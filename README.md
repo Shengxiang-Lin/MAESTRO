@@ -45,14 +45,14 @@ Orchestra-o1 does **not** carry its own SubAgent, runner, tools, or common runti
 
 ## Model configuration
 
-`config/model_config.yaml` is the shared model registry. Registry keys are real provider model identifiers used at call time; do not create entries such as `gpt-*` or `claude-*` that silently map to a different backend model.
+`config/model_config.yaml` is the canonical shared model/deployment registry. It describes **how a model is called or served**: API endpoint, local model path, vLLM GPU allocation, tensor parallelism, context length, memory utilization, and related runtime options.
 
-Experiment YAML files choose models by role. For example:
+Benchmark YAML files describe **which model each experiment role uses**. For example:
 
 ```yaml
-main_model: "qwen3.8-max"
+main_model: "local-qwen-27b"
 sub_models:
-  - "qwen3.8-max"
+  - "local-qwen-27b"
 
 tool_models:
   image_analysis: "qwen3.7-flash"
@@ -64,26 +64,25 @@ tool_models:
 evaluation_model: "qwen3.7-plus"
 ```
 
-`tool_models` controls the models used internally by the shared OmniGAIA image/audio/video tools. MAESTRO and Orchestra-o1 use the same role names, so changing a tool backend only requires editing the benchmark YAML. Each run also writes the resolved model roles into its trajectory/CSV output and a `model_roles_<timestamp>.json` manifest.
+This separation lets the same benchmark config switch between API and local models by changing only the role names. `tool_models` controls the models used internally by the shared OmniGAIA image/audio/video tools. Each run records the resolved model roles and local runtime metadata in its result manifest.
+
+Do not create misleading registry aliases such as a `gpt-*` key that silently calls a Qwen backend. API registry keys should reflect the real provider model identifier; local deployment names such as `qwen3-8b-local` and `local-qwen-27b` should clearly indicate that they are local services.
 
 ## Local models with vLLM
 
-Main-Agent and Sub-Agent can use a local model without changing their implementation. Add an experiment-local model definition with `backend: vllm`; the benchmark launcher starts (or reuses) an OpenAI-compatible vLLM server before the agents are created.
+Main-Agent and Sub-Agent use the same LLM client for API and local models. A registry entry with `backend: vllm` is automatically exposed through a local OpenAI-compatible vLLM server and then consumed through the existing `AsyncLLM` path.
+
+Local model definitions belong in `config/model_config.yaml`. For example, the repository contains a two-GPU 27B entry equivalent to:
 
 ```yaml
-main_model: "local-qwen-27b"
-sub_models:
-  - "local-qwen-27b"
-
 models:
   local-qwen-27b:
     backend: vllm
-    model_path: "/data/models/Qwen-27B"
+    model_path: "${QWEN3_27B_MODEL_PATH}"
     served_model_name: "local-qwen-27b"
     host: "127.0.0.1"
     port: 8804
 
-    # Multi-GPU: CUDA_VISIBLE_DEVICES=0,1 and vLLM tensor parallelism = 2.
     gpus: [0, 1]
     tensor_parallel_size: 2
     dtype: "bfloat16"
@@ -98,23 +97,57 @@ models:
     auto_start: true
     startup_timeout: 1200
     shutdown_on_exit: false
+    log_file: "logs/vllm/local-qwen-27b.log"
 
     extra_body:
       chat_template_kwargs:
         enable_thinking: true
 ```
 
-If `tensor_parallel_size` is omitted and `gpus` is a list, it defaults to `len(gpus)`. `extra_args` can be a list of raw vLLM CLI arguments or a mapping for options not represented explicitly. `python_executable`, `env`, `log_file`, `quantization`, `kv_cache_dtype`, `pipeline_parallel_size`, and other common vLLM settings can also be configured in YAML.
+Before running that model:
+
+```bash
+export QWEN3_27B_MODEL_PATH=/data/models/Qwen3-27B
+```
+
+Then the experiment YAML only selects it:
+
+```yaml
+main_model: "local-qwen-27b"
+sub_models:
+  - "local-qwen-27b"
+```
+
+If `tensor_parallel_size` is omitted and `gpus` is a list, it defaults to `len(gpus)`. `extra_args` can be a list of raw vLLM CLI arguments or a mapping for options not represented explicitly. `python_executable`, `env`, `log_file`, `quantization`, `kv_cache_dtype`, `pipeline_parallel_size`, and other common vLLM settings are also configurable in the model registry.
 
 The launcher checks `/v1/models` before starting a process. A matching vLLM service is reused; an unrelated process on the configured port is never killed or replaced. Services started by MAESTRO are kept alive by default so repeated experiments do not reload the model; set `shutdown_on_exit: true` if you want benchmark-owned services stopped automatically.
 
-A complete two-GPU 27B example is provided at:
+### Experiment-local model overrides
+
+Benchmark YAML may still contain an optional `models:` section for one-off deployment changes. These entries are **recursive partial overrides** on top of `config/model_config.yaml`, not replacement model definitions.
+
+For example, to run the registered 27B model on GPUs 4 and 5 with another port:
+
+```yaml
+main_model: "local-qwen-27b"
+sub_models:
+  - "local-qwen-27b"
+
+models:
+  local-qwen-27b:
+    gpus: [4, 5]
+    port: 8810
+```
+
+All unspecified fields such as `model_path`, `dtype`, `tensor_parallel_size`, `gpu_memory_utilization`, and `extra_body` continue to inherit from the shared registry.
+
+A role-only local 27B benchmark example is provided at:
 
 ```text
 config/benchmarks/orchestra_omnigaia_local_vllm.example.yaml
 ```
 
-This requires vLLM to be installed in the Python environment selected by `python_executable` (or the current Python environment when it is omitted).
+This requires vLLM to be installed in the Python environment selected by `python_executable`, or in the current Python environment when `python_executable` is omitted.
 
 ## Run MAESTRO
 
@@ -123,9 +156,10 @@ python bench_orchestra_omnigaia.py \
   --config config/benchmarks/orchestra_omnigaia.yaml
 ```
 
-For a local model, the command stays the same; only the YAML changes:
+For the registered local 27B model:
 
 ```bash
+export QWEN3_27B_MODEL_PATH=/data/models/Qwen3-27B
 python bench_orchestra_omnigaia.py \
   --config config/benchmarks/orchestra_omnigaia_local_vllm.example.yaml
 ```
@@ -137,25 +171,29 @@ python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
   --config baseline/orchestra-o1/config/benchmarks/orchestra_o1_omnigaia.yaml
 ```
 
-The O1 launcher uses the shared root runner, shared SubAgent, and shared tools, but injects `baseline/orchestra-o1/orchestra_o1/main_agent.py` and the O1 prompt.
+The O1 launcher uses the shared root runner, shared SubAgent, shared model registry, and shared tools, but injects `baseline/orchestra-o1/orchestra_o1/main_agent.py` and the O1 prompt.
 
 ## Run Orchestra-o1 with local Qwen3-8B
 
-The Qwen3-8B config now starts/reuses vLLM itself. Set `QWEN3_8B_MODEL_PATH` (or put the absolute path directly in YAML), then run the normal O1 entrypoint:
+The base Qwen3-8B and GRPO deployment definitions are also stored in `config/model_config.yaml`.
+
+Base model:
 
 ```bash
+export QWEN3_8B_MODEL_PATH=/data/models/Qwen3-8B
 python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
   --config baseline/orchestra-o1/config/benchmarks/orchestra_o1_omnigaia_qwen3_8b_base.yaml
 ```
 
-The GRPO checkpoint config uses the same mechanism with `QWEN3_8B_GRPO_MODEL_PATH`:
+GRPO checkpoint:
 
 ```bash
+export QWEN3_8B_GRPO_MODEL_PATH=/data/models/qwen3-8b-grpo
 python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
   --config baseline/orchestra-o1/bench_qwen/orchestra_o1_omnigaia_qwen_grpo.yaml
 ```
 
-The older `baseline/orchestra-o1/bench_qwen/bench_qwen_omnigaia.py` launcher remains available for compatibility, but it is no longer required just to start a local vLLM model.
+The older `baseline/orchestra-o1/bench_qwen/bench_qwen_omnigaia.py` launcher remains available for compatibility, but it now reuses the same root `config/model_config.yaml`; there is no second local-Qwen model registry to maintain.
 
 ## Train the Orchestra-o1 Qwen3-8B Main Agent
 

@@ -12,7 +12,7 @@ if [[ ! -e "${MODEL_PATH}" ]]; then
   exit 2
 fi
 
-# vLLM startup/GPU/port/runtime settings now live in the benchmark YAML.
+# vLLM startup/GPU/port/runtime settings live in config/model_config.yaml.
 export QWEN3_8B_GRPO_MODEL_PATH="${MODEL_PATH}"
 CONFIG_PATH="${CONFIG_PATH:-${SCRIPT_DIR}/orchestra_o1_omnigaia_qwen_grpo.yaml}"
 
