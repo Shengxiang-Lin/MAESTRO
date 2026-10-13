@@ -1,0 +1,15 @@
+# OmniGAIA baseline with Orchestra-o1 and a locally served Qwen3-8B MainAgent.
+main_model: "qwen3-8b"
+sub_models:
+  - "qwen3.8-max"
+
+dataset_path: "data/OmniGAIA/test_metadata.jsonl"
+attachments_dir: "data/OmniGAIA"
+level_filter: null
+
+max_tasks: 360
+max_attempts: 10
+max_concurrency: 5
+
+result_folder: "logs/omnigaia_orchestra_o1_qwen3_8b_base"
+trajectory_folder: "logs/omnigaia_orchestra_o1_qwen3_8b_base/trajectories"

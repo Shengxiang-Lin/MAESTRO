@@ -1,0 +1,31 @@
+# MAESTRO: persistent epistemic state + prospective projection v4.
+main_model: "qwen3.8-max"
+sub_models:
+  - "qwen3.8-max"
+
+dataset_path: "data/OmniGAIA/test_metadata.jsonl"
+attachments_dir: "data/OmniGAIA"
+level_filter: null
+max_tasks: 360
+max_attempts: 10
+max_concurrency: 10
+
+result_folder: "logs/omnigaia_orchestra_epistemic_projection_v4"
+trajectory_folder: "logs/omnigaia_orchestra_epistemic_projection_v4/trajectories"
+
+prospective:
+  enabled: true
+  max_prompt_results: 12
+  max_prompt_state_chars: 9000
+  max_source_ids_per_result: 12
+  max_epistemic_bindings: 8
+  max_belief_history: 4
+  max_evidence_attempts_per_target: 6
+  max_future_requirements: 4
+  max_critical_dependencies: 3
+  max_tasks_per_action: 5
+  max_evidence_refs: 6
+  completion_consistency_check: true
+  execution_projection_enabled: true
+  strict_provider_diversity: true
+  blind_requery: true

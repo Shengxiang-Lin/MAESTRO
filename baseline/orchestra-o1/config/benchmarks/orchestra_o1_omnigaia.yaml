@@ -1,0 +1,19 @@
+# OmniGAIA Benchmark Configuration (Orchestra-o1 baseline)
+
+# main_model: "qwen3.8-max"
+# sub_models:
+#   - "qwen3.8-max"
+main_model: "qwen3.7-plus"
+sub_models:
+  - "qwen3.7-plus"
+
+dataset_path: "data/OmniGAIA/test_metadata.jsonl"
+attachments_dir: "data/OmniGAIA"
+level_filter: null
+
+max_tasks: 100
+max_attempts: 10
+max_concurrency: 10
+
+result_folder: "logs/omnigaia_orchestra_o1_qwen3.7_plus"
+trajectory_folder: "logs/omnigaia_orchestra_o1_qwen3.7_plus/trajectories"
