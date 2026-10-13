@@ -11,6 +11,7 @@ import aiohttp
 from base.agent.base_action import BaseAction
 from base.engine.async_llm import LLMsConfig
 from base.engine.logs import logger
+from base.engine.cost_monitor import record_api_response, record_unmeasured_call
 
 MAX_SEGMENT_SECONDS = 30
 QWEN_OMNI_NATIVE_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
@@ -78,9 +79,12 @@ class ParseAudioAction(BaseAction):
             async with sess.post(QWEN_OMNI_NATIVE_ENDPOINT, headers=headers, json=payload) as resp:
                 text = await resp.text()
                 if resp.status >= 400:
+                    record_unmeasured_call(model, "audio", "audio_http_error_without_usage")
                     logger.error(f"[ParseAudio] qwen-omni HTTP {resp.status}: {text[:500]}")
                     return None
         obj = json.loads(text)
+        record_api_response(model, obj, category="audio", base_url=QWEN_OMNI_NATIVE_ENDPOINT,
+                            audio_input=True)
         texts: List[str] = []
         for choice in (obj.get("output") or {}).get("choices") or []:
             for item in ((choice.get("message") or {}).get("content") or []):
@@ -106,6 +110,7 @@ class ParseAudioAction(BaseAction):
         try:
             answer = await self._native_multimodal_call(api_key, model, str(path), str(query))
         except Exception as exc:
+            record_unmeasured_call(model, "audio", "audio_call_failed_without_complete_usage")
             return {"success": False, "output": None, "error": f"qwen-omni call failed: {exc}", "metrics": {"stage": "call", "model": model}}
         if not answer:
             return {"success": False, "output": None, "error": "qwen-omni returned empty answer.", "metrics": {"stage": "empty", "model": model}}

@@ -16,6 +16,7 @@ from openai import AsyncOpenAI
 from base.agent.base_action import BaseAction
 from base.engine.async_llm import LLMsConfig, llm_retry
 from base.engine.logs import logger
+from base.engine.cost_monitor import record_api_response, record_unmeasured_call
 from benchmark.omnigaia.tools.audio_analysis import QWEN_OMNI_NATIVE_ENDPOINT, QWEN_OMNI_AUDIO_EXTS
 
 _FFPROBE_PATH_CACHE: Optional[str] = None
@@ -186,8 +187,11 @@ class VideoAnalysisAction(BaseAction):
                 async with sess.post(QWEN_OMNI_NATIVE_ENDPOINT, headers=headers, json=payload) as resp:
                     text = await resp.text()
                     if resp.status >= 400:
+                        record_unmeasured_call(model, "video", "video_audio_http_error_without_usage")
                         return None
             obj = json.loads(text)
+            record_api_response(model, obj, category="video", base_url=QWEN_OMNI_NATIVE_ENDPOINT,
+                                audio_input=True)
             chunks: List[str] = []
             for choice in (obj.get("output") or {}).get("choices") or []:
                 for item in ((choice.get("message") or {}).get("content") or []):
@@ -195,6 +199,7 @@ class VideoAnalysisAction(BaseAction):
                         chunks.append(str(item["text"]).strip())
             return "\n".join(c for c in chunks if c) or None
         except Exception:
+            record_unmeasured_call(model, "video", "video_audio_call_failed_without_complete_usage")
             return None
 
     async def _combine_visual_and_audio(self, visual: str, audio: str, query: str) -> str:
@@ -209,7 +214,9 @@ class VideoAnalysisAction(BaseAction):
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 label=f"VideoAnalysis.combine({model})",
+                cost_category="video",
             )
+            record_api_response(model, completion, category="video", base_url=base_url)
             return (completion.choices[0].message.content or "").strip() or f"{visual}\n\n{audio}"
         except Exception:
             return f"{visual}\n\n{audio}"
@@ -239,7 +246,9 @@ class VideoAnalysisAction(BaseAction):
                     model=model,
                     messages=[{"role": "user", "content": content}],
                     label=f"VideoAnalysis.visual({model})",
+                    cost_category="video",
                 )
+                record_api_response(model, completion, category="video", base_url=base_url)
                 visual = (completion.choices[0].message.content or "").strip() or None
             except Exception as exc:
                 logger.warning(f"[VideoAnalysis] visual analysis failed: {exc}")

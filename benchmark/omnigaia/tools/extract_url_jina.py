@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 from base.agent.base_action import BaseAction
 from base.engine.async_llm import LLMsConfig
 from base.engine.logs import logger
+from base.engine.cost_monitor import record_api_response, record_unmeasured_call
 
 
 class ExtractUrlContentAction(BaseAction):
@@ -65,7 +66,10 @@ class ExtractUrlContentAction(BaseAction):
             r = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
             obj = r.json()
         except Exception:
+            record_unmeasured_call(self.FALLBACK_MODEL, "browse", "browse_request_failed_without_usage")
             return None
+        record_api_response(self.FALLBACK_MODEL, obj, category="browse", base_url=base_url,
+                            search_requested=True)
         if r.status_code != 200 or obj.get("code"):
             return None
         texts, sources = [], []
@@ -104,6 +108,7 @@ class ExtractUrlContentAction(BaseAction):
                             timeout=10,
                         ).text
                     )
+                    record_unmeasured_call("jina-reader", "browse", "external_provider_price_not_configured")
                     if text.strip():
                         api_key, base_url, model = self._get_llm_config()
                         if api_key:
@@ -112,6 +117,7 @@ class ExtractUrlContentAction(BaseAction):
                                 model=model,
                                 messages=[{"role": "user", "content": f"Source:\n{text[:120000]}\n\nQuestion: {browse_query}"}],
                             )
+                            record_api_response(model, completion, category="browse", base_url=base_url)
                             answer = completion.choices[0].message.content
                             if answer:
                                 return {"success": True, "output": {"url": url, "answer": answer.strip(), "source_preview": text[:2000]}, "error": None, "metrics": {}}

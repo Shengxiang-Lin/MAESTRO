@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 
 from base.engine.async_llm import LLMsConfig, llm_retry
 from base.engine.logs import logger
+from base.engine.cost_monitor import record_api_response
 
 DEFAULT_JUDGE_MODEL = "qwen3.7-plus"
 JUDGE_PROMPT = """You are a precise answer evaluator. Given the original question, determine if the predicted answer is semantically equivalent to the expected answer.
@@ -83,7 +84,9 @@ async def llm_semantic_score(
             temperature=0,
             max_tokens=10,
             label=f"LLMScorer({model_name})",
+            cost_category="evaluation",
         )
+        record_api_response(model_name, completion, category="evaluation", base_url=base_url)
         response = completion.choices[0].message.content.strip().upper()
         if "EQUIVALENT" in response:
             logger.info(f"[LLM Scorer] EQUIVALENT: '{predicted}' ~ '{expected}'")

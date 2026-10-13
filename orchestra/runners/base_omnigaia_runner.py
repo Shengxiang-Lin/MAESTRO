@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Tuple, Type
 
 from base.agent.base_action import BaseAction
 from base.engine.async_llm import LLMsConfig, create_llm_instance
+from base.engine.cost_monitor import COST_CSV_FIELDS, CostMonitor, record_unmeasured_call
 from base.engine.logs import logger
 from benchmark.common.env import BasicInfo
 from benchmark.common.runner import Runner
@@ -65,6 +66,7 @@ class BaseOmniGAIARunner:
                 "sub_models", "tool_models", "evaluation_model", "final_sub_model",
                 "success", "reward", "attempts", "sub_cost", "main_cost",
                 "total_cost", "timestamp", "start_time", "end_time", "error",
+                *COST_CSV_FIELDS,
             ],
         )
         csv_writer.writeheader()
@@ -88,13 +90,14 @@ class BaseOmniGAIARunner:
         attempts_detail: List[Dict[str, Any]],
         success: bool,
         total_reward: float,
-        total_cost: float,
+        total_cost: float | None,
         main_cost: float,
         sub_cost: float,
         final_sub_model: str | None,
         error: str | None,
         start_time: str | None = None,
         end_time: str | None = None,
+        cost_breakdown: Dict[str, Any] | None = None,
     ) -> None:
         trajectory_folder.mkdir(parents=True, exist_ok=True)
         filename = (
@@ -128,6 +131,7 @@ class BaseOmniGAIARunner:
             "error": error,
             "instruction": instruction,
             "meta": meta or {},
+            "cost_breakdown": cost_breakdown or {},
         }
         path = trajectory_folder / filename
         with path.open("w", encoding="utf-8") as handle:
@@ -224,182 +228,113 @@ class BaseOmniGAIARunner:
         results: Dict[str, Dict[str, Any]] = {}
 
         async def run_single(level_spec):
-            level_id = str(
-                level_spec.get("id") or level_spec.get("task_id") or str(level_spec)
-            )
+            level_id = str(level_spec.get("id") or level_spec.get("task_id") or str(level_spec))
             task_level = level_spec.get("Level", "")
             question = level_spec.get("question", "")
             expected_answer = level_spec.get("answer", "")
             task_type = level_spec.get("task_type", "")
             category = level_spec.get("category", "")
             omni_modal_input = level_spec.get("omni_modal_input", [])
+            journal = (csv_path.parent if csv_path else trajectory_folder) / f"api_usage_{timestamp}.jsonl"
 
             async with semaphore:
-                env = main_agent = None
-                attempts_detail: List[Dict[str, Any]] = []
-                start_time = datetime.now().isoformat()
-                try:
-                    logger.info(f"[{self.log_prefix}] Starting task: {level_id}")
-                    env = self.benchmark.make_env(level_spec, tools=self.omnigaia_tools)
-                    basic_info = env.get_basic_info()
-                    main_llm = create_llm_instance(
-                        LLMsConfig.default().get(self.main_model)
-                    )
-                    main_agent = self._build_main_agent(env, main_llm)
-                    main_agent.reset(
-                        BasicInfo(
-                            env_id=level_id,
-                            instruction=basic_info.instruction,
-                            action_space="",
-                            max_steps=self.max_attempts,
-                            meta_data=basic_info.meta_data,
-                        )
-                    )
-                    main_cost_before = main_agent.get_usage_cost()
+                with CostMonitor(task_id=level_id, journal_path=journal) as monitor:
+                    env = main_agent = basic_info = None
+                    attempts_detail: List[Dict[str, Any]] = []
+                    start_time = datetime.now().isoformat()
+                    main_cost_before = 0.0
                     final_answer = None
-
-                    for attempt_index in range(self.max_attempts):
-                        action, response = await main_agent.step(None, [])
-                        attempts_detail.append(
-                            self._attempt_record(attempt_index, action, response)
-                        )
-                        if action.get("action") == "complete":
-                            final_answer = (action.get("params") or {}).get("answer")
-                            break
-
-                    main_cost = max(
-                        0.0, main_agent.get_usage_cost() - main_cost_before
-                    )
                     total_reward = 0.0
-                    if final_answer:
-                        try:
+                    success = False
+                    error = None
+                    try:
+                        logger.info(f"[{self.log_prefix}] Starting task: {level_id}")
+                        env = self.benchmark.make_env(level_spec, tools=self.omnigaia_tools)
+                        basic_info = env.get_basic_info()
+                        main_llm = create_llm_instance(LLMsConfig.default().get(self.main_model))
+                        main_agent = self._build_main_agent(env, main_llm)
+                        main_agent.reset(BasicInfo(
+                            env_id=level_id, instruction=basic_info.instruction,
+                            action_space="", max_steps=self.max_attempts,
+                            meta_data=basic_info.meta_data,
+                        ))
+                        main_cost_before = main_agent.get_usage_cost()
+                        for attempt_index in range(self.max_attempts):
+                            action, response = await main_agent.step(None, [])
+                            attempts_detail.append(self._attempt_record(attempt_index, action, response))
+                            if action.get("action") == "complete":
+                                final_answer = (action.get("params") or {}).get("answer")
+                                break
+                        if final_answer:
                             total_reward = await llm_semantic_score(
-                                str(final_answer),
-                                expected_answer,
-                                model=self.evaluation_model,
-                                question=question,
+                                str(final_answer), expected_answer,
+                                model=self.evaluation_model, question=question,
                             )
-                        except Exception as exc:
-                            logger.warning(f"[{self.log_prefix}] scoring failed: {exc}")
-                    success = total_reward > 0.5
-                    sub_cost = self._sub_cost(attempts_detail)
-                    total_cost = sub_cost + main_cost
-                    end_time = datetime.now().isoformat()
-
-                    self._save_trajectory(
-                        trajectory_folder=trajectory_folder,
-                        level_id=level_id,
-                        timestamp=timestamp,
-                        level=task_level,
-                        question=question,
-                        expected_answer=expected_answer,
-                        task_type=task_type,
-                        category=category,
-                        omni_modal_input=omni_modal_input,
-                        instruction=basic_info.instruction,
-                        meta=basic_info.meta_data or {},
-                        attempts_detail=attempts_detail,
-                        success=success,
-                        total_reward=total_reward,
-                        total_cost=total_cost,
-                        main_cost=main_cost,
-                        sub_cost=sub_cost,
-                        final_sub_model=None,
-                        error=None,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                    self._after_trajectory(
-                        trajectory_folder=trajectory_folder,
-                        level_id=level_id,
-                        timestamp=timestamp,
-                        main_agent=main_agent,
-                        attempts_detail=attempts_detail,
-                    )
-
-                    if csv_writer and csv_lock:
-                        async with csv_lock:
-                            csv_writer.writerow(
-                                {
-                                    "task_id": level_id,
-                                    "level": task_level,
-                                    "task_type": task_type,
-                                    "category": category,
+                        success = total_reward > 0.5
+                        results[level_id] = {
+                            "success": success, "reward": total_reward,
+                            "answer": final_answer, "expected_answer": expected_answer,
+                        }
+                    except asyncio.CancelledError:
+                        error = "Cancelled"
+                        record_unmeasured_call(self.main_model, "agent", "cancelled_with_possible_in_flight_requests")
+                        raise
+                    except Exception as exc:
+                        error = f"{type(exc).__name__}: {exc}"
+                        logger.error(f"[{self.log_prefix}] Task {level_id} failed: {error}")
+                        results[level_id] = {"success": False, "reward": 0.0, "error": error}
+                    finally:
+                        # Preserve costs even when a task fails after a paid call.
+                        main_cost = max(0.0, main_agent.get_usage_cost() - main_cost_before) if main_agent else 0.0
+                        agent_cost = sum(r.cost for r in monitor.records if r.category == "agent")
+                        sub_cost = max(0.0, agent_cost - main_cost)
+                        breakdown = monitor.cost_columns(main_cost, sub_cost)
+                        end_time = datetime.now().isoformat()
+                        self._save_trajectory(
+                            trajectory_folder=trajectory_folder, level_id=level_id,
+                            timestamp=timestamp, level=task_level, question=question,
+                            expected_answer=expected_answer, task_type=task_type,
+                            category=category, omni_modal_input=omni_modal_input,
+                            instruction=basic_info.instruction if basic_info else None,
+                            meta=basic_info.meta_data if basic_info else None,
+                            attempts_detail=attempts_detail, success=success,
+                            total_reward=total_reward, total_cost=breakdown["total_cost"],
+                            main_cost=main_cost, sub_cost=sub_cost, final_sub_model=None,
+                            error=error, start_time=start_time, end_time=end_time,
+                            cost_breakdown={**breakdown, "usage": monitor.summary()},
+                        )
+                        self._after_trajectory(
+                            trajectory_folder=trajectory_folder, level_id=level_id,
+                            timestamp=timestamp, main_agent=main_agent,
+                            attempts_detail=attempts_detail,
+                        )
+                        if csv_writer and csv_lock:
+                            cost_fields = {
+                                key: ("" if value is None else f"{value:.6f}")
+                                if key.endswith(("_cost", "_cost_cny")) else value
+                                for key, value in breakdown.items()
+                            }
+                            async with csv_lock:
+                                csv_writer.writerow({
+                                    "task_id": level_id, "level": task_level,
+                                    "task_type": task_type, "category": category,
                                     "main_model": self.main_model,
                                     "sub_models": ",".join(self.sub_models),
-                                    "tool_models": json.dumps(
-                                        self.tool_models, ensure_ascii=False, sort_keys=True
-                                    ),
+                                    "tool_models": json.dumps(self.tool_models, ensure_ascii=False, sort_keys=True),
                                     "evaluation_model": self.evaluation_model,
-                                    "final_sub_model": None,
-                                    "success": success,
+                                    "final_sub_model": None, "success": success,
                                     "reward": f"{total_reward:.4f}",
                                     "attempts": len(attempts_detail),
-                                    "sub_cost": f"{sub_cost:.6f}",
-                                    "main_cost": f"{main_cost:.6f}",
-                                    "total_cost": f"{total_cost:.6f}",
-                                    "timestamp": timestamp,
-                                    "start_time": start_time,
-                                    "end_time": end_time,
-                                    "error": None,
-                                }
-                            )
-                            csv_file.flush()
-                    results[level_id] = {
-                        "success": success,
-                        "reward": total_reward,
-                        "answer": final_answer,
-                        "expected_answer": expected_answer,
-                    }
-                except Exception as exc:
-                    logger.error(
-                        f"[{self.log_prefix}] Task {level_id} failed: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
-                    end_time = datetime.now().isoformat()
-                    self._save_trajectory(
-                        trajectory_folder=trajectory_folder,
-                        level_id=level_id,
-                        timestamp=timestamp,
-                        level=task_level,
-                        question=question,
-                        expected_answer=expected_answer,
-                        task_type=task_type,
-                        category=category,
-                        omni_modal_input=omni_modal_input,
-                        instruction=None,
-                        meta=None,
-                        attempts_detail=attempts_detail,
-                        success=False,
-                        total_reward=0.0,
-                        total_cost=0.0,
-                        main_cost=0.0,
-                        sub_cost=0.0,
-                        final_sub_model=None,
-                        error=str(exc),
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                    self._after_trajectory(
-                        trajectory_folder=trajectory_folder,
-                        level_id=level_id,
-                        timestamp=timestamp,
-                        main_agent=main_agent,
-                        attempts_detail=attempts_detail,
-                    )
-                    results[level_id] = {
-                        "success": False,
-                        "reward": 0.0,
-                        "error": str(exc),
-                    }
-                finally:
-                    if env and hasattr(env, "close"):
-                        try:
-                            await env.close()
-                        except Exception as exc:
-                            logger.debug(
-                                f"[{self.log_prefix}] Error closing env: {exc}"
-                            )
+                                    "sub_cost": f"{sub_cost:.6f}", "main_cost": f"{main_cost:.6f}",
+                                    "timestamp": timestamp, "start_time": start_time,
+                                    "end_time": end_time, "error": error, **cost_fields,
+                                })
+                                csv_file.flush()
+                        if env and hasattr(env, "close"):
+                            try:
+                                await env.close()
+                            except Exception as exc:
+                                logger.debug(f"[{self.log_prefix}] Error closing env: {exc}")
 
         tasks = [asyncio.create_task(run_single(level)) for level in levels]
         try:

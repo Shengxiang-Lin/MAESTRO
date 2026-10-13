@@ -8,6 +8,7 @@ from openai import AsyncOpenAI
 
 from base.agent.base_action import BaseAction
 from base.engine.async_llm import LLMsConfig
+from base.engine.cost_monitor import record_api_response, record_unmeasured_call
 
 
 class ImageAnalysisAction(BaseAction):
@@ -46,6 +47,7 @@ class ImageAnalysisAction(BaseAction):
         api_key, base_url, model = self._get_llm_config()
         if not api_key:
             return {"success": False, "output": None, "error": "No API key configured", "metrics": {}}
+        api_attempted = False
         try:
             if str(image_path).startswith(("http://", "https://")):
                 image_url = str(image_path)
@@ -56,6 +58,7 @@ class ImageAnalysisAction(BaseAction):
                 mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/webp" if ext == ".webp" else "image/gif" if ext == ".gif" else "image/png"
                 image_url = f"data:{mime};base64,{data}"
             client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+            api_attempted = True
             completion = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": [
@@ -63,8 +66,11 @@ class ImageAnalysisAction(BaseAction):
                     {"type": "text", "text": str(query)},
                 ]}],
             )
+            record_api_response(model, completion, category="image", base_url=base_url)
             content = completion.choices[0].message.content if completion.choices else None
         except Exception as exc:
+            if api_attempted:
+                record_unmeasured_call(model, "image", "image_call_failed_without_complete_usage")
             return {"success": False, "output": None, "error": f"Image analysis failed: {exc}", "metrics": {}}
         if not content:
             return {"success": False, "output": None, "error": "Model returned empty response", "metrics": {}}

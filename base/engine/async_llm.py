@@ -11,7 +11,8 @@ from openai import AsyncOpenAI
 
 from pathlib import Path
 from typing import Dict, Optional, Any, Callable, TypeVar
-from base.engine.cost_monitor import record_cost
+from base.engine.cost_monitor import record_cost, record_unmeasured_call
+from base.engine.api_pricing import estimate_usage, reviewed_model, to_dict
 from base.engine.logs import logger, LogLevel
 
 T = TypeVar("T")
@@ -27,6 +28,8 @@ async def llm_retry(
     max_retries: int = DEFAULT_MAX_RETRIES,
     retry_delay: float = DEFAULT_RETRY_DELAY,
     label: str = "LLM call",
+    cost_category: str = "agent",
+    track_cost_failures: bool = True,
     **kwargs,
 ) -> Any:
     """Generic LLM call retry decorator.
@@ -53,6 +56,9 @@ async def llm_retry(
             return await func(*args, **kwargs)
         except Exception as e:
             last_exception = e
+            if track_cost_failures:
+                record_unmeasured_call(str(kwargs.get("model") or label), cost_category,
+                                       "failed_attempt_without_provider_usage")
             if attempt < max_retries:
                 logger.warning(
                     f"[Retry] {label} failed (attempt {attempt}/{max_retries}): {e}. "
@@ -228,15 +234,15 @@ class ModelPricing:
         "deepseek-v4-flash": {"input": 0.0002, "output": 0.0008},
         "deepseek-reasoner": {"input": 0.0002, "output": 0.0008},
         "qwen-plus": {"input": 0.0008, "output": 0.002},
-        "qwen3.7-plus": {"input": 0.002, "output": 0.006},
+        "qwen3.7-plus": {"input": 2 / 7 / 1000, "output": 8 / 7 / 1000},
         "qwen3.8-flash": {"input": 0.0001142857, "output": 0.0003857143},
-        "qwen3.8-max": {"input": 0.0017142857, "output": 0.0051428571},
+        "qwen3.8-max": {"input": 12 / 7 / 1000, "output": 36 / 7 / 1000},
         "qwen3.8-2.4t-a95b": {"input": 0.0017142857, "output": 0.0051428571},
         "qwen3-8b": {"input": 0.0000714286, "output": 0.0002857143},
-        "qwen3.7-flash": {"input": 0.0002, "output": 0.0006},
+        "qwen3.7-flash": {"input": 0.2 / 7 / 1000, "output": 0.8 / 7 / 1000},
         "qwen-flash": {"input": 0.00004, "output": 0.00012},
         "qwen3.5-omni-plus": {"input": 0.002, "output": 0.006},
-        "qwen3.5-omni-flash": {"input": 0.0002, "output": 0.0006},
+        "qwen3.5-omni-flash": {"input": 2.2 / 7 / 1000, "output": 13.3 / 7 / 1000},
     }
     _warned_unknown = set()
 
@@ -262,10 +268,17 @@ class TokenUsageTracker:
         self.total_cost = 0
         self.usage_history = []
     
-    def add_usage(self, model, input_tokens, output_tokens):
+    def add_usage(self, model, input_tokens, output_tokens, *, usage=None, base_url=None):
+        estimate = None
         if self.pricing_enabled:
-            input_cost = (input_tokens / 1000) * ModelPricing.get_price(model, "input")
-            output_cost = (output_tokens / 1000) * ModelPricing.get_price(model, "output")
+            if reviewed_model(model):
+                estimate = estimate_usage(model, usage if usage is not None else {
+                    "prompt_tokens": input_tokens, "completion_tokens": output_tokens,
+                }, base_url=base_url)
+                input_cost, output_cost = estimate["input_cost"], estimate["output_cost"]
+            else:
+                input_cost = (input_tokens / 1000) * ModelPricing.get_price(model, "input")
+                output_cost = (output_tokens / 1000) * ModelPricing.get_price(model, "output")
         else:
             input_cost = 0.0
             output_cost = 0.0
@@ -283,6 +296,10 @@ class TokenUsageTracker:
                 "output_price": ModelPricing.get_price(model, "output") if self.pricing_enabled else 0.0,
             }
         }
+        usage_record["coverage_complete"] = (estimate["coverage_complete"] if estimate
+                                            else not self.pricing_enabled or model in ModelPricing.PRICES)
+        usage_record["raw_usage"] = to_dict(usage)
+        usage_record["notes"] = estimate["notes"] if estimate else []
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
         self.total_cost += total_cost
@@ -325,6 +342,7 @@ class AsyncLLM:
             max_retries=DEFAULT_MAX_RETRIES,
             retry_delay=DEFAULT_RETRY_DELAY,
             label=f"AsyncLLM({self.config.model})",
+            track_cost_failures=self.config.backend != "vllm",
         )
 
     async def _call_impl(self, prompt, max_tokens=None, temperature=None, seed=None):
@@ -383,8 +401,16 @@ class AsyncLLM:
             )
         input_tokens = response.usage.prompt_tokens
         output_tokens = response.usage.completion_tokens
-        usage_record = self.usage_tracker.add_usage(self.config.model, input_tokens, output_tokens)
-        record_cost(self.config.model, input_tokens, output_tokens, usage_record["total_cost"])
+        usage_record = self.usage_tracker.add_usage(
+            self.config.model, input_tokens, output_tokens,
+            usage=response.usage, base_url=self.config.base_url,
+        )
+        record_cost(
+            self.config.model, input_tokens, output_tokens, usage_record["total_cost"],
+            category="agent", coverage_complete=usage_record["coverage_complete"],
+            is_api=self.config.backend != "vllm", raw_usage=usage_record["raw_usage"],
+            notes=usage_record["notes"], request_id=getattr(response, "id", None),
+        )
         ret = response.choices[0].message.content
         logger.log_to_file(LogLevel.INFO, f"LLM Response: {ret}")
         return ret

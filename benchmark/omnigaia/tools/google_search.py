@@ -7,6 +7,7 @@ import re
 
 from base.agent.base_action import BaseAction
 from base.engine.async_llm import LLMsConfig
+from base.engine.cost_monitor import record_api_response, record_unmeasured_call
 
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
 SERPER_BASE_URL = "https://google.serper.dev/search"
@@ -44,12 +45,18 @@ async def _dashscope_web_search(query: str, k: int, gl: str, hl: str, timeout_s:
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     timeout = aiohttp.ClientTimeout(total=timeout_s)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(endpoint, json=payload, headers=headers) as resp:
-            text = await resp.text()
-            if resp.status >= 400:
-                raise RuntimeError(f"HTTP {resp.status}: {text[:600]}")
-    obj = json.loads(text)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(endpoint, json=payload, headers=headers) as resp:
+                text = await resp.text()
+                if resp.status >= 400:
+                    raise RuntimeError(f"HTTP {resp.status}: {text[:600]}")
+        obj = json.loads(text)
+    except Exception:
+        record_unmeasured_call(model, "search", "search_request_failed_without_usage")
+        raise
+    record_api_response(model, obj, category="search", base_url=base_url,
+                        search_requested=True)
     if obj.get("code"):
         raise RuntimeError(f"DashScope API error: {obj.get('code')} {obj.get('message', '')}")
 
@@ -107,6 +114,7 @@ async def _serper_search(query: str, k: int, gl: str, hl: str) -> List[Dict[str,
             text = await resp.text()
             if resp.status >= 400:
                 raise RuntimeError(f"HTTP {resp.status}: {text[:600]}")
+    record_unmeasured_call("serper", "search", "external_provider_price_not_configured")
     return _serper_parse_results(json.loads(text), k)
 
 
