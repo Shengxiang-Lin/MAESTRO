@@ -22,10 +22,10 @@ class ImageAnalysisAction(BaseAction):
         "required": ["query", "image_path"],
         "additionalProperties": False,
     }
-    DEFAULT_MODEL: str = "claude-4-5-sonnet"
+    model_name: str = "qwen3.7-flash"
 
     def _get_llm_config(self, model_name: Optional[str] = None) -> tuple:
-        model_name = model_name or self.DEFAULT_MODEL
+        model_name = model_name or self.model_name
         try:
             cfg = LLMsConfig.default().get(model_name)
             if cfg:

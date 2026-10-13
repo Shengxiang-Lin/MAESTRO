@@ -1,4 +1,5 @@
 # Shared model registry for MAESTRO and Orchestra-o1 baselines.
+# Keys are the actual provider model identifiers used at call time.
 # Do not commit provider secrets. Export DASHSCOPE_API_KEY before running.
 models:
   qwen3.8-max:
@@ -42,43 +43,3 @@ models:
     api_key: null
     temperature: 0.7
     top_p: 0.95
-
-  claude-4-5-sonnet:
-    api_type: openai
-    model: qwen3.7-flash
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    api_key: null
-    temperature: 0.1
-    top_p: 0.9
-
-  deepseek-reasoner:
-    api_type: openai
-    model: deepseek-v4-flash-0731
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    api_key: null
-    temperature: 0.7
-    top_p: 0.95
-
-  gpt-5:
-    api_type: openai
-    model: qwen3.7-flash
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    api_key: null
-    temperature: 0.1
-    top_p: 0.9
-
-  gpt-4o-audio-preview:
-    api_type: openai
-    model: qwen3.5-omni-flash
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    api_key: null
-    temperature: 0.1
-    top_p: 0.9
-
-  gpt-4o:
-    api_type: openai
-    model: qwen3.5-omni-flash
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    api_key: null
-    temperature: 0.1
-    top_p: 0.9

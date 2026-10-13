@@ -36,6 +36,7 @@ Predicted Answer: {predicted}
 Respond with ONLY one word: "EQUIVALENT" or "DIFFERENT"
 """
 
+
 def _get_llm_config(model_name: Optional[str] = None) -> Tuple[str, str, str]:
     model_name = model_name or DEFAULT_JUDGE_MODEL
     try:
@@ -46,8 +47,13 @@ def _get_llm_config(model_name: Optional[str] = None) -> Tuple[str, str, str]:
     except Exception:
         pass
     api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("LLM_API_BASE") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    base_url = (
+        os.getenv("OPENAI_BASE_URL")
+        or os.getenv("LLM_API_BASE")
+        or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
     return (api_key, base_url, model_name)
+
 
 async def llm_semantic_score(
     predicted: str,
@@ -64,7 +70,11 @@ async def llm_semantic_score(
         logger.warning("[LLM Scorer] No API key available, falling back to 0.0")
         return 0.0
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-    prompt = JUDGE_PROMPT.format(question=question or "(not provided)", expected=expected, predicted=predicted)
+    prompt = JUDGE_PROMPT.format(
+        question=question or "(not provided)",
+        expected=expected,
+        predicted=predicted,
+    )
     try:
         completion = await llm_retry(
             client.chat.completions.create,
@@ -84,6 +94,7 @@ async def llm_semantic_score(
         logger.error(f"[LLM Scorer] Error: {e}")
         return 0.0
 
+
 def llm_semantic_score_sync(
     predicted: str,
     expected: str,
@@ -95,9 +106,14 @@ def llm_semantic_score_sync(
         if loop.is_running():
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, llm_semantic_score(predicted, expected, model, question))
+                future = executor.submit(
+                    asyncio.run,
+                    llm_semantic_score(predicted, expected, model, question),
+                )
                 return future.result(timeout=30)
-        return loop.run_until_complete(llm_semantic_score(predicted, expected, model, question))
+        return loop.run_until_complete(
+            llm_semantic_score(predicted, expected, model, question)
+        )
     except Exception as e:
         logger.error(f"[LLM Scorer Sync] Error: {e}")
         return 0.0

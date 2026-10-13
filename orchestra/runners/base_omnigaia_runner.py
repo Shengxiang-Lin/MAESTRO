@@ -30,6 +30,8 @@ class BaseOmniGAIARunner:
         sub_models: List[str],
         max_attempts: int,
         omnigaia_tools: List[BaseAction],
+        tool_models: Dict[str, str] | None = None,
+        evaluation_model: str = "qwen3.7-plus",
         main_agent_cls: Type[BaseMainAgent] = BaseMainAgent,
         prompt_builder: Any = None,
         main_agent_kwargs: Dict[str, Any] | None = None,
@@ -41,6 +43,8 @@ class BaseOmniGAIARunner:
         self.sub_models = list(sub_models)
         self.max_attempts = max_attempts
         self.omnigaia_tools = omnigaia_tools
+        self.tool_models = dict(tool_models or {})
+        self.evaluation_model = evaluation_model
         self.main_agent_cls = main_agent_cls
         self.prompt_builder = prompt_builder
         self.main_agent_kwargs = dict(main_agent_kwargs or {})
@@ -58,9 +62,9 @@ class BaseOmniGAIARunner:
             csv_file,
             fieldnames=[
                 "task_id", "level", "task_type", "category", "main_model",
-                "sub_models", "final_sub_model", "success", "reward", "attempts",
-                "sub_cost", "main_cost", "total_cost", "timestamp", "start_time",
-                "end_time", "error",
+                "sub_models", "tool_models", "evaluation_model", "final_sub_model",
+                "success", "reward", "attempts", "sub_cost", "main_cost",
+                "total_cost", "timestamp", "start_time", "end_time", "error",
             ],
         )
         csv_writer.writeheader()
@@ -110,6 +114,8 @@ class BaseOmniGAIARunner:
             "omni_modal_input": omni_modal_input,
             "main_model": self.main_model,
             "sub_models": self.sub_models,
+            "tool_models": self.tool_models,
+            "evaluation_model": self.evaluation_model,
             "max_attempts": self.max_attempts,
             "success": success,
             "total_reward": total_reward,
@@ -268,7 +274,10 @@ class BaseOmniGAIARunner:
                     if final_answer:
                         try:
                             total_reward = await llm_semantic_score(
-                                str(final_answer), expected_answer, question=question
+                                str(final_answer),
+                                expected_answer,
+                                model=self.evaluation_model,
+                                question=question,
                             )
                         except Exception as exc:
                             logger.warning(f"[{self.log_prefix}] scoring failed: {exc}")
@@ -318,6 +327,10 @@ class BaseOmniGAIARunner:
                                     "category": category,
                                     "main_model": self.main_model,
                                     "sub_models": ",".join(self.sub_models),
+                                    "tool_models": json.dumps(
+                                        self.tool_models, ensure_ascii=False, sort_keys=True
+                                    ),
+                                    "evaluation_model": self.evaluation_model,
                                     "final_sub_model": None,
                                     "success": success,
                                     "reward": f"{total_reward:.4f}",

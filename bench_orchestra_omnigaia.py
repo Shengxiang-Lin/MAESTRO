@@ -12,6 +12,7 @@ load_dotenv()
 import argparse
 import asyncio
 import csv
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -25,14 +26,7 @@ from benchmark.omnigaia.orchestra_benchmark import (
     OmniGAIAConfig,
     OmniGAIAOrchestraBenchmark,
 )
-from benchmark.omnigaia.tools import (
-    ExecuteCodeAction,
-    ExtractUrlContentAction,
-    GoogleSearchAction,
-    ImageAnalysisAction,
-    ParseAudioAction,
-    VideoAnalysisAction,
-)
+from benchmark.omnigaia.tools import build_omnigaia_tools, resolve_tool_models
 from orchestra.config import GAIAOrchestraConfig, ProspectiveConfig
 from orchestra.runners.omnigaia_runner import OmniGAIARunner
 
@@ -63,14 +57,10 @@ async def main() -> int:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     cfg.timestamp = timestamp
-    tools = [
-        GoogleSearchAction(),
-        ExecuteCodeAction(),
-        ExtractUrlContentAction(),
-        ImageAnalysisAction(),
-        ParseAudioAction(),
-        VideoAnalysisAction(),
-    ]
+    cfg.tool_models = resolve_tool_models(cfg.tool_models)
+    cfg.validate_model_registry()
+    tools = build_omnigaia_tools(cfg.tool_models)
+
     benchmark = OmniGAIAOrchestraBenchmark(
         OmniGAIAConfig(
             dataset_path=cfg.dataset_path,
@@ -116,6 +106,18 @@ async def main() -> int:
 
     cfg.result_folder.mkdir(parents=True, exist_ok=True)
     cfg.trajectory_folder.mkdir(parents=True, exist_ok=True)
+    model_manifest = {
+        "main_model": cfg.main_model,
+        "sub_models": cfg.sub_models,
+        "tool_models": cfg.tool_models,
+        "evaluation_model": cfg.evaluation_model,
+    }
+    manifest_path = cfg.result_folder / f"model_roles_{timestamp}.json"
+    manifest_path.write_text(
+        json.dumps(model_manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
     csv_path = cfg.result_folder / f"omnigaia_orchestra_{timestamp}.csv"
     runner = OmniGAIARunner(
         benchmark=benchmark,
@@ -123,11 +125,14 @@ async def main() -> int:
         sub_models=cfg.sub_models,
         max_attempts=cfg.max_attempts,
         omnigaia_tools=tools,
+        tool_models=cfg.tool_models,
+        evaluation_model=cfg.evaluation_model,
         prospective_config=prospective_cfg,
     )
     logger.info(
         f"[MAESTRO] tasks={len(levels)}, main={cfg.main_model}, "
-        f"sub={cfg.sub_models}, prospective={prospective_cfg}"
+        f"sub={cfg.sub_models}, tools={cfg.tool_models}, "
+        f"evaluation={cfg.evaluation_model}, prospective={prospective_cfg}"
     )
     results = await runner.run_levels(
         levels=levels,
@@ -139,7 +144,7 @@ async def main() -> int:
     success = sum(1 for result in results.values() if result.get("success"))
     logger.info(
         f"[MAESTRO] completed={len(results)}, success={success}, "
-        f"results={csv_path}"
+        f"results={csv_path}, model_roles={manifest_path}"
     )
     return 0
 

@@ -22,6 +22,8 @@ class OmniGAIARunner(BaseOmniGAIARunner):
         sub_models: List[str],
         max_attempts: int,
         omnigaia_tools: List[Any],
+        tool_models: Dict[str, str] | None = None,
+        evaluation_model: str = "qwen3.7-plus",
         prospective_config: ProspectiveConfig | None = None,
     ) -> None:
         self.prospective_config = prospective_config or ProspectiveConfig()
@@ -33,6 +35,8 @@ class OmniGAIARunner(BaseOmniGAIARunner):
             sub_models=sub_models,
             max_attempts=max_attempts,
             omnigaia_tools=omnigaia_tools,
+            tool_models=tool_models,
+            evaluation_model=evaluation_model,
             main_agent_cls=MainAgent,
             prompt_builder=ProspectiveOmniGAIAPrompt,
             main_agent_kwargs={"prospective_config": self.prospective_config},

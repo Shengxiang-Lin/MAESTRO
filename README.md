@@ -43,6 +43,29 @@ The important dependency direction is:
 
 Orchestra-o1 does **not** carry its own SubAgent, runner, tools, or common runtime. It reuses the canonical implementation under `orchestra/` and only keeps the Main-Agent behavior that differs from MAESTRO.
 
+## Model configuration
+
+`config/model_config.yaml` is the shared model registry. Registry keys are real provider model identifiers used at call time; do not create entries such as `gpt-*` or `claude-*` that silently map to a different backend model.
+
+Experiment YAML files choose models by role. For example:
+
+```yaml
+main_model: "qwen3.8-max"
+sub_models:
+  - "qwen3.8-max"
+
+tool_models:
+  image_analysis: "qwen3.7-flash"
+  audio_analysis: "qwen3.5-omni-flash"
+  video_vision: "qwen3.7-flash"
+  video_audio: "qwen3.5-omni-flash"
+  video_summary: "qwen3.7-flash"
+
+evaluation_model: "qwen3.7-plus"
+```
+
+`tool_models` controls the models used internally by the shared OmniGAIA image/audio/video tools. MAESTRO and Orchestra-o1 use the same role names, so changing a tool backend only requires editing the benchmark YAML. Each run also writes the resolved model roles into its trajectory/CSV output and a `model_roles_<timestamp>.json` manifest.
+
 ## Run MAESTRO
 
 ```bash
