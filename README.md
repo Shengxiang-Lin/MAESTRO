@@ -2,6 +2,20 @@
 
 This repository contains MAESTRO and the Orchestra-o1 baseline used for comparison.
 
+## Environment setup
+
+The reference environment uses **Python 3.11**. `requirements.txt` pins its complete Python package snapshot, including vLLM 0.27.1, PyTorch 2.13.0, and Transformers 5.15.1.
+
+Run these commands from the MAESTRO repository root (on the current server: `/root/autodl-tmp/MAESTRO`):
+
+```bash
+conda create --prefix ./X python=3.11
+conda activate ./X
+pip install -r requirements.txt
+```
+
+The reference platform is Linux x86_64, with PyTorch's CUDA 13.0 build (`2.13.0+cu130`). GPU runs require an NVIDIA driver compatible with that build; the Python interpreter and system dependencies are managed separately from `requirements.txt`.
+
 ## Repository layout
 
 ```text
