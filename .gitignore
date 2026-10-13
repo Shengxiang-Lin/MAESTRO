@@ -1,0 +1,47 @@
+# Environment & secrets
+.env
+
+# Personal config (contains API keys)
+config/model_config.yaml
+#config/benchmarks/
+
+# Runtime output
+workspace/
+workspace*/
+tmp/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Datasets (large files)
+benchmark/gaia/data/Gaia/
+benchmark/terminalbench/terminal-bench/
+dataset/
+
+# OS
+.DS_Store
+Thumbs.db
+
+base_models/
+saves/
+logs/
+orchestra/
+output/
+data/
+cache/
+*.log
+*.json
+*.srt
+*.tsv
+*.txt
+*.vtt
+*.html
+*.pdf
+*.wav
+others_*
+achieve/
+X/
