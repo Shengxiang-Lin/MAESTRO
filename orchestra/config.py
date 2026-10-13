@@ -8,6 +8,8 @@ from typing import Any, Dict, List
 
 import yaml
 
+from benchmark.dataset_preparation import normalize_dataset_type, prepare_dataset
+
 from base.engine.async_llm import LLMsConfig
 from base.engine.vllm_service import VLLMServiceManager
 
@@ -32,6 +34,9 @@ class GAIAOrchestraConfig:
         default_factory=lambda: Path("workspace/logs/trajectories")
     )
     timestamp: str | None = None
+    dataset_type: str = "omnigaia"
+    dataset_jsonl_path: Path | None = None
+    dataset_source_path: Path | None = None
 
     @classmethod
     def load(cls, config_path: Path | str) -> "GAIAOrchestraConfig":
@@ -57,6 +62,11 @@ class GAIAOrchestraConfig:
         if not isinstance(models, dict):
             raise ValueError("models must be a mapping from model name to configuration")
         return cls(
+            dataset_type=normalize_dataset_type(raw.get("dataset_type", "omnigaia")),
+            dataset_jsonl_path=(
+                cls._resolve_path(raw["dataset_jsonl_path"], config_path)
+                if raw.get("dataset_jsonl_path") else None
+            ),
             main_model=str(main_model),
             sub_models=[str(model) for model in sub_models],
             dataset_path=cls._resolve_path(dataset_path, config_path),
@@ -77,6 +87,16 @@ class GAIAOrchestraConfig:
                 config_path,
             ),
         )
+
+    def prepare_dataset(self) -> Path:
+        """Resolve the original source to the JSONL consumed by both runners."""
+        source = self.dataset_source_path or self.dataset_path
+        prepared = prepare_dataset(
+            source, self.attachments_dir, self.dataset_type, self.dataset_jsonl_path,
+        )
+        self.dataset_source_path = source
+        self.dataset_path = prepared
+        return prepared
 
     def install_model_overrides(self) -> None:
         """Apply experiment-local model overrides on top of the shared registry.

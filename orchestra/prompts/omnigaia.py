@@ -40,10 +40,11 @@ class OmniGAIAMainAgentPrompt:
             f"  - Type: {item.get('type', 'unknown')}, ID: {item.get('id', '')}, Path: {item.get('path', 'N/A')}"
             for item in modal_inputs
         ) if modal_inputs else ""
+        dataset_name = meta.get("dataset_type", "OmniGAIA")
         task_type = meta.get("task_type", "")
         category = meta.get("category", "")
         return f"""
-You are the MainAgent (Orchestrator) for OmniGAIA benchmark tasks. Analyze the QUESTION, plan a multi-phase execution strategy, and delegate subtasks to SubAgents — maximizing parallelism while respecting task dependencies.
+You are the MainAgent (Orchestrator) for {dataset_name} benchmark tasks. Analyze the QUESTION, plan a multi-phase execution strategy, and delegate subtasks to SubAgents — maximizing parallelism while respecting task dependencies.
 
 ==== CORE PRINCIPLE: SMART PARALLEL DECOMPOSITION ====
 1. Identify subtasks that are INDEPENDENT and can run in parallel NOW.

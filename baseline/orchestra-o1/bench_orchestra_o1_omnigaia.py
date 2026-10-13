@@ -54,6 +54,8 @@ async def main() -> int:
     logger.info("=" * 60)
 
     cfg = GAIAOrchestraConfig.load(args.config)
+    cfg.prepare_dataset()
+    logger.info(f"Dataset: type={cfg.dataset_type}, source={cfg.dataset_source_path}, jsonl={cfg.dataset_path}")
     if not cfg.dataset_path.exists():
         logger.error(f"Dataset not found: {cfg.dataset_path}")
         return 1
@@ -114,6 +116,10 @@ async def main() -> int:
     cfg.result_folder.mkdir(parents=True, exist_ok=True)
     cfg.trajectory_folder.mkdir(parents=True, exist_ok=True)
     model_manifest = {
+        "dataset_type": cfg.dataset_type,
+        "dataset_source_path": str(cfg.dataset_source_path),
+        "dataset_path": str(cfg.dataset_path),
+        "attachments_dir": str(cfg.attachments_dir),
         "main_model": cfg.main_model,
         "sub_models": cfg.sub_models,
         "tool_models": cfg.tool_models,
@@ -126,7 +132,7 @@ async def main() -> int:
         encoding="utf-8",
     )
 
-    csv_path = cfg.result_folder / f"omnigaia_orchestra_o1_{timestamp}.csv"
+    csv_path = cfg.result_folder / f"{cfg.dataset_type}_orchestra_o1_{timestamp}.csv"
     runner = BaseOmniGAIARunner(
         benchmark=benchmark,
         main_model=cfg.main_model,

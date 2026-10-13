@@ -116,6 +116,7 @@ class OmniGAIAOrchestraEnvironment(Environment):
         self.level_data = level
         self.meta_data = {
             "task_id": self.task_id,
+            "dataset_type": level.get("dataset_type", "OmniGAIA"),
             "level": self.task_level,
             "task_type": self.task_type,
             "category": self.category,

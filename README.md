@@ -220,3 +220,12 @@ Set `VERL_DIR`, `MODEL_PATH`, and optionally `DATA_DIR` before training. The tra
 ## Scope
 
 This migration covers Orchestra-o1 and the former Orchestra-o2/MAESTRO implementation only. Orchestra-o3/data-generation code is intentionally not included.
+
+
+## 数据集接入
+
+MAESTRO 和 Orchestra-o1 支持通过 `dataset_type: OmniGAIA` 或
+`dataset_type: MM-BrowseComp` 选择数据集。`dataset_path` 指向原始 JSON/JSONL；
+启动时自动生成统一格式 JSONL，并处理 MM-BrowseComp 题目前缀和本地图片附件。
+省略类别时保持原有 OmniGAIA 行为。完整配置与运行示例见
+[数据集配置说明](docs/datasets.md)。
