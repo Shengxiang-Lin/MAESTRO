@@ -1,31 +1,10 @@
-# OmniGAIA Benchmark Configuration - local Qwen3-8B GRPO model as MainAgent.
-# Set QWEN3_8B_GRPO_MODEL_PATH or replace model_path with the checkpoint directory.
+# OmniGAIA configuration with the local Qwen3-8B GRPO model as MainAgent.
+# Deployment details are defined in config/model_config.yaml.
+# Before running:
+#   export QWEN3_8B_GRPO_MODEL_PATH=/path/to/exported/qwen3-8b-grpo
 main_model: "qwen3-8b-grpo-local"
 sub_models:
   - "deepseek-v4-flash-0731"
-
-models:
-  qwen3-8b-grpo-local:
-    backend: vllm
-    model_path: "${QWEN3_8B_GRPO_MODEL_PATH}"
-    served_model_name: "qwen3-8b-grpo-local"
-    host: "127.0.0.1"
-    port: 8803
-    gpus: [0]
-    dtype: "bfloat16"
-    gpu_memory_utilization: 0.80
-    max_model_len: 16384
-    max_num_seqs: 4
-    max_num_batched_tokens: 4096
-    reasoning_parser: "qwen3"
-    enforce_eager: true
-    reuse_existing: true
-    auto_start: true
-    startup_timeout: 900
-    shutdown_on_exit: false
-    extra_body:
-      chat_template_kwargs:
-        enable_thinking: true
 
 tool_models:
   image_analysis: "qwen3.7-flash"

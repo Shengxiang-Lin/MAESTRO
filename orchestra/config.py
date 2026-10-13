@@ -79,10 +79,37 @@ class GAIAOrchestraConfig:
         )
 
     def install_model_overrides(self) -> None:
-        """Merge experiment-local model definitions into the shared registry."""
+        """Apply experiment-local model overrides on top of the shared registry.
+
+        ``config/model_config.yaml`` is the canonical model/deployment registry.
+        A benchmark may still define ``models:`` for one-off experiments, but
+        those entries are overlays rather than full replacements. Nested
+        mappings such as ``extra_body`` are merged recursively as well.
+        """
         registry = LLMsConfig.default()
-        for name, config in self.models.items():
-            registry.add_config(name, dict(config))
+        for name, override in self.models.items():
+            base = registry.configs.get(name, {})
+            if not isinstance(base, dict):
+                base = {}
+            registry.add_config(
+                name,
+                self._merge_model_config(dict(base), dict(override)),
+            )
+
+    @classmethod
+    def _merge_model_config(
+        cls,
+        base: Dict[str, Any],
+        override: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        merged = dict(base)
+        for key, value in override.items():
+            current = merged.get(key)
+            if isinstance(current, dict) and isinstance(value, dict):
+                merged[key] = cls._merge_model_config(current, value)
+            else:
+                merged[key] = value
+        return merged
 
     def required_model_names(self) -> List[str]:
         names = [self.main_model, *self.sub_models, self.evaluation_model]
@@ -124,7 +151,7 @@ class GAIAOrchestraConfig:
             )
 
     def prepare_model_backends(self) -> Dict[str, Dict[str, Any]]:
-        """Install inline configs and prepare local Main/Sub/Evaluation backends.
+        """Install overrides and prepare local Main/Sub/Evaluation backends.
 
         Remote API configs are left untouched. A config with ``backend: vllm``
         is started/reused locally, then rewritten in the registry as a normal

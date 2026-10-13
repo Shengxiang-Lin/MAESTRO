@@ -1,41 +1,23 @@
-# Example: run both MAESTRO Main-Agent and Sub-Agents on one local 27B model.
-# Only edit model_path / GPU allocation for your machine; no separate vllm command is needed.
+# Example: run both MAESTRO Main-Agent and Sub-Agents on the local 27B model
+# registered in config/model_config.yaml.
+#
+# Before running, set:
+#   export QWEN3_27B_MODEL_PATH=/path/to/your/Qwen-27B
+#
+# The vLLM deployment details (GPU list, tensor parallel size, port, memory
+# utilization, etc.) live in config/model_config.yaml rather than this
+# experiment config.
 main_model: "local-qwen-27b"
 sub_models:
   - "local-qwen-27b"
 
-models:
-  local-qwen-27b:
-    backend: vllm
-    model_path: "/path/to/your/Qwen-27B"
-    served_model_name: "local-qwen-27b"
-    host: "127.0.0.1"
-    port: 8804
+# Optional experiment-only override example. Unspecified fields continue to
+# inherit from config/model_config.yaml.
+# models:
+#   local-qwen-27b:
+#     gpus: [4, 5]
+#     port: 8810
 
-    # Multi-GPU vLLM. If tensor_parallel_size is omitted, it defaults to len(gpus).
-    gpus: [0, 1]
-    tensor_parallel_size: 2
-    dtype: "bfloat16"
-    gpu_memory_utilization: 0.90
-    max_model_len: 32768
-    max_num_seqs: 8
-    max_num_batched_tokens: 8192
-    reasoning_parser: "qwen3"
-    enforce_eager: true
-
-    # Reuse a matching server already listening on this port; otherwise start one.
-    reuse_existing: true
-    auto_start: true
-    startup_timeout: 1200
-    shutdown_on_exit: false
-    log_file: "logs/vllm/local-qwen-27b.log"
-
-    # Passed to the existing AsyncOpenAI chat request.
-    extra_body:
-      chat_template_kwargs:
-        enable_thinking: true
-
-# Tool models can stay remote while Main/Sub are local.
 tool_models:
   image_analysis: "qwen3.7-flash"
   audio_analysis: "qwen3.5-omni-flash"
