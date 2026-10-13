@@ -46,18 +46,18 @@ class ParseAudioAction(BaseAction):
         "required": ["query", "audio_path"],
         "additionalProperties": False,
     }
-    DEFAULT_MODEL_ALIAS: str = "gpt-4o-audio-preview"
+    model_name: str = "qwen3.5-omni-flash"
 
     def _get_credentials(self) -> tuple[str, str]:
         try:
-            cfg = LLMsConfig.default().get(self.DEFAULT_MODEL_ALIAS)
+            cfg = LLMsConfig.default().get(self.model_name)
             if cfg and cfg.key:
                 return cfg.key, cfg.model
         except Exception:
             pass
         return (
             os.getenv("DASHSCOPE_API_KEY") or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY"),
-            "qwen3.5-omni-plus",
+            self.model_name,
         )
 
     async def _native_multimodal_call(self, api_key: str, model: str, audio_path: str, query: str, timeout: int = 240) -> Optional[str]:

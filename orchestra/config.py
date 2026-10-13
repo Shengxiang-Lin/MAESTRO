@@ -7,6 +7,8 @@ from typing import Any, Dict, List
 
 import yaml
 
+from base.engine.async_llm import LLMsConfig
+
 
 @dataclass
 class GAIAOrchestraConfig:
@@ -16,6 +18,8 @@ class GAIAOrchestraConfig:
     sub_models: List[str]
     dataset_path: Path
     attachments_dir: Path
+    tool_models: Dict[str, str] = field(default_factory=dict)
+    evaluation_model: str = "qwen3.7-plus"
     level_filter: List[int] | None = None
     max_tasks: int | None = None
     max_attempts: int = 5
@@ -43,11 +47,16 @@ class GAIAOrchestraConfig:
         attachments_dir = raw.get("attachments_dir")
         if not attachments_dir:
             raise ValueError("attachments_dir is required")
+        tool_models = raw.get("tool_models") or {}
+        if not isinstance(tool_models, dict):
+            raise ValueError("tool_models must be a mapping from tool role to model name")
         return cls(
             main_model=str(main_model),
             sub_models=[str(model) for model in sub_models],
             dataset_path=cls._resolve_path(dataset_path, config_path),
             attachments_dir=cls._resolve_path(attachments_dir, config_path),
+            tool_models={str(role): str(model) for role, model in tool_models.items()},
+            evaluation_model=str(raw.get("evaluation_model") or "qwen3.7-plus"),
             level_filter=raw.get("level_filter"),
             max_tasks=raw.get("max_tasks"),
             max_attempts=int(raw.get("max_attempts", 5)),
@@ -61,6 +70,31 @@ class GAIAOrchestraConfig:
                 config_path,
             ),
         )
+
+    def validate_model_registry(self) -> None:
+        """Fail early when an experiment role references an unknown model name."""
+        registry = LLMsConfig.default()
+        roles: Dict[str, str] = {
+            "main_model": self.main_model,
+            "evaluation_model": self.evaluation_model,
+        }
+        roles.update(
+            {f"sub_models[{index}]": model for index, model in enumerate(self.sub_models)}
+        )
+        roles.update(
+            {f"tool_models.{role}": model for role, model in self.tool_models.items()}
+        )
+        errors: List[str] = []
+        for role, model in roles.items():
+            try:
+                registry.get(model)
+            except Exception as exc:
+                errors.append(f"{role}={model!r}: {exc}")
+        if errors:
+            raise ValueError(
+                "Model configuration contains unknown/unavailable registry entries:\n- "
+                + "\n- ".join(errors)
+            )
 
     @staticmethod
     def _resolve_path(path_str: str, config_path: Path) -> Path:

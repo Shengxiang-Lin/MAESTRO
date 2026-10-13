@@ -12,6 +12,7 @@ load_dotenv()
 import argparse
 import asyncio
 import csv
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -27,14 +28,7 @@ from benchmark.omnigaia.orchestra_benchmark import (
     OmniGAIAConfig,
     OmniGAIAOrchestraBenchmark,
 )
-from benchmark.omnigaia.tools import (
-    ExecuteCodeAction,
-    ExtractUrlContentAction,
-    GoogleSearchAction,
-    ImageAnalysisAction,
-    ParseAudioAction,
-    VideoAnalysisAction,
-)
+from benchmark.omnigaia.tools import build_omnigaia_tools, resolve_tool_models
 from orchestra.config import GAIAOrchestraConfig
 from orchestra.runners.base_omnigaia_runner import BaseOmniGAIARunner
 from orchestra_o1.main_agent import MainAgent as O1MainAgent
@@ -66,14 +60,10 @@ async def main() -> int:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     cfg.timestamp = timestamp
-    tools = [
-        GoogleSearchAction(),
-        ExecuteCodeAction(),
-        ExtractUrlContentAction(),
-        ImageAnalysisAction(),
-        ParseAudioAction(),
-        VideoAnalysisAction(),
-    ]
+    cfg.tool_models = resolve_tool_models(cfg.tool_models)
+    cfg.validate_model_registry()
+    tools = build_omnigaia_tools(cfg.tool_models)
+
     benchmark = OmniGAIAOrchestraBenchmark(
         OmniGAIAConfig(
             dataset_path=cfg.dataset_path,
@@ -123,18 +113,35 @@ async def main() -> int:
 
     cfg.result_folder.mkdir(parents=True, exist_ok=True)
     cfg.trajectory_folder.mkdir(parents=True, exist_ok=True)
-    csv_path = cfg.result_folder / f"omnigaia_orchestra_o1_{timestamp}.csv"
+    model_manifest = {
+        "main_model": cfg.main_model,
+        "sub_models": cfg.sub_models,
+        "tool_models": cfg.tool_models,
+        "evaluation_model": cfg.evaluation_model,
+    }
+    manifest_path = cfg.result_folder / f"model_roles_{timestamp}.json"
+    manifest_path.write_text(
+        json.dumps(model_manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
+    csv_path = cfg.result_folder / f"omnigaia_orchestra_o1_{timestamp}.csv"
     runner = BaseOmniGAIARunner(
         benchmark=benchmark,
         main_model=cfg.main_model,
         sub_models=cfg.sub_models,
         max_attempts=cfg.max_attempts,
         omnigaia_tools=tools,
+        tool_models=cfg.tool_models,
+        evaluation_model=cfg.evaluation_model,
         main_agent_cls=O1MainAgent,
         prompt_builder=OmniGAIAMainAgentPrompt,
         log_prefix="Orchestra-o1",
         summarize_trace=True,
+    )
+    logger.info(
+        f"[Orchestra-o1] main={cfg.main_model}, sub={cfg.sub_models}, "
+        f"tools={cfg.tool_models}, evaluation={cfg.evaluation_model}"
     )
     results = await runner.run_levels(
         levels=levels,
@@ -151,6 +158,7 @@ async def main() -> int:
     logger.info(f"Successful: {success}/{total}")
     logger.info(f"Total reward: {reward:.2f}")
     logger.info(f"Results: {csv_path}")
+    logger.info(f"Model roles: {manifest_path}")
     logger.info("=" * 60)
     return 0
 

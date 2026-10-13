@@ -38,9 +38,9 @@ class VideoAnalysisAction(BaseAction):
         "required": ["query", "video_path"],
         "additionalProperties": False,
     }
-    VISION_MODEL: str = "gpt-5"
-    AUDIO_MODEL: str = "gpt-4o-audio-preview"
-    SUMMARY_MODEL: str = "gpt-5"
+    vision_model: str = "qwen3.7-flash"
+    audio_model: str = "qwen3.5-omni-flash"
+    summary_model: str = "qwen3.7-flash"
 
     @staticmethod
     def _find_binary(name: str) -> Optional[str]:
@@ -71,7 +71,7 @@ class VideoAnalysisAction(BaseAction):
         return _FFMPEG_PATH_CACHE or None
 
     def _get_llm_config(self, model_name: Optional[str] = None) -> tuple:
-        model_name = model_name or self.VISION_MODEL
+        model_name = model_name or self.vision_model
         try:
             cfg = LLMsConfig.default().get(model_name)
             if cfg:
@@ -161,12 +161,12 @@ class VideoAnalysisAction(BaseAction):
 
     async def _transcribe_audio(self, wav_path: str, query: str) -> Optional[str]:
         try:
-            cfg = LLMsConfig.default().get(self.AUDIO_MODEL)
+            cfg = LLMsConfig.default().get(self.audio_model)
             api_key = cfg.key if cfg else None
-            model = cfg.model if cfg else "qwen3.5-omni-plus"
+            model = cfg.model if cfg else self.audio_model
         except Exception:
             api_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY")
-            model = "qwen3.5-omni-plus"
+            model = self.audio_model
         if not api_key:
             return None
         import aiohttp
@@ -198,7 +198,7 @@ class VideoAnalysisAction(BaseAction):
             return None
 
     async def _combine_visual_and_audio(self, visual: str, audio: str, query: str) -> str:
-        api_key, base_url, model = self._get_llm_config(self.SUMMARY_MODEL)
+        api_key, base_url, model = self._get_llm_config(self.summary_model)
         if not api_key:
             return f"[Visual Analysis]\n{visual}\n\n[Audio Transcription]\n{audio}"
         client = AsyncOpenAI(api_key=api_key, base_url=base_url)
@@ -225,7 +225,7 @@ class VideoAnalysisAction(BaseAction):
         start_time = float(kwargs.get("start_time", 0))
         end_time = float(kwargs["end_time"]) if kwargs.get("end_time") is not None else None
         analyze_audio = kwargs.get("analyze_audio", True)
-        api_key, base_url, model = self._get_llm_config(self.VISION_MODEL)
+        api_key, base_url, model = self._get_llm_config(self.vision_model)
 
         visual = None
         frames = self._extract_frames(video_path, max_frames, start_time, end_time)
