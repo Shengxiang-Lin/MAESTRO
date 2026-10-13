@@ -61,7 +61,7 @@ async def main() -> int:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     cfg.timestamp = timestamp
     cfg.tool_models = resolve_tool_models(cfg.tool_models)
-    cfg.validate_model_registry()
+    runtime_models = cfg.prepare_model_backends()
     tools = build_omnigaia_tools(cfg.tool_models)
 
     benchmark = OmniGAIAOrchestraBenchmark(
@@ -118,6 +118,7 @@ async def main() -> int:
         "sub_models": cfg.sub_models,
         "tool_models": cfg.tool_models,
         "evaluation_model": cfg.evaluation_model,
+        "local_runtime_models": runtime_models,
     }
     manifest_path = cfg.result_folder / f"model_roles_{timestamp}.json"
     manifest_path.write_text(
@@ -141,7 +142,8 @@ async def main() -> int:
     )
     logger.info(
         f"[Orchestra-o1] main={cfg.main_model}, sub={cfg.sub_models}, "
-        f"tools={cfg.tool_models}, evaluation={cfg.evaluation_model}"
+        f"tools={cfg.tool_models}, evaluation={cfg.evaluation_model}, "
+        f"local={runtime_models}"
     )
     results = await runner.run_levels(
         levels=levels,

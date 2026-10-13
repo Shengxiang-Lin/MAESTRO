@@ -277,6 +277,7 @@ class DelegateTaskTool(BaseAction):
             trace_summary = await self._trace_summary_if_enabled(
                 result.trace,
                 intended_task_instruction,
+                real_model,
             )
             return {
                 "task_instruction": task_instruction,
@@ -325,7 +326,10 @@ class DelegateTaskTool(BaseAction):
                     pass
 
     async def _summarize_trace(
-        self, trace, intended_task_instruction: str
+        self,
+        trace,
+        intended_task_instruction: str,
+        summary_model: str,
     ) -> str:
         if not trace:
             return "No steps executed"
@@ -338,15 +342,22 @@ class DelegateTaskTool(BaseAction):
             + trace_text
         )
         try:
-            review_llm = create_llm_instance(LLMsConfig.default().get("gpt-5"))
+            review_llm = create_llm_instance(LLMsConfig.default().get(summary_model))
             return (await review_llm(prompt)).strip()
         except Exception as exc:
             logger.warning(f"[DelegateTool] Trace summarization failed: {exc}")
             return f"Steps: {len(trace)}"
 
     async def _trace_summary_if_enabled(
-        self, trace, intended_task_instruction: str
+        self,
+        trace,
+        intended_task_instruction: str,
+        summary_model: str,
     ) -> str:
         if not self.summarize_trace:
             return ""
-        return await self._summarize_trace(trace, intended_task_instruction)
+        return await self._summarize_trace(
+            trace,
+            intended_task_instruction,
+            summary_model,
+        )

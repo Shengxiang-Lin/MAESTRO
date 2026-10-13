@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 
 import yaml
 
 from base.engine.async_llm import LLMsConfig
+from base.engine.vllm_service import VLLMServiceManager
 
 
 @dataclass
@@ -20,6 +22,7 @@ class GAIAOrchestraConfig:
     attachments_dir: Path
     tool_models: Dict[str, str] = field(default_factory=dict)
     evaluation_model: str = "qwen3.7-plus"
+    models: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     level_filter: List[int] | None = None
     max_tasks: int | None = None
     max_attempts: int = 5
@@ -50,6 +53,9 @@ class GAIAOrchestraConfig:
         tool_models = raw.get("tool_models") or {}
         if not isinstance(tool_models, dict):
             raise ValueError("tool_models must be a mapping from tool role to model name")
+        models = raw.get("models") or {}
+        if not isinstance(models, dict):
+            raise ValueError("models must be a mapping from model name to configuration")
         return cls(
             main_model=str(main_model),
             sub_models=[str(model) for model in sub_models],
@@ -57,6 +63,7 @@ class GAIAOrchestraConfig:
             attachments_dir=cls._resolve_path(attachments_dir, config_path),
             tool_models={str(role): str(model) for role, model in tool_models.items()},
             evaluation_model=str(raw.get("evaluation_model") or "qwen3.7-plus"),
+            models=cls._normalize_models(models, config_path),
             level_filter=raw.get("level_filter"),
             max_tasks=raw.get("max_tasks"),
             max_attempts=int(raw.get("max_attempts", 5)),
@@ -71,8 +78,19 @@ class GAIAOrchestraConfig:
             ),
         )
 
+    def install_model_overrides(self) -> None:
+        """Merge experiment-local model definitions into the shared registry."""
+        registry = LLMsConfig.default()
+        for name, config in self.models.items():
+            registry.add_config(name, dict(config))
+
+    def required_model_names(self) -> List[str]:
+        names = [self.main_model, *self.sub_models, self.evaluation_model]
+        names.extend(self.tool_models.values())
+        return list(dict.fromkeys(str(name) for name in names if name))
+
     def validate_model_registry(self) -> None:
-        """Fail early when an experiment role references an unknown model name."""
+        """Validate model roles without accidentally launching local services."""
         registry = LLMsConfig.default()
         roles: Dict[str, str] = {
             "main_model": self.main_model,
@@ -86,15 +104,77 @@ class GAIAOrchestraConfig:
         )
         errors: List[str] = []
         for role, model in roles.items():
+            if model not in registry.configs:
+                errors.append(f"{role}={model!r}: configuration not found")
+                continue
+            raw = registry.configs[model]
+            backend = str(raw.get("backend") or raw.get("provider") or "api").lower()
+            if backend == "vllm":
+                if not raw.get("model_path"):
+                    errors.append(f"{role}={model!r}: vLLM model_path is required")
+                continue
             try:
                 registry.get(model)
             except Exception as exc:
                 errors.append(f"{role}={model!r}: {exc}")
         if errors:
             raise ValueError(
-                "Model configuration contains unknown/unavailable registry entries:\n- "
+                "Model configuration contains invalid registry entries:\n- "
                 + "\n- ".join(errors)
             )
+
+    def prepare_model_backends(self) -> Dict[str, Dict[str, Any]]:
+        """Install inline configs and prepare local Main/Sub/Evaluation backends.
+
+        Remote API configs are left untouched. A config with ``backend: vllm``
+        is started/reused locally, then rewritten in the registry as a normal
+        OpenAI-compatible endpoint. Main-Agent and Sub-Agent code therefore use
+        exactly the same LLM client for local and remote models.
+        """
+        self.install_model_overrides()
+        self.validate_model_registry()
+        registry = LLMsConfig.default()
+        manager = VLLMServiceManager.default()
+        runtime_names = list(
+            dict.fromkeys([self.main_model, *self.sub_models, self.evaluation_model])
+        )
+        for name in runtime_names:
+            raw = dict(registry.configs[name])
+            backend = str(raw.get("backend") or raw.get("provider") or "api").lower()
+            if backend == "vllm":
+                registry.add_config(name, manager.prepare(name, raw))
+        return manager.manifest(runtime_names)
+
+    @classmethod
+    def _normalize_models(
+        cls,
+        models: Dict[str, Any],
+        config_path: Path,
+    ) -> Dict[str, Dict[str, Any]]:
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for name, value in models.items():
+            if not isinstance(value, dict):
+                raise ValueError(f"models.{name} must be a mapping")
+            cfg = dict(value)
+            backend = str(cfg.get("backend") or cfg.get("provider") or "api").lower()
+            if backend == "vllm" and cfg.get("model_path"):
+                raw_path = str(cfg["model_path"])
+                expanded = os.path.expanduser(os.path.expandvars(raw_path))
+                if not expanded.startswith("$"):
+                    candidate = Path(expanded)
+                    if not candidate.is_absolute():
+                        rel_to_config = config_path.parent / candidate
+                        if rel_to_config.exists():
+                            cfg["model_path"] = str(rel_to_config.resolve())
+                        else:
+                            repo_root = Path(__file__).resolve().parents[1]
+                            rel_to_repo = repo_root / candidate
+                            if rel_to_repo.exists():
+                                cfg["model_path"] = str(rel_to_repo.resolve())
+                    else:
+                        cfg["model_path"] = str(candidate)
+            normalized[str(name)] = cfg
+        return normalized
 
     @staticmethod
     def _resolve_path(path_str: str, config_path: Path) -> Path:

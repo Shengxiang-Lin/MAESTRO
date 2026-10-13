@@ -1,0 +1,73 @@
+# Example: run both MAESTRO Main-Agent and Sub-Agents on one local 27B model.
+# Only edit model_path / GPU allocation for your machine; no separate vllm command is needed.
+main_model: "local-qwen-27b"
+sub_models:
+  - "local-qwen-27b"
+
+models:
+  local-qwen-27b:
+    backend: vllm
+    model_path: "/path/to/your/Qwen-27B"
+    served_model_name: "local-qwen-27b"
+    host: "127.0.0.1"
+    port: 8804
+
+    # Multi-GPU vLLM. If tensor_parallel_size is omitted, it defaults to len(gpus).
+    gpus: [0, 1]
+    tensor_parallel_size: 2
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.90
+    max_model_len: 32768
+    max_num_seqs: 8
+    max_num_batched_tokens: 8192
+    reasoning_parser: "qwen3"
+    enforce_eager: true
+
+    # Reuse a matching server already listening on this port; otherwise start one.
+    reuse_existing: true
+    auto_start: true
+    startup_timeout: 1200
+    shutdown_on_exit: false
+    log_file: "logs/vllm/local-qwen-27b.log"
+
+    # Passed to the existing AsyncOpenAI chat request.
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
+
+# Tool models can stay remote while Main/Sub are local.
+tool_models:
+  image_analysis: "qwen3.7-flash"
+  audio_analysis: "qwen3.5-omni-flash"
+  video_vision: "qwen3.7-flash"
+  video_audio: "qwen3.5-omni-flash"
+  video_summary: "qwen3.7-flash"
+
+evaluation_model: "qwen3.7-plus"
+
+dataset_path: "data/OmniGAIA/test_metadata.jsonl"
+attachments_dir: "data/OmniGAIA"
+level_filter: null
+max_tasks: 360
+max_attempts: 10
+max_concurrency: 5
+
+result_folder: "logs/omnigaia_maestro_local_27b"
+trajectory_folder: "logs/omnigaia_maestro_local_27b/trajectories"
+
+prospective:
+  enabled: true
+  max_prompt_results: 12
+  max_prompt_state_chars: 9000
+  max_source_ids_per_result: 12
+  max_epistemic_bindings: 8
+  max_belief_history: 4
+  max_evidence_attempts_per_target: 6
+  max_future_requirements: 4
+  max_critical_dependencies: 3
+  max_tasks_per_action: 5
+  max_evidence_refs: 6
+  completion_consistency_check: true
+  execution_projection_enabled: true
+  strict_provider_diversity: true
+  blind_requery: true

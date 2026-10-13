@@ -20,7 +20,7 @@ class ExtractUrlContentAction(BaseAction):
         "required": ["url", "browse_query"],
         "additionalProperties": False,
     }
-    DEFAULT_MODEL: ClassVar[str] = "deepseek-reasoner"
+    DEFAULT_MODEL: ClassVar[str] = "qwen3.7-plus"
     FALLBACK_MODEL: ClassVar[str] = "qwen3.7-plus"
 
     def _get_llm_config(self, model_name: Optional[str] = None) -> tuple:

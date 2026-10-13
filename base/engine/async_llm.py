@@ -65,6 +65,7 @@ async def llm_retry(
                 )
     raise last_exception
 
+
 class LLMConfig:
     def __init__(self, config: dict):
         self.model = config.get("model", "gpt-4o-mini")
@@ -74,6 +75,8 @@ class LLMConfig:
         self.top_p = config.get("top_p", 1)
         self.enable_thinking = config.get("enable_thinking", None)
         self.extra_body = config.get("extra_body", None)
+        self.backend = str(config.get("backend") or "api").lower()
+
 
 class LLMsConfig:
     """Configuration manager for multiple LLM configurations"""
@@ -172,9 +175,17 @@ class LLMsConfig:
         if llm_name not in self.configs:
             raise ValueError(f"Configuration for {llm_name} not found")
         config = self.configs[llm_name]
+        backend = str(config.get("backend") or config.get("provider") or "api").lower()
+        if backend == "vllm" and not config.get("_runtime_prepared"):
+            from base.engine.vllm_service import VLLMServiceManager
+
+            config = VLLMServiceManager.default().prepare(llm_name, config)
+            self.configs[llm_name] = config
         api_key = config.get("api_key")
         base_url = config.get("base_url", "https://oneapi.deepwisdom.ai/v1")
-        if not api_key and "dashscope.aliyuncs.com" in base_url:
+        if backend == "vllm":
+            api_key = api_key or "EMPTY"
+        elif not api_key and "dashscope.aliyuncs.com" in base_url:
             api_key = os.getenv("DASHSCOPE_API_KEY")
             if not api_key:
                 raise ValueError(f"DASHSCOPE_API_KEY is required for model {llm_name}")
@@ -186,6 +197,7 @@ class LLMsConfig:
             "top_p": config.get("top_p", 1),
             "enable_thinking": config.get("enable_thinking", None),
             "extra_body": config.get("extra_body", None),
+            "backend": backend,
         }
         return LLMConfig(llm_config)
     
@@ -195,6 +207,7 @@ class LLMsConfig:
     def get_all_names(self) -> list:
         return list(self.configs.keys())
     
+
 class ModelPricing:
     """Pricing information for different models in USD per 1K tokens"""
     PRICES = {
@@ -239,17 +252,23 @@ class ModelPricing:
             cls._warned_unknown.add(model_name)
         return 0
 
+
 class TokenUsageTracker:
-    def __init__(self, model: str = ""):
+    def __init__(self, model: str = "", pricing_enabled: bool = True):
         self.model = model
+        self.pricing_enabled = pricing_enabled
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost = 0
         self.usage_history = []
     
     def add_usage(self, model, input_tokens, output_tokens):
-        input_cost = (input_tokens / 1000) * ModelPricing.get_price(model, "input")
-        output_cost = (output_tokens / 1000) * ModelPricing.get_price(model, "output")
+        if self.pricing_enabled:
+            input_cost = (input_tokens / 1000) * ModelPricing.get_price(model, "input")
+            output_cost = (output_tokens / 1000) * ModelPricing.get_price(model, "output")
+        else:
+            input_cost = 0.0
+            output_cost = 0.0
         total_cost = input_cost + output_cost
         usage_record = {
             "model": model,
@@ -260,8 +279,8 @@ class TokenUsageTracker:
             "output_cost": output_cost,
             "total_cost": total_cost,
             "prices": {
-                "input_price": ModelPricing.get_price(model, "input"),
-                "output_price": ModelPricing.get_price(model, "output")
+                "input_price": ModelPricing.get_price(model, "input") if self.pricing_enabled else 0.0,
+                "output_price": ModelPricing.get_price(model, "output") if self.pricing_enabled else 0.0,
             }
         }
         self.total_input_tokens += input_tokens
@@ -281,6 +300,7 @@ class TokenUsageTracker:
             "history": self.usage_history
         }
 
+
 class AsyncLLM:
     def __init__(self, config, system_msg:str = None, max_completion_tokens:int = None):
         if isinstance(config, str):
@@ -289,7 +309,10 @@ class AsyncLLM:
         self.config = config
         self.aclient = AsyncOpenAI(api_key=self.config.key, base_url=self.config.base_url)
         self.sys_msg = system_msg
-        self.usage_tracker = TokenUsageTracker(model=self.config.model)
+        self.usage_tracker = TokenUsageTracker(
+            model=self.config.model,
+            pricing_enabled=self.config.backend != "vllm",
+        )
         self.max_completion_tokens = max_completion_tokens
         
     async def __call__(self, prompt, max_tokens=None, temperature=None, seed=None):
