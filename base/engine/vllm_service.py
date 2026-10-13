@@ -270,6 +270,14 @@ class VLLMServiceManager:
             env.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
         for key, value in (config.get("env") or {}).items():
             env[str(key)] = os.path.expandvars(str(value))
+        # Apply project-owned compatibility fixes in every vLLM worker process.
+        # The compatibility loader does not edit the installed package source.
+        compat_dir = str(Path(__file__).resolve().parent / "vllm_compat")
+        python_paths = env.get("PYTHONPATH", "").split(os.pathsep)
+        if compat_dir not in python_paths:
+            env["PYTHONPATH"] = os.pathsep.join(
+                [compat_dir, *python_paths] if env.get("PYTHONPATH") else [compat_dir]
+            )
         return command, env
 
     @staticmethod
