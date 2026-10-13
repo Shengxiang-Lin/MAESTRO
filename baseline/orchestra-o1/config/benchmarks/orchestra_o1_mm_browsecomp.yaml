@@ -1,7 +1,38 @@
 # MM-BrowseComp configuration; model roles can match your existing experiment.
 main_model: "qwen3.7-plus"
 sub_models:
-  - "qwen3.7-plus"
+  - "qwen3.5-9b-local"
+
+# Local Sub-Agent; image/audio/video tools keep their configured API models.
+models:
+  qwen3.5-9b-local:
+    backend: vllm
+    model_path: "/home/lsx/code/MAESTRO/base_models/Qwen3.5-9B"
+    served_model_name: "qwen3.5-9b-local"
+    host: "127.0.0.1"
+    port: 8806
+    gpus: [2]
+    tensor_parallel_size: 1
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.90
+    max_model_len: 16384
+    max_num_seqs: 10
+    max_num_batched_tokens: 4096
+    reasoning_parser: "qwen3"
+    enforce_eager: true
+    reuse_existing: true
+    auto_start: true
+    startup_timeout: 900
+    shutdown_on_exit: false
+    log_file: "logs/vllm/qwen3.5-9b-local.log"
+    # Sub-Agent receives text; existing vision tools analyze the media.
+    extra_args:
+      - "--language-model-only"
+    env:
+      VLLM_USE_FLASHINFER_SAMPLER: "0"
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
 
 tool_models:
   image_analysis: "qwen3.7-flash"
@@ -23,5 +54,5 @@ max_tasks: 10
 max_attempts: 10
 max_concurrency: 10
 
-result_folder: "logs/mm_browsecomp_orchestra_o1_qwen3.7_plus"
-trajectory_folder: "logs/mm_browsecomp_orchestra_o1_qwen3.7_plus/trajectories"
+result_folder: "logs/mm_browsecomp_orchestra_o1_qwen37_plus_local_qwen35_9b"
+trajectory_folder: "logs/mm_browsecomp_orchestra_o1_qwen37_plus_local_qwen35_9b/trajectories"
