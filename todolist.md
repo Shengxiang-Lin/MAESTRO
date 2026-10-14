@@ -10,7 +10,20 @@ conda create --prefix ./X python=3.11
 conda activate ./X
 pip install -r requirements.txt
 mkdir -p logs/nohup
+mkdir data
 ```
+OmniGAIA
+```bash
+huggingface-cli download --repo-type dataset RUC-NLPIR/OmniGAIA --local-dir ./data/OmniGAIA
+```
+
+MM-BrowseComp 
+```bash
+cd data
+git clone https://github.com/MMBrowseComp/MM-BrowseComp.git
+python src/decrypt.py data/MMBrowseComp_400.jsonl data/MMBrowseComp_400_decrypted.jsonl
+```
+
 
 | 数据集 | Main-Agent | Sub-Agent | 配置文件 |
 |---|---|---|---|
