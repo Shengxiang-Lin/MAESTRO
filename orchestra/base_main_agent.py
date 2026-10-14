@@ -103,105 +103,92 @@ class BaseMainAgent(BaseAgent):
 
     @staticmethod
     def _runtime_telemetry(subtask: Dict[str, Any]) -> Dict[str, Any]:
+        """Collect internal execution metadata without exposing it in O1 history."""
         provenance = trace_control_provenance(subtask.get("trace") or [])
         assigned = subtask.get("tools_assigned") or []
         if isinstance(assigned, str):
             assigned = [assigned]
         return {
-            "assigned_tool_ids": sorted(
-                {str(value) for value in assigned if value}
-            ),
+            "assigned_tool_ids": sorted({str(value) for value in assigned if value}),
             "executed_tool_ids": list(provenance.get("executed_tool_ids") or []),
-            "attested_source_ids": list(
-                provenance.get("attested_source_ids") or []
-            )[:12],
-            "context_fingerprint": str(
-                subtask.get("context_fingerprint") or "empty"
-            ),
+            "attested_source_ids": list(provenance.get("attested_source_ids") or [])[:12],
+            "context_fingerprint": str(subtask.get("context_fingerprint") or "empty"),
         }
 
-    @staticmethod
-    def _format_runtime_telemetry(entry: Dict[str, Any]) -> str:
-        def _fmt(values: Any) -> str:
-            values = [str(value) for value in (values or []) if str(value)]
-            return ", ".join(values) if values else "none"
-
-        return (
-            f"model={entry.get('model') or 'unknown'}; "
-            f"assigned_tools=[{_fmt(entry.get('assigned_tool_ids'))}]; "
-            f"executed_tools=[{_fmt(entry.get('executed_tool_ids'))}]; "
-            f"attested_sources=[{_fmt(entry.get('attested_source_ids'))}]; "
-            f"context_fp={entry.get('context_fingerprint') or 'empty'}"
-        )
-
     def _format_subtask_history(self) -> str:
+        """Official Orchestra-o1 Main-visible subtask history format."""
         if not self.task_entries:
             return "No subtasks completed yet."
 
-        lines = [
-            "Runtime telemetry below records the execution path only; it does not "
-            "certify the semantic correctness of a Sub-Agent result."
-        ]
+        lines: List[str] = []
         done_count = 0
-        total_subtasks = 0
         for entry in self.task_entries:
             if entry.get("is_parallel_batch"):
                 batch_results = entry.get("subtask_results", [])
-                total_subtasks += len(batch_results)
-                block = [
-                    f'[Attempt {entry["attempt"]}] Parallel Batch '
-                    f'({len(batch_results)} subtasks)'
+                batch_lines = [
+                    f'[Attempt {entry["attempt"]}] 🔄 Parallel Batch ({len(batch_results)} subtasks)'
                 ]
                 for index, sub in enumerate(batch_results):
-                    status = sub.get("status", "?")
+                    emoji = "✅" if sub.get("status") == "done" else "⚠️"
                     model_display = sub.get("model", "?")
                     if self.mask_model_names and model_display in self.model_to_alias:
                         model_display = self.model_to_alias[model_display]
-                    block.extend(
-                        [
-                            f"  [{index + 1}] {status} | Model: {model_display} | "
-                            f"Steps: {sub.get('steps_taken', '?')}/{sub.get('max_steps', 30)}",
-                            f"  |- Task: {sub.get('instruction', 'N/A')}",
-                            f"  |- Result: {sub.get('result', '(no result)')}",
-                            f"  |- Runtime telemetry: {self._format_runtime_telemetry(sub)}",
-                        ]
+                    steps = f'{sub.get("steps_taken", "?")}/{sub.get("max_steps", 30)}'
+                    batch_lines.append(
+                        f'  [{index + 1}] {emoji} {sub.get("status", "?")} | Model: {model_display} | Steps: {steps}'
                     )
+                    batch_lines.append(f'  ├─ Task: {sub.get("instruction", "N/A")}')
+                    result_text = (
+                        f'"{sub.get("result", "")}"'
+                        if sub.get("result") and sub.get("result") != "-"
+                        else "(no result)"
+                    )
+                    batch_lines.append(f"  ├─ Result: {result_text}")
                     if sub.get("summary"):
-                        block.append(f"  |- Summary: {sub['summary']}")
-                    if sub.get("trace_summary"):
-                        block.append(
-                            "  `- Trace summary:\n"
-                            + indent_text(str(sub["trace_summary"]), "     ")
+                        batch_lines.append(f'  ├─ Summary: {sub["summary"]}')
+                    trace_summary = sub.get("trace_summary", "")
+                    if trace_summary and trace_summary != "N/A":
+                        batch_lines.append(
+                            f'  └─ Trace summary:\n{indent_text(str(trace_summary), "     ")}'
                         )
-                    if status == "done":
+                    else:
+                        batch_lines[-1] = batch_lines[-1].replace("├─", "└─")
+                    if sub.get("status") == "done":
                         done_count += 1
-                lines.append("\n".join(block))
-                continue
-
-            total_subtasks += 1
-            status = entry.get("status", "?")
-            model_display = entry.get("model", "?")
-            if self.mask_model_names and model_display in self.model_to_alias:
-                model_display = self.model_to_alias[model_display]
-            block = [
-                f'[Attempt {entry.get("attempt", "?")}] {status} | '
-                f'Model: {model_display} | Steps: '
-                f'{entry.get("steps_taken", "?")}/{entry.get("max_steps", 30)}',
-                f"|- Task: {entry.get('instruction', 'N/A')}",
-                f"|- Result: {entry.get('result', '(no result)')}",
-                f"|- Runtime telemetry: {self._format_runtime_telemetry(entry)}",
-            ]
-            if entry.get("summary"):
-                block.append(f"|- Summary: {entry['summary']}")
-            if entry.get("trace_summary"):
-                block.append(
-                    "`- Trace summary:\n"
-                    + indent_text(str(entry["trace_summary"]), "   ")
+                lines.append("\n".join(batch_lines))
+            else:
+                emoji = "✅" if entry.get("status") == "done" else "⚠️"
+                model_display = entry.get("model", "?")
+                if self.mask_model_names and model_display in self.model_to_alias:
+                    model_display = self.model_to_alias[model_display]
+                entry_lines = [
+                    f'[Attempt {entry.get("attempt", "?")}] {emoji} {entry.get("status", "?")} | '
+                    f'Model: {model_display} | Steps: {entry.get("steps_taken", "?")}/{entry.get("max_steps", 30)}',
+                    f'├─ Task: {entry.get("instruction", "N/A")}',
+                ]
+                result_text = (
+                    f'"{entry.get("result", "")}"'
+                    if entry.get("result") and entry.get("result") != "-"
+                    else "(no result)"
                 )
-            lines.append("\n".join(block))
-            if status == "done":
-                done_count += 1
+                entry_lines.append(f"├─ Result: {result_text}")
+                if entry.get("summary"):
+                    entry_lines.append(f'├─ Summary: {entry["summary"]}')
+                trace_summary = entry.get("trace_summary", "")
+                if trace_summary and trace_summary != "N/A":
+                    entry_lines.append(
+                        f'└─ Trace summary:\n{indent_text(str(trace_summary), "   ")}'
+                    )
+                else:
+                    entry_lines[-1] = entry_lines[-1].replace("├─", "└─")
+                lines.append("\n".join(entry_lines))
+                if entry.get("status") == "done":
+                    done_count += 1
 
+        total_subtasks = sum(
+            len(entry.get("subtask_results", [])) if entry.get("is_parallel_batch") else 1
+            for entry in self.task_entries
+        )
         lines.append(f"---\nSummary: {done_count}/{total_subtasks} subtasks done")
         return "\n\n".join(lines)
 
@@ -281,10 +268,7 @@ class BaseMainAgent(BaseAgent):
             None,
         )
         if tool is None:
-            return {
-                "action": "error",
-                "error": f"Unknown action: {action_name}",
-            }, response
+            return {"action": "error", "error": f"Unknown action: {action_name}"}, response
 
         result = await tool(**params)
         self._update_context(str(action_name), params, result)
@@ -315,9 +299,7 @@ class BaseMainAgent(BaseAgent):
                         "instruction": sub_result.get("task_instruction", "N/A"),
                         "model": sub_result.get("model", "unknown"),
                         "steps_taken": sub_result.get("steps_taken", 0),
-                        "max_steps": sub_result.get("statistics", {}).get(
-                            "max_steps", 30
-                        ),
+                        "max_steps": sub_result.get("statistics", {}).get("max_steps", 30),
                         "cost": sub_result.get("cost", 0),
                         "result": result_text,
                         "summary": finish.get("summary", "") if finish else "",
@@ -350,9 +332,7 @@ class BaseMainAgent(BaseAgent):
                         ),
                         "model": result.get("model", params.get("model", "unknown")),
                         "steps_taken": result.get("steps_taken", 0),
-                        "max_steps": result.get("statistics", {}).get(
-                            "max_steps", 30
-                        ),
+                        "max_steps": result.get("statistics", {}).get("max_steps", 30),
                         "cost": result.get("cost", 0),
                         "result": finish.get("result", "-") if finish else "-",
                         "summary": finish.get("summary", "") if finish else "",
@@ -364,14 +344,11 @@ class BaseMainAgent(BaseAgent):
             summary += f"  Answer: {params.get('answer', 'N/A')}\n"
 
         self.context = summary + "\n" + self.context
-        self.history.append(
-            {"attempt": self.attempt, "action": action, "result": result}
-        )
+        self.history.append({"attempt": self.attempt, "action": action, "result": result})
 
     async def run(self, request: Optional[str] = None) -> str:
         del request
         return "Orchestration via Runner"
 
 
-# Backward-compatible name for the O1 baseline.
 MainAgent = BaseMainAgent

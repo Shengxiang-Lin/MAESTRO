@@ -13,6 +13,7 @@ tool_models:
   video_summary: "qwen3.7-flash"
 
 evaluation_model: "qwen3.7-plus"
+trace_summary_model: "qwen3.7-plus"
 
 dataset_path: "data/OmniGAIA/test_metadata.jsonl"
 attachments_dir: "data/OmniGAIA"

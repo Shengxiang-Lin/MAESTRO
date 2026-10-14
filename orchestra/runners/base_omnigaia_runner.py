@@ -33,6 +33,7 @@ class BaseOmniGAIARunner:
         omnigaia_tools: List[BaseAction],
         tool_models: Dict[str, str] | None = None,
         evaluation_model: str = "qwen3.7-plus",
+        trace_summary_model: str = "qwen3.7-plus",
         main_agent_cls: Type[BaseMainAgent] = BaseMainAgent,
         prompt_builder: Any = None,
         main_agent_kwargs: Dict[str, Any] | None = None,
@@ -46,6 +47,7 @@ class BaseOmniGAIARunner:
         self.omnigaia_tools = omnigaia_tools
         self.tool_models = dict(tool_models or {})
         self.evaluation_model = evaluation_model
+        self.trace_summary_model = trace_summary_model
         self.main_agent_cls = main_agent_cls
         self.prompt_builder = prompt_builder
         self.main_agent_kwargs = dict(main_agent_kwargs or {})
@@ -63,10 +65,10 @@ class BaseOmniGAIARunner:
             csv_file,
             fieldnames=[
                 "task_id", "level", "task_type", "category", "main_model",
-                "sub_models", "tool_models", "evaluation_model", "final_sub_model",
-                "success", "reward", "attempts", "sub_cost", "main_cost",
-                "total_cost", "timestamp", "start_time", "end_time", "error",
-                *COST_CSV_FIELDS,
+                "sub_models", "tool_models", "evaluation_model", "trace_summary_model",
+                "final_sub_model", "success", "reward", "attempts", "sub_cost",
+                "main_cost", "total_cost", "timestamp", "start_time", "end_time",
+                "error", *COST_CSV_FIELDS,
             ],
         )
         csv_writer.writeheader()
@@ -119,6 +121,7 @@ class BaseOmniGAIARunner:
             "sub_models": self.sub_models,
             "tool_models": self.tool_models,
             "evaluation_model": self.evaluation_model,
+            "trace_summary_model": self.trace_summary_model,
             "max_attempts": self.max_attempts,
             "success": success,
             "total_reward": total_reward,
@@ -165,6 +168,7 @@ class BaseOmniGAIARunner:
             benchmark_type="omnigaia",
             alias_to_model=alias_to_model,
             summarize_trace=self.summarize_trace,
+            trace_summary_model=self.trace_summary_model,
         )
         return self.main_agent_cls(
             llm=main_llm,
@@ -284,7 +288,6 @@ class BaseOmniGAIARunner:
                         logger.error(f"[{self.log_prefix}] Task {level_id} failed: {error}")
                         results[level_id] = {"success": False, "reward": 0.0, "error": error}
                     finally:
-                        # Preserve costs even when a task fails after a paid call.
                         main_cost = max(0.0, main_agent.get_usage_cost() - main_cost_before) if main_agent else 0.0
                         agent_cost = sum(r.cost for r in monitor.records if r.category == "agent")
                         sub_cost = max(0.0, agent_cost - main_cost)
@@ -322,6 +325,7 @@ class BaseOmniGAIARunner:
                                     "sub_models": ",".join(self.sub_models),
                                     "tool_models": json.dumps(self.tool_models, ensure_ascii=False, sort_keys=True),
                                     "evaluation_model": self.evaluation_model,
+                                    "trace_summary_model": self.trace_summary_model,
                                     "final_sub_model": None, "success": success,
                                     "reward": f"{total_reward:.4f}",
                                     "attempts": len(attempts_detail),

@@ -124,6 +124,7 @@ async def main() -> int:
         "sub_models": cfg.sub_models,
         "tool_models": cfg.tool_models,
         "evaluation_model": cfg.evaluation_model,
+        "trace_summary_model": cfg.trace_summary_model,
         "local_runtime_models": runtime_models,
     }
     manifest_path = cfg.result_folder / f"model_roles_{timestamp}.json"
@@ -141,6 +142,7 @@ async def main() -> int:
         omnigaia_tools=tools,
         tool_models=cfg.tool_models,
         evaluation_model=cfg.evaluation_model,
+        trace_summary_model=cfg.trace_summary_model,
         main_agent_cls=O1MainAgent,
         prompt_builder=OmniGAIAMainAgentPrompt,
         log_prefix="Orchestra-o1",
@@ -149,7 +151,7 @@ async def main() -> int:
     logger.info(
         f"[Orchestra-o1] main={cfg.main_model}, sub={cfg.sub_models}, "
         f"tools={cfg.tool_models}, evaluation={cfg.evaluation_model}, "
-        f"local={runtime_models}"
+        f"trace_summary={cfg.trace_summary_model}, local={runtime_models}"
     )
     results = await runner.run_levels(
         levels=levels,

@@ -14,12 +14,7 @@ DEFAULT_RUNTIME_DIR = PROJECT_ROOT / "tmp"
 
 class ExecuteCodeAction(BaseAction):
     name: str = "ExecuteCodeAction"
-    description: str = (
-        "Execute code in a sandboxed subprocess (python|bash). Relative output "
-        f"files are created under {DEFAULT_RUNTIME_DIR}. Generated, downloaded, "
-        "and intermediate files must stay in ORCHESTRA_TMP_DIR; do not write "
-        "them to the repository root. Default disabled; enable via config and whitelist."
-    )
+    description: str = "Execute code in a sandboxed subprocess (python|bash). Default disabled; enable via config and whitelist."
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
