@@ -13,6 +13,10 @@ from base.engine.cost_monitor import record_api_response, record_unmeasured_call
 from benchmark.omnigaia.tools.dashscope_responses import request_response
 
 
+def _env_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class ExtractUrlContentAction(BaseAction):
     name: str = "ExtractUrlContentAction"
     description: str = (
@@ -28,6 +32,7 @@ class ExtractUrlContentAction(BaseAction):
         "required": ["url", "browse_query"],
         "additionalProperties": False,
     }
+    provider: Optional[str] = None
     model_name: str = "qwen3.7-flash"
 
     def _get_llm_config(self, model_name: Optional[str] = None) -> tuple:
@@ -89,8 +94,12 @@ class ExtractUrlContentAction(BaseAction):
         )
         try:
             obj = request_response(
-                api_key=api_key, base_url=base_url, model=model, prompt=prompt,
-                category="browse", idle_timeout=timeout,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                prompt=prompt,
+                category="browse",
+                idle_timeout=timeout,
             )
         except Exception:
             return None
@@ -121,7 +130,6 @@ class ExtractUrlContentAction(BaseAction):
             answer, preview = full_text.split("===SOURCES===", 1)
             answer, preview = answer.strip(), preview.strip()
         else:
-            # Keep evidence even when the model does not follow the delimiter.
             words = full_text.split()
             answer = " ".join(words[:200]).strip()
             preview_rest = " ".join(words[200:]).strip()
@@ -133,6 +141,97 @@ class ExtractUrlContentAction(BaseAction):
         if not answer:
             return None
         return answer, preview[:2500]
+
+    async def _jina_direct(
+        self,
+        url: str,
+        browse_query: str,
+    ) -> Optional[Dict[str, Any]]:
+        jina_key = os.getenv("JINA_API_KEY")
+        if not jina_key:
+            return None
+        try:
+            response = await asyncio.to_thread(
+                requests.get,
+                f"https://r.jina.ai/{url}",
+                headers={"Authorization": f"Bearer {jina_key}"},
+                timeout=10,
+            )
+            text = response.text
+            record_unmeasured_call(
+                "jina-reader",
+                "browse",
+                "external_provider_price_not_configured",
+            )
+            if not text.strip():
+                return None
+            api_key, base_url, model = self._get_llm_config()
+            if not api_key:
+                return None
+            client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+            completion = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Source:\n{text[:120000]}\n\n"
+                            f"Question: {browse_query}"
+                        ),
+                    }
+                ],
+            )
+            record_api_response(
+                model,
+                completion,
+                category="browse",
+                base_url=base_url,
+            )
+            answer = completion.choices[0].message.content
+            if not answer:
+                return None
+            return {
+                "success": True,
+                "output": {
+                    "url": url,
+                    "answer": answer.strip(),
+                    "source_preview": text[:2000],
+                },
+                "error": None,
+                "metrics": {},
+            }
+        except Exception as exc:
+            logger.warning(f"[ExtractUrl] Jina path failed: {exc}")
+            return None
+
+    async def _dashscope_direct(
+        self,
+        url: str,
+        browse_query: str,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            result = await asyncio.to_thread(
+                self._dashscope_fallback_direct,
+                url,
+                browse_query,
+            )
+        except Exception as exc:
+            result = None
+            logger.warning(f"[ExtractUrl] DashScope fallback failed: {exc}")
+        if result is None:
+            return None
+        answer, preview = result
+        preview_line = f"(DashScope web_search direct fallback) {preview[:2000]}"
+        return {
+            "success": True,
+            "output": {
+                "url": url,
+                "answer": answer,
+                "source_preview": preview_line,
+            },
+            "error": None,
+            "metrics": {},
+        }
 
     async def __call__(self, **kwargs) -> Any:
         url = str(kwargs.get("url") or "").strip()
@@ -152,92 +251,40 @@ class ExtractUrlContentAction(BaseAction):
                 "metrics": {},
             }
 
-        if os.getenv("EXTRACT_URL_USE_JINA", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            jina_key = os.getenv("JINA_API_KEY")
-            if jina_key:
-                try:
-                    text = await asyncio.to_thread(
-                        lambda: requests.get(
-                            f"https://r.jina.ai/{url}",
-                            headers={"Authorization": f"Bearer {jina_key}"},
-                            timeout=10,
-                        ).text
-                    )
-                    record_unmeasured_call(
-                        "jina-reader",
-                        "browse",
-                        "external_provider_price_not_configured",
-                    )
-                    if text.strip():
-                        api_key, base_url, model = self._get_llm_config()
-                        if api_key:
-                            client = AsyncOpenAI(
-                                api_key=api_key,
-                                base_url=base_url,
-                            )
-                            completion = await client.chat.completions.create(
-                                model=model,
-                                messages=[
-                                    {
-                                        "role": "user",
-                                        "content": (
-                                            f"Source:\n{text[:120000]}\n\n"
-                                            f"Question: {browse_query}"
-                                        ),
-                                    }
-                                ],
-                            )
-                            record_api_response(
-                                model,
-                                completion,
-                                category="browse",
-                                base_url=base_url,
-                            )
-                            answer = completion.choices[0].message.content
-                            if answer:
-                                return {
-                                    "success": True,
-                                    "output": {
-                                        "url": url,
-                                        "answer": answer.strip(),
-                                        "source_preview": text[:2000],
-                                    },
-                                    "error": None,
-                                    "metrics": {},
-                                }
-                except Exception as exc:
-                    logger.warning(f"[ExtractUrl] Jina path failed: {exc}")
-
-        try:
-            result = await asyncio.to_thread(
-                self._dashscope_fallback_direct,
-                url,
-                browse_query,
-            )
-        except Exception as exc:
-            result = None
-            logger.warning(f"[ExtractUrl] DashScope fallback failed: {exc}")
-        if result is None:
+        provider = str(self.provider or "").strip().lower()
+        if provider:
+            if provider == "jina":
+                result = await self._jina_direct(url, browse_query)
+            elif provider == "dashscope":
+                result = await self._dashscope_direct(url, browse_query)
+            else:
+                return {
+                    "success": False,
+                    "output": None,
+                    "error": f"unsupported browse provider: {provider}",
+                    "metrics": {},
+                }
+            if result is not None:
+                return result
             return {
                 "success": False,
                 "output": None,
-                "error": "failed to extract targeted URL content",
+                "error": f"{provider} browse failed",
                 "metrics": {},
             }
-        answer, preview = result
-        preview_line = f"(DashScope web_search direct fallback) {preview[:2000]}"
+
+        # Backward compatibility for direct construction without YAML provider:
+        # preserve the old Jina-first-then-DashScope behavior.
+        if _env_enabled("EXTRACT_URL_USE_JINA"):
+            result = await self._jina_direct(url, browse_query)
+            if result is not None:
+                return result
+        result = await self._dashscope_direct(url, browse_query)
+        if result is not None:
+            return result
         return {
-            "success": True,
-            "output": {
-                "url": url,
-                "answer": answer,
-                "source_preview": preview_line,
-            },
-            "error": None,
+            "success": False,
+            "output": None,
+            "error": "failed to extract targeted URL content",
             "metrics": {},
         }
