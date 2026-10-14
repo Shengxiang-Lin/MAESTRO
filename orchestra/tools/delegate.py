@@ -129,6 +129,39 @@ class DelegateTaskTool(BaseAction):
                 )
         return str(getattr(self.env, "instruction", "") or "")
 
+    @staticmethod
+    def _empty_usage() -> Dict[str, Any]:
+        return {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_tokens": 0,
+            "total_cost": 0.0,
+            "call_count": 0,
+        }
+
+    def _task_internal_metadata(
+        self,
+        task: Dict[str, Any],
+        *,
+        model: str,
+        usage: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        context = str(task.get("context") or "")
+        normalized_context = " ".join(context.lower().split())
+        context_fingerprint = (
+            hashlib.sha256(normalized_context.encode("utf-8")).hexdigest()[:12]
+            if normalized_context
+            else "empty"
+        )
+        return {
+            "model": str(model or ""),
+            "preferred_tools": list(task.get("preferred_tools") or []),
+            "route_compilation": deepcopy(task.get("route_compilation") or {}),
+            "context_fingerprint": context_fingerprint,
+            "agent_spec": deepcopy(task.get("agent_spec") or {}),
+            "usage": deepcopy(usage or self._empty_usage()),
+        }
+
     async def __call__(
         self,
         tasks: List[Dict[str, Any]] | None = None,
@@ -170,26 +203,33 @@ class DelegateTaskTool(BaseAction):
             return_exceptions=True,
         )
 
-        processed_results = []
+        processed_results: List[Dict[str, Any]] = []
+        internal_subtasks: List[Dict[str, Any]] = []
         for index, result in enumerate(subtask_results):
             if isinstance(result, Exception):
                 logger.error(f"[DelegateTool] Subtask {index} failed: {result}")
-                processed_results.append(
-                    {
-                        "subtask_index": index,
-                        "task_instruction": intended_instructions[index],
-                        "model": runtime_tasks[index].get("model", ""),
-                        "error": str(result),
-                        "steps_taken": 0,
-                        "done": False,
-                        "cost": 0.0,
-                    }
+                public_result = {
+                    "subtask_index": index,
+                    "task_instruction": intended_instructions[index],
+                    "error": str(result),
+                    "steps_taken": 0,
+                    "done": False,
+                    "cost": 0.0,
+                }
+                internal = self._task_internal_metadata(
+                    runtime_tasks[index],
+                    model=str(runtime_tasks[index].get("model") or ""),
                 )
             else:
-                result["subtask_index"] = index
+                public_result = dict(result)
+                internal = public_result.pop("_internal_metadata", {})
+                public_result["subtask_index"] = index
                 # Return the Main-requested instruction, not MAESTRO-internal rewrites.
-                result["task_instruction"] = intended_instructions[index]
-                processed_results.append(result)
+                public_result["task_instruction"] = intended_instructions[index]
+            internal = dict(internal or {})
+            internal["subtask_index"] = index
+            processed_results.append(public_result)
+            internal_subtasks.append(internal)
 
         total_cost = sum(
             float(item.get("cost", 0.0) or 0.0) for item in processed_results
@@ -197,28 +237,36 @@ class DelegateTaskTool(BaseAction):
         total_steps = sum(
             int(item.get("steps_taken", 0) or 0) for item in processed_results
         )
+        aggregate_usage = {
+            "total_input_tokens": sum(
+                int((item.get("usage") or {}).get("total_input_tokens", 0) or 0)
+                for item in internal_subtasks
+            ),
+            "total_output_tokens": sum(
+                int((item.get("usage") or {}).get("total_output_tokens", 0) or 0)
+                for item in internal_subtasks
+            ),
+            "total_tokens": sum(
+                int((item.get("usage") or {}).get("total_tokens", 0) or 0)
+                for item in internal_subtasks
+            ),
+            "total_cost": total_cost,
+            "call_count": sum(
+                int((item.get("usage") or {}).get("call_count", 0) or 0)
+                for item in internal_subtasks
+            ),
+        }
         return {
+            # Public result matches the official Orchestra-o1 delegation contract.
             "subtask_results": processed_results,
             "total_subtasks": len(tasks),
             "total_cost": total_cost,
             "total_steps": total_steps,
             "all_done": all(item.get("done", False) for item in processed_results),
-            # Internal accounting remains available to MAESTRO/trajectory code but
-            # BaseMainAgent does not expose it in the O1-visible subtask history.
-            "usage": {
-                "total_input_tokens": sum(
-                    int((item.get("usage") or {}).get("total_input_tokens", 0) or 0)
-                    for item in processed_results
-                ),
-                "total_output_tokens": sum(
-                    int((item.get("usage") or {}).get("total_output_tokens", 0) or 0)
-                    for item in processed_results
-                ),
-                "total_cost": total_cost,
-                "call_count": sum(
-                    int((item.get("usage") or {}).get("call_count", 0) or 0)
-                    for item in processed_results
-                ),
+            # MAESTRO/audit-only data is explicitly separated from the public result.
+            "_internal_metadata": {
+                "subtasks": internal_subtasks,
+                "usage": aggregate_usage,
             },
         }
 
@@ -233,17 +281,8 @@ class DelegateTaskTool(BaseAction):
         context = str(task.get("context") or "")
         tools = task.get("tools")
 
-        # The following fields are MAESTRO-internal execution metadata. They are
-        # intentionally absent from the public DelegateTaskTool schema above.
         preferred_tools = task.get("preferred_tools") or []
-        route_compilation = deepcopy(task.get("route_compilation") or {})
         agent_spec = task.get("agent_spec") or {}
-        normalized_context = " ".join(context.lower().split())
-        context_fingerprint = (
-            hashlib.sha256(normalized_context.encode("utf-8")).hexdigest()[:12]
-            if normalized_context
-            else "empty"
-        )
         real_model = self.alias_to_model.get(model, model)
         if real_model not in self.models:
             return {
@@ -252,7 +291,10 @@ class DelegateTaskTool(BaseAction):
                 "done": False,
                 "cost": 0.0,
                 "task_instruction": task_instruction,
-                "model": real_model,
+                "_internal_metadata": self._task_internal_metadata(
+                    task,
+                    model=real_model,
+                ),
             }
 
         env_clone = self.env.clone()
@@ -309,7 +351,6 @@ class DelegateTaskTool(BaseAction):
                 intended_task_instruction,
             )
             return {
-                # Official O1-facing result contract.
                 "task_instruction": task_instruction,
                 "model": real_model,
                 "tools_assigned": tools,
@@ -326,28 +367,25 @@ class DelegateTaskTool(BaseAction):
                     "max_steps": execution_max_steps,
                     "completed": result.done,
                 },
-                # Internal extensions retained for MAESTRO state/audit only.
-                "preferred_tools": preferred_tools,
-                "route_compilation": route_compilation,
-                "context_fingerprint": context_fingerprint,
-                "agent_spec": agent_spec,
-                "usage": llm.get_usage_summary(),
+                "_internal_metadata": self._task_internal_metadata(
+                    task,
+                    model=real_model,
+                    usage=llm.get_usage_summary(),
+                ),
             }
         except Exception as exc:
             logger.error(f"[DelegateTool] Subtask {idx} error: {exc}")
             return {
                 "error": str(exc),
                 "task_instruction": task_instruction,
-                "model": real_model,
                 "steps_taken": 0,
-                "tools_assigned": tools,
                 "done": False,
                 "cost": 0.0,
-                "preferred_tools": preferred_tools,
-                "route_compilation": route_compilation,
-                "context_fingerprint": context_fingerprint,
-                "agent_spec": agent_spec,
-                "usage": llm.get_usage_summary(),
+                "_internal_metadata": self._task_internal_metadata(
+                    task,
+                    model=real_model,
+                    usage=llm.get_usage_summary(),
+                ),
             }
         finally:
             if hasattr(env_clone, "close"):

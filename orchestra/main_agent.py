@@ -151,6 +151,38 @@ class MainAgent(BaseMainAgent):
         )
         return merged
 
+    @staticmethod
+    def _result_for_observed_state(result: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge private execution metadata into a ledger-only copy.
+
+        DelegateTaskTool keeps its public SubAgent results aligned with official
+        Orchestra-o1. MAESTRO alone consumes the private metadata needed for
+        state accounting, without exposing it through the shared O1 history.
+        """
+        enriched = deepcopy(result or {})
+        batch = enriched.get("subtask_results")
+        if not isinstance(batch, list):
+            return enriched
+
+        internal = (enriched.get("_internal_metadata") or {}).get("subtasks") or []
+        for index, subtask in enumerate(batch):
+            if not isinstance(subtask, dict) or index >= len(internal):
+                continue
+            metadata = internal[index]
+            if not isinstance(metadata, dict):
+                continue
+            for key in (
+                "model",
+                "preferred_tools",
+                "route_compilation",
+                "context_fingerprint",
+                "agent_spec",
+                "usage",
+            ):
+                if key in metadata and not subtask.get(key):
+                    subtask[key] = deepcopy(metadata[key])
+        return enriched
+
     async def step(self, observation, history, **kwargs) -> tuple:
         del observation, history, kwargs
         self.attempt += 1
@@ -240,7 +272,11 @@ class MainAgent(BaseMainAgent):
                 )
 
         if action_name == "delegate_task":
-            result_ids = self.observed_state.observe_feedback(result, self.attempt)
+            ledger_result = self._result_for_observed_state(result)
+            result_ids = self.observed_state.observe_feedback(
+                ledger_result,
+                self.attempt,
+            )
             self.observed_state.record_evidence_attempts(
                 attempt=self.attempt,
                 execution_params=execution_params,
