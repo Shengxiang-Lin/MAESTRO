@@ -11,32 +11,54 @@ from benchmark.omnigaia.tools.search_response import parse_search_response
 
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
 SERPER_BASE_URL = "https://google.serper.dev/search"
-DASHSCOPE_FALLBACK_MODEL = "qwen3.7-plus"
+DEFAULT_SEARCH_MODEL = "qwen3.7-flash"
 DASHSCOPE_DEFAULT_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _EMPTY_HIT = [{"content": "No good Google Search Result was found", "source": "None"}]
 
 
-def _get_dashscope_cfg() -> tuple[str, str, str]:
+def _get_dashscope_cfg(model_name: str) -> tuple[str, str, str]:
     api_key: Optional[str] = None
     base_url: Optional[str] = None
-    model_name = DASHSCOPE_FALLBACK_MODEL
+    runtime_model = model_name
     try:
-        cfg = LLMsConfig.default().get(DASHSCOPE_FALLBACK_MODEL)
+        cfg = LLMsConfig.default().get(model_name)
         if cfg and cfg.key:
             api_key, base_url = cfg.key, cfg.base_url
-            model_name = cfg.model or model_name
+            runtime_model = cfg.model or runtime_model
     except Exception:
         pass
-    api_key = api_key or os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or ""
-    base_url = base_url or os.getenv("DASHSCOPE_BASE_URL") or os.getenv("OPENAI_BASE_URL") or os.getenv("LLM_API_BASE") or DASHSCOPE_DEFAULT_BASE
-    return api_key, base_url, model_name
+    api_key = (
+        api_key
+        or os.getenv("DASHSCOPE_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("LLM_API_KEY")
+        or ""
+    )
+    base_url = (
+        base_url
+        or os.getenv("DASHSCOPE_BASE_URL")
+        or os.getenv("OPENAI_BASE_URL")
+        or os.getenv("LLM_API_BASE")
+        or DASHSCOPE_DEFAULT_BASE
+    )
+    return api_key, base_url, runtime_model
 
 
-async def _dashscope_web_search(query: str, k: int, gl: str, hl: str, timeout_s: int = 40) -> List[Dict[str, str]]:
+async def _dashscope_web_search(
+    query: str,
+    k: int,
+    gl: str,
+    hl: str,
+    model_name: str,
+    timeout_s: int = 40,
+) -> List[Dict[str, str]]:
     import aiohttp
-    api_key, base_url, model = _get_dashscope_cfg()
+
+    api_key, base_url, model = _get_dashscope_cfg(model_name)
     if not api_key:
-        raise RuntimeError("GoogleSearchAction: no DashScope/OpenAI-compatible API key available")
+        raise RuntimeError(
+            "GoogleSearchAction: no DashScope/OpenAI-compatible API key available"
+        )
     endpoint = base_url.rstrip("/") + "/responses"
     prompt = (
         f"Use your built-in web_search tool to perform a WEB SEARCH for:\n"
@@ -52,22 +74,40 @@ async def _dashscope_web_search(query: str, k: int, gl: str, hl: str, timeout_s:
         "input": prompt,
         "tools": [{"type": "web_search"}],
     }
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
     timeout = aiohttp.ClientTimeout(total=timeout_s)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(endpoint, json=payload, headers=headers) as resp:
+            async with session.post(
+                endpoint,
+                json=payload,
+                headers=headers,
+            ) as resp:
                 text = await resp.text()
                 if resp.status >= 400:
                     raise RuntimeError(f"HTTP {resp.status}: {text[:600]}")
         obj = json.loads(text)
     except Exception:
-        record_unmeasured_call(model, "search", "search_request_failed_without_usage")
+        record_unmeasured_call(
+            model,
+            "search",
+            "search_request_failed_without_usage",
+        )
         raise
-    record_api_response(model, obj, category="search", base_url=base_url,
-                        search_requested=True)
+    record_api_response(
+        model,
+        obj,
+        category="search",
+        base_url=base_url,
+        search_requested=True,
+    )
     if obj.get("code"):
-        raise RuntimeError(f"DashScope API error: {obj.get('code')} {obj.get('message', '')}")
+        raise RuntimeError(
+            f"DashScope API error: {obj.get('code')} {obj.get('message', '')}"
+        )
 
     # k describes the requested search breadth, not how much evidence to keep.
     return parse_search_response(obj)
@@ -80,25 +120,52 @@ def _serper_parse_results(results: Dict[str, Any], k: int) -> List[Dict[str, str
         if ans.get("answer"):
             return [{"content": str(ans["answer"]), "source": "None"}]
         if ans.get("snippet"):
-            return [{"content": str(ans["snippet"]).replace("\n", " "), "source": "None"}]
-    for item in (results.get("organic") or [])[:max(1, k)]:
+            return [
+                {
+                    "content": str(ans["snippet"]).replace("\n", " "),
+                    "source": "None",
+                }
+            ]
+    for item in (results.get("organic") or [])[: max(1, k)]:
         if item.get("snippet"):
-            snippets.append({"content": str(item["snippet"]), "source": str(item.get("link") or "None")})
+            snippets.append(
+                {
+                    "content": str(item["snippet"]),
+                    "source": str(item.get("link") or "None"),
+                }
+            )
     return snippets or list(_EMPTY_HIT)
 
 
-async def _serper_search(query: str, k: int, gl: str, hl: str) -> List[Dict[str, str]]:
+async def _serper_search(
+    query: str,
+    k: int,
+    gl: str,
+    hl: str,
+) -> List[Dict[str, str]]:
     import aiohttp
+
     if not SERPER_API_KEY:
         raise RuntimeError("SERPER_API_KEY is empty")
-    headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
+    headers = {
+        "X-API-KEY": SERPER_API_KEY,
+        "Content-Type": "application/json",
+    }
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(SERPER_BASE_URL, json={"q": query, "num": k, "gl": gl, "hl": hl}, headers=headers) as resp:
+        async with session.post(
+            SERPER_BASE_URL,
+            json={"q": query, "num": k, "gl": gl, "hl": hl},
+            headers=headers,
+        ) as resp:
             text = await resp.text()
             if resp.status >= 400:
                 raise RuntimeError(f"HTTP {resp.status}: {text[:600]}")
-    record_unmeasured_call("serper", "search", "external_provider_price_not_configured")
+    record_unmeasured_call(
+        "serper",
+        "search",
+        "external_provider_price_not_configured",
+    )
     return _serper_parse_results(json.loads(text), k)
 
 
@@ -116,28 +183,56 @@ class GoogleSearchAction(BaseAction):
         "required": ["query"],
         "additionalProperties": False,
     }
+    model_name: str = DEFAULT_SEARCH_MODEL
 
     async def __call__(self, **kwargs) -> Any:
         query = str(kwargs.get("query") or "").strip()
         if not query:
-            return {"success": False, "output": None, "error": "empty query", "metrics": {}}
+            return {
+                "success": False,
+                "output": None,
+                "error": "empty query",
+                "metrics": {},
+            }
         try:
             k = max(1, int(kwargs.get("k", 5)))
         except Exception:
             k = 5
-        gl, hl = kwargs.get("gl", "us") or "us", kwargs.get("hl", "en") or "en"
+        gl = kwargs.get("gl", "us") or "us"
+        hl = kwargs.get("hl", "en") or "en"
         errors: List[str] = []
         parsed = None
-        if os.getenv("GOOGLE_SEARCH_USE_SERPER", "").strip().lower() in ("1", "true", "yes", "on"):
+        if os.getenv("GOOGLE_SEARCH_USE_SERPER", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
             try:
                 parsed = await _serper_search(query, k, gl, hl)
             except Exception as exc:
                 errors.append(f"Serper: {exc}")
         if parsed is None:
             try:
-                parsed = await _dashscope_web_search(query, k, gl, hl)
+                parsed = await _dashscope_web_search(
+                    query,
+                    k,
+                    gl,
+                    hl,
+                    self.model_name,
+                )
             except Exception as exc:
                 errors.append(f"DashScope web_search: {exc}")
         if not parsed:
-            return {"success": False, "output": None, "error": " ; ".join(errors) or "no results", "metrics": {}}
-        return {"success": True, "output": parsed, "error": None, "metrics": {}}
+            return {
+                "success": False,
+                "output": None,
+                "error": " ; ".join(errors) or "no results",
+                "metrics": {},
+            }
+        return {
+            "success": True,
+            "output": parsed,
+            "error": None,
+            "metrics": {},
+        }
