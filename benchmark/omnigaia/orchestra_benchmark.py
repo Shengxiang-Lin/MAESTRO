@@ -16,29 +16,60 @@ from benchmark.omnigaia.llm_scorer import llm_semantic_score
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
+# Keep the official Orchestra-o1 agent-visible multimodal guidance while the
+# underlying tool implementations remain configurable in this repository.
 OMNI_MODAL_TOOL_HINTS = {
-    "video": (
-        "Use VideoAnalysisAction to analyze video content. Enable audio analysis "
-        "when speech or sound is relevant."
-    ),
+    "video": "Use VideoAnalysisAction to analyze video content (visual frames + audio track). It automatically detects and transcribes audio when present. Set analyze_audio=true for videos with speech/sound. You can specify start_time/end_time to focus on specific segments.",
     "audio": "Use ParseAudioAction to transcribe and analyze audio content.",
     "image": "Use ImageAnalysisAction to analyze image content.",
 }
 
+# Official Orchestra-o1 SubAgent-visible environment instructions. Runtime
+# details such as ORCHESTRA_TMP_DIR stay an implementation concern and are not
+# exposed to the agent.
 ACTION_SPACE_TEMPLATE = """
 ### finish
 Description: Report your result to MainAgent. Use when you have found the answer or cannot proceed.
-Parameters: {"result": "<answer>", "status": "done|partial|blocked", "summary": "<brief summary>"}
+Parameters: {{"result": "<answer>", "status": "done|partial|blocked", "summary": "<brief summary of what you did>"}}
 
 [IMPORTANT RULES]
-- Use print() in ExecuteCodeAction to see computation results.
-- Write generated/downloaded/intermediate files under ORCHESTRA_TMP_DIR.
-- Use 'finish' to report your result when done.
-- When remaining steps < 5, finish with your best result.
-- Use VideoAnalysisAction for video, ParseAudioAction for audio, and ImageAnalysisAction for task-provided images.
+- Use print() in ExecuteCodeAction to see computation results
+- Use 'finish' to report your result when done
+- When remaining steps < 5, finish with your best result
+- For video analysis, use VideoAnalysisAction with analyze_audio=true to extract both visual frames and audio track. Use start_time/end_time to focus on specific segments.
+- For standalone audio files, use ParseAudioAction to transcribe and analyze audio
+- For image analysis, use ImageAnalysisAction
 
 [STRICT OUTPUT FORMAT]
-Return one JSON object whose action is an exact available tool name or "finish".
+⚠️ You MUST output a single JSON object. The "action" field MUST be one of the EXACT tool names above (e.g., "ImageAnalysisAction") or "finish".
+⚠️ Do NOT use "execute" as the action name. Do NOT wrap tool names inside a "command" field.
+⚠️ The "params" field MUST contain the tool's parameter keys as a JSON object — NOT as command-line flags.
+
+General format:
+{{"action": "<EXACT_TOOL_NAME>", "params": {{<key>: <value>, ...}}, "memory": "<observations>"}}
+
+[FEW-SHOT EXAMPLES FOR EACH TOOL]
+
+GoogleSearchAction:
+{{"action": "GoogleSearchAction", "params": {{"query": "capital of France"}}, "memory": "Searching for the capital."}}
+
+ImageAnalysisAction:
+{{"action": "ImageAnalysisAction", "params": {{"query": "What brand logo is shown?", "image_path": "/data/images/photo.jpg"}}, "memory": "Identifying brand in image."}}
+
+ParseAudioAction:
+{{"action": "ParseAudioAction", "params": {{"query": "Transcribe and identify the main topic discussed.", "audio_path": "/data/audios/clip.wav"}}, "memory": "Transcribing audio."}}
+
+VideoAnalysisAction:
+{{"action": "VideoAnalysisAction", "params": {{"query": "What text appears on screen at 30s?", "video_path": "/data/videos/clip.mp4", "max_frames": 8, "start_time": 25, "end_time": 35, "analyze_audio": true}}, "memory": "Analyzing 25-35s segment."}}
+
+ExecuteCodeAction:
+{{"action": "ExecuteCodeAction", "params": {{"code": "import math\\nresult = math.sqrt(144)\\nprint(result)", "code_type": "python"}}, "memory": "Computing square root."}}
+
+ExtractUrlContentAction:
+{{"action": "ExtractUrlContentAction", "params": {{"url": "https://example.com/page", "browse_query": "key facts"}}, "memory": "Fetching web page."}}
+
+finish:
+{{"action": "finish", "params": {{"result": "42", "status": "done", "summary": "Found the answer via video analysis."}}, "memory": "Task complete."}}
 """.strip()
 
 
@@ -144,6 +175,11 @@ class OmniGAIAOrchestraEnvironment(Environment):
         )
 
     def set_delegation_view(self, *, instruction: str, question: str) -> None:
+        """Compatibility hook for MAESTRO-internal delegation metadata.
+
+        The official O1 initial observation always exposes the raw benchmark
+        question. Therefore ``question`` is deliberately not used by reset().
+        """
         self._delegation_instruction_override = str(instruction)
         self._delegation_question_override = str(question)
 
@@ -193,7 +229,7 @@ class OmniGAIAOrchestraEnvironment(Environment):
                 resolved_path = modal.get("resolved_path")
                 if resolved_path:
                     hint = OMNI_MODAL_TOOL_HINTS.get(
-                        modal_type, "Use the appropriate tool to process this file."
+                        modal_type, "Use appropriate tool to process this file."
                     )
                     instruction += (
                         f"\n{index}. [{modal_type.upper()}] ID: {modal_id}"
@@ -220,14 +256,9 @@ class OmniGAIAOrchestraEnvironment(Environment):
         del seed
         self._done = False
         self._steps = 0
-        visible_question = (
-            self._delegation_question_override
-            if self._delegation_question_override is not None
-            else self.question
-        )
         return {
             "message": "Environment ready. Use the available tools to answer the question.",
-            "question": visible_question,
+            "question": self.question,
             "current_step": 0,
             "max_steps": self.config.max_steps,
         }

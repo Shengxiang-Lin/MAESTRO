@@ -24,6 +24,7 @@ class GAIAOrchestraConfig:
     attachments_dir: Path
     tool_models: Dict[str, str] = field(default_factory=dict)
     evaluation_model: str = "qwen3.7-plus"
+    trace_summary_model: str = "qwen3.7-plus"
     models: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     level_filter: List[int] | None = None
     max_tasks: int | None = None
@@ -73,6 +74,7 @@ class GAIAOrchestraConfig:
             attachments_dir=cls._resolve_path(attachments_dir, config_path),
             tool_models={str(role): str(model) for role, model in tool_models.items()},
             evaluation_model=str(raw.get("evaluation_model") or "qwen3.7-plus"),
+            trace_summary_model=str(raw.get("trace_summary_model") or "qwen3.7-plus"),
             models=cls._normalize_models(models, config_path),
             level_filter=raw.get("level_filter"),
             max_tasks=raw.get("max_tasks"),
@@ -132,7 +134,12 @@ class GAIAOrchestraConfig:
         return merged
 
     def required_model_names(self) -> List[str]:
-        names = [self.main_model, *self.sub_models, self.evaluation_model]
+        names = [
+            self.main_model,
+            *self.sub_models,
+            self.evaluation_model,
+            self.trace_summary_model,
+        ]
         names.extend(self.tool_models.values())
         return list(dict.fromkeys(str(name) for name in names if name))
 
@@ -142,6 +149,7 @@ class GAIAOrchestraConfig:
         roles: Dict[str, str] = {
             "main_model": self.main_model,
             "evaluation_model": self.evaluation_model,
+            "trace_summary_model": self.trace_summary_model,
         }
         roles.update(
             {f"sub_models[{index}]": model for index, model in enumerate(self.sub_models)}
@@ -183,7 +191,14 @@ class GAIAOrchestraConfig:
         registry = LLMsConfig.default()
         manager = VLLMServiceManager.default()
         runtime_names = list(
-            dict.fromkeys([self.main_model, *self.sub_models, self.evaluation_model])
+            dict.fromkeys(
+                [
+                    self.main_model,
+                    *self.sub_models,
+                    self.evaluation_model,
+                    self.trace_summary_model,
+                ]
+            )
         )
         for name in runtime_names:
             raw = dict(registry.configs[name])

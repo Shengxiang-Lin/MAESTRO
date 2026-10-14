@@ -30,6 +30,8 @@ def _make_serializable(obj: Any) -> Any:
 
 
 class DelegateTaskTool(BaseAction):
+    """Official O1 delegation contract with MAESTRO-only internal metadata support."""
+
     name: str = "delegate_task"
     description: str = (
         "Delegate one or more subtasks to SubAgents for parallel execution. "
@@ -42,6 +44,7 @@ class DelegateTaskTool(BaseAction):
     benchmark_type: str = Field(default="omnigaia")
     alias_to_model: Dict[str, str] = Field(default_factory=dict)
     summarize_trace: bool = Field(default=True)
+    trace_summary_model: str = Field(default="qwen3.7-plus")
     _trace_formatter: Any = PrivateAttr(default=None)
 
     class Config:
@@ -55,6 +58,7 @@ class DelegateTaskTool(BaseAction):
         benchmark_type: str = "omnigaia",
         alias_to_model: Dict[str, str] | None = None,
         summarize_trace: bool = True,
+        trace_summary_model: str = "qwen3.7-plus",
     ):
         super().__init__()
         self.env = env
@@ -63,25 +67,42 @@ class DelegateTaskTool(BaseAction):
         self.benchmark_type = benchmark_type
         self.alias_to_model = alias_to_model or {}
         self.summarize_trace = bool(summarize_trace)
+        self.trace_summary_model = str(trace_summary_model)
         self._trace_formatter = create_gaia_formatter()
         display_models = (
             list(self.alias_to_model.keys()) if self.alias_to_model else self.models
         )
+        # Keep the Main->Sub public schema aligned with official Orchestra-o1.
         self.parameters = {
             "type": "object",
             "properties": {
                 "tasks": {
                     "type": "array",
-                    "description": "List of parallel subtasks.",
+                    "description": (
+                        "List of subtasks to execute in parallel. Each subtask is an "
+                        "object with task_instruction, model, context (optional), "
+                        "tools (optional)."
+                    ),
                     "items": {
                         "type": "object",
                         "properties": {
-                            "task_instruction": {"type": "string"},
-                            "context": {"type": "string"},
-                            "model": {"type": "string", "enum": display_models},
+                            "task_instruction": {
+                                "type": "string",
+                                "description": "Specific, actionable task for SubAgent",
+                            },
+                            "context": {
+                                "type": "string",
+                                "description": "Additional context/hints from previous attempts",
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": f"Model to use. MUST be one of: {display_models}",
+                                "enum": display_models,
+                            },
                             "tools": {
                                 "type": "array",
                                 "items": {"type": "string"},
+                                "description": "Tools for SubAgent (optional)",
                             },
                         },
                         "required": ["task_instruction", "model"],
@@ -128,7 +149,7 @@ class DelegateTaskTool(BaseAction):
                 ]
             else:
                 return {
-                    "error": "Must provide either 'tasks' or task_instruction+model",
+                    "error": "Must provide either 'tasks' list or 'task_instruction'+'model'",
                     "subtask_results": [],
                 }
         if not tasks:
@@ -152,6 +173,7 @@ class DelegateTaskTool(BaseAction):
         processed_results = []
         for index, result in enumerate(subtask_results):
             if isinstance(result, Exception):
+                logger.error(f"[DelegateTool] Subtask {index} failed: {result}")
                 processed_results.append(
                     {
                         "subtask_index": index,
@@ -165,6 +187,7 @@ class DelegateTaskTool(BaseAction):
                 )
             else:
                 result["subtask_index"] = index
+                # Return the Main-requested instruction, not MAESTRO-internal rewrites.
                 result["task_instruction"] = intended_instructions[index]
                 processed_results.append(result)
 
@@ -180,6 +203,8 @@ class DelegateTaskTool(BaseAction):
             "total_cost": total_cost,
             "total_steps": total_steps,
             "all_done": all(item.get("done", False) for item in processed_results),
+            # Internal accounting remains available to MAESTRO/trajectory code but
+            # BaseMainAgent does not expose it in the O1-visible subtask history.
             "usage": {
                 "total_input_tokens": sum(
                     int((item.get("usage") or {}).get("total_input_tokens", 0) or 0)
@@ -207,6 +232,9 @@ class DelegateTaskTool(BaseAction):
         model = str(task.get("model") or "")
         context = str(task.get("context") or "")
         tools = task.get("tools")
+
+        # The following fields are MAESTRO-internal execution metadata. They are
+        # intentionally absent from the public DelegateTaskTool schema above.
         preferred_tools = task.get("preferred_tools") or []
         route_compilation = deepcopy(task.get("route_compilation") or {})
         agent_spec = task.get("agent_spec") or {}
@@ -219,7 +247,7 @@ class DelegateTaskTool(BaseAction):
         real_model = self.alias_to_model.get(model, model)
         if real_model not in self.models:
             return {
-                "error": f"Invalid model selection: {model}",
+                "error": f"Invalid model: {model}",
                 "steps_taken": 0,
                 "done": False,
                 "cost": 0.0,
@@ -249,11 +277,13 @@ class DelegateTaskTool(BaseAction):
             if "original_question" in task
             else self._environment_instruction()
         )
+        # Keep our environment adaptation for the complete instruction, while
+        # reset() always exposes the raw benchmark question as in official O1.
         set_delegation_view = getattr(env_clone, "set_delegation_view", None)
         if callable(set_delegation_view):
             set_delegation_view(
                 instruction=original_question,
-                question=original_question,
+                question=getattr(self.env, "question", "") or original_question,
             )
 
         llm = create_llm_instance(LLMsConfig.default().get(real_model))
@@ -277,21 +307,16 @@ class DelegateTaskTool(BaseAction):
             trace_summary = await self._trace_summary_if_enabled(
                 result.trace,
                 intended_task_instruction,
-                real_model,
             )
             return {
+                # Official O1-facing result contract.
                 "task_instruction": task_instruction,
                 "model": real_model,
                 "tools_assigned": tools,
-                "preferred_tools": preferred_tools,
-                "route_compilation": route_compilation,
                 "steps_taken": result.steps,
-                "context_fingerprint": context_fingerprint,
-                "agent_spec": agent_spec,
                 "done": result.done,
                 "cost": result.cost,
                 "finish_result": finish_result,
-                "usage": llm.get_usage_summary(),
                 "trace": [
                     _make_serializable(step) for step in result.trace
                 ] if result.trace else [],
@@ -301,6 +326,12 @@ class DelegateTaskTool(BaseAction):
                     "max_steps": execution_max_steps,
                     "completed": result.done,
                 },
+                # Internal extensions retained for MAESTRO state/audit only.
+                "preferred_tools": preferred_tools,
+                "route_compilation": route_compilation,
+                "context_fingerprint": context_fingerprint,
+                "agent_spec": agent_spec,
+                "usage": llm.get_usage_summary(),
             }
         except Exception as exc:
             logger.error(f"[DelegateTool] Subtask {idx} error: {exc}")
@@ -310,12 +341,12 @@ class DelegateTaskTool(BaseAction):
                 "model": real_model,
                 "steps_taken": 0,
                 "tools_assigned": tools,
+                "done": False,
+                "cost": 0.0,
                 "preferred_tools": preferred_tools,
                 "route_compilation": route_compilation,
                 "context_fingerprint": context_fingerprint,
                 "agent_spec": agent_spec,
-                "done": False,
-                "cost": 0.0,
                 "usage": llm.get_usage_summary(),
             }
         finally:
@@ -329,20 +360,25 @@ class DelegateTaskTool(BaseAction):
         self,
         trace,
         intended_task_instruction: str,
-        summary_model: str,
     ) -> str:
         if not trace:
             return "No steps executed"
-        del intended_task_instruction
         trace_text = self._trace_formatter.format_trace(trace)
-        prompt = (
-            "Review the SubAgent execution trace and faithfully summarize it in "
-            "5-10 bullets: tool names, targets, evidence/provenance, final result, "
-            "problems, remaining issues. Output ONLY bullets.\n\n"
-            + trace_text
-        )
+        prompt = f"""You are a trajectory summarizer. Review the SubAgent's execution trace.
+
+Task: {intended_task_instruction[:200]}
+Steps: {len(trace)}
+
+=== Trace ===
+{trace_text}
+===
+
+Summarize in 5-10 bullets: key progress, problems, remaining issues.
+Output ONLY bullets."""
         try:
-            review_llm = create_llm_instance(LLMsConfig.default().get(summary_model))
+            review_llm = create_llm_instance(
+                LLMsConfig.default().get(self.trace_summary_model)
+            )
             return (await review_llm(prompt)).strip()
         except Exception as exc:
             logger.warning(f"[DelegateTool] Trace summarization failed: {exc}")
@@ -352,12 +388,10 @@ class DelegateTaskTool(BaseAction):
         self,
         trace,
         intended_task_instruction: str,
-        summary_model: str,
     ) -> str:
         if not self.summarize_trace:
             return ""
         return await self._summarize_trace(
             trace,
             intended_task_instruction,
-            summary_model,
         )

@@ -117,6 +117,7 @@ async def main() -> int:
         "sub_models": cfg.sub_models,
         "tool_models": cfg.tool_models,
         "evaluation_model": cfg.evaluation_model,
+        "trace_summary_model": cfg.trace_summary_model,
         "local_runtime_models": runtime_models,
     }
     manifest_path = cfg.result_folder / f"model_roles_{timestamp}.json"
@@ -134,13 +135,14 @@ async def main() -> int:
         omnigaia_tools=tools,
         tool_models=cfg.tool_models,
         evaluation_model=cfg.evaluation_model,
+        trace_summary_model=cfg.trace_summary_model,
         prospective_config=prospective_cfg,
     )
     logger.info(
         f"[MAESTRO] tasks={len(levels)}, main={cfg.main_model}, "
         f"sub={cfg.sub_models}, tools={cfg.tool_models}, "
-        f"evaluation={cfg.evaluation_model}, local={runtime_models}, "
-        f"prospective={prospective_cfg}"
+        f"evaluation={cfg.evaluation_model}, trace_summary={cfg.trace_summary_model}, "
+        f"local={runtime_models}, prospective={prospective_cfg}"
     )
     results = await runner.run_levels(
         levels=levels,
