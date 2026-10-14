@@ -6,6 +6,8 @@ sub_models:
 
 # Models used inside OmniGAIA tools. Change these here instead of editing Python.
 tool_models:
+  search: "qwen3.7-flash"
+  browse: "qwen3.7-plus"
   image_analysis: "qwen3.7-flash"
   audio_analysis: "qwen3.5-omni-flash"
   video_vision: "qwen3.7-flash"
