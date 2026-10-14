@@ -317,6 +317,7 @@ class BaseOmniGAIARunner:
                                 if key.endswith(("_cost", "_cost_cny")) else value
                                 for key, value in breakdown.items()
                             }
+                            cost_fields["cost_complete"] = "yes" if breakdown["cost_complete"] else "no"
                             async with csv_lock:
                                 csv_writer.writerow({
                                     "task_id": level_id, "level": task_level,
