@@ -56,9 +56,18 @@ class ExtractUrlContentAction(BaseAction):
             return None
         endpoint = base_url.rstrip("/") + "/responses"
         prompt = (
-            f"Use web_search to retrieve facts from or about this URL: {url}\n"
-            f"Question: {browse_query}\n"
-            "Answer concisely and only from retrieved evidence."
+            "You MUST use your built-in `web_search` tool to retrieve up-to-date "
+            f"information from this specific URL (or pages linked from it): {url}\n\n"
+            "Goal: answer the following question strictly based on facts found "
+            f"at / about that URL.\n\n"
+            f"Question: {browse_query}\n\n"
+            "Rules:\n"
+            "  - Do NOT guess or hallucinate; only cite what web_search returns.\n"
+            "  - Give a concise, self-contained answer first (numbers should be "
+            "digits, no prose around them when the question asks for an integer).\n"
+            "  - Then, on a NEW LINE starting with exactly '===SOURCES===', paste "
+            "the 3-6 most informative snippets returned by web_search (include "
+            "year, counts, page titles) so the caller can verify your work.\n"
         )
         payload = {"model": self.FALLBACK_MODEL, "input": prompt, "tools": [{"type": "web_search"}]}
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -72,7 +81,7 @@ class ExtractUrlContentAction(BaseAction):
                             search_requested=True)
         if r.status_code != 200 or obj.get("code"):
             return None
-        texts, sources = [], []
+        texts, web_search_actions = [], []
         for item in obj.get("output") or []:
             if not isinstance(item, dict):
                 continue
@@ -81,13 +90,32 @@ class ExtractUrlContentAction(BaseAction):
                     if isinstance(c, dict) and c.get("type") in ("text", "output_text") and c.get("text"):
                         texts.append(str(c["text"]))
             elif item.get("type") == "web_search_call":
-                for src in (item.get("action") or {}).get("sources") or []:
+                action = item.get("action") or {}
+                for key in ("query", "queries"):
+                    if action.get(key):
+                        web_search_actions.append(f"query: {action[key]}")
+                for src in action.get("sources") or []:
                     if isinstance(src, dict) and src.get("url"):
-                        sources.append(str(src["url"]))
-        answer = "\n".join(texts).strip()
+                        web_search_actions.append(f"src: {src['url']}")
+        full_text = "\n".join(texts).strip()
+        if not full_text:
+            return None
+        if "===SOURCES===" in full_text:
+            answer, preview = full_text.split("===SOURCES===", 1)
+            answer, preview = answer.strip(), preview.strip()
+        else:
+            # Keep evidence even when the model does not follow the delimiter.
+            words = full_text.split()
+            answer = " ".join(words[:200]).strip()
+            preview_rest = " ".join(words[200:]).strip()
+            preview = (
+                "(no ===SOURCES=== marker; raw answer tail + queries/sources)\n"
+                + (preview_rest + "\n" if preview_rest else "")
+                + "\n".join(web_search_actions)
+            ).strip()
         if not answer:
             return None
-        return answer, "\n".join(sources[:8])
+        return answer, preview[:2500]
 
     async def __call__(self, **kwargs) -> Any:
         url = str(kwargs.get("url") or "").strip()
@@ -132,4 +160,5 @@ class ExtractUrlContentAction(BaseAction):
         if result is None:
             return {"success": False, "output": None, "error": "failed to extract targeted URL content", "metrics": {}}
         answer, preview = result
-        return {"success": True, "output": {"url": url, "answer": answer, "source_preview": preview}, "error": None, "metrics": {}}
+        preview_line = f"(DashScope web_search direct fallback) {preview[:2000]}"
+        return {"success": True, "output": {"url": url, "answer": answer, "source_preview": preview_line}, "error": None, "metrics": {}}

@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import json
 import os
-import re
 
 from base.agent.base_action import BaseAction
 from base.engine.async_llm import LLMsConfig
 from base.engine.cost_monitor import record_api_response, record_unmeasured_call
+from benchmark.omnigaia.tools.search_response import parse_search_response
 
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
 SERPER_BASE_URL = "https://google.serper.dev/search"
@@ -38,9 +38,18 @@ async def _dashscope_web_search(query: str, k: int, gl: str, hl: str, timeout_s:
     if not api_key:
         raise RuntimeError("GoogleSearchAction: no DashScope/OpenAI-compatible API key available")
     endpoint = base_url.rstrip("/") + "/responses"
+    prompt = (
+        f"Use your built-in web_search tool to perform a WEB SEARCH for:\n"
+        f"  query = {query}\n"
+        f"  desired hits (k) = {k}, region gl={gl}, language hl={hl}\n\n"
+        "Rules:\n"
+        "  - ONLY cite facts returned by the web_search tool — no guessing.\n"
+        "  - Keep snippets terse, factual, and self-contained.\n"
+        "  - If web_search returns zero results, just say so honestly.\n"
+    )
     payload = {
         "model": model,
-        "input": f"Use web_search for: {query}\nReturn terse factual snippets. Region={gl}, language={hl}.",
+        "input": prompt,
         "tools": [{"type": "web_search"}],
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -60,33 +69,8 @@ async def _dashscope_web_search(query: str, k: int, gl: str, hl: str, timeout_s:
     if obj.get("code"):
         raise RuntimeError(f"DashScope API error: {obj.get('code')} {obj.get('message', '')}")
 
-    sources: List[str] = []
-    paragraphs: List[str] = []
-    for block in obj.get("output") or []:
-        if not isinstance(block, dict):
-            continue
-        if block.get("type") == "web_search_call":
-            for src in (block.get("action") or {}).get("sources") or []:
-                url = str(src.get("url") or "").strip() if isinstance(src, dict) else ""
-                if url and url not in sources:
-                    sources.append(url)
-        elif block.get("type") == "message":
-            for item in block.get("content") or []:
-                if isinstance(item, dict) and item.get("type") in ("text", "output_text"):
-                    paragraphs.extend(p.strip() for p in str(item.get("text") or "").splitlines() if len(p.strip()) >= 16)
-    hits: List[Dict[str, str]] = []
-    for idx, paragraph in enumerate(paragraphs[:k]):
-        urls = re.findall(r"https?://[^\s)\]>\"']+", paragraph)
-        source = urls[0] if urls else (sources[idx] if idx < len(sources) else "None")
-        hits.append({"content": paragraph, "source": source})
-    if len(hits) < k:
-        used = {h["source"] for h in hits}
-        for url in sources:
-            if url not in used:
-                hits.append({"content": f"Additional web_search source: {url}", "source": url})
-                if len(hits) >= k:
-                    break
-    return hits or list(_EMPTY_HIT)
+    # k describes the requested search breadth, not how much evidence to keep.
+    return parse_search_response(obj)
 
 
 def _serper_parse_results(results: Dict[str, Any], k: int) -> List[Dict[str, str]]:
