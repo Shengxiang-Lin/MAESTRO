@@ -19,6 +19,8 @@ sub_models:
 #     port: 8810
 
 tool_models:
+  search: "qwen3.7-flash"
+  browse: "qwen3.7-plus"
   image_analysis: "qwen3.7-flash"
   audio_analysis: "qwen3.5-omni-flash"
   video_vision: "qwen3.7-flash"
