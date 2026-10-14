@@ -69,11 +69,14 @@ async def _dashscope_web_search(
         "  - If web_search returns zero results, just say so honestly.\n"
     )
     obj = await asyncio.to_thread(
-        request_response, api_key=api_key, base_url=base_url, model=model,
-        prompt=prompt, category="search", idle_timeout=timeout_s,
+        request_response,
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        prompt=prompt,
+        category="search",
+        idle_timeout=timeout_s,
     )
-
-    # k describes the requested search breadth, not how much evidence to keep.
     return parse_search_response(obj)
 
 
@@ -133,6 +136,10 @@ async def _serper_search(
     return _serper_parse_results(json.loads(text), k)
 
 
+def _env_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class GoogleSearchAction(BaseAction):
     name: str = "GoogleSearchAction"
     description: str = "Web search returning snippets and source URLs."
@@ -147,6 +154,7 @@ class GoogleSearchAction(BaseAction):
         "required": ["query"],
         "additionalProperties": False,
     }
+    provider: Optional[str] = None
     model_name: str = DEFAULT_SEARCH_MODEL
 
     async def __call__(self, **kwargs) -> Any:
@@ -164,14 +172,40 @@ class GoogleSearchAction(BaseAction):
             k = 5
         gl = kwargs.get("gl", "us") or "us"
         hl = kwargs.get("hl", "en") or "en"
+
+        provider = str(self.provider or "").strip().lower()
+        if provider:
+            try:
+                if provider == "serper":
+                    parsed = await _serper_search(query, k, gl, hl)
+                elif provider == "dashscope":
+                    parsed = await _dashscope_web_search(
+                        query,
+                        k,
+                        gl,
+                        hl,
+                        self.model_name,
+                    )
+                else:
+                    raise ValueError(f"Unsupported search provider: {provider}")
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "output": None,
+                    "error": f"{provider}: {exc}",
+                    "metrics": {},
+                }
+            return {
+                "success": True,
+                "output": parsed,
+                "error": None,
+                "metrics": {},
+            }
+
+        # Backward compatibility for direct construction without YAML provider.
         errors: List[str] = []
         parsed = None
-        if os.getenv("GOOGLE_SEARCH_USE_SERPER", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
+        if _env_enabled("GOOGLE_SEARCH_USE_SERPER"):
             try:
                 parsed = await _serper_search(query, k, gl, hl)
             except Exception as exc:
