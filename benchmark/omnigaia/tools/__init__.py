@@ -11,6 +11,8 @@ from benchmark.omnigaia.tools.audio_analysis import ParseAudioAction
 from benchmark.omnigaia.tools.video_analysis import VideoAnalysisAction
 
 DEFAULT_TOOL_MODELS = {
+    "search": "qwen3.7-flash",
+    "browse": "qwen3.7-plus",
     "image_analysis": "qwen3.7-flash",
     "audio_analysis": "qwen3.5-omni-flash",
     "video_vision": "qwen3.7-flash",
@@ -36,9 +38,9 @@ def build_omnigaia_tools(tool_models: Mapping[str, str] | None = None):
     """Build the shared OmniGAIA tool set using explicit model roles."""
     models = resolve_tool_models(tool_models)
     return [
-        GoogleSearchAction(),
+        GoogleSearchAction(model_name=models["search"]),
         ExecuteCodeAction(),
-        ExtractUrlContentAction(),
+        ExtractUrlContentAction(model_name=models["browse"]),
         ImageAnalysisAction(model_name=models["image_analysis"]),
         ParseAudioAction(model_name=models["audio_analysis"]),
         VideoAnalysisAction(
