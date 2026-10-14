@@ -2,7 +2,7 @@
 .env
 
 # Personal config (contains API keys)
-config/model_config.yaml
+#config/model_config.yaml
 #config/benchmarks/
 
 # Runtime output
@@ -37,7 +37,6 @@ cache/
 *.json
 *.srt
 *.tsv
-*.txt
 *.vtt
 *.html
 *.pdf
