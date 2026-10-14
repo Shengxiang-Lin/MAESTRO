@@ -1,8 +1,14 @@
 # Orchestra-o1：8 组模型与数据集实验
 
-在 `/MAESTRO` 运行。OmniGAIA 跑全量 360 题，MM-BrowseComp 跑全量 400 题；每题最多重试 10 轮，并发上限 10；联网检索和网页读取统一用 `qwen3.7-flash`，评估与轨迹总结用 `qwen3.7-plus`。配置中的 `main_model`、`sub_models` 以本表为准。
+在 `MAESTRO` 目录下运行。OmniGAIA 使用全量 360 题，MM-BrowseComp 使用全量 400 题；每题最多重试 10 轮，并发上限为 10。联网检索和网页读取统一使用 `qwen3.7-flash`，评估与轨迹总结使用 `qwen3.7-plus`。配置中的 `main_model`、`sub_models` 以本表为准；如需修改 `base_url`，请编辑 `config/model_config.yaml`。
 
-运行前在当前 shell 中设置 `DASHSCOPE_API_KEY`；以下命令使用服务器已有的 `orchestra-o1` Conda 环境。每组输出到独立的 `logs/` 目录。
+运行前，请在当前 shell 中设置 `DASHSCOPE_API_KEY`；以下命令均使用服务器已有的 `orchestra-o1` Conda 环境。每组输出到独立的 `logs/` 目录。
+
+例如：
+
+```bash
+export DASHSCOPE_API_KEY='sk-ws-ABCDEFG'
+```
 
 ```bash
 cd MAESTRO
@@ -12,6 +18,7 @@ pip install -r requirements.txt
 mkdir -p logs/nohup
 mkdir data
 ```
+
 OmniGAIA
 ```bash
 huggingface-cli download --repo-type dataset RUC-NLPIR/OmniGAIA --local-dir ./data/OmniGAIA
