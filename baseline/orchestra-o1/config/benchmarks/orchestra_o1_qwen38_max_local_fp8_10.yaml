@@ -15,9 +15,15 @@ models:
     max_num_seqs: 10
     gpu_memory_utilization: 0.90
 
+search:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+browse:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
 tool_models:
-  search: "qwen3.7-flash"
-  browse: "qwen3.7-flash"
   image_analysis: "qwen3.7-flash"
   audio_analysis: "qwen3.5-omni-flash"
   video_vision: "qwen3.7-flash"
