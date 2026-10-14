@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import asyncio
 import json
 import os
 
 from base.agent.base_action import BaseAction
 from base.engine.async_llm import LLMsConfig
-from base.engine.cost_monitor import record_api_response, record_unmeasured_call
+from base.engine.cost_monitor import record_unmeasured_call
+from benchmark.omnigaia.tools.dashscope_responses import request_response
 from benchmark.omnigaia.tools.search_response import parse_search_response
 
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
@@ -49,17 +51,14 @@ async def _dashscope_web_search(
     k: int,
     gl: str,
     hl: str,
-    model_name: str,
+    model_name: str = DEFAULT_SEARCH_MODEL,
     timeout_s: int = 40,
 ) -> List[Dict[str, str]]:
-    import aiohttp
-
     api_key, base_url, model = _get_dashscope_cfg(model_name)
     if not api_key:
         raise RuntimeError(
             "GoogleSearchAction: no DashScope/OpenAI-compatible API key available"
         )
-    endpoint = base_url.rstrip("/") + "/responses"
     prompt = (
         f"Use your built-in web_search tool to perform a WEB SEARCH for:\n"
         f"  query = {query}\n"
@@ -69,45 +68,10 @@ async def _dashscope_web_search(
         "  - Keep snippets terse, factual, and self-contained.\n"
         "  - If web_search returns zero results, just say so honestly.\n"
     )
-    payload = {
-        "model": model,
-        "input": prompt,
-        "tools": [{"type": "web_search"}],
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    timeout = aiohttp.ClientTimeout(total=timeout_s)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                endpoint,
-                json=payload,
-                headers=headers,
-            ) as resp:
-                text = await resp.text()
-                if resp.status >= 400:
-                    raise RuntimeError(f"HTTP {resp.status}: {text[:600]}")
-        obj = json.loads(text)
-    except Exception:
-        record_unmeasured_call(
-            model,
-            "search",
-            "search_request_failed_without_usage",
-        )
-        raise
-    record_api_response(
-        model,
-        obj,
-        category="search",
-        base_url=base_url,
-        search_requested=True,
+    obj = await asyncio.to_thread(
+        request_response, api_key=api_key, base_url=base_url, model=model,
+        prompt=prompt, category="search", idle_timeout=timeout_s,
     )
-    if obj.get("code"):
-        raise RuntimeError(
-            f"DashScope API error: {obj.get('code')} {obj.get('message', '')}"
-        )
 
     # k describes the requested search breadth, not how much evidence to keep.
     return parse_search_response(obj)

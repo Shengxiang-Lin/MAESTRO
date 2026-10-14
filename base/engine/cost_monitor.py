@@ -195,7 +195,7 @@ def record_cost(model: str, input_tokens: int, output_tokens: int, cost: float, 
 
 
 def record_api_response(model: str, response, *, category: str, base_url=None,
-                        audio_input=False, search_requested=False) -> dict:
+                        audio_input=False, search_requested=False, request_details=None) -> dict:
     """Capture only provider usage/request IDs; never prompts or credentials."""
     usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
     request_id = (response.get("request_id") or response.get("id")) if isinstance(response, dict) else getattr(response, "id", None)
@@ -203,7 +203,8 @@ def record_api_response(model: str, response, *, category: str, base_url=None,
         estimate = estimate_usage(model, usage, base_url=base_url, audio_input=audio_input,
                                   search_requested=search_requested)
     except Exception as exc:
-        record_unmeasured_call(model, category, "provider_usage_could_not_be_parsed")
+        record_unmeasured_call(model, category, "provider_usage_could_not_be_parsed",
+                               request_details=request_details)
         logging.getLogger(__name__).warning("Could not parse provider usage: %s", exc)
         return {"coverage_complete": False, "total_cost": None}
     record_cost(
@@ -214,10 +215,11 @@ def record_api_response(model: str, response, *, category: str, base_url=None,
         cached_input_tokens=estimate["cached_input_tokens"],
         audio_input_tokens=estimate["audio_input_tokens"],
         audio_output_tokens=estimate["audio_output_tokens"],
+        transport_details=request_details or {},
     )
     return estimate
 
 
-def record_unmeasured_call(model: str, category: str, reason: str) -> None:
+def record_unmeasured_call(model: str, category: str, reason: str, *, request_details=None) -> None:
     record_cost(model, 0, 0, 0.0, category=category, coverage_complete=False,
-                notes=[reason])
+                notes=[reason], transport_details=request_details or {})

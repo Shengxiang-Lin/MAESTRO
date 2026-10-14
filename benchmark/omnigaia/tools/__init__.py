@@ -12,7 +12,7 @@ from benchmark.omnigaia.tools.video_analysis import VideoAnalysisAction
 
 DEFAULT_TOOL_MODELS = {
     "search": "qwen3.7-flash",
-    "browse": "qwen3.7-plus",
+    "browse": "qwen3.7-flash",
     "image_analysis": "qwen3.7-flash",
     "audio_analysis": "qwen3.5-omni-flash",
     "video_vision": "qwen3.7-flash",

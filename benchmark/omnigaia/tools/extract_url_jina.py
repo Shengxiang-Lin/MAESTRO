@@ -10,6 +10,7 @@ from base.agent.base_action import BaseAction
 from base.engine.async_llm import LLMsConfig
 from base.engine.logs import logger
 from base.engine.cost_monitor import record_api_response, record_unmeasured_call
+from benchmark.omnigaia.tools.dashscope_responses import request_response
 
 
 class ExtractUrlContentAction(BaseAction):
@@ -27,7 +28,7 @@ class ExtractUrlContentAction(BaseAction):
         "required": ["url", "browse_query"],
         "additionalProperties": False,
     }
-    model_name: str = "qwen3.7-plus"
+    model_name: str = "qwen3.7-flash"
 
     def _get_llm_config(self, model_name: Optional[str] = None) -> tuple:
         model_name = model_name or self.model_name
@@ -72,7 +73,6 @@ class ExtractUrlContentAction(BaseAction):
         api_key, base_url, model = self._get_dashscope_cfg()
         if not api_key:
             return None
-        endpoint = base_url.rstrip("/") + "/responses"
         prompt = (
             "You MUST use your built-in `web_search` tool to retrieve up-to-date "
             f"information from this specific URL (or pages linked from it): {url}\n\n"
@@ -87,38 +87,12 @@ class ExtractUrlContentAction(BaseAction):
             "the 3-6 most informative snippets returned by web_search (include "
             "year, counts, page titles) so the caller can verify your work.\n"
         )
-        payload = {
-            "model": model,
-            "input": prompt,
-            "tools": [{"type": "web_search"}],
-        }
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
         try:
-            r = requests.post(
-                endpoint,
-                headers=headers,
-                json=payload,
-                timeout=timeout,
+            obj = request_response(
+                api_key=api_key, base_url=base_url, model=model, prompt=prompt,
+                category="browse", idle_timeout=timeout,
             )
-            obj = r.json()
         except Exception:
-            record_unmeasured_call(
-                model,
-                "browse",
-                "browse_request_failed_without_usage",
-            )
-            return None
-        record_api_response(
-            model,
-            obj,
-            category="browse",
-            base_url=base_url,
-            search_requested=True,
-        )
-        if r.status_code != 200 or obj.get("code"):
             return None
         texts, web_search_actions = [], []
         for item in obj.get("output") or []:
