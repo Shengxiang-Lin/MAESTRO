@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict, Optional
+from typing import Any, Dict, Optional
 import asyncio
 import os
 import requests
@@ -14,18 +14,23 @@ from base.engine.cost_monitor import record_api_response, record_unmeasured_call
 
 class ExtractUrlContentAction(BaseAction):
     name: str = "ExtractUrlContentAction"
-    description: str = "Fetch/extract facts from a web URL. Uses DashScope web_search by default; Jina Reader is optional."
+    description: str = (
+        "Fetch/extract facts from a web URL. Uses DashScope web_search by default; "
+        "Jina Reader is optional."
+    )
     parameters: Dict[str, Any] = {
         "type": "object",
-        "properties": {"url": {"type": "string"}, "browse_query": {"type": "string"}},
+        "properties": {
+            "url": {"type": "string"},
+            "browse_query": {"type": "string"},
+        },
         "required": ["url", "browse_query"],
         "additionalProperties": False,
     }
-    DEFAULT_MODEL: ClassVar[str] = "qwen3.7-plus"
-    FALLBACK_MODEL: ClassVar[str] = "qwen3.7-plus"
+    model_name: str = "qwen3.7-plus"
 
     def _get_llm_config(self, model_name: Optional[str] = None) -> tuple:
-        model_name = model_name or self.DEFAULT_MODEL
+        model_name = model_name or self.model_name
         try:
             cfg = LLMsConfig.default().get(model_name)
             if cfg:
@@ -34,24 +39,37 @@ class ExtractUrlContentAction(BaseAction):
             pass
         return (
             os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY"),
-            os.getenv("OPENAI_BASE_URL") or os.getenv("LLM_API_BASE") or "https://api.openai.com/v1",
+            os.getenv("OPENAI_BASE_URL")
+            or os.getenv("LLM_API_BASE")
+            or "https://api.openai.com/v1",
             model_name,
         )
 
-    def _get_dashscope_cfg(self) -> tuple[str, str]:
+    def _get_dashscope_cfg(self) -> tuple[str, str, str]:
+        runtime_model = self.model_name
         try:
-            cfg = LLMsConfig.default().get(self.FALLBACK_MODEL)
+            cfg = LLMsConfig.default().get(self.model_name)
             if cfg and cfg.key:
-                return cfg.key, cfg.base_url
+                return cfg.key, cfg.base_url, cfg.model or runtime_model
         except Exception:
             pass
         return (
-            os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or "",
-            os.getenv("DASHSCOPE_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            os.getenv("DASHSCOPE_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("LLM_API_KEY")
+            or "",
+            os.getenv("DASHSCOPE_BASE_URL")
+            or "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            runtime_model,
         )
 
-    def _dashscope_fallback_direct(self, url: str, browse_query: str, timeout: int = 70) -> Optional[tuple[str, str]]:
-        api_key, base_url = self._get_dashscope_cfg()
+    def _dashscope_fallback_direct(
+        self,
+        url: str,
+        browse_query: str,
+        timeout: int = 70,
+    ) -> Optional[tuple[str, str]]:
+        api_key, base_url, model = self._get_dashscope_cfg()
         if not api_key:
             return None
         endpoint = base_url.rstrip("/") + "/responses"
@@ -69,16 +87,37 @@ class ExtractUrlContentAction(BaseAction):
             "the 3-6 most informative snippets returned by web_search (include "
             "year, counts, page titles) so the caller can verify your work.\n"
         )
-        payload = {"model": self.FALLBACK_MODEL, "input": prompt, "tools": [{"type": "web_search"}]}
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": model,
+            "input": prompt,
+            "tools": [{"type": "web_search"}],
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
         try:
-            r = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+            r = requests.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=timeout,
+            )
             obj = r.json()
         except Exception:
-            record_unmeasured_call(self.FALLBACK_MODEL, "browse", "browse_request_failed_without_usage")
+            record_unmeasured_call(
+                model,
+                "browse",
+                "browse_request_failed_without_usage",
+            )
             return None
-        record_api_response(self.FALLBACK_MODEL, obj, category="browse", base_url=base_url,
-                            search_requested=True)
+        record_api_response(
+            model,
+            obj,
+            category="browse",
+            base_url=base_url,
+            search_requested=True,
+        )
         if r.status_code != 200 or obj.get("code"):
             return None
         texts, web_search_actions = [], []
@@ -86,17 +125,21 @@ class ExtractUrlContentAction(BaseAction):
             if not isinstance(item, dict):
                 continue
             if item.get("type") == "message":
-                for c in item.get("content") or []:
-                    if isinstance(c, dict) and c.get("type") in ("text", "output_text") and c.get("text"):
-                        texts.append(str(c["text"]))
+                for content in item.get("content") or []:
+                    if (
+                        isinstance(content, dict)
+                        and content.get("type") in ("text", "output_text")
+                        and content.get("text")
+                    ):
+                        texts.append(str(content["text"]))
             elif item.get("type") == "web_search_call":
                 action = item.get("action") or {}
                 for key in ("query", "queries"):
                     if action.get(key):
                         web_search_actions.append(f"query: {action[key]}")
-                for src in action.get("sources") or []:
-                    if isinstance(src, dict) and src.get("url"):
-                        web_search_actions.append(f"src: {src['url']}")
+                for source in action.get("sources") or []:
+                    if isinstance(source, dict) and source.get("url"):
+                        web_search_actions.append(f"src: {source['url']}")
         full_text = "\n".join(texts).strip()
         if not full_text:
             return None
@@ -121,11 +164,26 @@ class ExtractUrlContentAction(BaseAction):
         url = str(kwargs.get("url") or "").strip()
         browse_query = str(kwargs.get("browse_query") or "").strip()
         if not url or not browse_query:
-            return {"success": False, "output": None, "error": "url and browse_query are required", "metrics": {}}
+            return {
+                "success": False,
+                "output": None,
+                "error": "url and browse_query are required",
+                "metrics": {},
+            }
         if not url.startswith(("http://", "https://")):
-            return {"success": False, "output": None, "error": "only http/https URLs are supported", "metrics": {}}
+            return {
+                "success": False,
+                "output": None,
+                "error": "only http/https URLs are supported",
+                "metrics": {},
+            }
 
-        if os.getenv("EXTRACT_URL_USE_JINA", "").strip().lower() in ("1", "true", "yes", "on"):
+        if os.getenv("EXTRACT_URL_USE_JINA", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
             jina_key = os.getenv("JINA_API_KEY")
             if jina_key:
                 try:
@@ -136,29 +194,76 @@ class ExtractUrlContentAction(BaseAction):
                             timeout=10,
                         ).text
                     )
-                    record_unmeasured_call("jina-reader", "browse", "external_provider_price_not_configured")
+                    record_unmeasured_call(
+                        "jina-reader",
+                        "browse",
+                        "external_provider_price_not_configured",
+                    )
                     if text.strip():
                         api_key, base_url, model = self._get_llm_config()
                         if api_key:
-                            client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+                            client = AsyncOpenAI(
+                                api_key=api_key,
+                                base_url=base_url,
+                            )
                             completion = await client.chat.completions.create(
                                 model=model,
-                                messages=[{"role": "user", "content": f"Source:\n{text[:120000]}\n\nQuestion: {browse_query}"}],
+                                messages=[
+                                    {
+                                        "role": "user",
+                                        "content": (
+                                            f"Source:\n{text[:120000]}\n\n"
+                                            f"Question: {browse_query}"
+                                        ),
+                                    }
+                                ],
                             )
-                            record_api_response(model, completion, category="browse", base_url=base_url)
+                            record_api_response(
+                                model,
+                                completion,
+                                category="browse",
+                                base_url=base_url,
+                            )
                             answer = completion.choices[0].message.content
                             if answer:
-                                return {"success": True, "output": {"url": url, "answer": answer.strip(), "source_preview": text[:2000]}, "error": None, "metrics": {}}
+                                return {
+                                    "success": True,
+                                    "output": {
+                                        "url": url,
+                                        "answer": answer.strip(),
+                                        "source_preview": text[:2000],
+                                    },
+                                    "error": None,
+                                    "metrics": {},
+                                }
                 except Exception as exc:
                     logger.warning(f"[ExtractUrl] Jina path failed: {exc}")
 
         try:
-            result = await asyncio.to_thread(self._dashscope_fallback_direct, url, browse_query)
+            result = await asyncio.to_thread(
+                self._dashscope_fallback_direct,
+                url,
+                browse_query,
+            )
         except Exception as exc:
             result = None
             logger.warning(f"[ExtractUrl] DashScope fallback failed: {exc}")
         if result is None:
-            return {"success": False, "output": None, "error": "failed to extract targeted URL content", "metrics": {}}
+            return {
+                "success": False,
+                "output": None,
+                "error": "failed to extract targeted URL content",
+                "metrics": {},
+            }
         answer, preview = result
         preview_line = f"(DashScope web_search direct fallback) {preview[:2000]}"
-        return {"success": True, "output": {"url": url, "answer": answer, "source_preview": preview_line}, "error": None, "metrics": {}}
+        return {
+            "success": True,
+            "output": {
+                "url": url,
+                "answer": answer,
+                "source_preview": preview_line,
+            },
+            "error": None,
+            "metrics": {},
+        }
