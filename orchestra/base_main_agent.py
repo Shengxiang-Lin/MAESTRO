@@ -11,7 +11,6 @@ from base.agent.memory import Memory
 from base.engine.async_llm import ModelPricing
 from base.engine.logs import LogLevel, logger
 from benchmark.common.env import BasicInfo
-from orchestra.common.provenance import trace_control_provenance
 from orchestra.common.utils import indent_text, parse_json_response
 
 
@@ -100,20 +99,6 @@ class BaseMainAgent(BaseAgent):
 
     def get_usage_cost(self) -> float:
         return float(self.get_usage_summary().get("total_cost", 0.0) or 0.0)
-
-    @staticmethod
-    def _runtime_telemetry(subtask: Dict[str, Any]) -> Dict[str, Any]:
-        """Collect internal execution metadata without exposing it in O1 history."""
-        provenance = trace_control_provenance(subtask.get("trace") or [])
-        assigned = subtask.get("tools_assigned") or []
-        if isinstance(assigned, str):
-            assigned = [assigned]
-        return {
-            "assigned_tool_ids": sorted({str(value) for value in assigned if value}),
-            "executed_tool_ids": list(provenance.get("executed_tool_ids") or []),
-            "attested_source_ids": list(provenance.get("attested_source_ids") or [])[:12],
-            "context_fingerprint": str(subtask.get("context_fingerprint") or "empty"),
-        }
 
     def _format_subtask_history(self) -> str:
         """Official Orchestra-o1 Main-visible subtask history format."""
@@ -302,9 +287,12 @@ class BaseMainAgent(BaseAgent):
                         "max_steps": sub_result.get("statistics", {}).get("max_steps", 30),
                         "cost": sub_result.get("cost", 0),
                         "result": result_text,
-                        "summary": finish.get("summary", "") if finish else "",
+                        "summary": (
+                            finish.get("summary", "")
+                            if finish
+                            else "SubAgent did not finish."
+                        ),
                         "trace_summary": sub_result.get("trace_summary", ""),
-                        **self._runtime_telemetry(sub_result),
                     }
                     batch_entries.append(entry)
                     summary += (
@@ -335,9 +323,12 @@ class BaseMainAgent(BaseAgent):
                         "max_steps": result.get("statistics", {}).get("max_steps", 30),
                         "cost": result.get("cost", 0),
                         "result": finish.get("result", "-") if finish else "-",
-                        "summary": finish.get("summary", "") if finish else "",
+                        "summary": (
+                            finish.get("summary", "")
+                            if finish
+                            else "SubAgent did not finish."
+                        ),
                         "trace_summary": result.get("trace_summary", ""),
-                        **self._runtime_telemetry(result),
                     }
                 )
         elif action == "complete":
