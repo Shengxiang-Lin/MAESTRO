@@ -28,7 +28,11 @@ from benchmark.omnigaia.orchestra_benchmark import (
     OmniGAIAConfig,
     OmniGAIAOrchestraBenchmark,
 )
-from benchmark.omnigaia.tools import build_omnigaia_tools, resolve_tool_models
+from benchmark.omnigaia.tools import (
+    build_omnigaia_tools,
+    load_web_tool_configs,
+    resolve_tool_models,
+)
 from orchestra.config import GAIAOrchestraConfig
 from orchestra.runners.base_omnigaia_runner import BaseOmniGAIARunner
 from orchestra_o1.main_agent import MainAgent as O1MainAgent
@@ -54,6 +58,7 @@ async def main() -> int:
     logger.info("=" * 60)
 
     cfg = GAIAOrchestraConfig.load(args.config)
+    search_cfg, browse_cfg = load_web_tool_configs(args.config)
     cfg.prepare_dataset()
     logger.info(f"Dataset: type={cfg.dataset_type}, source={cfg.dataset_source_path}, jsonl={cfg.dataset_path}")
     if not cfg.dataset_path.exists():
@@ -64,7 +69,11 @@ async def main() -> int:
     cfg.timestamp = timestamp
     cfg.tool_models = resolve_tool_models(cfg.tool_models)
     runtime_models = cfg.prepare_model_backends()
-    tools = build_omnigaia_tools(cfg.tool_models)
+    tools = build_omnigaia_tools(
+        cfg.tool_models,
+        search=search_cfg,
+        browse=browse_cfg,
+    )
 
     benchmark = OmniGAIAOrchestraBenchmark(
         OmniGAIAConfig(
@@ -122,6 +131,8 @@ async def main() -> int:
         "attachments_dir": str(cfg.attachments_dir),
         "main_model": cfg.main_model,
         "sub_models": cfg.sub_models,
+        "search": search_cfg,
+        "browse": browse_cfg,
         "tool_models": cfg.tool_models,
         "evaluation_model": cfg.evaluation_model,
         "trace_summary_model": cfg.trace_summary_model,
@@ -150,7 +161,8 @@ async def main() -> int:
     )
     logger.info(
         f"[Orchestra-o1] main={cfg.main_model}, sub={cfg.sub_models}, "
-        f"tools={cfg.tool_models}, evaluation={cfg.evaluation_model}, "
+        f"search={search_cfg}, browse={browse_cfg}, tools={cfg.tool_models}, "
+        f"evaluation={cfg.evaluation_model}, "
         f"trace_summary={cfg.trace_summary_model}, local={runtime_models}"
     )
     results = await runner.run_levels(
