@@ -1,8 +1,7 @@
-# MM-BrowseComp configuration; model roles can match your existing experiment.
+# Orchestra-o1: MM-BrowseComp; Main-Agent qwen3.8-max; Sub-Agent qwen3.7-flash.
 main_model: "qwen3.8-max"
 sub_models:
   - "qwen3.7-flash"
-
 
 search:
   provider: "dashscope"
@@ -20,17 +19,16 @@ tool_models:
   video_summary: "qwen3.7-flash"
 
 evaluation_model: "qwen3.7-plus"
+trace_summary_model: "qwen3.7-plus"
 
 dataset_type: "MM-BrowseComp"
-# Accepts JSON, plaintext JSONL, or the official encrypted JSONL.
 dataset_path: "data/MM-BrowseComp/data/MMBrowseComp_400_decrypted.jsonl"
 dataset_jsonl_path: "data/MM-BrowseComp/data/test_metadata.jsonl"
 attachments_dir: "data/MM-BrowseComp"
 level_filter: null
-
-max_tasks: 10
+max_tasks: 400
 max_attempts: 10
 max_concurrency: 10
 
-result_folder: "logs/mm_browsecomp_orchestra_o1_qwen37_plus_local_qwen35_9b"
-trajectory_folder: "logs/mm_browsecomp_orchestra_o1_qwen37_plus_local_qwen35_9b/trajectories"
+result_folder: "logs/mm_browsecomp_o1_qwen38_max_qwen37_flash_400"
+trajectory_folder: "logs/mm_browsecomp_o1_qwen38_max_qwen37_flash_10/trajectories"
