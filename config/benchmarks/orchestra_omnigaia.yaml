@@ -4,10 +4,18 @@ main_model: "qwen3.8-max"
 sub_models:
   - "qwen3.8-max"
 
-# Models used inside OmniGAIA tools. Change these here instead of editing Python.
+# Web-connected tools: provider controls where evidence comes from; model controls
+# the LLM used by providers that require one.
+search:
+  provider: "dashscope"   # dashscope | serper
+  model: "qwen3.7-flash" # ignored when provider=serper
+
+browse:
+  provider: "dashscope"   # dashscope | jina
+  model: "qwen3.7-flash" # jina uses this model after reading the page
+
+# Models used by non-web OmniGAIA tools.
 tool_models:
-  search: "qwen3.7-flash"
-  browse: "qwen3.7-flash"
   image_analysis: "qwen3.7-flash"
   audio_analysis: "qwen3.5-omni-flash"
   video_vision: "qwen3.7-flash"
