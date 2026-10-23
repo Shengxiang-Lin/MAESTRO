@@ -1,0 +1,33 @@
+# Orchestra-o1: OmniGAIA; Main-Agent qwen3.8-max; Sub-Agent qwen3.7-plus.
+main_model: "qwen3.8-max"
+sub_models:
+  - "local-qwen3.5-9b"
+
+search:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+browse:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+tool_models:
+  image_analysis: "qwen3.7-flash"
+  audio_analysis: "qwen3.5-omni-flash"
+  video_vision: "qwen3.7-flash"
+  video_audio: "qwen3.5-omni-flash"
+  video_summary: "qwen3.7-flash"
+
+evaluation_model: "qwen3.7-plus"
+trace_summary_model: "qwen3.7-plus"
+
+dataset_type: "OmniGAIA"
+dataset_path: "data/OmniGAIA/test_metadata.jsonl"
+attachments_dir: "data/OmniGAIA"
+level_filter: null
+max_tasks: 30
+max_attempts: 10
+max_concurrency: 10
+
+result_folder: "logs/omnigaia_o1_qwen38_max_local_qwen35_9b_30"
+trajectory_folder: "logs/omnigaia_o1_qwen38_max_local_qwen35_9b_30/trajectories"

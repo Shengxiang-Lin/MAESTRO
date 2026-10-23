@@ -25,9 +25,9 @@ dataset_type: "OmniGAIA"
 dataset_path: "data/OmniGAIA/test_metadata.jsonl"
 attachments_dir: "data/OmniGAIA"
 level_filter: null
-max_tasks: 360
+max_tasks: 30
 max_attempts: 10
 max_concurrency: 10
 
-result_folder: "logs/omnigaia_o1_qwen38_max_qwen37_plus_360"
-trajectory_folder: "logs/omnigaia_o1_qwen38_max_qwen37_plus_10/trajectories"
+result_folder: "logs/omnigaia_o1_qwen38_max_qwen37_plus_30"
+trajectory_folder: "logs/omnigaia_o1_qwen38_max_qwen37_plus_30/trajectories"
