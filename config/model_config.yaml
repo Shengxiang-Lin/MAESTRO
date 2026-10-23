@@ -159,3 +159,27 @@ models:
     extra_body:
       chat_template_kwargs:
         enable_thinking: true
+
+  local-qwen3.5-9b-1:
+    backend: vllm
+    model_path: "${QWEN35_9B_MODEL_PATH}"
+    served_model_name: "local-qwen3.5-9b-1"
+    host: "127.0.0.1"
+    port: 8809
+    gpus: [2]
+    tensor_parallel_size: 1
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.90
+    max_model_len: 32768
+    max_num_seqs: 8
+    max_num_batched_tokens: 8192
+    reasoning_parser: "qwen3"
+    enforce_eager: true
+    reuse_existing: true
+    auto_start: true
+    startup_timeout: 1200
+    shutdown_on_exit: false
+    log_file: "logs/vllm/local-qwen3.5-9b-1.log"
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
