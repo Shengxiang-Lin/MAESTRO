@@ -6,7 +6,6 @@ import json
 import os
 
 from base.agent.base_action import BaseAction
-from base.engine.async_llm import LLMsConfig
 from base.engine.cost_monitor import record_unmeasured_call
 from benchmark.omnigaia.tools.dashscope_responses import request_response
 from benchmark.omnigaia.tools.search_response import parse_search_response
@@ -19,31 +18,17 @@ _EMPTY_HIT = [{"content": "No good Google Search Result was found", "source": "N
 
 
 def _get_dashscope_cfg(model_name: str) -> tuple[str, str, str]:
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
-    runtime_model = model_name
-    try:
-        cfg = LLMsConfig.default().get(model_name)
-        if cfg and cfg.key:
-            api_key, base_url = cfg.key, cfg.base_url
-            runtime_model = cfg.model or runtime_model
-    except Exception:
-        pass
-    api_key = (
-        api_key
-        or os.getenv("DASHSCOPE_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-        or os.getenv("LLM_API_KEY")
-        or ""
-    )
-    base_url = (
-        base_url
-        or os.getenv("DASHSCOPE_BASE_URL")
-        or os.getenv("OPENAI_BASE_URL")
-        or os.getenv("LLM_API_BASE")
-        or DASHSCOPE_DEFAULT_BASE
-    )
-    return api_key, base_url, runtime_model
+    """Return provider-local DashScope credentials and endpoint.
+
+    A search configured with provider='dashscope' must never inherit the API key
+    or base URL of a model alias registered for another OpenAI-compatible
+    provider (for example Paratera).  The model name comes from the benchmark
+    search config; credentials and endpoint come only from DashScope-specific
+    environment variables.
+    """
+    api_key = os.getenv("DASHSCOPE_API_KEY") or ""
+    base_url = os.getenv("DASHSCOPE_BASE_URL") or DASHSCOPE_DEFAULT_BASE
+    return api_key, base_url, model_name
 
 
 async def _dashscope_web_search(
@@ -57,7 +42,7 @@ async def _dashscope_web_search(
     api_key, base_url, model = _get_dashscope_cfg(model_name)
     if not api_key:
         raise RuntimeError(
-            "GoogleSearchAction: no DashScope/OpenAI-compatible API key available"
+            "GoogleSearchAction: DASHSCOPE_API_KEY is required for provider='dashscope'"
         )
     prompt = (
         f"Use your built-in web_search tool to perform a WEB SEARCH for:\n"
