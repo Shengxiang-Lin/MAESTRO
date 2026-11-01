@@ -5,11 +5,11 @@ sub_models:
 
 search:
   provider: "dashscope"
-  model: "qwen3.8-flash"
+  model: "Qwen3.7-Plus"
 
 browse:
   provider: "dashscope"
-  model: "qwen3.8-flash"
+  model: "Qwen3.7-Plus"
 
 tool_models:
   image_analysis: "qwen3.8-flash"
