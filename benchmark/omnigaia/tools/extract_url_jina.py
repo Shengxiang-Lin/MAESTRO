@@ -52,21 +52,17 @@ class ExtractUrlContentAction(BaseAction):
         )
 
     def _get_dashscope_cfg(self) -> tuple[str, str, str]:
-        runtime_model = self.model_name
-        try:
-            cfg = LLMsConfig.default().get(self.model_name)
-            if cfg and cfg.key:
-                return cfg.key, cfg.base_url, cfg.model or runtime_model
-        except Exception:
-            pass
+        """Return provider-local DashScope credentials and endpoint.
+
+        provider='dashscope' is intentionally isolated from the shared model
+        registry so a Paratera model alias cannot replace the DashScope base URL
+        or credentials used by the Responses web_search API.
+        """
         return (
-            os.getenv("DASHSCOPE_API_KEY")
-            or os.getenv("OPENAI_API_KEY")
-            or os.getenv("LLM_API_KEY")
-            or "",
+            os.getenv("DASHSCOPE_API_KEY") or "",
             os.getenv("DASHSCOPE_BASE_URL")
             or "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            runtime_model,
+            self.model_name,
         )
 
     def _dashscope_fallback_direct(
