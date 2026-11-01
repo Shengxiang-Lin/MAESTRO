@@ -1,0 +1,185 @@
+# Shared model registry for MAESTRO and Orchestra-o1 baselines.
+#
+# This file describes HOW a model is called or served. Benchmark YAML files
+# should normally only select model names for main/sub/tool/evaluation roles.
+# Do not commit provider secrets or machine-specific absolute paths. Export the
+# referenced environment variables before running local models.
+models:
+  # ---------------------------------------------------------------------------
+  # Remote API models
+  # ---------------------------------------------------------------------------
+  qwen3.8-max:
+    backend: api
+    api_type: openai
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: null
+    temperature: 0.1
+    top_p: 0.9
+
+  qwen3.7-plus:
+    backend: api
+    api_type: openai
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: null
+    temperature: 0.1
+    top_p: 0.9
+
+  qwen3.7-flash:
+    backend: api
+    api_type: openai
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: null
+    temperature: 0.1
+    top_p: 0.9
+
+  qwen3.5-omni-flash:
+    backend: api
+    api_type: openai
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: null
+    temperature: 0.1
+    top_p: 0.9
+
+  deepseek-v4-flash-0731:
+    backend: api
+    api_type: openai
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: null
+    temperature: 0.7
+    top_p: 0.95
+
+  deepseek-v3.2:
+    backend: api
+    api_type: openai
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: null
+    temperature: 0.7
+    top_p: 0.95
+
+  # ---------------------------------------------------------------------------
+  # Local vLLM models
+  # ---------------------------------------------------------------------------
+  # Base Qwen3-8B used by the Orchestra-o1 local baseline.
+  qwen3-8b-local:
+    backend: vllm
+    model_path: "${QWEN3_8B_MODEL_PATH}"
+    served_model_name: "qwen3-8b-local"
+    host: "127.0.0.1"
+    port: 8803
+    gpus: [0]
+    tensor_parallel_size: 1
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.80
+    max_model_len: 16384
+    max_num_seqs: 4
+    max_num_batched_tokens: 4096
+    reasoning_parser: "qwen3"
+    enforce_eager: true
+    reuse_existing: true
+    auto_start: true
+    startup_timeout: 900
+    shutdown_on_exit: false
+    log_file: "logs/vllm/qwen3-8b-local.log"
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
+
+  # GRPO-trained Qwen3-8B checkpoint. A separate default port allows the base
+  # and GRPO models to coexist if desired.
+  qwen3-8b-grpo-local:
+    backend: vllm
+    model_path: "${QWEN3_8B_GRPO_MODEL_PATH}"
+    served_model_name: "qwen3-8b-grpo-local"
+    host: "127.0.0.1"
+    port: 8805
+    gpus: [0]
+    tensor_parallel_size: 1
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.80
+    max_model_len: 16384
+    max_num_seqs: 4
+    max_num_batched_tokens: 4096
+    reasoning_parser: "qwen3"
+    enforce_eager: true
+    reuse_existing: true
+    auto_start: true
+    startup_timeout: 900
+    shutdown_on_exit: false
+    log_file: "logs/vllm/qwen3-8b-grpo-local.log"
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
+
+  # Example larger local model for multi-GPU Main/Sub-Agent experiments.
+  # With gpus=[0,1], vLLM is launched with CUDA_VISIBLE_DEVICES=0,1 and TP=2.
+  local-qwen-27b:
+    backend: vllm
+    model_path: "${QWEN3_27B_MODEL_PATH}"
+    served_model_name: "local-qwen-27b"
+    host: "127.0.0.1"
+    port: 8804
+    gpus: [0, 1]
+    tensor_parallel_size: 2
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.90
+    max_model_len: 32768
+    max_num_seqs: 8
+    max_num_batched_tokens: 8192
+    reasoning_parser: "qwen3"
+    enforce_eager: true
+    reuse_existing: true
+    auto_start: true
+    startup_timeout: 1200
+    shutdown_on_exit: false
+    log_file: "logs/vllm/local-qwen-27b.log"
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
+
+  local-qwen3.5-9b:
+    backend: vllm
+    model_path: "${QWEN35_9B_MODEL_PATH}"
+    served_model_name: "local-qwen3.5-9b"
+    host: "127.0.0.1"
+    port: 8807
+    gpus: [1]
+    tensor_parallel_size: 1
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.90
+    max_model_len: 32768
+    max_num_seqs: 8
+    max_num_batched_tokens: 8192
+    reasoning_parser: "qwen3"
+    enforce_eager: true
+    reuse_existing: true
+    auto_start: true
+    startup_timeout: 1200
+    shutdown_on_exit: false
+    log_file: "logs/vllm/local-qwen3.5-9b.log"
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
+
+  local-qwen3.5-9b-1:
+    backend: vllm
+    model_path: "${QWEN35_9B_MODEL_PATH}"
+    served_model_name: "local-qwen3.5-9b-1"
+    host: "127.0.0.1"
+    port: 8809
+    gpus: [2]
+    tensor_parallel_size: 1
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.90
+    max_model_len: 32768
+    max_num_seqs: 8
+    max_num_batched_tokens: 8192
+    reasoning_parser: "qwen3"
+    enforce_eager: true
+    reuse_existing: true
+    auto_start: true
+    startup_timeout: 1200
+    shutdown_on_exit: false
+    log_file: "logs/vllm/local-qwen3.5-9b-1.log"
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true

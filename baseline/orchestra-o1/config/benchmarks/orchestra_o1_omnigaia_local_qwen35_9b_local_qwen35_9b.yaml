@@ -1,5 +1,5 @@
 # Orchestra-o1: OmniGAIA; Main-Agent qwen3.8-max; Sub-Agent qwen3.7-plus.
-main_model: "local-qwen3.5-9b-1"
+main_model: "local-qwen3.5-9b"
 sub_models:
   - "local-qwen3.5-9b"
 
