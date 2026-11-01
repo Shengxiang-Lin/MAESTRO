@@ -11,6 +11,7 @@ models:
   qwen3.8-max:
     backend: api
     api_type: openai
+    model: "Qwen3.8-Max"
     base_url: https://llmapi.paratera.com
     api_key: null
     temperature: 0.1
@@ -19,14 +20,16 @@ models:
   qwen3.7-plus:
     backend: api
     api_type: openai
+    model: "Qwen3.7-Plus"
     base_url: https://llmapi.paratera.com
     api_key: null
     temperature: 0.1
     top_p: 0.9
 
-  qwen3.7-flash:
+  qwen3.8-flash:
     backend: api
     api_type: openai
+    model: "Qwen3.8-Flash"
     base_url: https://llmapi.paratera.com
     api_key: null
     temperature: 0.1
@@ -43,6 +46,7 @@ models:
   deepseek-v4-flash-0731:
     backend: api
     api_type: openai
+    model: "DeepSeek-V4-Flash-0731"
     base_url: https://llmapi.paratera.com
     api_key: null
     temperature: 0.7
@@ -51,6 +55,7 @@ models:
   deepseek-v3.2:
     backend: api
     api_type: openai
+    model: "DeepSeek-V3.2"
     base_url: https://llmapi.paratera.com
     api_key: null
     temperature: 0.7
