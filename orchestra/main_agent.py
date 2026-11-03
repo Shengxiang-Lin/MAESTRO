@@ -10,6 +10,7 @@ from pydantic import Field
 from base.engine.logs import LogLevel
 from orchestra.base_main_agent import BaseMainAgent
 from orchestra.common.utils import parse_json_response
+from orchestra.prompts.omnigaia import OmniGAIAMainAgentPrompt as O1MainPrompt
 
 from .config import ProspectiveConfig
 from .prospective import normalize_prospective_decision
@@ -18,7 +19,7 @@ from .state import ObservedStateLedger
 
 
 class MainAgent(BaseMainAgent):
-    """Persistent epistemic state + prospective deliberation + one macro-action."""
+    """Persistent epistemic state + prospective deliberation + one runtime action."""
 
     name: str = Field(default="MAESTROMainAgent")
     prospective_config: Any = Field(default=None, exclude=True)
@@ -83,6 +84,30 @@ class MainAgent(BaseMainAgent):
             max_future_requirements=cfg.max_future_requirements,
             max_critical_dependencies=cfg.max_critical_dependencies,
             max_tasks_per_action=cfg.max_tasks_per_action,
+        )
+
+    def _build_o1_equivalent_prompt(
+        self,
+        *,
+        context: str,
+        subtask_history: str,
+        attempt_index: int,
+    ) -> str:
+        """Build the public observation contract used by the O1 Main.
+
+        This prompt is stored for small-Main training only.  It is not sent to
+        the API MAESTRO Main and therefore does not change runtime behavior.
+        """
+        return O1MainPrompt.build_prompt(
+            instruction=self.instruction,
+            meta=self.meta,
+            prior_context=context,
+            attempt_index=attempt_index,
+            max_attempts=self.max_attempts,
+            sub_models=self.masked_sub_models,
+            subtask_history=subtask_history,
+            model_to_alias=self.model_to_alias if self.mask_model_names else None,
+            tools=self.subagent_tools,
         )
 
     def _normalize_decision(self, raw: Any) -> Dict[str, Any]:
@@ -205,6 +230,11 @@ class MainAgent(BaseMainAgent):
             attempt_index=self.attempt,
         )
         state_before["main_prompt"] = prompt
+        state_before["o1_equivalent_prompt"] = self._build_o1_equivalent_prompt(
+            context=self.context,
+            subtask_history=subtask_history,
+            attempt_index=self.attempt,
+        )
         from base.engine.logs import logger
 
         logger.log_to_file(
@@ -221,6 +251,12 @@ class MainAgent(BaseMainAgent):
             decision.get("epistemic_state") or {"bindings": []}
         )
         prospective_state = deepcopy(decision.get("prospective_state") or {})
+        orchestration_mode = str(
+            decision.get("orchestration_mode") or ""
+        )
+        consequence_assessment = deepcopy(
+            decision.get("consequence_assessment") or {}
+        )
         decision_record = self.observed_state.record_decision(
             attempt=self.attempt,
             epistemic_state=epistemic_state,
@@ -230,6 +266,10 @@ class MainAgent(BaseMainAgent):
             reasoning=str(decision.get("reasoning") or ""),
             validation_warnings=decision.get("validation_warnings") or [],
         )
+        # Keep the shared ledger API stable while exposing the new semantic
+        # decision labels in the trajectory's decision_record.
+        decision_record["orchestration_mode"] = orchestration_mode
+        decision_record["consequence_assessment"] = consequence_assessment
 
         projection_reports: List[Dict[str, Any]] = []
         projection_failures: List[Dict[str, Any]] = []
@@ -298,6 +338,8 @@ class MainAgent(BaseMainAgent):
             "result": result,
             "epistemic_state": epistemic_state,
             "prospective_state": prospective_state,
+            "orchestration_mode": orchestration_mode,
+            "consequence_assessment": consequence_assessment,
             "validation_warnings": deepcopy(
                 decision.get("validation_warnings") or []
             ),

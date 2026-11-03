@@ -5,11 +5,13 @@ from copy import deepcopy
 from typing import Any, Dict, Iterable, List
 
 from .config import ProspectiveConfig
+from .modes import ORCHESTRATION_MODES
 
 _READINESS = {"ready", "not_ready", "uncertain"}
 _ACTIONS = {"delegate_task", "complete"}
 _EPISTEMIC_STATUS = {"unresolved", "provisional", "supported"}
 _SAMPLING = {"reuse_ok", "prefer_diverse", "require_diverse"}
+_CONSEQUENCE_LEVELS = {"low", "medium", "high"}
 _LEGACY_POLICY_TO_SAMPLING = {
     "reuse_allowed": "reuse_ok",
     "prefer_independent": "prefer_diverse",
@@ -106,6 +108,46 @@ def _normalize_prospective_state(raw: Any, config: ProspectiveConfig) -> Dict[st
     }
 
 
+def _normalize_orchestration_mode(raw: Any, action: str) -> tuple[str, List[str]]:
+    candidate = str(raw or "").strip().lower()
+    warnings: List[str] = []
+    if candidate not in ORCHESTRATION_MODES:
+        warnings.append("missing_or_invalid_orchestration_mode")
+        candidate = "complete" if action == "complete" else "advance"
+    if action == "complete" and candidate != "complete":
+        warnings.append("complete_action_with_noncomplete_mode")
+    if action == "delegate_task" and candidate == "complete":
+        warnings.append("delegate_action_with_complete_mode")
+    return candidate, warnings
+
+
+def _normalize_consequence_assessment(
+    raw: Any,
+    *,
+    orchestration_mode: str,
+) -> Dict[str, Any]:
+    raw = raw if isinstance(raw, dict) else {}
+    effort = str(raw.get("cost_level") or raw.get("effort") or "").strip().lower()
+    if effort not in _CONSEQUENCE_LEVELS:
+        effort = ""
+    return {
+        "chosen_mode": orchestration_mode,
+        "expected_gain": _text(
+            raw.get("expected_gain") or raw.get("expected_progress"),
+            700,
+        ),
+        "risk_if_skipped": _text(
+            raw.get("risk_if_skipped") or raw.get("risk"),
+            700,
+        ),
+        "cost_note": _text(
+            raw.get("cost_note") or raw.get("cost"),
+            500,
+        ),
+        "cost_level": effort,
+    }
+
+
 def _normalize_evidence_request(raw: Any, config: ProspectiveConfig) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     if not raw:
@@ -154,6 +196,17 @@ def normalize_prospective_decision(raw: Any, *, config: ProspectiveConfig, selec
     if action not in _ACTIONS:
         warnings.append("invalid_action")
         action = "orchestration_error"
+
+    orchestration_mode, mode_warnings = _normalize_orchestration_mode(
+        raw.get("orchestration_mode") or raw.get("macro_mode") or raw.get("mode"),
+        action,
+    )
+    warnings.extend(mode_warnings)
+    consequence_assessment = _normalize_consequence_assessment(
+        raw.get("consequence_assessment") or raw.get("consequence") or {},
+        orchestration_mode=orchestration_mode,
+    )
+
     binding_keys = {item["key"] for item in epistemic_state["bindings"]}
     for dep in prospective_state["critical_dependencies"]:
         key = dep.get("belief_key")
@@ -189,6 +242,8 @@ def normalize_prospective_decision(raw: Any, *, config: ProspectiveConfig, selec
     return {
         "epistemic_state": epistemic_state,
         "prospective_state": prospective_state,
+        "orchestration_mode": orchestration_mode,
+        "consequence_assessment": consequence_assessment,
         "action": action,
         "params": params,
         "reasoning": _text(raw.get("reasoning"), 1200),

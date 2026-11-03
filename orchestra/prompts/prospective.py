@@ -46,9 +46,11 @@ Perform this sequence in ONE response:
 1. revise current epistemic bindings from visible evidence;
 2. identify which bindings matter for future task success;
 3. predict what evidence/state should change next;
-4. emit exactly ONE outward macro-action: `delegate_task` or `complete`.
+4. choose exactly ONE INTERNAL orchestration mode;
+5. perform a short qualitative consequence check for that mode;
+6. emit exactly ONE OUTWARD runtime action: `delegate_task` or `complete`.
 
-Do not classify a source, Sub-Agent, provider, tool, or communication path with hidden trust/reliability labels. Do not invent numeric confidence, trust scores, or causal probabilities.
+The internal orchestration mode is a semantic planning label, NOT a new environment action. Do not classify a source, Sub-Agent, provider, tool, or communication path with hidden trust/reliability labels. Do not invent numeric confidence, trust scores, or causal probabilities.
 
 ==== 1. PERSISTENT EPISTEMIC STATE / DELAYED COMMITMENT ====
 Maintain compact symbolic bindings for decision-relevant variables/claims. Each binding has:
@@ -64,10 +66,33 @@ Prefer delayed commitment. One coherent result does not force `supported`; prior
 ==== 2. PROSPECTIVE FUTURE-IMPACT STATE ====
 Use at most {max_future_requirements} `future_requirements` describing WHAT must still become known/resolved. Use at most {max_critical_dependencies} `critical_dependencies`, each with `belief_key`, `reason`, `consequence_if_wrong`, and `evidence_gap`. `desired_next_evidence_state` describes the TARGET STATE after the next useful work, not a tool name. `completion_readiness` is `ready`, `not_ready`, or `uncertain`.
 
-==== 3. EVIDENCE ATTEMPT HISTORY ====
+==== 3. INTERNAL ORCHESTRATION MODE ====
+Choose exactly one:
+- `advance`: current information is sufficiently usable; progress to the next dependency/sub-goal.
+- `verify`: a load-bearing claim needs additional evidence before downstream use.
+- `retry`: repeat essentially the same method because another sample still has information value.
+- `reformulate`: change wording, decomposition, crop/query, or method because the previous formulation was ineffective.
+- `switch`: change model, tool, provider, or execution route because the current route is unlikely to recover.
+- `rollback`: stop relying on a previously promoted premise and repair work that depended on it.
+- `complete`: stop because the information required for the final answer is sufficient.
+
+`verify`, `retry`, `reformulate`, `switch`, `rollback`, and `advance` usually still compile to the outward action `delegate_task`. Only `complete` should normally compile to outward `complete`.
+
+Do not choose a conservative mode by default. In particular, do not verify/retry merely because uncertainty exists. Spend budget only when the expected downstream value justifies it.
+
+==== 4. QUALITATIVE CONSEQUENCE CHECK ====
+Before emitting the outward action, state:
+- `expected_gain`: what useful state/progress should result from the chosen mode;
+- `risk_if_skipped`: what can go wrong if the current bottleneck is ignored;
+- `cost_note`: what budget/resource is being spent;
+- `cost_level`: `low`, `medium`, or `high` when meaningful, otherwise empty.
+
+This is a qualitative decision aid, not a calibrated probability model. Do not output fake numeric Q-values/confidence scores and do not enumerate a full portfolio of candidate actions.
+
+==== 5. EVIDENCE ATTEMPT HISTORY ====
 Use `evidence_attempt_history` to distinguish fresh retry, same-provider re-sampling, diverse-provider evidence, repeated correlated agreement, and strict diversity requests that could not execute. Same-provider retries can still be informative; decide from future consequence, evidence gap, previous attempts, and cost.
 
-==== 4. SEMANTIC EVIDENCE REQUEST ====
+==== 6. SEMANTIC EVIDENCE REQUEST ====
 All outward work remains a normal task inside `delegate_task`. Do NOT introduce new outward actions. A task may optionally include `evidence_request` with:
 - `target_key`;
 - `target_requirement`;
@@ -79,10 +104,10 @@ All outward work remains a normal task inside `delegate_task`. Do NOT introduce 
 `prefer_diverse`: prefer a different provider but keep old providers as fallback.
 `require_diverse`: rare strict projection; exclude providers used by `based_on` only when provider-disjoint evidence is necessary. If unavailable, execution may return `evidence_projection_unavailable`.
 
-==== 5. BLIND RE-QUERY / PREDICATE PRESERVATION ====
+==== 7. BLIND RE-QUERY / PREDICATE PRESERVATION ====
 `blind` is independent of sampling diversity. Use it when an old candidate may anchor a new attempt. `target_requirement` must not contain the candidate answer/value and must preserve the same predicate.
 
-==== 6. EXECUTABLE-SPACE PROJECTION ====
+==== 8. EXECUTABLE-SPACE PROJECTION ====
 The Main outputs a SEMANTIC evidence request. A deterministic projector maps it onto the executable tool space. The projector does not decide whether more evidence is needed and does not assign trust.
 
 ==== DECISION RULE ====
@@ -92,7 +117,8 @@ The Main outputs a SEMANTIC evidence request. A deterministic projector maps it 
 - Reuse an old path when another sample still has information value.
 - Prefer diversity when correlation is the main remaining evidence gap.
 - Do not gather evidence merely to increase source/tool counts.
-- If `complete`, load-bearing bindings needed for the answer should not remain unresolved, `completion_readiness` should be `ready`, and `future_requirements` should be empty.
+- Avoid redundant retries: if the same method already failed without new information, reformulate or switch instead.
+- If `complete`, load-bearing bindings needed for the answer should not remain unresolved, `completion_readiness` should be `ready`, `future_requirements` should be empty, and `orchestration_mode` should be `complete`.
 
 ==== OBSERVED APPEND-ONLY EVIDENCE + PRIOR EPISTEMIC STATE ====
 {state}
@@ -123,6 +149,13 @@ Return exactly one JSON object:
     "desired_next_evidence_state": "what should be resolved next",
     "completion_readiness": "ready|not_ready|uncertain"
   }},
+  "orchestration_mode": "advance|verify|retry|reformulate|switch|rollback|complete",
+  "consequence_assessment": {{
+    "expected_gain": "useful progress expected from the chosen mode",
+    "risk_if_skipped": "downstream failure risk if the bottleneck is ignored",
+    "cost_note": "resource/budget implication",
+    "cost_level": "low|medium|high"
+  }},
   "action": "delegate_task|complete",
   "params": {{
     "tasks": [{{
@@ -139,7 +172,7 @@ Return exactly one JSON object:
       }}
     }}]
   }},
-  "reasoning": "brief explanation linking epistemic revision, future consequence, and the chosen action"
+  "reasoning": "brief explanation linking epistemic revision, future consequence, chosen mode, and outward action"
 }}
 
 `evidence_request` is OPTIONAL for ordinary task-progress delegation. For `complete`, replace `params` with {{"answer": "precise concise final answer"}}. Do not generate candidate action portfolios, rankings, hidden trust labels, numeric trust/confidence scores, or a second-stage critique.
