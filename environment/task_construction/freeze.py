@@ -60,7 +60,12 @@ def freeze_batch(summary:Mapping[str,Any],*,target:int,seed:int,worlds_path,task
     authoring=Path(authoring_input_path);authoring.parent.mkdir(parents=True,exist_ok=True)
     with authoring.open("w",encoding="utf-8") as writer:
         for row in projections:writer.write(json.dumps(row,ensure_ascii=False)+"\n")
-    manifest={"version":4,"status":"frozen" if not failures and len(projections)>=target else "rejected","target":target,"requested_target":int(summary.get("worlds",{}).get("target",target)),"target_filled":bool(summary.get("worlds",{}).get("target_filled",False)),"seed":seed,"frozen_count":min(len(projections),target),"failures":failures,"semantic_world_policy_version":2,"artifacts":{"worlds":{"path":str(worlds_path),"sha256":_sha(worlds_path)},"task_designs":{"path":str(task_design_path),"sha256":_sha(task_design_path)},"scenarios":{"path":str(scenario_path),"sha256":_sha(scenario_path)},"capabilities":{"path":str(capability_path),"sha256":_sha(capability_path)},"authoring_inputs":{"path":str(authoring),"sha256":_sha(authoring)}},"invariants":{"p15_wording_only":True,"private_world_not_in_author_prompt":True,"direct_only_shortcuts":0,"minimum_progressive_discovery_depth":2}}
+    manifest={"version":4,"status":"frozen" if not failures and len(projections)>=target else "rejected","target":target,"requested_target":int(summary.get("worlds",{}).get("target",target)),
+        "target_filled":bool(summary.get("worlds",{}).get("target_filled",False)),
+        "candidate_pool_size":summary.get("pipeline",{}).get("candidate_pool_size"),
+        "candidate_pool_fully_evaluated":summary.get("worlds",{}).get("pool_fully_evaluated"),
+        "accepted_world_count":target,
+        "seed":seed,"frozen_count":min(len(projections),target),"failures":failures,"semantic_world_policy_version":2,"artifacts":{"worlds":{"path":str(worlds_path),"sha256":_sha(worlds_path)},"task_designs":{"path":str(task_design_path),"sha256":_sha(task_design_path)},"scenarios":{"path":str(scenario_path),"sha256":_sha(scenario_path)},"capabilities":{"path":str(capability_path),"sha256":_sha(capability_path)},"authoring_inputs":{"path":str(authoring),"sha256":_sha(authoring)}},"invariants":{"p15_wording_only":True,"private_world_not_in_author_prompt":True,"direct_only_shortcuts":0,"minimum_progressive_discovery_depth":2}}
     target_path=Path(manifest_path);target_path.parent.mkdir(parents=True,exist_ok=True);target_path.write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding="utf-8")
     if manifest["status"]!="frozen":raise FreezeError("P1 freeze rejected: "+"; ".join(failures[:20]))
     return manifest
