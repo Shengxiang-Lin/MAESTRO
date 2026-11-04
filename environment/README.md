@@ -199,6 +199,23 @@ new run still rejects all worlds, review
 `environment/data/typed_worlds_{pool_size}.jsonl.quality_rejected.jsonl`
 for the concrete validation reason rather than proceeding to questions.
 
+## Parallel question generation (ordered streaming)
+
+Question generation uses a thread pool (`question_workers: 4` by default)
+for independent Author/Critic tasks. Each task preserves the original
+Author → deterministic preflight → semantic Critic/repair → postflight
+contract. Results can complete out of order, but the writer appends
+accepted, rejected and critic-audit JSONL records **in original task order**.
+
+`flush_every: 5` commits progress to disk in batches, and
+`question_progress_state.json` records SHA-256 digests and committed byte
+offsets. Rerunning `python environment/generate_questions.py` resumes at
+the first uncommitted task if frozen inputs and generation settings match.
+Use `--restart-questions` only when intentionally discarding an existing
+question batch. Old pre-streaming output without checkpoint is never
+silently overwritten. For implementation and recovery details, see
+[question_generation/README.md](question_generation/README.md).
+
 ## Fixed validated candidate pool
 
 Task construction has **one** mode: choose a candidate pool capacity and
