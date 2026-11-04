@@ -6,7 +6,7 @@ The environment is organized by function rather than pipeline stage numbers:
 environment/
 ├── task_construction/          # deterministic/programmatic task-world construction
 ├── question_generation/        # LLM question authoring over frozen task semantics
-├── trajectory_simulation/      # LLM trajectory synthesis and recovery data
+├── trajectory_simulation/      # compiled gold proof DAG + two-role clean trajectory simulation
 ├── construct_tasks.py
 ├── generate_questions.py
 └── simulate_trajectories.py
@@ -39,7 +39,13 @@ frozen public projection
         -> validated natural-language question
 ```
 
-Trajectory simulation is separate from question generation. Its initial implementation mirrors the existing clean-trajectory planner/Teacher pipeline and is the extension point for MAESTRO-specific unreliable-feedback, recovery, macro-label and counterfactual-value generation.
+Trajectory simulation is separate from question generation. The **frozen ProgramIR,
+symbolic trace, minimal evidence proof and capability discovery dependencies**
+compile into a gold solution DAG. A Main Planner LLM allocates only currently
+ready parallel subtasks, a separate Sub-Agent Executor LLM produces grounded
+answers and compressed traces for each assignment, and Main summarizes each
+completed round. The gold evidence and final answer are checked independently;
+no agent interference or recovery is simulated yet.
 
 Generated artifacts live under `environment/data/`. Source datasets are expected under `data/world-source/` by default, matching the previous implementation.
 
@@ -75,12 +81,13 @@ question_generation:
   author_profile: dashscope_qwen
   critic_profile: dashscope_qwen
 trajectory_simulation:
-  teacher_profile: dashscope_qwen
+  planner_profile: dashscope_qwen
+  executor_profile: dashscope_qwen
 ```
 
 ### Local vLLM (default: Qwen3.5-9B)
 
-By default, Question Author, Semantic Critic, and Trajectory Teacher all use
+By default, Question Author, Semantic Critic, Main Planner and Sub-Agent Executor use
 the **same** `local_qwen35_9b` profile in `environment/config.yaml`:
 model `local-qwen3.5-9b` at `http://127.0.0.1:8807/v1`. The model profile
 corresponds to `config/model_config.yaml`'s `local-qwen3.5-9b` service.
@@ -111,7 +118,7 @@ CUDA_VISIBLE_DEVICES=1 vllm serve "$QWEN35_9B_MODEL_PATH" \
 The reduced context size and text-only mode are practical starting points
 for 24 GB GPUs, not a guarantee against out-of-memory errors. Adjust memory
 settings and concurrency as needed. Disabling thinking is particularly
-useful here because the Author/Critic/Teacher produce structured JSON.
+useful here because the Author/Critic/Main/Sub-Agent models produce structured JSON.
 Qwen3.5-9B full BF16 requires substantial VRAM; on smaller GPUs consider
 a supported quantized checkpoint or more hardware.
 
@@ -133,8 +140,8 @@ The environment client accesses a **running** vLLM HTTP service; it does not
 launch or download model weights automatically. To run it on another machine,
 expose the server securely and change `models.local_qwen35_9b.base_url`.
 You can use different profiles per role or switch to `dashscope_qwen` by
-changing the three `author_profile`, `critic_profile` and
-`teacher_profile` settings. The `offline` (passthrough) profile remains
+changing the four `author_profile`, `critic_profile`, `planner_profile`
+and `executor_profile` settings. The `offline` (passthrough) profile remains
 available for no-network checks.
 
 ### Commands
@@ -164,6 +171,17 @@ support JSON response formatting.
 The root `config/model_config.yaml` remains MAESTRO's shared orchestration
 model registry. `environment/config.yaml` is scoped to synthetic data
 generation and does not alter `baseline/` or Main/Sub-Agent settings.
+
+### Gold orchestration trajectories
+
+After question generation, `simulate_trajectories.py plan` compiles the
+official evidence/proof solution graphs **without using an LLM**.
+`simulate_trajectories.py synthesize` then invokes two separate teacher
+roles *round by round*, with parallel Sub-Agent requests only for tasks whose
+frozen predecessors are complete. Evidence and task answers remain grounded
+in the original world; no attack, retry/switch action, or invented evidence
+is generated. The implementation and output schema are documented in
+[trajectory_simulation/README.md](trajectory_simulation/README.md).
 
 ### Troubleshooting: no executable worlds / missing frozen manifest
 
