@@ -108,7 +108,17 @@ def parse_with_config(
     values = dict(values)
     if section in {"question_generation", "trajectory_simulation"} and "seed" not in values:
         values["seed"] = construction.get("seed", 17)
-    target = int(construction.get("target", 100))
+    # Pool-mode artifacts carry the *pool capacity* in their filenames.
+    # The frozen manifest still records the actual accepted world count.
+    if construction.get("all_valid_candidates", False):
+        target = int(construction.get("candidate_pool_size") or 0)
+        if target < 1:
+            raise EnvironmentConfigError(
+                "task_construction.candidate_pool_size must be positive "
+                "when all_valid_candidates is enabled"
+            )
+    else:
+        target = int(construction.get("target", 100))
     recognized: set[str] = set()
     for current in _walk_parsers(parser):
         names = {action.dest for action in current._actions}
