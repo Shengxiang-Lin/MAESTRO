@@ -13,10 +13,10 @@ from .validator import validate_step,validate_trajectory
 
 def _rows(path):
     with Path(path).open("r",encoding="utf-8") as handle:return [json.loads(line) for line in handle if line.strip()]
-def _world_map(path):
+def _world_map(path,seed=17):
     result={}
     for index,row in enumerate(_rows(path)):
-        rendered=render_task_record(row,seed=17+index);result[rendered.task_id]=(row,rendered)
+        rendered=render_task_record(row,seed=seed+index);result[rendered.task_id]=(row,rendered)
     return result
 def plan_trajectories_jsonl(worlds_path,realized_path,output_path,*,max_records=None):
     realized=_rows(realized_path)
@@ -34,10 +34,10 @@ def _teacher(provider,*,base_url=None,model=None,api_key=None,temperature=.2,max
     if provider=="passthrough":return PassthroughTeacher()
     if not base_url or not model:raise ValueError("base_url/model required for openai-compatible trajectory teacher")
     return LLMTeacher(OpenAICompatibleBackend(base_url,model,api_key,temperature,max_tokens,timeout,json_mode))
-def synthesize_trajectories_jsonl(worlds_path,realized_path,output_path,*,provider="passthrough",base_url=None,model=None,api_key=None,temperature=.2,max_tokens=2048,timeout=90.,max_records=None,max_attempts=3,rejected_output_path=None,progress=True,flush_every=5,json_mode=True):
+def synthesize_trajectories_jsonl(worlds_path,realized_path,output_path,*,provider="passthrough",base_url=None,model=None,api_key=None,temperature=.2,max_tokens=2048,timeout=90.,max_records=None,max_attempts=3,rejected_output_path=None,progress=True,flush_every=5,json_mode=True,seed=17):
     realized=_rows(realized_path)
     if max_records is not None:realized=realized[:max_records]
-    worlds=_world_map(worlds_path);teacher=_teacher(provider,base_url=base_url,model=model,api_key=api_key,temperature=temperature,max_tokens=max_tokens,timeout=timeout,json_mode=json_mode);target=Path(output_path);target.parent.mkdir(parents=True,exist_ok=True);rejected_path=Path(rejected_output_path) if rejected_output_path else target.with_suffix(target.suffix+".rejected.jsonl");accepted=0;rejected=0;out=target.open("w",encoding="utf-8");bad=rejected_path.open("w",encoding="utf-8");bar=tqdm(realized,desc="Trajectory simulation",unit="task",disable=not progress)
+    worlds=_world_map(worlds_path,seed=seed);teacher=_teacher(provider,base_url=base_url,model=model,api_key=api_key,temperature=temperature,max_tokens=max_tokens,timeout=timeout,json_mode=json_mode);target=Path(output_path);target.parent.mkdir(parents=True,exist_ok=True);rejected_path=Path(rejected_output_path) if rejected_output_path else target.with_suffix(target.suffix+".rejected.jsonl");accepted=0;rejected=0;out=target.open("w",encoding="utf-8");bad=rejected_path.open("w",encoding="utf-8");bar=tqdm(realized,desc="Trajectory simulation",unit="task",disable=not progress)
     try:
         for task_index,row in enumerate(bar):
             task_id=str(row.get("task_id"));pair=worlds.get(task_id);plan=compile_frontiers(row)
