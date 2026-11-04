@@ -163,3 +163,36 @@ support JSON response formatting.
 The root `config/model_config.yaml` remains MAESTRO's shared orchestration
 model registry. `environment/config.yaml` is scoped to synthetic data
 generation and does not alter `baseline/` or Main/Sub-Agent settings.
+
+### Troubleshooting: no executable worlds / missing frozen manifest
+
+If `construct_tasks.py` reports `World generation accepted no worlds`,
+then the downstream P0/P1 freeze did not finish: `frozen_manifest_{target}.json`
+will not exist, so question generation cannot start. Examine the actual
+candidate and world rejection reasons:
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+p=Path("environment/data/build_summary.json")
+d=json.loads(p.read_text())
+for section in ("candidate_selection", "worlds"):
+    x=d.get(section, {})
+    print(section, "accepted=", x.get("accepted"),
+          "rejections=", x.get("rejection_reasons"))
+PY
+```
+
+For an already completed source-prior build, reuse the expensive KQA/YAGO/MMQA
+artifacts without repeating the YAGO scan:
+
+```bash
+python environment/construct_tasks.py --reuse-source-priors
+```
+
+This only skips source-prior preparation. It still rebuilds the candidate
+shortlist and executable worlds, and then attempts P0/P1 freeze. If the
+new run still rejects all worlds, review
+`environment/data/typed_worlds_{target}.jsonl.quality_rejected.jsonl`
+for the concrete validation reason rather than proceeding to questions.
