@@ -198,130 +198,44 @@ new run still rejects all worlds, review
 `environment/data/typed_worlds_{target}.jsonl.quality_rejected.jsonl`
 for the concrete validation reason rather than proceeding to questions.
 
-## Construction regression fixes (2026-11-04)
+## Fixed validated candidate pool
 
-The functional package layout and YAML entrypoints remain unchanged. Construction
-now extracts dependency-closed producer pools before sampling, keeps complete
-terminal operand subgraphs, and constructs actual fork/join branches. A candidate
-reservoir target counts validated candidates, not raw attempts. Reservoir selection
-and final-world diversity are measured against their requested batch sizes.
-
-World synthesis materializes literal slots into both facts and the executable
-program. Intersections construct supporting facts on every branch. Candidate
-worlds must pass the existing semantic, evidence, TaskDesign, scenario, capability
-and rendering gates before entering the final batch; retries change deterministic
-world seeds without changing these thresholds.
-
-Useful controls:
-
-```bash
-python environment/construct_tasks.py --reuse-source-priors
-# Bound candidate-search work explicitly when debugging:
-python environment/construct_tasks.py --reuse-source-priors --candidate-max-attempts 500
-# Explicitly allow freezing an underfilled batch (otherwise construction fails):
-python environment/construct_tasks.py --reuse-source-priors --allow-partial-batch
-```
-
-`--world-attempts-per-candidate` defaults to 3. Partial manifests report
-`requested_target`, `target_filled`, and the actual `frozen_count`. A frozen status
-means the included records passed validation; inspect the counts before a full run.
-
-Question authoring receives an answer-free terminal contract. Local checks reject
-unresolved slots, missing public numbers/literals and changed terminal attributes.
-Critic repairs must receive a fresh semantic pass before acceptance. These checks
-complement the semantic critic; they do not prove arbitrary natural-language
-paraphrases equivalent.
-
-Run the local regression suite with:
-
-```bash
-python -m unittest discover -s environment/tests -v
-```
-
-The validated reservoir is retained as `*.reservoir.jsonl`. If the preferred
-shortlist underfills the world batch, remaining reservoir candidates are tried
-under the same final-world diversity and quality gates.
-
-## Parallel candidate binding and resume
-
-Candidate binding now defaults to `min(8, os.cpu_count())` CPU processes. The
-parent owns proposal seeds, batch snapshots of diversity usage, deduplication and
-ordered commits; workers only perform the existing graph-grounded binding search.
-Linux workers inherit the preloaded catalog, taxonomy and read-mostly indexes
-through `fork`. Other platforms use `spawn` and load their own indexes.
-
-```bash
-python environment/construct_tasks.py --reuse-source-priors --candidate-workers 8
-```
-
-The YAML keys `candidate_workers` and `candidate_proposal_batch_size` accept
-positive integers. `null` selects the automatic process count and a proposal
-batch of `2 * workers`. A larger batch is not necessarily faster: each batch is
-committed only after all its proposals finish.
-
-After interruption, rerun the same command. Each completed batch persists accepted
-rows, counters and RNG state. A verified committed prefix is reused; an incomplete
-batch is replayed in proposal order. The progress bar displays `workers`, current
-accepted count and total attempted proposals.
-
-Files next to the semantic shortlist are:
-
-- `*.candidate-progress.jsonl`: append-only validated candidates.
-- `*.candidate-state.json`: atomic checkpoint with committed byte count/hash.
-- `*.candidate-output.lock` and `*.candidate-state.lock`: advisory writer locks.
-
-Source contents, relevant implementation code and generation settings are checked
-before reuse. To intentionally start over after changing these inputs, use
-`--restart-candidates`; this resets only the candidate checkpoint and staging file.
-The attempt budget may be increased without discarding already committed batches.
-A completed reservoir is also reused when a downstream stage is rerun. Fixed seed,
-inputs and batch size produce the same committed candidates independent of worker
-completion order. Batch diversity guidance is fixed at the start of each batch;
-this does not change the final-world quality or diversity checks.
-
-An already running pre-parallel process cannot adopt this implementation or
-retroactively save its in-memory candidates. Its first restart starts a new
-checkpointed candidate run.
-
-
-## Fixed validated candidate pool (default)
-
-The default construction mode is now a **fixed pool**, **not** a fixed
-accepted-world or accepted-question count:
+Task construction has **one** mode: choose a candidate pool capacity and
+evaluate every validated semantic candidate; retain however many pass.
 
 ```yaml
 task_construction:
-  all_valid_candidates: true
   candidate_pool_size: 2000
+  seed: 17
 ```
 
-In this mode:
+The construction flow is:
 
-1. Build a pool of **up to 2000 validated semantic candidates** (ProgramIR
-   composition + graph-grounded semantic binding). This is the pool size
-   *after* initial validation, not a raw proposal count. A bounded proposal
-   attempt budget still applies; if that budget is exhausted, the pool may
-   contain fewer than 2000 candidates.
-2. **No 8x reservoir multiplier and no separate 100- or 150-candidate
-   shortlist.** Every collected candidate is sent to World Generation.
-3. Check each candidate under the existing world synthesis, evidence,
-   observed semantic support, execution, TaskDesign, scenario, capability,
-   rendering **and dynamic final-world diversity** checks. The code does
-   not stop after 100 accepted worlds. Failed candidates are rejected with
-   recorded reasons; the existing per-candidate retry budget remains 3.
-4. Freeze **every accepted world** that passes downstream audits. For
-   instance, 2000 examined candidates might yield 800 worlds; the frozen
-   manifest then records `frozen_count=800`. This is not a promised yield.
-5. Question Author, Semantic Critic and deterministic pre/postflight process
-   the actual frozen rows. Only questions passing those checks are accepted;
-   there is no mandatory final question count.
+1. ProgramIR composition + graph-grounded semantic binding collects **up to
+   2000 validated candidates**. The bounded proposal attempt budget means
+   this count may underfill; rejected raw proposals do not count toward the
+   pool. There is **no 8x multiplier, second shortlist, or world quota**.
+2. World Generation tests every collected candidate, with up to three
+   deterministic world-synthesis attempts each. All existing evidence,
+   semantic-support, symbolic execution, TaskDesign, scenario, capability,
+   rendering and relative diversity checks remain enabled.
+3. P0/P1 downstream audits and Freeze run over the worlds that actually pass.
+   `frozen_manifest_2000.json` contains their **actual** `frozen_count`.
+4. The LLM Author + Semantic Critic then evaluate each frozen task.
+   `questions_2000/question_generation_summary.json` reports the actual
+   accepted-question count; this may be smaller than `frozen_count`.
 
-This **does not relax per-world quality gates**. World-level diversity uses
-caps based on the number accepted so far rather than the aspirational pool
-size; an item can still be rejected for diversity. Consequently `accepted`
-means passing **all** enabled gates, not every syntactically valid world.
+The `2000` filename suffix identifies the **configured pool capacity**, not
+the number of valid worlds/questions. Inspect these metrics:
 
-With the existing source-prior artifacts, run:
+- `build_summary.json`: `candidate_selection.validated_candidates`,
+  `candidate_selection.pool_filled`, `worlds.candidates_tested`,
+  `worlds.accepted`, `worlds.rejection_reasons`.
+- `frozen_manifest_2000.json`: `candidate_pool_size`, `frozen_count`.
+- `questions_2000/question_generation_summary.json`: `requested`,
+  `accepted`, `rejected`.
+
+Run from the repository root after preparing source priors:
 
 ```bash
 python environment/construct_tasks.py --reuse-source-priors
@@ -329,23 +243,48 @@ python environment/generate_questions.py
 python environment/simulate_trajectories.py synthesize
 ```
 
-The `2000` suffix in names such as `typed_worlds_2000.jsonl`,
-`frozen_manifest_2000.json` and `questions_2000/` describes the
-**candidate-pool configuration**, not the number of accepted records.
-Inspect `build_summary.json -> worlds.accepted / candidates_tested`,
-`frozen_manifest_2000.json -> frozen_count`, and
-`questions_2000/question_generation_summary.json -> accepted` for the
-actual counts.
+To change pool size, edit `task_construction.candidate_pool_size` in
+`environment/config.yaml` before running all three stages (or pass the same
+custom `--config` file to every command). Avoid changing only the construction
+CLI flag: question/trajectory paths expand `{target}` from the YAML pool size.
 
-To change the size for all three stages, **edit
-`task_construction.candidate_pool_size` in `environment/config.yaml`**
-(or use the same custom YAML via `--config` for every command).
-A one-off `construct_tasks.py --candidate-pool-size N` override changes
-construction only; it does not automatically rewrite the next command's
-YAML paths. Different pool sizes have separate candidate checkpoints.
+To change the number of available proposals without relaxing quality
+checks, use `--candidate-max-attempts N`. The candidate generator supports
+`--candidate-workers N`, `--candidate-proposal-batch-size N`, and
+`--restart-candidates`, plus `--world-attempts-per-candidate N` for world
+synthesis retries. Source priors are read from `environment/data/` and can
+be reused, avoiding repeated KQA/YAGO/MMQA scans.
 
-The former target-limited mode is still available for comparisons:
-set `all_valid_candidates: false` and use `target`,
-`shortlist_target`, `candidate_multiplier` and
-`allow_partial_batch` as before. No automatic 1000-question replenishment
-pipeline is enabled or merged.
+### Parallel candidate checkpoint and recovery
+
+Parallel binding defaults to `min(8, os.cpu_count())` worker processes. The
+parent schedules proposals and commits accepted candidates in deterministic
+proposal order, independent of completion order. Worker binding uses the
+existing graph-grounded semantic validity checks. The checkpoint is updated
+after each complete batch.
+
+Files are placed beside `semantic_candidates_pool_2000.jsonl`:
+
+- `*.candidate-progress.jsonl`: validated candidates from committed batches.
+- `*.candidate-state.json`: attempt count, RNG state, committed bytes and hash.
+- `*.candidate-state.lock` / `*.candidate-output.lock`: advisory process locks.
+
+Rerun the same construction command to reuse a compatible checkpoint. Source
+contents, relevant code and candidate-generation settings are hashed and
+verified. If you modify those inputs or change pool size, start a fresh
+checkpoint with `--restart-candidates`; the expensive source priors can still
+be reused. World Generation, Freeze and question generation are separate
+stages, not part of the candidate checkpoint.
+
+The retained semantic candidate pool is `semantic_candidates_pool_2000.jsonl`.
+A second duplicate `*.reservoir.jsonl` file is no longer generated.
+
+Run no-network regression tests:
+
+```bash
+python -m unittest discover -s environment/tests -v
+```
+
+The quality thresholds have **not** been relaxed. An accepted count below
+the pool size means the remaining candidates failed one or more enabled
+checks; it is not a reason to bypass quality validation.
