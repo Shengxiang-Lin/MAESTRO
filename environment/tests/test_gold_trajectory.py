@@ -156,6 +156,8 @@ class GoldTrajectoryTests(unittest.TestCase):
                 self_outer.assertNotIn("gold_answer_claims", json.dumps(payload["public_plan"]))
                 self_outer.assertEqual(payload["completed_subtask_ids"], [])
                 self_outer.assertNotIn("A has r:second B", prompt)
+                self_outer.assertNotIn("expected_answer", prompt)
+                self_outer.assertNotIn("gold_answer_claims", prompt)
                 return super().plan(payload, prompt)
         self_outer = self
         class SlowExecutor(PassthroughExecutor):
