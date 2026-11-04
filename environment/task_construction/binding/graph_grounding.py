@@ -87,6 +87,36 @@ def validate_graph_grounded_plan(plan,catalog,taxonomy):
         evidence=index.shared_entity(center_type,bundle);proof.append(evidence)
         if not evidence["accepted"]:raise BindingError("graph_grounding:no_shared_entity_witness:"+str(center_type)+":"+"+".join(sorted(bundle)))
     return proof
+def validate_program_structure(program):
+    """Reject malformed operator arity before the graph-witness search.
+
+    ProgramIR validates DAG references/cycles, but does not validate
+    operator-specific arities. In particular, RELATE must have one input.
+    """
+    fixed_arity={
+        "FIND":0,"FIND_ALL":0,
+        "RELATE":1,
+        "FILTER_TYPE":1,"FILTER_STRING":1,"FILTER_NUMBER":1,
+        "FILTER_YEAR":1,"FILTER_DATE":1,
+        "COUNT":1,"QUERY_NAME":1,"QUERY_ATTR":1,
+        "QUERY_RELATION":2,"SELECT_BETWEEN":2,"SELECT_AMONG":1,
+        "VERIFY_STRING":1,"VERIFY_NUMBER":1,
+        "VERIFY_YEAR":1,"VERIFY_DATE":1,
+    }
+    for node in program.nodes:
+        actual=len(node.dependencies)
+        expected=fixed_arity.get(node.op)
+        if expected is not None and actual!=expected:
+            raise BindingError(
+                f"malformed_program:op={node.op}:node={node.node_id}:"
+                f"dependencies={actual}:expected={expected}"
+            )
+        if node.op in {"INTERSECT","UNION"} and actual<2:
+            raise BindingError(
+                f"malformed_program:op={node.op}:node={node.node_id}:"
+                f"dependencies={actual}:expected_at_least=2"
+            )
+
 class GraphGroundedProgramBinder:
     def __init__(self,catalog,taxonomy,*,seed=17,min_predicate_count=25,candidate_limit=32,max_states=4096):
         self.catalog=catalog;self.taxonomy=taxonomy;self.seed=int(seed);self.min_predicate_count=int(min_predicate_count);self.candidate_limit=max(1,int(candidate_limit));self.max_states=max(1,int(max_states));self.index=GraphWitnessIndex(catalog,taxonomy);self.validator=TypedProgramBinder(catalog,taxonomy,seed=seed,max_attempts=1);self.states=0;self.rejections=defaultdict(int)
@@ -106,6 +136,7 @@ class GraphGroundedProgramBinder:
             score+=len(evidence["witnesses"])
         return True,score
     def bind(self,program):
+        validate_program_structure(program)
         unsupported=sorted({node.op for node in program.nodes if node.op in UNSUPPORTED_OPS})
         if unsupported:raise BindingError(f"qualifier/conditional operators not enabled yet: {unsupported}")
         base_solver,roots=_logical_roots(program,self.taxonomy);nodes=program.node_map();children={node.node_id:[] for node in program.nodes}
