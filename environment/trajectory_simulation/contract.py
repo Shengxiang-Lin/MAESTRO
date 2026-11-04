@@ -169,11 +169,15 @@ def feedback_prompt(payload: Mapping[str, Any]) -> str:
 
 
 def _hidden_identifier(text: str) -> bool:
-    return bool(re.search(r"(?:fragment:\d+|fragment:terminal|subtask:|discover:)", text))
+    return bool(re.search(
+        r"(?:fragment:\d+|fragment:terminal|subtask:|discover:|entity:[A-Za-z0-9_-]+)",
+        text,
+    ))
 
 
 def validate_action(value: Any, guidance: Mapping[str, Any],
-                    oracle: Any, answer_contract: Mapping[str, Any]) -> tuple[bool, list[str]]:
+                    oracle: Any, answer_contract: Mapping[str, Any],
+                    *, public_state: Mapping[str, Any] | None = None) -> tuple[bool, list[str]]:
     if not isinstance(value, Mapping):
         return False, ["action_not_object"]
     issues: list[str] = []
@@ -182,7 +186,13 @@ def validate_action(value: Any, guidance: Mapping[str, Any],
     params = value.get("params")
     if not isinstance(params, Mapping):
         return False, ["params_not_object"]
+    public_sources = set(re.findall(
+        r"source_\d+", json.dumps(public_state or {}, ensure_ascii=False)
+    ))
+    visible_text = str(value.get("reasoning", ""))
     if guidance["may_complete"]:
+        if set(re.findall(r"source_\d+", visible_text)) - public_sources:
+            issues.append("unobserved_resource_in_main_reasoning")
         if value.get("action") != "complete":
             issues.append("must_complete_after_gold_fragments")
         if not answers_equal(params.get("answer"), oracle, answer_contract):
@@ -202,6 +212,8 @@ def validate_action(value: Any, guidance: Mapping[str, Any],
         if not isinstance(task, Mapping):
             issues.append(f"task_{index}:not_object")
             continue
+        public_text = str(task.get("task_instruction", "")) + " " + str(task.get("context", ""))
+        visible_text += " " + public_text
         for key in ("task_instruction", "context"):
             content = task.get(key)
             if not isinstance(content, str) or not content.strip() or _hidden_identifier(content):
@@ -213,6 +225,8 @@ def validate_action(value: Any, guidance: Mapping[str, Any],
             issues.append(f"task_{index}:invalid_tools")
         elif not set(fragment["suggested_tools"]).intersection(tools):
             issues.append(f"task_{index}:tools_not_grounded")
+    if set(re.findall(r"source_\d+", visible_text)) - public_sources:
+        issues.append("future_resource_id_in_public_action")
     return not issues, issues
 
 
