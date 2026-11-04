@@ -13,10 +13,19 @@ models:
 
   local_qwen:
     backend: vllm
-    # Must match the --served-model-name used when starting the local server.
+    # Original Qwen3-8B example, retained as an optional alternative.
     model: qwen3-8b-local
     base_url: http://127.0.0.1:8803/v1
-    # No key is required unless your local vLLM server was started with one.
+    api_key_env: null
+    json_mode: true
+
+  local_qwen35_9b:
+    backend: vllm
+    # Match the --served-model-name and --port used by vllm serve.
+    # This matches config/model_config.yaml's local-qwen3.5-9b endpoint.
+    model: local-qwen3.5-9b
+    base_url: http://127.0.0.1:8807/v1
+    # Local server normally needs no key; if protected, set the env var name.
     api_key_env: null
     json_mode: true
 
@@ -50,9 +59,9 @@ task_construction:
   mmqa_dev: data/world-source/MultiModalQA/MMQA_dev.jsonl.gz
 
 question_generation:
-  # Choose either "dashscope_qwen", "local_qwen" or "offline" per role.
-  author_profile: dashscope_qwen
-  critic_profile: dashscope_qwen
+  # Both question generation roles use the same local Qwen3.5-9B vLLM service.
+  author_profile: local_qwen35_9b
+  critic_profile: local_qwen35_9b
   manifest: environment/data/frozen_manifest_{target}.json
   authoring_inputs: environment/data/authoring_inputs_{target}.jsonl
   worlds: environment/data/typed_worlds_{target}.jsonl
@@ -71,7 +80,7 @@ question_generation:
   no_progress: false
 
 trajectory_simulation:
-  teacher_profile: dashscope_qwen
+  teacher_profile: local_qwen35_9b
   worlds: environment/data/typed_worlds_{target}.jsonl
   realized: environment/data/questions_{target}/realized_capability_worlds.jsonl
   output: environment/data/trajectories_{target}.jsonl
