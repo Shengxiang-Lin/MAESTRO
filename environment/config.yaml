@@ -79,6 +79,10 @@ question_generation:
   timeout: 180
   question_max_attempts: 2
   question_workers: 4
+  # Stream completed tasks in frozen-input order, fsync after every 5 writes.
+  flush_every: 5
+  # Only set true to explicitly discard existing question-generation progress.
+  restart_questions: false
   no_semantic_critic: false
   no_json_mode: false
   no_progress: false
