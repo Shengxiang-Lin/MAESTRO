@@ -1,4 +1,10 @@
-"""Stream native O1 episodes with immutable, private world supervision."""
+"""Fragment-guided gold O1 trajectories over existing frozen task solutions.
+
+Main sees an O1 public state plus *private generation guidance*. ProgramIR
+fragments are assigned in dependency order, with independent ones in parallel.
+Sub-Agent LLMs write only compressed language; the program supplies the exact
+intermediate answers and their private evidence bindings.
+"""
 from __future__ import annotations
 
 import json
@@ -13,26 +19,21 @@ from environment.question_generation.backend import BackendError
 from environment.task_construction.rendering.pipeline import render_task_record
 
 from .compiler import (
-    GoldCompilationError, compile_gold_solution, public_plan,
-    ready_subtasks, json_value,
+    GoldCompilationError, compile_gold_solution, json_value,
+    private_guidance, ready_fragments,
 )
-from .prompts import (
-    executor_prompt, final_prompt, planner_prompt, summary_prompt,
+from .contract import (
+    TOOLS, answer_string, feedback_prompt, main_prompt, public_action,
+    validate_action, validate_feedback,
 )
-from .validator import (
-    answers_equal,
-    validate_final, validate_gold_trajectory, validate_main_summary,
-    validate_parallel_plan, validate_subagent_result,
-)
-from .grounding import grouped_evidence
 
 
 class GoldTrajectoryError(RuntimeError):
-    def __init__(self, stage: str, issues: list[str], audit=None) -> None:
+    def __init__(self, stage: str, issues: list[str], audit: Any = None):
         self.stage = stage
-        self.issues = issues
+        self.issues = list(issues)
         self.audit = audit or {}
-        super().__init__(f"{stage}: {', '.join(issues)}")
+        super().__init__(f"{stage}: {', '.join(self.issues)}")
 
 
 def _rows(path: str | Path) -> list[dict[str, Any]]:
@@ -40,328 +41,281 @@ def _rows(path: str | Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in handle if line.strip()]
 
 
-def _world_map(path: str | Path, seed: int = 17) -> dict[str, tuple[dict[str, Any], Any]]:
+def _world_map(path: str | Path, seed: int) -> dict[str, tuple[dict[str, Any], Any]]:
     result = {}
     for index, record in enumerate(_rows(path)):
         rendered = render_task_record(record, seed=seed + index)
         if rendered.task_id in result:
-            raise GoldTrajectoryError("world_index", [f"duplicate world {rendered.task_id}"])
+            raise GoldTrajectoryError("world_index", [f"duplicate task_id {rendered.task_id}"])
         result[rendered.task_id] = (record, rendered)
     return result
 
 
+def _stage(call, validate, *, stage: str, max_attempts: int) -> dict[str, Any]:
+    attempts = []
+    issues = []
+    for index in range(max_attempts):
+        value: Any = None
+        try:
+            value = call(issues)
+            if not isinstance(value, Mapping):
+                issues = ["response_not_json_object"]
+            else:
+                okay, issues = validate(value)
+                if okay:
+                    return dict(value)
+        except (BackendError, ValueError, TypeError, KeyError) as exc:
+            issues = [f"{type(exc).__name__}:{str(exc)[:220]}"]
+        attempts.append({
+            "attempt": index + 1, "issues": list(issues),
+            "response": json_value(value),
+        })
+    raise GoldTrajectoryError(stage, issues, {"attempts": attempts})
+
+
 def _with_feedback(prompt: str, issues: list[str]) -> str:
-    """Repair hint only; validation and gold evidence stay authoritative."""
     if not issues:
         return prompt
-    return prompt + "\n\nPrevious output was rejected for: " + json.dumps(issues) + (
-        "\nRegenerate the requested JSON without changing any frozen task IDs, "
-        "resource IDs, authoritative source facts or dependency constraints. "
-        "Rewrite rejected summary statements using the specific reasons above; "
-        "do not repeat or preserve a contradicted claim from your previous response. "
-        "Return only the JSON fields requested by this stage."
+    return (
+        prompt + "\n\nYour previous JSON was rejected for " +
+        json.dumps(issues, ensure_ascii=False) +
+        ". Regenerate only this action/summary; preserve the frozen fragment "
+        "order, assigned evidence and private/public information boundaries."
     )
 
 
-def _stage(call,validate,*,stage,max_attempts,diagnostics=None):
-    last=[];attempts=[]
-    for attempt in range(1,max_attempts+1):
-        value=None
-        try:
-            value=call(last)
-            if not isinstance(value,Mapping):last=["non_object_model_response"]
-            else:
-                okay,issues=validate(value)
-                if okay:return dict(value)
-                last=issues
-        except (BackendError,ValueError,TypeError,KeyError) as exc:
-            last=[f"{type(exc).__name__}:{str(exc)[:180]}"]
-        audit={"attempt":attempt,"response":json_value(value),"issues":last}
-        if stage=="main_final_answer" and isinstance(value,Mapping) and diagnostics:
-            audit["answer_validation"]={
-                "accepted":answers_equal(value.get("answer"),diagnostics["expected_answer"],
-                                         diagnostics["answer_contract"]),
-            }
-        attempts.append(audit)
-    raise GoldTrajectoryError(stage,last,{"attempts":attempts,**(diagnostics or {})})
+def _history(trajectory: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Exactly the public O1 action/result history, not the gold supervision."""
+    return [
+        {
+            "action": step["action"], "reasoning": step["reasoning"],
+            "params": step["params"], "result": step["result"],
+        }
+        for step in trajectory
+    ]
 
 
-def _reviewed(role,value,validate,claims,fields,*,question,pending=(),allowed=(),context=None):
-    okay,issues=validate(value)
-    if not okay:return okay,issues
-    from .grounding import semantic_review
-    text="\n".join(str(value.get(field,"")) for field in fields)
-    return semantic_review(role,text,claims,question=question,pending_ids=pending,allowed_ids=allowed,context=context)
-
-
-def _public_task(task: Mapping[str, Any]) -> dict[str, Any]:
-    result={
-        k: task[k] for k in (
-            "subtask_id", "kind", "resource_id", "source_type", "role", "agent",
-            "available_tool_families", "depends_on",
-            "depends_on_any",
-        )
-    }
-    if task.get("kind")=="discover":result["discovery_terms"]=task.get("discovery_terms",[])
-    return result
-
-
-def _synthesize_reference_one(
-    realized: Mapping[str, Any], world_record: Mapping[str, Any],
-    rendered: Any, planner: Any, executor: Any, *,
-    max_attempts: int = 3, subagent_workers: int = 4,
-) -> dict[str, Any]:
-    """Generate one official trajectory by repeated Main/Sub-Agent calls."""
-    if max_attempts < 1 or subagent_workers < 1:
-        raise ValueError("max_attempts and subagent_workers must be positive")
-    try:
-        gold = compile_gold_solution(realized, world_record, rendered)
-    except (ValueError, KeyError, TypeError) as exc:
-        raise GoldTrajectoryError("gold_compilation", [str(exc)]) from exc
-    graph = public_plan(gold)
-    tasks_by_id = {item["subtask_id"]: item for item in gold["tasks"]}
-    completed: set[str] = set()
-    previous_results: dict[str, dict[str, Any]] = {}
-    history_summaries: list[str] = []
-    rounds: list[dict[str, Any]] = []
-
-    with ThreadPoolExecutor(max_workers=subagent_workers,
-                            thread_name_prefix="gold-subagent") as pool:
-        while len(completed) < len(tasks_by_id):
-            ready = ready_subtasks(gold, completed)
-            if not ready:
-                raise GoldTrajectoryError("scheduling", ["no_ready_tasks_or_dependency_cycle"])
-            ready_ids = [item["subtask_id"] for item in ready]
-            pending_ids = [item["subtask_id"] for item in gold["tasks"]
-                           if item["subtask_id"] not in completed]
-            round_index = len(rounds) + 1
-            plan_payload = {
-                "question": gold["question"],
-                "public_plan": graph,
-                "completed_subtask_ids": sorted(completed),
-                "completed_subtask_results": [
-                    previous_results[item["subtask_id"]] for item in gold["tasks"]
-                    if item["subtask_id"] in completed
-                ],
-                "history_summaries": history_summaries,
-                "ready_tasks": [_public_task(task) for task in ready],
-                "pending_task_ids": pending_ids,
-            }
-            allocation = _stage(
-                lambda feedback: planner.plan(
-                    plan_payload, _with_feedback(planner_prompt(plan_payload), feedback)),
-                lambda value: validate_parallel_plan(value, ready),
-                stage=f"round_{round_index}:main_plan", max_attempts=max_attempts,
-            )
-            allocated = {item["subtask_id"]: item
-                         for item in allocation["parallel_subtasks"]}
-
-            def execute_task(task: Mapping[str, Any]) -> dict[str, Any]:
-                task_id = task["subtask_id"]
-                dependency_ids=set(task["depends_on"])
-                for group in task.get("depends_on_any",()):
-                    dependency_ids.update(set(group) & completed)
-                dependency_results = [
-                    previous_results[dep] for dep in sorted(dependency_ids)
-                ]
-                if task.get("kind")=="discover":
-                    descriptor=task["gold_answer_claims"]
-                    result={"subtask_id":task_id,"status":"success","answer":descriptor,
-                        "evidence_source_ids":[task["resource_id"]],
-                        "answer_summary":f"Located {descriptor[0]['title']} ({task['resource_id']}); only its resource descriptor is available.",
-                        "trajectory_summary":"Used already available clues to retrieve the resource descriptor; its contents remain unread."}
-                    okay,issues=validate_subagent_result(result,task)
-                    if not okay:raise GoldTrajectoryError("discovery_execution",issues)
-                    return result
-                execution_payload = {
-                    "question": gold["question"],
-                    "assigned_subtask": allocated[task_id],
-                    "dependency_results": dependency_results,
-                    "task": task,
-                }
-                inspection_claims,inspection_state=grouped_evidence(tasks_by_id,[
-                    {"subtask_id":task_id,"answer":task["gold_answer_claims"]}])
-                inspection_claims[0]["source_observation"]=task["observation"]
-                return _stage(
-                    lambda feedback: executor.execute(
-                        execution_payload,
-                        _with_feedback(executor_prompt(execution_payload), feedback)),
-                    lambda value: _reviewed(executor,value,
-                        lambda v:validate_subagent_result(v,task,question=gold["question"]),
-                        inspection_claims,
-                        ("answer_summary","trajectory_summary"),question=gold["question"],
-                        allowed=[task["resource_id"]],
-                        context={"kind":"inspect","resource_id":task["resource_id"],
-                                 "source_type":task["source_type"],"agent":task["agent"],
-                                 **inspection_state}),
-                    stage=f"round_{round_index}:subagent:{task_id}",
-                    max_attempts=max_attempts,
-                )
-
-            # Each independent subtask has its own Sub-Agent LLM request.
-            # Collect in fixed Gold DAG order although requests run concurrently.
-            futures = [pool.submit(execute_task, item) for item in ready]
-            responses = []
-            for future in futures:
-                responses.append(future.result())
-            known=[*previous_results.values(),*responses]
-            known_claims,review_state=grouped_evidence(tasks_by_id,known)
-            summary_payload = {
-                "question": gold["question"],
-                "history_summaries": history_summaries,
-                "current_results": responses,
-                "observed_evidence":known_claims,
-                **review_state,
-                "pending_task_ids": [
-                    item for item in pending_ids if item not in set(ready_ids)
-                ],
-            }
-            known_ids={sid for result in known for sid in result["evidence_source_ids"]}
-            summary = _stage(
-                lambda feedback: planner.summarize(
-                    summary_payload, _with_feedback(summary_prompt(summary_payload), feedback)),
-                lambda value:_reviewed(planner,value,
-                    lambda v:validate_main_summary(v,claims=known_claims,
-                        pending_ids=summary_payload["pending_task_ids"],allowed_ids=known_ids,question=gold["question"]),
-                    known_claims,("main_summary",),question=gold["question"],
-                    pending=summary_payload["pending_task_ids"],allowed=known_ids,
-                    context={"kind":"main_round_summary",**review_state}),
-                stage=f"round_{round_index}:main_summary",
-                max_attempts=max_attempts,
-            )
-            before = sorted(completed)
-            for item in responses:
-                completed.add(item["subtask_id"])
-                previous_results[item["subtask_id"]] = item
-            history_summaries.append(summary["main_summary"])
-            rounds.append({
-                "round": round_index,
-                "completed_before": before,
-                "current_parallel_task_ids": ready_ids,
-                "main_action": allocation,
-                "subagent_results": responses,
-                "main_summary": summary["main_summary"],
-                "completed_after": sorted(completed),
-                "pending_after": [
-                    item["subtask_id"] for item in gold["tasks"]
-                    if item["subtask_id"] not in completed
-                ],
-            })
-
-    final_payload = {
-        "question": gold["question"],
-        "public_plan": graph,
-        "all_results": [previous_results[t["subtask_id"]] for t in gold["tasks"]],
-        "history_summaries": history_summaries,
-        "observed_evidence":known_claims,
-        **review_state,
-        # Used by the offline passthrough role only; deliberately NOT included
-        # in the real LLM Main prompt.
-        "expected_answer": gold["final_answer"],
-    }
-    final = _stage(
-        lambda feedback: planner.finalize(
-            final_payload, _with_feedback(final_prompt(final_payload), feedback)),
-        lambda value:_reviewed(planner,value,
-            lambda v:validate_final(v,gold["final_answer"],gold["answer_contract"]),
-            [*known_claims,{"verified_final_answer":value.get("answer")}],
-            ("summary",),question=gold["question"],
-            allowed={sid for result in previous_results.values() for sid in result["evidence_source_ids"]},
-            context={"kind":"main_final_summary",**review_state,
-                     "verified_final_answer":value.get("answer")}),
-        stage="main_final_answer", max_attempts=max_attempts,
-        diagnostics={"expected_answer":gold["final_answer"],"answer_contract":gold["answer_contract"],
-                     "completed_rounds":rounds,"public_plan":graph},
-    )
-    validation = validate_gold_trajectory(gold, rounds, final)
-    if not validation["accepted"]:
-        raise GoldTrajectoryError("gold_trajectory_validation", validation["issues"])
+def _public_state(question: str, trajectory: list[dict[str, Any]]) -> dict[str, Any]:
     return {
-        "task_id": gold["task_id"],
-        "question": gold["question"],
-        "plan": graph,
-        "steps": rounds,
-        "final": final,
-        "validation": validation,
-        "gold_supervision": {
-            "proof_source_ids": gold["proof_source_ids"],
-            "required_fact_ids":gold["required_fact_ids"],
-            "answer_contract":gold["answer_contract"],
-            "acquisition_validation":gold["acquisition_validation"],
-            "acquisition_alternatives":gold["acquisition_alternatives"],
-            "required_resource_ids": gold["required_resource_ids"],
-            "gold_parallel_waves": gold["gold_parallel_waves"],
-            "symbolic_trace": gold["symbolic_trace"],
-            "symbolic_answer": gold["symbolic_answer"],
-            "final_answer": gold["final_answer"],
-        },
-        "metadata": {
-            "clean_trajectory": True,
-            "discovery_responses_environment_authoritative":True,
-            "text_grounding_review":{
-                "planner":"offline_deterministic" if getattr(planner,"offline",False) else "llm_review",
-                "executor":"offline_deterministic" if getattr(executor,"offline",False) else "llm_review"},
-            "two_role_teacher": True,
-            "subtasks_compiled_from_frozen_gold": True,
-            "oracle_answer_not_shown_to_main_llm": True,
-            "resource_observations_from_frozen_world": True,
-            "no_adversarial_feedback": True,
-        },
+        "question": question,
+        "history": _history(trajectory),
+        "available_tools": list(TOOLS),
     }
+
+
+def _model(role: Any) -> str:
+    return str(getattr(getattr(role, "backend", None), "model", "passthrough"))
 
 
 def synthesize_one(
-    realized, world_record, rendered, planner, executor, *,
-    max_attempts=3, subagent_workers=4,
-):
-    from .o1_pipeline import synthesize_one as synthesize_o1
-    return synthesize_o1(
-        realized, world_record, rendered, planner, executor,
-        max_attempts=max_attempts, subagent_workers=subagent_workers,
-    )
+    realized: Mapping[str, Any], world_record: Mapping[str, Any], rendered: Any,
+    planner: Any, executor: Any, *, max_attempts: int = 3,
+    subagent_workers: int = 4,
+) -> dict[str, Any]:
+    if max_attempts < 1 or subagent_workers < 1:
+        raise ValueError("max_attempts and subagent_workers must be >= 1")
+    try:
+        gold = compile_gold_solution(realized, world_record, rendered)
+    except (GoldCompilationError, ValueError, TypeError, KeyError) as exc:
+        raise GoldTrajectoryError("gold_compilation", [str(exc)]) from exc
+
+    trajectory: list[dict[str, Any]] = []
+    private_rounds = []
+    completed: set[str] = set()
+    known_results: dict[str, dict[str, Any]] = {}
+    fragment_by_id = {f["fragment_id"]: f for f in gold["fragments"]}
+
+    with ThreadPoolExecutor(max_workers=subagent_workers,
+                            thread_name_prefix="gold-fragment") as pool:
+        # Each delegation must complete a full, nonempty ready wave. The
+        # last extra iteration is the Main's final complete action.
+        for round_index in range(1, len(gold["fragments"]) + 2):
+            guidance = private_guidance(gold, completed)
+            ready = ready_fragments(gold, completed)
+            public_state = _public_state(gold["question"], trajectory)
+            payload = {
+                "public_state": public_state,
+                "gold_guidance": guidance,
+                # Offline passthrough test mode only. NOT included in main_prompt.
+                "offline_oracle_answer": gold["final_answer"],
+            }
+            action = _stage(
+                lambda issues: planner.decide(
+                    payload, _with_feedback(main_prompt(payload), issues)
+                ),
+                lambda value: validate_action(
+                    value, guidance, gold["final_answer"], gold["answer_contract"]
+                ),
+                stage=f"round_{round_index}:main_action",
+                max_attempts=max_attempts,
+            )
+            wire = public_action(action)
+            if guidance["may_complete"]:
+                trajectory.append({
+                    "attempt": round_index, **wire,
+                    "state_before": public_state,
+                    "result": {"done": True, "success": True,
+                               "answer": wire["params"]["answer"]},
+                })
+                if completed != set(fragment_by_id):
+                    raise GoldTrajectoryError("validation", ["gold_graph_incomplete"])
+                return {
+                    "task_id": gold["task_id"],
+                    "question": gold["question"],
+                    "instruction": gold["question"],
+                    "main_model": _model(planner),
+                    "sub_models": [_model(executor)],
+                    "attempts": len(trajectory),
+                    "success": True,
+                    "trajectory": trajectory,
+                    "validation": {
+                        "accepted": True, "final_answer_verified": True,
+                        "completed_gold_fragments": len(completed),
+                        "expected_gold_fragments": len(fragment_by_id),
+                        "fragment_dependencies_respected": True,
+                    },
+                    "gold_supervision": {
+                        "policy": gold["policy"],
+                        "composition_fragments": [{
+                            "fragment_id": f["fragment_id"],
+                            "output_node_id": f["output_node_id"],
+                            "depends_on": f["depends_on"],
+                            "resource_ids": f["resource_ids"],
+                            "operations": f["operations"],
+                            "expected_answer": f["expected_answer"],
+                        } for f in gold["fragments"]],
+                        "parallel_waves": gold["waves"],
+                        "symbolic_trace": gold["symbolic_trace"],
+                        "final_proof_source_ids": gold["final_proof_source_ids"],
+                        "final_answer": gold["final_answer"],
+                        "round_bindings": private_rounds,
+                    },
+                    "metadata": {
+                        "format": "orchestra_o1",
+                        "gold_policy": "first_stage_fragment_guided",
+                        "clean_trajectory": True,
+                        "two_role_teacher": True,
+                        "main_public_state_matches_o1": True,
+                        "gold_guidance_private": True,
+                        "subagent_answers_programmatic": True,
+                        "raw_tool_traces_generated": False,
+                        "attacks_simulated": False,
+                    },
+                }
+
+            assignments = wire["params"]["tasks"]
+            if len(assignments) != len(ready):
+                raise GoldTrajectoryError("validation", ["unexpected_task_count"])
+
+            def generate_subagent(index: int, fragment: dict[str, Any]) -> dict[str, Any]:
+                assigned = assignments[index]
+                predecessor_results = [
+                    known_results[dep] for dep in fragment["depends_on"]
+                ]
+                sub_payload = {
+                    "question": gold["question"],
+                    "task_instruction": assigned["task_instruction"],
+                    "assigned_task": assigned,
+                    "dependency_results": predecessor_results,
+                    "fragment": fragment,
+                }
+                language = _stage(
+                    lambda issues: executor.respond(
+                        sub_payload,
+                        _with_feedback(feedback_prompt(sub_payload), issues),
+                    ),
+                    lambda value: validate_feedback(value, fragment),
+                    stage=f"round_{round_index}:subagent:{index}",
+                    max_attempts=max_attempts,
+                )
+                # The exact answer is NOT generated or copied by the LLM.
+                fixed_answer = answer_string(fragment["expected_answer"])
+                return {
+                    "subtask_index": index,
+                    "task_instruction": assigned["task_instruction"],
+                    "model": _model(executor),
+                    "tools_assigned": assigned["tools"],
+                    "done": True,
+                    "finish_result": {
+                        "status": "done",
+                        "result": fixed_answer,
+                        "summary": language["summary"],
+                    },
+                    "trace_summary": language["trace_summary"],
+                }
+
+            futures = [
+                pool.submit(generate_subagent, index, fragment)
+                for index, fragment in enumerate(ready)
+            ]
+            # Run in parallel but publish all results in deterministic fragment order.
+            replies = [future.result() for future in futures]
+            for fragment, reply in zip(ready, replies):
+                known_results[fragment["fragment_id"]] = {
+                    "fragment_id": fragment["fragment_id"],
+                    "answer": reply["finish_result"]["result"],
+                    "summary": reply["finish_result"]["summary"],
+                }
+                completed.add(fragment["fragment_id"])
+            private_rounds.append({
+                "round": round_index,
+                "task_bindings": [{
+                    "task_index": index, "fragment_id": f["fragment_id"],
+                    "output_node_id": f["output_node_id"],
+                    "resource_ids": f["resource_ids"],
+                } for index, f in enumerate(ready)],
+            })
+            trajectory.append({
+                "attempt": round_index, **wire,
+                "state_before": public_state,
+                "result": {
+                    "total_subtasks": len(replies),
+                    "subtask_results": replies,
+                },
+            })
+    raise GoldTrajectoryError("round_budget", ["gold_fragments_not_completed"])
 
 
 def plan_trajectories_jsonl(
     worlds_path: str | Path, realized_path: str | Path,
-    output_path: str | Path, *, max_records: int | None = None,
-    seed: int = 17,
+    output_path: str | Path, *, max_records: int | None = None, seed: int = 17,
 ) -> dict[str, Any]:
-    """Inspect gold graphs without LLM calls."""
     realized = _rows(realized_path)
     if max_records is not None:
         realized = realized[:max_records]
     worlds = _world_map(worlds_path, seed=seed)
-    destination = Path(output_path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    passed = 0
-    rejection_reasons = Counter()
-    with destination.open("w", encoding="utf-8") as writer:
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    accepted = 0
+    reasons: Counter[str] = Counter()
+    with output.open("w", encoding="utf-8") as writer:
         for item in realized:
-            task_id = str(item.get("task_id"))
+            task_id = str(item.get("task_id", ""))
             try:
                 if task_id not in worlds:
-                    raise GoldCompilationError("no matching world")
-                gold = compile_gold_solution(item, *worlds[task_id], full_environment=True)
-                output = {
-                    "status": "ready", "task_id": task_id,
-                    "gold_plan": public_plan(gold),
-                    "gold_parallel_waves": gold["gold_parallel_waves"],
-                    "proof_source_ids": gold["proof_source_ids"],
-                    "final_answer": gold["final_answer"],
+                    raise GoldCompilationError("world_not_found")
+                plan = compile_gold_solution(item, *worlds[task_id])
+                row = {
+                    "task_id": task_id, "status": "ready",
+                    "fragment_graph": [{
+                        "fragment_id": f["fragment_id"],
+                        "output_node_id": f["output_node_id"],
+                        "depends_on": f["depends_on"],
+                        "resource_ids": f["resource_ids"],
+                        "expected_answer": f["expected_answer"],
+                    } for f in plan["fragments"]],
+                    "gold_waves": plan["waves"],
+                    "final_answer": plan["final_answer"],
                 }
-                passed += 1
+                accepted += 1
             except (GoldCompilationError, ValueError, TypeError, KeyError) as exc:
-                rejection_reasons[type(exc).__name__] += 1
-                output = {
-                    "status": "rejected", "task_id": task_id, "reason": str(exc),
-                }
-            writer.write(json.dumps(output, ensure_ascii=False) + "\n")
+                reasons[type(exc).__name__] += 1
+                row = {"task_id": task_id, "status": "rejected", "reason": str(exc)}
+            writer.write(json.dumps(row, ensure_ascii=False) + "\n")
     return {
-        "planned": len(realized),
-        "ready": passed,
-        "rejected": len(realized) - passed,
-        "rejection_reasons": dict(rejection_reasons),
-        "output": str(destination),
+        "planned": len(realized), "ready": accepted,
+        "rejected": len(realized) - accepted,
+        "rejection_reasons": dict(reasons), "output": str(output),
     }
 
 
@@ -373,53 +327,47 @@ def synthesize_trajectories_jsonl(
     progress: bool = True, flush_every: int = 5, seed: int = 17,
     model_roles: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if max_attempts < 1 or subagent_workers < 1 or flush_every < 1:
-        raise ValueError("max_attempts, subagent_workers and flush_every must be >= 1")
+    if min(max_attempts, subagent_workers, flush_every) < 1:
+        raise ValueError("attempts, workers, flush_every must be >= 1")
     realized = _rows(realized_path)
     if max_records is not None:
         realized = realized[:max_records]
     worlds = _world_map(worlds_path, seed=seed)
-    target = Path(output_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    rejected_path = (Path(rejected_output_path) if rejected_output_path
-                     else target.with_suffix(target.suffix + ".rejected.jsonl"))
-    if rejected_path.resolve() == target.resolve():
-        raise ValueError("rejected output must differ from accepted trajectory output")
-    rejected_path.parent.mkdir(parents=True, exist_ok=True)
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    rejected_output = (Path(rejected_output_path) if rejected_output_path
+                       else output.with_suffix(output.suffix + ".rejected.jsonl"))
+    rejected_output.parent.mkdir(parents=True, exist_ok=True)
+    if rejected_output.resolve() == output.resolve():
+        raise ValueError("accepted and rejected output paths must differ")
     accepted = rejected = 0
-    reasons = Counter()
-    # One whole trajectory is the atomic output unit; each internal round
-    # is causally sequential, while its independent Sub-Agent calls are parallel.
-    with (
-        target.open("w", encoding="utf-8") as good,
-        rejected_path.open("w", encoding="utf-8") as bad,
-    ):
-        bar = tqdm(realized, desc="O1 trajectory simulation",
+    reasons: Counter[str] = Counter()
+    # Atomic unit = one complete trajectory. Rounds remain causally ordered.
+    with output.open("w", encoding="utf-8") as good, rejected_output.open("w", encoding="utf-8") as bad:
+        bar = tqdm(realized, desc="Fragment gold trajectories",
                    unit="task", disable=not progress)
-        for item in bar:
-            task_id = str(item.get("task_id", ""))
+        for row in bar:
+            task_id = str(row.get("task_id", ""))
             try:
                 if task_id not in worlds:
                     raise GoldTrajectoryError("input", ["missing_matching_world"])
                 record, rendered = worlds[task_id]
-                payload = synthesize_one(
-                    item, record, rendered, planner, executor,
+                episode = synthesize_one(
+                    row, record, rendered, planner, executor,
                     max_attempts=max_attempts, subagent_workers=subagent_workers,
                 )
             except (GoldTrajectoryError, ValueError, KeyError, TypeError) as exc:
                 rejected += 1
                 stage = exc.stage if isinstance(exc, GoldTrajectoryError) else "unexpected_error"
-                issues = exc.issues if isinstance(exc, GoldTrajectoryError) else [str(exc)]
                 reasons[stage] += 1
                 bad.write(json.dumps({
-                    "task_id": task_id,
-                    "reason": stage,
-                    "issues": issues,
-                    "audit":json_value(exc.audit) if isinstance(exc,GoldTrajectoryError) else {},
+                    "task_id": task_id, "reason": stage,
+                    "issues": exc.issues if isinstance(exc, GoldTrajectoryError) else [str(exc)],
+                    "audit": exc.audit if isinstance(exc, GoldTrajectoryError) else {},
                 }, ensure_ascii=False) + "\n")
             else:
                 accepted += 1
-                good.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                good.write(json.dumps(episode, ensure_ascii=False) + "\n")
             if (accepted + rejected) % flush_every == 0:
                 good.flush()
                 bad.flush()
@@ -428,16 +376,14 @@ def synthesize_trajectories_jsonl(
         good.flush()
         bad.flush()
     return {
-        "requested": len(realized),
-        "accepted": accepted,
+        "requested": len(realized), "accepted": accepted,
         "rejected": rejected,
-        "acceptance_rate": accepted / len(realized) if realized else 0.,
-        "rejection_reasons": dict(reasons),
-        "output": str(target),
-        "rejected_output": str(rejected_path),
+        "acceptance_rate": accepted / len(realized) if realized else 0.0,
+        "rejection_reasons": dict(reasons), "output": str(output),
+        "rejected_output": str(rejected_output),
         "model_roles": dict(model_roles or {}),
         "subagent_workers": subagent_workers,
-        "policy": "orchestra_o1_main_controlled_two_role_simulation",
+        "policy": "first_stage_fragment_guided_o1_gold_trajectory",
     }
 
 
