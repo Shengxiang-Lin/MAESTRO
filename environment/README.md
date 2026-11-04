@@ -78,32 +78,63 @@ trajectory_simulation:
   teacher_profile: dashscope_qwen
 ```
 
-### Local vLLM
+### Local vLLM (default: Qwen3.5-9B)
 
-The `local_qwen` profile connects to an **already running** local vLLM
-server, using the same OpenAI-compatible client. Example server launch:
+By default, Question Author, Semantic Critic, and Trajectory Teacher all use
+the **same** `local_qwen35_9b` profile in `environment/config.yaml`:
+model `local-qwen3.5-9b` at `http://127.0.0.1:8807/v1`. The model profile
+corresponds to `config/model_config.yaml`'s `local-qwen3.5-9b` service.
+
+Use a Qwen3.5-compatible version of vLLM (at least v0.17.0 according to the
+vLLM model recipe). Start one service **before** running question/trajectory
+generation. The model path may be a local downloaded checkpoint directory or
+the Hugging Face model ID:
 
 ```bash
-vllm serve "$QWEN3_8B_MODEL_PATH" \
-  --host 127.0.0.1 --port 8803 \
-  --served-model-name qwen3-8b-local
+export QWEN35_9B_MODEL_PATH="/path/to/Qwen3.5-9B"  # or Qwen/Qwen3.5-9B
+
+# GPU 1 in the repository's shared config; change to GPU 0 if applicable.
+CUDA_VISIBLE_DEVICES=1 vllm serve "$QWEN35_9B_MODEL_PATH" \
+  --host 127.0.0.1 \
+  --port 8807 \
+  --served-model-name local-qwen3.5-9b \
+  --dtype bfloat16 \
+  --tensor-parallel-size 1 \
+  --gpu-memory-utilization 0.90 \
+  --max-model-len 8192 \
+  --language-model-only \
+  --reasoning-parser qwen3 \
+  --default-chat-template-kwargs '{"enable_thinking": false}'
 ```
 
-Match the YAML `model` with the server's served model name and set
-`base_url` to its `/v1` endpoint. Author, Critic and Teacher may use
-different backends; for example:
+The reduced context size and text-only mode are practical starting points
+for 24 GB GPUs, not a guarantee against out-of-memory errors. Adjust memory
+settings and concurrency as needed. Disabling thinking is particularly
+useful here because the Author/Critic/Teacher produce structured JSON.
+Qwen3.5-9B full BF16 requires substantial VRAM; on smaller GPUs consider
+a supported quantized checkpoint or more hardware.
 
-```yaml
-question_generation:
-  author_profile: dashscope_qwen
-  critic_profile: local_qwen
-trajectory_simulation:
-  teacher_profile: local_qwen
+Verify that the server advertises the exact model name:
+
+```bash
+curl -s http://127.0.0.1:8807/v1/models
 ```
 
-The environment HTTP client does **not** automatically launch vLLM. Manage
-the server separately or use the repository's shared model infrastructure.
-Use the `offline` (passthrough) profile for no-network wiring checks.
+Test one structured response before a large data-generation batch:
+
+```bash
+curl -s http://127.0.0.1:8807/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"local-qwen3.5-9b","messages":[{"role":"user","content":"Return a JSON object with the field ok set to true."}],"response_format":{"type":"json_object"},"max_tokens":128,"temperature":0}'
+```
+
+The environment client accesses a **running** vLLM HTTP service; it does not
+launch or download model weights automatically. To run it on another machine,
+expose the server securely and change `models.local_qwen35_9b.base_url`.
+You can use different profiles per role or switch to `dashscope_qwen` by
+changing the three `author_profile`, `critic_profile` and
+`teacher_profile` settings. The `offline` (passthrough) profile remains
+available for no-network checks.
 
 ### Commands
 
