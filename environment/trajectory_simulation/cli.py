@@ -21,6 +21,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--output")
     parser.add_argument("--max-records", type=int)
+    parser.add_argument("--seed", type=int, default=17)
 
 
 def command_plan(args: argparse.Namespace) -> None:
@@ -53,6 +54,7 @@ def command_synthesize(args: argparse.Namespace) -> None:
         progress=not args.no_progress,
         flush_every=args.flush_every,
         json_mode=spec["json_mode"] and not args.no_json_mode,
+        seed=args.seed,
     )
     result["model_backend"]=spec["backend"]
     _print(result)
