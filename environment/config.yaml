@@ -88,15 +88,21 @@ question_generation:
   no_progress: false
 
 trajectory_simulation:
-  teacher_profile: local_qwen35_9b
+  # The Main Planner and Sub-Agent roles are separate requests/prompts. They
+  # may share the same Qwen3.5-9B vLLM endpoint or use different profiles.
+  planner_profile: local_qwen35_9b
+  executor_profile: local_qwen35_9b
   worlds: environment/data/typed_worlds_{pool_size}.jsonl
   realized: environment/data/questions_{pool_size}/realized_capability_worlds.jsonl
   output: environment/data/trajectories_{pool_size}.jsonl
   max_records: null
-  temperature: 0.2
+  planner_temperature: 0.2
+  executor_temperature: 0.2
   max_tokens: 2048
   timeout: 90
   max_attempts: 3
+  # Run independent current-round Sub-Agent requests concurrently.
+  subagent_workers: 4
   flush_every: 5
   rejected_output: null
   no_json_mode: false
