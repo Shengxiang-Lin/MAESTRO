@@ -54,4 +54,5 @@ environment/tests/*
 /work/environment_repair_20261104/
 
 /work/environment_parallel_20261104/
-!environment/tests/test_parallel_candidates.py
+environment/tests/
+work/
