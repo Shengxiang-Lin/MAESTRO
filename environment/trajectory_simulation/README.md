@@ -17,14 +17,15 @@ trajectory, one interaction round at a time.
 
 Every fragment's complete ancestor subprogram is evaluated on candidate
 source subsets. The compiler selects a **reachable evidence witness** that
-reproduces its full-world result, and checks decision-information completeness.
-It subtracts predecessor evidence for the Sub-Agent packet, so a later
-fragment receives already-known intermediate answers plus **new** clues,
-rather than rereading every earlier source.
+reproduces its full-world result, checks decision-information completeness and
+retains evaluated facts, including values that exclude a candidate.
+It separates new source observations from previously read witness evidence,
+so later fragments can reuse predecessor facts without claiming new retrieval.
 
-A terminal evidence fragment is added **only when** the combined fragments'
-evidence cannot support the original final answer. The terminal calculation
-and final oracle answer always remain programmatically verified.
+A terminal fragment is added when operations remain outside the composed
+fragments, or when additional evidence is required. It includes every remaining
+operation in dependency order, not just the final COUNT/VERIFY. The terminal
+calculation and final oracle answer remain programmatically verified.
 
 The compiler **rejects** tasks without `composition_links`; it never falls
 back to source-by-source exploration or invents a new decomposition.
@@ -59,6 +60,11 @@ resource descriptors, prerequisites, permitted tools), remaining fragments
 and terminal operator. Future answer values, future resource contents and
 the oracle final answer are **not** included.
 
+The actual prompt uses ordered plan slots and source types rather than raw
+fragment/source handles. Operations retain dependency edges, readable comparison
+symbols and public aliases for question entities. This keeps the gold planning
+reference while reducing private-handle copying and branch ambiguity.
+
 Main emits only the next native O1 action:
 - `delegate_task`: one task per currently-ready independent gold fragment;
   all ready tasks are dispatched in the same parallel round. Main writes
@@ -75,13 +81,18 @@ free exploration rollout.
 
 ## Role 2: Sub-Agent Teacher
 
-One LLM request is made **per assigned fragment**, and independent current
-round tasks run in parallel. Inputs include:
+One feedback-generation request is made **per assigned fragment**, followed
+by a scoped language review. Independent current-round tasks run in parallel.
+Generation inputs include:
 - the delegated O1 task;
 - completed prerequisite fragment answers;
 - the gold fragment operations;
 - its incremental evidence packet (rendered source content and public facts);
-- its **authoritative intermediate answer** from Stage 1.
+- previously read witness observations, separately marked as reused evidence;
+- its **authoritative intermediate answer** and per-operation results from Stage 1.
+
+The simulator prompt focuses on the assigned task rather than repeating the full
+original question, so future filters do not contaminate an intermediate report.
 
 The LLM generates only:
 
@@ -99,9 +110,18 @@ prefix. Consequently the JSON schema is small, while the factual answer is
 strictly correct by construction.
 
 Natural-language summaries are bounded and checked for numeric assertions,
-unknown source references and private IDs. They are **not** a substitute for
-a full semantic entailment audit. Sample manually before using as training
-data. Neither role fabricates raw tool-call traces, cost, failures or attacks.
+unknown source references, exact title aliases and private IDs. LLM-generated
+task instructions and reports then receive a temperature-zero fixed-contract
+review. It uses readable dependency steps, typed completed results, observed
+claims and authoritative step outputs; rejections must quote generated text.
+The reviewer must not re-solve the question or substitute general world
+knowledge for the synthetic world's verified operations. Offline reference
+roles skip this LLM review. It is **not** a formal semantic entailment proof;
+sample manually before using as training data. Neither role fabricates raw
+tool-call traces, cost, failures or attacks.
+
+The Main must assign every required source-modality tool for a fragment rather
+than substitute a search/code tool because the predicate appears structured.
 
 ## Commands
 

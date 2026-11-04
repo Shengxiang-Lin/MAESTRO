@@ -33,13 +33,24 @@ def json_value(value: Any) -> Any:
     return value
 
 
-def _public_inputs(inputs: tuple[str, ...]) -> list[str]:
+def _public_inputs(inputs: tuple[str, ...], rendered: Any = None) -> list[str]:
     """Never reveal synthetic internal entity IDs as future Main instructions."""
     visible = []
+    aliases = (getattr(rendered, "hidden_metadata", {}) or {}).get("entity_aliases", {})
+    comparators = {
+        "<CMP:=>": "=", "<CMP:==>": "==", "<CMP:!=>": "!=",
+        "<CMP:>>": ">", "<CMP:greater>": ">",
+        "<CMP:<>": "<", "<CMP:less>": "<",
+        "<CMP:>=>": ">=", "<CMP:<=>": "<=",
+    }
     for token in inputs:
         token = str(token)
-        if token.startswith("entity:"):
-            visible.append("entity identified by the question or predecessor clues")
+        if token in comparators:
+            visible.append(comparators[token])
+        elif token.startswith("entity:"):
+            visible.append(aliases.get(
+                token.split(":", 1)[1],
+                "entity identified by the question or predecessor clues"))
         elif token.startswith("type:"):
             visible.append(type_label(token.split(":", 1)[1]))
         elif token.startswith(("schema:", "yago:", "r:")):
@@ -88,12 +99,47 @@ def _same(left: Any, right: Any) -> bool:
     return normalize_answer(json_value(left)) == normalize_answer(json_value(right))
 
 
+def _read_fact_ids(program: ProgramIR, world: Any) -> set[str]:
+    """Retain evaluated evidence, including values that reject a candidate."""
+    trace = SymbolicExecutor().execute_trace(program, world)
+    required = set(assess_goal_information_completeness(program, world).required_fact_ids)
+    for node in program.nodes:
+        if not node.dependencies:
+            continue
+        candidates = set()
+        dependencies = node.dependencies[:2] if node.op in {
+            "SELECT_BETWEEN", "QUERY_RELATION",
+        } else node.dependencies[:1]
+        for parent in dependencies:
+            value = trace[parent]
+            if isinstance(value, (set, list, tuple)):
+                candidates.update(str(item) for item in value)
+        for fact in world.facts:
+            if node.op == "RELATE" and fact.predicate == node.inputs[0]:
+                backward = "backward" in node.inputs
+                endpoint = str(fact.object) if backward else fact.subject
+                if fact.object_kind == "entity" and endpoint in candidates:
+                    required.add(fact.fact_id)
+            elif node.op == "QUERY_RELATION":
+                left = {str(item) for item in trace[node.dependencies[0]]}
+                right = {str(item) for item in trace[node.dependencies[1]]}
+                if fact.object_kind == "entity" and fact.subject in left and str(fact.object) in right:
+                    required.add(fact.fact_id)
+            elif (node.op in {
+                "FILTER_STRING", "FILTER_NUMBER", "FILTER_YEAR", "FILTER_DATE",
+                "QUERY_ATTR", "SELECT_AMONG", "SELECT_BETWEEN",
+            } and fact.subject in candidates and fact.predicate == node.inputs[0]):
+                required.add(fact.fact_id)
+    return required
+
+
 def _minimal_witness(
     subprogram: ProgramIR, world: Any, expected: Any, dependencies: Mapping[str, Any],
     *, max_sources: int, required_fact_ids: tuple[str, ...] = (),
 ) -> list[str]:
     """Brute-force the small frozen source set; never trust a model's evidence."""
     all_ids = sorted(world.sources)
+    required_fact_ids = set(required_fact_ids) | _read_fact_ids(subprogram, world)
     if len(all_ids) > max_sources:
         raise GoldCompilationError("world exceeds exact fragment witness budget")
     for size in range(len(all_ids) + 1):
@@ -233,16 +279,23 @@ def compile_gold_solution(
             owned -= _ancestors(program, predecessor)
         operations = [
             {"node_id": nid, "op": node_map[nid].op,
-             "inputs": _public_inputs(node_map[nid].inputs)}
+             "dependencies": list(node_map[nid].dependencies),
+             "inputs": _public_inputs(node_map[nid].inputs, rendered)}
             for nid in order if nid in owned
         ]
         fragment = {
             "fragment_id": identifier, "stage": int(link.get("stage", index)),
             "output_node_id": output, "depends_on": prev,
             "operations": operations,
+            "operation_results": [{
+                "node_id": op["node_id"],
+                "answer": _public_answer(trace[op["node_id"]], rendered, node_map[op["node_id"]]),
+            } for op in operations],
             "resource_ids": new_sources,
             "support_resource_ids": witness,
             "observations": _source_claims(world, rendered, new_sources),
+            "known_observations": _source_claims(
+                world, rendered, sorted(set(witness) & known_sources)),
             "expected_answer": _public_answer(trace[output], rendered, node_map[output]),
             "answer_kind": "entity_set" if isinstance(trace[output], set) else "value",
         }
@@ -273,21 +326,36 @@ def compile_gold_solution(
         and current_answer is not None
         and _same(current_answer, trace[final_id])
     )
-    if not sufficient:
-        # Some terminals need additional source observations beyond all
-        # producer fragments (e.g. QUERY_ATTR or SELECT_BETWEEN).
+    covered_nodes = set().union(*(
+        _ancestors(program, output) for output in output_ids))
+    terminal_nodes = _ancestors(program, final_id) - covered_nodes
+    if terminal_nodes or not sufficient:
+        # Finish every remaining operation, not just the final COUNT/VERIFY.
+        terminal_predecessors = _maximal_dependencies(program, final_id, output_to_fragment)
+        known_sources = set().union(*(
+            support_by_fragment[parent] for parent in terminal_predecessors))
+        new_sources = sorted(set(final_proof_sources) - known_sources)
         fragments.append({
             "fragment_id": "fragment:terminal",
             "stage": max(x["stage"] for x in fragments) + 1,
             "output_node_id": final_id,
-            "depends_on": _maximal_dependencies(program, final_id, output_to_fragment),
-            "operations": [{"node_id": final_id, "op": node_map[final_id].op,
-                            "inputs": _public_inputs(node_map[final_id].inputs)}],
-            "resource_ids": sorted(set(final_proof_sources) - support_sources),
+            "depends_on": terminal_predecessors,
+            "operations": [
+                {"node_id": nid, "op": node_map[nid].op,
+                 "dependencies": list(node_map[nid].dependencies),
+                 "inputs": _public_inputs(node_map[nid].inputs, rendered)}
+                for nid in order if nid in terminal_nodes or (not terminal_nodes and nid == final_id)
+            ],
+            "operation_results": [
+                {"node_id": nid,
+                 "answer": _public_answer(trace[nid], rendered, node_map[nid])}
+                for nid in order if nid in terminal_nodes or (not terminal_nodes and nid == final_id)
+            ],
+            "resource_ids": new_sources,
             "support_resource_ids": final_proof_sources,
-            "observations": _source_claims(
-                world, rendered, sorted(set(final_proof_sources) - support_sources)
-            ),
+            "observations": _source_claims(world, rendered, new_sources),
+            "known_observations": _source_claims(
+                world, rendered, sorted(set(final_proof_sources) & known_sources)),
             "expected_answer": json_value(rendered.answer),
             "answer_kind": "terminal_evidence",
         })
@@ -336,13 +404,15 @@ def private_guidance(plan: Mapping[str, Any], completed: set[str]) -> dict[str, 
         "fragment_graph": [{
             "fragment_id": f["fragment_id"], "depends_on": f["depends_on"],
             "stage": f["stage"],
-            "operations": [{"op": op["op"], "inputs": op["inputs"]}
+            "operations": [{"node_id": op["node_id"], "op": op["op"],
+                            "dependencies": op["dependencies"], "inputs": op["inputs"]}
                            for op in f["operations"]],
         } for f in plan["fragments"]],
         "completed_fragments": sorted(completed),
         "ready": [{
             "fragment_id": f["fragment_id"], "depends_on": f["depends_on"],
-            "operations": [{"op": op["op"], "inputs": op["inputs"]}
+            "operations": [{"node_id": op["node_id"], "op": op["op"],
+                            "dependencies": op["dependencies"], "inputs": op["inputs"]}
                            for op in f["operations"]],
             "required_resources": [{
                 "resource_id": obs["resource_id"],

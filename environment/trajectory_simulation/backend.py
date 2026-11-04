@@ -5,6 +5,7 @@ Use JSON-object mode, not a dynamic enum/regex schema containing private facts.
 """
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any, Mapping
 
 from environment.question_generation.backend import OpenAICompatibleBackend
@@ -46,6 +47,13 @@ class LLMPlanner:
 
     def __init__(self, backend: OpenAICompatibleBackend):
         self.backend = backend
+        self.review_backend = OpenAICompatibleBackend(**{
+            **asdict(backend), "temperature": 0.0, "max_tokens": 1024})
+
+    def review(self, prompt: str) -> dict[str, Any]:
+        return self.review_backend.complete_json(
+            "Check teacher language against the supplied fixed contract, not a new solution. "
+            "Return only a short accept/issues JSON verdict with exact quotes.", prompt)
 
     def decide(self, payload: Mapping[str, Any], prompt: str) -> dict[str, Any]:
         return self.backend.complete_json(
@@ -78,11 +86,18 @@ class LLMExecutor:
 
     def __init__(self, backend: OpenAICompatibleBackend):
         self.backend = backend
+        self.review_backend = OpenAICompatibleBackend(**{
+            **asdict(backend), "temperature": 0.0, "max_tokens": 1024})
+
+    def review(self, prompt: str) -> dict[str, Any]:
+        return self.review_backend.complete_json(
+            "Check teacher language against the supplied fixed contract, not a new solution. "
+            "Return only a short accept/issues JSON verdict with exact quotes.", prompt)
 
     def respond(self, payload: Mapping[str, Any], prompt: str) -> dict[str, Any]:
         return self.backend.complete_json(
             "You simulate one successful Sub-Agent's compressed trace for a "
-            "PREDETERMINED ProgramIR fragment. The controller supplies and "
+            "PREDETERMINED reasoning subtask. The controller supplies and "
             "checks the exact answer; write only summary and trace_summary "
             "using the assigned evidence. Return JSON only.", prompt,
         )

@@ -132,8 +132,8 @@ class FragmentCompilationTests(unittest.TestCase):
     def test_parallel_fragments_share_question_but_not_sources(self):
         question, world, rendered = fixture()
         gold = compile_gold_solution(question, world, rendered)
-        self.assertEqual(len(gold["fragments"]), 2)
-        self.assertEqual(gold["waves"], [["fragment:0", "fragment:1"]])
+        self.assertEqual(len(gold["fragments"]), 3)
+        self.assertEqual(gold["waves"], [["fragment:0", "fragment:1"], ["fragment:terminal"]])
         self.assertEqual(gold["fragments"][0]["resource_ids"], ["s1"])
         self.assertEqual(gold["fragments"][1]["resource_ids"], ["s2"])
         self.assertEqual(gold["fragments"][0]["expected_answer"], ["Bob"])
@@ -143,7 +143,7 @@ class FragmentCompilationTests(unittest.TestCase):
 
     def test_dependency_and_resource_anchor_are_respected(self):
         gold = compile_gold_solution(*fixture(dependent=True))
-        self.assertEqual(gold["waves"], [["fragment:0"], ["fragment:1"]])
+        self.assertEqual(gold["waves"], [["fragment:0"], ["fragment:1"], ["fragment:terminal"]])
         self.assertEqual(gold["fragments"][1]["depends_on"], ["fragment:0"])
         self.assertEqual(gold["fragments"][1]["resource_ids"], ["s2"])
         self.assertEqual(gold["fragments"][1]["support_resource_ids"], ["s1", "s2"])
@@ -156,6 +156,34 @@ class FragmentCompilationTests(unittest.TestCase):
         self.assertEqual(gold["fragments"][-1]["resource_ids"], ["s3"])
         self.assertEqual(gold["fragments"][-1]["support_resource_ids"], ["s1", "s2", "s3"])
         self.assertEqual(gold["waves"][-1], ["fragment:terminal"])
+        self.assertEqual([op["op"] for op in gold["fragments"][-1]["operations"]],
+                         ["INTERSECT", "QUERY_NAME", "QUERY_ATTR"])
+
+    def test_terminal_computation_is_kept_without_new_sources(self):
+        gold = compile_gold_solution(*fixture())
+        terminal = gold["fragments"][-1]
+        self.assertEqual(terminal["resource_ids"], [])
+        self.assertEqual([op["op"] for op in terminal["operations"]],
+                         ["INTERSECT", "QUERY_NAME"])
+        self.assertEqual({obs["resource_id"] for obs in terminal["known_observations"]},
+                         {"s1", "s2"})
+
+    def test_comparison_guidance_and_rejected_candidate_evidence(self):
+        question, record, rendered = fixture()
+        record["program"]["nodes"][1] = {
+            "node_id": 1, "op": "FILTER_YEAR", "dependencies": [0],
+            "inputs": ["r:birth", "<CMP:=>", "1674"],
+        }
+        record["world"]["facts"][0].update(
+            predicate="r:birth", object="1687", object_kind="year")
+        rendered.answer = []
+        rendered.sources[0].content = "Alice birth year 1687"
+        gold = compile_gold_solution(question, record, rendered)
+        first = gold["fragments"][0]
+        self.assertEqual(first["expected_answer"], [])
+        self.assertEqual(first["resource_ids"], ["s1"])
+        self.assertEqual(first["operations"][-1]["inputs"][1], "=")
+        self.assertNotIn("<CMP:", json.dumps(private_guidance(gold, set())))
 
     def test_missing_composition_metadata_rejected_without_fallback(self):
         question, world, rendered = fixture()
@@ -171,15 +199,141 @@ class FragmentCompilationTests(unittest.TestCase):
         self.assertNotIn("Carol", json.dumps(prompt_state))
         self.assertNotIn("observations", json.dumps(prompt_state))
         self.assertFalse(prompt_state["may_complete"])
+        self.assertEqual(prompt_state["ready"][0]["operations"][0]["inputs"], ["Alice"])
 
 
 class FragmentTrajectoryTests(unittest.TestCase):
+    def test_unrelated_task_is_rejected_by_fixed_contract_review(self):
+        class Main(PassthroughPlanner):
+            offline = False
+            def decide(self, payload, prompt):
+                value = super().decide(payload, prompt)
+                value["params"]["tasks"][0]["task_instruction"] = "Summarize the weather."
+                return value
+            def review(self, prompt):
+                return {"accept": False, "issues": [{
+                    "quote": "Summarize the weather.",
+                    "reason": "The assigned subgoal is a relation query, not weather.",
+                }]}
+        with self.assertRaisesRegex(GoldTrajectoryError, "language_inconsistency"):
+            synthesize_one(*fixture(), Main(), PassthroughExecutor(), max_attempts=1)
+
+    def test_contradictory_summary_is_rejected_despite_fixed_answer(self):
+        class Sub(PassthroughExecutor):
+            offline = False
+            def respond(self, payload, prompt):
+                return {"summary": "The answer is Nobody, not Bob.",
+                        "trace_summary": "Used the assigned relation evidence."}
+            def review(self, prompt):
+                return {"accept": False, "issues": [{
+                    "quote": "The answer is Nobody, not Bob.",
+                    "reason": "The authoritative subtask answer is Bob.",
+                }]}
+        with self.assertRaisesRegex(GoldTrajectoryError, "language_inconsistency"):
+            synthesize_one(*fixture(), PassthroughPlanner(), Sub(), max_attempts=1)
+
+    def test_review_requires_a_quote_from_generated_text(self):
+        from environment.trajectory_simulation.review import review_language
+        role = SimpleNamespace(offline=False, review=lambda prompt: {
+            "accept": False, "issues": [{"quote": "not in the summary", "reason": "Wrong."}],
+        })
+        self.assertEqual(review_language(role, "test", ["The result is Bob."]),
+                         (False, ["invalid_language_review"]))
+
+    def test_unknown_reference_title_has_specific_rejection(self):
+        gold = compile_gold_solution(*fixture())
+        self.assertIn("trace_summary_unknown_resource_title:Reference 99",
+                      validate_feedback({
+                          "summary": "The result is Bob.",
+                          "trace_summary": "Consulted Reference 99.",
+                      }, gold["fragments"][0])[1])
+
+    def test_public_feedback_cannot_describe_the_synthesis_controller(self):
+        gold = compile_gold_solution(*fixture())
+        for label in ("ProgramIR", "SymbolicExecutor", "symbolic executor"):
+            with self.subTest(label=label):
+                self.assertFalse(validate_feedback({
+                    "summary": "The result is Bob.",
+                    "trace_summary": label + " supplied the answer.",
+                }, gold["fragments"][0])[0])
+
+    def test_single_source_fact_attribution_must_match_its_claims(self):
+        gold = compile_gold_solution(*fixture(dependent=True))
+        fragment = gold["fragments"][0]
+        fragment["known_observations"] = gold["fragments"][1]["observations"]
+        fragment["observations"][0]["title"] = "Reference 1"
+        fragment["known_observations"][0]["title"] = "Reference 2"
+        bad = {"summary": "The result is Bob.",
+               "trace_summary": "Reference 1 confirmed Bob's second relation to Carol."}
+        self.assertTrue(any("source_fact_mismatch:s1" in issue
+                            for issue in validate_feedback(bad, fragment)[1]))
+        good = {**bad, "trace_summary": "Reference 2 confirmed Bob's second relation to Carol."}
+        self.assertTrue(validate_feedback(good, fragment)[0])
+
+    def test_feedback_can_reuse_prior_evidence_without_new_sources(self):
+        from environment.trajectory_simulation.contract import feedback_prompt
+        gold = compile_gold_solution(*fixture(terminal_evidence=True))
+        terminal = gold["fragments"][-1]
+        terminal["known_observations"][0]["claims"].append({
+            "subject": "Alice", "predicate": "birth date",
+            "object": "1687", "object_kind": "year"})
+        value = {
+            "summary": "The previously read s1 record lists Alice's birth date as 1687.",
+            "trace_summary": "Reused the prior evidence without another retrieval.",
+        }
+        self.assertTrue(validate_feedback(value, terminal)[0])
+        prompt = feedback_prompt({
+            "question": "Find Alice.", "task_instruction": "Finish the attribute query.",
+            "dependency_results": [], "fragment": terminal,
+        })
+        self.assertIn("previously_read_observations", prompt)
+        self.assertIn("1687", prompt)
+
+    def test_main_prompt_explicitly_requires_native_params_tasks(self):
+        from environment.trajectory_simulation.contract import main_prompt
+        gold = compile_gold_solution(*fixture())
+        prompt = main_prompt({
+            "public_state": {"question": gold["question"]},
+            "gold_guidance": private_guidance(gold, set()),
+        })
+        self.assertIn("params.tasks", prompt)
+        self.assertIn("required_output_schema", prompt)
+        self.assertNotIn("fragment:", prompt)
+        self.assertNotIn('"s1"', prompt)
+
+    def test_relative_step_labels_are_not_numeric_fact_claims(self):
+        gold = compile_gold_solution(*fixture())
+        self.assertTrue(validate_feedback({
+            "summary": "The result is Bob.",
+            "trace_summary": "Executed Step 1 and Step 2 using the assigned evidence.",
+        }, gold["fragments"][0])[0])
+
+    def test_all_source_modality_tools_are_required(self):
+        from environment.trajectory_simulation.contract import validate_action
+        gold = compile_gold_solution(*fixture())
+        guidance = private_guidance(gold, set())
+        guidance["ready"][0]["suggested_tools"] = ["ExtractUrlContentAction", "ImageAnalysisAction"]
+        action = PassthroughPlanner().decide({
+            "public_state": {"question": gold["question"]},
+            "gold_guidance": guidance,
+        }, "")
+        action["params"]["tasks"][0]["tools"] = ["ExtractUrlContentAction"]
+        self.assertIn("task_0:tools_not_grounded",
+                      validate_action(action, guidance, ["Bob"], {})[1])
+
+    def test_complete_answer_must_use_o1_string_transport(self):
+        from environment.trajectory_simulation.contract import validate_action
+        action = {"action": "complete", "reasoning": "",
+                  "params": {"answer": 2}}
+        self.assertIn("complete_answer_must_be_nonempty_string",
+                      validate_action(action, {"may_complete": True}, 2, {})[1])
+
     def test_public_o1_state_and_private_supervision_are_separate(self):
         result = synthesize_one(*fixture(dependent=True),
                                 PassthroughPlanner(), PassthroughExecutor())
         self.assertTrue(result["validation"]["accepted"])
         self.assertEqual([step["action"] for step in result["trajectory"]],
-                         ["delegate_task", "delegate_task", "complete"])
+                         ["delegate_task", "delegate_task", "delegate_task", "complete"])
         first = result["trajectory"][0]
         self.assertEqual(set(first["state_before"]),
                          {"question", "subtask_history", "available_tools"})
@@ -193,14 +347,14 @@ class FragmentTrajectoryTests(unittest.TestCase):
         final_history = result["trajectory"][-1]["state_before"]["subtask_history"]
         self.assertIn("[Attempt 1]", final_history)
         self.assertIn("[Attempt 2]", final_history)
-        self.assertIn("Summary: 2/2 subtasks done", final_history)
+        self.assertIn("Summary: 3/3 subtasks done", final_history)
         self.assertIn('["Carol"]', final_history)
         public = json.dumps(result["trajectory"])
         self.assertNotIn("fragment:0", public)
         self.assertNotIn("symbolic_trace", public)
         self.assertNotIn("private_gold_guidance", public)
         self.assertEqual(result["gold_supervision"]["parallel_waves"],
-                         [["fragment:0"], ["fragment:1"]])
+                         [["fragment:0"], ["fragment:1"], ["fragment:terminal"]])
         self.assertEqual(result["trajectory"][-1]["params"]["answer"], '["Carol"]')
 
     def test_subagent_result_is_symbolically_fixed_not_model_copied_facts(self):
@@ -223,9 +377,9 @@ class FragmentTrajectoryTests(unittest.TestCase):
         self.assertIn("Parallel Batch (2 subtasks)", history)
         self.assertIn("[1] ✅ done", history)
         self.assertIn("[2] ✅ done", history)
-        self.assertEqual(history.count("Trace summary:"), 2)
-        self.assertEqual(history.count("Result:"), 2)
-        self.assertIn("Summary: 2/2 subtasks done", history)
+        self.assertEqual(history.count("Trace summary:"), 3)
+        self.assertEqual(history.count("Result:"), 3)
+        self.assertIn("Summary: 3/3 subtasks done", history)
         self.assertEqual(
             history,
             format_o1_subtask_history(episode["trajectory"][:-1]),
@@ -245,7 +399,7 @@ class FragmentTrajectoryTests(unittest.TestCase):
         self.assertIn("public_o1_state", text)
         self.assertIn("private_gold_guidance", text)
         self.assertIn("Trace summary:", text)
-        self.assertIn("Summary: 2/2 subtasks done", text)
+        self.assertIn("Summary: 3/3 subtasks done", text)
 
     def test_parallel_subagents_are_independent_requests(self):
         class SlowExecutor(PassthroughExecutor):

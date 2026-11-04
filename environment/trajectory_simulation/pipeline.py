@@ -27,6 +27,7 @@ from .contract import (
     validate_action, validate_feedback,
 )
 from .history import format_o1_subtask_history
+from .review import action_review_prompt, feedback_review_prompt, review_language
 
 
 class GoldTrajectoryError(RuntimeError):
@@ -52,7 +53,8 @@ def _world_map(path: str | Path, seed: int) -> dict[str, tuple[dict[str, Any], A
     return result
 
 
-def _stage(call, validate, *, stage: str, max_attempts: int) -> dict[str, Any]:
+def _stage(call, validate, *, stage: str, max_attempts: int,
+           diagnostics: Mapping[str, Any] | None = None) -> dict[str, Any]:
     attempts = []
     issues = []
     for index in range(max_attempts):
@@ -71,7 +73,7 @@ def _stage(call, validate, *, stage: str, max_attempts: int) -> dict[str, Any]:
             "attempt": index + 1, "issues": list(issues),
             "response": json_value(value),
         })
-    raise GoldTrajectoryError(stage, issues, {"attempts": attempts})
+    raise GoldTrajectoryError(stage, issues, {"attempts": attempts, **(diagnostics or {})})
 
 
 def _with_feedback(prompt: str, issues: list[str]) -> str:
@@ -131,19 +133,33 @@ def synthesize_one(
             payload = {
                 "public_state": public_state,
                 "gold_guidance": guidance,
+                "completed_subtask_contracts": list(known_results.values()),
                 # Offline passthrough test mode only. NOT included in main_prompt.
                 "offline_oracle_answer": gold["final_answer"],
             }
+
+            def check_action(value):
+                okay, issues = validate_action(
+                    value, guidance, gold["final_answer"], gold["answer_contract"],
+                    public_state=public_state,
+                )
+                if not okay:
+                    return okay, issues
+                texts = [value["reasoning"]]
+                for task in value["params"].get("tasks", []):
+                    texts.extend([task["task_instruction"], task["context"]])
+                return review_language(
+                    planner, action_review_prompt(
+                        value, guidance, public_state, list(known_results.values()), ready), texts)
+
             action = _stage(
                 lambda issues: planner.decide(
                     payload, _with_feedback(main_prompt(payload), issues)
                 ),
-                lambda value: validate_action(
-                    value, guidance, gold["final_answer"], gold["answer_contract"],
-                    public_state=public_state,
-                ),
+                check_action,
                 stage=f"round_{round_index}:main_action",
                 max_attempts=max_attempts,
+                diagnostics={"completed_trajectory": json_value(trajectory)},
             )
             wire = public_action(action)
             if guidance["may_complete"]:
@@ -197,6 +213,11 @@ def synthesize_one(
                         "subagent_answers_programmatic": True,
                         "raw_tool_traces_generated": False,
                         "attacks_simulated": False,
+                        "language_validation": (
+                            "deterministic_offline_reference"
+                            if getattr(planner, "offline", False) and getattr(executor, "offline", False)
+                            else "fixed_contract_review_with_quoted_issues"
+                        ),
                     },
                 }
 
@@ -216,14 +237,27 @@ def synthesize_one(
                     "dependency_results": predecessor_results,
                     "fragment": fragment,
                 }
+
+                def check_feedback(value):
+                    okay, issues = validate_feedback(value, fragment)
+                    if not okay:
+                        return okay, issues
+                    return review_language(
+                        executor, feedback_review_prompt(value, sub_payload),
+                        [value["summary"], value["trace_summary"]])
+
                 language = _stage(
                     lambda issues: executor.respond(
                         sub_payload,
                         _with_feedback(feedback_prompt(sub_payload), issues),
                     ),
-                    lambda value: validate_feedback(value, fragment),
+                    check_feedback,
                     stage=f"round_{round_index}:subagent:{index}",
                     max_attempts=max_attempts,
+                    diagnostics={
+                        "completed_trajectory": json_value(trajectory),
+                        "fragment_id": fragment["fragment_id"],
+                    },
                 )
                 # The exact answer is NOT generated or copied by the LLM.
                 fixed_answer = answer_string(fragment["expected_answer"])
@@ -251,6 +285,7 @@ def synthesize_one(
                 known_results[fragment["fragment_id"]] = {
                     "fragment_id": fragment["fragment_id"],
                     "answer": reply["finish_result"]["result"],
+                    "answer_kind": fragment["answer_kind"],
                     "summary": reply["finish_result"]["summary"],
                 }
                 completed.add(fragment["fragment_id"])
