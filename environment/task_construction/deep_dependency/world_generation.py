@@ -33,6 +33,10 @@ def _json_default(value):
     raise TypeError(f"Unsupported artifact value: {type(value).__name__}")
 
 def _serialize_world(world):return world.to_dict() if hasattr(world,"to_dict") else {"entities":world.entities,"facts":[fact.__dict__ for fact in world.facts],"sources":{sid:source.__dict__ for sid,source in world.sources.items()},"metadata":world.metadata}
+def _stop_after_target(accepted_count:int, target:int, all_valid_candidates:bool)->bool:
+    """A validated fixed pool must be fully examined regardless of yield."""
+    return not all_valid_candidates and accepted_count>=target
+
 def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_path,*,
     target,min_depth=5,seed=17,min_critical_sources=2,min_noncritical_sources=1,
     min_proof_sources=2,max_sources=6,mmqa_source_motifs_path=None,progress=False,
@@ -62,7 +66,7 @@ def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_
     iterator=tqdm(rows,desc='Executable worlds',disable=not progress)
     candidates_tested=0
     for index,row in enumerate(iterator):
-        if not all_valid_candidates and len(accepted)>=target:
+        if _stop_after_target(len(accepted),target,all_valid_candidates):
             break
         candidates_tested+=1
         for attempt in range(world_attempts_per_candidate):
