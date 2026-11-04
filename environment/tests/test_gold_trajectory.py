@@ -235,6 +235,28 @@ class FragmentTrajectoryTests(unittest.TestCase):
             synthesize_one(*fixture(), PassthroughPlanner(), BadExecutor(),
                            max_attempts=1)
 
+    def test_main_cannot_leak_future_resource_handles(self):
+        class LeakyPlanner(PassthroughPlanner):
+            def decide(self, payload, prompt):
+                value = super().decide(payload, prompt)
+                if value["action"] == "delegate_task":
+                    value["params"]["tasks"][0]["task_instruction"] += " source_99"
+                return value
+        with self.assertRaisesRegex(GoldTrajectoryError,
+                                    "future_resource_id_in_public_action"):
+            synthesize_one(*fixture(), LeakyPlanner(), PassthroughExecutor(),
+                           max_attempts=1)
+
+    def test_subagent_cannot_override_programmed_answer(self):
+        class UntrustedExecutor(PassthroughExecutor):
+            def respond(self, payload, prompt):
+                value = super().respond(payload, prompt)
+                value["answer"] = "Wrong answer"
+                return value
+        with self.assertRaisesRegex(GoldTrajectoryError, "unexpected_feedback_fields"):
+            synthesize_one(*fixture(), PassthroughPlanner(), UntrustedExecutor(),
+                           max_attempts=1)
+
     def test_main_cannot_drop_gold_parallel_fragment(self):
         class IncompletePlanner(PassthroughPlanner):
             def decide(self, payload, prompt):
