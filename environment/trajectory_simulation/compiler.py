@@ -12,7 +12,7 @@ from typing import Any, Mapping
 from environment.task_construction.executor import SymbolicExecutor
 from environment.task_construction.scenario.information import assess_goal_information_completeness
 from environment.task_construction.ir import ProgramIR
-from environment.task_construction.rendering.naming import predicate_label
+from environment.task_construction.rendering.naming import predicate_label, type_label
 from environment.task_construction.rendering.pipeline import program_from_dict, world_from_dict
 from environment.task_construction.validation import normalize_answer
 
@@ -31,6 +31,24 @@ def json_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {str(k): json_value(v) for k, v in value.items()}
     return value
+
+
+def _public_inputs(inputs: tuple[str, ...]) -> list[str]:
+    """Never reveal synthetic internal entity IDs as future Main instructions."""
+    visible = []
+    for token in inputs:
+        token = str(token)
+        if token.startswith("entity:"):
+            visible.append("entity identified by the question or predecessor clues")
+        elif token.startswith("type:"):
+            visible.append(type_label(token.split(":", 1)[1]))
+        elif token.startswith(("schema:", "yago:", "r:")):
+            visible.append(predicate_label(token))
+        elif token.startswith(("value_", "literal_")):
+            visible.append("value specified by the public question")
+        else:
+            visible.append(token)
+    return visible
 
 
 def _ancestors(program: ProgramIR, output: int) -> set[int]:
@@ -215,8 +233,7 @@ def compile_gold_solution(
             owned -= _ancestors(program, predecessor)
         operations = [
             {"node_id": nid, "op": node_map[nid].op,
-             "inputs": [predicate_label(x) if x.startswith(("schema:", "yago:", "r:")) else x
-                        for x in node_map[nid].inputs]}
+             "inputs": _public_inputs(node_map[nid].inputs)}
             for nid in order if nid in owned
         ]
         fragment = {
@@ -265,7 +282,7 @@ def compile_gold_solution(
             "output_node_id": final_id,
             "depends_on": _maximal_dependencies(program, final_id, output_to_fragment),
             "operations": [{"node_id": final_id, "op": node_map[final_id].op,
-                            "inputs": list(node_map[final_id].inputs)}],
+                            "inputs": _public_inputs(node_map[final_id].inputs)}],
             "resource_ids": sorted(set(final_proof_sources) - support_sources),
             "support_resource_ids": final_proof_sources,
             "observations": _source_claims(
@@ -318,12 +335,15 @@ def private_guidance(plan: Mapping[str, Any], completed: set[str]) -> dict[str, 
         "goal": "Follow the frozen composed solution, one parallel wave at a time",
         "fragment_graph": [{
             "fragment_id": f["fragment_id"], "depends_on": f["depends_on"],
-            "stage": f["stage"], "operations": f["operations"],
+            "stage": f["stage"],
+            "operations": [{"op": op["op"], "inputs": op["inputs"]}
+                           for op in f["operations"]],
         } for f in plan["fragments"]],
         "completed_fragments": sorted(completed),
         "ready": [{
             "fragment_id": f["fragment_id"], "depends_on": f["depends_on"],
-            "operations": f["operations"],
+            "operations": [{"op": op["op"], "inputs": op["inputs"]}
+                           for op in f["operations"]],
             "required_resources": [{
                 "resource_id": obs["resource_id"],
                 "source_type": obs["source_type"],
