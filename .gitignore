@@ -56,3 +56,7 @@ environment/tests/*
 /work/environment_parallel_20261104/
 environment/tests/
 work/
+
+# Keep the native O1 trajectory regressions with their implementation.
+!environment/tests/
+!environment/tests/test_o1_trajectory.py

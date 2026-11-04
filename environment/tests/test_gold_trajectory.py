@@ -18,7 +18,7 @@ from environment.trajectory_simulation.compiler import (
 )
 from environment.trajectory_simulation.pipeline import (
     GoldTrajectoryError, plan_trajectories_jsonl,
-    synthesize_one, synthesize_trajectories_jsonl,
+    _synthesize_reference_one as synthesize_one, synthesize_trajectories_jsonl,
 )
 from environment.trajectory_simulation.validator import validate_subagent_result
 
@@ -243,10 +243,151 @@ class GoldTrajectoryTests(unittest.TestCase):
                 self.assertEqual(output["accepted"], 1)
                 row = json.loads((folder/"trajectories.jsonl").read_text().strip())
                 self.assertTrue(row["validation"]["final_answer_verified"])
-                self.assertEqual(row["final"]["answer"], ["B"])
+                self.assertEqual(json.loads(row["trajectory"][-1]["params"]["answer"]), ["B"])
 
 
 class GoldRegressionTests(unittest.TestCase):
+    def test_review_backend_bounds_json_without_changing_generation_backend(self):
+        from unittest.mock import patch
+        from environment.question_generation.backend import OpenAICompatibleBackend,BackendError
+        from environment.trajectory_simulation.backend import LLMPlanner
+        backend=OpenAICompatibleBackend("http://localhost/v1","test",temperature=.2)
+        role=LLMPlanner(backend)
+        with patch("environment.trajectory_simulation.backend.urllib.request.urlopen") as request:
+            response=request.return_value.__enter__.return_value
+            response.read.return_value=json.dumps({
+                "choices":[{"finish_reason":"stop","message":{"content":'{"accept":true,"issues":[]}'}}]
+            }).encode()
+            self.assertTrue(role.review("Check a summary.")["accept"])
+            body=json.loads(request.call_args.args[0].data)
+            self.assertEqual(body["response_format"]["type"],"json_schema")
+            schema=body["response_format"]["json_schema"]["schema"]
+            self.assertEqual(schema["properties"]["issues"]["maxItems"],3)
+            self.assertEqual(body["temperature"],0.0)
+            self.assertEqual(backend.temperature,.2)
+            response.read.return_value=json.dumps({
+                "choices":[{"finish_reason":"length","message":{"content":'{"accept":'}}]
+            }).encode()
+            with self.assertRaisesRegex(BackendError,"truncated"):
+                role.review("Check a summary.")
+
+    def test_all_selected_anchor_providers_remain_or_dependencies(self):
+        r,w,rendered=fixture()
+        w["world"]["entities"]["C"]="schema:Person"
+        w["world"]["facts"].append({
+            "fact_id":"f3","subject":"B","predicate":"r:third",
+            "object":"C","object_kind":"entity","source_id":"s3"})
+        w["world"]["sources"]["s3"]={
+            "source_id":"s3","source_type":"text","fact_ids":["f3"],"metadata":{}}
+        w["program"]["nodes"][-1].update(op="RELATE",inputs=["r:third","forward"])
+        w["program"]["nodes"].append({
+            "node_id":5,"op":"QUERY_NAME","dependencies":[4],"inputs":[]})
+        rendered.answer=["C"]
+        rendered.sources.append(SimpleNamespace(
+            source_id="s3",source_type="text",title="Source 3",content="B third C"))
+        resources=r["capability_world"]["resources"]
+        for resource in resources:
+            resource.update(requires_anchors=[],produces_anchors=["a"])
+        resources.append({
+            **resources[0],"resource_id":"s3","visibility":"discoverable",
+            "requires_anchors":["a"],"produces_anchors":[]})
+        plan=compile_gold_solution(r,w,rendered)
+        task=next(t for t in plan["tasks"] if t["subtask_id"]=="discover:s3")
+        self.assertEqual(task["depends_on"],[])
+        self.assertEqual(task["depends_on_any"],[["subtask:s1","subtask:s2"]])
+        for provider in ("s1","s2"):
+            self.assertIn(task,ready_subtasks(plan,{"subtask:"+provider}))
+        self.assertNotIn(task,ready_subtasks(plan,set()))
+        output=synthesize_one(r,w,rendered,PassthroughPlanner(),PassthroughExecutor())
+        self.assertTrue(output["validation"]["accepted"])
+
+    def test_required_anchors_are_and_but_providers_are_or(self):
+        from environment.trajectory_simulation.acquisition import resolve_dependencies
+        resources=[
+            {"resource_id":"a1","visibility":"provided","produces_anchors":["a"]},
+            {"resource_id":"a2","visibility":"provided","produces_anchors":["a"]},
+            {"resource_id":"b","visibility":"provided","produces_anchors":["b"]},
+            {"resource_id":"target","visibility":"discoverable","requires_anchors":["a","b"]},
+        ]
+        deps,_=resolve_dependencies(resources,{})
+        task={"subtask_id":"target","depends_on":[],
+              "depends_on_any":[sorted(group) for group in deps["target"]]}
+        self.assertEqual(ready_subtasks({"tasks":[task]},{"a1"}),[])
+        self.assertEqual(ready_subtasks({"tasks":[task]},{"a2","b"}),[task])
+
+    def test_evidence_selection_does_not_force_first_provider(self):
+        r,w,rendered=fixture(dependent=True)
+        resources=r["capability_world"]["resources"]
+        resources[0].update(produces_anchors=["a"],requires_anchors=[])
+        resources[1].update(produces_anchors=[],requires_anchors=["a"])
+        resources.append({
+            **resources[0],"resource_id":"s0","anchor_dependency_resource_ids":[]})
+        w["world"]["sources"]["s0"]={
+            "source_id":"s0","source_type":"text","fact_ids":[],"metadata":{}}
+        rendered.sources.append(SimpleNamespace(
+            source_id="s0",source_type="text",title="Extra",content=""))
+        plan=compile_gold_solution(r,w,rendered)
+        self.assertEqual(plan["required_resource_ids"],["s1","s2"])
+        self.assertEqual(plan["acquisition_alternatives"]["s2"],[["s0","s1"]])
+
+    def test_or_cycle_cannot_publish_same_wave_anchor(self):
+        from environment.trajectory_simulation.acquisition import resolve_dependencies
+        with self.assertRaisesRegex(ValueError,"unreachable"):
+            resolve_dependencies([
+                {"resource_id":"a","visibility":"discoverable",
+                 "requires_anchors":["b"],"produces_anchors":["a"]},
+                {"resource_id":"b","visibility":"discoverable",
+                 "requires_anchors":["a"],"produces_anchors":["b"]},
+            ],{})
+
+    def test_grouped_review_keeps_titles_provenance_and_latest_read_state(self):
+        from environment.trajectory_simulation.grounding import grouped_evidence,review_prompt
+        tasks={
+            "d":{"subtask_id":"d","kind":"discover","resource_id":"source_02",
+                 "observation":{"title":"Reference 1"}},
+            "i":{"subtask_id":"i","kind":"inspect","resource_id":"source_02",
+                 "observation":{"title":"Reference 1"}},
+        }
+        claims,state=grouped_evidence(tasks,[
+            {"subtask_id":"d","answer":[{"resource_id":"source_02","title":"Reference 1"}]},
+            {"subtask_id":"i","answer":[{"subject":"Alice","predicate":"height","object":170}]},
+        ])
+        self.assertEqual(state["inspected_resource_ids"],["source_02"])
+        self.assertEqual(state["discovered_unread_resource_ids"],[])
+        self.assertEqual(claims[1]["resource_id"],"source_02")
+        self.assertEqual(claims[1]["title"],"Reference 1")
+        prompt=review_prompt("Read Source 02.",claims,context=state)
+        self.assertIn("Never infer ownership",prompt)
+        self.assertIn('"resource_title_aliases":{"Reference 1":"source_02"}',prompt)
+        self.assertIn("AUTHORITATIVE OBSERVED FACT from INSPECTED source_02",prompt)
+
+    def test_summary_numeric_format_is_semantically_normalized(self):
+        from environment.trajectory_simulation.grounding import text_issues
+        self.assertEqual(text_issues("Population is 1,190.0.",[{"population":1190}]),[])
+        self.assertEqual(text_issues("Population is 1190.",[{"population":"1,190"}]),[])
+        self.assertIn("unsupported_numeric_claim_in_summary",
+                      text_issues("Population is 1191.",[{"population":1190}]))
+
+    def test_final_reviewer_sees_verified_answer_but_main_does_not(self):
+        r,w,rendered=fixture()
+        w["program"]["nodes"][-1].update(op="COUNT")
+        rendered.answer=1
+        outer=self
+        class Main(PassthroughPlanner):
+            def finalize(self,payload,prompt):
+                outer.assertNotIn("expected_answer",prompt)
+                outer.assertNotIn("verified_final_answer",prompt)
+                outer.assertIn("JOIN facts",prompt)
+                return {"action":"complete","answer":1,"summary":"The final count is 1."}
+            def review(self,prompt):
+                if '"main_final_summary"' in prompt:
+                    outer.assertIn('"verified_final_answer":1',prompt)
+                    outer.assertIn('"inspected_resource_ids":["s1","s2"]',prompt)
+                return {"accept":True,"issues":[]}
+        output=synthesize_one(r,w,rendered,Main(),PassthroughExecutor())
+        self.assertEqual(output["final"]["answer"],1)
+        self.assertTrue(output["validation"]["accepted"])
+
     def test_shared_anchor_provider_is_an_alternative_not_an_and_parent(self):
         r,w,rendered=fixture(dependent=True)
         cap=r["capability_world"]
@@ -293,6 +434,39 @@ class GoldRegressionTests(unittest.TestCase):
         self.assertFalse(check(True,1))
         self.assertFalse(check(1,True))
         self.assertFalse(check(["Alice"],["Alice","Alice"],{"collection_mode":"multiset"}))
+        self.assertTrue(check('["Bob","Alice"]',["Alice","Bob"],{"collection_mode":"set"}))
+        self.assertTrue(check("Alice",["Alice"],{"collection_mode":"set"}))
+        self.assertFalse(check("Alice and Bob",["Alice","Bob"],{"collection_mode":"set"}))
+        self.assertFalse(check('["Alice"]',["Alice","Alice"],{"collection_mode":"multiset"}))
+
+    def test_semantic_review_requires_an_actual_quote_and_reason(self):
+        from environment.trajectory_simulation.grounding import semantic_review
+        class Reviewer:
+            offline=False
+            def review(self,prompt):
+                return {"accept":False,"issues":[
+                    {"quote":"Alice is 999 metres tall.","reason":"Not in evidence"}]}
+        okay,issues=semantic_review(
+            Reviewer(),"Alice is 170 metres tall.",[{"height":170}])
+        self.assertFalse(okay)
+        self.assertEqual(issues,["summary_review_invalid_rejection"])
+        class ValidReviewer:
+            offline=False
+            def review(self,prompt):
+                return {"accept":False,"issues":[
+                    {"quote":"Alice is short.","reason":"Evidence says Alice is tall."}]}
+        okay,issues=semantic_review(
+            ValidReviewer(),"Alice is short.",[{"description":"Alice is tall."}])
+        self.assertFalse(okay)
+        self.assertIn("Alice is short.",issues[0])
+        class ContradictoryReviewer(ValidReviewer):
+            def review(self,prompt):
+                response=super().review(prompt)
+                response["accept"]=True
+                return response
+        self.assertFalse(semantic_review(
+            ContradictoryReviewer(),"Alice is short.",
+            [{"description":"Alice is tall."}])[0])
 
     def test_false_summary_is_rejected_even_when_structured_facts_match(self):
         task={"subtask_id":"s","resource_id":"r","gold_answer_claims":[{"subject":"Alice","predicate":"height","object":170}]}
@@ -311,6 +485,46 @@ class GoldRegressionTests(unittest.TestCase):
         from environment.trajectory_simulation.grounding import text_issues
         self.assertEqual(text_issues("Read sources 01, 03, and 05.",[],allowed_ids=["source_01","source_03","source_05"]),[])
         self.assertIn("unknown_resource_reference",text_issues("Read source 999.",[],allowed_ids=["source_01"]))
+        self.assertEqual(text_issues(
+            "Pending work must inspect sources 01, 03, and 05.",[],
+            allowed_ids=["source_02"],
+            pending_ids=["subtask:source_01","subtask:source_03","subtask:source_05"]),[])
+
+    def test_final_summary_review_is_not_a_second_question_solver(self):
+        from environment.trajectory_simulation.grounding import review_prompt
+        for kind in ("main_final_summary","main_round_summary","inspect"):
+            prompt=review_prompt("The answer is false.",[],
+                                 question="PRIVATE QUESTION ONLY FOR MAIN",
+                                 context={"kind":kind,"verified_final_answer":False})
+            self.assertNotIn("PRIVATE QUESTION ONLY FOR MAIN",prompt)
+            self.assertIn('"verified_final_answer":false',prompt)
+
+    def test_final_summary_rejection_audit_separates_correct_answer(self):
+        from environment.trajectory_simulation.pipeline import _stage
+        with self.assertRaises(GoldTrajectoryError) as caught:
+            _stage(
+                lambda feedback:{"action":"complete","answer":False,"summary":"Bad attribution"},
+                lambda value:(False,["summary_semantic_review:wrong source"]),
+                stage="main_final_answer",max_attempts=1,
+                diagnostics={"expected_answer":False,"answer_contract":{"collection_mode":"scalar"}})
+        self.assertTrue(caught.exception.audit["attempts"][0]["answer_validation"]["accepted"])
+
+    def test_false_single_source_requirement_is_rejected_before_llm_review(self):
+        from environment.trajectory_simulation.grounding import semantic_review,review_prompt
+        class Reviewer:
+            def review(self,prompt):
+                raise AssertionError("Invalid co-location reasoning should be rejected directly")
+        okay,issues=semantic_review(
+            Reviewer(),"No single source has both attributes, so the answer is false.",[],
+            context={"kind":"main_final_summary","verified_final_answer":False})
+        self.assertFalse(okay)
+        self.assertIn("invalid_single_source_requirement_in_final_reasoning",issues)
+        prompt=review_prompt(
+            "The height does not equal 1.6224 m.",[{"height":1.8544}],
+            question="Compare to 1.6224 m for people born in 1674.",
+            context={"kind":"main_final_summary","verified_final_answer":False})
+        self.assertIn('"public_constraint_values":["1.6224","1674"]',prompt)
+        self.assertNotIn("Compare to",prompt)
 
     def test_rejected_response_is_preserved_for_diagnosis(self):
         from environment.trajectory_simulation.pipeline import _stage

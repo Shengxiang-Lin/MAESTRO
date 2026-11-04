@@ -34,12 +34,13 @@ def ready_subtasks(plan: Mapping[str, Any], completed: set[str]) -> list[dict[st
         task for task in plan["tasks"]
         if task["subtask_id"] not in completed
         and set(task["depends_on"]).issubset(completed)
+        and all(set(group) & completed for group in task.get("depends_on_any", ()))
     ]
 
 
 def compile_gold_solution(
     realized: Mapping[str, Any], world_record: Mapping[str, Any],
-    rendered: Any, *, max_proof_sources: int = 8,
+    rendered: Any, *, max_proof_sources: int = 8, full_environment: bool = False,
 ) -> dict[str, Any]:
     task_id = str(realized.get("task_id", ""))
     if not task_id or task_id != rendered.task_id:
@@ -66,8 +67,9 @@ def compile_gold_solution(
         selected,required_facts=choose_evidence(program,world,dep,max_proof_sources)
     except ValueError as exc:
         raise GoldCompilationError(str(exc)) from exc
-    selected_ids=set(selected)
     proof_ids=list(selected)
+    if full_environment:selected=sorted(world.sources)
+    selected_ids=set(selected)
     rendered_sources = {source.source_id: source for source in rendered.sources}
     if not selected_ids.issubset(rendered_sources):
         raise GoldCompilationError("gold resources missing rendered observations")
@@ -85,7 +87,9 @@ def compile_gold_solution(
     for sid in selected:
         src = world.sources[sid]
         resource = by_id[sid]
-        parents = sorted(dep[sid] & selected_ids)
+        groups = [sorted(group & selected_ids) for group in dep[sid]]
+        parents = sorted({group[0] for group in groups if len(group) == 1})
+        alternatives = [["subtask:"+p for p in group] for group in groups if len(group)>1]
         cap_ids = list(resource.get("required_capability_ids") or [])
         specialist = (str(cap_by_id[cap_ids[0]].get("specialist", "")) if cap_ids
                       and cap_ids[0] in cap_by_id else "")
@@ -122,6 +126,7 @@ def compile_gold_solution(
                 "resource_id":sid,"source_type":str(src.source_type),
                 "visibility":"discoverable","role":"resource_discovery","agent":"main",
                 "available_tool_families":["search"],"depends_on":inspection_parents,
+                "depends_on_any":alternatives,
                 "discovery_terms":terms,"required_for_proof":False,
                 "gold_answer_claims":[descriptor],"observation":descriptor})
             inspection_parents=["discover:"+sid]
@@ -135,6 +140,7 @@ def compile_gold_solution(
             "agent": specialist,
             "available_tool_families": list(resource.get("available_tool_families") or []),
             "depends_on": inspection_parents,
+            "depends_on_any": [],
             "required_for_proof": sid in proof_ids,
             "gold_answer_claims": facts,
             "observation": {
@@ -147,8 +153,7 @@ def compile_gold_solution(
 
     done=set();waves=[]
     while len(done)<len(tasks):
-        ready=sorted(t["subtask_id"] for t in tasks if t["subtask_id"] not in done
-                     and set(t["depends_on"]).issubset(done))
+        ready=sorted(t["subtask_id"] for t in ready_subtasks({"tasks":tasks},done))
         if not ready:raise GoldCompilationError("compiled acquisition graph is cyclic")
         waves.append(ready);done.update(ready)
     final_op=program.node_map()[order[-1]].op
@@ -161,6 +166,9 @@ def compile_gold_solution(
         "required_fact_ids":required_facts,
         "acquisition_validation":{"anchor_semantics":"AND_over_anchors_OR_over_providers",
                                   "decision_information_complete":True},
+        "acquisition_alternatives":{
+            sid:[sorted(group) for group in groups] for sid,groups in sorted(dep.items())
+        },
         "question": str(realized.get("question", "")),
         "public_task_design": dict(realized.get("task_design", {}) or {}),
         "final_answer": json_value(rendered.answer),
@@ -191,6 +199,7 @@ def public_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
             {key: task[key] for key in (
                 "subtask_id", "kind", "resource_id", "source_type", "visibility", "role",
                 "agent", "available_tool_families", "depends_on",
+                "depends_on_any",
             )}
             for task in plan["tasks"]
         ],

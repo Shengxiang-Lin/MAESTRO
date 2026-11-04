@@ -33,6 +33,9 @@ def planner_prompt(payload: Mapping[str, Any]) -> str:
         "Return JSON: {\"parallel_subtasks\":[{\"subtask_id\":str,"
         "\"agent\":str,\"resource_id\":str,\"instruction\":str}]}.\n\n"
         + _dump(public)
+        + "\n\nEXACT allowed subtask IDs for THIS round: "
+        + _dump({"subtask_ids":[task["subtask_id"] for task in payload["ready_tasks"]]})
+        + "\nReturn exactly one assignment for each of these IDs and NONE of the other graph tasks."
     )
 
 
@@ -72,13 +75,23 @@ def summary_prompt(payload: Mapping[str, Any]) -> str:
         "question": payload["question"],
         "completed_history": payload["history_summaries"],
         "current_parallel_subtask_results": payload["current_results"],
+        "observed_evidence_by_source":payload.get("observed_evidence",[]),
+        "inspected_resource_ids":payload.get("inspected_resource_ids",[]),
+        "discovered_unread_resource_ids":payload.get("discovered_unread_resource_ids",[]),
         "pending_task_ids": payload["pending_task_ids"],
     }
     return (
         "Write the Main Agent's concise round summary AFTER receiving all "
         "parallel Sub-Agent answers. State what has now been learned and which "
         "work remains, but do not predict unknown future observations or invent "
-        "missing facts. Return exactly {\"main_summary\":str}.\n\n"
+        "missing facts. Use observed_evidence_by_source for fact attribution. "
+        "Each row's title is an alias for that SAME resource_id, not another resource; "
+        "the title number need not match the source ID number. "
+        "Do not solve the final question yet; describe evidence learned and pending work. "
+        "Use at most two sentences. Report positive observed facts and read/discovery state "
+        "only; do not infer global absence, uniqueness, or compare numeric constraints here. "
+        "If pending_task_ids is empty, say evidence collection is complete and final reasoning follows. "
+        "Return exactly {\"main_summary\":str}.\n\n"
         + _dump(public)
     )
 
@@ -89,12 +102,24 @@ def final_prompt(payload: Mapping[str, Any]) -> str:
         "overall_solution_architecture": payload["public_plan"],
         "all_completed_subagent_results": payload["all_results"],
         "history_summaries": payload["history_summaries"],
+        "observed_evidence_by_source":payload.get("observed_evidence",[]),
+        "inspected_resource_ids":payload.get("inspected_resource_ids",[]),
+        "discovered_unread_resource_ids":payload.get("discovered_unread_resource_ids",[]),
     }
     return (
         "Every required gold subtask is completed. Return a final answer to "
         "the original question, supported by the accumulated evidence. "
         "Use the same answer type/format as the question requires: JSON string, "
-        "number, boolean, or list. Do not invent facts. Return JSON: "
+        "number, boolean, or list. Derive the answer from observed_evidence_by_source; "
+        "history summaries are not authoritative facts. Each evidence row's title is an alias "
+        "for its SAME resource_id, even when the numbers differ. A discover result locates a descriptor, "
+        "while an inspect result reads facts; check the final inspected_resource_ids. "
+        "JOIN facts with the same public subject/entity name across different sources. "
+        "Birth dates, heights and other required attributes need NOT coexist in one source. "
+        "Never reject a candidate just because no single source contains every attribute; "
+        "evaluate the combined facts and actual values instead. "
+        "Keep summary concise and justify the result with observed facts, without claiming "
+        "to read uninspected resources. Do not invent facts. Return JSON: "
         "{\"action\":\"complete\",\"answer\":<answer>,\"summary\":str}.\n\n"
         + _dump(public)
     )

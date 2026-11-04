@@ -6,7 +6,8 @@ import re
 from decimal import Decimal,InvalidOperation
 from typing import Any, Mapping
 
-from .compiler import json_value
+from .compiler import json_value, ready_subtasks
+from .grounding import grouped_evidence
 
 
 def _equal(left: Any, right: Any) -> bool:
@@ -35,6 +36,12 @@ def answers_equal(left,right,contract=None):
         try:return _number(left)==_number(right)
         except (ValueError,TypeError):return False
     if isinstance(right,(list,tuple,set)):
+        # O1's complete tool transports answers as strings.
+        if isinstance(left,str):
+            try:left=json.loads(left)
+            except json.JSONDecodeError:
+                if len(right)==1 and contract.get("collection_mode")=="set":
+                    left=[left]
         if not isinstance(left,(list,tuple,set)):return False
         numeric=bool(right) and all(isinstance(v,(int,float)) and not isinstance(v,bool) for v in right)
         try:
@@ -59,6 +66,10 @@ def validate_parallel_plan(
     ids = [str(row.get("subtask_id")) for row in assigned if isinstance(row, Mapping)]
     if len(assigned) != len(ready) or len(ids) != len(set(ids)) or set(ids) != set(wanted):
         issues.append("parallel_group_mismatch")
+        if set(wanted)-set(ids):
+            issues.append("missing_ready_subtasks:"+",".join(sorted(set(wanted)-set(ids))))
+        if set(ids)-set(wanted):
+            issues.append("unexpected_or_unready_subtasks:"+",".join(sorted(set(ids)-set(wanted))))
     for row in assigned:
         if not isinstance(row, Mapping):
             issues.append("malformed_subtask")
@@ -118,13 +129,12 @@ def validate_gold_trajectory(
     task_map = {task["subtask_id"]: task for task in plan["tasks"]}
     completed: set[str] = set()
     seen_resources: set[str] = set()
+    observed_results=[]
     issues: list[str] = []
     for i, round_data in enumerate(rounds):
         if "completed_before" in round_data and set(round_data["completed_before"])!=completed:
             issues.append(f"round_{i+1}:completed_before_mismatch")
-        ready = [task for task in plan["tasks"]
-                 if task["subtask_id"] not in completed
-                 and set(task["depends_on"]).issubset(completed)]
+        ready = ready_subtasks(plan,completed)
         if not ready:issues.append(f"round_{i+1}:unexpected_empty_round")
         ok, errors = validate_parallel_plan(round_data.get("main_action", {}), ready)
         if not ok:
@@ -150,13 +160,13 @@ def validate_gold_trajectory(
             if not valid:
                 issues.extend(f"round_{i+1}:{error}" for error in errors)
             completed.add(task["subtask_id"])
+            observed_results.append(result)
             if task.get("kind","inspect")=="inspect":seen_resources.add(task["resource_id"])
         if "completed_after" in round_data and set(round_data["completed_after"])!=completed:
             issues.append(f"round_{i+1}:completed_after_mismatch")
         if "pending_after" in round_data and set(round_data["pending_after"])!=set(task_map)-completed:
             issues.append(f"round_{i+1}:pending_after_mismatch")
-        known_claims=[c for t in plan["tasks"] if t["subtask_id"] in completed for c in t["gold_answer_claims"]]
-        known_claims.extend({"resource":{k:v for k,v in t.get("observation",{}).items() if k!="content"}} for t in plan["tasks"] if t["subtask_id"] in completed)
+        known_claims,_=grouped_evidence(task_map,observed_results)
         pending_ids=set(task_map)-completed
         valid_summary, errors = validate_main_summary(round_data,claims=known_claims,
             pending_ids=pending_ids,allowed_ids={task_map[t]["resource_id"] for t in completed},question=plan.get("question",""))
