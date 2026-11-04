@@ -45,7 +45,7 @@ def validate_frozen_inputs(manifest_path,authoring_inputs_path,capabilities_path
         if task_id not in cap_ids:raise BoundaryError(f"authoring task not present in frozen capabilities: {task_id}")
         if not isinstance(row.get("task_design"),Mapping):raise BoundaryError(f"{task_id}: missing public TaskDesign contract")
         if not isinstance(row.get("resources"),list):raise BoundaryError(f"{task_id}: missing public resources")
-    frozen_count=int(manifest.get("frozen_count",manifest.get("target",0)) or 0)
+    frozen_count=int(manifest.get("frozen_count",0) or 0)
     if frozen_count<=0:raise BoundaryError("empty frozen batch")
     if len(authoring)!=frozen_count or len(capabilities)!=frozen_count:raise BoundaryError(f"authoring projection has {len(authoring)} rows; frozen manifest expects {frozen_count}")
     return {"status":"valid","manifest_version":manifest.get("version"),"semantic_world_policy_version":manifest.get("semantic_world_policy_version"),"frozen_count":frozen_count,"authoring_count":len(authoring),"capability_count":len(capabilities),"manifest":str(manifest_path),"authoring_inputs":str(authoring_inputs_path),"capabilities":str(capabilities_path),"worlds":str(worlds_path) if worlds_path is not None else None}
