@@ -43,7 +43,7 @@ task_construction:
   target: 100
   seed: 17
   shortlist_target: null
-  candidate_multiplier: 8.0
+  candidate_multiplier: 8.0  # Legacy-only; ignored in fixed-pool mode.
   # null: up to 8 processes, with 2 proposals per process in each batch.
   candidate_workers: null
   candidate_proposal_batch_size: null
