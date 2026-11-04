@@ -36,15 +36,21 @@ The public O1 state supplied at each decision contains only:
 ```json
 {
   "question": "...",
-  "history": [
-    {"action": "delegate_task", "reasoning": "...",
-     "params": {"tasks": []}, "result": {"subtask_results": []}}
-  ],
+  "subtask_history": "[Attempt 1] 🔄 Parallel Batch (2 subtasks)\\n  [1] ✅ done | Model: ...\\n  ├─ Task: ...\\n  ├─ Result: ...\\n  ├─ Summary: ...\\n  └─ Trace summary: ...",
   "available_tools": ["GoogleSearchAction", "ExtractUrlContentAction"]
 }
 ```
 
-The full tool registry is supplied in real episodes; the example is abbreviated.
+This is the **cumulative, human-readable SUBTASK HISTORY format** used by
+`orchestra/base_main_agent.py::_format_subtask_history()`. It includes
+**every previous round** (not only the last one) and every parallel
+Sub-Agent's task, result/answer, `finish_result.summary` and
+`trace_summary`. Before the first delegation the history reads
+`No subtasks completed yet.`
+
+The simulator leaves unavailable raw tool-step counts as `?`; it never
+manufactures steps or costs. The full tool registry is supplied in real
+episodes; the example is abbreviated.
 
 The **Main generation prompt** additionally receives a **PRIVATE** teacher
 guidance block, compiled from the frozen composition graph:
@@ -62,7 +68,7 @@ Main emits only the next native O1 action:
 - `complete`: only after all required fragments have succeeded, with a
   final answer checked against the frozen oracle.
 
-The public `state_before` and the next-round `history` contain **no private
+The public `state_before.subtask_history` for each round contains **no private
 guidance, symbolic trace, oracle answer or fragment IDs**. The output is an
 O1-format trajectory, but the labeled action is gold-guided rather than a
 free exploration rollout.
@@ -146,7 +152,8 @@ feedback, **never** changing gold facts or fragment dependencies.
 - `trajectory[]`: native O1 public `delegate_task` actions, corresponding
   `subtask_results` with `finish_result` and `trace_summary`, followed by
   `complete`.
-- `trajectory[].state_before`: public O1 question, history, and tools only.
+- `trajectory[].state_before`: public O1 question, formatted cumulative
+  `subtask_history` (all prior results/trace summaries), and available tools only.
 - `validation`: final-answer and fragment-completion checks.
 - `gold_supervision`: **PRIVATE** composition fragment IDs, node IDs,
   source witnesses, exact intermediate answers, symbolic trace and task-slot
