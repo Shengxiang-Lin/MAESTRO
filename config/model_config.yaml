@@ -11,31 +11,12 @@ models:
   qwen3.8-max:
     backend: api
     api_type: openai
-    model: "Qwen3.8-Max"
-    base_url: https://llmapi.paratera.com
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     api_key: null
     temperature: 0.1
     top_p: 0.9
 
   qwen3.7-plus:
-    backend: api
-    api_type: openai
-    model: "Qwen3.7-Plus"
-    base_url: https://llmapi.paratera.com
-    api_key: null
-    temperature: 0.1
-    top_p: 0.9
-
-  qwen3.8-flash:
-    backend: api
-    api_type: openai
-    model: "Qwen3.8-Flash"
-    base_url: https://llmapi.paratera.com
-    api_key: null
-    temperature: 0.1
-    top_p: 0.9
-
-  qwen3.5-omni-flash:
     backend: api
     api_type: openai
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -49,13 +30,20 @@ models:
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     api_key: null
     temperature: 0.1
-    top_p: 0.9 
+    top_p: 0.9
+
+  qwen3.5-omni-flash:
+    backend: api
+    api_type: openai
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: null
+    temperature: 0.1
+    top_p: 0.9
 
   deepseek-v4-flash-0731:
     backend: api
     api_type: openai
-    model: "DeepSeek-V4-Flash-0731"
-    base_url: https://llmapi.paratera.com
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     api_key: null
     temperature: 0.7
     top_p: 0.95
@@ -63,8 +51,7 @@ models:
   deepseek-v3.2:
     backend: api
     api_type: openai
-    model: "DeepSeek-V3.2"
-    base_url: https://llmapi.paratera.com
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     api_key: null
     temperature: 0.7
     top_p: 0.95
