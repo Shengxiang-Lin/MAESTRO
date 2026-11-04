@@ -49,8 +49,8 @@ Generated artifacts live under `environment/data/`. Source datasets are expected
 All three entrypoints read `environment/config.yaml` by default. It
 contains task-construction parameters, frozen question-generation inputs,
 trajectory outputs, generation settings, and model profiles. Repository-relative
-paths resolve from MAESTRO's root. `{target}` in paths is expanded from
-`task_construction.target`. Explicit CLI flags override the YAML defaults.
+paths resolve from MAESTRO's root. `{pool_size}` in paths is expanded from
+`task_construction.candidate_pool_size`. Explicit CLI flags override the YAML defaults.
 Use `--config path/to/another.yaml` to select another configuration.
 
 Install the configuration dependency:
@@ -168,7 +168,7 @@ generation and does not alter `baseline/` or Main/Sub-Agent settings.
 ### Troubleshooting: no executable worlds / missing frozen manifest
 
 If `construct_tasks.py` reports `World generation accepted no worlds`,
-then the downstream P0/P1 freeze did not finish: `frozen_manifest_{target}.json`
+then the downstream P0/P1 freeze did not finish: `frozen_manifest_{pool_size}.json`
 will not exist, so question generation cannot start. Examine the actual
 candidate and world rejection reasons:
 
@@ -180,7 +180,8 @@ p=Path("environment/data/build_summary.json")
 d=json.loads(p.read_text())
 for section in ("candidate_selection", "worlds"):
     x=d.get(section, {})
-    print(section, "accepted=", x.get("accepted"),
+    count = x.get("validated_candidates") if section=="candidate_selection" else x.get("accepted")
+    print(section, "accepted=", count,
           "rejections=", x.get("rejection_reasons"))
 PY
 ```
@@ -192,10 +193,10 @@ artifacts without repeating the YAGO scan:
 python environment/construct_tasks.py --reuse-source-priors
 ```
 
-This only skips source-prior preparation. It still rebuilds the candidate
-shortlist and executable worlds, and then attempts P0/P1 freeze. If the
+This only skips source-prior preparation. It reuses a compatible candidate
+checkpoint (or creates a new one), evaluates every candidate, and then attempts P0/P1 freeze. If the
 new run still rejects all worlds, review
-`environment/data/typed_worlds_{target}.jsonl.quality_rejected.jsonl`
+`environment/data/typed_worlds_{pool_size}.jsonl.quality_rejected.jsonl`
 for the concrete validation reason rather than proceeding to questions.
 
 ## Fixed validated candidate pool
@@ -246,7 +247,7 @@ python environment/simulate_trajectories.py synthesize
 To change pool size, edit `task_construction.candidate_pool_size` in
 `environment/config.yaml` before running all three stages (or pass the same
 custom `--config` file to every command). Avoid changing only the construction
-CLI flag: question/trajectory paths expand `{target}` from the YAML pool size.
+CLI flag: question/trajectory paths expand `{pool_size}` from the YAML pool size.
 
 To change the number of available proposals without relaxing quality
 checks, use `--candidate-max-attempts N`. The candidate generator supports
