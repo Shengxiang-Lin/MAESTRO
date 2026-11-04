@@ -26,6 +26,7 @@ from .contract import (
     TOOLS, answer_string, feedback_prompt, main_prompt, public_action,
     validate_action, validate_feedback,
 )
+from .history import format_o1_subtask_history
 
 
 class GoldTrajectoryError(RuntimeError):
@@ -84,21 +85,15 @@ def _with_feedback(prompt: str, issues: list[str]) -> str:
     )
 
 
-def _history(trajectory: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Exactly the public O1 action/result history, not the gold supervision."""
-    return [
-        {
-            "action": step["action"], "reasoning": step["reasoning"],
-            "params": step["params"], "result": step["result"],
-        }
-        for step in trajectory
-    ]
-
-
 def _public_state(question: str, trajectory: list[dict[str, Any]]) -> dict[str, Any]:
+    """O1-compatible observation: question + cumulative formatted subtask history.
+
+    Gold fragment graph/answers remain exclusively in the teacher guidance and
+    private supervision, never in the public Main state.
+    """
     return {
         "question": question,
-        "history": _history(trajectory),
+        "subtask_history": format_o1_subtask_history(trajectory),
         "available_tools": list(TOOLS),
     }
 
