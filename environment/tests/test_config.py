@@ -57,6 +57,7 @@ class ConfigTests(unittest.TestCase):
         parser = argparse.ArgumentParser()
         parser.add_argument("--manifest")
         parser.add_argument("--question-workers", type=int, default=4)
+        parser.add_argument("--seed", type=int, default=17)
         parser.add_argument("--provider", default="passthrough")
         parser.add_argument("--model")
         parser.add_argument("--base-url")
@@ -82,6 +83,9 @@ class ConfigTests(unittest.TestCase):
     def test_explicit_offline_override(self):
         parser = argparse.ArgumentParser()
         parser.add_argument("--provider", default="openai-compatible")
+        parser.add_argument("--worlds")
+        parser.add_argument("--output")
+        parser.add_argument("--seed", type=int, default=17)
         args = parse_with_config(parser, "trajectory_simulation", [
             "--provider", "passthrough", "--config", str(self.path)
         ])
@@ -93,6 +97,7 @@ class ConfigTests(unittest.TestCase):
         sub = subs.add_parser("synthesize")
         sub.add_argument("--worlds", required=True)
         sub.add_argument("--output", required=True)
+        sub.add_argument("--seed", type=int, default=17)
         args = parse_with_config(root, "trajectory_simulation", [
             "synthesize", "--config", str(self.path)
         ])
@@ -102,6 +107,9 @@ class ConfigTests(unittest.TestCase):
 
     def test_missing_remote_api_key_has_helpful_error(self):
         parser = argparse.ArgumentParser()
+        parser.add_argument("--manifest")
+        parser.add_argument("--question-workers", type=int)
+        parser.add_argument("--seed", type=int)
         args = parse_with_config(parser, "question_generation", [
             "--config", str(self.path)
         ])
