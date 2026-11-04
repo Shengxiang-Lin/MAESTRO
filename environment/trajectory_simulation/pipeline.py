@@ -18,7 +18,7 @@ from environment.question_generation.backend import BackendError
 from environment.task_construction.rendering.pipeline import render_task_record
 
 from .compiler import (
-    GoldCompilationError, compile_gold_solution, json_value, public_plan,
+    GoldCompilationError, compile_gold_solution, public_plan,
     ready_subtasks,
 )
 from .prompts import (
@@ -52,12 +52,22 @@ def _world_map(path: str | Path, seed: int = 17) -> dict[str, tuple[dict[str, An
     return result
 
 
+def _with_feedback(prompt: str, issues: list[str]) -> str:
+    """Repair hint only; validation and gold evidence stay authoritative."""
+    if not issues:
+        return prompt
+    return prompt + "\n\nPrevious output was rejected for: " + json.dumps(issues) + (
+        "\nRegenerate the requested JSON without changing any frozen task IDs, "
+        "resource IDs, answer claims or dependency constraints."
+    )
+
+
 def _stage(call, validate, *, stage: str, max_attempts: int) -> dict[str, Any]:
-    """Retry invalid *outputs*, never accept a structurally incorrect step."""
-    last = ["missing_result"]
+    """Retry with rejection feedback; never accept structurally invalid data."""
+    last: list[str] = []
     for _ in range(max_attempts):
         try:
-            value = call()
+            value = call(last)
             if not isinstance(value, Mapping):
                 last = ["non_object_model_response"]
                 continue
@@ -121,7 +131,8 @@ def synthesize_one(
                 "pending_task_ids": pending_ids,
             }
             allocation = _stage(
-                lambda: planner.plan(plan_payload, planner_prompt(plan_payload)),
+                lambda feedback: planner.plan(
+                    plan_payload, _with_feedback(planner_prompt(plan_payload), feedback)),
                 lambda value: validate_parallel_plan(value, ready),
                 stage=f"round_{round_index}:main_plan", max_attempts=max_attempts,
             )
@@ -140,8 +151,9 @@ def synthesize_one(
                     "task": task,
                 }
                 return _stage(
-                    lambda: executor.execute(execution_payload,
-                                             executor_prompt(execution_payload)),
+                    lambda feedback: executor.execute(
+                        execution_payload,
+                        _with_feedback(executor_prompt(execution_payload), feedback)),
                     lambda value: validate_subagent_result(value, task),
                     stage=f"round_{round_index}:subagent:{task_id}",
                     max_attempts=max_attempts,
@@ -162,7 +174,8 @@ def synthesize_one(
                 ],
             }
             summary = _stage(
-                lambda: planner.summarize(summary_payload, summary_prompt(summary_payload)),
+                lambda feedback: planner.summarize(
+                    summary_payload, _with_feedback(summary_prompt(summary_payload), feedback)),
                 validate_main_summary,
                 stage=f"round_{round_index}:main_summary",
                 max_attempts=max_attempts,
@@ -196,7 +209,8 @@ def synthesize_one(
         "expected_answer": gold["final_answer"],
     }
     final = _stage(
-        lambda: planner.finalize(final_payload, final_prompt(final_payload)),
+        lambda feedback: planner.finalize(
+            final_payload, _with_feedback(final_prompt(final_payload), feedback)),
         lambda value: validate_final(value, gold["final_answer"]),
         stage="main_final_answer", max_attempts=max_attempts,
     )
