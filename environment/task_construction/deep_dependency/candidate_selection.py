@@ -59,7 +59,7 @@ def _binding_type_pairs(binding:Mapping[str,Any])->list[str]:
 def generate_world_candidate_shortlist(kqa_paths:Sequence[str|Path],yago_catalog_path:str|Path,taxonomy_path:str|Path,output_path:str|Path,*,shortlist_target:int,world_target:int,candidate_multiplier:float=DEFAULT_CANDIDATE_MULTIPLIER,seed:int=17,max_records:int|None=None,min_fragment_depth:int=2,max_fragment_depth:int=4,min_orchestration_depth:int=3,max_orchestration_depth:int=5,min_latent_anchors:int=2,min_parallel_width:int=2,progress:bool=False)->dict[str,Any]:
     programs=_iter_kqa_programs(kqa_paths,max_records=max_records)
     if not programs:raise ValueError("no usable KQA-Pro programs")
-    catalog=json.loads(Path(yago_catalog_path).read_text(encoding="utf-8"));taxonomy=TaxonomyIndex.from_json(taxonomy_path);rng=random.Random(seed);reservoir_target=max(shortlist_target,int(math.ceil(shortlist_target*candidate_multiplier)));tracker=BatchDiversityTracker();accepted=[];rejections=Counter();attempts=0;iterator=range(reservoir_target)
+    catalog=json.loads(Path(yago_catalog_path).read_text(encoding="utf-8"));taxonomy=TaxonomyIndex.from_json(taxonomy_path);rng=random.Random(seed);reservoir_target=max(shortlist_target,int(math.ceil(shortlist_target*candidate_multiplier)));tracker=BatchDiversityTracker();accepted=[];rejections=Counter();rejection_examples=[];attempts=0;iterator=range(reservoir_target)
     if progress:iterator=tqdm(iterator,desc="Semantic candidate reservoir",unit="candidate")
     for _ in iterator:
         attempts+=1
@@ -72,9 +72,21 @@ def generate_world_candidate_shortlist(kqa_paths:Sequence[str|Path],yago_catalog
             row={"candidate_id":f"candidate-{len(accepted)+1:06d}","program":plan.program.to_dict(),"binding":binding,"source_program_signature":plan.program.canonical_signature(),"reasoning_motif":profile.label,"hardness":profile.to_dict(),"topology_signature":topology,"terminal_family":family,"selection":{"world_target":world_target,"shortlist_target":shortlist_target,"candidate_multiplier":candidate_multiplier}}
             accepted.append(row);tracker.add(topology=topology,predicates=predicates,type_pairs=type_pairs,terminal_family=family)
             if len(accepted)>=shortlist_target:break
-        except (BindingError,ValueError,RuntimeError) as exc:rejections[type(exc).__name__]+=1
+        except (BindingError,ValueError,RuntimeError) as exc:
+            detail=str(exc)
+            category=(detail.split(":",1)[0].strip() or type(exc).__name__)
+            key=f"{type(exc).__name__}:{category}"
+            rejections[key]+=1
+            if len(rejection_examples)<20:
+                rejection_examples.append({"attempt":attempts,"category":key,"detail":detail[:240]})
+        if progress and attempts%50==0 and hasattr(iterator,"set_postfix"):
+            main_reason=rejections.most_common(1)
+            iterator.set_postfix(
+                accepted=len(accepted),
+                dominant_rejection=main_reason[0][0][:45] if main_reason else "none",
+            )
     target=Path(output_path);target.parent.mkdir(parents=True,exist_ok=True)
     with target.open("w",encoding="utf-8") as writer:
         for row in accepted:writer.write(json.dumps(row,ensure_ascii=False)+"\n")
-    return {"output":str(target),"requested_shortlist":shortlist_target,"world_target":world_target,"generated_attempts":attempts,"accepted":len(accepted),"acceptance_rate":len(accepted)/attempts if attempts else 0.0,"reservoir_target":reservoir_target,"rejection_reasons":dict(rejections.most_common()),"diversity":tracker.summary(),"policy":"deep_program_composition_then_graph_grounded_semantic_binding_then_diversity_selection"}
+    return {"output":str(target),"requested_shortlist":shortlist_target,"world_target":world_target,"generated_attempts":attempts,"accepted":len(accepted),"acceptance_rate":len(accepted)/attempts if attempts else 0.0,"reservoir_target":reservoir_target,"rejection_reasons":dict(rejections.most_common()),"rejection_examples":rejection_examples,"diversity":tracker.summary(),"policy":"deep_program_composition_then_graph_grounded_semantic_binding_then_diversity_selection"}
 __all__=["DEFAULT_CANDIDATE_MULTIPLIER","generate_world_candidate_shortlist"]
