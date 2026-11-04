@@ -27,9 +27,17 @@ The symbolic executor is authoritative for task truth. LLMs are not used in this
 Run from the repository root:
 
 ```bash
-python environment/construct_tasks.py --target 100
+python environment/construct_tasks.py --reuse-source-priors
 ```
 
 Important outputs live under `environment/data/`, including `typed_worlds_*.jsonl`, `task_designs_*.jsonl`, `capability_worlds_*.jsonl`, `authoring_inputs_*.jsonl`, and `frozen_manifest_*.json`.
 
 The construction policy follows the former `orchestra-o3/environment` production path, but the code is reorganized by responsibility rather than by historical P0/P1 naming.
+
+The only production size control is `task_construction.candidate_pool_size`
+(default: 2000) in `environment/config.yaml`. The program collects up to that
+many semantically valid candidates and checks each one against the unchanged
+world-quality and diversity gates. It freezes every passing world, without a
+fixed accepted-world quota. `frozen_manifest_2000.json` records the actual
+`frozen_count` (not necessarily 2000). `--reuse-source-priors` skips
+the expensive source scan only after those priors have been prepared.
