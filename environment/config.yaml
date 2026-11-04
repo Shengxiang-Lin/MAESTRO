@@ -33,6 +33,13 @@ models:
     backend: passthrough
 
 task_construction:
+  # Fixed-pool mode (default): generate up to 2000 VALIDATED semantic
+  # candidates and test every one; freeze however many worlds pass.
+  # No 8x reservoir expansion, no 100-world stopping quota.
+  all_valid_candidates: true
+  candidate_pool_size: 2000
+  # Legacy target-limited mode remains available by setting
+  # all_valid_candidates: false. Its target is still 100.
   target: 100
   seed: 17
   shortlist_target: null
