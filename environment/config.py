@@ -81,11 +81,11 @@ def _walk_parsers(parser: argparse.ArgumentParser):
                 yield from _walk_parsers(child)
 
 
-def _configured_value(name: str, value: Any, target: int) -> Any:
+def _configured_value(name: str, value: Any, pool_size: int) -> Any:
     if value is None:
         return None
     if isinstance(value, str):
-        value = value.replace("{target}", str(target))
+        value = value.replace("{pool_size}", str(pool_size))
         if name in PATH_ARGUMENTS:
             path = Path(value).expanduser()
             return str((REPO_DIR / path).resolve()) if not path.is_absolute() else str(path)
@@ -110,8 +110,8 @@ def parse_with_config(
         values["seed"] = construction.get("seed", 17)
     # The filename suffix identifies the fixed candidate pool, while the
     # manifest's frozen_count reports how many worlds actually passed.
-    target = int(construction.get("candidate_pool_size", 2000))
-    if target < 1:
+    pool_size = int(construction.get("candidate_pool_size", 2000))
+    if pool_size < 1:
         raise EnvironmentConfigError(
             "task_construction.candidate_pool_size must be positive"
         )
@@ -120,7 +120,7 @@ def parse_with_config(
         names = {action.dest for action in current._actions}
         recognized.update(names)
         defaults = {
-            key: _configured_value(key, value, target)
+            key: _configured_value(key, value, pool_size)
             for key, value in values.items()
             if key in names and key not in {"help", "config", "command"}
         }
