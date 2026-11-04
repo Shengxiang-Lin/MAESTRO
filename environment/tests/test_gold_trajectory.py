@@ -188,13 +188,13 @@ class FragmentTrajectoryTests(unittest.TestCase):
         second = result["trajectory"][1]
         second_history = second["state_before"]["subtask_history"]
         self.assertIn("[Attempt 1] 🔄 Parallel Batch (1 subtasks)", second_history)
-        self.assertIn('Result: "[\\"Bob\\"]"', second_history)
+        self.assertIn('["Bob"]', second_history)
         self.assertIn("Trace summary:", second_history)
         final_history = result["trajectory"][-1]["state_before"]["subtask_history"]
         self.assertIn("[Attempt 1]", final_history)
         self.assertIn("[Attempt 2]", final_history)
         self.assertIn("Summary: 2/2 subtasks done", final_history)
-        self.assertIn('Result: "[\\"Carol\\"]"', final_history)
+        self.assertIn('["Carol"]', final_history)
         public = json.dumps(result["trajectory"])
         self.assertNotIn("fragment:0", public)
         self.assertNotIn("symbolic_trace", public)
