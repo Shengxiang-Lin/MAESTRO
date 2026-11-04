@@ -84,7 +84,7 @@ def _public_task(task: Mapping[str, Any]) -> dict[str, Any]:
     return {
         k: task[k] for k in (
             "subtask_id", "resource_id", "source_type", "role", "agent",
-            "depends_on",
+            "available_tool_families", "depends_on",
         )
     }
 
