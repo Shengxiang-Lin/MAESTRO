@@ -38,7 +38,7 @@ class ConfigTests(unittest.TestCase):
                     "api_key_env": None,
                 },
             },
-            "task_construction": {"target": 12, "seed": 3},
+            "task_construction": {"candidate_pool_size": 12, "seed": 3},
             "question_generation": {
                 "author_profile": "remote",
                 "critic_profile": "local",
