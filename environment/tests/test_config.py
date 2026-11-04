@@ -121,6 +121,9 @@ class ConfigTests(unittest.TestCase):
         self.config["question_generation"]["critic_profile"] = "does_not_exist"
         self.path.write_text(yaml.safe_dump(self.config), encoding="utf-8")
         parser = argparse.ArgumentParser()
+        parser.add_argument("--manifest")
+        parser.add_argument("--question-workers", type=int)
+        parser.add_argument("--seed", type=int)
         args = parse_with_config(parser, "question_generation", [
             "--config", str(self.path)
         ])
