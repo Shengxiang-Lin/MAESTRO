@@ -7,7 +7,8 @@ from typing import Any,Iterable,Mapping,Sequence
 from tqdm.auto import tqdm
 from ..binding import BindingError,GraphGroundedProgramBinder
 from ..data_sources.taxonomy import TaxonomyIndex
-from ..ir import ProgramIR,ProgramNode
+from ..ir import ProgramIR
+from ..data_sources.kqa import record_to_ir
 from ..quality.diversity import BatchDiversityTracker
 from ..quality.hardness import complexity_profile,pure_topology_signature
 from .composer import compose_deep_program
@@ -15,26 +16,17 @@ from .terminal_families import terminal_family
 DEFAULT_CANDIDATE_MULTIPLIER=8.0
 
 def _program_from_kqa(item:Mapping[str,Any])->ProgramIR|None:
+    """Use the canonical KQA adapter, not raw KQA function names.
+
+    KQA records say Find/Relate/FilterNum/And/Count, whereas the IR,
+    composer, binder, and executor use FIND/RELATE/FILTER_NUMBER/
+    INTERSECT/COUNT. Keeping raw labels silently produced empty
+    compositions and a zero-candidate shortlist.
+    """
     raw=item.get("program")
-    if not isinstance(raw,Sequence) or isinstance(raw,(str,bytes)) or not raw:return None
-    nodes=[]
-    for index,step in enumerate(raw):
-        if not isinstance(step,Mapping):return None
-        op=str(step.get("function") or step.get("op") or "").strip()
-        if not op:return None
-        dependencies=step.get("dependencies",step.get("dependency",()))
-        if dependencies is None:dependencies=()
-        if isinstance(dependencies,int):dependencies=(dependencies,)
-        deps=[]
-        for dep in dependencies:
-            try:deps.append(int(dep))
-            except (TypeError,ValueError):pass
-        inputs=step.get("inputs",step.get("input",()))
-        if inputs is None:inputs=()
-        if isinstance(inputs,(str,int,float)):inputs=(inputs,)
-        nodes.append(ProgramNode(index,op,tuple(deps),tuple(str(v) for v in inputs),op))
-    try:return ProgramIR(nodes,metadata={"source":"KQA-Pro","source_question":item.get("question")})
-    except Exception:return None
+    if not isinstance(raw,list) or not raw:return None
+    try:return record_to_ir(dict(item))
+    except (ValueError,TypeError,KeyError):return None
 
 def _iter_kqa_programs(paths:Sequence[str|Path],*,max_records:int|None=None)->list[ProgramIR]:
     programs=[];seen=0
