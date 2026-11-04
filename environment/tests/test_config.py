@@ -42,13 +42,13 @@ class ConfigTests(unittest.TestCase):
             "question_generation": {
                 "author_profile": "remote",
                 "critic_profile": "local",
-                "manifest": "environment/data/frozen_manifest_{target}.json",
+                "manifest": "environment/data/frozen_manifest_{pool_size}.json",
                 "question_workers": 2,
             },
             "trajectory_simulation": {
                 "teacher_profile": "local",
-                "worlds": "environment/data/typed_worlds_{target}.jsonl",
-                "output": "environment/data/trajectories_{target}.jsonl",
+                "worlds": "environment/data/typed_worlds_{pool_size}.jsonl",
+                "output": "environment/data/trajectories_{pool_size}.jsonl",
             },
         }
         self.path.write_text(yaml.safe_dump(self.config), encoding="utf-8")
