@@ -260,6 +260,7 @@ def signature_for_question_run(
         "critic_temperature": args.critic_temperature,
         "max_tokens": args.max_tokens,
         "critic_max_tokens": args.critic_max_tokens,
+        "timeout": args.timeout,
         "question_max_attempts": args.question_max_attempts,
         "no_semantic_critic": args.no_semantic_critic,
         "no_json_mode": args.no_json_mode,
