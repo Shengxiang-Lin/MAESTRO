@@ -6,7 +6,7 @@ The environment is organized by function rather than pipeline stage numbers:
 environment/
 ├── task_construction/          # deterministic/programmatic task-world construction
 ├── question_generation/        # LLM question authoring over frozen task semantics
-├── trajectory_simulation/      # compiled gold proof DAG + two-role clean trajectory simulation
+├── trajectory_simulation/      # first-stage fragment DAG + O1-format gold Main/Sub-Agent trajectories
 ├── construct_tasks.py
 ├── generate_questions.py
 └── simulate_trajectories.py
@@ -174,14 +174,19 @@ generation and does not alter `baseline/` or Main/Sub-Agent settings.
 
 ### Gold orchestration trajectories
 
-After question generation, `simulate_trajectories.py plan` compiles the
-official evidence/proof solution graphs **without using an LLM**.
-`simulate_trajectories.py synthesize` then invokes two separate teacher
-roles *round by round*, with parallel Sub-Agent requests only for tasks whose
-frozen predecessors are complete. Evidence and task answers remain grounded
-in the original world; no attack, retry/switch action, or invented evidence
-is generated. The implementation and output schema are documented in
-[trajectory_simulation/README.md](trajectory_simulation/README.md).
+After question generation, `simulate_trajectories.py plan` compiles
+the existing **KQA ProgramIR composition fragments** into official
+fragment-level subtasks. `composition_links.output_node_id` and
+`SymbolicExecutor.execute_trace()` supply the standard intermediate
+answers; source witnesses supply the evidence without generating a second
+solution plan. `simulate_trajectories.py synthesize` uses two separate LLM
+roles *round by round*: Main generates an O1 action from Question + completed
+History with **private gold-fragment guidance**; parallel Sub-Agent requests
+write compressed reasoning summaries while the program inserts exact gold
+subtask answers. Students receive only O1 public state and feedback, never
+private guidance, oracle values or fragment IDs. No attacks, raw tool
+execution, retry/switch recovery actions or invented evidence are generated.
+See [trajectory_simulation/README.md](trajectory_simulation/README.md).
 
 ### Troubleshooting: no executable worlds / missing frozen manifest
 
