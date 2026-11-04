@@ -199,6 +199,7 @@ def compile_gold_solution(
 
     fragments = []
     output_to_fragment: dict[int, str] = {}
+    support_by_fragment: dict[str, set[str]] = {}
     support_sources: set[str] = set()
     for index, (link, output) in enumerate(zip(links, output_ids)):
         identifier = f"fragment:{index}"
@@ -207,6 +208,8 @@ def compile_gold_solution(
                                    max_sources=max_sources)
         support_sources.update(witness)
         prev = _maximal_dependencies(program, output, output_to_fragment)
+        known_sources = set().union(*(support_by_fragment[p] for p in prev)) if prev else set()
+        new_sources = sorted(set(witness) - known_sources)
         owned = _ancestors(program, output)
         for predecessor in output_to_fragment:
             owned -= _ancestors(program, predecessor)
@@ -220,13 +223,15 @@ def compile_gold_solution(
             "fragment_id": identifier, "stage": int(link.get("stage", index)),
             "output_node_id": output, "depends_on": prev,
             "operations": operations,
-            "resource_ids": witness,
-            "observations": _source_claims(world, rendered, witness),
+            "resource_ids": new_sources,
+            "support_resource_ids": witness,
+            "observations": _source_claims(world, rendered, new_sources),
             "expected_answer": _public_answer(trace[output], rendered, node_map[output]),
             "answer_kind": "entity_set" if isinstance(trace[output], set) else "value",
         }
         fragments.append(fragment)
         output_to_fragment[output] = identifier
+        support_by_fragment[identifier] = set(witness)
 
     final_id = order[-1]
     final_subprogram = _subprogram(program, final_id)
@@ -261,8 +266,11 @@ def compile_gold_solution(
             "depends_on": _maximal_dependencies(program, final_id, output_to_fragment),
             "operations": [{"node_id": final_id, "op": node_map[final_id].op,
                             "inputs": list(node_map[final_id].inputs)}],
-            "resource_ids": final_proof_sources,
-            "observations": _source_claims(world, rendered, final_proof_sources),
+            "resource_ids": sorted(set(final_proof_sources) - support_sources),
+            "support_resource_ids": final_proof_sources,
+            "observations": _source_claims(
+                world, rendered, sorted(set(final_proof_sources) - support_sources)
+            ),
             "expected_answer": json_value(rendered.answer),
             "answer_kind": "terminal_evidence",
         })
@@ -317,8 +325,10 @@ def private_guidance(plan: Mapping[str, Any], completed: set[str]) -> dict[str, 
             "fragment_id": f["fragment_id"], "depends_on": f["depends_on"],
             "operations": f["operations"],
             "required_resources": [{
-                "resource_id": obs["resource_id"], "source_type": obs["source_type"],
-                "title": obs["title"],
+                "resource_id": obs["resource_id"],
+                "source_type": obs["source_type"],
+                # An undiscovered source's title is private evidence, not
+                # an O1-visible clue for a future Main instruction.
             } for obs in f["observations"]],
             "suggested_tools": sorted({
                 "GoogleSearchAction" if obs["source_type"] == "search" else
