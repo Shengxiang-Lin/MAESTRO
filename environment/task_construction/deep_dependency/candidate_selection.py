@@ -63,6 +63,7 @@ def _generate_world_candidate_shortlist(
     min_orchestration_depth=3, max_orchestration_depth=5,
     min_latent_anchors=2, min_parallel_width=2, progress=False, max_attempts=None,
     candidate_workers=None, candidate_proposal_batch_size=None, restart_candidates=False,
+    all_valid_candidates=False,
 ):
     if max_attempts is not None and max_attempts<1:
         raise ValueError('max_attempts must be positive')
@@ -82,9 +83,14 @@ def _generate_world_candidate_shortlist(
     batch_size=2*workers if candidate_proposal_batch_size is None else candidate_proposal_batch_size
     if workers<1 or batch_size<1:
         raise ValueError('candidate workers and proposal batch size must be positive')
-    reservoir_target=max(shortlist_target,int(math.ceil(shortlist_target*candidate_multiplier)))
+    # Fixed-pool mode gathers exactly shortlist_target *validated* semantic
+    # candidates; the legacy 8x oversampling applies only to target-limited
+    # shortlist selection.
+    reservoir_target=(shortlist_target if all_valid_candidates else
+        max(shortlist_target,int(math.ceil(shortlist_target*candidate_multiplier))))
     attempts_limit=max_attempts if max_attempts is not None else max(1000,reservoir_target*40)
     settings=dict(seed=seed,shortlist_target=shortlist_target,world_target=world_target,
+        all_valid_candidates=all_valid_candidates,
         reservoir_target=reservoir_target,workers=workers,batch_size=batch_size,max_records=max_records,
         min_fragment_depth=min_fragment_depth,max_fragment_depth=max_fragment_depth,
         min_orchestration_depth=min_orchestration_depth,max_orchestration_depth=max_orchestration_depth,
@@ -116,28 +122,38 @@ def _generate_world_candidate_shortlist(
     attempts=parallel['attempts']
     rejections=parallel['rejections']
     examples=parallel['examples']
-    # Interleave structural cells before applying target-sized semantic caps.
-    cells = {}
-    for row in reservoir:
-        deep = row['program']['metadata']['deep_dependency']
-        key = (deep['orchestration_motif'],deep['orchestration_depth'],row['terminal_family'])
-        cells.setdefault(key,[]).append(row)
-    tracker = BatchDiversityTracker(target=shortlist_target)
-    selected, selection_rejections = [], Counter()
-    while any(cells.values()) and len(selected)<shortlist_target:
-        for key in sorted(cells):
-            if not cells[key] or len(selected)>=shortlist_target:
-                continue
-            row = cells[key].pop(0)
-            kwargs = dict(topology=row['topology_signature'],
-                predicates=_binding_predicates(row['binding']),
-                type_pairs=_binding_type_pairs(row['binding']),terminal_family=row['terminal_family'])
-            ok, reasons = tracker.would_accept(**kwargs)
-            if not ok:
-                selection_rejections.update(reasons)
-                continue
-            selected.append(row)
-            tracker.add(**kwargs)
+    selected,selection_rejections=[],Counter()
+    if all_valid_candidates:
+        # Evaluate every validated candidate at world level. Do not apply a
+        # second capacity-limited semantic shortlist before checking worlds.
+        # World-level diversity and every existing quality gate still apply.
+        selected=list(reservoir)
+        selection_diversity={"policy":"deferred_to_world_generation",
+                             "accepted":len(selected)}
+    else:
+        # Interleave structural cells before applying target-sized semantic caps.
+        cells = {}
+        for row in reservoir:
+            deep = row['program']['metadata']['deep_dependency']
+            key = (deep['orchestration_motif'],deep['orchestration_depth'],row['terminal_family'])
+            cells.setdefault(key,[]).append(row)
+        tracker = BatchDiversityTracker(target=shortlist_target)
+        selected, selection_rejections = [], Counter()
+        while any(cells.values()) and len(selected)<shortlist_target:
+            for key in sorted(cells):
+                if not cells[key] or len(selected)>=shortlist_target:
+                    continue
+                row = cells[key].pop(0)
+                kwargs = dict(topology=row['topology_signature'],
+                    predicates=_binding_predicates(row['binding']),
+                    type_pairs=_binding_type_pairs(row['binding']),terminal_family=row['terminal_family'])
+                ok, reasons = tracker.would_accept(**kwargs)
+                if not ok:
+                    selection_rejections.update(reasons)
+                    continue
+                selected.append(row)
+                tracker.add(**kwargs)
+        selection_diversity=tracker.summary()
     target = Path(output_path)
     target.parent.mkdir(parents=True,exist_ok=True)
     reserve_path=target.with_name(target.stem+'.reservoir.jsonl')
@@ -150,10 +166,12 @@ def _generate_world_candidate_shortlist(
         'generated_attempts':attempts,'attempts_limit':attempts_limit,'accepted':len(selected),
         'reservoir_target':reservoir_target,'reservoir_accepted':len(reservoir),
         'reservoir_target_filled':len(reservoir)>=reservoir_target,
-        'target_filled':len(selected)>=shortlist_target,'rejection_reasons':dict(rejections),
+        'target_filled':len(selected)>=shortlist_target,'all_valid_candidates':all_valid_candidates,
+        'candidate_pool_size':reservoir_target if all_valid_candidates else None,
+        'rejection_reasons':dict(rejections),
         'selection_rejections':dict(selection_rejections),'rejection_examples':examples,
         'pools':{'source_programs':len(unique),'producer_fragments':len(pools[0]),'terminal_programs':len(pools[1])},
-        'diversity':tracker.summary(),'parallel_generation':parallel}
+        'diversity':selection_diversity,'parallel_generation':parallel}
 
 
 def generate_world_candidate_shortlist(*args,**kwargs):
