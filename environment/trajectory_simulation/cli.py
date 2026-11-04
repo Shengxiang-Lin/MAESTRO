@@ -6,6 +6,7 @@ import json
 import os
 
 from .pipeline import plan_trajectories_jsonl, synthesize_trajectories_jsonl
+from environment.config import EnvironmentConfigError, parse_with_config, resolve_model
 
 
 def _print(payload: object) -> None:
@@ -13,13 +14,12 @@ def _print(payload: object) -> None:
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--worlds", required=True, help="typed_worlds_*.jsonl")
+    parser.add_argument("--worlds", help="typed_worlds_*.jsonl")
     parser.add_argument(
         "--realized",
-        required=True,
         help="validated question-generation realized_capability_worlds.jsonl",
     )
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--output")
     parser.add_argument("--max-records", type=int)
 
 
@@ -35,26 +35,27 @@ def command_plan(args: argparse.Namespace) -> None:
 
 
 def command_synthesize(args: argparse.Namespace) -> None:
-    _print(
-        synthesize_trajectories_jsonl(
-            args.worlds,
-            args.realized,
-            args.output,
-            provider=args.provider,
-            base_url=args.base_url,
-            model=args.model,
-            api_key=os.environ.get(args.api_key_env),
-            temperature=args.temperature,
-            max_tokens=args.max_tokens,
-            timeout=args.timeout,
-            max_records=args.max_records,
-            max_attempts=args.max_attempts,
-            rejected_output_path=args.rejected_output,
-            progress=not args.no_progress,
-            flush_every=args.flush_every,
-            json_mode=not args.no_json_mode,
-        )
+    spec=resolve_model(args,"trajectory_teacher")
+    result=synthesize_trajectories_jsonl(
+        args.worlds,
+        args.realized,
+        args.output,
+        provider=spec["provider"],
+        base_url=spec["base_url"],
+        model=spec["model"],
+        api_key=spec["api_key"],
+        temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        timeout=args.timeout,
+        max_records=args.max_records,
+        max_attempts=args.max_attempts,
+        rejected_output_path=args.rejected_output,
+        progress=not args.no_progress,
+        flush_every=args.flush_every,
+        json_mode=spec["json_mode"] and not args.no_json_mode,
     )
+    result["model_backend"]=spec["backend"]
+    _print(result)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -96,8 +97,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
-    args.func(args)
+    try:
+        args = parse_with_config(build_parser(),"trajectory_simulation")
+    except EnvironmentConfigError as exc:
+        raise SystemExit(f"Environment configuration error: {exc}") from exc
+    missing=[key for key in ("worlds","realized","output") if not getattr(args,key,None)]
+    if missing:raise SystemExit("Missing trajectory inputs (CLI or YAML): "+", ".join(missing))
+    try:
+        args.func(args)
+    except EnvironmentConfigError as exc:
+        raise SystemExit(f"Environment model error: {exc}") from exc
 
 
 if __name__ == "__main__":
