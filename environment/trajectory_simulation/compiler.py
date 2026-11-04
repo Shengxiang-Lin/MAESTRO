@@ -10,6 +10,7 @@ from itertools import combinations
 from typing import Any, Mapping
 
 from environment.task_construction.executor import SymbolicExecutor
+from environment.task_construction.scenario.information import assess_goal_information_completeness
 from environment.task_construction.ir import ProgramIR
 from environment.task_construction.rendering.naming import predicate_label
 from environment.task_construction.rendering.pipeline import program_from_dict, world_from_dict
@@ -71,7 +72,7 @@ def _same(left: Any, right: Any) -> bool:
 
 def _minimal_witness(
     subprogram: ProgramIR, world: Any, expected: Any, dependencies: Mapping[str, Any],
-    *, max_sources: int,
+    *, max_sources: int, required_fact_ids: tuple[str, ...] = (),
 ) -> list[str]:
     """Brute-force the small frozen source set; never trust a model's evidence."""
     all_ids = sorted(world.sources)
@@ -81,11 +82,15 @@ def _minimal_witness(
         for subset in combinations(all_ids, size):
             if not reachable_subset(subset, dependencies):
                 continue
+            scoped_world = _evidence_world(world, set(subset))
+            if not set(required_fact_ids).issubset({f.fact_id for f in scoped_world.facts}):
+                continue
             try:
-                answer = SymbolicExecutor().execute(subprogram, _evidence_world(world, set(subset)))
+                answer = SymbolicExecutor().execute(subprogram, scoped_world)
+                info = assess_goal_information_completeness(subprogram, scoped_world)
             except (ValueError, TypeError, RuntimeError):
                 continue
-            if _same(answer, expected):
+            if info.accepted and _same(answer, expected):
                 return list(subset)
     raise GoldCompilationError(
         f"no source-complete witness for fragment output node "
@@ -225,10 +230,28 @@ def compile_gold_solution(
 
     final_id = order[-1]
     final_subprogram = _subprogram(program, final_id)
+    final_info = assess_goal_information_completeness(program, world)
+    if not final_info.accepted:
+        raise GoldCompilationError("frozen world lacks decision-complete information")
     final_proof_sources = _minimal_witness(
-        final_subprogram, world, trace[final_id], dependencies, max_sources=max_sources
+        final_subprogram, world, trace[final_id], dependencies,
+        max_sources=max_sources, required_fact_ids=final_info.required_fact_ids,
     )
-    if not set(final_proof_sources).issubset(support_sources):
+    current_world = _evidence_world(world, support_sources)
+    current_info = assess_goal_information_completeness(program, current_world)
+    current_answer = None
+    try:
+        current_answer = SymbolicExecutor().execute(program, current_world)
+    except (ValueError, TypeError, RuntimeError):
+        pass
+    sufficient = (
+        current_info.accepted
+        and set(final_info.required_fact_ids).issubset(
+            {f.fact_id for f in current_world.facts})
+        and current_answer is not None
+        and _same(current_answer, trace[final_id])
+    )
+    if not sufficient:
         # Some terminals need additional source observations beyond all
         # producer fragments (e.g. QUERY_ATTR or SELECT_BETWEEN).
         fragments.append({
