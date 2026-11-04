@@ -181,6 +181,8 @@ def validate_action(value: Any, guidance: Mapping[str, Any],
     if not isinstance(value, Mapping):
         return False, ["action_not_object"]
     issues: list[str] = []
+    if set(value) != {"action", "reasoning", "params"}:
+        issues.append("unexpected_action_fields")
     if not isinstance(value.get("reasoning"), str) or _hidden_identifier(value.get("reasoning", "")):
         issues.append("invalid_public_reasoning")
     params = value.get("params")
@@ -212,6 +214,8 @@ def validate_action(value: Any, guidance: Mapping[str, Any],
         if not isinstance(task, Mapping):
             issues.append(f"task_{index}:not_object")
             continue
+        if set(task) != {"task_instruction", "context", "model", "tools"}:
+            issues.append(f"task_{index}:unexpected_fields")
         public_text = str(task.get("task_instruction", "")) + " " + str(task.get("context", ""))
         visible_text += " " + public_text
         for key in ("task_instruction", "context"):
@@ -234,6 +238,8 @@ def validate_feedback(value: Any, fragment: Mapping[str, Any]) -> tuple[bool, li
     if not isinstance(value, Mapping):
         return False, ["feedback_not_object"]
     issues = []
+    if set(value) != {"summary", "trace_summary"}:
+        issues.append("unexpected_feedback_fields")
     supported = json.dumps({
         "answer": fragment["expected_answer"],
         "operations": fragment["operations"],
