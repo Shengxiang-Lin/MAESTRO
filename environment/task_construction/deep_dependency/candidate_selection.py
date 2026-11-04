@@ -1,15 +1,14 @@
-"""Generate and select graph-grounded deep ProgramIR candidates."""
+"""Generate a fixed pool of validated graph-grounded ProgramIR candidates."""
 from __future__ import annotations
 import json,os
 from pathlib import Path
 from typing import Any,Mapping,Sequence
-from ..binding import BindingError,GraphGroundedProgramBinder
+from ..binding import BindingError
 from ..data_sources.taxonomy import TaxonomyIndex
 from ..ir import ProgramIR
 from ..data_sources.kqa import record_to_ir
 from ..quality.hardness import complexity_profile
 from .composer import compose_deep_program,prepare_composition_pools
-from .terminal_families import terminal_family
 
 def _program_from_kqa(item:Mapping[str,Any])->ProgramIR|None:
     """Use the canonical KQA adapter, not raw KQA function names.
@@ -17,7 +16,7 @@ def _program_from_kqa(item:Mapping[str,Any])->ProgramIR|None:
     KQA records say Find/Relate/FilterNum/And/Count, whereas the IR,
     composer, binder, and executor use FIND/RELATE/FILTER_NUMBER/
     INTERSECT/COUNT. Keeping raw labels silently produced empty
-    compositions and a zero-candidate shortlist.
+    compositions and a zero-candidate pool.
     """
     raw=item.get("program")
     if not isinstance(raw,list) or not raw:return None
@@ -110,13 +109,13 @@ def _generate_candidate_pool(
         attempts_limit=attempts_limit,seed=seed,workers=workers,batch_size=batch_size,
         make_proposal=make_proposal,progress=progress,restart=restart_candidates,
         initializer=_worker_init,initargs=(str(yago_catalog_path),str(taxonomy_path),seed))
-    target=Path(output_path)
-    target.parent.mkdir(parents=True,exist_ok=True)
-    with target.open("w",encoding="utf-8") as writer:
+    output=Path(output_path)
+    output.parent.mkdir(parents=True,exist_ok=True)
+    with output.open("w",encoding="utf-8") as writer:
         for row in candidates:
             writer.write(json.dumps(row,ensure_ascii=False)+"\n")
     return {
-        "output":str(target),
+        "output":str(output),
         "candidate_pool_size":pool_size,
         "validated_candidates":len(candidates),
         "pool_filled":len(candidates)>=pool_size,
