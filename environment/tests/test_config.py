@@ -46,7 +46,8 @@ class ConfigTests(unittest.TestCase):
                 "question_workers": 2,
             },
             "trajectory_simulation": {
-                "teacher_profile": "local",
+                "planner_profile": "local",
+                "executor_profile": "remote",
                 "worlds": "environment/data/typed_worlds_{pool_size}.jsonl",
                 "output": "environment/data/trajectories_{pool_size}.jsonl",
             },
@@ -89,7 +90,29 @@ class ConfigTests(unittest.TestCase):
         args = parse_with_config(parser, "trajectory_simulation", [
             "--provider", "passthrough", "--config", str(self.path)
         ])
-        self.assertEqual(resolve_model(args, "trajectory_teacher")["backend"], "passthrough")
+        self.assertEqual(resolve_model(args, "trajectory_planner")["backend"], "passthrough")
+        self.assertEqual(resolve_model(args, "trajectory_executor")["backend"], "passthrough")
+
+    def test_separate_trajectory_profiles_and_model_overrides(self):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--provider", default="openai-compatible")
+        parser.add_argument("--model")
+        parser.add_argument("--planner-model")
+        parser.add_argument("--executor-model")
+        parser.add_argument("--worlds")
+        parser.add_argument("--output")
+        parser.add_argument("--seed", type=int, default=17)
+        args = parse_with_config(parser, "trajectory_simulation", [
+            "--config", str(self.path), "--planner-model", "planner-only"
+        ])
+        with patch.dict(os.environ, {"MAESTRO_TEST_KEY": "test-secret"}):
+            planner = resolve_model(args, "trajectory_planner")
+            executor = resolve_model(args, "trajectory_executor")
+        self.assertEqual(planner["model"], "planner-only")
+        self.assertEqual(planner["backend"], "vllm")
+        self.assertEqual(executor["model"], "remote-model")
+        self.assertEqual(executor["backend"], "api")
+        self.assertEqual(executor["api_key"], "test-secret")
 
     def test_subparser_required_paths_satisfied_by_yaml(self):
         root = argparse.ArgumentParser()
