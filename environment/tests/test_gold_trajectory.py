@@ -99,6 +99,30 @@ class GoldTrajectoryTests(unittest.TestCase):
         self.assertNotIn("gold_answer_claims", json.dumps(public))
         self.assertEqual(plan["symbolic_trace"]["3"], ["B"])
 
+    def test_gold_claims_use_public_rendered_aliases(self):
+        realized, record, rendered = fixture()
+        rendered.hidden_metadata = {
+            "entity_aliases": {"A": "Alice", "B": "Bob"},
+            "literal_surfaces_by_predicate": {},
+            "literal_surfaces": {},
+        }
+        rendered.answer = ["Bob"]
+        rendered.sources[0].content = "Alice — first: Bob."
+        rendered.sources[1].content = "Alice — second: Bob."
+        gold = compile_gold_solution(realized, record, rendered)
+        claims = gold["tasks"][0]["gold_answer_claims"]
+        self.assertEqual(claims, [{
+            "subject": "Alice", "predicate": "first",
+            "object": "Bob", "object_kind": "entity",
+        }])
+        self.assertNotIn("fact_id", json.dumps(claims))
+        output = synthesize_one(
+            realized, record, rendered,
+            PassthroughPlanner(), PassthroughExecutor(),
+        )
+        self.assertTrue(output["validation"]["accepted"])
+        self.assertEqual(output["final"]["answer"], ["Bob"])
+
     def test_dependency_forces_two_rounds(self):
         realized, record, rendered = fixture(dependent=True)
         plan = compile_gold_solution(realized, record, rendered)
