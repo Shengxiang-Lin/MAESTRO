@@ -13,11 +13,11 @@ from .validators import postflight,preflight
 
 def _rows(path):
     with Path(path).open("r",encoding="utf-8") as handle:return [json.loads(line) for line in handle if line.strip()]
-def _world_by_task(path):
+def _world_by_task(path,seed=17):
     from environment.task_construction.rendering.pipeline import render_task_record
     result={}
     for index,row in enumerate(_rows(path)):
-        task=render_task_record(row,seed=17+index);result[task.task_id]=row
+        task=render_task_record(row,seed=seed+index);result[task.task_id]=row
     return result
 def _capability_by_task(path):return {str(row.get("task_id")):row for row in _rows(path) if row.get("task_id")}
 def _backends(args):
@@ -85,7 +85,7 @@ def run(args):
     except (BoundaryError,FileNotFoundError,json.JSONDecodeError) as exc:raise SystemExit(f"Frozen-input validation failed: {exc}") from exc
     authoring=_rows(args.authoring_inputs)
     if args.max_records is not None:authoring=authoring[:args.max_records]
-    worlds=_world_by_task(args.worlds);capabilities=_capability_by_task(args.capabilities);output_dir=Path(args.output_dir);output_dir.mkdir(parents=True,exist_ok=True);realized_path=output_dir/"realized_capability_worlds.jsonl";rejected_path=output_dir/"question_rejected.jsonl";critic_path=output_dir/"question_critic_audit.jsonl";summary_path=output_dir/"question_generation_summary.json";author,critic=_backends(args);results=[];workers=max(1,args.question_workers)
+    worlds=_world_by_task(args.worlds,seed=args.seed);capabilities=_capability_by_task(args.capabilities);output_dir=Path(args.output_dir);output_dir.mkdir(parents=True,exist_ok=True);realized_path=output_dir/"realized_capability_worlds.jsonl";rejected_path=output_dir/"question_rejected.jsonl";critic_path=output_dir/"question_critic_audit.jsonl";summary_path=output_dir/"question_generation_summary.json";author,critic=_backends(args);results=[];workers=max(1,args.question_workers)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures={pool.submit(_realize_one,payload,worlds.get(str(payload.get("task_id")),{}),capabilities.get(str(payload.get("task_id")),{}),author,critic,question_max_attempts=args.question_max_attempts,use_critic=not args.no_semantic_critic):index for index,payload in enumerate(authoring)}
         iterator=as_completed(futures);bar=tqdm(total=len(futures),desc="Question generation",unit="task",disable=args.no_progress)
