@@ -45,18 +45,12 @@ others_*
 achieve/
 X/
 tests/
-# Track construction regression tests alongside the existing environment tests.
-!environment/tests/
-environment/tests/*
-!environment/tests/test_construction_regressions.py
+# Track all environment regression tests, including gold trajectories.
+!/environment/tests/
+!/environment/tests/*.py
 
 # Local repair backup and validation artifacts.
 /work/environment_repair_20261104/
 
 /work/environment_parallel_20261104/
-environment/tests/
 work/
-
-# Keep the native O1 trajectory regressions with their implementation.
-!environment/tests/
-!environment/tests/test_o1_trajectory.py
