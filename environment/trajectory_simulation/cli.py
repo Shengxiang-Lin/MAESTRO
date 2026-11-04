@@ -1,110 +1,134 @@
-"""CLI for clean trajectory planning and LLM trajectory synthesis."""
+"""CLI for two-role, environment-grounded gold trajectory simulation."""
 from __future__ import annotations
 
 import argparse
 import json
-import os
+from pathlib import Path
 
+from environment.config import (
+    EnvironmentConfigError, parse_with_config, resolve_model,
+)
+from environment.question_generation.backend import OpenAICompatibleBackend
+
+from .backend import (
+    LLMExecutor, LLMPlanner, PassthroughExecutor, PassthroughPlanner,
+)
 from .pipeline import plan_trajectories_jsonl, synthesize_trajectories_jsonl
-from environment.config import EnvironmentConfigError, parse_with_config, resolve_model
 
 
-def _print(payload: object) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+def _print(value: object) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--worlds", help="typed_worlds_*.jsonl")
-    parser.add_argument(
-        "--realized",
-        help="validated question-generation realized_capability_worlds.jsonl",
-    )
+    parser.add_argument("--realized", help="accepted question-generation JSONL")
     parser.add_argument("--output")
     parser.add_argument("--max-records", type=int)
     parser.add_argument("--seed", type=int, default=17)
 
 
 def command_plan(args: argparse.Namespace) -> None:
-    _print(
-        plan_trajectories_jsonl(
-            args.worlds,
-            args.realized,
-            args.output,
-            max_records=args.max_records,
-        )
+    # Do not overwrite the configured synthesis output during plan-only runs.
+    output = args.output
+    if "--output" not in args._explicit_options:
+        output = str(Path(output).with_suffix(".gold_plan.jsonl"))
+    _print(plan_trajectories_jsonl(
+        args.worlds, args.realized, output,
+        max_records=args.max_records, seed=args.seed,
+    ))
+
+
+def _role(spec: dict, args: argparse.Namespace, *, planner: bool):
+    if spec["provider"] == "passthrough":
+        return PassthroughPlanner() if planner else PassthroughExecutor()
+    backend = OpenAICompatibleBackend(
+        spec["base_url"], spec["model"], spec["api_key"],
+        args.planner_temperature if planner else args.executor_temperature,
+        args.max_tokens, args.timeout,
+        spec["json_mode"] and not args.no_json_mode,
     )
+    return LLMPlanner(backend) if planner else LLMExecutor(backend)
 
 
 def command_synthesize(args: argparse.Namespace) -> None:
-    spec=resolve_model(args,"trajectory_teacher")
-    result=synthesize_trajectories_jsonl(
-        args.worlds,
-        args.realized,
-        args.output,
-        provider=spec["provider"],
-        base_url=spec["base_url"],
-        model=spec["model"],
-        api_key=spec["api_key"],
-        temperature=args.temperature,
-        max_tokens=args.max_tokens,
-        timeout=args.timeout,
+    planner_spec = resolve_model(args, "trajectory_planner")
+    executor_spec = resolve_model(args, "trajectory_executor")
+    planner = _role(planner_spec, args, planner=True)
+    executor = _role(executor_spec, args, planner=False)
+    clean = lambda spec: {key: value for key, value in spec.items() if key != "api_key"}
+    result = synthesize_trajectories_jsonl(
+        args.worlds, args.realized, args.output,
+        planner=planner, executor=executor,
         max_records=args.max_records,
         max_attempts=args.max_attempts,
+        subagent_workers=args.subagent_workers,
         rejected_output_path=args.rejected_output,
         progress=not args.no_progress,
         flush_every=args.flush_every,
-        json_mode=spec["json_mode"] and not args.no_json_mode,
         seed=args.seed,
+        model_roles={
+            "main_planner": clean(planner_spec),
+            "subagent_executor": clean(executor_spec),
+        },
     )
-    result["model_backend"]=spec["backend"]
     _print(result)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Dependency-aware clean orchestration trajectory simulation"
+        description="Generate gold clean trajectories from frozen world solutions"
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True)
 
-    plan = subparsers.add_parser(
-        "plan",
-        help="compile frozen acquisition frontiers without calling a Teacher LLM",
-    )
+    plan = sub.add_parser("plan", help="compile gold task DAG without an LLM")
     _add_common(plan)
     plan.set_defaults(func=command_plan)
 
-    synthesize = subparsers.add_parser(
+    synth = sub.add_parser(
         "synthesize",
-        help="generate validated clean trajectories round by round",
+        help="round-wise Main planning, parallel Sub-Agent results and Main summaries",
     )
-    _add_common(synthesize)
-    synthesize.add_argument(
-        "--provider",
-        choices=("passthrough", "openai-compatible"),
+    _add_common(synth)
+    synth.add_argument(
+        "--provider", choices=("passthrough", "openai-compatible"),
         default="passthrough",
     )
-    synthesize.add_argument("--base-url")
-    synthesize.add_argument("--model")
-    synthesize.add_argument("--api-key-env", default="DASHSCOPE_API_KEY")
-    synthesize.add_argument("--temperature", type=float, default=0.2)
-    synthesize.add_argument("--max-tokens", type=int, default=2048)
-    synthesize.add_argument("--timeout", type=float, default=90.0)
-    synthesize.add_argument("--max-attempts", type=int, default=3)
-    synthesize.add_argument("--flush-every", type=int, default=5)
-    synthesize.add_argument("--rejected-output")
-    synthesize.add_argument("--no-json-mode", action="store_true")
-    synthesize.add_argument("--no-progress", action="store_true")
-    synthesize.set_defaults(func=command_synthesize)
+    synth.add_argument("--base-url")
+    synth.add_argument("--model", help="override both role model names")
+    synth.add_argument("--planner-model", help="override only Main Planner model")
+    synth.add_argument("--executor-model", help="override only Sub-Agent model")
+    synth.add_argument("--api-key-env", default="DASHSCOPE_API_KEY")
+    synth.add_argument("--planner-temperature", type=float, default=0.2)
+    synth.add_argument("--executor-temperature", type=float, default=0.2)
+    synth.add_argument("--max-tokens", type=int, default=2048)
+    synth.add_argument("--timeout", type=float, default=90.)
+    synth.add_argument("--max-attempts", type=int, default=3)
+    synth.add_argument("--subagent-workers", type=int, default=4)
+    synth.add_argument("--flush-every", type=int, default=5)
+    synth.add_argument("--rejected-output")
+    synth.add_argument("--no-json-mode", action="store_true")
+    synth.add_argument("--no-progress", action="store_true")
+    synth.set_defaults(func=command_synthesize)
     return parser
 
 
 def main() -> None:
     try:
-        args = parse_with_config(build_parser(),"trajectory_simulation")
+        args = parse_with_config(build_parser(), "trajectory_simulation")
     except EnvironmentConfigError as exc:
         raise SystemExit(f"Environment configuration error: {exc}") from exc
-    missing=[key for key in ("worlds","realized","output") if not getattr(args,key,None)]
-    if missing:raise SystemExit("Missing trajectory inputs (CLI or YAML): "+", ".join(missing))
+    missing = [
+        key for key in ("worlds", "realized", "output")
+        if not getattr(args, key, None)
+    ]
+    if missing:
+        raise SystemExit("Missing trajectory inputs: " + ", ".join(missing))
+    if args.max_records is not None and args.max_records < 0:
+        raise SystemExit("--max-records must be nonnegative")
+    if args.command == "synthesize":
+        if min(args.max_attempts, args.subagent_workers, args.flush_every) < 1:
+            raise SystemExit("attempts, workers and flush_every must be >= 1")
     try:
         args.func(args)
     except EnvironmentConfigError as exc:
