@@ -1,12 +1,12 @@
 """Canonical programmatic construction pipeline for MAESTRO synthetic tasks."""
 from __future__ import annotations
-import argparse,json,math
+import argparse,json
 from pathlib import Path
 from typing import Any,Mapping
 from tqdm.auto import tqdm
 from environment.config import EnvironmentConfigError, parse_with_config
 from .capabilities import ground_capabilities_jsonl
-from .deep_dependency.candidate_selection import DEFAULT_CANDIDATE_MULTIPLIER,generate_world_candidate_shortlist
+from .deep_dependency.candidate_selection import generate_candidate_pool
 from .deep_dependency.world_generation import generate_world_batch
 from .freeze import FreezeError,freeze_batch
 from .quality.execution_contract import audit_execution_contract_jsonl
@@ -36,7 +36,6 @@ def _require_inputs(paths):
     if missing:raise SystemExit("Missing required input file(s):\n"+"\n".join(f"  - {p}" for p in missing))
 def _count_jsonl(path):
     with Path(path).open("r",encoding="utf-8") as handle:return sum(1 for line in handle if line.strip())
-def _default_shortlist_target(target):return max(target+50,int(math.ceil(target*1.5)))
 def _artifact_paths(target):return {"task_design":OUTPUT_DIR/f"task_designs_{target}.jsonl","scenario":OUTPUT_DIR/f"scenario_validity_{target}.jsonl","capability":OUTPUT_DIR/f"capability_worlds_{target}.jsonl","authoring":OUTPUT_DIR/f"authoring_inputs_{target}.jsonl","manifest":OUTPUT_DIR/f"frozen_manifest_{target}.json"}
 def _require_prepared_sources():_require_inputs([KQA_ANALYSIS,YAGO_CATALOG,YAGO_ENTITY_PROFILES,YAGO_TAXONOMY_INDEX,MMQA_SEMANTIC_BUNDLES,MMQA_SCENARIO_PRIOR])
 def _run_downstream(worlds_path,rendered_path,*,accepted,target,seed,progress):
@@ -47,61 +46,151 @@ def _run_downstream(worlds_path,rendered_path,*,accepted,target,seed,progress):
     scenario=audit_scenarios_jsonl(worlds_path,output_path=paths["scenario"],max_records=accepted);_write_json(OUTPUT_DIR/f"scenario_validity_summary_{target}.json",scenario);result["scenario_validity"]=scenario;bar.update(1)
     capability=ground_capabilities_jsonl(worlds_path,paths["capability"],max_records=accepted,seed=seed,task_design_path=paths["task_design"]);_write_json(OUTPUT_DIR/f"capability_grounding_{target}.json",capability);result["capability_grounding"]=capability;result["semantic_plausibility"]=audit_plausibility_jsonl(worlds_path,YAGO_CATALOG,YAGO_TAXONOMY_INDEX,output_path=OUTPUT_DIR/f"semantic_plausibility_{target}.jsonl");result["execution_contract"]=audit_execution_contract_jsonl(worlds_path,output_path=OUTPUT_DIR/f"execution_contract_{target}.jsonl",seed=seed);bar.update(1);bar.close();return result
 def build_parser():
-    p=argparse.ArgumentParser(description="Build MAESTRO synthetic task worlds");p.add_argument("--target",type=int,default=100);p.add_argument("--candidate-pool-size",type=int,help="validated semantic candidates to evaluate in all-valid mode");p.add_argument("--all-valid-candidates",action="store_true",help="check the entire fixed pool; freeze all worlds passing quality gates");p.add_argument("--shortlist-target",type=int);p.add_argument("--candidate-multiplier",type=float,default=DEFAULT_CANDIDATE_MULTIPLIER);p.add_argument("--seed",type=int,default=17);p.add_argument("--max-records",type=int);p.add_argument("--min-fragment-depth",type=int,default=2);p.add_argument("--max-fragment-depth",type=int,default=4);p.add_argument("--min-orchestration-depth",type=int,default=3);p.add_argument("--max-orchestration-depth",type=int,default=5);p.add_argument("--min-latent-anchors",type=int,default=2);p.add_argument("--min-parallel-width",type=int,default=2);p.add_argument("--kqa-train",type=Path,default=DEFAULT_KQA_TRAIN);p.add_argument("--kqa-val",type=Path,default=DEFAULT_KQA_VAL);p.add_argument("--yago-facts",type=Path,default=DEFAULT_YAGO_FACTS);p.add_argument("--yago-schema",type=Path,default=DEFAULT_YAGO_SCHEMA);p.add_argument("--yago-taxonomy",type=Path,default=DEFAULT_YAGO_TAXONOMY);p.add_argument("--mmqa-train",type=Path,default=DEFAULT_MMQA_TRAIN);p.add_argument("--mmqa-dev",type=Path,default=DEFAULT_MMQA_DEV);p.add_argument("--yago-profile-limit",type=int,default=4096);p.add_argument("--mmqa-max-records",type=int);p.add_argument("--reuse-source-priors",action="store_true");p.add_argument("--prepare-sources-only",action="store_true");p.add_argument("--resume-downstream",action="store_true");p.add_argument("--no-progress",action="store_true");p.add_argument("--candidate-max-attempts",type=int);p.add_argument("--world-attempts-per-candidate",type=int,default=3);p.add_argument("--allow-partial-batch",action="store_true");p.add_argument("--candidate-workers",type=int);p.add_argument("--candidate-proposal-batch-size",type=int);p.add_argument("--restart-candidates",action="store_true");return p
+    p=argparse.ArgumentParser(description="Build all valid MAESTRO worlds from a fixed semantic candidate pool")
+    p.add_argument("--candidate-pool-size",type=int,default=2000,help="number of validated semantic candidates to collect and evaluate")
+    p.add_argument("--seed",type=int,default=17)
+    p.add_argument("--max-records",type=int)
+    p.add_argument("--min-fragment-depth",type=int,default=2)
+    p.add_argument("--max-fragment-depth",type=int,default=4)
+    p.add_argument("--min-orchestration-depth",type=int,default=3)
+    p.add_argument("--max-orchestration-depth",type=int,default=5)
+    p.add_argument("--min-latent-anchors",type=int,default=2)
+    p.add_argument("--min-parallel-width",type=int,default=2)
+    p.add_argument("--kqa-train",type=Path,default=DEFAULT_KQA_TRAIN)
+    p.add_argument("--kqa-val",type=Path,default=DEFAULT_KQA_VAL)
+    p.add_argument("--yago-facts",type=Path,default=DEFAULT_YAGO_FACTS)
+    p.add_argument("--yago-schema",type=Path,default=DEFAULT_YAGO_SCHEMA)
+    p.add_argument("--yago-taxonomy",type=Path,default=DEFAULT_YAGO_TAXONOMY)
+    p.add_argument("--mmqa-train",type=Path,default=DEFAULT_MMQA_TRAIN)
+    p.add_argument("--mmqa-dev",type=Path,default=DEFAULT_MMQA_DEV)
+    p.add_argument("--yago-profile-limit",type=int,default=4096)
+    p.add_argument("--mmqa-max-records",type=int)
+    p.add_argument("--reuse-source-priors",action="store_true")
+    p.add_argument("--prepare-sources-only",action="store_true")
+    p.add_argument("--resume-downstream",action="store_true")
+    p.add_argument("--no-progress",action="store_true")
+    p.add_argument("--candidate-max-attempts",type=int)
+    p.add_argument("--world-attempts-per-candidate",type=int,default=3)
+    p.add_argument("--candidate-workers",type=int)
+    p.add_argument("--candidate-proposal-batch-size",type=int)
+    p.add_argument("--restart-candidates",action="store_true")
+    return p
+
 def main():
-    
     try:
         args=parse_with_config(build_parser(),"task_construction")
     except EnvironmentConfigError as exc:
         raise SystemExit(f"Environment configuration error: {exc}") from exc
-    if args.all_valid_candidates:
-        if not args.candidate_pool_size or args.candidate_pool_size < 1:
-            raise SystemExit("--all-valid-candidates requires --candidate-pool-size > 0")
-        if args.shortlist_target is not None:
-            raise SystemExit("--shortlist-target is not used in --all-valid-candidates mode")
-        # In pool mode the legacy target slot is only an artifact label and
-        # a capacity upper bound, NOT an accepted-world target.
-        args.target=args.candidate_pool_size
+    pool_size=args.candidate_pool_size
+    if pool_size<1:
+        raise SystemExit("--candidate-pool-size must be positive")
+    if args.world_attempts_per_candidate<1:
+        raise SystemExit("--world-attempts-per-candidate must be positive")
+    if args.candidate_max_attempts is not None and args.candidate_max_attempts<1:
+        raise SystemExit("--candidate-max-attempts must be positive")
     progress=not args.no_progress
-    if args.target<=0:raise SystemExit("--target must be positive")
-    if args.world_attempts_per_candidate<1:raise SystemExit("--world-attempts-per-candidate must be positive")
-    if args.candidate_max_attempts is not None and args.candidate_max_attempts<1:raise SystemExit("--candidate-max-attempts must be positive")
-    shortlist=(args.candidate_pool_size if args.all_valid_candidates else
-               args.shortlist_target if args.shortlist_target is not None else _default_shortlist_target(args.target))
-    if shortlist<args.target:raise SystemExit("--shortlist-target must be >= --target")
-    OUTPUT_DIR.mkdir(parents=True,exist_ok=True);candidates=(OUTPUT_DIR/f"semantic_candidates_pool_{args.candidate_pool_size}.jsonl" if args.all_valid_candidates else OUTPUT_DIR/f"semantic_candidates_{shortlist}_for_{args.target}.jsonl");worlds=OUTPUT_DIR/f"typed_worlds_{args.target}.jsonl";rendered=OUTPUT_DIR/f"rendered_worlds_{args.target}.jsonl";summary_path=OUTPUT_DIR/"build_summary.json";summary={"pipeline":{"mode":"fixed_candidate_pool_all_valid" if args.all_valid_candidates else "validated_semantic_world_batch","target_worlds":None if args.all_valid_candidates else args.target,"candidate_pool_size":args.candidate_pool_size if args.all_valid_candidates else None,"shortlist_target":shortlist,"candidate_multiplier":1.0 if args.all_valid_candidates else args.candidate_multiplier,"seed":args.seed,"semantic_binding":"graph_grounded_v2_plus_observed_support","split_policy":"group by topology/skeleton family when evaluating generalization"}}
+    OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
+    candidates=OUTPUT_DIR/f"semantic_candidates_pool_{pool_size}.jsonl"
+    worlds=OUTPUT_DIR/f"typed_worlds_{pool_size}.jsonl"
+    rendered=OUTPUT_DIR/f"rendered_worlds_{pool_size}.jsonl"
+    summary_path=OUTPUT_DIR/"build_summary.json"
+    summary={"pipeline":{
+        "mode":"fixed_candidate_pool",
+        "candidate_pool_size":pool_size,
+        "seed":args.seed,
+        "semantic_binding":"graph_grounded_v2_plus_observed_support",
+        "split_policy":"group by topology/skeleton family when evaluating generalization",
+    }}
     if args.resume_downstream:
-        if not worlds.is_file():raise SystemExit(f"--resume-downstream requires {worlds}")
-        _require_prepared_sources();accepted=_count_jsonl(worlds);summary["worlds"]={"accepted":accepted,"target":args.target,"target_filled":accepted>=args.target,"output":str(worlds),"resumed":True};summary.update(_run_downstream(worlds,rendered,accepted=accepted,target=args.target,seed=args.seed,progress=progress))
+        if not worlds.is_file():
+            raise SystemExit(f"--resume-downstream requires {worlds}")
+        _require_prepared_sources()
+        accepted=_count_jsonl(worlds)
+        summary["worlds"]={
+            "accepted":accepted,
+            "candidate_pool_size":pool_size,
+            "output":str(worlds),
+            "resumed":True,
+        }
+        summary.update(_run_downstream(worlds,rendered,accepted=accepted,target=pool_size,
+                                       seed=args.seed,progress=progress))
     else:
-        if args.reuse_source_priors:_require_prepared_sources();summary["source_preparation"]=_read_json(SOURCE_PATHS.summary)
+        if args.reuse_source_priors:
+            _require_prepared_sources()
+            summary["source_preparation"]=_read_json(SOURCE_PATHS.summary)
         else:
-            _require_inputs([args.kqa_train,args.kqa_val,args.yago_facts,args.yago_schema,args.yago_taxonomy,args.mmqa_train,args.mmqa_dev]);summary["source_preparation"]=prepare_source_priors(kqa_train=args.kqa_train,kqa_val=args.kqa_val,yago_facts=args.yago_facts,yago_schema=args.yago_schema,yago_taxonomy=args.yago_taxonomy,mmqa_train=args.mmqa_train,mmqa_dev=args.mmqa_dev,output_dir=OUTPUT_DIR,seed=args.seed,yago_profile_limit=args.yago_profile_limit,mmqa_max_records=args.mmqa_max_records,progress=progress)
-        if args.prepare_sources_only:_write_json(summary_path,summary);print(summary_path);return
+            _require_inputs([args.kqa_train,args.kqa_val,args.yago_facts,args.yago_schema,
+                             args.yago_taxonomy,args.mmqa_train,args.mmqa_dev])
+            summary["source_preparation"]=prepare_source_priors(
+                kqa_train=args.kqa_train,kqa_val=args.kqa_val,
+                yago_facts=args.yago_facts,yago_schema=args.yago_schema,
+                yago_taxonomy=args.yago_taxonomy,
+                mmqa_train=args.mmqa_train,mmqa_dev=args.mmqa_dev,
+                output_dir=OUTPUT_DIR,seed=args.seed,
+                yago_profile_limit=args.yago_profile_limit,
+                mmqa_max_records=args.mmqa_max_records,progress=progress)
+        if args.prepare_sources_only:
+            _write_json(summary_path,summary)
+            print(summary_path)
+            return
         from .deep_dependency.parallel_candidates import CandidateCheckpointError
         try:
-            summary["candidate_selection"]=generate_world_candidate_shortlist([args.kqa_train,args.kqa_val],YAGO_CATALOG,YAGO_TAXONOMY_INDEX,candidates,shortlist_target=shortlist,world_target=args.target,candidate_multiplier=1.0 if args.all_valid_candidates else args.candidate_multiplier,seed=args.seed,max_records=args.max_records,min_fragment_depth=args.min_fragment_depth,max_fragment_depth=args.max_fragment_depth,min_orchestration_depth=args.min_orchestration_depth,max_orchestration_depth=args.max_orchestration_depth,min_latent_anchors=args.min_latent_anchors,min_parallel_width=args.min_parallel_width,progress=progress,max_attempts=args.candidate_max_attempts,candidate_workers=args.candidate_workers,candidate_proposal_batch_size=args.candidate_proposal_batch_size,restart_candidates=args.restart_candidates,all_valid_candidates=args.all_valid_candidates)
-        except CandidateCheckpointError as exc:raise SystemExit(f"Candidate checkpoint error: {exc}")
-        if int(summary["candidate_selection"].get("accepted",0) or 0)<=0:
+            summary["candidate_selection"]=generate_candidate_pool(
+                [args.kqa_train,args.kqa_val],YAGO_CATALOG,YAGO_TAXONOMY_INDEX,
+                candidates,pool_size=pool_size,seed=args.seed,max_records=args.max_records,
+                min_fragment_depth=args.min_fragment_depth,
+                max_fragment_depth=args.max_fragment_depth,
+                min_orchestration_depth=args.min_orchestration_depth,
+                max_orchestration_depth=args.max_orchestration_depth,
+                min_latent_anchors=args.min_latent_anchors,
+                min_parallel_width=args.min_parallel_width,
+                progress=progress,max_attempts=args.candidate_max_attempts,
+                candidate_workers=args.candidate_workers,
+                candidate_proposal_batch_size=args.candidate_proposal_batch_size,
+                restart_candidates=args.restart_candidates)
+        except CandidateCheckpointError as exc:
+            raise SystemExit(f"Candidate checkpoint error: {exc}") from exc
+        if summary["candidate_selection"]["validated_candidates"]<=0:
             _write_json(summary_path,summary)
-            raise SystemExit(
-                "Candidate shortlist is empty; no executable worlds can be generated. "
-                "Inspect environment/data/build_summary.json -> candidate_selection."
-                "rejection_reasons (for example, hardness or BindingError)."
-            )
-        summary["worlds"]=generate_world_batch(candidates,YAGO_CATALOG,YAGO_TAXONOMY_INDEX,worlds,target=args.target,min_depth=5,seed=args.seed,min_critical_sources=2,min_noncritical_sources=1,min_proof_sources=2,max_sources=6,mmqa_source_motifs_path=MMQA_SCENARIO_PRIOR,progress=progress,world_attempts_per_candidate=args.world_attempts_per_candidate,reserve_candidates_path=summary["candidate_selection"].get("reserve_output"),all_valid_candidates=args.all_valid_candidates);accepted=int(summary["worlds"].get("accepted",0) or 0)
+            raise SystemExit("No validated semantic candidates; inspect "
+                             f"{summary_path} -> candidate_selection.rejection_reasons")
+        summary["worlds"]=generate_world_batch(
+            candidates,YAGO_CATALOG,YAGO_TAXONOMY_INDEX,worlds,
+            min_depth=5,seed=args.seed,min_critical_sources=2,min_noncritical_sources=1,
+            min_proof_sources=2,max_sources=6,
+            mmqa_source_motifs_path=MMQA_SCENARIO_PRIOR,
+            progress=progress,world_attempts_per_candidate=args.world_attempts_per_candidate)
+        accepted=int(summary["worlds"]["accepted"])
         if accepted<=0:
             _write_json(summary_path,summary)
             raise SystemExit("World generation accepted no worlds. "
                              f"Rejection reasons: {summary['worlds'].get('rejection_reasons',{})}. "
                              f"See {summary['worlds'].get('rejected_output')} and {summary_path}")
-        if accepted<args.target and not (args.allow_partial_batch or args.all_valid_candidates):
-            _write_json(summary_path,summary)
-            raise SystemExit(f"World batch underfilled: {accepted}/{args.target}. Inspect {summary_path}; use --allow-partial-batch only to explicitly freeze the surviving subset.")
-        summary.update(_run_downstream(worlds,rendered,accepted=accepted,target=args.target,seed=args.seed,progress=progress))
-    _write_json(summary_path,summary);accepted=int(summary["worlds"].get("accepted",0) or 0);paths=_artifact_paths(args.target)
-    if accepted<args.target and not (args.allow_partial_batch or args.all_valid_candidates):raise SystemExit(f"World batch underfilled: {accepted}/{args.target}; freezing requires --allow-partial-batch")
-    try:manifest=freeze_batch(summary,target=accepted,seed=args.seed,worlds_path=worlds,task_design_path=paths["task_design"],scenario_path=paths["scenario"],capability_path=paths["capability"],authoring_input_path=paths["authoring"],manifest_path=paths["manifest"])
-    except FreezeError as exc:_write_json(summary_path,summary);raise SystemExit(str(exc)) from exc
-    summary["freeze"]=manifest;_write_json(summary_path,summary);print(json.dumps({"status":"done","worlds":str(worlds),"manifest":str(paths["manifest"]),"authoring_inputs":str(paths["authoring"]),"summary":str(summary_path)},ensure_ascii=False,indent=2))
-if __name__=="__main__":main()
+        summary.update(_run_downstream(worlds,rendered,accepted=accepted,target=pool_size,
+                                       seed=args.seed,progress=progress))
+    _write_json(summary_path,summary)
+    accepted=int(summary["worlds"].get("accepted",0) or 0)
+    paths=_artifact_paths(pool_size)
+    try:
+        manifest=freeze_batch(
+            summary,target=accepted,seed=args.seed,worlds_path=worlds,
+            task_design_path=paths["task_design"],scenario_path=paths["scenario"],
+            capability_path=paths["capability"],authoring_input_path=paths["authoring"],
+            manifest_path=paths["manifest"])
+    except FreezeError as exc:
+        _write_json(summary_path,summary)
+        raise SystemExit(str(exc)) from exc
+    summary["freeze"]=manifest
+    _write_json(summary_path,summary)
+    print(json.dumps({
+        "status":"done",
+        "candidate_pool_size":pool_size,
+        "accepted_worlds":accepted,
+        "worlds":str(worlds),
+        "manifest":str(paths["manifest"]),
+        "authoring_inputs":str(paths["authoring"]),
+        "summary":str(summary_path),
+    },ensure_ascii=False,indent=2))
+
+if __name__=="__main__":
+    main()
