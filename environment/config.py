@@ -19,7 +19,8 @@ DEFAULT_CONFIG = ENV_DIR / "config.yaml"
 ROLE_SELECTORS = {
     "question_author": ("question_generation", "author_profile"),
     "question_critic": ("question_generation", "critic_profile"),
-    "trajectory_teacher": ("trajectory_simulation", "teacher_profile"),
+    "trajectory_planner": ("trajectory_simulation", "planner_profile"),
+    "trajectory_executor": ("trajectory_simulation", "executor_profile"),
 }
 PATH_ARGUMENTS = {
     "manifest", "authoring_inputs", "worlds", "capabilities",
@@ -130,7 +131,7 @@ def parse_with_config(
             for action in current._actions:
                 if action.dest in defaults and defaults[action.dest] is not None:
                     action.required = False
-    extras = {"author_profile", "critic_profile", "teacher_profile"}
+    extras = {"author_profile", "critic_profile", "planner_profile", "executor_profile"}
     unknown = set(values).difference(recognized | extras)
     if unknown:
         raise EnvironmentConfigError(
@@ -151,7 +152,7 @@ def parse_with_config(
 
 
 def resolve_model(args: argparse.Namespace, role: str) -> dict[str, Any]:
-    """Resolve the model used by one Author, Critic or Teacher role.
+    """Resolve the model used by an Author, Critic or trajectory teacher role.
 
     A profile with backend=api or backend=vllm is accessed via an
     OpenAI-compatible HTTP endpoint. backend=passthrough needs no network.
@@ -186,7 +187,11 @@ def resolve_model(args: argparse.Namespace, role: str) -> dict[str, Any]:
         profile["backend"] = "passthrough"
     if role == "question_critic" and "--critic-model" in explicit:
         profile["model"] = args.critic_model
-    elif role != "question_critic" and "--model" in explicit:
+    elif role == "trajectory_planner" and "--planner-model" in explicit:
+        profile["model"] = args.planner_model
+    elif role == "trajectory_executor" and "--executor-model" in explicit:
+        profile["model"] = args.executor_model
+    elif "--model" in explicit:
         profile["model"] = args.model
     if "--base-url" in explicit:
         profile["base_url"] = args.base_url
