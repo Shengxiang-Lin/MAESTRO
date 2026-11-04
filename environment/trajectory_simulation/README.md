@@ -45,8 +45,9 @@ frozen source observation and the corresponding authoritative fact claims.
 
 Each response contains:
 
-- `answer`: the **exact structured source facts** (fact IDs + subject,
-  predicate, object), checked against the frozen source.
+- `answer`: the **exact structured source facts** (public subject,
+  predicate and object surfaces), checked against the frozen source.
+  Private fact IDs and entity IDs are not returned to the Main.
 - `answer_summary`: concise natural-language description of the subtask answer.
 - `trajectory_summary`: compressed description of what the Sub-Agent did.
 - `evidence_source_ids` and `status`: strictly validated.
