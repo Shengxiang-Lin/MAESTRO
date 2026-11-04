@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from environment.task_construction.executor import SymbolicExecutor
 from environment.task_construction.rendering.pipeline import program_from_dict, world_from_dict
+from environment.task_construction.rendering.naming import predicate_label
 from environment.task_construction.validation import minimal_source_proof
 
 
@@ -108,6 +109,12 @@ def compile_gold_solution(
     if not selected_ids.issubset(rendered_sources):
         raise GoldCompilationError("gold resources missing rendered observations")
     fact_map = {fact.fact_id: fact for fact in world.facts}
+    # The Sub-Agent's answers use the same deterministic public surfaces as
+    # the rendered evidence, never private synthetic entity/fact IDs.
+    surface = getattr(rendered, "hidden_metadata", {}) or {}
+    aliases = surface.get("entity_aliases", {})
+    literal_scoped = surface.get("literal_surfaces_by_predicate", {})
+    literal_fallback = surface.get("literal_surfaces", {})
     cap_by_id = {str(cap.get("capability_id")): cap
                  for cap in capability.get("capabilities", ())
                  if isinstance(cap, Mapping)}
@@ -126,11 +133,17 @@ def compile_gold_solution(
             if fid not in fact_map:
                 raise GoldCompilationError(f"unknown frozen fact {fid} in {sid}")
             fact = fact_map[fid]
+            if fact.object_kind == "entity":
+                display_object = aliases.get(str(fact.object), str(fact.object))
+            else:
+                display_object = literal_scoped.get(fact.predicate, {}).get(
+                    str(fact.object),
+                    literal_fallback.get(str(fact.object), fact.object),
+                )
             facts.append({
-                "fact_id": fact.fact_id,
-                "subject": fact.subject,
-                "predicate": fact.predicate,
-                "object": json_value(fact.object),
+                "subject": aliases.get(fact.subject, fact.subject),
+                "predicate": predicate_label(fact.predicate),
+                "object": json_value(display_object),
                 "object_kind": fact.object_kind,
             })
         tasks.append({
