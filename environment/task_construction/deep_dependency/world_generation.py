@@ -33,14 +33,10 @@ def _json_default(value):
     raise TypeError(f"Unsupported artifact value: {type(value).__name__}")
 
 def _serialize_world(world):return world.to_dict() if hasattr(world,"to_dict") else {"entities":world.entities,"facts":[fact.__dict__ for fact in world.facts],"sources":{sid:source.__dict__ for sid,source in world.sources.items()},"metadata":world.metadata}
-def _stop_after_target(accepted_count:int, target:int, all_valid_candidates:bool)->bool:
-    """A validated fixed pool must be fully examined regardless of yield."""
-    return not all_valid_candidates and accepted_count>=target
-
 def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_path,*,
-    target,min_depth=5,seed=17,min_critical_sources=2,min_noncritical_sources=1,
+    min_depth=5,seed=17,min_critical_sources=2,min_noncritical_sources=1,
     min_proof_sources=2,max_sources=6,mmqa_source_motifs_path=None,progress=False,
-    world_attempts_per_candidate=3,reserve_candidates_path=None,all_valid_candidates=False):
+    world_attempts_per_candidate=3):
     from ..task_design.planner import plan_task_design
     from ..task_design.quality import assess_task_design
     from ..scenario.validity import assess_scenario
@@ -55,19 +51,12 @@ def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_
     observed=ObservedSupport(catalog,taxonomy)
     motif_prior=ScenarioEvidencePrior.from_path(mmqa_source_motifs_path) if mmqa_source_motifs_path and Path(mmqa_source_motifs_path).is_file() else ScenarioEvidencePrior.fallback()
     accepted,rejected,reasons=[],[],Counter()
-    # For a fixed pool, scale diversity caps with the actual number of
-    # accepted worlds rather than assuming all pool members will pass.
-    # This preserves relative concentration limits for underfilled pools.
-    tracker=BatchDiversityTracker(target=None if all_valid_candidates else target)
+    # Preserve the existing relative diversity caps at every accepted count.
+    tracker=BatchDiversityTracker(target=None)
     rows=list(_read_rows(candidates_path))
-    if reserve_candidates_path is not None:
-        seen={r['candidate_id'] for r in rows}
-        rows.extend(r for r in _read_rows(reserve_candidates_path) if r['candidate_id'] not in seen)
     iterator=tqdm(rows,desc='Executable worlds',disable=not progress)
     candidates_tested=0
     for index,row in enumerate(iterator):
-        if _stop_after_target(len(accepted),target,all_valid_candidates):
-            break
         candidates_tested+=1
         for attempt in range(world_attempts_per_candidate):
             run_seed=seed+index*1009+attempt*104729
@@ -140,16 +129,19 @@ def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_
     with rejected_path.open('w',encoding='utf-8') as writer:
         for row in rejected:
             writer.write(json.dumps(row,ensure_ascii=False)+'\n')
-    return {'output':str(target_path),'rejected_output':str(rejected_path),
-        'target':target,'accepted':len(accepted),'target_filled':len(accepted)>=target,
-        'fill_rate':len(accepted)/target if target else 0.,'rejected_attempts':len(rejected),
-        'rejection_reasons':dict(reasons),'diversity':tracker.summary(),
-        'world_attempts_per_candidate':world_attempts_per_candidate,
-        'all_valid_candidates':all_valid_candidates,
-        'candidate_pool_size':len(rows),
-        'candidates_tested':candidates_tested,
-        'pool_fully_evaluated':candidates_tested==len(rows),
-        'candidate_acceptance_rate':len(accepted)/candidates_tested if candidates_tested else 0.0}
+    return {
+        "output":str(target_path),
+        "rejected_output":str(rejected_path),
+        "candidate_pool_size":len(rows),
+        "candidates_tested":candidates_tested,
+        "pool_fully_evaluated":candidates_tested==len(rows),
+        "accepted":len(accepted),
+        "candidate_acceptance_rate":len(accepted)/candidates_tested if candidates_tested else 0.0,
+        "rejected_attempts":len(rejected),
+        "rejection_reasons":dict(reasons),
+        "diversity":tracker.summary(),
+        "world_attempts_per_candidate":world_attempts_per_candidate,
+    }
 
 
 __all__=['generate_world_batch']
