@@ -68,6 +68,13 @@ def main():
             _require_inputs([args.kqa_train,args.kqa_val,args.yago_facts,args.yago_schema,args.yago_taxonomy,args.mmqa_train,args.mmqa_dev]);summary["source_preparation"]=prepare_source_priors(kqa_train=args.kqa_train,kqa_val=args.kqa_val,yago_facts=args.yago_facts,yago_schema=args.yago_schema,yago_taxonomy=args.yago_taxonomy,mmqa_train=args.mmqa_train,mmqa_dev=args.mmqa_dev,output_dir=OUTPUT_DIR,seed=args.seed,yago_profile_limit=args.yago_profile_limit,mmqa_max_records=args.mmqa_max_records,progress=progress)
         if args.prepare_sources_only:_write_json(summary_path,summary);print(summary_path);return
         summary["candidate_selection"]=generate_world_candidate_shortlist([args.kqa_train,args.kqa_val],YAGO_CATALOG,YAGO_TAXONOMY_INDEX,candidates,shortlist_target=shortlist,world_target=args.target,candidate_multiplier=args.candidate_multiplier,seed=args.seed,max_records=args.max_records,min_fragment_depth=args.min_fragment_depth,max_fragment_depth=args.max_fragment_depth,min_orchestration_depth=args.min_orchestration_depth,max_orchestration_depth=args.max_orchestration_depth,min_latent_anchors=args.min_latent_anchors,min_parallel_width=args.min_parallel_width,progress=progress)
+        if int(summary["candidate_selection"].get("accepted",0) or 0)<=0:
+            _write_json(summary_path,summary)
+            raise SystemExit(
+                "Candidate shortlist is empty; no executable worlds can be generated. "
+                "Inspect environment/data/build_summary.json -> candidate_selection."
+                "rejection_reasons (for example, hardness or BindingError)."
+            )
         summary["worlds"]=generate_world_batch(candidates,YAGO_CATALOG,YAGO_TAXONOMY_INDEX,worlds,target=args.target,min_depth=5,seed=args.seed,min_critical_sources=2,min_noncritical_sources=1,min_proof_sources=2,max_sources=6,mmqa_source_motifs_path=MMQA_SCENARIO_PRIOR,progress=progress);accepted=int(summary["worlds"].get("accepted",0) or 0)
         if accepted<=0:_write_json(summary_path,summary);raise SystemExit("World generation accepted no worlds")
         summary.update(_run_downstream(worlds,rendered,accepted=accepted,target=args.target,seed=args.seed,progress=progress))
