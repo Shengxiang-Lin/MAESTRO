@@ -282,3 +282,70 @@ this does not change the final-world quality or diversity checks.
 An already running pre-parallel process cannot adopt this implementation or
 retroactively save its in-memory candidates. Its first restart starts a new
 checkpointed candidate run.
+
+
+## Fixed validated candidate pool (default)
+
+The default construction mode is now a **fixed pool**, **not** a fixed
+accepted-world or accepted-question count:
+
+```yaml
+task_construction:
+  all_valid_candidates: true
+  candidate_pool_size: 2000
+```
+
+In this mode:
+
+1. Build a pool of **up to 2000 validated semantic candidates** (ProgramIR
+   composition + graph-grounded semantic binding). This is the pool size
+   *after* initial validation, not a raw proposal count. A bounded proposal
+   attempt budget still applies; if that budget is exhausted, the pool may
+   contain fewer than 2000 candidates.
+2. **No 8x reservoir multiplier and no separate 100- or 150-candidate
+   shortlist.** Every collected candidate is sent to World Generation.
+3. Check each candidate under the existing world synthesis, evidence,
+   observed semantic support, execution, TaskDesign, scenario, capability,
+   rendering **and dynamic final-world diversity** checks. The code does
+   not stop after 100 accepted worlds. Failed candidates are rejected with
+   recorded reasons; the existing per-candidate retry budget remains 3.
+4. Freeze **every accepted world** that passes downstream audits. For
+   instance, 2000 examined candidates might yield 800 worlds; the frozen
+   manifest then records `frozen_count=800`. This is not a promised yield.
+5. Question Author, Semantic Critic and deterministic pre/postflight process
+   the actual frozen rows. Only questions passing those checks are accepted;
+   there is no mandatory final question count.
+
+This **does not relax per-world quality gates**. World-level diversity uses
+caps based on the number accepted so far rather than the aspirational pool
+size; an item can still be rejected for diversity. Consequently `accepted`
+means passing **all** enabled gates, not every syntactically valid world.
+
+With the existing source-prior artifacts, run:
+
+```bash
+python environment/construct_tasks.py --reuse-source-priors
+python environment/generate_questions.py
+python environment/simulate_trajectories.py synthesize
+```
+
+The `2000` suffix in names such as `typed_worlds_2000.jsonl`,
+`frozen_manifest_2000.json` and `questions_2000/` describes the
+**candidate-pool configuration**, not the number of accepted records.
+Inspect `build_summary.json -> worlds.accepted / candidates_tested`,
+`frozen_manifest_2000.json -> frozen_count`, and
+`questions_2000/question_generation_summary.json -> accepted` for the
+actual counts.
+
+To change the size for all three stages, **edit
+`task_construction.candidate_pool_size` in `environment/config.yaml`**
+(or use the same custom YAML via `--config` for every command).
+A one-off `construct_tasks.py --candidate-pool-size N` override changes
+construction only; it does not automatically rewrite the next command's
+YAML paths. Different pool sizes have separate candidate checkpoints.
+
+The former target-limited mode is still available for comparisons:
+set `all_valid_candidates: false` and use `target`,
+`shortlist_target`, `candidate_multiplier` and
+`allow_partial_batch` as before. No automatic 1000-question replenishment
+pipeline is enabled or merged.
