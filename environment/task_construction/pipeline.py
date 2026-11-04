@@ -36,15 +36,15 @@ def _require_inputs(paths):
     if missing:raise SystemExit("Missing required input file(s):\n"+"\n".join(f"  - {p}" for p in missing))
 def _count_jsonl(path):
     with Path(path).open("r",encoding="utf-8") as handle:return sum(1 for line in handle if line.strip())
-def _artifact_paths(target):return {"task_design":OUTPUT_DIR/f"task_designs_{target}.jsonl","scenario":OUTPUT_DIR/f"scenario_validity_{target}.jsonl","capability":OUTPUT_DIR/f"capability_worlds_{target}.jsonl","authoring":OUTPUT_DIR/f"authoring_inputs_{target}.jsonl","manifest":OUTPUT_DIR/f"frozen_manifest_{target}.json"}
+def _artifact_paths(pool_size):return {"task_design":OUTPUT_DIR/f"task_designs_{pool_size}.jsonl","scenario":OUTPUT_DIR/f"scenario_validity_{pool_size}.jsonl","capability":OUTPUT_DIR/f"capability_worlds_{pool_size}.jsonl","authoring":OUTPUT_DIR/f"authoring_inputs_{pool_size}.jsonl","manifest":OUTPUT_DIR/f"frozen_manifest_{pool_size}.json"}
 def _require_prepared_sources():_require_inputs([KQA_ANALYSIS,YAGO_CATALOG,YAGO_ENTITY_PROFILES,YAGO_TAXONOMY_INDEX,MMQA_SEMANTIC_BUNDLES,MMQA_SCENARIO_PRIOR])
-def _run_downstream(worlds_path,rendered_path,*,accepted,target,seed,progress):
-    paths=_artifact_paths(target);result={};bar=tqdm(total=5,desc="Environment downstream",unit="stage",disable=not progress,dynamic_ncols=True)
+def _run_downstream(worlds_path,rendered_path,*,accepted,pool_size,seed,progress):
+    paths=_artifact_paths(pool_size);result={};bar=tqdm(total=5,desc="Environment downstream",unit="stage",disable=not progress,dynamic_ncols=True)
     result["task_design"]=plan_task_designs_jsonl(worlds_path,paths["task_design"],max_records=accepted,taxonomy_index_path=YAGO_TAXONOMY_INDEX);bar.update(1)
     result["rendered"]=render_jsonl(worlds_path,rendered_path,seed=seed);bar.update(1)
-    modality=audit_modality_jsonl(worlds_path,max_records=accepted);_write_json(OUTPUT_DIR/f"modality_audit_{target}.json",modality);result["modality"]=modality;bar.update(1)
-    scenario=audit_scenarios_jsonl(worlds_path,output_path=paths["scenario"],max_records=accepted);_write_json(OUTPUT_DIR/f"scenario_validity_summary_{target}.json",scenario);result["scenario_validity"]=scenario;bar.update(1)
-    capability=ground_capabilities_jsonl(worlds_path,paths["capability"],max_records=accepted,seed=seed,task_design_path=paths["task_design"]);_write_json(OUTPUT_DIR/f"capability_grounding_{target}.json",capability);result["capability_grounding"]=capability;result["semantic_plausibility"]=audit_plausibility_jsonl(worlds_path,YAGO_CATALOG,YAGO_TAXONOMY_INDEX,output_path=OUTPUT_DIR/f"semantic_plausibility_{target}.jsonl");result["execution_contract"]=audit_execution_contract_jsonl(worlds_path,output_path=OUTPUT_DIR/f"execution_contract_{target}.jsonl",seed=seed);bar.update(1);bar.close();return result
+    modality=audit_modality_jsonl(worlds_path,max_records=accepted);_write_json(OUTPUT_DIR/f"modality_audit_{pool_size}.json",modality);result["modality"]=modality;bar.update(1)
+    scenario=audit_scenarios_jsonl(worlds_path,output_path=paths["scenario"],max_records=accepted);_write_json(OUTPUT_DIR/f"scenario_validity_summary_{pool_size}.json",scenario);result["scenario_validity"]=scenario;bar.update(1)
+    capability=ground_capabilities_jsonl(worlds_path,paths["capability"],max_records=accepted,seed=seed,task_design_path=paths["task_design"]);_write_json(OUTPUT_DIR/f"capability_grounding_{pool_size}.json",capability);result["capability_grounding"]=capability;result["semantic_plausibility"]=audit_plausibility_jsonl(worlds_path,YAGO_CATALOG,YAGO_TAXONOMY_INDEX,output_path=OUTPUT_DIR/f"semantic_plausibility_{pool_size}.jsonl");result["execution_contract"]=audit_execution_contract_jsonl(worlds_path,output_path=OUTPUT_DIR/f"execution_contract_{pool_size}.jsonl",seed=seed);bar.update(1);bar.close();return result
 def build_parser():
     p=argparse.ArgumentParser(description="Build all valid MAESTRO worlds from a fixed semantic candidate pool")
     p.add_argument("--candidate-pool-size",type=int,default=2000,help="number of validated semantic candidates to collect and evaluate")
@@ -112,7 +112,7 @@ def main():
             "output":str(worlds),
             "resumed":True,
         }
-        summary.update(_run_downstream(worlds,rendered,accepted=accepted,target=pool_size,
+        summary.update(_run_downstream(worlds,rendered,accepted=accepted,pool_size=pool_size,
                                        seed=args.seed,progress=progress))
     else:
         if args.reuse_source_priors:
@@ -166,14 +166,14 @@ def main():
             raise SystemExit("World generation accepted no worlds. "
                              f"Rejection reasons: {summary['worlds'].get('rejection_reasons',{})}. "
                              f"See {summary['worlds'].get('rejected_output')} and {summary_path}")
-        summary.update(_run_downstream(worlds,rendered,accepted=accepted,target=pool_size,
+        summary.update(_run_downstream(worlds,rendered,accepted=accepted,pool_size=pool_size,
                                        seed=args.seed,progress=progress))
     _write_json(summary_path,summary)
     accepted=int(summary["worlds"].get("accepted",0) or 0)
     paths=_artifact_paths(pool_size)
     try:
         manifest=freeze_batch(
-            summary,target=accepted,seed=args.seed,worlds_path=worlds,
+            summary,accepted_count=accepted,seed=args.seed,worlds_path=worlds,
             task_design_path=paths["task_design"],scenario_path=paths["scenario"],
             capability_path=paths["capability"],authoring_input_path=paths["authoring"],
             manifest_path=paths["manifest"])
