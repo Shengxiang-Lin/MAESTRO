@@ -25,12 +25,20 @@ def resolve_dependencies(resources: list[Mapping[str, Any]], registry: Mapping[s
             dependencies[sid] = []
         elif has_anchors:
             anchors = set(map(str, resource.get("requires_anchors", ())))
-            if not anchors:
-                raise ValueError(f"discoverable resource {sid} has no required anchors")
-            dependencies[sid] = [
-                providers.get(anchor, set()) - {sid}
-                for anchor in sorted(anchors - question_anchors)
-            ]
+            if anchors:
+                dependencies[sid] = [
+                    providers.get(anchor, set()) - {sid}
+                    for anchor in sorted(anchors - question_anchors)
+                ]
+            else:
+                # Some frozen worlds store explicit provider source IDs
+                # rather than a named anchor registry.
+                parents = set(map(str, resource.get("anchor_dependency_resource_ids", ())))
+                if not parents:
+                    raise ValueError(f"discoverable resource {sid} has no frozen acquisition prerequisite")
+                if not parents.issubset(by_id) or sid in parents:
+                    raise ValueError(f"invalid acquisition parents for {sid}")
+                dependencies[sid] = [{parent} for parent in sorted(parents)]
         else:
             parents = set(map(str, resource.get("anchor_dependency_resource_ids", ())))
             if not parents.issubset(by_id) or sid in parents:
