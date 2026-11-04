@@ -25,7 +25,7 @@ class FixedCandidatePoolTests(unittest.TestCase):
                 "version":1,
                 "task_construction":{"candidate_pool_size":2000},
                 "question_generation":{
-                    "manifest":"environment/data/frozen_manifest_{target}.json",
+                    "manifest":"environment/data/frozen_manifest_{pool_size}.json",
                 },
             }),encoding="utf-8")
             parser=argparse.ArgumentParser()
