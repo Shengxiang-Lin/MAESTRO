@@ -19,6 +19,7 @@ def planner_prompt(payload: Mapping[str, Any]) -> str:
         "question": payload["question"],
         "overall_solution_architecture": payload["public_plan"],
         "completed_subtask_ids": payload["completed_subtask_ids"],
+        "completed_subtask_results": payload["completed_subtask_results"],
         "history_summaries": payload["history_summaries"],
         "ready_tasks_this_round": payload["ready_tasks"],
         "pending_task_ids": payload["pending_task_ids"],
@@ -30,7 +31,7 @@ def planner_prompt(payload: Mapping[str, Any]) -> str:
         "resource_id exactly as given, with one specific instruction each. "
         "Do not schedule unready tasks, hallucinate tools, or claim future results. "
         "Return JSON: {\"parallel_subtasks\":[{\"subtask_id\":str,"
-        "\"agent\":str,\"resource_id\":str,\"instruction\":str}]}.\\n\\n"
+        "\"agent\":str,\"resource_id\":str,\"instruction\":str}]}.\n\n"
         + _dump(public)
     )
 
@@ -56,7 +57,7 @@ def executor_prompt(payload: Mapping[str, Any]) -> str:
         "Return JSON: {\"subtask_id\":str,\"status\":\"success\","
         "\"answer\":[...],\"answer_summary\":str,\"trajectory_summary\":str,"
         "\"evidence_source_ids\":[str]}. "
-        "evidence_source_ids must be the single resource_id assigned to you.\\n\\n"
+        "evidence_source_ids must be the single resource_id assigned to you.\n\n"
         + _dump(public)
     )
 
@@ -72,7 +73,7 @@ def summary_prompt(payload: Mapping[str, Any]) -> str:
         "Write the Main Agent's concise round summary AFTER receiving all "
         "parallel Sub-Agent answers. State what has now been learned and which "
         "work remains, but do not predict unknown future observations or invent "
-        "missing facts. Return exactly {\"main_summary\":str}.\\n\\n"
+        "missing facts. Return exactly {\"main_summary\":str}.\n\n"
         + _dump(public)
     )
 
@@ -89,7 +90,7 @@ def final_prompt(payload: Mapping[str, Any]) -> str:
         "the original question, supported by the accumulated evidence. "
         "Use the same answer type/format as the question requires: JSON string, "
         "number, boolean, or list. Do not invent facts. Return JSON: "
-        "{\"action\":\"complete\",\"answer\":<answer>,\"summary\":str}.\\n\\n"
+        "{\"action\":\"complete\",\"answer\":<answer>,\"summary\":str}.\n\n"
         + _dump(public)
     )
 
