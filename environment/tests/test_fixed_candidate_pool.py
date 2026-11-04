@@ -60,8 +60,12 @@ class FixedCandidatePoolTests(unittest.TestCase):
                 "attempts": 15, "rejections": {}, "examples": [],
                 "workers": 1, "proposal_batch_size": 2,
             }
+            class DummyProgram:
+                def canonical_signature(self):
+                    return "source-signature"
+
             with (
-                patch.object(cs, "_iter_kqa_programs", return_value=[object()]),
+                patch.object(cs, "_iter_kqa_programs", return_value=[DummyProgram()]),
                 patch.object(cs, "prepare_composition_pools",
                              return_value=([object()], [object()])),
                 patch.object(cs.TaxonomyIndex, "from_json", return_value=object()),
