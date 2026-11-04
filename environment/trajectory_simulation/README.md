@@ -1,132 +1,164 @@
-# O1 Two-Role Trajectory Simulation
+# Fragment-Centric Gold O1 Trajectories
 
-Stage three uses the existing frozen worlds and accepted questions without
-modifying either. It generates O1-shaped collaboration records, not real tool
-execution episodes, attack/recovery branches, costs or raw tool traces.
+Stage 3 **does not generate a new solution**. Stage 1 has already composed
+KQA ProgramIR fragments into an executable task and Stage 2 has generated
+an accepted natural-language question. This stage turns those **existing
+answered fragments** into a clean, official Orchestra-o1 collaboration
+trajectory, one interaction round at a time.
 
-## Main controls each round
+## Ground truth comes from Stage 1
 
-The Main LLM receives the question, known resource descriptors and previous
-public replies. It chooses the next `delegate_task` or `complete` action.
-For delegation it decides the instructions, context, tools, task grouping
-and parallel width. It may dispatch only part of the feasible work or combine
-several feasible source scopes into one task. No fixed DAG wave is imposed.
+`compiler.py` reads:
+- `program.metadata.deep_dependency.composition_links[]` (fragment boundaries,
+  stage, `output_node_id` and predecessor structure);
+- `SymbolicExecutor.execute_trace()` (exact intermediate answers);
+- the frozen `World` and rendered source observations (grounded clues);
+- capability resource dependencies (evidence-discovery prerequisites).
 
-The constrained teacher prompt also includes private feasible scope handles,
-an evidence-sufficiency flag and the terminal answer format. It does not include
-future source contents, the oracle answer or the symbolic reasoning trace.
-These teacher hints are not part of public `state_before` or history.
-This remains constrained teacher synthesis, not an unconstrained O1 benchmark.
+Every fragment's complete ancestor subprogram is evaluated on candidate
+source subsets. The compiler selects a **reachable evidence witness** that
+reproduces its full-world result, and checks decision-information completeness.
+It subtracts predecessor evidence for the Sub-Agent packet, so a later
+fragment receives already-known intermediate answers plus **new** clues,
+rather than rereading every earlier source.
 
-There is no separate Main summary stage. After the round's replies return,
-Main decides its next action from the updated history.
+A terminal evidence fragment is added **only when** the combined fragments'
+evidence cannot support the original final answer. The terminal calculation
+and final oracle answer always remain programmatically verified.
 
-## One simulator call per Main task
+The compiler **rejects** tasks without `composition_links`; it never falls
+back to source-by-source exploration or invents a new decomposition.
 
-Each task in `delegate_task.params.tasks` produces exactly one independently
-scheduled Sub-Agent LLM request and one reply, even if several sources are
-assigned to that task. The simulator receives its assigned task, scoped frozen
-observations, authoritative public fact surfaces and already observed context.
+## Role 1: Main Teacher
 
-Public replies in `result.subtask_results` contain `subtask_index`,
-`task_instruction`, `model`, `tools_assigned`, `done`, plus:
+The public O1 state supplied at each decision contains only:
 
 ```json
 {
-  "finish_result": {
-    "result": "Source-attributed answer to the delegated task",
-    "status": "done",
-    "summary": "Concise result summary"
-  },
-  "trace_summary": "Compressed description of simulated work"
+  "question": "...",
+  "history": [
+    {"action": "delegate_task", "reasoning": "...",
+     "params": {"tasks": []}, "result": {"subtask_results": []}}
+  ],
+  "available_tools": ["GoogleSearchAction", "ExtractUrlContentAction"]
 }
 ```
 
-Discovery also uses the simulator, but receives only a frozen descriptor.
-It cannot access that resource's contents until a later inspection task.
-The private `task_bindings` and exact `grounded_claims` audit fields are
-validated and stripped from public actions, replies and history.
+The full tool registry is supplied in real episodes; the example is abbreviated.
 
-With JSON mode enabled, native role requests use strict JSON Schema. The
-simulator's `finish_result.result` starts with a schema-constrained prefix
-containing all assigned public facts (or only the discovery descriptor).
-The LLM writes any subsequent task conclusion, `summary` and `trace_summary`.
-This prevents source facts from disappearing behind an early no-match answer.
-The backend must support JSON Schema, including string patterns and fixed
-claim values; unsupported endpoints fail explicitly. `--no-json-mode` disables
-guided decoding, but does not disable output validation.
+The **Main generation prompt** additionally receives a **PRIVATE** teacher
+guidance block, compiled from the frozen composition graph:
+`fragment_graph`, `completed_fragments`, `ready[]` (current fragment operations,
+resource descriptors, prerequisites, permitted tools), remaining fragments
+and terminal operator. Future answer values, future resource contents and
+the oracle final answer are **not** included.
 
-## Evidence and validation
+Main emits only the next native O1 action:
+- `delegate_task`: one task per currently-ready independent gold fragment;
+  all ready tasks are dispatched in the same parallel round. Main writes
+  actionable `task_instruction`, `context` and selects tools. The controller
+  binds task array slots to fragment IDs **privately**; the model no longer
+  generates private task binding IDs.
+- `complete`: only after all required fragments have succeeded, with a
+  final answer checked against the frozen oracle.
 
-The full frozen resource environment is compiled, including alternative
-providers and distractors. A minimum reachable proof is retained only as private
-supervision; Main need not follow that particular proof or inspect every source.
+The public `state_before` and the next-round `history` contain **no private
+guidance, symbolic trace, oracle answer or fragment IDs**. The output is an
+O1-format trajectory, but the labeled action is gold-guided rather than a
+free exploration rollout.
 
-Discovery dependencies are AND over required anchors and OR over providers of
-the same anchor. A provider must have completed inspection in a previous round.
-Legacy resources use explicit parent dependencies. Unreachable dependencies
-remain errors. Resource titles are aliases of their exact IDs, not independent
-sources; facts about the same entity may be joined across sources.
+## Role 2: Sub-Agent Teacher
 
-Completion requires a nonempty inspected-source cover whose symbolic result
-matches the frozen result and whose decision-information check passes, including
-the full world's required attribute facts. Attribute-only `required_fact_ids`
-can be empty for relation tasks, so that field alone never authorizes completion.
-This uses the frozen world's closed-world semantics, not open-web completeness.
+One LLM request is made **per assigned fragment**, and independent current
+round tasks run in parallel. Inputs include:
+- the delegated O1 task;
+- completed prerequisite fragment answers;
+- the gold fragment operations;
+- its incremental evidence packet (rendered source content and public facts);
+- its **authoritative intermediate answer** from Stage 1.
 
-`complete.params.answer` must be a string and satisfy the deterministic terminal
-contract: sets for names/relations/selections, multisets for attribute lists,
-and strict scalar typing. Numeric formatting is normalized; booleans are not
-numbers. There is no separate final-summary critic that can veto a correct answer.
+The LLM generates only:
 
-Feedback audit claims must exactly match their assigned evidence. Public text
-must retain all assigned fact surfaces and source attribution. It also has
-deterministic numeric, resource and visibility checks, but these do not prove
-full natural-language semantic equivalence. Review samples before publication.
+```json
+{
+  "summary": "What this particular subtask established.",
+  "trace_summary": "A concise narrative of the relevant clues and operations."
+}
+```
+
+The program inserts the **exact frozen subtask answer** as
+`finish_result.result` and `status: done`. It never asks the LLM to reproduce
+the entire fact list, a private fact enum or a regex-constrained evidence
+prefix. Consequently the JSON schema is small, while the factual answer is
+strictly correct by construction.
+
+Natural-language summaries are bounded and checked for numeric assertions,
+unknown source references and private IDs. They are **not** a substitute for
+a full semantic entailment audit. Sample manually before using as training
+data. Neither role fabricates raw tool-call traces, cost, failures or attacks.
 
 ## Commands
 
-Run from the MAESTRO root using the `orchestra-o1` Conda environment:
+From the MAESTRO repository root, after task construction and question
+generation:
 
 ```bash
-conda activate orchestra-o1
+# Compile the fragment DAGs without invoking an LLM.
+python environment/simulate_trajectories.py plan \
+  --max-records 10 --output /tmp/maestro_fragment_plans.jsonl
 
-# Compile a private environment plan, with no LLM calls.
-python environment/simulate_trajectories.py plan
-
-# Deterministic smoke test; only this offline Main has oracle access.
+# Offline structural smoke test (not LLM training data).
 python environment/simulate_trajectories.py synthesize \
-  --provider passthrough --max-records 3
+  --provider passthrough --max-records 10 \
+  --output /tmp/maestro_fragment_offline.jsonl
 
-# Main and simulator use the configured LLM profiles.
-python environment/simulate_trajectories.py synthesize
+# Real Qwen3.5-9B Main/Sub-Agent teacher generation.
+python environment/simulate_trajectories.py synthesize \
+  --max-records 10 --output /tmp/maestro_fragment_llm.jsonl
 
-python -m unittest discover -s environment/tests -v
+# Regression tests.
+python -m unittest discover -s environment/tests -p "test_gold_trajectory.py" -v
 ```
 
-Defaults in `environment/config.yaml` use `local_qwen35_9b` for both separately
-prompted roles, temperature 0.2, four simulator workers and three attempts.
-Profiles and `--planner-model` / `--executor-model` can select different models.
-`subagent_workers` caps concurrency within a round; questions run sequentially.
-Invalid actions/replies retry with validation feedback, never silent acceptance.
+Both roles default to the same local Qwen3.5-9B vLLM service, but use
+different prompts and can have independently selected model profiles.
 
-## Outputs
+```yaml
+trajectory_simulation:
+  planner_profile: local_qwen35_9b
+  executor_profile: local_qwen35_9b
+  planner_temperature: 0.2
+  executor_temperature: 0.2
+  subagent_workers: 4
+  max_attempts: 3
+  flush_every: 5
+```
 
-Default inputs are `environment/data/typed_worlds_2000.jsonl` and
-`environment/data/questions_2000/realized_capability_worlds.jsonl`.
-Default output is `environment/data/trajectories_2000.jsonl`.
+`subagent_workers` parallelizes current-round fragments; rounds and
+different questions are still sequential. `max_attempts` retries
+structurally invalid Main actions or Sub-Agent summaries with rejection
+feedback, **never** changing gold facts or fragment dependencies.
 
-Each accepted record has `trajectory[]` entries with `action`, `reasoning`,
-`params`, `result` and public `state_before`. The final entry is `complete`.
-Private `gold_supervision` contains the answer, proof/source alternatives and
-round bindings. It must not be exported as student observation data.
-Metadata marks simulated feedback and the absence of raw tool traces.
-The legacy training exporter expecting `o1_equivalent_prompt` needs adaptation.
+## Output and privacy boundary
 
-Rejected records retain stage, validation issues and available attempt diagnostics
-in a separate `.rejected.jsonl`. Treat these diagnostics as privileged metadata.
-`flush_every` flushes whole accepted/rejected records, not resumable round
-checkpoints. Re-running synthesis overwrites its output files.
+`trajectories_2000.jsonl` contains one accepted episode per JSONL row:
 
-The old fixed-plan implementation remains as `_synthesize_reference_one` for
-reference regression tests; the public synthesis entry point uses `o1_pipeline`.
+- `trajectory[]`: native O1 public `delegate_task` actions, corresponding
+  `subtask_results` with `finish_result` and `trace_summary`, followed by
+  `complete`.
+- `trajectory[].state_before`: public O1 question, history, and tools only.
+- `validation`: final-answer and fragment-completion checks.
+- `gold_supervision`: **PRIVATE** composition fragment IDs, node IDs,
+  source witnesses, exact intermediate answers, symbolic trace and task-slot
+  bindings. Exclude this field and any plan-only outputs from student prompts.
+
+`trajectories_2000.jsonl.rejected.jsonl` records rejection stages and
+attempt diagnostics. These may contain private data and must remain in
+audit storage. `flush_every` periodically writes whole episodes; Stage 3
+does not yet have a cross-run checkpoint. Re-running synthesis overwrites
+the chosen output paths. Use a distinct `--output` for trials.
+
+This implementation intentionally **removes** the old Main free-selection
+of arbitrary resource scopes, source-centric Sub-Agent answers, optional
+source exploration, dynamic JSON enum/fact-prefix decoding, redundant
+LLM fact copying and the previous dual simulation path.
