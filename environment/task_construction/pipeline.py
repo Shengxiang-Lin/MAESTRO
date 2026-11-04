@@ -4,6 +4,7 @@ import argparse,json,math
 from pathlib import Path
 from typing import Any,Mapping
 from tqdm.auto import tqdm
+from environment.config import EnvironmentConfigError, parse_with_config
 from .capabilities import ground_capabilities_jsonl
 from .deep_dependency.candidate_selection import DEFAULT_CANDIDATE_MULTIPLIER,generate_world_candidate_shortlist
 from .deep_dependency.world_generation import generate_world_batch
@@ -48,7 +49,12 @@ def _run_downstream(worlds_path,rendered_path,*,accepted,target,seed,progress):
 def build_parser():
     p=argparse.ArgumentParser(description="Build MAESTRO synthetic task worlds");p.add_argument("--target",type=int,default=100);p.add_argument("--shortlist-target",type=int);p.add_argument("--candidate-multiplier",type=float,default=DEFAULT_CANDIDATE_MULTIPLIER);p.add_argument("--seed",type=int,default=17);p.add_argument("--max-records",type=int);p.add_argument("--min-fragment-depth",type=int,default=2);p.add_argument("--max-fragment-depth",type=int,default=4);p.add_argument("--min-orchestration-depth",type=int,default=3);p.add_argument("--max-orchestration-depth",type=int,default=5);p.add_argument("--min-latent-anchors",type=int,default=2);p.add_argument("--min-parallel-width",type=int,default=2);p.add_argument("--kqa-train",type=Path,default=DEFAULT_KQA_TRAIN);p.add_argument("--kqa-val",type=Path,default=DEFAULT_KQA_VAL);p.add_argument("--yago-facts",type=Path,default=DEFAULT_YAGO_FACTS);p.add_argument("--yago-schema",type=Path,default=DEFAULT_YAGO_SCHEMA);p.add_argument("--yago-taxonomy",type=Path,default=DEFAULT_YAGO_TAXONOMY);p.add_argument("--mmqa-train",type=Path,default=DEFAULT_MMQA_TRAIN);p.add_argument("--mmqa-dev",type=Path,default=DEFAULT_MMQA_DEV);p.add_argument("--yago-profile-limit",type=int,default=4096);p.add_argument("--mmqa-max-records",type=int);p.add_argument("--reuse-source-priors",action="store_true");p.add_argument("--prepare-sources-only",action="store_true");p.add_argument("--resume-downstream",action="store_true");p.add_argument("--no-progress",action="store_true");return p
 def main():
-    args=build_parser().parse_args();progress=not args.no_progress
+    
+    try:
+        args=parse_with_config(build_parser(),"task_construction")
+    except EnvironmentConfigError as exc:
+        raise SystemExit(f"Environment configuration error: {exc}") from exc
+    progress=not args.no_progress
     if args.target<=0:raise SystemExit("--target must be positive")
     shortlist=args.shortlist_target if args.shortlist_target is not None else _default_shortlist_target(args.target)
     if shortlist<args.target:raise SystemExit("--shortlist-target must be >= --target")
