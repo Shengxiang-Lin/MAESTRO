@@ -22,7 +22,7 @@ def _world_by_task(path):
 def _capability_by_task(path):return {str(row.get("task_id")):row for row in _rows(path) if row.get("task_id")}
 def _backends(args):
     author_spec=resolve_model(args,"question_author")
-    critic_spec=resolve_model(args,"question_critic")
+    critic_spec=resolve_model(args,"question_critic") if not args.no_semantic_critic else {"provider":"passthrough","backend":"passthrough","model":None,"base_url":None,"api_key":None,"json_mode":False}
     # Keep resolved metadata free from API keys.
     args._resolved_models={
         "question_author":{k:v for k,v in author_spec.items() if k!="api_key"},
@@ -110,5 +110,9 @@ def main():
     missing=[key for key in ("manifest","authoring_inputs","worlds","capabilities","output_dir") if not getattr(args,key,None)]
     if missing:raise SystemExit("Missing question-generation inputs (CLI or YAML): "+", ".join(missing))
     if args.question_workers<1:raise SystemExit("--question-workers must be >= 1")
-    print(json.dumps(run(args),ensure_ascii=False,indent=2))
+    try:
+        result=run(args)
+    except EnvironmentConfigError as exc:
+        raise SystemExit(f"Environment model error: {exc}") from exc
+    print(json.dumps(result,ensure_ascii=False,indent=2))
 if __name__=="__main__":main()
