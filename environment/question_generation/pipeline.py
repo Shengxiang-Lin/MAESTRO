@@ -17,7 +17,9 @@ def _world_by_task(path,seed=17):
     from environment.task_construction.rendering.pipeline import render_task_record
     result={}
     for index,row in enumerate(_rows(path)):
-        task=render_task_record(row,seed=seed+index);result[task.task_id]=row
+        task=render_task_record(row,seed=seed+index)
+        if task.task_id in result:raise BoundaryError(f"duplicate world task_id: {task.task_id}")
+        result[task.task_id]={**row,"_display_answer":task.answer}
     return result
 def _capability_by_task(path):return {str(row.get("task_id")):row for row in _rows(path) if row.get("task_id")}
 def _backends(args):
@@ -43,7 +45,7 @@ def _backends(args):
             args.critic_temperature,args.critic_max_tokens,args.timeout,
             critic_spec["json_mode"] and not args.no_json_mode))
     return author,critic
-def _oracle(world):return world.get("answer") if isinstance(world,Mapping) else None
+def _oracle(world):return world.get("_display_answer",world.get("answer")) if isinstance(world,Mapping) else None
 def _critic_review(critic,payload,question,*,max_tries=2):
     last=None
     for _ in range(max_tries):
@@ -65,11 +67,18 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
             except BackendError as exc:
                 audit["critic_error"]=str(exc);audits.append(audit);feedback=f"semantic_critic_error: {exc}";continue
             audit["semantic_critic"]=review
-            if not bool(review.get("accept")) or str(review.get("semantic_fidelity","pass")).lower()=="fail":
+            if review.get("accept") is not True or str(review.get("semantic_fidelity","")).lower()!="pass":
                 repair=" ".join(str(review.get("repair_question") or "").split())
                 if repair:
                     repair_pre=preflight(payload,repair);audit["repair_preflight"]=repair_pre.to_dict()
-                    if repair_pre.accepted:candidate=repair
+                    if repair_pre.accepted:
+                        try:repair_review=_critic_review(critic,payload,repair,max_tries=1)
+                        except BackendError as exc:
+                            audit["repair_critic_error"]=str(exc);audits.append(audit);feedback="repair critic failed";continue
+                        audit["repair_semantic_critic"]=repair_review
+                        if repair_review.get("accept") is not True or repair_review.get("semantic_fidelity")!="pass":
+                            audits.append(audit);feedback="repair still violates frozen semantics";continue
+                        candidate=repair
                     else:
                         audits.append(audit);feedback="critic repair failed deterministic preflight: "+"; ".join(repair_pre.issues);continue
                 else:
@@ -85,7 +94,10 @@ def run(args):
     except (BoundaryError,FileNotFoundError,json.JSONDecodeError) as exc:raise SystemExit(f"Frozen-input validation failed: {exc}") from exc
     authoring=_rows(args.authoring_inputs)
     if args.max_records is not None:authoring=authoring[:args.max_records]
-    worlds=_world_by_task(args.worlds,seed=args.seed);capabilities=_capability_by_task(args.capabilities);output_dir=Path(args.output_dir);output_dir.mkdir(parents=True,exist_ok=True);realized_path=output_dir/"realized_capability_worlds.jsonl";rejected_path=output_dir/"question_rejected.jsonl";critic_path=output_dir/"question_critic_audit.jsonl";summary_path=output_dir/"question_generation_summary.json";author,critic=_backends(args);results=[];workers=max(1,args.question_workers)
+    worlds=_world_by_task(args.worlds,seed=args.seed);capabilities=_capability_by_task(args.capabilities)
+    if any(str(row.get("task_id")) not in worlds for row in authoring):
+        raise SystemExit("authoring tasks are missing corresponding executable worlds")
+    output_dir=Path(args.output_dir);output_dir.mkdir(parents=True,exist_ok=True);realized_path=output_dir/"realized_capability_worlds.jsonl";rejected_path=output_dir/"question_rejected.jsonl";critic_path=output_dir/"question_critic_audit.jsonl";summary_path=output_dir/"question_generation_summary.json";author,critic=_backends(args);results=[];workers=max(1,args.question_workers)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures={pool.submit(_realize_one,payload,worlds.get(str(payload.get("task_id")),{}),capabilities.get(str(payload.get("task_id")),{}),author,critic,question_max_attempts=args.question_max_attempts,use_critic=not args.no_semantic_critic):index for index,payload in enumerate(authoring)}
         iterator=as_completed(futures);bar=tqdm(total=len(futures),desc="Question generation",unit="task",disable=args.no_progress)

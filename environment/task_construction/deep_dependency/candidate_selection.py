@@ -1,6 +1,6 @@
 """Generate and select graph-grounded deep ProgramIR candidates."""
 from __future__ import annotations
-import json,math,random
+import json,math,os
 from collections import Counter
 from pathlib import Path
 from typing import Any,Iterable,Mapping,Sequence
@@ -11,7 +11,7 @@ from ..ir import ProgramIR
 from ..data_sources.kqa import record_to_ir
 from ..quality.diversity import BatchDiversityTracker
 from ..quality.hardness import complexity_profile,pure_topology_signature
-from .composer import compose_deep_program
+from .composer import compose_deep_program,prepare_composition_pools
 from .terminal_families import terminal_family
 DEFAULT_CANDIDATE_MULTIPLIER=8.0
 
@@ -56,37 +56,112 @@ def _binding_type_pairs(binding:Mapping[str,Any])->list[str]:
         if isinstance(item,Mapping):result.append(f"attribute:{item.get('entity_type')}->{item.get('value_kind')}")
     return result
 
-def generate_world_candidate_shortlist(kqa_paths:Sequence[str|Path],yago_catalog_path:str|Path,taxonomy_path:str|Path,output_path:str|Path,*,shortlist_target:int,world_target:int,candidate_multiplier:float=DEFAULT_CANDIDATE_MULTIPLIER,seed:int=17,max_records:int|None=None,min_fragment_depth:int=2,max_fragment_depth:int=4,min_orchestration_depth:int=3,max_orchestration_depth:int=5,min_latent_anchors:int=2,min_parallel_width:int=2,progress:bool=False)->dict[str,Any]:
-    programs=_iter_kqa_programs(kqa_paths,max_records=max_records)
-    if not programs:raise ValueError("no usable KQA-Pro programs")
-    catalog=json.loads(Path(yago_catalog_path).read_text(encoding="utf-8"));taxonomy=TaxonomyIndex.from_json(taxonomy_path);rng=random.Random(seed);reservoir_target=max(shortlist_target,int(math.ceil(shortlist_target*candidate_multiplier)));tracker=BatchDiversityTracker();accepted=[];rejections=Counter();rejection_examples=[];attempts=0;iterator=range(reservoir_target)
-    if progress:iterator=tqdm(iterator,desc="Semantic candidate reservoir",unit="candidate")
-    for _ in iterator:
-        attempts+=1
+def _generate_world_candidate_shortlist(
+    kqa_paths, yago_catalog_path, taxonomy_path, output_path, *,
+    shortlist_target, world_target, candidate_multiplier=DEFAULT_CANDIDATE_MULTIPLIER,
+    seed=17, max_records=None, min_fragment_depth=2, max_fragment_depth=4,
+    min_orchestration_depth=3, max_orchestration_depth=5,
+    min_latent_anchors=2, min_parallel_width=2, progress=False, max_attempts=None,
+    candidate_workers=None, candidate_proposal_batch_size=None, restart_candidates=False,
+):
+    if max_attempts is not None and max_attempts<1:
+        raise ValueError('max_attempts must be positive')
+    if not 0 < world_target <= shortlist_target or candidate_multiplier < 1:
+        raise ValueError('require 0 < world_target <= shortlist_target and multiplier >= 1')
+    programs = _iter_kqa_programs(kqa_paths, max_records=max_records)
+    unique = {p.canonical_signature():p for p in programs}
+    pools = prepare_composition_pools(tuple(unique.values()),
+        min_depth=min_fragment_depth, max_depth=max_fragment_depth)
+    if not all(pools):
+        raise ValueError('no usable dependency-closed producer or terminal pools')
+    catalog = json.loads(Path(yago_catalog_path).read_text(encoding='utf-8'))
+    taxonomy = TaxonomyIndex.from_json(taxonomy_path)
+    from .parallel_candidates import (input_signature,prepare_worker_context,
+        run_batches,_worker_init)
+    workers=min(8,os.cpu_count() or 1) if candidate_workers is None else candidate_workers
+    batch_size=2*workers if candidate_proposal_batch_size is None else candidate_proposal_batch_size
+    if workers<1 or batch_size<1:
+        raise ValueError('candidate workers and proposal batch size must be positive')
+    reservoir_target=max(shortlist_target,int(math.ceil(shortlist_target*candidate_multiplier)))
+    attempts_limit=max_attempts if max_attempts is not None else max(1000,reservoir_target*40)
+    settings=dict(seed=seed,shortlist_target=shortlist_target,world_target=world_target,
+        reservoir_target=reservoir_target,workers=workers,batch_size=batch_size,max_records=max_records,
+        min_fragment_depth=min_fragment_depth,max_fragment_depth=max_fragment_depth,
+        min_orchestration_depth=min_orchestration_depth,max_orchestration_depth=max_orchestration_depth,
+        min_latent_anchors=min_latent_anchors,min_parallel_width=min_parallel_width)
+    signature=input_signature([*kqa_paths,yago_catalog_path,taxonomy_path],settings)
+    prepare_worker_context(catalog,taxonomy,seed)
+
+    def make_proposal(attempt,rng,predicate_usage):
         try:
-            composed=compose_deep_program(programs,min_fragment_depth=min_fragment_depth,max_fragment_depth=max_fragment_depth,min_orchestration_depth=min_orchestration_depth,max_orchestration_depth=max_orchestration_depth,min_parallel_width=min_parallel_width,seed=rng.randrange(1<<31))
-            profile=complexity_profile(composed,min_depth=max(3,min_fragment_depth+1))
-            if not profile.qualifies:rejections["hardness"]+=1;continue
-            binder=GraphGroundedProgramBinder(catalog,taxonomy,seed=rng.randrange(1<<31),candidate_limit=32,max_states=4096);plan=binder.bind(composed);binding=plan.to_dict();topology=pure_topology_signature(plan.program);predicates=_binding_predicates(binding);type_pairs=_binding_type_pairs(binding);family=terminal_family(plan.program);ok,reasons=tracker.would_accept(topology=topology,predicates=predicates,type_pairs=type_pairs,terminal_family=family)
-            if not ok:rejections.update(reasons);continue
-            row={"candidate_id":f"candidate-{len(accepted)+1:06d}","program":plan.program.to_dict(),"binding":binding,"source_program_signature":plan.program.canonical_signature(),"reasoning_motif":profile.label,"hardness":profile.to_dict(),"topology_signature":topology,"terminal_family":family,"selection":{"world_target":world_target,"shortlist_target":shortlist_target,"candidate_multiplier":candidate_multiplier}}
-            accepted.append(row);tracker.add(topology=topology,predicates=predicates,type_pairs=type_pairs,terminal_family=family)
-            if len(accepted)>=shortlist_target:break
+            motifs=('chain',) if min_parallel_width==1 else ('chain','fork_join','mixed_dag')
+            composed=compose_deep_program((),prepared_pools=pools,
+                min_fragment_depth=min_fragment_depth,max_fragment_depth=max_fragment_depth,
+                min_orchestration_depth=min_orchestration_depth,max_orchestration_depth=max_orchestration_depth,
+                min_latent_anchors=min_latent_anchors,min_parallel_width=min_parallel_width,
+                motif=motifs[attempt%len(motifs)],seed=rng.randrange(1<<31))
+            profile=complexity_profile(composed,min_depth=5)
+            if not profile.qualifies:
+                return {'attempt':attempt,'error':'hardness'}
+            return {'attempt':attempt,'program':composed.to_dict(),'binding_seed':rng.randrange(1<<31),
+                'predicate_usage':predicate_usage,'reasoning_motif':profile.label,'hardness':profile.to_dict()}
         except (BindingError,ValueError,RuntimeError) as exc:
-            detail=str(exc)
-            category=(detail.split(":",1)[0].strip() or type(exc).__name__)
-            key=f"{type(exc).__name__}:{category}"
-            rejections[key]+=1
-            if len(rejection_examples)<20:
-                rejection_examples.append({"attempt":attempts,"category":key,"detail":detail[:240]})
-        if progress and attempts%50==0 and hasattr(iterator,"set_postfix"):
-            main_reason=rejections.most_common(1)
-            iterator.set_postfix(
-                accepted=len(accepted),
-                dominant_rejection=main_reason[0][0][:45] if main_reason else "none",
-            )
-    target=Path(output_path);target.parent.mkdir(parents=True,exist_ok=True)
-    with target.open("w",encoding="utf-8") as writer:
-        for row in accepted:writer.write(json.dumps(row,ensure_ascii=False)+"\n")
-    return {"output":str(target),"requested_shortlist":shortlist_target,"world_target":world_target,"generated_attempts":attempts,"accepted":len(accepted),"acceptance_rate":len(accepted)/attempts if attempts else 0.0,"reservoir_target":reservoir_target,"rejection_reasons":dict(rejections.most_common()),"rejection_examples":rejection_examples,"diversity":tracker.summary(),"policy":"deep_program_composition_then_graph_grounded_semantic_binding_then_diversity_selection"}
-__all__=["DEFAULT_CANDIDATE_MULTIPLIER","generate_world_candidate_shortlist"]
+            return {'attempt':attempt,'error':type(exc).__name__+':'+str(exc).split(':',1)[0],
+                    'detail':str(exc)[:240]}
+
+    reservoir,parallel=run_batches(output_path,signature=signature,target=reservoir_target,
+        attempts_limit=attempts_limit,seed=seed,workers=workers,batch_size=batch_size,
+        make_proposal=make_proposal,progress=progress,restart=restart_candidates,
+        initializer=_worker_init,initargs=(str(yago_catalog_path),str(taxonomy_path),seed))
+    attempts=parallel['attempts']
+    rejections=parallel['rejections']
+    examples=parallel['examples']
+    # Interleave structural cells before applying target-sized semantic caps.
+    cells = {}
+    for row in reservoir:
+        deep = row['program']['metadata']['deep_dependency']
+        key = (deep['orchestration_motif'],deep['orchestration_depth'],row['terminal_family'])
+        cells.setdefault(key,[]).append(row)
+    tracker = BatchDiversityTracker(target=shortlist_target)
+    selected, selection_rejections = [], Counter()
+    while any(cells.values()) and len(selected)<shortlist_target:
+        for key in sorted(cells):
+            if not cells[key] or len(selected)>=shortlist_target:
+                continue
+            row = cells[key].pop(0)
+            kwargs = dict(topology=row['topology_signature'],
+                predicates=_binding_predicates(row['binding']),
+                type_pairs=_binding_type_pairs(row['binding']),terminal_family=row['terminal_family'])
+            ok, reasons = tracker.would_accept(**kwargs)
+            if not ok:
+                selection_rejections.update(reasons)
+                continue
+            selected.append(row)
+            tracker.add(**kwargs)
+    target = Path(output_path)
+    target.parent.mkdir(parents=True,exist_ok=True)
+    reserve_path=target.with_name(target.stem+'.reservoir.jsonl')
+    with reserve_path.open('w',encoding='utf-8') as reserve:
+        for row in reservoir:reserve.write(json.dumps(row,ensure_ascii=False)+'\n')
+    with target.open('w',encoding='utf-8') as writer:
+        for row in selected:
+            writer.write(json.dumps(row,ensure_ascii=False)+'\n')
+    return {'output':str(target),'reserve_output':str(reserve_path),'requested_shortlist':shortlist_target,'world_target':world_target,
+        'generated_attempts':attempts,'attempts_limit':attempts_limit,'accepted':len(selected),
+        'reservoir_target':reservoir_target,'reservoir_accepted':len(reservoir),
+        'reservoir_target_filled':len(reservoir)>=reservoir_target,
+        'target_filled':len(selected)>=shortlist_target,'rejection_reasons':dict(rejections),
+        'selection_rejections':dict(selection_rejections),'rejection_examples':examples,
+        'pools':{'source_programs':len(unique),'producer_fragments':len(pools[0]),'terminal_programs':len(pools[1])},
+        'diversity':tracker.summary(),'parallel_generation':parallel}
+
+
+def generate_world_candidate_shortlist(*args,**kwargs):
+    from .parallel_candidates import _exclusive_lock
+    output=Path(args[3] if len(args)>3 else kwargs['output_path'])
+    output.parent.mkdir(parents=True,exist_ok=True)
+    with _exclusive_lock(output.with_name(output.stem+'.candidate-output.lock')):
+        return _generate_world_candidate_shortlist(*args,**kwargs)
+
+
+__all__ = ['DEFAULT_CANDIDATE_MULTIPLIER','generate_world_candidate_shortlist']

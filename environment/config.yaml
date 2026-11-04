@@ -37,6 +37,10 @@ task_construction:
   seed: 17
   shortlist_target: null
   candidate_multiplier: 8.0
+  # null: up to 8 processes, with 2 proposals per process in each batch.
+  candidate_workers: null
+  candidate_proposal_batch_size: null
+  restart_candidates: false
   max_records: null
   min_fragment_depth: 2
   max_fragment_depth: 4

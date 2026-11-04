@@ -10,8 +10,8 @@ class DiversityCaps:
 def diversity_caps(accepted_count:int)->DiversityCaps:
     n=max(1,int(accepted_count));return DiversityCaps(max(2,int(.18*n)+1),max(3,int(.28*n)+1),max(3,int(.30*n)+1),max(4,int(.42*n)+1))
 class BatchDiversityTracker:
-    def __init__(self):self.topology=Counter();self.predicate=Counter();self.type_pair=Counter();self.terminal_family=Counter();self.accepted=0
-    def caps(self):return diversity_caps(self.accepted)
+    def __init__(self,target=None):self.target=target;self.topology=Counter();self.predicate=Counter();self.type_pair=Counter();self.terminal_family=Counter();self.accepted=0
+    def caps(self):return diversity_caps(self.target if self.target is not None else self.accepted)
     def would_accept(self,*,topology:str,predicates:Iterable[str],type_pairs:Iterable[str],terminal_family:str)->tuple[bool,list[str]]:
         caps=self.caps();reasons=[]
         if self.topology[topology]+1>caps.topology:reasons.append("topology_cap")

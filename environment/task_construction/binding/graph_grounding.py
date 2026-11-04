@@ -103,7 +103,10 @@ def validate_program_structure(program):
         "VERIFY_STRING":1,"VERIFY_NUMBER":1,
         "VERIFY_YEAR":1,"VERIFY_DATE":1,
     }
+    node_map=program.node_map()
     for node in program.nodes:
+        if node.op.startswith("VERIFY_") and len(node.dependencies)==1 and node_map[node.dependencies[0]].op!="QUERY_ATTR":
+            raise BindingError("malformed_program:VERIFY requires QUERY_ATTR scalar input")
         actual=len(node.dependencies)
         expected=fixed_arity.get(node.op)
         if expected is not None and actual!=expected:
@@ -118,8 +121,8 @@ def validate_program_structure(program):
             )
 
 class GraphGroundedProgramBinder:
-    def __init__(self,catalog,taxonomy,*,seed=17,min_predicate_count=25,candidate_limit=32,max_states=4096):
-        self.catalog=catalog;self.taxonomy=taxonomy;self.seed=int(seed);self.min_predicate_count=int(min_predicate_count);self.candidate_limit=max(1,int(candidate_limit));self.max_states=max(1,int(max_states));self.index=GraphWitnessIndex(catalog,taxonomy);self.validator=TypedProgramBinder(catalog,taxonomy,seed=seed,max_attempts=1);self.states=0;self.rejections=defaultdict(int)
+    def __init__(self,catalog,taxonomy,*,seed=17,min_predicate_count=25,candidate_limit=32,max_states=4096,predicate_usage=None,predicate_binder=None):
+        self.predicate_binder=predicate_binder;self.predicate_usage=predicate_usage if predicate_usage is not None else {};self.catalog=catalog;self.taxonomy=taxonomy;self.seed=int(seed);self.min_predicate_count=int(min_predicate_count);self.candidate_limit=max(1,int(candidate_limit));self.max_states=max(1,int(max_states));self.index=GraphWitnessIndex(catalog,taxonomy);self.validator=TypedProgramBinder(catalog,taxonomy,seed=seed,max_attempts=1);self.states=0;self.rejections=defaultdict(int)
     def _stable_key(self,*parts):return sha1("|".join([str(self.seed),*(str(x) for x in parts)]).encode()).hexdigest()
     def _bundle_check(self,program,solver,roots,rels,attrs):
         failure=_binding_realizability_failure(program,roots,rels,attrs,self.catalog)
@@ -136,6 +139,8 @@ class GraphGroundedProgramBinder:
             score+=len(evidence["witnesses"])
         return True,score
     def bind(self,program):
+        self.states=0
+        self.rejections.clear()
         validate_program_structure(program)
         unsupported=sorted({node.op for node in program.nodes if node.op in UNSUPPORTED_OPS})
         if unsupported:raise BindingError(f"qualifier/conditional operators not enabled yet: {unsupported}")
@@ -147,9 +152,13 @@ class GraphGroundedProgramBinder:
             node=nodes[node_id]
             if node.op=="RELATE":slots.append(("relation",node,None,None));continue
             desired_kind=ATTRIBUTE_OP_KIND.get(node.op);entity_node=node_id if desired_kind is not None else None
-            if node.op=="QUERY_ATTR":entity_node=node.dependencies[0] if node.dependencies else None;verify_kinds=[]
+            if node.op=="QUERY_ATTR":
+                entity_node=node.dependencies[0] if node.dependencies else None
+                verify_kinds=[{"VERIFY_STRING":"string","VERIFY_NUMBER":"number","VERIFY_YEAR":"year","VERIFY_DATE":"date"}[c.op] for c in children[node_id] if c.op.startswith("VERIFY_")]
+                desired_kind=verify_kinds[0] if verify_kinds else None
             if entity_node is not None:slots.append(("attribute",node,desired_kind,entity_node))
-        binder=PredicateBinder(self.catalog,self.taxonomy,seed=self.seed,min_count=self.min_predicate_count)
+        binder=self.predicate_binder or PredicateBinder(self.catalog,self.taxonomy,seed=self.seed,min_count=self.min_predicate_count)
+        self.validator.observed_support=binder.observed_support
         def rel_candidates(solver,rels,attrs,node):
             direction=node.inputs[1] if len(node.inputs)>1 else "forward";feasible=[]
             for count,option in binder._relation_options():
@@ -159,7 +168,7 @@ class GraphGroundedProgramBinder:
                 if edge.get("status")!="supported":self.rejections["edge_"+str(edge.get("status","unknown"))]+=1;continue
                 binding=RelationBinding(option.predicate,option.subject_type,option.object_type,direction);new_rels=dict(rels);new_rels[node.node_id]=binding;ok,score=self._bundle_check(program,trial,roots,new_rels,attrs)
                 if ok:feasible.append((score,int(count),self._stable_key(node.node_id,option.predicate,in_type,out_type),trial,binding))
-            feasible.sort(key=lambda x:(-x[0],-x[1],x[2]));return feasible[:self.candidate_limit]
+            feasible.sort(key=lambda x:(self.predicate_usage.get(x[4].predicate,0),-x[0],-x[1],x[2]));return feasible[:self.candidate_limit]
         def attr_candidates(solver,rels,attrs,node,value_kind,entity_node):
             feasible=[]
             for count,predicate,info,domain,selected_kind,datatype in binder._attribute_specs(value_kind):
@@ -171,10 +180,13 @@ class GraphGroundedProgramBinder:
                 if edge.get("status")!="supported":self.rejections["attribute_"+str(edge.get("status","unknown"))]+=1;continue
                 binding=AttributeBinding(str(predicate),profile_type,selected_kind,datatype,profile.family,profile.canonical_unit,profile.minimum,profile.maximum,profile.integer_values,profile.confidence,profile.evidence);new_attrs=dict(attrs);new_attrs[node.node_id]=binding;ok,score=self._bundle_check(program,trial,roots,rels,new_attrs)
                 if ok:feasible.append((score,int(count),self._stable_key(node.node_id,predicate,profile_type,selected_kind),trial,binding))
-            feasible.sort(key=lambda x:(-x[0],-x[1],x[2]));return feasible[:self.candidate_limit]
+            feasible.sort(key=lambda x:(self.predicate_usage.get(x[4].predicate,0),-x[0],-x[1],x[2]));return feasible[:self.candidate_limit]
         def dfs(index,solver,rels,attrs):
             if self.states>=self.max_states:return None
-            if index==len(slots):return solver,rels,attrs
+            if index==len(slots):
+                try:self.validator._check_final_consistency(program,solver.materialize(nodes),rels,attrs)
+                except BindingError:return None
+                return solver,rels,attrs
             self.states+=1;kind,node,value_kind,entity_node=slots[index];candidates=rel_candidates(solver,rels,attrs,node) if kind=="relation" else attr_candidates(solver,rels,attrs,node,value_kind,entity_node)
             for _,_,_,trial,binding in candidates:
                 new_rels,new_attrs=dict(rels),dict(attrs);(new_rels if kind=="relation" else new_attrs)[node.node_id]=binding;result=dfs(index+1,trial,new_rels,new_attrs)

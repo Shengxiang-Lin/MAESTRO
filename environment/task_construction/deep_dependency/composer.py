@@ -5,9 +5,8 @@ the COMPLETE ancestor closure of its output; no dependency is silently dropped
 to satisfy a depth limit. A chained fragment replaces its own root with the
 producer's output instead of introducing an unrelated FIND root.
 
-The production orchestra-o3 anchor-fragment composer is still richer (motif
-quotas and fork/join topology). This module safeguards the current MAESTRO
-implementation; it is not a claim of full upstream algorithm equivalence.
+Prepared producer pools support chains and genuine fork/join branches.
+Terminal dependency closures are retained rather than reconstructed from arity.
 """
 from __future__ import annotations
 
@@ -145,91 +144,141 @@ def _attach_chain(
     return [*base, *appended]
 
 
-def _add_branch_join(nodes: list[ProgramNode], rng: random.Random) -> list[ProgramNode]:
-    entity_ids = [node.node_id for node in nodes if node.op in _MONOTONE_ENTITY_OPS]
-    if len(entity_ids) < 2:
-        return nodes
-    left = entity_ids[-1]
-    right = rng.choice(entity_ids[:-1])
-    op = rng.choice(("INTERSECT", "UNION"))
-    return [*nodes, ProgramNode(len(nodes), op, (left, right), (), op)]
+def _terminal(nodes, template, rng):
+    """Preserve the complete terminal closure, including QUERY_ATTR -> VERIFY."""
+    roots = [n for n in template.nodes if not n.dependencies]
+    if not roots or any(n.op not in _REPLACEABLE_ROOTS for n in roots):
+        raise ValueError('terminal has no replaceable entity roots')
+    remap = {root.node_id: nodes[-1].node_id for root in roots}
+    result = list(nodes)
+    for node_id in template.topological_order():
+        if node_id in remap:
+            continue
+        node = template.node_map()[node_id]
+        remap[node_id] = len(result)
+        result.append(ProgramNode(len(result), node.op,
+            tuple(remap[d] for d in node.dependencies), node.inputs, node.raw_function))
+    return result
 
 
-def _terminal(nodes: list[ProgramNode], template: ProgramIR, rng: random.Random) -> list[ProgramNode]:
-    terminals = [
-        template.node_map()[node_id]
-        for node_id in template.topological_order()
-        if template.node_map()[node_id].op in _TERMINALS
-    ]
-    terminal = rng.choice(terminals) if terminals else ProgramNode(-1, "QUERY_NAME", (), (), "QueryName")
-    entity_ids = [node.node_id for node in nodes if node.op in _ENTITY_OPS]
-    if not entity_ids:
-        return nodes
-    if terminal.op in {"QUERY_RELATION", "SELECT_BETWEEN"} and len(entity_ids) >= 2:
-        deps = (entity_ids[-2], entity_ids[-1])
-    else:
-        deps = (entity_ids[-1],)
-    return [*nodes, ProgramNode(len(nodes), terminal.op, deps, terminal.inputs, terminal.raw_function)]
+def prepare_composition_pools(programs, *, min_depth=2, max_depth=4):
+    """Extract and deduplicate usable fragments before sampling compositions."""
+    fragments, terminals = {}, {}
+    for program in programs:
+        node_map = program.node_map()
+        if any(n.op not in _MONOTONE_ENTITY_OPS | _TERMINALS for n in program.nodes):
+            continue
+        order = program.topological_order()
+        for node_id in order:
+            if node_map[node_id].op not in _MONOTONE_ENTITY_OPS - _REPLACEABLE_ROOTS:
+                continue
+            closure = _ancestor_closure(node_map, node_id)
+            chosen = [node_map[i] for i in order if i in closure]
+            roots = [n for n in chosen if not n.dependencies]
+            if len(roots) != 1 or roots[0].op not in _REPLACEABLE_ROOTS:
+                continue
+            if any(n.op not in _MONOTONE_ENTITY_OPS for n in chosen):
+                continue
+            fragment = ProgramIR(_renumber(chosen))
+            if min_depth <= fragment.metrics()['depth'] <= max_depth:
+                fragments.setdefault(fragment.canonical_signature(), fragment)
+        if order and node_map[order[-1]].op in _TERMINALS:
+            closure = _ancestor_closure(node_map, order[-1])
+            chosen = [node_map[i] for i in order if i in closure]
+            roots = [n for n in chosen if not n.dependencies]
+            if roots and all(n.op in _REPLACEABLE_ROOTS for n in roots):
+                terminal = ProgramIR(_renumber(chosen))
+                terminals.setdefault(terminal.canonical_signature(), terminal)
+    return tuple(fragments.values()), tuple(terminals.values())
 
 
 def compose_deep_program(
-    fragments: Sequence[ProgramIR], *,
-    min_fragment_depth: int = 2, max_fragment_depth: int = 4,
-    min_orchestration_depth: int = 3, max_orchestration_depth: int = 5,
-    min_parallel_width: int = 2, seed: int = 17
-) -> ProgramIR:
-    if not fragments:
-        raise ValueError("at least one ProgramIR fragment is required")
+    fragments, *, min_fragment_depth=2, max_fragment_depth=4,
+    min_orchestration_depth=3, max_orchestration_depth=5,
+    min_parallel_width=2, min_latent_anchors=2, seed=17,
+    prepared_pools=None, motif=None,
+):
+    if min_orchestration_depth < 3 or max_orchestration_depth < min_orchestration_depth:
+        raise ValueError('orchestration depth must satisfy 3 <= min <= max')
+    if min_latent_anchors < 1 or min_latent_anchors >= max_orchestration_depth:
+        raise ValueError('latent anchors must fit within orchestration depth')
+    if min_parallel_width < 1:
+        raise ValueError('parallel width must be positive')
+    producers, terminals = prepared_pools or prepare_composition_pools(
+        fragments, min_depth=min_fragment_depth, max_depth=max_fragment_depth)
+    if not producers or not terminals:
+        raise ValueError('no supported producer fragments or terminal programs')
     rng = random.Random(seed)
-    fragment_count = max(
-        2, min(len(fragments), rng.randint(min_orchestration_depth, max_orchestration_depth))
-    )
-    chosen = (
-        rng.sample(list(fragments), fragment_count)
-        if len(fragments) >= fragment_count
-        else [rng.choice(fragments) for _ in range(fragment_count)]
-    )
-    nodes: list[ProgramNode] = []
-    links = []
-    for index, program in enumerate(chosen):
-        fragment = _fragment(
-            program, min_depth=min_fragment_depth, max_depth=max_fragment_depth, rng=rng
-        )
-        if not fragment:
-            raise ValueError("source has no eligible single-root monotone producer fragment")
-        before = len(nodes)
-        producer = _tail(nodes)
-        nodes = _attach_chain(nodes, fragment)
-        links.append({
-            "fragment": index, "start": before, "end": len(nodes)-1,
-            "producer_node_id": producer,
-            "replaced_root": index > 0,
-        })
-    if min_parallel_width >= 2:
-        nodes = _add_branch_join(nodes, rng)
-    nodes = _terminal(nodes, chosen[-1], rng)
-    nodes = _renumber(nodes)
-    metadata = {
-        "source": "kqa_pro_composition",
-        "deep_dependency": {
-            "composition_links": links,
-            "fragment_count": fragment_count,
-            "min_fragment_depth": min_fragment_depth,
-            "max_fragment_depth": max_fragment_depth,
-            "orchestration_depth": fragment_count,
-            "parallel_width": min_parallel_width,
-            "seed": seed,
-        },
-    }
+    motif = motif or ('chain' if min_parallel_width == 1 else rng.choice(('chain','fork_join','mixed_dag')))
+    depth = rng.randint(max(min_orchestration_depth, min_latent_anchors + 1), max_orchestration_depth)
+    terminal_pool = [p for p in terminals if sum(not n.dependencies for n in p.nodes)>=2] if motif=='mixed_dag' else terminals
+    if not terminal_pool:
+        motif, terminal_pool = 'fork_join', terminals
+    terminal = rng.choice(terminal_pool)
+    nodes, links, anchors = [], [], []
+
+    def append_fragment(base, root=None, stage=0):
+        fragment = rng.choice(producers)
+        for _ in range(8):
+            if fragment.canonical_signature() not in {x['source_signature'] for x in links}:
+                break
+            fragment = rng.choice(producers)
+        result, remap = list(base), {}
+        for node in fragment.nodes:
+            if not node.dependencies and root is not None:
+                remap[node.node_id] = root
+                continue
+            remap[node.node_id] = len(result)
+            result.append(ProgramNode(len(result), node.op,
+                tuple(remap[d] for d in node.dependencies), node.inputs, node.raw_function))
+        output = remap[fragment.nodes[-1].node_id]
+        links.append({'fragment':len(links), 'stage':stage,
+            'producer_node_id':root, 'output_node_id':output,
+            'source_signature':fragment.canonical_signature(), 'replaced_root':root is not None})
+        return result, output
+
+    current = None
+    for stage in range(depth - 1):
+        if motif != 'chain' and stage == depth - 2:
+            outputs = []
+            for _ in range(max(2, min_parallel_width)):
+                nodes, output = append_fragment(nodes, root=current, stage=stage)
+                outputs.append(output)
+            nodes.append(ProgramNode(len(nodes), 'INTERSECT', tuple(outputs)))
+            current = nodes[-1].node_id
+        else:
+            nodes, current = append_fragment(nodes, root=current, stage=stage)
+        anchors.append(current)
+    roots = [n for n in terminal.nodes if not n.dependencies]
+    remap = {roots[0].node_id:current}
+    for root in roots[1:]:
+        if motif == 'mixed_dag':
+            nodes, output = append_fragment(nodes, root=anchors[0], stage=depth - 2)
+            remap[root.node_id] = output
+        else:
+            remap[root.node_id] = len(nodes)
+            nodes.append(ProgramNode(len(nodes), root.op, (), root.inputs, root.raw_function))
+    for node_id in terminal.topological_order():
+        if node_id in remap:
+            continue
+        node = terminal.node_map()[node_id]
+        remap[node_id] = len(nodes)
+        nodes.append(ProgramNode(len(nodes), node.op,
+            tuple(remap[d] for d in node.dependencies), node.inputs, node.raw_function))
+    metadata = {'source':'kqa_pro_composition','deep_dependency':{
+        'composition_links':links, 'fragment_count':len(links),
+        'orchestration_depth':depth, 'orchestration_motif':motif,
+        'parallel_width':1 if motif == 'chain' else max(2,min_parallel_width),
+        'latent_anchor_node_ids':anchors, 'seed':seed}}
     return ProgramIR(nodes, metadata=metadata)
 
 
-def compose_candidate_stream(
-    programs: Sequence[ProgramIR], *, count: int, seed: int, **kwargs
-) -> Iterable[ProgramIR]:
+def compose_candidate_stream(programs, *, count, seed, **kwargs):
     rng = random.Random(seed)
-    for _ in range(max(0, int(count))):
-        yield compose_deep_program(programs, seed=rng.randrange(1 << 31), **kwargs)
+    pools = prepare_composition_pools(programs,
+        min_depth=kwargs.get('min_fragment_depth',2), max_depth=kwargs.get('max_fragment_depth',4))
+    for _ in range(max(0,int(count))):
+        yield compose_deep_program(programs, prepared_pools=pools, seed=rng.randrange(1<<31), **kwargs)
 
 
-__all__ = ["compose_candidate_stream", "compose_deep_program"]
+__all__ = ['compose_candidate_stream','compose_deep_program','prepare_composition_pools']

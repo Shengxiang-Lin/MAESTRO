@@ -27,7 +27,7 @@ def _attribute_kinds(info:Mapping[str,Any])->Dict[str,str|None]:
     return kinds
 class PredicateBinder:
     def __init__(self,catalog:Mapping[str,Any],taxonomy:TaxonomyIndex,*,seed:int=17,min_count:int=25,diversity_guidance:BindingDiversityGuidance|None=None)->None:
-        self.catalog=catalog;self.taxonomy=taxonomy;self.rng=random.Random(seed);self.min_count=min_count;self.diversity_guidance=diversity_guidance;self._cached_relation_options=None;self._attribute_profile_cache={};self._chosen_attribute_predicates={};self.profile_guidance_events=0;self.profile_guidance_supported_events=0
+        self.catalog=catalog;self.taxonomy=taxonomy;self.rng=random.Random(seed);self.min_count=min_count;self.diversity_guidance=diversity_guidance;self._attribute_specs_cache={};self._cached_relation_options=None;self._attribute_profile_cache={};self._chosen_attribute_predicates={};self.profile_guidance_events=0;self.profile_guidance_supported_events=0
         from ..quality.observed_support import ObservedSupport
         self.observed_support=ObservedSupport(catalog,taxonomy)
     def _relation_options(self):
@@ -102,6 +102,10 @@ class PredicateBinder:
         if not solver.constrain(input_node,in_type) or not solver.constrain(output_node,out_type):return None
         return RelationBinding(chosen.predicate,chosen.subject_type,chosen.object_type,direction)
     def _attribute_specs(self,value_kind):
+        if value_kind not in self._attribute_specs_cache:
+            self._attribute_specs_cache[value_kind]=tuple(self._iter_attribute_specs(value_kind))
+        return iter(self._attribute_specs_cache[value_kind])
+    def _iter_attribute_specs(self,value_kind):
         for predicate,info in self.catalog.get("predicates",{}).items():
             count=int(info.get("count",0))
             if count<self.min_count or info.get("kind")!="attribute":continue

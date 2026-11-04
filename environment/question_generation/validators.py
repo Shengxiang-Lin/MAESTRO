@@ -16,7 +16,7 @@ def preflight(payload:Mapping[str,Any],question:str)->QuestionValidation:
     if len(text)<15:issues.append("question_too_short")
     if len(text)>1200:issues.append("question_too_long")
     if _INTERNAL_RE.search(text):issues.append("internal_metadata_leak")
-    if _PLACEHOLDER_RE.search(text):issues.append("synthetic_identifier_leak")
+    if _PLACEHOLDER_RE.search(text) or re.search(r"<(?:SYMBOL|YEAR|NUMBER|DATE|ATTR|REL|ENTITY_OR_TYPE|STRING|BOOL|VALUE)[^>]*>",text,re.I):issues.append("synthetic_identifier_leak")
     if not (text.endswith("?") or text.endswith(".")):issues.append("missing_terminal_punctuation")
     contract=payload.get("task_design",{}) if isinstance(payload.get("task_design"),Mapping) else {};operation=str(contract.get("final_operation") or "").upper();lower=text.lower()
     if operation=="COUNT" and not any(token in lower for token in ("how many","count","number of")):issues.append("count_intent_missing")
@@ -26,7 +26,9 @@ def preflight(payload:Mapping[str,Any],question:str)->QuestionValidation:
     if draft:
         draft_words=_content_words(draft);question_words=_content_words(text);overlap=len(draft_words&question_words)/len(draft_words) if draft_words else 1.
         if overlap<.12:issues.append("surface_drift_extreme")
-    return QuestionValidation(not issues,tuple(issues))
+    from .contracts import contract_issues
+    issues.extend(contract_issues(payload,text))
+    return QuestionValidation(not issues,tuple(dict.fromkeys(issues)))
 def postflight(payload:Mapping[str,Any],question:str,*,oracle_answer:Any=None)->QuestionValidation:
     issues=list(preflight(payload,question).issues);lower=str(question).casefold()
     if oracle_answer is not None:

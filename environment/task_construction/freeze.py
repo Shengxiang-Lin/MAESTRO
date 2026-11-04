@@ -17,6 +17,7 @@ def _sha(path):
 def _by_task(rows):return {str(row.get("task_id")):row for row in rows if row.get("task_id") is not None}
 def _task_id_from_world(record):return render_task_record(record,seed=17).task_id
 def _public_authoring_projection(world_record,design,capability,*,seed):
+    from environment.question_generation.contracts import terminal_contract
     draft=render_task_record(world_record,seed=seed);resources=[]
     for resource in capability.get("resources",()):
         if not isinstance(resource,Mapping):continue
@@ -25,10 +26,19 @@ def _public_authoring_projection(world_record,design,capability,*,seed):
     for item in capability.get("capabilities",()):
         if not isinstance(item,Mapping):continue
         agents.append({"capability_id":item.get("capability_id"),"specialist":item.get("specialist"),"source_types":item.get("source_types",()),"tool_families":item.get("tool_families",())})
-    return {"task_id":design["task_id"],"draft_question":draft.question,"task_design":dict(design.get("public_contract",{})),"resources":resources,"available_agents":agents,"freeze_version":4}
+    return {"task_id":design["task_id"],"draft_question":draft.question,"task_design":dict(design.get("public_contract",{})),"resources":resources,"available_agents":agents,"freeze_version":4,"terminal_contract":terminal_contract(world_record,draft.question)}
 def freeze_batch(summary:Mapping[str,Any],*,target:int,seed:int,worlds_path,task_design_path,scenario_path,capability_path,authoring_input_path,manifest_path):
     worlds=_rows(worlds_path);designs=_rows(task_design_path);scenarios=_rows(scenario_path);capabilities=_rows(capability_path)
-    if len(worlds)<target:raise FreezeError(f"world batch has {len(worlds)} records, need {target}")
+    if target<=0:raise FreezeError("cannot freeze an empty batch")
+    if len(worlds)!=target:raise FreezeError(f"world batch has {len(worlds)} records, need {target}")
+    for label,rows in (("task_designs",designs),("scenarios",scenarios),("capabilities",capabilities)):
+        if len(rows)!=target:raise FreezeError(f"{label} count mismatch: {len(rows)} != {target}")
+    for section in ("semantic_plausibility","execution_contract"):
+        audit=summary.get(section,{})
+        if audit.get("audited")!=target or audit.get("accepted")!=target:
+            raise FreezeError(f"{section} audit incomplete or rejected")
+    if not summary.get("task_design",{}).get("taxonomy_aware_clue_validation"):
+        raise FreezeError("taxonomy-aware task-design audit required")
     design_by=_by_task(designs);scenario_by=_by_task(scenarios);capability_by=_by_task(capabilities);failures=[];projections=[]
     for index,world in enumerate(worlds[:target]):
         task_id=_task_id_from_world(world);design=design_by.get(task_id);scenario=scenario_by.get(task_id);capability=capability_by.get(task_id)
@@ -50,7 +60,7 @@ def freeze_batch(summary:Mapping[str,Any],*,target:int,seed:int,worlds_path,task
     authoring=Path(authoring_input_path);authoring.parent.mkdir(parents=True,exist_ok=True)
     with authoring.open("w",encoding="utf-8") as writer:
         for row in projections:writer.write(json.dumps(row,ensure_ascii=False)+"\n")
-    manifest={"version":4,"status":"frozen" if not failures and len(projections)>=target else "rejected","target":target,"seed":seed,"frozen_count":min(len(projections),target),"failures":failures,"semantic_world_policy_version":2,"artifacts":{"worlds":{"path":str(worlds_path),"sha256":_sha(worlds_path)},"task_designs":{"path":str(task_design_path),"sha256":_sha(task_design_path)},"scenarios":{"path":str(scenario_path),"sha256":_sha(scenario_path)},"capabilities":{"path":str(capability_path),"sha256":_sha(capability_path)},"authoring_inputs":{"path":str(authoring),"sha256":_sha(authoring)}},"invariants":{"p15_wording_only":True,"private_world_not_in_author_prompt":True,"direct_only_shortcuts":0,"minimum_progressive_discovery_depth":2}}
+    manifest={"version":4,"status":"frozen" if not failures and len(projections)>=target else "rejected","target":target,"requested_target":int(summary.get("worlds",{}).get("target",target)),"target_filled":bool(summary.get("worlds",{}).get("target_filled",False)),"seed":seed,"frozen_count":min(len(projections),target),"failures":failures,"semantic_world_policy_version":2,"artifacts":{"worlds":{"path":str(worlds_path),"sha256":_sha(worlds_path)},"task_designs":{"path":str(task_design_path),"sha256":_sha(task_design_path)},"scenarios":{"path":str(scenario_path),"sha256":_sha(scenario_path)},"capabilities":{"path":str(capability_path),"sha256":_sha(capability_path)},"authoring_inputs":{"path":str(authoring),"sha256":_sha(authoring)}},"invariants":{"p15_wording_only":True,"private_world_not_in_author_prompt":True,"direct_only_shortcuts":0,"minimum_progressive_discovery_depth":2}}
     target_path=Path(manifest_path);target_path.parent.mkdir(parents=True,exist_ok=True);target_path.write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding="utf-8")
     if manifest["status"]!="frozen":raise FreezeError("P1 freeze rejected: "+"; ".join(failures[:20]))
     return manifest

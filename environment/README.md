@@ -102,6 +102,7 @@ CUDA_VISIBLE_DEVICES=1 vllm serve "$QWEN35_9B_MODEL_PATH" \
   --tensor-parallel-size 1 \
   --gpu-memory-utilization 0.90 \
   --max-model-len 8192 \
+  --max-num-seqs 16 \
   --language-model-only \
   --reasoning-parser qwen3 \
   --default-chat-template-kwargs '{"enable_thinking": false}'
@@ -196,3 +197,88 @@ shortlist and executable worlds, and then attempts P0/P1 freeze. If the
 new run still rejects all worlds, review
 `environment/data/typed_worlds_{target}.jsonl.quality_rejected.jsonl`
 for the concrete validation reason rather than proceeding to questions.
+
+## Construction regression fixes (2026-11-04)
+
+The functional package layout and YAML entrypoints remain unchanged. Construction
+now extracts dependency-closed producer pools before sampling, keeps complete
+terminal operand subgraphs, and constructs actual fork/join branches. A candidate
+reservoir target counts validated candidates, not raw attempts. Reservoir selection
+and final-world diversity are measured against their requested batch sizes.
+
+World synthesis materializes literal slots into both facts and the executable
+program. Intersections construct supporting facts on every branch. Candidate
+worlds must pass the existing semantic, evidence, TaskDesign, scenario, capability
+and rendering gates before entering the final batch; retries change deterministic
+world seeds without changing these thresholds.
+
+Useful controls:
+
+```bash
+python environment/construct_tasks.py --reuse-source-priors
+# Bound candidate-search work explicitly when debugging:
+python environment/construct_tasks.py --reuse-source-priors --candidate-max-attempts 500
+# Explicitly allow freezing an underfilled batch (otherwise construction fails):
+python environment/construct_tasks.py --reuse-source-priors --allow-partial-batch
+```
+
+`--world-attempts-per-candidate` defaults to 3. Partial manifests report
+`requested_target`, `target_filled`, and the actual `frozen_count`. A frozen status
+means the included records passed validation; inspect the counts before a full run.
+
+Question authoring receives an answer-free terminal contract. Local checks reject
+unresolved slots, missing public numbers/literals and changed terminal attributes.
+Critic repairs must receive a fresh semantic pass before acceptance. These checks
+complement the semantic critic; they do not prove arbitrary natural-language
+paraphrases equivalent.
+
+Run the local regression suite with:
+
+```bash
+python -m unittest discover -s environment/tests -v
+```
+
+The validated reservoir is retained as `*.reservoir.jsonl`. If the preferred
+shortlist underfills the world batch, remaining reservoir candidates are tried
+under the same final-world diversity and quality gates.
+
+## Parallel candidate binding and resume
+
+Candidate binding now defaults to `min(8, os.cpu_count())` CPU processes. The
+parent owns proposal seeds, batch snapshots of diversity usage, deduplication and
+ordered commits; workers only perform the existing graph-grounded binding search.
+Linux workers inherit the preloaded catalog, taxonomy and read-mostly indexes
+through `fork`. Other platforms use `spawn` and load their own indexes.
+
+```bash
+python environment/construct_tasks.py --reuse-source-priors --candidate-workers 8
+```
+
+The YAML keys `candidate_workers` and `candidate_proposal_batch_size` accept
+positive integers. `null` selects the automatic process count and a proposal
+batch of `2 * workers`. A larger batch is not necessarily faster: each batch is
+committed only after all its proposals finish.
+
+After interruption, rerun the same command. Each completed batch persists accepted
+rows, counters and RNG state. A verified committed prefix is reused; an incomplete
+batch is replayed in proposal order. The progress bar displays `workers`, current
+accepted count and total attempted proposals.
+
+Files next to the semantic shortlist are:
+
+- `*.candidate-progress.jsonl`: append-only validated candidates.
+- `*.candidate-state.json`: atomic checkpoint with committed byte count/hash.
+- `*.candidate-output.lock` and `*.candidate-state.lock`: advisory writer locks.
+
+Source contents, relevant implementation code and generation settings are checked
+before reuse. To intentionally start over after changing these inputs, use
+`--restart-candidates`; this resets only the candidate checkpoint and staging file.
+The attempt budget may be increased without discarding already committed batches.
+A completed reservoir is also reused when a downstream stage is rerun. Fixed seed,
+inputs and batch size produce the same committed candidates independent of worker
+completion order. Batch diversity guidance is fixed at the start of each batch;
+this does not change the final-world quality or diversity checks.
+
+An already running pre-parallel process cannot adopt this implementation or
+retroactively save its in-memory candidates. Its first restart starts a new
+checkpointed candidate run.
