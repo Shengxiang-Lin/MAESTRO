@@ -145,15 +145,16 @@ class FragmentCompilationTests(unittest.TestCase):
         gold = compile_gold_solution(*fixture(dependent=True))
         self.assertEqual(gold["waves"], [["fragment:0"], ["fragment:1"]])
         self.assertEqual(gold["fragments"][1]["depends_on"], ["fragment:0"])
-        self.assertEqual(gold["fragments"][1]["resource_ids"], ["s1", "s2"])
+        self.assertEqual(gold["fragments"][1]["resource_ids"], ["s2"])
+        self.assertEqual(gold["fragments"][1]["support_resource_ids"], ["s1", "s2"])
         self.assertEqual(gold["fragments"][1]["expected_answer"], ["Carol"])
 
     def test_terminal_evidence_gets_its_own_fragment(self):
         gold = compile_gold_solution(*fixture(terminal_evidence=True))
         self.assertEqual(gold["fragments"][-1]["fragment_id"], "fragment:terminal")
         self.assertEqual(gold["fragments"][-1]["expected_answer"], [175])
-        self.assertTrue(set(["s1","s2","s3"]).issubset(
-            gold["fragments"][-1]["resource_ids"]))
+        self.assertEqual(gold["fragments"][-1]["resource_ids"], ["s3"])
+        self.assertEqual(gold["fragments"][-1]["support_resource_ids"], ["s1", "s2", "s3"])
         self.assertEqual(gold["waves"][-1], ["fragment:terminal"])
 
     def test_missing_composition_metadata_rejected_without_fallback(self):
