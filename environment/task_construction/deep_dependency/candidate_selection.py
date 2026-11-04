@@ -1,19 +1,15 @@
 """Generate and select graph-grounded deep ProgramIR candidates."""
 from __future__ import annotations
-import json,math,os
-from collections import Counter
+import json,os
 from pathlib import Path
-from typing import Any,Iterable,Mapping,Sequence
-from tqdm.auto import tqdm
+from typing import Any,Mapping,Sequence
 from ..binding import BindingError,GraphGroundedProgramBinder
 from ..data_sources.taxonomy import TaxonomyIndex
 from ..ir import ProgramIR
 from ..data_sources.kqa import record_to_ir
-from ..quality.diversity import BatchDiversityTracker
-from ..quality.hardness import complexity_profile,pure_topology_signature
+from ..quality.hardness import complexity_profile
 from .composer import compose_deep_program,prepare_composition_pools
 from .terminal_families import terminal_family
-DEFAULT_CANDIDATE_MULTIPLIER=8.0
 
 def _program_from_kqa(item:Mapping[str,Any])->ProgramIR|None:
     """Use the canonical KQA adapter, not raw KQA function names.
@@ -56,19 +52,20 @@ def _binding_type_pairs(binding:Mapping[str,Any])->list[str]:
         if isinstance(item,Mapping):result.append(f"attribute:{item.get('entity_type')}->{item.get('value_kind')}")
     return result
 
-def _generate_world_candidate_shortlist(
+def _generate_candidate_pool(
     kqa_paths, yago_catalog_path, taxonomy_path, output_path, *,
-    shortlist_target, world_target, candidate_multiplier=DEFAULT_CANDIDATE_MULTIPLIER,
-    seed=17, max_records=None, min_fragment_depth=2, max_fragment_depth=4,
+    pool_size, seed=17, max_records=None,
+    min_fragment_depth=2, max_fragment_depth=4,
     min_orchestration_depth=3, max_orchestration_depth=5,
-    min_latent_anchors=2, min_parallel_width=2, progress=False, max_attempts=None,
-    candidate_workers=None, candidate_proposal_batch_size=None, restart_candidates=False,
-    all_valid_candidates=False,
+    min_latent_anchors=2, min_parallel_width=2, progress=False,
+    max_attempts=None, candidate_workers=None,
+    candidate_proposal_batch_size=None, restart_candidates=False,
 ):
+    """Build a fixed number of *validated* semantic candidates, with checkpoints."""
+    if pool_size<1:
+        raise ValueError("pool_size must be positive")
     if max_attempts is not None and max_attempts<1:
-        raise ValueError('max_attempts must be positive')
-    if not 0 < world_target <= shortlist_target or candidate_multiplier < 1:
-        raise ValueError('require 0 < world_target <= shortlist_target and multiplier >= 1')
+        raise ValueError("max_attempts must be positive")
     programs = _iter_kqa_programs(kqa_paths, max_records=max_records)
     unique = {p.canonical_signature():p for p in programs}
     pools = prepare_composition_pools(tuple(unique.values()),
@@ -83,15 +80,9 @@ def _generate_world_candidate_shortlist(
     batch_size=2*workers if candidate_proposal_batch_size is None else candidate_proposal_batch_size
     if workers<1 or batch_size<1:
         raise ValueError('candidate workers and proposal batch size must be positive')
-    # Fixed-pool mode gathers exactly shortlist_target *validated* semantic
-    # candidates; the legacy 8x oversampling applies only to target-limited
-    # shortlist selection.
-    reservoir_target=(shortlist_target if all_valid_candidates else
-        max(shortlist_target,int(math.ceil(shortlist_target*candidate_multiplier))))
-    attempts_limit=max_attempts if max_attempts is not None else max(1000,reservoir_target*40)
-    settings=dict(seed=seed,shortlist_target=shortlist_target,world_target=world_target,
-        all_valid_candidates=all_valid_candidates,
-        reservoir_target=reservoir_target,workers=workers,batch_size=batch_size,max_records=max_records,
+    attempts_limit=max_attempts if max_attempts is not None else max(1000,pool_size*40)
+    settings=dict(seed=seed,pool_size=pool_size,
+        workers=workers,batch_size=batch_size,max_records=max_records,
         min_fragment_depth=min_fragment_depth,max_fragment_depth=max_fragment_depth,
         min_orchestration_depth=min_orchestration_depth,max_orchestration_depth=max_orchestration_depth,
         min_latent_anchors=min_latent_anchors,min_parallel_width=min_parallel_width)
@@ -115,71 +106,39 @@ def _generate_world_candidate_shortlist(
             return {'attempt':attempt,'error':type(exc).__name__+':'+str(exc).split(':',1)[0],
                     'detail':str(exc)[:240]}
 
-    reservoir,parallel=run_batches(output_path,signature=signature,target=reservoir_target,
+    candidates,parallel=run_batches(output_path,signature=signature,target=pool_size,
         attempts_limit=attempts_limit,seed=seed,workers=workers,batch_size=batch_size,
         make_proposal=make_proposal,progress=progress,restart=restart_candidates,
         initializer=_worker_init,initargs=(str(yago_catalog_path),str(taxonomy_path),seed))
-    attempts=parallel['attempts']
-    rejections=parallel['rejections']
-    examples=parallel['examples']
-    selected,selection_rejections=[],Counter()
-    if all_valid_candidates:
-        # Evaluate every validated candidate at world level. Do not apply a
-        # second capacity-limited semantic shortlist before checking worlds.
-        # World-level diversity and every existing quality gate still apply.
-        selected=list(reservoir)
-        selection_diversity={"policy":"deferred_to_world_generation",
-                             "accepted":len(selected)}
-    else:
-        # Interleave structural cells before applying target-sized semantic caps.
-        cells = {}
-        for row in reservoir:
-            deep = row['program']['metadata']['deep_dependency']
-            key = (deep['orchestration_motif'],deep['orchestration_depth'],row['terminal_family'])
-            cells.setdefault(key,[]).append(row)
-        tracker = BatchDiversityTracker(target=shortlist_target)
-        selected, selection_rejections = [], Counter()
-        while any(cells.values()) and len(selected)<shortlist_target:
-            for key in sorted(cells):
-                if not cells[key] or len(selected)>=shortlist_target:
-                    continue
-                row = cells[key].pop(0)
-                kwargs = dict(topology=row['topology_signature'],
-                    predicates=_binding_predicates(row['binding']),
-                    type_pairs=_binding_type_pairs(row['binding']),terminal_family=row['terminal_family'])
-                ok, reasons = tracker.would_accept(**kwargs)
-                if not ok:
-                    selection_rejections.update(reasons)
-                    continue
-                selected.append(row)
-                tracker.add(**kwargs)
-        selection_diversity=tracker.summary()
-    target = Path(output_path)
+    target=Path(output_path)
     target.parent.mkdir(parents=True,exist_ok=True)
-    reserve_path=target.with_name(target.stem+'.reservoir.jsonl')
-    with reserve_path.open('w',encoding='utf-8') as reserve:
-        for row in reservoir:reserve.write(json.dumps(row,ensure_ascii=False)+'\n')
-    with target.open('w',encoding='utf-8') as writer:
-        for row in selected:
-            writer.write(json.dumps(row,ensure_ascii=False)+'\n')
-    return {'output':str(target),'reserve_output':str(reserve_path),'requested_shortlist':shortlist_target,'world_target':world_target,
-        'generated_attempts':attempts,'attempts_limit':attempts_limit,'accepted':len(selected),
-        'reservoir_target':reservoir_target,'reservoir_accepted':len(reservoir),
-        'reservoir_target_filled':len(reservoir)>=reservoir_target,
-        'target_filled':len(selected)>=shortlist_target,'all_valid_candidates':all_valid_candidates,
-        'candidate_pool_size':reservoir_target if all_valid_candidates else None,
-        'rejection_reasons':dict(rejections),
-        'selection_rejections':dict(selection_rejections),'rejection_examples':examples,
-        'pools':{'source_programs':len(unique),'producer_fragments':len(pools[0]),'terminal_programs':len(pools[1])},
-        'diversity':selection_diversity,'parallel_generation':parallel}
+    with target.open("w",encoding="utf-8") as writer:
+        for row in candidates:
+            writer.write(json.dumps(row,ensure_ascii=False)+"\n")
+    return {
+        "output":str(target),
+        "candidate_pool_size":pool_size,
+        "validated_candidates":len(candidates),
+        "pool_filled":len(candidates)>=pool_size,
+        "generated_attempts":parallel["attempts"],
+        "attempts_limit":attempts_limit,
+        "rejection_reasons":parallel["rejections"],
+        "rejection_examples":parallel["examples"],
+        "pools":{
+            "source_programs":len(unique),
+            "producer_fragments":len(pools[0]),
+            "terminal_programs":len(pools[1]),
+        },
+        "parallel_generation":parallel,
+    }
 
 
-def generate_world_candidate_shortlist(*args,**kwargs):
+def generate_candidate_pool(*args,**kwargs):
     from .parallel_candidates import _exclusive_lock
     output=Path(args[3] if len(args)>3 else kwargs['output_path'])
     output.parent.mkdir(parents=True,exist_ok=True)
     with _exclusive_lock(output.with_name(output.stem+'.candidate-output.lock')):
-        return _generate_world_candidate_shortlist(*args,**kwargs)
+        return _generate_candidate_pool(*args,**kwargs)
 
 
-__all__ = ['DEFAULT_CANDIDATE_MULTIPLIER','generate_world_candidate_shortlist']
+__all__ = ["generate_candidate_pool"]
