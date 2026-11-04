@@ -66,11 +66,11 @@ question_generation:
   # Both question generation roles use the same local Qwen3.5-9B vLLM service.
   author_profile: local_qwen35_9b
   critic_profile: local_qwen35_9b
-  manifest: environment/data/frozen_manifest_{target}.json
-  authoring_inputs: environment/data/authoring_inputs_{target}.jsonl
-  worlds: environment/data/typed_worlds_{target}.jsonl
-  capabilities: environment/data/capability_worlds_{target}.jsonl
-  output_dir: environment/data/questions_{target}
+  manifest: environment/data/frozen_manifest_{pool_size}.json
+  authoring_inputs: environment/data/authoring_inputs_{pool_size}.jsonl
+  worlds: environment/data/typed_worlds_{pool_size}.jsonl
+  capabilities: environment/data/capability_worlds_{pool_size}.jsonl
+  output_dir: environment/data/questions_{pool_size}
   max_records: null
   question_temperature: 0.4
   critic_temperature: 0.0
@@ -85,9 +85,9 @@ question_generation:
 
 trajectory_simulation:
   teacher_profile: local_qwen35_9b
-  worlds: environment/data/typed_worlds_{target}.jsonl
-  realized: environment/data/questions_{target}/realized_capability_worlds.jsonl
-  output: environment/data/trajectories_{target}.jsonl
+  worlds: environment/data/typed_worlds_{pool_size}.jsonl
+  realized: environment/data/questions_{pool_size}/realized_capability_worlds.jsonl
+  output: environment/data/trajectories_{pool_size}.jsonl
   max_records: null
   temperature: 0.2
   max_tokens: 2048
