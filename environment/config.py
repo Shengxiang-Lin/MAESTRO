@@ -107,7 +107,7 @@ def parse_with_config(
         raise EnvironmentConfigError(f"{section} must be a YAML mapping")
     construction = config.get("task_construction", {})
     values = dict(values)
-    if section in {"question_generation", "trajectory_simulation"} and "seed" not in values:
+    if section in {"question_generation", "trajectory_simulation"} and "seed" not in values and any(action.dest=="seed" for current in _walk_parsers(parser) for action in current._actions):
         values["seed"] = construction.get("seed", 17)
     # The filename suffix identifies the fixed candidate pool, while the
     # manifest's frozen_count reports how many worlds actually passed.

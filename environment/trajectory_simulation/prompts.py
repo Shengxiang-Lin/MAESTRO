@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 
 def _dump(payload: Mapping[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    return json.dumps(payload, ensure_ascii=False, separators=(",",":"), default=str)
 
 
 def planner_prompt(payload: Mapping[str, Any]) -> str:
@@ -43,14 +43,19 @@ def executor_prompt(payload: Mapping[str, Any]) -> str:
         "assigned_subtask": payload["assigned_subtask"],
         "dependency_results": payload["dependency_results"],
         "source_observation": task["observation"],
+        "task_kind":task.get("kind","inspect"),
+        "discovery_terms":task.get("discovery_terms",[]),
         "authoritative_answer_claims": task["gold_answer_claims"],
     }
     return (
-        "You are executing ONE assigned subtask in a clean environment. "
+        "You are executing ONE assigned subtask in a clean environment. For task_kind=discover, search using already-known discovery_terms and report only the returned descriptor; do not claim to read its contents. For inspect, read the provided observation. "
         "Read its provided source observation and completed prerequisite results. "
         "The authoritative_answer_claims are already verified against the frozen "
         "symbolic world. Output that list EXACTLY in the JSON field 'answer' "
         "(same public subject/predicate/object values and ordering; do not add or omit claims). "
+        "This is evidence extraction, not answering the whole question. Keep ALL verified claims, "
+        "including contextual facts and distractors that do not match the question filters. "
+        "Never replace a nonempty authoritative list with an empty answer. "
         "Write a concise natural-language answer_summary explaining what was found "
         "and a compressed trajectory_summary describing the work performed. "
         "Do not claim to have observed other sources or future results. "

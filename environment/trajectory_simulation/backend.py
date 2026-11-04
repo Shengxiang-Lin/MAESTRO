@@ -12,6 +12,7 @@ from environment.question_generation.backend import OpenAICompatibleBackend
 
 
 class PassthroughPlanner:
+    offline=True
     """Deterministic offline teacher for regression tests, not benchmark data."""
 
     def plan(self, payload: Mapping[str, Any], prompt: str) -> dict[str, Any]:
@@ -31,6 +32,9 @@ class PassthroughPlanner:
         ids = [result["subtask_id"] for result in payload["current_results"]]
         return {"main_summary": "Completed and incorporated evidence from " + ", ".join(ids) + "."}
 
+    def review(self,prompt):
+        return {"accept":True,"issues":[]}
+
     def finalize(self, payload: Mapping[str, Any], prompt: str) -> dict[str, Any]:
         return {
             "action": "complete",
@@ -40,8 +44,12 @@ class PassthroughPlanner:
 
 
 class LLMPlanner:
+    offline=False
     def __init__(self, backend: OpenAICompatibleBackend):
         self.backend = backend
+
+    def review(self,prompt):
+        return self.backend.complete_json("Verify summary grounding against supplied evidence. Return JSON only.",prompt)
 
     def plan(self, payload: Mapping[str, Any], prompt: str) -> dict[str, Any]:
         return self.backend.complete_json(
@@ -64,7 +72,11 @@ class LLMPlanner:
 
 
 class PassthroughExecutor:
+    offline=True
     """Offline deterministic gold-copying reference (no LLM)."""
+
+    def review(self,prompt):
+        return {"accept":True,"issues":[]}
 
     def execute(self, payload: Mapping[str, Any], prompt: str) -> dict[str, Any]:
         task = payload["task"]
@@ -79,8 +91,12 @@ class PassthroughExecutor:
 
 
 class LLMExecutor:
+    offline=False
     def __init__(self, backend: OpenAICompatibleBackend):
         self.backend = backend
+
+    def review(self,prompt):
+        return self.backend.complete_json("Verify summary grounding against supplied evidence. Return JSON only.",prompt)
 
     def execute(self, payload: Mapping[str, Any], prompt: str) -> dict[str, Any]:
         return self.backend.complete_json(

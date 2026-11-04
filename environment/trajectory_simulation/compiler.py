@@ -11,7 +11,7 @@ from typing import Any, Mapping
 from environment.task_construction.executor import SymbolicExecutor
 from environment.task_construction.rendering.pipeline import program_from_dict, world_from_dict
 from environment.task_construction.rendering.naming import predicate_label
-from environment.task_construction.validation import minimal_source_proof
+from .acquisition import INITIAL,resolve_dependencies,choose_evidence
 
 
 class GoldCompilationError(ValueError):
@@ -26,16 +26,6 @@ def json_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(k): json_value(v) for k, v in value.items()}
     return value
-
-
-def _source_closure(ids: set[str], dependencies: Mapping[str, set[str]]) -> set[str]:
-    result = set(ids)
-    while True:
-        parents = {p for sid in result for p in dependencies[sid]}
-        new = result | parents
-        if new == result:
-            return result
-        result = new
 
 
 def ready_subtasks(plan: Mapping[str, Any], completed: set[str]) -> list[dict[str, Any]]:
@@ -59,11 +49,6 @@ def compile_gold_solution(
     trace = SymbolicExecutor().execute_trace(program, world)
     order = program.topological_order()
     raw_answer = json_value(trace[order[-1]])
-    proof = minimal_source_proof(program, world, max_sources=max_proof_sources)
-    witnesses = proof.get("witnesses") or []
-    if not witnesses:
-        raise GoldCompilationError("no executable minimal source proof for this task")
-
     capability = realized.get("capability_world", {})
     resources = capability.get("resources", ()) if isinstance(capability, Mapping) else ()
     by_id = {str(r.get("resource_id")): r for r in resources
@@ -73,38 +58,16 @@ def compile_gold_solution(
     missing = set(world.sources) - set(by_id)
     if missing:
         raise GoldCompilationError(f"capability graph missing world resources: {sorted(missing)}")
-    dep = {
-        sid: set(map(str, by_id[sid].get("anchor_dependency_resource_ids", ()) or ()))
-        if str(by_id[sid].get("visibility", "")) not in {"attached", "provided", "initial"}
-        else set()
-        for sid in world.sources
-    }
-    for sid, parents in dep.items():
-        if not parents.issubset(by_id) or sid in parents:
-            raise GoldCompilationError(f"invalid acquisition parents for {sid}")
-    options = []
-    for witness in witnesses:
-        proof_ids = set(map(str, witness))
-        if not proof_ids or not proof_ids.issubset(world.sources):
-            continue
-        closure = _source_closure(proof_ids, dep)
-        options.append((len(closure), sorted(closure), sorted(proof_ids)))
-    if not options:
-        raise GoldCompilationError("minimal source proof references unavailable sources")
-    _, selected, proof_ids = min(options)
-    selected_ids = set(selected)
-
-    # Check an acyclic acquisition graph and deterministic parallel wave order.
-    done: set[str] = set()
-    waves: list[list[str]] = []
-    while len(done) < len(selected):
-        ready = sorted(sid for sid in selected if sid not in done
-                       and (dep[sid] & selected_ids).issubset(done))
-        if not ready:
-            raise GoldCompilationError("gold resource dependency graph is cyclic")
-        waves.append(["subtask:" + sid for sid in ready])
-        done.update(ready)
-
+    audit=capability.get("binding_audit",{})
+    discovery=audit.get("progressive_discovery",{}) or audit.get("p1_orchestration_profile",{}).get("progressive_discovery",{})
+    registry=discovery.get("anchor_registry",{})
+    try:
+        dep,levels=resolve_dependencies(list(by_id.values()),registry)
+        selected,required_facts=choose_evidence(program,world,dep,max_proof_sources)
+    except ValueError as exc:
+        raise GoldCompilationError(str(exc)) from exc
+    selected_ids=set(selected)
+    proof_ids=list(selected)
     rendered_sources = {source.source_id: source for source in rendered.sources}
     if not selected_ids.issubset(rendered_sources):
         raise GoldCompilationError("gold resources missing rendered observations")
@@ -127,7 +90,7 @@ def compile_gold_solution(
         specialist = (str(cap_by_id[cap_ids[0]].get("specialist", "")) if cap_ids
                       and cap_ids[0] in cap_by_id else "")
         if not specialist:
-            specialist = str(resource.get("source_type", "evidence")) + "_specialist"
+            raise GoldCompilationError(f"resource {sid} has no registered specialist")
         facts = []
         for fid in src.fact_ids:
             if fid not in fact_map:
@@ -146,15 +109,32 @@ def compile_gold_solution(
                 "object": json_value(display_object),
                 "object_kind": fact.object_kind,
             })
+        inspection_parents=["subtask:"+p for p in parents]
+        if resource.get("visibility") not in INITIAL:
+            descriptor={"resource_id":sid,"source_type":str(src.source_type),
+                        "title":rendered_sources[sid].title}
+            terms=[]
+            for aid in resource.get("requires_anchors",()):
+                raw=str(registry.get("anchors",{}).get(aid,{}).get("surface",aid))
+                terms.append(aliases.get(raw,literal_fallback.get(raw,
+                    predicate_label(raw) if raw.startswith(("schema:","yago:")) else raw)))
+            tasks.append({"subtask_id":"discover:"+sid,"kind":"discover",
+                "resource_id":sid,"source_type":str(src.source_type),
+                "visibility":"discoverable","role":"resource_discovery","agent":"main",
+                "available_tool_families":["search"],"depends_on":inspection_parents,
+                "discovery_terms":terms,"required_for_proof":False,
+                "gold_answer_claims":[descriptor],"observation":descriptor})
+            inspection_parents=["discover:"+sid]
         tasks.append({
             "subtask_id": "subtask:" + sid,
+            "kind":"inspect",
             "resource_id": sid,
             "source_type": str(resource.get("source_type", src.source_type)),
             "visibility": str(resource.get("visibility", "")),
             "role": str(resource.get("role", "")),
             "agent": specialist,
             "available_tool_families": list(resource.get("available_tool_families") or []),
-            "depends_on": ["subtask:" + p for p in parents],
+            "depends_on": inspection_parents,
             "required_for_proof": sid in proof_ids,
             "gold_answer_claims": facts,
             "observation": {
@@ -165,8 +145,22 @@ def compile_gold_solution(
             },
         })
 
+    done=set();waves=[]
+    while len(done)<len(tasks):
+        ready=sorted(t["subtask_id"] for t in tasks if t["subtask_id"] not in done
+                     and set(t["depends_on"]).issubset(done))
+        if not ready:raise GoldCompilationError("compiled acquisition graph is cyclic")
+        waves.append(ready);done.update(ready)
+    final_op=program.node_map()[order[-1]].op
+    answer_contract={"operation":final_op,"collection_mode":
+        "set" if final_op in {"QUERY_NAME","QUERY_RELATION","SELECT_BETWEEN","SELECT_AMONG"}
+        else "multiset" if isinstance(raw_answer,list) else "scalar"}
     return {
         "task_id": task_id,
+        "answer_contract":answer_contract,
+        "required_fact_ids":required_facts,
+        "acquisition_validation":{"anchor_semantics":"AND_over_anchors_OR_over_providers",
+                                  "decision_information_complete":True},
         "question": str(realized.get("question", "")),
         "public_task_design": dict(realized.get("task_design", {}) or {}),
         "final_answer": json_value(rendered.answer),
@@ -181,7 +175,7 @@ def compile_gold_solution(
         "required_resource_ids": selected,
         "tasks": tasks,
         "gold_parallel_waves": waves,
-        "policy": "frozen_symbolic_proof_plus_dependency_closed_acquisition",
+        "policy": "decision_complete_evidence_and_anchor_aware_discovery",
     }
 
 
@@ -191,10 +185,11 @@ def public_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
         "task_id": plan["task_id"],
         "question": plan["question"],
         "task_design": plan["public_task_design"],
+        "answer_contract":plan["answer_contract"],
         "reasoning_graph": plan["reasoning_graph"],
         "tasks": [
             {key: task[key] for key in (
-                "subtask_id", "resource_id", "source_type", "visibility", "role",
+                "subtask_id", "kind", "resource_id", "source_type", "visibility", "role",
                 "agent", "available_tool_families", "depends_on",
             )}
             for task in plan["tasks"]

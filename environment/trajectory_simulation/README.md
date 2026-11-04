@@ -142,3 +142,39 @@ python -m unittest discover -s environment/tests -p "test_config.py" -v
 This version intentionally covers only the clean gold case. Fault injections,
 recovery branches, tool execution and reward/counterfactual labels belong to
 future stages and are not generated here.
+
+## Compiler and validation fixes (2026-11-04)
+
+The frozen worlds and accepted questions are unchanged. Acquisition is resolved
+as AND over required anchors and OR over their providers. Only an already
+reachable provider is selected; anchors from a wave are published after that
+wave. Legacy records without anchor metadata retain explicit dependency handling.
+Unknown/unreachable anchors remain errors rather than being silently ignored.
+
+Resource selection preserves the full world's decision-required facts, the
+symbolic answer, and decision-information completeness in the selected evidence.
+This includes the losing candidates' values in comparisons/rankings. Shared facts
+remain observable whenever any selected source provides them.
+
+A discoverable resource has two tasks: `discover:<source>` searches from known
+clues through Main's search action; `subtask:<source>` inspects its contents with
+the registered specialist after discovery. Discovery returns an environment-owned
+descriptor deterministically. The LLM Sub-Agent receives contents only for
+inspection; it cannot invent a search result or read a future resource.
+
+Final validation follows the terminal answer contract: unordered sets for names,
+relations and selections; unordered multisets for attribute values; ordered lists
+only when explicitly specified. Finite numeric formatting is normalized, while
+boolean values remain distinct from numbers. Sub-Agent structured claims still
+must match their authoritative facts exactly.
+
+Generated summaries pass deterministic checks and a scoped role-model grounding
+review. Public question values may describe search/filter objectives; they are
+not automatically treated as observed evidence. Local subtask reviews must not
+demand completion of the whole question. The offline provider uses deterministic
+reference text and does not perform an LLM semantic review.
+
+Rejected trajectories now retain attempt responses and validation issues. Final
+answer failures also record the expected answer and answer contract in the
+rejected audit, never in the real Main LLM prompt. Treat rejected audits and
+`gold_supervision` as privileged metadata when exporting student examples.

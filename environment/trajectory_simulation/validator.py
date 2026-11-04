@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import re
+from decimal import Decimal,InvalidOperation
 from typing import Any, Mapping
 
 from .compiler import json_value
@@ -11,6 +13,39 @@ def _equal(left: Any, right: Any) -> bool:
     return json.dumps(json_value(left), sort_keys=True, ensure_ascii=False) == json.dumps(
         json_value(right), sort_keys=True, ensure_ascii=False
     )
+
+
+def _number(value):
+    if isinstance(value,bool):raise ValueError("boolean is not a numeric answer")
+    token=str(value).strip()
+    if re.fullmatch(r"[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?",token):token=token.replace(",","")
+    try:result=Decimal(token)
+    except InvalidOperation as exc:raise ValueError("not a finite number") from exc
+    if not result.is_finite():raise ValueError("not a finite number")
+    return result
+
+
+def answers_equal(left,right,contract=None):
+    contract=contract or {}
+    if isinstance(right,bool):
+        if isinstance(left,str) and left.strip().lower() in {"true","false"}:
+            left=left.strip().lower()=="true"
+        return isinstance(left,bool) and left==right
+    if isinstance(right,(int,float)):
+        try:return _number(left)==_number(right)
+        except (ValueError,TypeError):return False
+    if isinstance(right,(list,tuple,set)):
+        if not isinstance(left,(list,tuple,set)):return False
+        numeric=bool(right) and all(isinstance(v,(int,float)) and not isinstance(v,bool) for v in right)
+        try:
+            key=lambda v: str(_number(v).normalize()) if numeric else json.dumps(json_value(v),sort_keys=True,ensure_ascii=False)
+            a,b=[key(v) for v in left],[key(v) for v in right]
+        except (ValueError,TypeError):return False
+        mode=contract.get("collection_mode","multiset")
+        if mode=="ordered":return a==b
+        if mode=="set":return set(a)==set(b)
+        return sorted(a)==sorted(b)
+    return _equal(left,right)
 
 
 def validate_parallel_plan(
@@ -41,7 +76,7 @@ def validate_parallel_plan(
 
 
 def validate_subagent_result(
-    result: Mapping[str, Any], task: Mapping[str, Any],
+    result: Mapping[str, Any], task: Mapping[str, Any], *, question="",
 ) -> tuple[bool, list[str]]:
     issues = []
     if result.get("subtask_id") != task["subtask_id"]:
@@ -52,26 +87,26 @@ def validate_subagent_result(
         issues.append("evidence_source_mismatch")
     if not _equal(result.get("answer"), task["gold_answer_claims"]):
         issues.append("answer_claims_not_grounded")
-    if not str(result.get("trajectory_summary", "")).strip():
-        issues.append("empty_compressed_trajectory")
-    if not str(result.get("answer_summary", "")).strip():
-        issues.append("empty_subtask_answer_summary")
+    from .grounding import text_issues
+    support=[*task["gold_answer_claims"],{"source_observation":task.get("observation",{})}]
+    for field in ("trajectory_summary","answer_summary"):
+        issues.extend(field+":"+e for e in text_issues(result.get(field),support,allowed_ids=[task["resource_id"]],question=question))
     return not issues, issues
 
 
-def validate_main_summary(result: Mapping[str, Any]) -> tuple[bool, list[str]]:
-    if not str(result.get("main_summary", "")).strip():
-        return False, ["empty_main_summary"]
-    return True, []
+def validate_main_summary(result,*,claims=None,pending_ids=None,allowed_ids=None,question=""):
+    from .grounding import text_issues
+    issues=text_issues(result.get("main_summary"),claims,pending_ids=pending_ids,allowed_ids=allowed_ids,question=question)
+    return not issues,issues
 
 
-def validate_final(result: Mapping[str, Any], oracle: Any) -> tuple[bool, list[str]]:
+def validate_final(result: Mapping[str, Any], oracle: Any, answer_contract=None) -> tuple[bool, list[str]]:
     issues = []
     if result.get("action") != "complete":
         issues.append("final_action_not_complete")
-    if not _equal(result.get("answer"), oracle):
+    if not answers_equal(result.get("answer"), oracle,answer_contract):
         issues.append("final_answer_mismatch")
-    if not str(result.get("summary", "")).strip():
+    if not isinstance(result.get("summary"),str) or not result["summary"].strip():
         issues.append("empty_final_summary")
     return not issues, issues
 
@@ -85,9 +120,12 @@ def validate_gold_trajectory(
     seen_resources: set[str] = set()
     issues: list[str] = []
     for i, round_data in enumerate(rounds):
+        if "completed_before" in round_data and set(round_data["completed_before"])!=completed:
+            issues.append(f"round_{i+1}:completed_before_mismatch")
         ready = [task for task in plan["tasks"]
                  if task["subtask_id"] not in completed
                  and set(task["depends_on"]).issubset(completed)]
+        if not ready:issues.append(f"round_{i+1}:unexpected_empty_round")
         ok, errors = validate_parallel_plan(round_data.get("main_action", {}), ready)
         if not ok:
             issues.extend(f"round_{i+1}:{error}" for error in errors)
@@ -95,6 +133,9 @@ def validate_gold_trajectory(
         if not isinstance(subtasks, list) or len(subtasks) != len(ready):
             issues.append(f"round_{i+1}:result_count_mismatch")
             continue
+        result_ids=[r.get("subtask_id") for r in subtasks if isinstance(r,Mapping)]
+        if len(set(result_ids))!=len(result_ids) or set(result_ids)!={t["subtask_id"] for t in ready}:
+            issues.append(f"round_{i+1}:result_group_mismatch")
         for result in subtasks:
             if not isinstance(result, Mapping):
                 issues.append(f"round_{i+1}:malformed_result")
@@ -105,19 +146,27 @@ def validate_gold_trajectory(
             }:
                 issues.append(f"round_{i+1}:unknown_or_unready_result")
                 continue
-            valid, errors = validate_subagent_result(result, task)
+            valid, errors = validate_subagent_result(result, task,question=plan.get("question",""))
             if not valid:
                 issues.extend(f"round_{i+1}:{error}" for error in errors)
             completed.add(task["subtask_id"])
-            seen_resources.add(task["resource_id"])
-        valid_summary, errors = validate_main_summary(round_data)
+            if task.get("kind","inspect")=="inspect":seen_resources.add(task["resource_id"])
+        if "completed_after" in round_data and set(round_data["completed_after"])!=completed:
+            issues.append(f"round_{i+1}:completed_after_mismatch")
+        if "pending_after" in round_data and set(round_data["pending_after"])!=set(task_map)-completed:
+            issues.append(f"round_{i+1}:pending_after_mismatch")
+        known_claims=[c for t in plan["tasks"] if t["subtask_id"] in completed for c in t["gold_answer_claims"]]
+        known_claims.extend({"resource":{k:v for k,v in t.get("observation",{}).items() if k!="content"}} for t in plan["tasks"] if t["subtask_id"] in completed)
+        pending_ids=set(task_map)-completed
+        valid_summary, errors = validate_main_summary(round_data,claims=known_claims,
+            pending_ids=pending_ids,allowed_ids={task_map[t]["resource_id"] for t in completed},question=plan.get("question",""))
         if not valid_summary:
             issues.extend(f"round_{i+1}:{error}" for error in errors)
     if completed != set(task_map):
         issues.append("incomplete_official_task_graph")
     if not set(plan["proof_source_ids"]).issubset(seen_resources):
         issues.append("incomplete_gold_proof")
-    final_ok, final_issues = validate_final(final, plan["final_answer"])
+    final_ok, final_issues = validate_final(final, plan["final_answer"],plan.get("answer_contract"))
     if not final_ok:
         issues.extend(final_issues)
     return {

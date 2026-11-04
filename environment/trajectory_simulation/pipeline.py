@@ -19,7 +19,7 @@ from environment.task_construction.rendering.pipeline import render_task_record
 
 from .compiler import (
     GoldCompilationError, compile_gold_solution, public_plan,
-    ready_subtasks,
+    ready_subtasks, json_value,
 )
 from .prompts import (
     executor_prompt, final_prompt, planner_prompt, summary_prompt,
@@ -31,9 +31,10 @@ from .validator import (
 
 
 class GoldTrajectoryError(RuntimeError):
-    def __init__(self, stage: str, issues: list[str]) -> None:
+    def __init__(self, stage: str, issues: list[str], audit=None) -> None:
         self.stage = stage
         self.issues = issues
+        self.audit = audit or {}
         super().__init__(f"{stage}: {', '.join(issues)}")
 
 
@@ -62,31 +63,40 @@ def _with_feedback(prompt: str, issues: list[str]) -> str:
     )
 
 
-def _stage(call, validate, *, stage: str, max_attempts: int) -> dict[str, Any]:
-    """Retry with rejection feedback; never accept structurally invalid data."""
-    last: list[str] = []
-    for _ in range(max_attempts):
+def _stage(call,validate,*,stage,max_attempts,diagnostics=None):
+    last=[];attempts=[]
+    for attempt in range(1,max_attempts+1):
+        value=None
         try:
-            value = call(last)
-            if not isinstance(value, Mapping):
-                last = ["non_object_model_response"]
-                continue
-            okay, issues = validate(value)
-            if okay:
-                return dict(value)
-            last = issues
-        except (BackendError, ValueError, TypeError, KeyError) as exc:
-            last = [f"{type(exc).__name__}:{str(exc)[:180]}"]
-    raise GoldTrajectoryError(stage, last)
+            value=call(last)
+            if not isinstance(value,Mapping):last=["non_object_model_response"]
+            else:
+                okay,issues=validate(value)
+                if okay:return dict(value)
+                last=issues
+        except (BackendError,ValueError,TypeError,KeyError) as exc:
+            last=[f"{type(exc).__name__}:{str(exc)[:180]}"]
+        attempts.append({"attempt":attempt,"response":json_value(value),"issues":last})
+    raise GoldTrajectoryError(stage,last,{"attempts":attempts,**(diagnostics or {})})
+
+
+def _reviewed(role,value,validate,claims,fields,*,question,pending=(),allowed=(),context=None):
+    okay,issues=validate(value)
+    if not okay:return okay,issues
+    from .grounding import semantic_review
+    text="\n".join(str(value.get(field,"")) for field in fields)
+    return semantic_review(role,text,claims,question=question,pending_ids=pending,allowed_ids=allowed,context=context)
 
 
 def _public_task(task: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    result={
         k: task[k] for k in (
-            "subtask_id", "resource_id", "source_type", "role", "agent",
+            "subtask_id", "kind", "resource_id", "source_type", "role", "agent",
             "available_tool_families", "depends_on",
         )
     }
+    if task.get("kind")=="discover":result["discovery_terms"]=task.get("discovery_terms",[])
+    return result
 
 
 def synthesize_one(
@@ -144,6 +154,15 @@ def synthesize_one(
                 dependency_results = [
                     previous_results[dep] for dep in task["depends_on"]
                 ]
+                if task.get("kind")=="discover":
+                    descriptor=task["gold_answer_claims"]
+                    result={"subtask_id":task_id,"status":"success","answer":descriptor,
+                        "evidence_source_ids":[task["resource_id"]],
+                        "answer_summary":f"Located {descriptor[0]['title']} ({task['resource_id']}); only its resource descriptor is available.",
+                        "trajectory_summary":"Used already available clues to retrieve the resource descriptor; its contents remain unread."}
+                    okay,issues=validate_subagent_result(result,task)
+                    if not okay:raise GoldTrajectoryError("discovery_execution",issues)
+                    return result
                 execution_payload = {
                     "question": gold["question"],
                     "assigned_subtask": allocated[task_id],
@@ -154,7 +173,12 @@ def synthesize_one(
                     lambda feedback: executor.execute(
                         execution_payload,
                         _with_feedback(executor_prompt(execution_payload), feedback)),
-                    lambda value: validate_subagent_result(value, task),
+                    lambda value: _reviewed(executor,value,
+                        lambda v:validate_subagent_result(v,task,question=gold["question"]),
+                        [*task["gold_answer_claims"],{"source_observation":task["observation"]}],
+                        ("answer_summary","trajectory_summary"),question=gold["question"],
+                        allowed=[task["resource_id"]],
+                        context={"kind":"inspect","resource_id":task["resource_id"],"source_type":task["source_type"],"agent":task["agent"]}),
                     stage=f"round_{round_index}:subagent:{task_id}",
                     max_attempts=max_attempts,
                 )
@@ -173,10 +197,21 @@ def synthesize_one(
                     item for item in pending_ids if item not in set(ready_ids)
                 ],
             }
+            known=[*previous_results.values(),*responses]
+            known_claims=[c for result in known for c in result["answer"]]
+            known_claims.extend({"resource":{k:v for k,v in tasks_by_id[r["subtask_id"]]["observation"].items() if k!="content"}} for r in known)
+            known_ids={sid for result in known for sid in result["evidence_source_ids"]}
             summary = _stage(
                 lambda feedback: planner.summarize(
                     summary_payload, _with_feedback(summary_prompt(summary_payload), feedback)),
-                validate_main_summary,
+                lambda value:_reviewed(planner,value,
+                    lambda v:validate_main_summary(v,claims=known_claims,
+                        pending_ids=summary_payload["pending_task_ids"],allowed_ids=known_ids,question=gold["question"]),
+                    known_claims,("main_summary",),question=gold["question"],
+                    pending=summary_payload["pending_task_ids"],allowed=known_ids,
+                    context={"kind":"main_round_summary",
+                        "completed_results":[{"kind":tasks_by_id[r["subtask_id"]]["kind"],"subtask_id":r["subtask_id"],"resource_id":tasks_by_id[r["subtask_id"]]["resource_id"],"answer":r["answer"]} for r in known],
+                        "inspected_resource_ids":[tasks_by_id[r["subtask_id"]]["resource_id"] for r in known if tasks_by_id[r["subtask_id"]]["kind"]=="inspect"]}),
                 stage=f"round_{round_index}:main_summary",
                 max_attempts=max_attempts,
             )
@@ -211,8 +246,14 @@ def synthesize_one(
     final = _stage(
         lambda feedback: planner.finalize(
             final_payload, _with_feedback(final_prompt(final_payload), feedback)),
-        lambda value: validate_final(value, gold["final_answer"]),
+        lambda value:_reviewed(planner,value,
+            lambda v:validate_final(v,gold["final_answer"],gold["answer_contract"]),
+            known_claims,
+            ("summary",),question=gold["question"],
+            allowed={sid for result in previous_results.values() for sid in result["evidence_source_ids"]},
+            context={"kind":"main_final_summary","completed_results":[{"kind":tasks_by_id[r["subtask_id"]]["kind"],"subtask_id":r["subtask_id"],"resource_id":tasks_by_id[r["subtask_id"]]["resource_id"],"answer":r["answer"]} for r in previous_results.values()]}),
         stage="main_final_answer", max_attempts=max_attempts,
+        diagnostics={"expected_answer":gold["final_answer"],"answer_contract":gold["answer_contract"]},
     )
     validation = validate_gold_trajectory(gold, rounds, final)
     if not validation["accepted"]:
@@ -226,6 +267,9 @@ def synthesize_one(
         "validation": validation,
         "gold_supervision": {
             "proof_source_ids": gold["proof_source_ids"],
+            "required_fact_ids":gold["required_fact_ids"],
+            "answer_contract":gold["answer_contract"],
+            "acquisition_validation":gold["acquisition_validation"],
             "required_resource_ids": gold["required_resource_ids"],
             "gold_parallel_waves": gold["gold_parallel_waves"],
             "symbolic_trace": gold["symbolic_trace"],
@@ -234,6 +278,10 @@ def synthesize_one(
         },
         "metadata": {
             "clean_trajectory": True,
+            "discovery_responses_environment_authoritative":True,
+            "text_grounding_review":{
+                "planner":"offline_deterministic" if getattr(planner,"offline",False) else "llm_review",
+                "executor":"offline_deterministic" if getattr(executor,"offline",False) else "llm_review"},
             "two_role_teacher": True,
             "subtasks_compiled_from_frozen_gold": True,
             "oracle_answer_not_shown_to_main_llm": True,
@@ -337,6 +385,7 @@ def synthesize_trajectories_jsonl(
                     "task_id": task_id,
                     "reason": stage,
                     "issues": issues,
+                    "audit":json_value(exc.audit) if isinstance(exc,GoldTrajectoryError) else {},
                 }, ensure_ascii=False) + "\n")
             else:
                 accepted += 1
