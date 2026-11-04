@@ -144,7 +144,8 @@ def synthesize_one(
                     payload, _with_feedback(main_prompt(payload), issues)
                 ),
                 lambda value: validate_action(
-                    value, guidance, gold["final_answer"], gold["answer_contract"]
+                    value, guidance, gold["final_answer"], gold["answer_contract"],
+                    public_state=public_state,
                 ),
                 stage=f"round_{round_index}:main_action",
                 max_attempts=max_attempts,
@@ -181,6 +182,7 @@ def synthesize_one(
                             "output_node_id": f["output_node_id"],
                             "depends_on": f["depends_on"],
                             "resource_ids": f["resource_ids"],
+                            "support_resource_ids": f["support_resource_ids"],
                             "operations": f["operations"],
                             "expected_answer": f["expected_answer"],
                         } for f in gold["fragments"]],
@@ -263,6 +265,7 @@ def synthesize_one(
                     "task_index": index, "fragment_id": f["fragment_id"],
                     "output_node_id": f["output_node_id"],
                     "resource_ids": f["resource_ids"],
+                    "support_resource_ids": f["support_resource_ids"],
                 } for index, f in enumerate(ready)],
             })
             trajectory.append({
