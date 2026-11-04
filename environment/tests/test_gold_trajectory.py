@@ -182,10 +182,19 @@ class FragmentTrajectoryTests(unittest.TestCase):
                          ["delegate_task", "delegate_task", "complete"])
         first = result["trajectory"][0]
         self.assertEqual(set(first["state_before"]),
-                         {"question", "history", "available_tools"})
-        self.assertEqual(first["state_before"]["history"], [])
+                         {"question", "subtask_history", "available_tools"})
+        self.assertEqual(first["state_before"]["subtask_history"],
+                         "No subtasks completed yet.")
         second = result["trajectory"][1]
-        self.assertEqual(len(second["state_before"]["history"]), 1)
+        second_history = second["state_before"]["subtask_history"]
+        self.assertIn("[Attempt 1] 🔄 Parallel Batch (1 subtasks)", second_history)
+        self.assertIn('Result: "[\\"Bob\\"]"', second_history)
+        self.assertIn("Trace summary:", second_history)
+        final_history = result["trajectory"][-1]["state_before"]["subtask_history"]
+        self.assertIn("[Attempt 1]", final_history)
+        self.assertIn("[Attempt 2]", final_history)
+        self.assertIn("Summary: 2/2 subtasks done", final_history)
+        self.assertIn('Result: "[\\"Carol\\"]"', final_history)
         public = json.dumps(result["trajectory"])
         self.assertNotIn("fragment:0", public)
         self.assertNotIn("symbolic_trace", public)
@@ -205,6 +214,38 @@ class FragmentTrajectoryTests(unittest.TestCase):
         self.assertIn("trace_summary", replies[0])
         schema = feedback_schema()
         self.assertEqual(set(schema["properties"]), {"summary", "trace_summary"})
+
+    def test_o1_history_contains_all_parallel_results_across_rounds(self):
+        from environment.trajectory_simulation.history import format_o1_subtask_history
+        episode = synthesize_one(*fixture(), PassthroughPlanner(), PassthroughExecutor())
+        before_finish = episode["trajectory"][-1]["state_before"]
+        history = before_finish["subtask_history"]
+        self.assertIn("Parallel Batch (2 subtasks)", history)
+        self.assertIn("[1] ✅ done", history)
+        self.assertIn("[2] ✅ done", history)
+        self.assertEqual(history.count("Trace summary:"), 2)
+        self.assertEqual(history.count("Result:"), 2)
+        self.assertIn("Summary: 2/2 subtasks done", history)
+        self.assertEqual(
+            history,
+            format_o1_subtask_history(episode["trajectory"][:-1]),
+        )
+
+    def test_main_prompt_uses_formatted_history_but_keeps_private_gold_separate(self):
+        from environment.trajectory_simulation.contract import main_prompt
+        from environment.trajectory_simulation.compiler import private_guidance
+        episode = synthesize_one(*fixture(dependent=True),
+                                 PassthroughPlanner(), PassthroughExecutor())
+        state = episode["trajectory"][-1]["state_before"]
+        self.assertNotIn("private_gold_guidance", json.dumps(state))
+        self.assertNotIn("fragment:", json.dumps(state))
+        compiled = compile_gold_solution(*fixture(dependent=True))
+        guidance = private_guidance(compiled, set())
+        text = main_prompt({"public_state": state, "gold_guidance": guidance})
+        self.assertIn("public_o1_state", text)
+        self.assertIn("private_gold_guidance", text)
+        self.assertIn("Trace summary:", text)
+        self.assertIn("Summary: 2/2 subtasks done", text)
 
     def test_parallel_subagents_are_independent_requests(self):
         class SlowExecutor(PassthroughExecutor):
