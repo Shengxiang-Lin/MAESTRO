@@ -105,6 +105,9 @@ def parse_with_config(
     if not isinstance(values, Mapping):
         raise EnvironmentConfigError(f"{section} must be a YAML mapping")
     construction = config.get("task_construction", {})
+    values = dict(values)
+    if section in {"question_generation", "trajectory_simulation"} and "seed" not in values:
+        values["seed"] = construction.get("seed", 17)
     target = int(construction.get("target", 100))
     recognized: set[str] = set()
     for current in _walk_parsers(parser):
