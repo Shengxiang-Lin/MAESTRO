@@ -50,7 +50,7 @@ def executor_prompt(payload: Mapping[str, Any]) -> str:
         "Read its provided source observation and completed prerequisite results. "
         "The authoritative_answer_claims are already verified against the frozen "
         "symbolic world. Output that list EXACTLY in the JSON field 'answer' "
-        "(same fact IDs, values, ordering; do not add or omit facts). "
+        "(same public subject/predicate/object values and ordering; do not add or omit claims). "
         "Write a concise natural-language answer_summary explaining what was found "
         "and a compressed trajectory_summary describing the work performed. "
         "Do not claim to have observed other sources or future results. "
