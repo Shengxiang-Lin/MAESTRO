@@ -1,4 +1,4 @@
-"""CLI for Main-controlled O1 actions and per-task simulated replies."""
+"""CLI for Stage-1-fragment-guided O1 gold trajectories."""
 from __future__ import annotations
 
 import argparse
@@ -77,17 +77,17 @@ def command_synthesize(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate Main-controlled O1 trajectories from frozen environments"
+        description="Generate fragment-guided official O1 trajectories from frozen tasks"
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    plan = sub.add_parser("plan", help="compile private resource constraints without an LLM")
+    plan = sub.add_parser("plan", help="compile first-stage answered fragment DAGs without an LLM")
     _add_common(plan)
     plan.set_defaults(func=command_plan)
 
     synth = sub.add_parser(
         "synthesize",
-        help="Main delegate/complete decisions and one simulated reply per delegated task",
+        help="per-round gold Main actions and one grounded reply per fragment",
     )
     _add_common(synth)
     synth.add_argument(
