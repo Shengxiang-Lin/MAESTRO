@@ -153,6 +153,7 @@ def compile_gold_solution(
             "visibility": str(resource.get("visibility", "")),
             "role": str(resource.get("role", "")),
             "agent": specialist,
+            "available_tool_families": list(resource.get("available_tool_families") or []),
             "depends_on": ["subtask:" + p for p in parents],
             "required_for_proof": sid in proof_ids,
             "gold_answer_claims": facts,
@@ -167,6 +168,7 @@ def compile_gold_solution(
     return {
         "task_id": task_id,
         "question": str(realized.get("question", "")),
+        "public_task_design": dict(realized.get("task_design", {}) or {}),
         "final_answer": json_value(rendered.answer),
         "symbolic_answer": raw_answer,
         "symbolic_trace": {str(k): json_value(v) for k, v in trace.items()},
@@ -188,11 +190,12 @@ def public_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "task_id": plan["task_id"],
         "question": plan["question"],
+        "task_design": plan["public_task_design"],
         "reasoning_graph": plan["reasoning_graph"],
         "tasks": [
             {key: task[key] for key in (
                 "subtask_id", "resource_id", "source_type", "visibility", "role",
-                "agent", "depends_on",
+                "agent", "available_tool_families", "depends_on",
             )}
             for task in plan["tasks"]
         ],
