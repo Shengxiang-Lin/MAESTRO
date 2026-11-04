@@ -76,7 +76,11 @@ def main():
                 "rejection_reasons (for example, hardness or BindingError)."
             )
         summary["worlds"]=generate_world_batch(candidates,YAGO_CATALOG,YAGO_TAXONOMY_INDEX,worlds,target=args.target,min_depth=5,seed=args.seed,min_critical_sources=2,min_noncritical_sources=1,min_proof_sources=2,max_sources=6,mmqa_source_motifs_path=MMQA_SCENARIO_PRIOR,progress=progress);accepted=int(summary["worlds"].get("accepted",0) or 0)
-        if accepted<=0:_write_json(summary_path,summary);raise SystemExit("World generation accepted no worlds")
+        if accepted<=0:
+            _write_json(summary_path,summary)
+            raise SystemExit("World generation accepted no worlds. "
+                             f"Rejection reasons: {summary['worlds'].get('rejection_reasons',{})}. "
+                             f"See {summary['worlds'].get('rejected_output')} and {summary_path}")
         summary.update(_run_downstream(worlds,rendered,accepted=accepted,target=args.target,seed=args.seed,progress=progress))
     _write_json(summary_path,summary);accepted=int(summary["worlds"].get("accepted",0) or 0);paths=_artifact_paths(args.target)
     try:manifest=freeze_batch(summary,target=accepted,seed=args.seed,worlds_path=worlds,task_design_path=paths["task_design"],scenario_path=paths["scenario"],capability_path=paths["capability"],authoring_input_path=paths["authoring"],manifest_path=paths["manifest"])
