@@ -75,7 +75,7 @@ def replay_task(task,new_observations=(),*,public_cache=None):
     def attrs(candidates,predicate):
         return [(f['subject'],f['object']) for f in facts if f['subject'] in as_set(candidates) and f['predicate']==predicate and f['object_kind']!='entity']
     checks=packet['execution_checks'] if packet['version']==3 else task['task_instruction']
-    lines=re.findall(r'^\d+\. (.+)
+    lines=re.findall(r'^\d+\. (.+)$',checks,re.M)
     if not lines:raise ValueError('public task has no executable instruction list')
     for original in lines:
         line,refs=replace_refs(original);deps=[]
