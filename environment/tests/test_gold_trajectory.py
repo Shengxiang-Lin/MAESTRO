@@ -215,6 +215,87 @@ class FragmentCompilationTests(unittest.TestCase):
         # in the public Main state or its history.
         self.assertNotIn("d0001", json.dumps(result["trajectory"]))
 
+    def test_public_intermediate_domain_may_differ_without_changing_final_answer(self):
+        from environment.trajectory_simulation.public_preflight import audit_public_executability
+        question, record, rendered = fixture()
+        record["program"]["nodes"] = [
+            {"node_id": 0, "op": "FIND", "dependencies": [],
+             "inputs": ["type:schema:Person"]},
+            {"node_id": 1, "op": "RELATE", "dependencies": [0],
+             "inputs": ["r:first", "forward"]},
+            {"node_id": 2, "op": "QUERY_NAME", "dependencies": [1], "inputs": []},
+        ]
+        record["program"]["metadata"]["deep_dependency"]["composition_links"] = [
+            {"fragment": 0, "stage": 0, "producer_node_id": None,
+             "output_node_id": 0},
+            {"fragment": 1, "stage": 1, "producer_node_id": 0,
+             "output_node_id": 1},
+        ]
+        # This unsourced person appears in the private FIND(type) output
+        # but is invisible to a public Sub-Agent. The downstream relation
+        # never uses it, so the full public answer remains Bob.
+        record["world"]["entities"]["ghost"] = "schema:Person"
+        gold = compile_gold_solution(question, record, rendered)
+        root = next(f for f in gold["fragments"] if f["output_node_id"] == 0)
+        self.assertEqual(root["expected_answer"], ["Alice", "Bob"])
+        self.assertTrue(any(
+            item["node_id"] == 0 for item in gold["public_intermediate_projections"]
+        ))
+        self.assertTrue(audit_public_executability(gold)["publicly_executable"])
+
+    def test_final_source_domain_mismatch_is_never_projected_away(self):
+        question, record, rendered = fixture()
+        record["program"]["nodes"] = [
+            {"node_id": 0, "op": "FIND", "dependencies": [],
+             "inputs": ["type:schema:Person"]},
+            {"node_id": 1, "op": "COUNT", "dependencies": [0], "inputs": []},
+        ]
+        record["program"]["metadata"]["deep_dependency"]["composition_links"] = [
+            {"fragment": 0, "stage": 0, "producer_node_id": None,
+             "output_node_id": 0},
+        ]
+        record["world"]["entities"]["ghost"] = "schema:Person"
+        rendered.answer = 3
+        with self.assertRaisesRegex(
+            GoldCompilationError, "public_full_world_answer_disagrees_with_gold"
+        ):
+            compile_gold_solution(question, record, rendered)
+
+    def test_unique_public_intersection_can_be_certified_without_stage1_tag(self):
+        from environment.trajectory_simulation.public_preflight import audit_public_executability
+        question, record, rendered = fixture()
+        record["program"]["nodes"] = [
+            {"node_id": 0, "op": "FIND", "dependencies": [],
+             "inputs": ["entity:A"]},
+            {"node_id": 1, "op": "FIND", "dependencies": [],
+             "inputs": ["type:schema:Person"]},
+            {"node_id": 2, "op": "FILTER_YEAR", "dependencies": [1],
+             "inputs": ["r:birth", "<CMP:=>", "1912"]},
+            {"node_id": 3, "op": "INTERSECT", "dependencies": [0, 2], "inputs": []},
+            {"node_id": 4, "op": "QUERY_NAME", "dependencies": [3], "inputs": []},
+        ]
+        record["program"]["metadata"]["deep_dependency"]["composition_links"] = [
+            {"fragment": 0, "stage": 0, "producer_node_id": None,
+             "output_node_id": 2},
+        ]
+        record["world"]["facts"][0].update(
+            predicate="r:birth", object="1912", object_kind="year")
+        record["world"]["facts"][1].update(
+            subject="B", predicate="r:birth", object="1980", object_kind="year")
+        question["question"] = "Which Person has recorded birth year 1912?"
+        rendered.answer = ["Alice"]
+        rendered.hidden_metadata.pop("public_query_plan", None)
+        gold = compile_gold_solution(question, record, rendered)
+        self.assertEqual(len(gold["public_projections"]), 1)
+        self.assertEqual(gold["public_projections"][0]["rule"],
+                         "witness_verified_intersection")
+        self.assertTrue(audit_public_executability(gold)["publicly_executable"])
+        # A second matching person destroys the singleton proof: fail closed.
+        record["world"]["facts"][1]["object"] = "1912"
+        not_unique = compile_gold_solution(question, record, rendered)
+        self.assertEqual(not_unique["public_projections"], [])
+        self.assertFalse(audit_public_executability(not_unique)["publicly_executable"])
+
     def test_missing_entities_that_change_answer_still_rejected(self):
         from environment.trajectory_simulation.compiler import _minimal_witness
         from environment.task_construction.rendering.pipeline import program_from_dict, world_from_dict

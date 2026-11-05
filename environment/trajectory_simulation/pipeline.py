@@ -412,6 +412,8 @@ def plan_trajectories_jsonl(
                     } for f in plan["fragments"]],
                     "gold_waves": plan["waves"],
                     "public_projections": plan.get("public_projections", []),
+                    "public_projection_diagnostics": plan.get("public_projection_diagnostics", []),
+                    "public_intermediate_projections": plan.get("public_intermediate_projections", []),
                     "final_answer": plan["final_answer"],
                 }
                 if public_preflight["publicly_executable"]:

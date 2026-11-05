@@ -18,6 +18,16 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
         raise GoldCompilationError('question/world task_id mismatch')
     p=program_from_dict(record['program']);w=world_from_dict(record['world'])
     nodes=p.node_map();order=p.topological_order();trace=SymbolicExecutor().execute_trace(p,w)
+    # A real Sub-Agent can enumerate only entities supported by published
+    # Source facts. The private world may have additional unsourced distractors.
+    # Project the *entire* computation first, never individual answers.
+    public_world=_evidence_world(w,set(w.sources))
+    try:
+        public_full_trace=SymbolicExecutor().execute_trace(p,public_world)
+    except (ValueError,TypeError,RuntimeError) as exc:
+        raise GoldCompilationError('public_full_world_execution_failed', {
+            'error_type':type(exc).__name__, 'detail':str(exc)[:240],
+        }) from exc
     hidden=getattr(rendered,'hidden_metadata',{}) or {}
     def public_args(node):
         args=_public_inputs(node.inputs,rendered)
@@ -46,6 +56,7 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
     discovery=(audit.get('progressive_discovery',{}) or audit.get('p1_orchestration_profile',{}).get('progressive_discovery',{}))
     dependencies,_=resolve_dependencies(resources,discovery.get('anchor_registry',{}))
     profile=tool_profile(scene)
+    question=str(realized.get('question',''))
     cut_names={out:f'fragment:{i}' for i,out in enumerate(outputs)}
     # Branch operands are independent work, even if Stage 1 left them outside a composition cut.
     consumers=Counter(dep for node in p.nodes for dep in node.dependencies)
@@ -65,16 +76,55 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
         if entry.get('rule')=='unique_intersection_clue'
         for nid in entry.get('find_node_ids',[])
     }
+    # Independently certify a hidden singleton INTERSECT even when Stage 1
+    # did not label its public-query metadata. This is only a *candidate*
+    # for Stage-3 graph projection; the adapter still checks causal evidence,
+    # consumers, intermediate outputs, and the public replay.
+    candidate_intersections=[]
+    for join in p.nodes:
+        if join.op!='INTERSECT' or len(join.dependencies)!=2:continue
+        for find_id,other_id in (
+            (join.dependencies[0],join.dependencies[1]),
+            (join.dependencies[1],join.dependencies[0]),
+        ):
+            find=nodes[find_id]
+            if find.op!='FIND' or len(find.inputs)!=1 or not find.inputs[0].startswith('entity:'):
+                continue
+            alias=_public_inputs(find.inputs,rendered)[0]
+            if re.search(r'(?<!\w)'+re.escape(alias)+r'(?!\w)',question,re.I):
+                continue
+            if find_id in _ancestors(p,other_id):
+                continue
+            entity_id=find.inputs[0].split(':',1)[1]
+            expected={entity_id}
+            if not all(
+                isinstance(public_full_trace[nid],set) and public_full_trace[nid]==expected
+                for nid in (find_id,other_id,join.node_id)
+            ):
+                continue
+            candidate_intersections.append({
+                'rule':'witness_verified_intersection',
+                'find_node_ids':[find_id],
+                'identifying_node_ids':[other_id],
+                'join_node_id':join.node_id,
+            })
+            concealed_ids.add(find_id)
+            break
     for node in p.nodes:
         if node.op=='INTERSECT' and any(dep in concealed_ids for dep in node.dependencies):
             cut_names.setdefault(node.node_id,f'fragment:public_join:{node.node_id}')
     final=order[-1];cut_names.setdefault(final,'fragment:terminal')
     if not _same(_public_answer(trace[final],rendered,nodes[final]),rendered.answer):
         raise GoldCompilationError('rendered final answer disagrees with verified program')
+    if not _same(_public_answer(public_full_trace[final],rendered,nodes[final]),rendered.answer):
+        raise GoldCompilationError('public_full_world_answer_disagrees_with_gold', {
+            'output_node_id':final,
+            'private_answer_matches_rendered':True,
+            'public_source_domain_answer_matches':False,
+        })
     # A shared root is safe to repeat; a non-root boundary is bound to a completed result.
     previous={};fragments=[];support={}
     latent={nid:entry for entry in (getattr(rendered,'hidden_metadata',{}) or {}).get('public_query_plan',{}).get('latent_entities',[]) for nid in entry.get('find_node_ids',[])}
-    question=str(realized.get('question',''))
     for out in order:
         if out not in cut_names:continue
         fid=cut_names[out];prev=_maximal_dependencies(p,out,previous)
@@ -112,10 +162,10 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
         entity_reads=set()
         for node in subtree.nodes:
             if node.op=='FIND_ALL' or (node.op=='FIND' and node.inputs[0].startswith('type:')):
-                entity_reads.update(set(trace[node.node_id]) & observable_entities)
+                entity_reads.update(set(public_full_trace[node.node_id]) & observable_entities)
             if node.op=='FILTER_TYPE':
-                entity_reads.update(set(trace[node.dependencies[0]]) & observable_entities)
-        witness=_minimal_witness(subtree,w,trace[out],dependencies,max_sources=max_sources,required_entity_ids=entity_reads)
+                entity_reads.update(set(public_full_trace[node.dependencies[0]]) & observable_entities)
+        witness=_minimal_witness(subtree,public_world,public_full_trace[out],dependencies,max_sources=max_sources,required_entity_ids=entity_reads)
         # A step's public intermediate value must come from public evidence,
         # not from invisible entities in the private symbolic universe.
         public_trace=SymbolicExecutor().execute_trace(
@@ -142,7 +192,7 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
             'resource_ids':new_sources,'support_resource_ids':witness,
             'observations':observations,'acquisition_waves':acquisition,
             'known_observations':_source_claims(w,rendered,sorted(set(witness)&inherited)),
-            'expected_answer':json_value(rendered.answer) if out==final else _public_answer(trace[out],rendered,nodes[out]),
+            'expected_answer':json_value(rendered.answer) if out==final else _public_answer(public_full_trace[out],rendered,nodes[out]),
             'answer_kind':'entity_set' if isinstance(trace[out],set) else 'value',
             'suggested_tools':tools,'available_tools':list(profile.available),
             'scene':scene,'bounded_realization':True}
@@ -165,6 +215,14 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
             'multiset' if isinstance(trace[final],(list,tuple,set)) else 'scalar'},
         'terminal':{'op':nodes[final].op,'node_id':final,'depends_on':fragments[-1]['depends_on']},
         'symbolic_trace':{str(k):json_value(v) for k,v in trace.items()},
+        'projection_candidates':candidate_intersections,
+        'public_intermediate_projections':[
+            {'node_id':nid,'private_count':len(trace[nid]),
+             'public_count':len(public_full_trace[nid])}
+            for nid in order if isinstance(trace[nid],set)
+            and isinstance(public_full_trace[nid],set)
+            and not _same(trace[nid],public_full_trace[nid])
+        ],
         'final_proof_source_ids':fragments[-1]['support_resource_ids'],
         'policy':'first_stage_composition_links_fragment_gold','scene':scene,
         'available_tools':list(profile.available),'provided_resources':provided,
