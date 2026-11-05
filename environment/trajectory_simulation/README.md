@@ -50,8 +50,20 @@ For each question, this phase:
    such as `VideoAnalysisAction` are **optional**, never mandatory. A trace
    may omit tool mechanics if it accurately explains the supported result.
    Both literal and natural-language claims of *unpermitted* tool actions
-   remain forbidden. Semantic review still checks source-specific facts,
-   values and relation directions. If the local LLM returns missing/blank
+   remain forbidden. The output contract has **exactly two nonempty JSON
+   strings**, `summary` and `trace_summary`; trace bullets belong inside
+   the latter string, separated by escaped newlines. For local vLLM, Stage 3.1
+   requests a JSON Schema response for those two fields and falls back to
+   `json_object` only if the endpoint explicitly rejects schema support.
+   A valid nonempty `trace_summary: list[str]` is losslessly joined into
+   one string before the SAME deterministic and semantic checks, avoiding
+   unnecessary re-generation. `natural_feedback_normalized` counts
+   successfully checked writer responses that required such conversion.
+   The reviewer distinguishes verified FIND/FILTER/INTERSECT/SELECT_BETWEEN
+   and backward relation results from unsupported direct Source claims;
+   facts and relation directions must still be correctly attributed.
+   Internal observation keys and invented quoted search queries are rejected.
+   If the local LLM returns missing/blank
    `summary` or `trace_summary`, Stage 3.1 retries the writer **once** using
    a shorter prompt with predicate-relevant source facts and the same fixed
    answer. The retry is not a bypass: both deterministic fact checks and the
