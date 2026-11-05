@@ -40,7 +40,15 @@ class QuestionRenderer:
         if op=="FIND":
             concealment=self._concealment(node.node_id)
             return f"the {type_label(concealment.entity_type)} identified by the other stated clues" if concealment is not None else _input_value(inputs[0],self.aliases) if inputs else "the referenced entity"
-        if op=="FIND_ALL":return ("the available entities","the entities in the records","all candidate entities")[self._variant(node.node_id,"find_all",3)]
+        if op=="FIND_ALL":
+            # The symbolic root enumerates the task's finite source-backed
+            # domain. It does NOT mean Main was handed an answer-like entity
+            # list or that a live web search can exhaust the whole Internet.
+            return (
+                "entities identified from the relevant task evidence",
+                "entities documented across the accessible task references",
+                "candidate entities discoverable from the task-related sources",
+            )[self._variant(node.node_id,"find_all",3)]
         if op=="FILTER_TYPE":
             kind=type_label(inputs[0].split(":",1)[-1]) if inputs else "Entity";variant=self._variant(node.node_id,"filter_type",3)
             return (f"{kind} entities among {deps[0]}",f"{kind} entities drawn from {deps[0]}",f"{deps[0]} restricted to {kind} entities")[variant]
