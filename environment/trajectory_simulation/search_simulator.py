@@ -25,6 +25,8 @@ _STOP = frozenset((
     "determine", "each", "entities", "entity", "evidence", "find", "for",
     "from", "have", "identify", "identified", "into", "its", "matching",
     "names", "only", "other", "provided", "record", "records", "reference",
+    "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+    "eighth", "ninth", "tenth",
     "references", "related", "relevant", "required", "result", "results",
     "return", "search", "set", "source", "sources", "specified", "subtask",
     "supply", "supplied", "task", "that", "the", "their", "them", "these",
