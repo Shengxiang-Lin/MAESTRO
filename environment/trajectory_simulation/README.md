@@ -45,11 +45,17 @@ respects those anchors. Previously read evidence is marked as reused.
 synthetic distractors with no Source evidence. Public Replay has never seen
 those entities; its FIND_ALL and type enumeration operate on entities actually
 named in published source claims. Witness compilation now projects the same
-source-backed entity domain, and stores **publicly projected intermediate
-values** for replay validation. It still requires coverage of every
-source-observable candidate, full decision-information checks, and exact
-agreement with the unmodified private final answer. If invisible entities
-change the answer, the Gold task is rejected rather than fabricated.
+source-backed entity domain and evaluates the **entire ProgramIR** against
+all frozen public Sources before compiling any fragment. If the final
+public-source answer differs from the unchanged private oracle, compilation
+fails closed with `public_full_world_answer_disagrees_with_gold`.
+When only intermediate candidate sets differ (e.g. invisible distractors
+removed before a later relation/filter), fragment witnesses and public
+intermediate supervision use the publicly observable set, not a private
+candidate that no Sub-Agent could enumerate. Witness coverage,
+decision-information checks, and exact final-answer agreement remain strict.
+Private audit `public_intermediate_projections` records affected node IDs and
+set cardinalities, not student-visible answers.
 
 Uncomposed independent operands of a join are separate tasks rather than being
 hidden inside one terminal task. Only the actual join and final calculation wait
@@ -104,6 +110,16 @@ INTERSECT has no extra evidence, and neither removed fragment has other
 consumers. The private symbolic trace and final oracle remain unchanged.
 `public_projections` records the transformation for private auditing.
 
+Stage 3 may also certify the same algebraic redundancy when Stage-1
+metadata did not tag it: the concealed singleton FIND, independent
+source-backed branch, and their INTERSECT must all have the same unique
+result in the **entire public-source execution**. The adapter then requires
+actual witness support, a standalone evidence-free hidden FIND, matching
+join inputs, no unsafe shared consumers, and unaltered downstream bindings.
+Uncertified candidates are not rewritten. Private
+`public_projection_diagnostics` records whether candidates were projected;
+`public_projections` records successful, auditable rewrites.
+
 Other concealed entities are never supplied from the oracle. If a
 necessary identifying clue cannot be formulated or replayed, the task is
 quarantined with `latent_find_missing_public_clue`, rather than producing
@@ -150,6 +166,14 @@ python environment/simulate_trajectories.py synthesize --scene omnigaia \
 
 python -m unittest discover -s environment/tests
 ```
+
+For a paired 100-question check against an unchanged frozen Stage-1 batch,
+run `plan` and `synthesize --provider passthrough` with the same
+`--worlds`, `--realized`, `--seed`, `--max-records 100`,
+`--schedule compact`, and `--scene omnigaia` options. Compare `ready`,
+`quarantined`, `rejected`, and the per-task reasons. A structurally ready
+passthrough trajectory is **not** yet training eligible; Stage-2 question
+semantics must also pass an independent actual review.
 
 Main/executor model profiles, temperatures, retries and current-round worker
 concurrency continue to come from `environment/config.yaml`. Different questions
