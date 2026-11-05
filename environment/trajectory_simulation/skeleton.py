@@ -55,6 +55,19 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
                 cut_names.setdefault(dep,f'fragment:branch:{dep}')
         if consumers[node.node_id]>1 and node.dependencies:
             cut_names.setdefault(node.node_id,f'fragment:shared:{node.node_id}')
+    # Expose a separate join boundary when Stage 1 explicitly concealed a
+    # singleton FIND in favor of a uniquely identifying intersection branch.
+    # The public graph adapter can then remove that redundant private root
+    # without changing any other ProgramIR calculation.
+    concealed_ids={
+        int(nid)
+        for entry in hidden.get('public_query_plan',{}).get('latent_entities',[])
+        if entry.get('rule')=='unique_intersection_clue'
+        for nid in entry.get('find_node_ids',[])
+    }
+    for node in p.nodes:
+        if node.op=='INTERSECT' and any(dep in concealed_ids for dep in node.dependencies):
+            cut_names.setdefault(node.node_id,f'fragment:public_join:{node.node_id}')
     final=order[-1];cut_names.setdefault(final,'fragment:terminal')
     if not _same(_public_answer(trace[final],rendered,nodes[final]),rendered.answer):
         raise GoldCompilationError('rendered final answer disagrees with verified program')
