@@ -137,6 +137,8 @@ def make_round_record(
     """Validate the previous public rounds and export exactly one Main decision."""
     if history_origin not in {"natural", "teacher_reconstructed"}:
         raise ValueError("invalid_history_origin")
+    if round_index != len(prefix) + 1:
+        raise ValueError("round_index_does_not_follow_history_prefix")
     if require_review and not (eligibility.get("eligible") and eligibility.get("reviewed")):
         raise ValueError("unreviewed_question_cannot_export")
     if eligibility.get("question_sha256") != digest(question):
@@ -172,6 +174,17 @@ def make_round_record(
     else:
         if assigned_task_count != 0:
             raise ValueError("complete_with_delegation")
+        if not prefix:
+            raise ValueError("completion_without_previous_result")
+        from .contract import answers_equal
+        last=prefix[-1]["result"]["subtask_results"][-1]
+        contract={
+            "collection_mode": "set" if last["result_kind"]=="entity_set" else "multiset"
+        }
+        if not answers_equal(
+            action["params"]["answer"],last["result_value"],contract
+        ):
+            raise ValueError("complete_answer_not_supported_by_public_history")
     target = training_target(action)
     sample = {
         "id": f"{task_id}:round-{round_index}",
@@ -257,6 +270,8 @@ def synthesize_rounds_jsonl(
     history_origins=Counter()
     rewritten_tasks=0
     assigned_tasks=0
+    attempted_rewrites=0
+    attempted_assignments=0
     bank_fragments=0
     bank_natural_feedback=0
     rounds_considered=0
@@ -282,6 +297,13 @@ def synthesize_rounds_jsonl(
                         scene=scene,schedule=schedule,question_review=question_review,
                     )
                     bank_fragments+=len(bank["fragments"])
+                    attempted_rewrites+=sum(
+                        wave["naturalization"]["rewritten_tasks"]
+                        for wave in bank["waves"]
+                    )
+                    attempted_assignments+=sum(
+                        len(wave["fragment_ids"]) for wave in bank["waves"]
+                    )
                     bank_natural_feedback+=sum(
                         bool(f["natural_feedback"]) for f in bank["fragments"].values()
                     )
@@ -398,13 +420,21 @@ def synthesize_rounds_jsonl(
         "tasks_rejected":tasks["rejected"],
         "subtask_bank_fragments":bank_fragments,
         "subtask_bank_natural_feedback":bank_natural_feedback,
+        "subtask_bank_feedback_natural_rate":(
+            bank_natural_feedback/bank_fragments if bank_fragments else 0.0
+        ),
         "rounds_considered":rounds_considered,
         "eligible_rounds":eligible_rounds,
         "rounds_skipped":sum(skips.values()),
         "round_yield":eligible_rounds/rounds_considered if rounds_considered else 0.0,
-        "natural_main_tasks_rewritten":rewritten_tasks,
-        "natural_main_tasks_total":assigned_tasks,
-        "natural_action_rate":rewritten_tasks/assigned_tasks if assigned_tasks else 0.0,
+        "natural_main_tasks_rewritten":attempted_rewrites,
+        "natural_main_tasks_total":attempted_assignments,
+        "natural_action_rate":(
+            attempted_rewrites/attempted_assignments
+            if attempted_assignments else 0.0
+        ),
+        "exported_main_tasks_rewritten":rewritten_tasks,
+        "exported_main_tasks_total":assigned_tasks,
         "history_origins":dict(history_origins),
         "round_skip_reasons":dict(skips),
         "task_failure_reasons":{
