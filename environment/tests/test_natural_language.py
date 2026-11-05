@@ -231,6 +231,91 @@ class NaturalLanguageTests(unittest.TestCase):
                 "trace_summary": "No other result was found.",
             })
 
+    def test_report_may_name_verified_simulated_tools_but_not_unsupported_ones(self):
+        fragment = {
+            "scene": "omnigaia",
+            "expected_answer": ["Alice"],
+            "operations": [{"op":"FIND", "inputs":["Alice"]}],
+            "operation_results": [{"answer":["Alice"], "input_values":[]}],
+            "observations": [{
+                "resource_id":"source_01","source_type":"text","title":"First reference",
+                "claims":[{"subject":"Alice","predicate":"r:birth",
+                           "object":"1912","object_kind":"year"}],
+                "visibility":"discoverable",
+            }],
+            "known_observations": [], "acquisition_waves":[["source_01"]],
+            "suggested_tools":["GoogleSearchAction","ExtractUrlContentAction"],
+        }
+        from environment.trajectory_simulation.tool_provenance import (
+            reconstruct_tool_observations,
+        )
+        plan = reconstruct_tool_observations(fragment)
+        self.assertFalse(plan["live_tool_calls"])
+        self.assertEqual(
+            [step["tool"] for step in plan["steps"]],
+            ["GoogleSearchAction","ExtractUrlContentAction"],
+        )
+        payload = {"fragment": fragment, "tool_provenance":plan}
+        valid = {
+            "summary":"Alice is identified in the public record.",
+            "trace_summary":"- GoogleSearchAction located First reference (source_01).\n"
+                            "- ExtractUrlContentAction inspected First reference and "
+                            "found Alice's r:birth year as 1912.\n"
+                            "- The recorded result identifies Alice.",
+        }
+        self.assertEqual(realize_feedback_natural(payload,valid),valid)
+        with self.assertRaisesRegex(ValueError,"unverified_tool_action_claim"):
+            realize_feedback_natural(payload,{
+                **valid,"trace_summary":valid["trace_summary"]+
+                "\n- VideoAnalysisAction read a video file.",
+            })
+        with self.assertRaisesRegex(ValueError,"tool_trace_does_not_reflect_supported_tool_use"):
+            realize_feedback_natural(payload,{
+                **valid,"trace_summary":"First reference identifies Alice born in 1912.",
+            })
+        with self.assertRaisesRegex(ValueError,"unverified_tool_action_claim"):
+            realize_feedback_natural(payload,{
+                **valid,"trace_summary":valid["trace_summary"]+
+                "\n- I clicked an unrelated webpage.",
+            })
+
+    def test_public_tool_plan_preserves_acquisition_order_and_reused_sources(self):
+        from environment.trajectory_simulation.tool_provenance import (
+            reconstruct_tool_observations,
+        )
+        def source(sid, source_type, visibility="discoverable"):
+            return {
+                "resource_id":sid,"source_type":source_type,
+                "visibility":visibility,"title":f"Reference {sid}",
+                "claims":[{"observation_key":f"claim:{sid}",
+                           "subject":"Alice","predicate":"r:record",
+                           "object":"yes","object_kind":"string"}],
+            }
+        fragment = {
+            "scene":"omnigaia","observations":[
+                source("source_02","image_report"),
+                source("source_01","text")
+            ],
+            "known_observations":[source("source_00","video_report","provided")],
+            "acquisition_waves":[["source_01"],["source_02"]],
+            "suggested_tools":["GoogleSearchAction","ExtractUrlContentAction",
+                               "ImageAnalysisAction"],
+        }
+        plan=reconstruct_tool_observations(fragment)
+        self.assertEqual(
+            [(step["kind"],step["tool"],step["resource_id"]) for step in plan["steps"]],
+            [
+                ("source_discovery","GoogleSearchAction","source_01"),
+                ("source_inspection","ExtractUrlContentAction","source_01"),
+                ("source_discovery","GoogleSearchAction","source_02"),
+                ("source_inspection","ImageAnalysisAction","source_02"),
+                ("previously_available_evidence",None,"source_00"),
+            ],
+        )
+        self.assertTrue(all("query" not in step for step in plan["steps"]))
+        self.assertTrue(all("timestamp" not in step for step in plan["steps"]))
+        self.assertTrue(all("claim_keys" in step for step in plan["steps"]))
+
     def test_public_replay_and_sft_export_work_with_natural_main_task_prose(self):
         class NaturalPlanner(PassthroughPlanner):
             style_provider = "natural"
