@@ -53,20 +53,28 @@ def read_packet(task):
         1: ({'version','completed_inputs','known_records'},
             {'version','scene','completed_inputs','known_records'}),
         2: ({'version','scene','completed_inputs','known_resource_ids'},),
+        # A natural-language O1 task carries the same *public* executable
+        # checks in a structured transport packet. It is not an oracle:
+        # replay still uses only published claims and predecessor bindings.
+        3: ({'version','scene','completed_inputs','known_resource_ids','execution_checks'},),
     }
     if not isinstance(packet,dict) or packet.get('version') not in allowed or set(packet) not in allowed[packet['version']]:
         raise ValueError('invalid public task packet')
     if not isinstance(packet.get('completed_inputs'),dict):
         raise ValueError('malformed completed task references')
-    if packet['version']==2:
+    if packet['version'] in (2,3):
         ids=packet.get('known_resource_ids')
         if not isinstance(ids,list) or not all(isinstance(i,str) for i in ids) or len(ids)!=len(set(ids)):
             raise ValueError('malformed public evidence references')
+        if packet['version']==3:
+            checks=packet.get('execution_checks')
+            if not isinstance(checks,str) or not checks.strip():
+                raise ValueError('missing public execution checks')
     return packet
 
 def verify_known_packet(task,public_cache):
     packet=read_packet(task)
-    if packet['version']==2:
+    if packet['version'] in (2,3):
         resolved=[]
         for sid in packet['known_resource_ids']:
             if sid not in public_cache:
