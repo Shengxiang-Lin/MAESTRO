@@ -69,7 +69,9 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
             except BackendError as exc:
                 audit["critic_error"]=str(exc);audits.append(audit);feedback=f"semantic_critic_error: {exc}";continue
             audit["semantic_critic"]=review
-            if review.get("accept") is not True or str(review.get("semantic_fidelity","")).lower()!="pass":
+            if (review.get("accept") is not True
+                    or str(review.get("semantic_fidelity","")).lower()!="pass"
+                    or review.get("issues") != []):
                 repair=" ".join(str(review.get("repair_question") or "").split())
                 if repair:
                     repair_pre=preflight(payload,repair);audit["repair_preflight"]=repair_pre.to_dict()
@@ -78,7 +80,9 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
                         except BackendError as exc:
                             audit["repair_critic_error"]=str(exc);audits.append(audit);feedback="repair critic failed";continue
                         audit["repair_semantic_critic"]=repair_review
-                        if repair_review.get("accept") is not True or repair_review.get("semantic_fidelity")!="pass":
+                        if (repair_review.get("accept") is not True
+                                or str(repair_review.get("semantic_fidelity","")).lower()!="pass"
+                                or repair_review.get("issues") != []):
                             audits.append(audit);feedback="repair still violates frozen semantics";continue
                         candidate=repair
                     else:
