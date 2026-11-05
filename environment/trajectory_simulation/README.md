@@ -7,12 +7,36 @@ The accepted Stage-2 question is preserved.
 
 ## Strict semantic boundary
 
-The two teacher LLMs select bounded language plans. The controller renders native
-O1 actions and feedback from verified operations, exact operands, completed input
-bindings, source provenance and symbolic results. The LLM does not freely rewrite
-predicates, comparisons, relation directions, candidate sets or conclusions.
-This is gold-guided language realization, not an autonomous planning evaluation.
-Currently the bounded language choices are `concise`, `stepwise`, `goal`, and `evidence`.
+Gold ProgramIR, public source evidence, dependencies, tool lists, and exact
+answers remain authoritative. **Natural language is not the answer oracle.**
+The default LLM synthesis mode (`--style-provider natural`) makes two
+additional, independently reviewed language realizations:
+
+- Main rewrites each immutable, source-scoped gold delegation into a fluent
+  information goal and expected deliverable. It cannot choose different
+  subtasks, tools, dependencies, intermediate answers, or completion answers.
+- Each Sub-Agent writes a natural concise finding and evidence explanation
+  from its already verified public observations and exact executed steps.
+  Fabricated search/tool actions and unsupported facts are forbidden.
+- A deterministic guard and a separate semantic/evidence LLM review must
+  both pass. If either rejects the rewrite, the original verified wording is
+  emitted instead and the cause is saved in `generation_audit`; the sample
+  is never silently marked as a successful natural rewrite.
+- Natural `task_instruction` is **not** used to compute an answer. A v3
+  `[Public task packet]` contains the original publicly executable numbered
+  checks, alongside the same evidence handles and completed public bindings.
+  `replay_task` and `export_episode` execute these checks solely against
+  published evidence, not against hidden Gold values. The public task
+  transport and source access remain reproducible.
+
+The legacy `--style-provider llm` selects one of the four deterministic
+`concise`, `stepwise`, `goal`, and `evidence` variants. The
+`--style-provider template` option chooses deterministic variants without
+LLM style calls. `--provider passthrough` remains the offline structural mode.
+
+These are **gold-guided language realizations**, not autonomous planning
+evaluations. Stage 3 does not simulate actual tool traces; public evidence
+claims derive from frozen source witnesses.
 
 - Main chooses a language variant for each ordered ready task and its reasoning.
   The public output is `delegate_task` with native `params.tasks`, or `complete`.
@@ -65,12 +89,15 @@ No source-by-source decomposition replaces the original reasoning skeleton.
 Main's public state contains the question, provided reference descriptors,
 available native tools, an explicit public evidence store, and cumulative O1-formatted subtask history. Simulated
 records have public reference handles, not invented image paths or URLs.
-Later O1 task contexts use a version-2 **public evidence reference packet**:
+Canonical O1 task contexts use a version-2 **public evidence reference packet**:
 `known_resource_ids` and completed input bindings, **not full copied source
 records**. `Public Evidence Store` in the visible Main state still contains
 the actual observed records. The synthesizer and SFT exporter resolve the
 references from the chronological public store, then replay the exact same
-operation steps. An unknown or future resource reference fails validation.
+operation steps. Natural-mode O1 tasks instead carry a version-3 packet with
+`execution_checks` so human-facing `task_instruction` may be fluent prose
+while replay remains strict. These public checks are NOT a private solution
+or evidence oracle. An unknown or future resource reference fails validation.
 This greatly reduces JSON repetition in Main's SFT target.
 
 The teacher language-choice prompt retains completed result bindings; narrative
