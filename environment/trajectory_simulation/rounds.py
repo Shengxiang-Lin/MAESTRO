@@ -215,8 +215,7 @@ def synthesize_rounds_jsonl(
     *, planner, executor, max_records: int | None = None,
     round_indices: set[int] | None = None,
     include_fallback_rounds: bool = False, include_complete: bool = True,
-    max_o1_attempts: int = 10, max_attempts: int = 3,
-    subagent_workers: int = 4, seed: int = 17, scene: str = "omnigaia",
+    max_o1_attempts: int = 10, seed: int = 17, scene: str = "omnigaia",
     schedule: str = "compact", question_review: bool = True,
     quarantine_output_path: str | Path | None = None,
     rejected_output_path: str | Path | None = None,
@@ -243,9 +242,6 @@ def synthesize_rounds_jsonl(
         raise ValueError("round_indices must contain positive integers")
     if max_o1_attempts<1:
         raise ValueError("max_o1_attempts must be positive")
-    if max_attempts<1 or subagent_workers<1:
-        raise ValueError("max_attempts and subagent_workers must be positive")
-
     rows=_rows(realized_path)
     if max_records is not None:
         rows=rows[:max_records]
