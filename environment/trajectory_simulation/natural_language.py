@@ -330,9 +330,9 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         "single string separated by escaped newline characters (\\n). "
         "Never output a list, null, extra keys or markdown fences. "
         "For example: "
-        '{"summary":"Alice matches the requested year.",'
-        '"trace_summary":"- Inspected the relevant reference.\\n- '
-        'Confirmed Alice matches the recorded year."}. '
+        '{"summary":"Verified the requested result.",'
+        '"trace_summary":"- Examined the relevant evidence.\\n- '
+        'Checked the stated condition and returned the result."}. '
         "SUMMARY: one or two direct sentences stating the result and the most "
         "relevant clue. Do not grade your performance or the whole Main problem. "
         "TRACE_SUMMARY: write 2-6 concise, connected bullets or short paragraphs "
