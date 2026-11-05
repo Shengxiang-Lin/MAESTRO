@@ -82,8 +82,17 @@ def replay_task(task,new_observations=(),*,public_cache=None):
         def get(token):
             value=refs[token];deps.append(copy.deepcopy(value));return value
         if line.startswith('Identify all entities of type '):
+            # Historical canonical wording remains accepted for frozen banks.
             kind=line[len('Identify all entities of type '):-1]
             value={e for e,t in entities.items() if t==kind}
+        elif m:=re.fullmatch(
+            r'(?:Search task-relevant sources to identify entities of type |'
+            r'Examine accessible task evidence to identify entities of type )'
+            r'(.+); do not assume a complete list was initially provided\.',line
+        ):
+            # Discovery changes only how Main describes the task. The actual
+            # set must still come solely from the published source records.
+            value={e for e,t in entities.items() if t==m[1]}
         elif line.startswith('Identify '):
             target=line[len('Identify '):-1]
             if target.startswith('the entity matching the question clues: '):
@@ -96,7 +105,16 @@ def replay_task(task,new_observations=(),*,public_cache=None):
                 value=candidates
             elif target.startswith('the entity matching '):raise ValueError('missing concrete identification clue')
             else:value={target}
-        elif line=='Start a separate candidate set from all supplied records.':value=set(entities)
+        elif line in {
+            'Start a separate candidate set from all supplied records.',
+            'Search task-relevant sources and enumerate the candidate entities '
+            'supported by the discovered evidence.',
+            'Examine the accessible task evidence and enumerate the candidate '
+            'entities it supports.',
+        }:
+            # FIND_ALL ranges over only published source-backed entity records.
+            # This does not inject an oracle roster or assume initial names.
+            value=set(entities)
         elif m:=re.fullmatch(r'From (@\w+), keep only entities of type (.+)\.',line):
             value={e for e in as_set(get(m[1])) if entities.get(e)==m[2]}
         elif m:=re.fullmatch(r'From (@\w+), keep only entities whose (.+?) (==|!=|>=|<=|=|>|<) (.+)\.',line):

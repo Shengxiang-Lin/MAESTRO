@@ -7,6 +7,34 @@ The frozen Stage-1 ProgramIR / Fragment DAG and accepted Stage-2 question
 supply the immutable semantics. The subtask answers always come from public
 source-replayed symbolic execution; the LLM writes only language.
 
+### Candidate discovery is not an initially supplied roster
+
+An unbound `FIND_ALL` or `FIND`-by-type operation starts with **unknown
+candidate names**. The canonical Main delegation asks the Sub-Agent to find
+entities in the task-related evidence first, then apply the frozen filters.
+The exact root result is reconstructed from **published source claims and
+entity types**, not injected into the Main prompt as an oracle list.
+Sub-Agent `summary` / `trace_summary` may name the candidates AFTER
+describing how the evidence identified them; they must not falsely claim
+that a complete candidate list was supplied at the outset when other
+sources had to be discovered. In contrast, a later-round Main delegation
+may explicitly name entities in earlier, already published Sub-Agent results.
+
+This is source-backed *simulation*. Public aliases (e.g. synthetic city
+names) deliberately differ from original YAGO entity labels, and the
+`simulated_tool_provenance` log records `live_tool_calls=false`.
+A real public web search may not resolve these aliases. Do not claim this
+pipeline measures successful real-web search, or that the task corpus is
+the whole Internet. A truly live-search benchmark would require an
+independently retrievable evidence index or resolvable original names.
+
+The new canonical instruction text is supported by the public replay
+parser as the same `FIND_ALL` / `FIND` operation; the older canonical
+sentences remain readable for existing banks. Old Stage-2 questions and
+already written Stage-3 banks are **not** silently rewritten. To change
+question wording, regenerate/reauthor the Stage-2 artifacts against the
+same verified ProgramIR, then rebuild the Stage-3 Subtask Bank.
+
 ## Phase 1 — Complete and verify every Sub-Agent subtask
 
 Run **once** after constructing the frozen Worlds and accepted questions:

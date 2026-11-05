@@ -22,6 +22,31 @@ The LLM may change wording only. It may not add facts, resources,
 proof requirements, hidden criteria, answer hints, or change acquisition
 visibility. **No quality gate has been relaxed.**
 
+## Discovery-root questions: candidate names are findings, not input
+
+A ProgramIR `FIND_ALL` enumerates entities from the **bounded, source-backed
+task evidence domain**. It is not a user-supplied complete roster, and it
+does not imply exhaustive search of Wikipedia/the open web. Questions about
+these roots should ask which entities can be **identified from relevant task
+references** and then filtered by the stated predicates. The Author/Critic
+are instructed not to pre-enumerate answer-like entity names; an extra
+preflight check rejects explicit complete-supplied-list claims in tasks
+with discoverable sources.
+
+The generator's entity names are deliberately **synthetic aliases**, not
+the original YAGO labels. A real Internet Google search cannot be assumed
+to find the aliases; source discovery in Stage 3 is witness-backed
+**simulation**, not live search evaluation.
+
+Changing the deterministic question renderer affects *newly rendered/frozen*
+authoring inputs. Previously frozen `authoring_inputs_*.jsonl` retain their
+old draft strings. Restarting Stage 2 reauthors against those frozen inputs
+using the new discovery wording rules, but does **not** itself rewrite the
+old drafts. To update the draft templates themselves, regenerate the
+upstream rendering/freeze outputs in a new batch and then re-run Stage 2.
+Do not hand-edit existing accepted questions: Stage 3 fingerprints both
+the accepted question and ProgramIR for review.
+
 ## Semantic ownership and multi-hop fidelity
 
 The Author and Critic now compare every public constraint against the

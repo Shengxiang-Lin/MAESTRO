@@ -21,11 +21,24 @@ def input_label(binding, completed):
     if previous is None:raise ValueError('missing completed input for language realization')
     return f"the completed {previous.get('public_ref','subtask')} result ({previous['answer']})"
 
-def task_sentence(op, sources):
+def task_sentence(op, sources, *, can_search=False):
     name,args=op['op'],op['inputs']
     inp=sources[0] if sources else 'the supplied records'
-    if name=='FIND':return ('Identify all entities of type ' if op.get('find_kind')=='type' else 'Identify ')+args[0]+'.'
-    if name=='FIND_ALL':return 'Start a separate candidate set from all supplied records.'
+    if name=='FIND' and op.get('find_kind')=='type':
+        return (
+            'Search task-relevant sources to identify entities of type '
+            if can_search else
+            'Examine accessible task evidence to identify entities of type '
+        ) + args[0] + '; do not assume a complete list was initially provided.'
+    if name=='FIND':return 'Identify '+args[0]+'.'
+    if name=='FIND_ALL':
+        return (
+            'Search task-relevant sources and enumerate the candidate entities '
+            'supported by the discovered evidence.'
+            if can_search else
+            'Examine the accessible task evidence and enumerate the candidate '
+            'entities it supports.'
+        )
     if name=='FILTER_TYPE':return f'From {inp}, keep only entities of type {args[0]}.'
     if name.startswith('FILTER_'):return f'From {inp}, keep only entities whose {args[0]} {args[1]} {args[2]}.'
     if name=='RELATE':
@@ -44,21 +57,39 @@ def task_sentence(op, sources):
     raise ValueError('unsupported realization operation '+name)
 
 def task_variants(fragment, completed, visible_resources=(), public_cache=None):
+    tool_list=fragment['suggested_tools']
+    can_search='GoogleSearchAction' in tool_list
+    discovery_root=any(
+        op['op']=='FIND_ALL'
+        or (op['op']=='FIND' and op.get('find_kind')=='type')
+        for op in fragment['operations']
+    )
     sentences=[]
     for op in fragment['operations']:
         refs=[input_label(b,completed) for b in op.get('input_bindings',[])]
-        sentences.append(task_sentence(op,refs))
+        sentences.append(task_sentence(op,refs,can_search=can_search))
     # Local instruction numbers have identical meaning in both presentations.
     instruction='\n'.join(f'{i}. {line}' for i,line in enumerate(sentences,1))
-    tool_list=fragment['suggested_tools']
     context='Execute the instructions in dependency order; each input refers only to the result explicitly named in that instruction.'
     if any(b['kind']=='completed' for op in fragment['operations'] for b in op.get('input_bindings',[])):
         refs={b['fragment_id'] for op in fragment['operations'] for b in op.get('input_bindings',[]) if b['kind']=='completed'}
         context+=' Completed inputs: '+'; '.join(f"{completed[r].get('public_ref','subtask')}: {completed[r]['answer']}" for r in sorted(refs))+'.'
     if visible_resources:
         context+=' Available reference handles: '+'; '.join(f"{r['title']} ({r['resource_id']}, {r['source_type']})" for r in visible_resources)+'.'
-    if 'GoogleSearchAction' in tool_list:
-        context+=' Locate any further required records using the named entities and conditions, then inspect them with the assigned modality tools.'
+    if discovery_root and can_search:
+        context+=(
+            ' Discover relevant records using the stated types, relations and'
+            ' attribute constraints. Candidate entity names must be learned'
+            ' from the evidence, not assumed to be an initially supplied list.'
+            ' Inspect any discovered records with the assigned modality tools.'
+        )
+    elif discovery_root:
+        context+=(
+            ' Enumerate the entities supported by the accessible reference'
+            ' materials. No complete candidate list is supplied in advance.'
+        )
+    elif can_search:
+        context+=' Locate any further required records using the stated anchors and constraints, then inspect them with the assigned modality tools.'
     else:context+=' Use the supplied or previously inspected records with the assigned tools.'
     if public_cache is not None:
         from .evidence import task_packet,MARKER
@@ -69,6 +100,8 @@ def task_variants(fragment, completed, visible_resources=(), public_cache=None):
           'Find the '+args[0]+' values for the specified entities' if op=='QUERY_ATTR' else
           'Identify the entities reached through '+args[0]+' in the required direction' if op=='RELATE' else
           'Identify the entities satisfying the specified constraints')
+    if discovery_root:
+        goal='Discover candidates from the task evidence and '+goal[0].lower()+goal[1:]
     # An O1 Main task should lead with an information goal, not read like a
     # bare query-plan instruction list. Keep the numbered checks unchanged so
     # public evidence replay still deterministically verifies every step.
@@ -131,7 +164,7 @@ def report_sentence(op, result):
         if isinstance(v,list) and len(v)>8:return f'the {len(v)} input entities'
         return value_text(v)
     if name=='FIND':return f'Identified entities of type {args[0]}: {answer}.' if op.get('find_kind')=='type' else f'Identified {args[0]} as {answer}.'
-    if name=='FIND_ALL':return 'Initialized a separate candidate set from all supplied records.'
+    if name=='FIND_ALL':return 'Enumerated candidate entities from the accessible task evidence.'
     if name=='FILTER_TYPE':return f'Filtered {scope()} for type {args[0]}; retained {answer}.'
     if name.startswith('FILTER_'):return f'Filtered {scope()} using {args[0]} {args[1]} {args[2]}; retained {answer}.'
     if name=='RELATE':
