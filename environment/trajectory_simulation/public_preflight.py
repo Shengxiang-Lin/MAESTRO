@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .compiler import json_value, ready_fragments
+from .compiler import json_value, private_guidance, ready_fragments
 from .contract import answer_string, answers_equal
 from .evidence import bind_ready, public_record, verify_known_packet
 from .realization import task_variants
@@ -44,7 +44,16 @@ def audit_public_executability(plan: Mapping[str, Any]) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     fragments = plan["fragments"]
     for round_no in range(1, len(fragments) + 2):
-        ready = bind_ready(ready_fragments(plan, completed), cache)
+        try:
+            ready = bind_ready(ready_fragments(plan, completed), cache)
+        except (ValueError, KeyError, TypeError) as exc:
+            return {
+                "publicly_executable": False,
+                "reason": "public_evidence_binding_unavailable",
+                "detail": str(exc)[:400],
+                "round": round_no, "checked_fragments": len(checks),
+                "completed_fragment_ids": sorted(completed),
+            }
         if not ready:
             if len(completed) == len(fragments):
                 return {
@@ -56,6 +65,28 @@ def audit_public_executability(plan: Mapping[str, Any]) -> dict[str, Any]:
                 "checked_rounds": round_no - 1, "checked_fragments": len(checks),
                 "completed_fragment_ids": sorted(completed),
             }
+        # Reproduce the exact *runtime* binding path used by synthesize_one.
+        # In particular guidance.ready contains the known_resource_ids built
+        # from published observations, whereas the original fragments don't.
+        runtime = {f["fragment_id"]: f for f in ready}
+        bound_plan = {
+            **plan,
+            "fragments": [
+                runtime.get(f["fragment_id"], f) for f in fragments
+            ],
+        }
+        guidance = private_guidance(bound_plan, completed)
+        provided = list(plan.get("provided_resources", ()))
+        visible_resources = list({
+            str(r["resource_id"]): r for r in [
+                *provided,
+                *({
+                    "resource_id": record["resource_id"],
+                    "source_type": record["source_type"],
+                    "title": record["title"],
+                } for record in cache.values()),
+            ]
+        }.values())
         pending = []
         for task_index, fragment in enumerate(ready):
             fragment_id = fragment["fragment_id"]
@@ -63,7 +94,7 @@ def audit_public_executability(plan: Mapping[str, Any]) -> dict[str, Any]:
                 # Exactly the first permitted O1 variant; changing the
                 # language-style prefix cannot alter its numbered operations.
                 task = task_variants(
-                    fragment, previous, plan.get("provided_resources", ()), cache
+                    guidance["ready"][task_index], previous, visible_resources, cache
                 )[0]
                 verify_known_packet(task, cache)
                 observed = [public_record(o) for o in fragment["observations"]]
