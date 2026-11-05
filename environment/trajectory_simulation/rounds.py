@@ -7,7 +7,9 @@ its history prefix, action contract, and natural-language requirements pass.
 """
 from __future__ import annotations
 
+import ast
 import json
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -17,17 +19,44 @@ from .eligibility import digest
 from .exporter import training_target, validate_public_episode
 
 
-# These are public tool names/descriptions, not fabricated tool executions.
-# The canonical prompt builder supplies formatting and native O1 instructions.
-_TOOL_DESCRIPTIONS = {
-    "GoogleSearchAction": "Search public web pages for relevant information.",
-    "ExtractUrlAction": "Extract the relevant text of a public web URL.",
-    "ExtractUrlContentAction": "Extract the relevant text of a public web URL.",
-    "VideoAnalysisAction": "Analyze supplied video content, including frames and audio.",
-    "ImageAnalysisAction": "Analyze a task-provided image.",
-    "ParseAudioAction": "Transcribe and analyze task-provided audio.",
-    "ExecuteCodeAction": "Run Python code to calculate or process evidence.",
+# Derive real OmniGAIA tools' static public descriptions/schemas from their
+# class declarations. Importing live tool implementations would load providers,
+# models and optional GPU packages during offline SFT export.
+_NATIVE_TOOL_MODULES = {
+    "GoogleSearchAction": "google_search.py",
+    "ExtractUrlContentAction": "extract_url_jina.py",
+    "ExecuteCodeAction": "execute_code.py",
+    "VideoAnalysisAction": "video_analysis.py",
+    "ImageAnalysisAction": "multimodal_toolkit.py",
+    "ParseAudioAction": "audio_analysis.py",
 }
+
+
+@lru_cache(maxsize=16)
+def native_tool_spec(name: str) -> SimpleNamespace:
+    module = _NATIVE_TOOL_MODULES.get(name)
+    if module is None:
+        raise ValueError(f"unknown_native_o1_tool:{name}")
+    path = Path(__file__).resolve().parents[2] / "benchmark" / "omnigaia" / "tools" / module
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name != name:
+            continue
+        values = {}
+        for stmt in node.body:
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                key, value = stmt.target.id, stmt.value
+            elif isinstance(stmt, ast.Assign) and len(stmt.targets)==1 and isinstance(stmt.targets[0], ast.Name):
+                key, value = stmt.targets[0].id, stmt.value
+            else:
+                continue
+            if key in {"name","description","parameters"} and value is not None:
+                values[key] = ast.literal_eval(value)
+        if all(k in values for k in ("name","description","parameters")):
+            if values["name"] != name:
+                raise ValueError("native_tool_name_disagrees_with_class")
+            return SimpleNamespace(**values)
+    raise ValueError(f"native_o1_tool_schema_unavailable:{name}")
 
 
 def _prior_context(history: list[Mapping[str, Any]]) -> str:
@@ -64,14 +93,7 @@ def o1_input(
     record. No future subtask observations or private supervision are added.
     """
     from orchestra.prompts.omnigaia import OmniGAIAMainAgentPrompt
-    tools = [
-        SimpleNamespace(
-            name=str(name),
-            description=_TOOL_DESCRIPTIONS.get(str(name), "Task-specific public action."),
-            parameters={},
-        )
-        for name in state["available_tools"]
-    ]
+    tools = [native_tool_spec(str(name)) for name in state["available_tools"]]
     meta: dict[str, Any] = {}
     for key in ("task_type", "category"):
         if isinstance(question_record.get(key), str):
@@ -119,6 +141,23 @@ def make_round_record(
         raise ValueError("unreviewed_question_cannot_export")
     if eligibility.get("question_sha256") != digest(question):
         raise ValueError("question_changed_after_review")
+    from .history import format_o1_subtask_history
+    if set(state) != {"question","subtask_history","available_tools","evidence_store"}:
+        raise ValueError("unexpected_main_state_fields")
+    if state["subtask_history"] != format_o1_subtask_history(prefix):
+        raise ValueError("round_history_not_equal_to_verified_prefix")
+    if not str(state["question"]).startswith(question):
+        raise ValueError("round_question_not_equal_to_frozen_question")
+    seen = {}
+    for step in prefix:
+        for reply in step["result"]["subtask_results"]:
+            for observation in reply["observed_evidence"]:
+                source_id = observation["resource_id"]
+                if source_id in seen and seen[source_id] != observation:
+                    raise ValueError("inconsistent_round_history_sources")
+                seen[source_id] = observation
+    if state["evidence_store"] != seen:
+        raise ValueError("round_evidence_store_not_equal_to_verified_prefix")
     validate_public_episode({
         "question": question, "task_id": task_id,
         "input_eligibility": eligibility,
@@ -360,6 +399,7 @@ def synthesize_rounds_jsonl(
 
 
 __all__ = [
-    "o1_input","make_round_record","RoundSink","synthesize_rounds_jsonl",
+    "native_tool_spec","o1_input","make_round_record","RoundSink",
+    "synthesize_rounds_jsonl",
 ]
 
