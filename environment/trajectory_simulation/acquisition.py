@@ -23,6 +23,11 @@ def resolve_dependencies(resources: list[Mapping[str, Any]], registry: Mapping[s
     for sid, resource in by_id.items():
         if resource.get("visibility") in INITIAL:
             dependencies[sid] = []
+        elif resource.get("metadata", {}).get("search_entry") == "public_question":
+            # A searchable public index has a query entry point rather than
+            # a fabricated initial document. The query ranking and witness
+            # reachability are audited separately by the search simulator.
+            dependencies[sid] = []
         elif has_anchors:
             anchors = set(map(str, resource.get("requires_anchors", ())))
             if anchors:
