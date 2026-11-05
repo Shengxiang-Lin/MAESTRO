@@ -36,17 +36,71 @@ def _json_object(text:str)->dict[str,Any]:
 @dataclass
 class OpenAICompatibleBackend:
     base_url:str;model:str;api_key:str|None=None;temperature:float=.4;max_tokens:int=2048;timeout:float=180.;json_mode:bool=True
-    def complete_json(self,system_prompt:str,user_prompt:str)->dict[str,Any]:
+    def complete_json(
+        self,system_prompt:str,user_prompt:str,*,
+        response_schema:Mapping[str,Any]|None=None,
+    )->dict[str,Any]:
+        """JSON mode by default; optional schema-constrained JSON for vLLM.
+
+        An explicit unsupported-schema HTTP 400/422 may downgrade this *one*
+        request to JSON object mode. Other errors are not silently retried.
+        The caller retains its own deterministic and semantic validators.
+        """
         url=self.base_url.rstrip("/")
         if not url.endswith("/chat/completions"):url += "/chat/completions"
-        body={"model":self.model,"messages":[{"role":"system","content":system_prompt},{"role":"user","content":user_prompt}],"temperature":self.temperature,"max_tokens":self.max_tokens}
-        if self.json_mode:body["response_format"]={"type":"json_object"}
+        body={"model":self.model,
+              "messages":[{"role":"system","content":system_prompt},
+                          {"role":"user","content":user_prompt}],
+              "temperature":self.temperature,"max_tokens":self.max_tokens}
+        if response_schema is not None and self.json_mode:
+            body["response_format"]={
+                "type":"json_schema",
+                "json_schema":{"name":"subagent_feedback","strict":True,
+                               "schema":response_schema},
+            }
+        elif self.json_mode:
+            body["response_format"]={"type":"json_object"}
         headers={"Content-Type":"application/json"}
         if self.api_key:headers["Authorization"]="Bearer "+self.api_key
-        request=urllib.request.Request(url,data=json.dumps(body,ensure_ascii=False).encode("utf-8"),headers=headers,method="POST")
+
+        def invoke(request_body):
+            request=urllib.request.Request(
+                url,data=json.dumps(request_body,ensure_ascii=False).encode("utf-8"),
+                headers=headers,method="POST",
+            )
+            with urllib.request.urlopen(request,timeout=self.timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+
         try:
-            with urllib.request.urlopen(request,timeout=self.timeout) as response:payload=json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError,urllib.error.HTTPError,TimeoutError,json.JSONDecodeError) as exc:raise BackendError(f"OpenAI-compatible call failed: {exc}") from exc
+            payload=invoke(body)
+        except urllib.error.HTTPError as exc:
+            # Some older OpenAI-compatible servers implement json_object but
+            # not json_schema. Fall back ONLY when the API explicitly reports
+            # that json_schema/response_format is unsupported.
+            details=exc.read().decode("utf-8","replace")[:1024]
+            schema_unsupported=(
+                response_schema is not None and self.json_mode
+                and exc.code in (400,422)
+                and ("json_schema" in details.lower()
+                     or "response_format" in details.lower())
+                and any(term in details.lower() for term in (
+                    "not support","unsupported","invalid","unknown",
+                    "unrecognized","not implemented",
+                ))
+            )
+            if not schema_unsupported:
+                raise BackendError(
+                    f"OpenAI-compatible call failed: HTTP {exc.code}: {details[:180]}"
+                ) from exc
+            body["response_format"]={"type":"json_object"}
+            try:
+                payload=invoke(body)
+            except (urllib.error.URLError,TimeoutError,json.JSONDecodeError) as retry_exc:
+                raise BackendError(
+                    f"OpenAI-compatible schema fallback failed: {retry_exc}"
+                ) from retry_exc
+        except (urllib.error.URLError,TimeoutError,json.JSONDecodeError) as exc:
+            raise BackendError(f"OpenAI-compatible call failed: {exc}") from exc
         try:
             return _json_object(_extract_content(payload))
         except BackendError as exc:
@@ -60,6 +114,7 @@ class OpenAICompatibleBackend:
                 "content":message.get("content") if isinstance(message,dict) else None,
             }
             raise
+
 class PassthroughAuthorBackend:
     def author(self,payload:Mapping[str,Any],prompt:str)->dict[str,Any]:return {"question":str(payload.get("draft_question") or "").strip(),"notes":"passthrough"}
 class LLMQuestionAuthor:

@@ -168,7 +168,8 @@ class LLMExecutor(_LLMRole):
     def naturalize_feedback(self,payload,canonical,*,audit=None):
         from .natural_language import (
             feedback_writer_prompt, feedback_repair_prompt,
-            feedback_output_diagnostic, realize_feedback_natural,
+            feedback_output_diagnostic, SUBAGENT_REPORT_JSON_SCHEMA,
+            normalize_feedback_shape, realize_feedback_natural,
             feedback_reviewer_prompt, check_reviewer,
         )
         # The local small-model JSON writer can return empty required fields.
@@ -188,13 +189,27 @@ class LLMExecutor(_LLMRole):
             entry={'stage':'write','attempt':attempt+1}
             audit.append(entry)
             try:
+                from environment.question_generation.backend import OpenAICompatibleBackend
+                # Only the real HTTP backend accepts this optional argument.
+                # Fake/custom backends continue to use the standard two-arg
+                # contract, and the code also validates plain JSON mode.
+                schema_kwargs=(
+                    {'response_schema':SUBAGENT_REPORT_JSON_SCHEMA}
+                    if isinstance(self.backend,OpenAICompatibleBackend)
+                    and self.backend.json_mode else {}
+                )
                 proposal=self.backend.complete_json(
-                    'Return JSON with exactly two NONEMPTY strings: summary and '
-                    'trace_summary. Report only facts supported by public evidence.',
-                    prompt,
+                    'STRICT JSON: exactly two nonempty STRING fields, summary '
+                    'and trace_summary. trace_summary is a STRING, NOT a list. '
+                    'Report only supported public-evidence findings.',
+                    prompt,**schema_kwargs,
                 )
                 entry['candidate']=proposal
-                result=realize_feedback_natural(payload,proposal)
+                normalized,fields=normalize_feedback_shape(proposal)
+                result=realize_feedback_natural(payload,normalized)
+                if fields:
+                    self._count('natural_feedback_normalized')
+                    entry['normalized_fields']=list(fields)
             except Exception as exc:
                 from environment.question_generation.backend import BackendError
                 if not isinstance(exc,(ValueError,TypeError,KeyError,BackendError)):
