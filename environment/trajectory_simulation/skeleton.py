@@ -88,9 +88,14 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
                     bindings.append({'kind':'completed','fragment_id':previous[dep]})
                 else:
                     raise GoldCompilationError(f'unbound operation input {dep} at {nid}')
-            operations.append({'node_id':nid,'op':node.op,'dependencies':list(node.dependencies),'inputs':args,'input_bindings':bindings})
+            operations.append({'node_id':nid,'op':node.op,'dependencies':list(node.dependencies),'inputs':args,'input_bindings':bindings,'find_kind':'type' if node.op=='FIND' and node.inputs[0].startswith('type:') else 'entity'})
         subtree=_subprogram(p,out)
-        witness=_minimal_witness(subtree,w,trace[out],dependencies,max_sources=max_sources)
+        entity_reads=set()
+        for node in subtree.nodes:
+            if node.op=='FIND_ALL' or (node.op=='FIND' and node.inputs[0].startswith('type:')):
+                entity_reads.update(trace[node.node_id])
+            if node.op=='FILTER_TYPE':entity_reads.update(trace[node.dependencies[0]])
+        witness=_minimal_witness(subtree,w,trace[out],dependencies,max_sources=max_sources,required_entity_ids=entity_reads)
         inherited=set().union(*(support[x] for x in prev)) if prev else set()
         new_sources=sorted(set(witness)-inherited)
         observations=_source_claims(w,rendered,new_sources)
@@ -137,4 +142,5 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
         'symbolic_trace':{str(k):json_value(v) for k,v in trace.items()},
         'final_proof_source_ids':fragments[-1]['support_resource_ids'],
         'policy':'first_stage_composition_links_fragment_gold','scene':scene,
-        'available_tools':list(profile.available),'provided_resources':provided}
+        'available_tools':list(profile.available),'provided_resources':provided,
+        'canonical_question':getattr(rendered,'question',question)}

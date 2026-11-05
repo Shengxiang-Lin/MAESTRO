@@ -337,7 +337,7 @@ class FragmentTrajectoryTests(unittest.TestCase):
                          ["delegate_task", "delegate_task", "delegate_task", "complete"])
         first = result["trajectory"][0]
         self.assertEqual(set(first["state_before"]),
-                         {"question", "subtask_history", "available_tools"})
+                         {"question", "subtask_history", "available_tools", "evidence_store"})
         self.assertEqual(first["state_before"]["subtask_history"],
                          "No subtasks completed yet.")
         second = result["trajectory"][1]

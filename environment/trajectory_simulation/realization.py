@@ -6,7 +6,7 @@ provenance and conclusions below come from the verified execution ledger.
 from __future__ import annotations
 import json
 
-STYLES=('concise','stepwise')
+STYLES=('concise','stepwise','goal','evidence')
 
 def value_text(value):
     if value == []:return 'an empty result'
@@ -24,7 +24,7 @@ def input_label(binding, completed):
 def task_sentence(op, sources):
     name,args=op['op'],op['inputs']
     inp=sources[0] if sources else 'the supplied records'
-    if name=='FIND':return 'Identify '+args[0]+'.'
+    if name=='FIND':return ('Identify all entities of type ' if op.get('find_kind')=='type' else 'Identify ')+args[0]+'.'
     if name=='FIND_ALL':return 'Start a separate candidate set from all supplied records.'
     if name=='FILTER_TYPE':return f'From {inp}, keep only entities of type {args[0]}.'
     if name.startswith('FILTER_'):return f'From {inp}, keep only entities whose {args[0]} {args[1]} {args[2]}.'
@@ -43,7 +43,7 @@ def task_sentence(op, sources):
         return f'Select entities from {" and ".join(sources)} by {args[0]} using {args[1]}.'
     raise ValueError('unsupported realization operation '+name)
 
-def task_variants(fragment, completed, visible_resources=()):
+def task_variants(fragment, completed, visible_resources=(), public_cache=None):
     sentences=[]
     for op in fragment['operations']:
         refs=[input_label(b,completed) for b in op.get('input_bindings',[])]
@@ -60,12 +60,23 @@ def task_variants(fragment, completed, visible_resources=()):
     if 'GoogleSearchAction' in tool_list:
         context+=' Locate any further required records using the named entities and conditions, then inspect them with the assigned modality tools.'
     else:context+=' Use the supplied or previously inspected records with the assigned tools.'
-    return [{'task_instruction':instruction,'context':context,'model':'model_1','tools':tool_list},
-            {'task_instruction':'Perform these checks and return the final result:\n'+instruction,'context':context,'model':'model_1','tools':tool_list}]
+    if public_cache is not None:
+        from .evidence import task_packet,MARKER
+        context+=MARKER+json.dumps(task_packet(fragment,completed,public_cache),ensure_ascii=False,separators=(',',':'))
+    last=fragment['operations'][-1];op=last['op'];args=last['inputs']
+    goal=('Determine the number of matching entities' if op=='COUNT' else
+          'Check whether the retrieved values satisfy '+ ' '.join(args) if op.startswith('VERIFY_') else
+          'Find the '+args[0]+' values for the specified entities' if op=='QUERY_ATTR' else
+          'Identify the entities reached through '+args[0]+' in the required direction' if op=='RELATE' else
+          'Identify the entities satisfying the specified constraints')
+    headers=['','Perform these checks and return the final result:\n',
+             goal+'. Return the result with the supporting references. Preserve the following input scopes and checks:\n',
+             goal+'. Inspect the supplied evidence and report the relevant facts and source references. Required checks:\n']
+    return [{'task_instruction':header+instruction,'context':context,'model':'model_1','tools':tool_list} for header in headers]
 
 def action_options(payload):
     completed={r['fragment_id']:r for r in payload.get('completed_subtask_contracts',[])}
-    return [task_variants(f,completed,payload.get('visible_resources',[])) for f in payload['gold_guidance']['ready']]
+    return [task_variants(f,completed,payload.get('visible_resources',[]),payload.get('evidence_cache')) for f in payload['gold_guidance']['ready']]
 
 def realize_action(payload, choice):
     guidance=payload['gold_guidance']
@@ -87,12 +98,14 @@ def main_style_prompt(payload):
     history=state.get('subtask_history','')
     if len(history)>9000:
         state['subtask_history']='[Earlier narrative compressed; all completed result bindings are listed below.]\n'+history[-9000:]
+    if 'evidence_store' in state:
+        state['evidence_store']={sid:{'title':r['title'],'source_type':r['source_type'],'fact_count':len(r['claims'])} for sid,r in state['evidence_store'].items()}
     packet={'public_o1_state':state,'completed_results':done}
     if guidance['may_complete']:
         packet['output_example']={'reasoning_style':'concise','answer':done[-1]['answer'] if done else ''}
         fields={'reasoning_style':{'type':'string','enum':list(STYLES)},'answer':{'type':'string'}}
     else:
-        packet['private_gold_guidance']={'ordered_ready_task_variants':action_options(payload)}
+        packet['private_gold_guidance']={'ordered_ready_task_variants':[[{'task_instruction':v['task_instruction'],'tools':v['tools']} for v in variants] for variants in action_options(payload)]}
         packet['output_example']={'reasoning_style':'concise','task_styles':['stepwise']*len(guidance['ready'])}
         fields={'reasoning_style':{'type':'string','enum':list(STYLES)},'task_styles':{'type':'array','items':{'type':'string','enum':list(STYLES)},'minItems':len(guidance['ready']),'maxItems':len(guidance['ready'])}}
     packet['required_output_schema']={'type':'object','properties':fields,'required':list(fields),'additionalProperties':False}
@@ -100,15 +113,18 @@ def main_style_prompt(payload):
         'Select a presentation style, never solve, rewrite, drop or merge a task. The controller renders params.tasks '
         'from the selected variants. No private IDs, analysis or additional fields. Return JSON only.\n'+json.dumps(packet,ensure_ascii=False,separators=(',',':')))
 
+def report_value(value):
+    return f"{len(value)} entities/values" if isinstance(value,list) and len(value)>6 else value_text(value)
+
 def report_sentence(op, result):
-    name,args=op['op'],op['inputs'];answer=value_text(result['answer'])
+    name,args=op['op'],op['inputs'];answer=report_value(result['answer'])
     values=result.get('input_values',[])
     def scope(i=0):
         if len(values)<=i:return 'the supplied input'
         v=values[i]
         if isinstance(v,list) and len(v)>8:return f'the {len(v)} input entities'
         return value_text(v)
-    if name=='FIND':return f'Identified {args[0]} as {answer}.'
+    if name=='FIND':return f'Identified entities of type {args[0]}: {answer}.' if op.get('find_kind')=='type' else f'Identified {args[0]} as {answer}.'
     if name=='FIND_ALL':return 'Initialized a separate candidate set from all supplied records.'
     if name=='FILTER_TYPE':return f'Filtered {scope()} for type {args[0]}; retained {answer}.'
     if name.startswith('FILTER_'):return f'Filtered {scope()} using {args[0]} {args[1]} {args[2]}; retained {answer}.'
@@ -139,14 +155,25 @@ def feedback_variants(fragment):
             evidence.append('Inspected '+', '.join(f"{r['title']} ({r['resource_id']})" for r in refs)+' using '+', '.join(tools)+'.')
     if known:evidence.append('Reused the earlier observations from '+', '.join(f"{r['title']} ({r['resource_id']})" for r in known)+'.')
     sentences=[report_sentence(op,result) for op,result in zip(fragment['operations'],fragment['operation_results'])]
-    answer=value_text(fragment['expected_answer']);last=fragment['operations'][-1]['op']
+    answer=report_value(fragment['expected_answer']);last=fragment['operations'][-1]['op']
     if last=='COUNT':conclusion='The assigned checks yielded a count of '+answer+'.'
     elif last.startswith('VERIFY_'):conclusion='The requested condition evaluated to '+answer+'.'
     else:conclusion='Completed the assigned checks and returned '+answer+'.'
-    return [
+    from .evidence import evidence_lines
+    predicates={op['inputs'][0] for op in fragment['operations'] if op['inputs'] and op['op'] not in {'FIND','FILTER_TYPE'} and not op['op'].startswith('VERIFY_')}
+    facts=evidence_lines([*observations,*known],predicates) if predicates else []
+    selected=facts[:6]
+    support=(' Supporting observations: '+'; '.join(selected)+'.') if selected else ''
+    variants=[
         {'summary':conclusion,'trace_summary':' '.join(evidence+sentences)},
         {'summary':sentences[-1],'trace_summary':'\n'.join('* '+line for line in evidence+sentences)},
+        {'summary':conclusion,'trace_summary':' '.join(evidence+sentences)+support},
+        {'summary':conclusion,'trace_summary':'\n'.join('* '+line for line in evidence+sentences+(['Supporting observations:']+selected if selected else []))},
     ]
+    for variant in variants:
+        if len(variant['summary'])>1600 or len(variant['trace_summary'])>4000:
+            raise ValueError('bounded report exceeds compression budget')
+    return variants
 
 def realize_feedback(payload, choice):
     if set(choice)!={'report_style'} or choice['report_style'] not in STYLES:raise ValueError('invalid report language plan')
@@ -156,8 +183,8 @@ def feedback_style_prompt(payload):
     return ('Choose a compressed Sub-Agent report style: concise uses connected prose; stepwise uses '
         'progress bullets, like an executed tool trace. Both reports below describe the same fixed '
         'evidence and verified operations. Select the clearest style; never alter facts or explain '
-        'how training data was generated. Return exactly one key, report_style. Its value must be concise or stepwise. Example: {"report_style":"stepwise"}.\n'+
-        json.dumps({'assigned_task':payload.get('assigned_task',{'task_instruction':payload.get('task_instruction','')}),'report_variants':feedback_variants(payload['fragment'])},ensure_ascii=False,separators=(',',':')))
+        'how training data was generated. Return exactly one key, report_style. Its value must be concise, stepwise, goal or evidence. Example: {"report_style":"stepwise"}.\n'+
+        json.dumps({'assigned_task':payload.get('assigned_task',{'task_instruction':payload.get('task_instruction','')})['task_instruction'],'styles':list(STYLES),'report_variants':[{'summary':v['summary'],'trace_preview':v['trace_summary'][:1100]} for v in feedback_variants(payload['fragment'])]},ensure_ascii=False,separators=(',',':')))
 
 def validate_bound_action(action, payload):
     if payload['gold_guidance']['may_complete']:

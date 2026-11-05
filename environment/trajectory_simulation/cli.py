@@ -27,6 +27,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output")
     parser.add_argument("--max-records", type=int)
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--schedule",choices=("baseline","compact"),default="baseline")
     parser.add_argument("--scene", choices=sorted(PROFILES), default="omnigaia")
 
 
@@ -37,7 +38,7 @@ def command_plan(args: argparse.Namespace) -> None:
         output = str(Path(output).with_suffix(".gold_plan.jsonl"))
     _print(plan_trajectories_jsonl(
         args.worlds, args.realized, output,
-        max_records=args.max_records, seed=args.seed, scene=args.scene,
+        max_records=args.max_records, seed=args.seed, scene=args.scene, schedule=args.schedule,
     ))
 
 
@@ -58,6 +59,11 @@ def command_synthesize(args: argparse.Namespace) -> None:
     executor_spec = resolve_model(args, "trajectory_executor")
     planner = _role(planner_spec, args, planner=True)
     executor = _role(executor_spec, args, planner=False)
+    for role in (planner,executor):role.style_provider=args.style_provider;role.style_seed=args.style_seed
+    if args.eligibility_cache:
+        from .pipeline import protect_paths
+        protect_paths([args.worlds,args.realized],[args.eligibility_cache,args.output])
+        planner.eligibility_cache=args.eligibility_cache
     clean = lambda spec: {key: value for key, value in spec.items() if key != "api_key"}
     result = synthesize_trajectories_jsonl(
         args.worlds, args.realized, args.output,
@@ -66,9 +72,10 @@ def command_synthesize(args: argparse.Namespace) -> None:
         max_attempts=args.max_attempts,
         subagent_workers=args.subagent_workers,
         rejected_output_path=args.rejected_output,
+        quarantine_output_path=args.quarantine_output,
         progress=not args.no_progress,
         flush_every=args.flush_every,
-        seed=args.seed, scene=args.scene,
+        seed=args.seed, scene=args.scene, schedule=args.schedule,
         model_roles={
             "main_planner": clean(planner_spec),
             "subagent_executor": clean(executor_spec),
@@ -96,6 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--provider", choices=("passthrough", "openai-compatible"),
         default="passthrough",
     )
+    synth.add_argument("--style-provider",choices=("llm","template"),default="llm")
+    synth.add_argument("--style-seed",type=int,default=17)
     synth.add_argument("--base-url")
     synth.add_argument("--model", help="override both role model names")
     synth.add_argument("--planner-model", help="override only Main Planner model")
@@ -109,6 +118,8 @@ def build_parser() -> argparse.ArgumentParser:
     synth.add_argument("--subagent-workers", type=int, default=4)
     synth.add_argument("--flush-every", type=int, default=5)
     synth.add_argument("--rejected-output")
+    synth.add_argument("--quarantine-output")
+    synth.add_argument("--eligibility-cache")
     synth.add_argument("--no-json-mode", action="store_true")
     synth.add_argument("--no-progress", action="store_true")
     synth.set_defaults(func=command_synthesize)

@@ -70,9 +70,10 @@ class BoundRealizationTests(unittest.TestCase):
         gold=compile_gold_solution(q,r,t)
         guidance=private_guidance(gold,set())
         self.assertNotIn('Alice',json.dumps(guidance))
-        episode=synthesize_one(q,r,t,PassthroughPlanner(),PassthroughExecutor())
-        self.assertNotIn('Alice',json.dumps(episode['trajectory'][0]['params']))
-        self.assertIn('Alice',episode['trajectory'][0]['result']['subtask_results'][0]['trace_summary'])
+        # A hidden FIND with no public identifying clue is now quarantined,
+        # rather than filled from the private target identity.
+        with self.assertRaisesRegex(GoldTrajectoryError,'missing concrete identification clue'):
+            synthesize_one(q,r,t,PassthroughPlanner(),PassthroughExecutor())
 
     def test_wrong_explanation_is_rejected_even_when_symbolic_answer_is_fixed(self):
         class Drift(PassthroughExecutor):

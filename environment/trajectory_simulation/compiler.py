@@ -6,6 +6,7 @@ to ground those answers. Neither model is permitted to invent new subgoals.
 """
 from __future__ import annotations
 
+import hashlib
 from itertools import combinations
 from typing import Any, Mapping
 
@@ -135,7 +136,7 @@ def _read_fact_ids(program: ProgramIR, world: Any) -> set[str]:
 
 def _minimal_witness(
     subprogram: ProgramIR, world: Any, expected: Any, dependencies: Mapping[str, Any],
-    *, max_sources: int, required_fact_ids: tuple[str, ...] = (),
+    *, max_sources: int, required_fact_ids: tuple[str, ...] = (), required_entity_ids=(),
 ) -> list[str]:
     """Brute-force the small frozen source set; never trust a model's evidence."""
     all_ids = sorted(world.sources)
@@ -147,6 +148,8 @@ def _minimal_witness(
             if not reachable_subset(subset, dependencies):
                 continue
             scoped_world = _evidence_world(world, set(subset))
+            observed_entities={f.subject for f in scoped_world.facts}|{str(f.object) for f in scoped_world.facts if f.object_kind=="entity"}
+            if not set(required_entity_ids).issubset(observed_entities):continue
             if not set(required_fact_ids).issubset({f.fact_id for f in scoped_world.facts}):
                 continue
             try:
@@ -213,6 +216,7 @@ def _source_claims(world: Any, rendered: Any, source_ids: list[str]) -> list[dic
                    else scoped.get(f.predicate, {}).get(
                        str(f.object), literals.get(str(f.object), f.object)))
             claims.append({
+                "observation_key": "claim:"+hashlib.sha256((rendered.task_id+":"+fid).encode()).hexdigest()[:24],
                 "subject": aliases.get(f.subject, f.subject),
                 "predicate": predicate_label(f.predicate),
                 "object": json_value(obj),
@@ -223,6 +227,10 @@ def _source_claims(world: Any, rendered: Any, source_ids: list[str]) -> list[dic
             "resource_id": sid, "source_type": source.source_type,
             "title": source.title, "content": json_value(source.content),
             "claims": claims,
+            "entity_types": {aliases.get(e,e):type_label(world.entities[e]) for e in
+                {f.subject for fid in world.sources[sid].fact_ids for f in [facts[fid]]} |
+                {str(f.object) for fid in world.sources[sid].fact_ids for f in [facts[fid]] if f.object_kind=="entity"}
+                if e in world.entities},
         })
     return rows
 
@@ -235,9 +243,15 @@ def ready_fragments(plan: Mapping[str, Any], completed: set[str]) -> list[dict[s
     ]
 
 
-def compile_gold_solution(realized, world_record, rendered, *, max_sources=8, scene="omnigaia"):
+def compile_gold_solution(realized, world_record, rendered, *, max_sources=8, scene="omnigaia", schedule="baseline"):
     from .skeleton import compile_fragments
-    return compile_fragments(realized, world_record, rendered, max_sources=max_sources, scene=scene)
+    plan=compile_fragments(realized, world_record, rendered, max_sources=max_sources, scene=scene)
+    if schedule=="compact":
+        from .scheduling import compact_plan
+        return compact_plan(plan)
+    if schedule!="baseline":raise ValueError("unknown scheduling policy")
+    plan["schedule"]="baseline"
+    return plan
 
 
 def private_guidance(plan: Mapping[str, Any], completed: set[str]) -> dict[str, Any]:
@@ -250,7 +264,7 @@ def private_guidance(plan: Mapping[str, Any], completed: set[str]) -> dict[str, 
             "stage": f["stage"],
             "operations": [{"node_id": op["node_id"], "op": op["op"],
                             "dependencies": op["dependencies"], "inputs": op["inputs"],
-                             "input_bindings": op.get("input_bindings", [])}
+                             "input_bindings": op.get("input_bindings", []), "find_kind":op.get("find_kind","entity")}
                            for op in f["operations"]],
         } for f in plan["fragments"]],
         "completed_fragments": sorted(completed),
@@ -258,7 +272,7 @@ def private_guidance(plan: Mapping[str, Any], completed: set[str]) -> dict[str, 
             "fragment_id": f["fragment_id"], "depends_on": f["depends_on"],
             "operations": [{"node_id": op["node_id"], "op": op["op"],
                             "dependencies": op["dependencies"], "inputs": op["inputs"],
-                             "input_bindings": op.get("input_bindings", [])}
+                             "input_bindings": op.get("input_bindings", []), "find_kind":op.get("find_kind","entity")}
                            for op in f["operations"]],
             "required_resources": [{
                 "resource_id": obs["resource_id"],
@@ -266,7 +280,9 @@ def private_guidance(plan: Mapping[str, Any], completed: set[str]) -> dict[str, 
                 # An undiscovered source's title is private evidence, not
                 # an O1-visible clue for a future Main instruction.
             } for obs in f["observations"]],
+            "scene":plan["scene"],
             "suggested_tools": f["suggested_tools"],
+            "known_resource_ids": [o["resource_id"] for o in f.get("known_observations",[])],
             "available_tools": plan["available_tools"],
             "input_bindings": [op.get("input_bindings", []) for op in f["operations"]],
         } for f in ready],
