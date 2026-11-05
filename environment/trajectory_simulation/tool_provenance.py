@@ -103,6 +103,18 @@ def source_evidence_guide(
         ]
     }
     groups: dict[str, dict[str, Any]] = {}
+    if not plan.get("steps"):
+        # Direct writer/reviewer tests and legacy consumers can supply
+        # source observations without a tool-plan packet. Never infer a tool
+        # call from source availability alone in this fallback path.
+        return [{
+            "source_id": sid,
+            "title": source["title"],
+            "source_type": source.get("source_type", "unspecified"),
+            "source_access": "source_witness_only",
+            "permitted_tools": [],
+            "claims": source.get("claims", []),
+        } for sid, source in sources.items()]
     for event in plan.get("steps", []):
         sid = event["resource_id"]
         if sid not in sources:
