@@ -267,6 +267,52 @@ class FragmentCompilationTests(unittest.TestCase):
         self.assertIn("missing-fact",
                       caught.exception.diagnostics["unsourced_required_fact_ids"])
 
+    def test_public_projection_removes_certified_concealed_intersection(self):
+        from environment.trajectory_simulation.public_preflight import audit_public_executability
+        question,record,rendered=fixture()
+        # Stage 1 concealed a singleton because an independently evidenced
+        # type+attribute branch uniquely identifies the very same entity.
+        record['program']['nodes']=[
+            {'node_id':0,'op':'FIND','dependencies':[],'inputs':['entity:A']},
+            {'node_id':1,'op':'FIND','dependencies':[],'inputs':['type:schema:Person']},
+            {'node_id':2,'op':'FILTER_YEAR','dependencies':[1],
+             'inputs':['r:birth','<CMP:=>','1912']},
+            {'node_id':3,'op':'INTERSECT','dependencies':[0,2],'inputs':[]},
+            {'node_id':4,'op':'QUERY_NAME','dependencies':[3],'inputs':[]},
+        ]
+        record['program']['metadata']['deep_dependency']['composition_links']=[
+            {'fragment':0,'stage':0,'producer_node_id':None,'output_node_id':2}
+        ]
+        record['world']['facts'][0].update(
+            predicate='r:birth',object='1912',object_kind='year')
+        record['world']['facts'][1].update(
+            subject='B',predicate='r:birth',object='1980',object_kind='year')
+        question['question']='Which Person has recorded birth year 1912?'
+        rendered.answer=['Alice']
+        rendered.hidden_metadata['public_query_plan']={
+            'latent_entities':[{
+                'entity_id':'A','entity_type':'schema:Person',
+                'find_node_ids':[0],
+                'rule':'unique_intersection_clue',
+                'identifying_node_ids':[2],
+                'support_fact_ids':['f1'],
+            }]
+        }
+        baseline=compile_gold_solution(question,record,rendered,schedule='baseline')
+        self.assertEqual(len(baseline['public_projections']),1)
+        self.assertTrue(all(
+            fragment['output_node_id'] not in (0,3)
+            for fragment in baseline['fragments']))
+        self.assertTrue(audit_public_executability(baseline)['publicly_executable'])
+        compact=compile_gold_solution(question,record,rendered,schedule='compact')
+        self.assertTrue(audit_public_executability(compact)['publicly_executable'])
+        episode=synthesize_one(
+            question,record,rendered,
+            PassthroughPlanner(),PassthroughExecutor(),schedule='compact')
+        self.assertTrue(episode['validation']['accepted'])
+        self.assertEqual(episode['trajectory'][-1]['params']['answer'],'["Alice"]')
+        self.assertNotIn('fragment:public_join:',json.dumps(episode['trajectory']))
+
     def test_missing_composition_metadata_rejected_without_fallback(self):
         question, world, rendered = fixture()
         world["program"]["metadata"] = {}
