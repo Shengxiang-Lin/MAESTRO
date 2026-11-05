@@ -1,9 +1,9 @@
-"""Precompute a clean, source-replayable Subtask Bank before Main SFT states.
+"""Phase 1: precompute clean, source-replayable Sub-Agent feedback before Main SFT.
 
 The Gold fragment DAG determines the subtask boundaries and partial order.
 All expected results come from the frozen symbolic witness, not from an LLM.
-Sub-Agent language is a natural, evidence-grounded *description* of those
-verified results. No simulated error, retry, or unobserved future result is
+Only Sub-Agent report language is generated in this phase. Main delegation
+language and Main training decisions belong exclusively to phase 2. No simulated error, retry, or unobserved future result is
 ever placed in a Main-visible state.
 
 A bank is private teacher data. Main SFT examples are constructed separately
@@ -55,62 +55,6 @@ def _report_natural(executor, payload, template, fragment):
             raise
         return template, {
             "natural":False, "reason":f"{type(exc).__name__}:{str(exc)[:160]}",
-        }
-
-
-def _natural_action(planner, payload, canonical):
-    if not (
-        getattr(planner, "style_provider", None) == "natural"
-        and callable(getattr(planner, "naturalize_action", None))
-    ):
-        return canonical, {"rewritten_tasks":0, "errors":[], "natural":False}
-    try:
-        proposed = planner.naturalize_action(payload, canonical)
-        ok, issues = validate_action(
-            proposed, payload["gold_guidance"], payload["offline_oracle_answer"],
-            payload["answer_contract"], public_state=payload["public_state"],
-        )
-        if not ok or proposed["action"] != canonical["action"]:
-            raise ValueError("invalid_natural_action:" + ",".join(issues))
-        old_tasks=canonical["params"].get("tasks",[])
-        new_tasks=proposed["params"].get("tasks",[])
-        if len(new_tasks)!=len(old_tasks):
-            raise ValueError("natural_action_task_count_changed")
-        from .natural_language import natural_public_context
-        for original, new in zip(old_tasks,new_tasks):
-            expected = (
-                original["context"]
-                if new["task_instruction"] == original["task_instruction"]
-                else natural_public_context(
-                    original["context"],original["task_instruction"]
-                )
-            )
-            if (new["context"]!=expected or new["model"]!=original["model"]
-                    or new["tools"]!=original["tools"]):
-                raise ValueError("natural_action_transport_changed")
-        if not old_tasks and proposed["params"]!=canonical["params"]:
-            raise ValueError("natural_complete_result_changed")
-        changed=sum(
-            a["task_instruction"]!=b["task_instruction"]
-            for a,b in zip(old_tasks,new_tasks)
-        )
-        return proposed, {
-            "natural":changed>0 or proposed["action"]=="complete",
-            "rewritten_tasks":changed,
-            "errors":getattr(planner,"last_natural_audit",{}).get("errors",[]),
-        }
-    except (ValueError,KeyError,TypeError) as exc:
-        return canonical,{
-            "natural":False,"rewritten_tasks":0,
-            "errors":[{"reason":f"{type(exc).__name__}:{str(exc)[:160]}"}],
-        }
-    except Exception as exc:
-        from environment.question_generation.backend import BackendError
-        if not isinstance(exc,BackendError):
-            raise
-        return canonical,{
-            "natural":False,"rewritten_tasks":0,
-            "errors":[{"reason":f"{type(exc).__name__}:{str(exc)[:160]}"}],
         }
 
 
@@ -239,9 +183,10 @@ def build_subtask_bank(
             raise GoldTrajectoryError("subtask_bank",issues)
         if canonical["action"]!="delegate_task":
             raise GoldTrajectoryError("subtask_bank",["unexpected_complete"])
-        natural,audit=_natural_action(planner,payload,canonical)
+        # Phase 1 generates Sub-Agent evidence reports ONLY. Main task
+        # language is a phase-2 decision target, never generated here.
         original_tasks=canonical["params"]["tasks"]
-        public_tasks=natural["params"]["tasks"]
+        public_tasks=original_tasks
         if len(original_tasks)!=len(ready):
             raise GoldTrajectoryError("subtask_bank",["incorrect_ready_wave"])
         # The parallel wave shares only the PREVIOUS wave's immutable public
@@ -328,17 +273,16 @@ def build_subtask_bank(
                 evidence_cache[sid]=observation
             completed.add(fragment["fragment_id"])
         wave_step={
-            "attempt":index,**public_action(natural),
+            "attempt":index,**public_action(canonical),
             "state_before":state,
             "result":{"total_subtasks":len(reply_list),
                       "subtask_results":reply_list},
         }
         waves.append({
             "round_index":index,"state":state,
-            "action":public_action(natural),
             "canonical_action":public_action(canonical),
+            "bound_fragments":ready,
             "fragment_ids":[f["fragment_id"] for f in ready],
-            "naturalization":audit,
             "feedback_natural":[
                 records[f["fragment_id"]]["natural_feedback"] for f in ready
             ],
@@ -356,11 +300,10 @@ def build_subtask_bank(
         "answer_contract":gold["answer_contract"],
     }
     complete=teacher_main.decide(final_payload,main_prompt(final_payload))
-    natural_complete,_=_natural_action(planner,final_payload,complete)
-    if natural_complete["action"]!="complete":
+    if complete["action"]!="complete":
         raise GoldTrajectoryError("subtask_bank",["not_a_completion"])
     ok,issues=validate_action(
-        natural_complete,final_payload["gold_guidance"],
+        complete,final_payload["gold_guidance"],
         gold["final_answer"],gold["answer_contract"],public_state=state,
     )
     if not ok:
@@ -370,12 +313,115 @@ def build_subtask_bank(
         "eligibility":eligibility,"preflight":preflight,
         "fragments":records,"waves":waves,
         "complete":{"round_index":index,"state":state,
-                    "action":public_action(natural_complete)},
+                    "action":public_action(complete)},
         "schedule":schedule,
         "full_public_history":history,
         "final_answer":gold["final_answer"],  # PRIVATE: not Main-visible
+        "gold_plan":gold,  # Teacher-private; never fed to Main
+        "question_record":dict(realized),
+        "schema_version":1,
         "ready_order":[list(wave["fragment_ids"]) for wave in waves],
     }
 
 
-__all__=["build_subtask_bank"]
+
+def generate_subtasks_jsonl(
+    worlds_path, realized_path, output_path, *,
+    reviewer, executor, max_records=None, seed=17, scene="omnigaia",
+    schedule="compact", feedback_workers=4,
+    rejected_output_path=None, quarantine_output_path=None, progress=True,
+):
+    """Complete Phase 1 and persist reusable teacher-private Subtask Banks.
+
+    This phase calls the question reviewer and Sub-Agent language model only.
+    It does NOT generate any natural Main delegation or training target.
+    Phase 2 reads the output independently, without worlds or Stage-2 files.
+    """
+    import json
+    import traceback
+    from collections import Counter
+    from pathlib import Path
+    from tqdm.auto import tqdm
+    from .eligibility import digest
+    from .pipeline import _rows, _world_map, protect_paths
+
+    rows=_rows(realized_path)
+    if max_records is not None:
+        rows=rows[:max_records]
+    worlds=_world_map(worlds_path,seed=seed)
+    output=Path(output_path)
+    rejected=Path(rejected_output_path) if rejected_output_path else Path(str(output)+".rejected.jsonl")
+    quarantined=Path(quarantine_output_path) if quarantine_output_path else Path(str(output)+".quarantine.jsonl")
+    protect_paths([worlds_path,realized_path],[output,rejected,quarantined])
+    if len({p.resolve() for p in (output,rejected,quarantined)})!=3:
+        raise ValueError("Phase-1 output paths must be distinct")
+    for p in (output,rejected,quarantined):
+        p.parent.mkdir(parents=True,exist_ok=True)
+    stats=Counter()
+    reasons=Counter()
+    with output.open("w",encoding="utf-8") as good, rejected.open(
+        "w",encoding="utf-8"
+    ) as bad, quarantined.open("w",encoding="utf-8") as isolate:
+        for row in tqdm(rows,desc="Phase 1: correct Sub-Agent reports",unit="task",disable=not progress):
+            task_id=str(row.get("task_id",""))
+            try:
+                if task_id not in worlds:
+                    raise GoldTrajectoryError("input",["missing_matching_world"])
+                world,rendered=worlds[task_id]
+                bank=build_subtask_bank(
+                    row,world,rendered,planner=reviewer,executor=executor,
+                    scene=scene,schedule=schedule,feedback_workers=feedback_workers,
+                )
+                if not (bank["eligibility"].get("eligible") and bank["eligibility"].get("reviewed")):
+                    raise GoldTrajectoryError(
+                        "question_eligibility",["semantic_review_not_confirmed"]
+                    )
+                payload=json_value(bank)
+                record={"format":"maestro.clean_subtasks.v1","bank":payload}
+                record["sha256"]=digest(record)
+                good.write(json.dumps(record,ensure_ascii=False)+"\n")
+                good.flush()
+                stats["accepted"]+=1
+                stats["subtasks"]+=len(payload["fragments"])
+                stats["natural_feedback"]+=sum(
+                    bool(item["natural_feedback"])
+                    for item in payload["fragments"].values()
+                )
+                stats["waves"]+=len(payload["waves"])
+            except (GoldTrajectoryError,ValueError,KeyError,TypeError) as exc:
+                stage=exc.stage if isinstance(exc,GoldTrajectoryError) else "unexpected_error"
+                quarantine=stage in {
+                    "question_eligibility","public_replay","public_executability",
+                }
+                dest=isolate if quarantine else bad
+                stats["quarantined" if quarantine else "rejected"]+=1
+                reasons[stage]+=1
+                dest.write(json.dumps({
+                    "task_id":task_id,"reason":stage,
+                    "issues":exc.issues if isinstance(exc,GoldTrajectoryError)
+                             else [f"{type(exc).__name__}: {exc}"],
+                    "audit":exc.audit if isinstance(exc,GoldTrajectoryError)
+                            else {"traceback":traceback.format_exc(limit=8)},
+                },ensure_ascii=False)+"\n")
+                dest.flush()
+    return {
+        "phase":"subtasks","requested":len(rows),
+        "accepted_banks":stats["accepted"],
+        "quarantined":stats["quarantined"],"rejected":stats["rejected"],
+        "subtasks":stats["subtasks"],"gold_waves":stats["waves"],
+        "natural_feedback_count":stats["natural_feedback"],
+        "natural_feedback_rate":stats["natural_feedback"]/stats["subtasks"]
+                                  if stats["subtasks"] else 0.0,
+        "reasons":dict(reasons),
+        "request_counts":{
+            "question_review":dict(getattr(reviewer,"request_counts",{})),
+            "subagent":dict(getattr(executor,"request_counts",{})),
+        },
+        "output":str(output),
+        "rejected_output":str(rejected),
+        "quarantine_output":str(quarantined),
+    }
+
+
+__all__=["build_subtask_bank","generate_subtasks_jsonl"]
+

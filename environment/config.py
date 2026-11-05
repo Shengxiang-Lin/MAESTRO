@@ -24,7 +24,7 @@ ROLE_SELECTORS = {
 }
 PATH_ARGUMENTS = {
     "manifest", "authoring_inputs", "worlds", "capabilities",
-    "output_dir", "output", "realized", "rejected_output",
+    "output_dir", "output", "bank", "realized", "rejected_output",
     "kqa_train", "kqa_val", "yago_facts", "yago_schema",
     "yago_taxonomy", "mmqa_train", "mmqa_dev",
 }

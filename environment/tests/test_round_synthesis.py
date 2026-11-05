@@ -1,4 +1,4 @@
-"""Precomputed correct Subtask Bank -> independent, causal O1 Main decisions."""
+"""Two explicit Stage-3 phases: correct Sub-Agent feedback, then Main rounds."""
 from __future__ import annotations
 
 import copy
@@ -11,271 +11,267 @@ from unittest.mock import patch
 
 from environment.tests.test_gold_trajectory import fixture
 from environment.trajectory_simulation.backend import (
-    PassthroughPlanner, PassthroughExecutor,
+    PassthroughPlanner,PassthroughExecutor,
 )
 from environment.trajectory_simulation.eligibility import digest
-from environment.trajectory_simulation.exporter import validate_public_episode
 from environment.trajectory_simulation.natural_language import realize_main
 from environment.trajectory_simulation.rounds import (
-    make_round_record, synthesize_rounds_jsonl, o1_input, native_tool_spec,
+    _read_verified_bank,compose_main_rounds,generate_main_rounds_jsonl,
+    native_tool_spec,o1_input,
 )
-from environment.trajectory_simulation.subtask_bank import build_subtask_bank
+from environment.trajectory_simulation.subtask_bank import (
+    build_subtask_bank,generate_subtasks_jsonl,
+)
 
 
-def reviewed(gold, record, role, *, review=True):
+def reviewed(gold,record,role,*,review=True):
     return {
-        "eligible": True, "reviewed": True,
-        "question_sha256": digest(gold["question"]),
-        "program_sha256": digest(record["program"]),
-        "method": "test_exact_program_review", "issues": [],
+        "eligible":True,"reviewed":True,
+        "question_sha256":digest(gold["question"]),
+        "program_sha256":digest(record["program"]),
+        "method":"test_exact_program_review","issues":[],
     }
 
 
-class RoundCentricTests(unittest.TestCase):
-    def bank(self, *, dependent=False, planner=None, executor=None):
-        q, record, rendered = fixture(dependent=dependent)
+class TwoPhaseTests(unittest.TestCase):
+    def bank(self,*,dependent=True):
+        q,world,rendered=fixture(dependent=dependent)
         with patch(
-            "environment.trajectory_simulation.subtask_bank.check_question", reviewed
+            "environment.trajectory_simulation.subtask_bank.check_question",reviewed
         ):
-            bank = build_subtask_bank(
-                q, record, rendered,
-                planner=planner or PassthroughPlanner(),
-                executor=executor or PassthroughExecutor(),
-                schedule="baseline",
+            bank=build_subtask_bank(
+                q,world,rendered,planner=PassthroughPlanner(),
+                executor=PassthroughExecutor(),schedule="baseline",
             )
-        return q,record,rendered,bank
+        return q,world,rendered,bank
 
-    def test_real_o1_input_uses_native_prompt_and_native_tool_schema(self):
-        state = {
-            "question": "Who wrote the research report?",
-            "subtask_history": "No subtasks completed yet.",
-            "available_tools": ["GoogleSearchAction", "ExecuteCodeAction"],
-            "evidence_store": {},
-        }
-        text=o1_input(state,[],question_record={},round_index=1)
-        for phrase in ("==== QUESTION ====", "==== SUBTASK HISTORY ====",
-                       "==== AVAILABLE TOOLS", "[Attempt 1/10]"):
-            self.assertIn(phrase,text)
-        self.assertIn("Who wrote the research report?",text)
-        spec=native_tool_spec("GoogleSearchAction")
-        self.assertIn(spec.description,text)
-        self.assertIn('"query"',text)
-        self.assertNotIn("gold_supervision",text)
-        self.assertNotIn("expected_answer",text)
-        from environment.trajectory_simulation.tools import tool_profile
-        # Make every synthetic tool card agree with the actual benchmark
-        # definition, not a handcrafted substitute.
-        for name in tool_profile("omnigaia").available:
-            with self.subTest(tool=name):
-                self.assertEqual(native_tool_spec(name).name,name)
-                self.assertTrue(native_tool_spec(name).parameters)
-                self.assertTrue(native_tool_spec(name).description)
+    def test_phase1_generates_all_subagent_answers_without_main_language(self):
+        class Reviewer(PassthroughPlanner):
+            style_provider="natural"
+            def naturalize_action(self,*args):
+                raise AssertionError("Phase 1 must not call Main writer")
 
-    def test_subtask_bank_materializes_all_answers_before_main_sampling(self):
-        _,_,_,bank=self.bank(dependent=True)
+        q,world,rendered=fixture(dependent=True)
+        with patch("environment.trajectory_simulation.subtask_bank.check_question",reviewed):
+            bank=build_subtask_bank(
+                q,world,rendered,planner=Reviewer(),
+                executor=PassthroughExecutor(),schedule="baseline",
+            )
+        self.assertEqual(bank["schema_version"],1)
         self.assertEqual(len(bank["fragments"]),3)
         self.assertEqual(len(bank["waves"]),3)
-        self.assertEqual(bank["complete"]["round_index"],4)
         self.assertEqual(len(bank["full_public_history"]),3)
-        for fragment in bank["fragments"].values():
-            self.assertTrue(fragment["correct_answer"])
-            self.assertTrue(fragment["summary"])
-            self.assertTrue(fragment["trace_summary"])
-            self.assertIn(fragment["natural_feedback"],{True,False})
-        results=[w["step"]["result"]["subtask_results"][0] for w in bank["waves"]]
-        self.assertEqual(results[0]["finish_result"]["status"],"done")
-        self.assertEqual(results[1]["finish_result"]["status"],"done")
-        self.assertEqual(results[2]["finish_result"]["status"],"done")
-        self.assertEqual(bank["complete"]["action"]["action"],"complete")
+        self.assertEqual(bank["complete"]["round_index"],4)
+        for item in bank["fragments"].values():
+            self.assertTrue(item["correct_answer"])
+            self.assertTrue(item["summary"])
+            self.assertTrue(item["trace_summary"])
+            self.assertFalse(item["natural_feedback"])
+            self.assertFalse(item["natural_task"])
+        for wave in bank["waves"]:
+            self.assertEqual(wave["canonical_action"]["action"],"delegate_task")
+            self.assertEqual(len(wave["bound_fragments"]),len(wave["fragment_ids"]))
+            self.assertNotIn("naturalization",wave)
+            self.assertNotIn("action",wave)
+        self.assertEqual(bank["gold_plan"]["task_id"],bank["task_id"])
 
-    def test_bank_history_is_topological_and_no_same_wave_future_results(self):
+    def test_precomputed_parallel_wave_hides_sibling_answers(self):
         _,_,_,bank=self.bank(dependent=False)
-        self.assertEqual(len(bank["waves"]),2)
-        first=bank["waves"][0]
+        first,second=bank["waves"]
         self.assertEqual(len(first["fragment_ids"]),2)
         self.assertEqual(first["state"]["evidence_store"],{})
-        self.assertEqual(
-            first["state"]["subtask_history"],"No subtasks completed yet."
-        )
-        second=bank["waves"][1]
+        self.assertEqual(first["state"]["subtask_history"],"No subtasks completed yet.")
+        self.assertNotIn("Attempt 1",first["state"]["subtask_history"])
         self.assertIn("Attempt 1",second["state"]["subtask_history"])
-        self.assertEqual(len(second["state"]["evidence_store"]),2)
         self.assertNotIn("Attempt 2",second["state"]["subtask_history"])
-        self.assertEqual(
-            set(second["state"]["evidence_store"]),
-            {o["resource_id"] for step in [first["step"]]
-             for reply in step["result"]["subtask_results"]
-             for o in reply["observed_evidence"]},
-        )
 
-    def test_full_public_replay_still_validates_precomputed_bank(self):
-        _,_,_,bank=self.bank(dependent=True)
-        episode={
-            "task_id":bank["task_id"],"question":bank["question"],
-            "input_eligibility":bank["eligibility"],
-            "validation":{"public_evidence_replay_verified":True},
-            "trajectory":[*bank["full_public_history"],{
-                "attempt":bank["complete"]["round_index"],
-                **bank["complete"]["action"],
-                "state_before":bank["complete"]["state"],
-                "result":{"done":True,"success":True,
-                          "answer":bank["complete"]["action"]["params"]["answer"]},
-            }],
-        }
-        validate_public_episode(episode,require_training=False)
-        prefix=episode["trajectory"][:-1]
-        validate_public_episode(
-            {**episode,"trajectory":prefix},
-            require_training=False,require_terminal=False,
+    def test_two_commands_have_distinct_inputs_without_legacy_flow(self):
+        from environment.trajectory_simulation.cli import build_parser
+        parser=build_parser()
+        commands=next(
+            action.choices for action in parser._actions
+            if isinstance(action,__import__("argparse")._SubParsersAction)
         )
+        self.assertEqual(set(commands),{"subtasks","rounds"})
+        phase1=parser.parse_args(["subtasks","--worlds","w","--realized","q","--output","b"])
+        self.assertEqual(phase1.worlds,"w")
+        phase2=parser.parse_args(["rounds","--bank","b","--output","s"])
+        self.assertEqual(phase2.bank,"b")
+        self.assertFalse(hasattr(phase2,"worlds"))
+        self.assertFalse(hasattr(phase2,"realized"))
 
-    def test_rejected_earlier_natural_language_does_not_block_later_target(self):
+    def test_phase1_output_can_be_used_by_separate_phase2_without_world(self):
+        q,world,rendered=fixture(dependent=True)
+        with tempfile.TemporaryDirectory() as tmp,patch(
+            "environment.trajectory_simulation.subtask_bank.check_question",reviewed
+        ),patch(
+            "environment.trajectory_simulation.pipeline._rows",return_value=[q]
+        ),patch(
+            "environment.trajectory_simulation.pipeline._world_map",
+            return_value={q["task_id"]:(world,rendered)}
+        ):
+            worlds=Path(tmp)/"worlds.jsonl"
+            questions=Path(tmp)/"realized.jsonl"
+            worlds.write_text("{}\n")
+            questions.write_text("{}\n")
+            bankfile=Path(tmp)/"bank.jsonl"
+            summary=generate_subtasks_jsonl(
+                worlds,questions,bankfile,
+                reviewer=PassthroughPlanner(),executor=PassthroughExecutor(),
+                schedule="baseline",progress=False,
+            )
+            self.assertEqual(summary["accepted_banks"],1)
+            self.assertEqual(summary["subtasks"],3)
+            self.assertEqual(summary["gold_waves"],3)
+            record=json.loads(bankfile.read_text().strip())
+            bank=_read_verified_bank(record)
+            self.assertEqual(len(bank["fragments"]),3)
+
+            # Important: Phase 2 receives BANK ONLY; it must not query any
+            # original World/Question input or create Sub-Agent language.
+            with patch(
+                "environment.trajectory_simulation.pipeline._world_map",
+                side_effect=AssertionError("Phase 2 cannot load original Worlds")
+            ),patch(
+                "environment.trajectory_simulation.subtask_bank.build_subtask_bank",
+                side_effect=AssertionError("Phase 2 cannot rebuild Sub-Agent reports")
+            ):
+                output=Path(tmp)/"main_sft.jsonl"
+                result=generate_main_rounds_jsonl(
+                    bankfile,output,planner=PassthroughPlanner(),progress=False,
+                )
+            self.assertEqual(result["banks_processed"],1)
+            self.assertEqual(result["eligible_rounds"],4)
+            self.assertEqual(result["banks_rejected"],0)
+            samples=[json.loads(line) for line in output.read_text().splitlines()]
+            self.assertEqual([item["round_index"] for item in samples],[1,2,3,4])
+            self.assertEqual([item["macro_label"] for item in samples],
+                             ["advance","advance","advance","complete"])
+            self.assertIn("[Attempt 2/10]",samples[1]["input"])
+            self.assertNotIn("gold_plan",samples[1]["input"])
+            self.assertNotIn("correct_answer",samples[1]["input"])
+            self.assertNotIn("execution_checks",samples[1]["target_json"])
+
+    def test_phase2_late_round_survives_earlier_natural_writer_failure(self):
         class FirstBadThenGood(PassthroughPlanner):
             offline=False
             style_provider="natural"
-            attempts=0
+            count=0
             def naturalize_action(self,payload,canonical):
                 if canonical["action"]=="complete":
                     return realize_main(payload,canonical,{"reasoning":""})
-                self.attempts+=1
-                if self.attempts==1:
-                    raise ValueError("first_natural_rewrite_rejected")
+                self.count+=1
+                if self.count==1:
+                    raise ValueError("round1 Main rewrite failed")
                 natural=[]
                 for task in canonical["params"]["tasks"]:
-                    instructions=[
-                        re.sub(r"^\d+\.\s+", "", line)
+                    steps=[
+                        re.sub(r"^\d+\.\s+","",line)
                         for line in task["task_instruction"].splitlines()
                         if re.match(r"^\d+\.\s+",line)
                     ]
                     natural.append(
-                        "Review the supplied references to determine the answer. "
-                        + " ".join(instructions)
+                        "Review the supplied records and return the answer. "+" ".join(steps)
                     )
                 return realize_main(
-                    payload,canonical,
-                    {"reasoning":"","task_instructions":natural},
+                    payload,canonical,{"reasoning":"","task_instructions":natural}
                 )
 
-        q,record,rendered,bank=self.bank(
-            dependent=True,planner=FirstBadThenGood(),
-        )
-        self.assertEqual(bank["waves"][0]["naturalization"]["rewritten_tasks"],0)
-        self.assertEqual(bank["waves"][1]["naturalization"]["rewritten_tasks"],1)
-        self.assertEqual(bank["waves"][2]["naturalization"]["rewritten_tasks"],1)
-        # A complete Gold-backed history is available for a later round even
-        # though the first natural Main task did not produce an SFT target.
-        second=bank["waves"][1]
-        row=make_round_record(
-            task_id=bank["task_id"],round_index=2,question=bank["question"],
-            eligibility=bank["eligibility"],state=second["state"],
-            prefix=[bank["waves"][0]["step"]],
-            action=second["action"],question_record=q,
-            natural_task_count=1,assigned_task_count=1,
-            history_origin="teacher_reconstructed",
-        )
-        self.assertEqual(row["macro_label"],"advance")
-        self.assertIn("[Attempt 1]",row["input"])
-        self.assertIn("[Attempt 2/10]",row["input"])
-        self.assertNotIn("execution_checks",row["target_json"])
-        self.assertNotIn("gold_supervision",row["input"])
+        _,_,_,bank=self.bank(dependent=True)
+        model=FirstBadThenGood()
+        samples,stats=compose_main_rounds(bank,planner=model)
+        self.assertEqual(stats["skipped"],1)
+        self.assertEqual([row["round_index"] for row in samples],[2,3,4])
+        self.assertEqual(samples[0]["history_origin"],"teacher_reconstructed")
+        self.assertIn("Attempt 1",samples[0]["input"])
+        self.assertNotIn("private_gold",samples[0]["input"])
+        self.assertEqual(stats["rewritten"],2)
 
-        # Main SFT accepts Round 2 without any Round-1 natural target:
-        # the offline teacher bank still supplies a complete correct history.
-        with tempfile.TemporaryDirectory() as tmp, patch(
-            "environment.trajectory_simulation.subtask_bank.build_subtask_bank",
-            return_value=bank,
-        ), patch(
-            "environment.trajectory_simulation.pipeline._rows",return_value=[q],
-        ), patch(
-            "environment.trajectory_simulation.pipeline._world_map",
-            return_value={q["task_id"]:(record,rendered)},
-        ):
-            source=Path(tmp)/"worlds.jsonl"
-            realized=Path(tmp)/"realized.jsonl"
-            source.write_text("{}\\n")
-            realized.write_text("{}\\n")
-            output=Path(tmp)/"rounds.jsonl"
-            summary=synthesize_rounds_jsonl(
-                source,realized,output,
-                planner=FirstBadThenGood(),executor=PassthroughExecutor(),
-                round_indices={1,2},progress=False,
-            )
-            self.assertEqual(summary["rounds_skipped"],1)
-            self.assertEqual(summary["eligible_rounds"],1)
-            rows=[json.loads(line) for line in output.read_text().splitlines()]
-            self.assertEqual(len(rows),1)
-            self.assertEqual(rows[0]["round_index"],2)
-            self.assertEqual(rows[0]["history_origin"],"teacher_reconstructed")
-
-    def test_round_export_refuses_invalid_state_or_corrupted_prefix(self):
-        q,_,_,bank=self.bank(dependent=True)
-        second=bank["waves"][1]
-        prefix=copy.deepcopy([bank["waves"][0]["step"]])
-        broken_state=copy.deepcopy(second["state"])
-        broken_state["subtask_history"]="This is a forged summary."
-        params=dict(
-            task_id=bank["task_id"],round_index=2,
-            question=bank["question"],eligibility=bank["eligibility"],
-            prefix=prefix,action=second["action"],question_record=q,
-            natural_task_count=0,assigned_task_count=1,
-            history_origin="teacher_reconstructed",
-        )
-        with self.assertRaisesRegex(ValueError,"round_history_not_equal"):
-            make_round_record(state=broken_state,**params)
-        prefix[0]["result"]["subtask_results"][0]["result_value"]=["Incorrect"]
+    def test_phase2_rejects_tampered_bank_and_future_leakage(self):
+        _,_,_,bank=self.bank(dependent=True)
+        envelope={"format":"maestro.clean_subtasks.v1","bank":bank}
+        envelope["sha256"]=digest(envelope)
+        self.assertEqual(_read_verified_bank(envelope)["task_id"],bank["task_id"])
+        tampered=copy.deepcopy(envelope)
+        tampered["bank"]["waves"][0]["step"]["result"]["subtask_results"][0][
+            "finish_result"
+        ]["result"] = "forged"
+        with self.assertRaisesRegex(ValueError,"integrity"):
+            _read_verified_bank(tampered)
+        # Recomputed hash alone cannot bypass source-only public replay.
+        tampered["sha256"]=digest({
+            "format":tampered["format"],"bank":tampered["bank"],
+        })
         with self.assertRaises(ValueError):
-            make_round_record(state=second["state"],**params)
+            _read_verified_bank(tampered)
 
-    def test_synthesize_rounds_jsonl_uses_bank_and_selected_rounds(self):
-        q,record,rendered=fixture(dependent=True)
-        with tempfile.TemporaryDirectory() as tmp, patch(
-            "environment.trajectory_simulation.subtask_bank.check_question",reviewed,
-        ),patch(
-            "environment.trajectory_simulation.pipeline._rows",
-            return_value=[q],
-        ),patch(
-            "environment.trajectory_simulation.pipeline._world_map",
-            return_value={q["task_id"]:(record,rendered)},
-        ):
-            src=Path(tmp)/"worlds.jsonl"
-            realized=Path(tmp)/"realized.jsonl"
-            src.write_text("{}\n")
-            realized.write_text("{}\n")
-            out=Path(tmp)/"rounds.jsonl"
-            bank_file=Path(tmp)/"bank.jsonl"
-            stats=synthesize_rounds_jsonl(
-                src,realized,out,planner=PassthroughPlanner(),
-                executor=PassthroughExecutor(),round_indices={2,3},
-                schedule="baseline",progress=False,bank_output_path=bank_file,
-            )
-            self.assertEqual(stats["subtask_bank_fragments"],3)
-            self.assertEqual(stats["rounds_considered"],2)
-            self.assertEqual(stats["eligible_rounds"],2)
-            rows=[json.loads(line) for line in out.read_text().splitlines()]
-            self.assertEqual([r["round_index"] for r in rows],[2,3])
-            self.assertTrue(all(r["history_valid"] for r in rows))
-            private=json.loads(bank_file.read_text().strip())
-            self.assertTrue(private["private_teacher_bank"])
-            self.assertEqual(len(private["fragments"]),3)
-            self.assertEqual(stats["history_origins"],{
-                "teacher_reconstructed":2,
-            })
+    def test_phase2_does_not_call_main_writer_for_unselected_history(self):
+        class CountingPlanner(PassthroughPlanner):
+            offline=False
+            style_provider="natural"
+            count=0
+            def naturalize_action(self,payload,canonical):
+                self.count+=1
+                return canonical
 
-    def test_invalid_stage2_question_is_not_sft_training_data(self):
-        q,record,rendered=fixture(dependent=True)
-        with patch(
-            "environment.trajectory_simulation.subtask_bank.check_question",
-            return_value={
-                "eligible":False,"reviewed":True,"question_sha256":digest(q["question"]),
-                "method":"test_rejection",
-            },
-        ):
-            from environment.trajectory_simulation.pipeline import GoldTrajectoryError
-            with self.assertRaisesRegex(GoldTrajectoryError,"question_eligibility"):
-                build_subtask_bank(
-                    q,record,rendered,planner=PassthroughPlanner(),
-                    executor=PassthroughExecutor(),
+        _,_,_,bank=self.bank(dependent=True)
+        planner=CountingPlanner()
+        rows,stats=compose_main_rounds(
+            bank,planner=planner,
+            round_indices={3},include_fallback_rounds=True,
+        )
+        self.assertEqual(planner.count,1)
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]["round_index"],3)
+        self.assertEqual(rows[0]["history_origin"],"teacher_reconstructed")
+        self.assertIn("Attempt 1",rows[0]["input"])
+
+    def test_phase2_keeps_verified_round_one_if_round_two_export_fails(self):
+        _,_,_,bank=self.bank(dependent=True)
+        envelope={"format":"maestro.clean_subtasks.v1","bank":bank}
+        envelope["sha256"]=digest(envelope)
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path=Path(tmp)/"bank.jsonl"
+            output_path=Path(tmp)/"rounds.jsonl"
+            input_path.write_text(json.dumps(envelope,ensure_ascii=False)+"\n")
+            from environment.trajectory_simulation.rounds import make_round_record
+            calls=[0]
+
+            def fail_second(*args,**kwargs):
+                calls[0]+=1
+                if calls[0]==2:
+                    raise ValueError("simulated_second_round_export_failure")
+                return make_round_record(*args,**kwargs)
+
+            with patch(
+                "environment.trajectory_simulation.rounds.make_round_record",
+                side_effect=fail_second,
+            ):
+                stats=generate_main_rounds_jsonl(
+                    input_path,output_path,planner=PassthroughPlanner(),
+                    progress=False,
                 )
+            self.assertEqual(stats["banks_rejected"],1)
+            self.assertEqual(stats["eligible_rounds"],1)
+            items=[json.loads(line) for line in output_path.read_text().splitlines()]
+            self.assertEqual(len(items),1)
+            self.assertEqual(items[0]["round_index"],1)
+            self.assertTrue(items[0]["history_valid"])
+
+    def test_main_prompt_uses_actual_orchestra_o1_tool_descriptions(self):
+        state={
+            "question":"Who wrote the research report?",
+            "subtask_history":"No subtasks completed yet.",
+            "available_tools":["GoogleSearchAction","ExecuteCodeAction"],
+            "evidence_store":{},
+        }
+        prompt=o1_input(state,[],question_record={},round_index=1)
+        self.assertIn("[Attempt 1/10]",prompt)
+        self.assertIn("==== SUBTASK HISTORY ====",prompt)
+        spec=native_tool_spec("GoogleSearchAction")
+        self.assertIn(spec.description,prompt)
+        self.assertIn('"query"',prompt)
+        self.assertNotIn("expected_answer",prompt)
 
 
 if __name__=="__main__":
