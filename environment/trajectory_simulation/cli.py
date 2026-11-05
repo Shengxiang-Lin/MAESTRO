@@ -118,6 +118,7 @@ def command_rounds(args: argparse.Namespace) -> None:
         include_fallback_rounds=args.include_fallback_rounds,
         include_complete=not args.exclude_complete,
         max_o1_attempts=args.max_o1_attempts,
+        feedback_workers=args.feedback_workers,
         seed=args.seed, scene=args.scene, schedule=args.schedule,
         rejected_output_path=args.rejected_output,
         quarantine_output_path=args.quarantine_output,
@@ -197,6 +198,10 @@ def build_parser() -> argparse.ArgumentParser:
              "subtask instructions, feedback and answers; never use as SFT input",
     )
     rounds.add_argument("--max-o1-attempts", type=int, default=10)
+    rounds.add_argument(
+        "--feedback-workers",type=int,default=4,
+        help="parallel report language workers for sibling Subtasks within a Gold wave",
+    )
     rounds.set_defaults(func=command_rounds)
     return parser
 
