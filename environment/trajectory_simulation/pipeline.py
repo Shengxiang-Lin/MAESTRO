@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+import traceback
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -487,8 +488,17 @@ def synthesize_trajectories_jsonl(
                 else:rejected+=1
                 (quarantine if isolated else bad).write(json.dumps({
                     "task_id": task_id, "reason": stage,
-                    "issues": exc.issues if isinstance(exc, GoldTrajectoryError) else [str(exc)],
-                    "audit": exc.audit if isinstance(exc, GoldTrajectoryError) else {},
+                    "issues": (
+                        exc.issues if isinstance(exc, GoldTrajectoryError)
+                        else [f"{type(exc).__name__}: {exc}"]
+                    ),
+                    "audit": (
+                        exc.audit if isinstance(exc, GoldTrajectoryError)
+                        else {
+                            "exception_type": type(exc).__name__,
+                            "traceback": traceback.format_exc(limit=10),
+                        }
+                    ),
                 }, ensure_ascii=False) + "\n")
             else:
                 accepted += 1

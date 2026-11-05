@@ -394,6 +394,91 @@ class FragmentCompilationTests(unittest.TestCase):
         self.assertEqual(episode['trajectory'][-1]['params']['answer'],'["Alice"]')
         self.assertNotIn('fragment:public_join:',json.dumps(episode['trajectory']))
 
+    def test_unexpected_synthesis_error_retains_type_and_traceback(self):
+        question, record, rendered = fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with patch('environment.trajectory_simulation.pipeline._rows',
+                       return_value=[question]), patch(
+                'environment.trajectory_simulation.pipeline._world_map',
+                return_value={question['task_id']: (record, rendered)},
+            ), patch(
+                'environment.trajectory_simulation.pipeline.synthesize_one',
+                side_effect=KeyError(15),
+            ):
+                summary = synthesize_trajectories_jsonl(
+                    base / 'worlds.jsonl', base / 'realized.jsonl',
+                    base / 'good.jsonl',
+                    rejected_output_path=base / 'bad.jsonl',
+                    quarantine_output_path=base / 'quarantine.jsonl',
+                    planner=PassthroughPlanner(), executor=PassthroughExecutor(),
+                    progress=False,
+                )
+            self.assertEqual(summary['rejected'], 1)
+            item = json.loads((base / 'bad.jsonl').read_text().strip())
+            self.assertEqual(item['reason'], 'unexpected_error')
+            self.assertEqual(item['issues'], ['KeyError: 15'])
+            self.assertEqual(item['audit']['exception_type'], 'KeyError')
+            self.assertIn('KeyError: 15', item['audit']['traceback'])
+
+    def test_semantic_reviewer_sees_original_nodes_removed_by_public_projection(self):
+        from environment.trajectory_simulation.eligibility import check_question
+        question, record, rendered = fixture()
+        record['program']['nodes'] = [
+            {'node_id': 0, 'op': 'FIND', 'dependencies': [], 'inputs': ['entity:A']},
+            {'node_id': 1, 'op': 'FIND', 'dependencies': [], 'inputs': ['type:schema:Person']},
+            {'node_id': 2, 'op': 'FILTER_YEAR', 'dependencies': [1],
+             'inputs': ['r:birth', '<CMP:=>', '1912']},
+            {'node_id': 3, 'op': 'INTERSECT', 'dependencies': [0, 2], 'inputs': []},
+            {'node_id': 4, 'op': 'QUERY_NAME', 'dependencies': [3], 'inputs': []},
+        ]
+        record['program']['metadata']['deep_dependency']['composition_links'] = [
+            {'fragment': 0, 'stage': 0, 'producer_node_id': None,
+             'output_node_id': 2},
+        ]
+        record['world']['facts'][0].update(
+            predicate='r:birth', object='1912', object_kind='year')
+        record['world']['facts'][1].update(
+            subject='B', predicate='r:birth', object='1980', object_kind='year')
+        question['question'] = 'Which Person has recorded birth year 1912?'
+        rendered.answer = ['Alice']
+        rendered.hidden_metadata['public_query_plan'] = {
+            'latent_entities': [{
+                'entity_id': 'A', 'entity_type': 'schema:Person',
+                'find_node_ids': [0], 'rule': 'unique_intersection_clue',
+                'identifying_node_ids': [2], 'support_fact_ids': ['f1'],
+            }],
+        }
+        gold = compile_gold_solution(question, record, rendered)
+        self.assertEqual(len(gold['public_projections']), 1)
+        self.assertNotIn(0, {
+            op['node_id'] for f in gold['fragments'] for op in f['operations']
+        })
+        self.assertNotIn(3, {
+            op['node_id'] for f in gold['fragments'] for op in f['operations']
+        })
+
+        class Reviewer:
+            offline = False
+            backend = SimpleNamespace(model='regression-reviewer', base_url='test://local')
+            payload = None
+
+            def check_question(self, prompt):
+                self.payload = json.loads(prompt.split('\n', 1)[1])
+                return {'decision': 'eligible', 'issues': []}
+
+        role = Reviewer()
+        verdict = check_question(gold, record, role)
+        self.assertTrue(verdict['reviewed'])
+        self.assertTrue(verdict['eligible'])
+        self.assertEqual(role.payload['canonical_expression']['step'], 4)
+        steps = {item['step']: item for item in role.payload['canonical_steps']}
+        self.assertEqual(set(steps), {0, 1, 2, 3, 4})
+        self.assertTrue(steps[0]['projected_from_public_delegation'])
+        self.assertTrue(steps[3]['projected_from_public_delegation'])
+        self.assertFalse(steps[2]['projected_from_public_delegation'])
+        self.assertEqual(len(role.payload['certified_public_projections']), 1)
+
     def test_missing_composition_metadata_rejected_without_fallback(self):
         question, world, rendered = fixture()
         world["program"]["metadata"] = {}
