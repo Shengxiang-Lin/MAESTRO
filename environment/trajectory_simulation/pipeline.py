@@ -222,6 +222,7 @@ def synthesize_one(
                         "upstream_question_semantics_revalidated": eligibility['reviewed'],
                         "public_evidence_replay_verified": True,
                         "public_plan_preflight_verified": True,
+                        "public_projection_count": len(gold.get("public_projections", [])),
                         "training_eligible": eligibility['reviewed'] and not (getattr(planner,'offline',False) or getattr(executor,'offline',False)),
                         "completed_gold_fragments": len(completed),
                         "expected_gold_fragments": len(fragment_by_id),
@@ -241,6 +242,7 @@ def synthesize_one(
                             "expected_answer": f["expected_answer"],
                         } for f in gold["fragments"]],
                         "parallel_waves": gold["waves"],
+                        "public_projections": gold.get("public_projections", []),
                         "symbolic_trace": gold["symbolic_trace"],
                         "final_proof_source_ids": gold["final_proof_source_ids"],
                         "final_answer": gold["final_answer"],
@@ -409,6 +411,7 @@ def plan_trajectories_jsonl(
                         "expected_answer": f["expected_answer"],
                     } for f in plan["fragments"]],
                     "gold_waves": plan["waves"],
+                    "public_projections": plan.get("public_projections", []),
                     "final_answer": plan["final_answer"],
                 }
                 if public_preflight["publicly_executable"]:
