@@ -71,6 +71,44 @@ The teacher language-choice prompt retains completed result bindings; narrative
 history above 9000 characters uses a marked recent-history view. Saved public
 states always preserve the full cumulative history.
 
+## Publicly executable Gold plans (before LLM calls)
+
+`plan` now checks **two different boundaries**:
+
+1. Gold compilation: source-reachable evidence can reproduce the original
+   frozen intermediate and final answers.
+2. Public executability: each proposed O1 delegation, including its completed
+   input references and source observations, can be replayed *without* any
+   private oracle/entity injection. Independent same-round subtasks do not
+   observe sibling outputs until that parallel wave finishes.
+
+A plan can therefore be `compiled` but have `status: quarantined` with
+`public_executability.reason`, `fragment_id`, `round`, `operations` and
+`new_source_ids`. These are **diagnostics**; do not promote them to prompts.
+Accepted plans include `public_executability.publicly_executable: true`.
+Compilation and public executability do **not** certify that the Stage-2
+English question has the same meaning as Stage-1 ProgramIR. That requires
+separate question eligibility review.
+
+### Concealed intermediate identities
+
+The first-stage public question renderer may intentionally conceal a direct
+FIND when a separate, evidenced branch of an INTERSECT uniquely determines
+the same singleton. A direct `Identify the hidden entity` delegation would
+be impossible for an O1 Sub-Agent. The `public_projection` pass removes
+**only this certified redundant intersection** when all of the following
+hold: first-stage metadata explicitly says `unique_intersection_clue`,
+the hidden FIND is standalone and has no evidence, the independent
+identifying branch has public evidence and the same exact answer, the
+INTERSECT has no extra evidence, and neither removed fragment has other
+consumers. The private symbolic trace and final oracle remain unchanged.
+`public_projections` records the transformation for private auditing.
+
+Other concealed entities are never supplied from the oracle. If a
+necessary identifying clue cannot be formulated or replayed, the task is
+quarantined with `latent_find_missing_public_clue`, rather than producing
+a misleadingly successful synthetic trajectory.
+
 ## Scene tool mapping
 
 `tools.py` owns `ToolProfile` and the scene registry. `--scene omnigaia` selects
@@ -95,6 +133,7 @@ scene; compiler, prompt, public tool registry and feedback share this mapping.
 Run from the repository root, with the normal configured conda environment:
 
 ```bash
+# The plan output now reports compiled / ready / quarantined separately.
 # Default compact schedule merges linear steps while preserving true forks.
 python environment/simulate_trajectories.py plan --scene omnigaia \
   --schedule compact --max-records 10 --output work/trajectory_plans_compact.jsonl
