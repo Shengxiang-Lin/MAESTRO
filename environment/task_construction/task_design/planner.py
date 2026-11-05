@@ -58,17 +58,64 @@ def _source_ids_for_facts(world,fact_ids):
     for fact in world.facts:
         if fact.fact_id in fact_ids and fact.source_id:result.add(str(fact.source_id))
     return result
-def _visibility_plan(world,latent_entities):
-    ordered=sorted(world.sources.values(),key=EvidenceSource.sort_key)
-    if not ordered:return ()
-    clue_fact_ids={fid for latent in latent_entities for fid in latent.support_fact_ids};clue_sources=_source_ids_for_facts(world,clue_fact_ids);preferred=[s for s in ordered if s.source_id in clue_sources];preferred_media=[s for s in preferred if s.source_type in _MEDIA_SOURCE_TYPES];any_media=[s for s in ordered if s.source_type in _MEDIA_SOURCE_TYPES];entry=preferred_media[0] if preferred_media else preferred[0] if preferred else any_media[0] if any_media else ordered[0];result=[]
+_WEB_SOURCE_TYPES = {"text", "search", "table", "database"}
+_RETRIEVAL_POLICY = "task_local_ranked_public_index_v1"
+
+
+def _source_scenario(world):
+    kinds = {source.source_type for source in world.sources.values()}
+    if kinds and kinds <= _WEB_SOURCE_TYPES:
+        return "web_search"
+    if kinds and kinds <= _MEDIA_SOURCE_TYPES:
+        return "provided_media"
+    return "hybrid"
+
+
+def _visibility_plan(world, latent_entities):
+    ordered = sorted(world.sources.values(), key=EvidenceSource.sort_key)
+    if not ordered:
+        return ()
+    scenario = _source_scenario(world)
+    if scenario == "web_search":
+        # A text/structured Wiki/YAGO task begins with a SEARCH QUERY, not
+        # with an arbitrary 'provided file' containing its first candidates.
+        # Discoverability is later tested against a separate public index.
+        return tuple(ResourceVisibility(
+            source.source_id, source.source_type,
+            "discoverable", "web_result",
+            "obtain through simulated GoogleSearchAction",
+        ) for source in ordered)
+    clue_fact_ids = {
+        fid for latent in latent_entities for fid in latent.support_fact_ids
+    }
+    clue_sources = _source_ids_for_facts(world, clue_fact_ids)
+    preferred = [s for s in ordered if s.source_id in clue_sources]
+    preferred_media = [s for s in preferred if s.source_type in _MEDIA_SOURCE_TYPES]
+    any_media = [s for s in ordered if s.source_type in _MEDIA_SOURCE_TYPES]
+    entry = (preferred_media[0] if preferred_media else
+             preferred[0] if preferred else
+             any_media[0] if any_media else ordered[0])
+    result = []
     for source in ordered:
-        if source.source_id==entry.source_id:attached=source.source_type in _MEDIA_SOURCE_TYPES;result.append(ResourceVisibility(source.source_id,source.source_type,"attached" if attached else "provided","entry_anchor","supports a recoverable public clue" if source.source_id in clue_sources else "provides a genuine existing task entry point"))
-        else:result.append(ResourceVisibility(source.source_id,source.source_type,"discoverable","discovery","existing evidence reserved for downstream acquisition"))
+        if source.source_id == entry.source_id:
+            attached = source.source_type in _MEDIA_SOURCE_TYPES
+            result.append(ResourceVisibility(
+                source.source_id, source.source_type,
+                "attached" if attached else "provided",
+                "entry_anchor", "provided multimedia or reference input",
+            ))
+        else:
+            result.append(ResourceVisibility(
+                source.source_id, source.source_type,
+                "discoverable", "discovery",
+                "downstream evidence to locate through search",
+            ))
     return tuple(result)
+
+
 def plan_task_design(record,*,program=None,world=None,max_latent_entities=2):
     if program is None:
         raw=record.get("program",{});program=_program_from_dict(raw) if isinstance(raw,Mapping) else (_ for _ in ()).throw(ValueError("task record is missing program"))
     if world is None:
         raw=record.get("world",{});world=_world_from_dict(raw) if isinstance(raw,Mapping) else (_ for _ in ()).throw(ValueError("task record is missing world"))
-    binding=_mapping(record.get("binding"));query_plan=build_public_query_plan(record,program,world,max_latent_entities=max_latent_entities);minimum_sources=query_plan.minimum_required_source_count;motif=infer_task_motif(program,query_plan,minimum_required_source_count=minimum_sources);visibility=_visibility_plan(world,query_plan.latent_entities);final_node=program.node_map()[program.topological_order()[-1]];latent_find_nodes=tuple(sorted({node_id for latent in query_plan.latent_entities for node_id in latent.find_node_ids}));entry_strategy="latent_clue_recovery" if query_plan.latent_entities else "attached_media" if any(item.visibility=="attached" for item in visibility) else "provided_resource";return TaskDesign(_task_id(record,program),motif,final_node.op,infer_answer_type(program,binding),entry_strategy,tuple(query_plan.latent_entity_ids),latent_find_nodes,_public_clues(program,query_plan.latent_entities,binding),tuple(program.topological_order()),visibility,minimum_sources,{"motif_family":motif_family(motif),"proof_entity_count":len(query_plan.proof_entity_ids),"latent_entity_count":len(query_plan.latent_entities),"existing_source_count":len(world.sources),"adds_synthetic_resources":False,"changes_symbolic_truth":False,"clue_graph_version":2})
+    binding=_mapping(record.get("binding"));query_plan=build_public_query_plan(record,program,world,max_latent_entities=max_latent_entities);minimum_sources=query_plan.minimum_required_source_count;motif=infer_task_motif(program,query_plan,minimum_required_source_count=minimum_sources);visibility=_visibility_plan(world,query_plan.latent_entities);final_node=program.node_map()[program.topological_order()[-1]];latent_find_nodes=tuple(sorted({node_id for latent in query_plan.latent_entities for node_id in latent.find_node_ids}));entry_strategy=_source_scenario(world);return TaskDesign(_task_id(record,program),motif,final_node.op,infer_answer_type(program,binding),entry_strategy,tuple(query_plan.latent_entity_ids),latent_find_nodes,_public_clues(program,query_plan.latent_entities,binding),tuple(program.topological_order()),visibility,minimum_sources,{"motif_family":motif_family(motif),"proof_entity_count":len(query_plan.proof_entity_ids),"latent_entity_count":len(query_plan.latent_entities),"existing_source_count":len(world.sources),"adds_synthetic_resources":False,"changes_symbolic_truth":False,"clue_graph_version":2,"retrieval_policy":_RETRIEVAL_POLICY,"evidence_scenario":entry_strategy})
