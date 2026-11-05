@@ -114,7 +114,7 @@ def command_rounds(args: argparse.Namespace) -> None:
         args.worlds, args.realized, output,
         planner=planner, executor=executor,
         max_records=args.max_records,
-        round_indices=indices, history_style=args.history_style,
+        round_indices=indices,
         include_fallback_rounds=args.include_fallback_rounds,
         include_complete=not args.exclude_complete,
         max_o1_attempts=args.max_o1_attempts,
@@ -123,6 +123,7 @@ def command_rounds(args: argparse.Namespace) -> None:
         seed=args.seed, scene=args.scene, schedule=args.schedule,
         rejected_output_path=args.rejected_output,
         quarantine_output_path=args.quarantine_output,
+        bank_output_path=args.bank_output,
         progress=not args.no_progress,
     ))
 
@@ -176,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     rounds = sub.add_parser(
         "rounds",
-        help="stream independently validated teacher-forced Main decision samples",
+        help="precompute clean Subtask Bank, then compose and export O1 Main decisions",
     )
     _add_common(rounds)
     _add_synthesis_options(rounds)
@@ -185,17 +186,17 @@ def build_parser() -> argparse.ArgumentParser:
         "unselected predecessor rounds are reconstructed as valid history",
     )
     rounds.add_argument(
-        "--history-style", choices=("natural","teacher"), default="natural",
-        help="natural: attempt grounded O1 historical prose with safe fallback; "
-        "teacher: reconstruct clean prior rounds without language-model calls",
-    )
-    rounds.add_argument(
         "--include-fallback-rounds", action="store_true",
         help="include canonical-template targets when some Main natural rewrites fail",
     )
     rounds.add_argument(
         "--exclude-complete", action="store_true",
         help="omit Gold complete decisions from the SFT training examples",
+    )
+    rounds.add_argument(
+        "--bank-output",
+        help="optional teacher-private JSONL with precomputed source-backed "
+             "subtask instructions, feedback and answers; never use as SFT input",
     )
     rounds.add_argument("--max-o1-attempts", type=int, default=10)
     rounds.set_defaults(func=command_rounds)
