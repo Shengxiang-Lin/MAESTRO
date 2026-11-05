@@ -30,7 +30,10 @@ number, date or attribute**, and to the direction and preservation of all
 relation hops. Preserving the word "1912" is insufficient when a Way's
 start date has been rewritten as a City's start date; preserving entity
 names is insufficient when an intermediate death-place/spouse hop was
-removed. A Critic response with `accept=true` but nonempty `issues`
+removed. Author/Critic instructions also explicitly require retaining
+publicly named starting entities (such as an airport named in the frozen
+draft), rather than replacing them with a potentially non-unique IATA
+code or shifting dates across the relation chain. A Critic response with `accept=true` but nonempty `issues`
 is rejected, including during wording-repair review.
 
 These stronger language checks do not retroactively alter previously
