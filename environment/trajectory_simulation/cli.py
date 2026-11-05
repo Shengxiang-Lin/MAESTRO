@@ -27,7 +27,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output")
     parser.add_argument("--max-records", type=int)
     parser.add_argument("--seed", type=int, default=17)
-    parser.add_argument("--schedule",choices=("baseline","compact"),default="baseline")
+    parser.add_argument("--schedule",choices=("baseline","compact"),default="compact")
     parser.add_argument("--scene", choices=sorted(PROFILES), default="omnigaia")
 
 
