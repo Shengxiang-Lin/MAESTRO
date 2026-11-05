@@ -280,6 +280,37 @@ def synthesize_one(
             # Independently checked Main action and public history prefix:
             # emit its training sample before any later Sub-Agent execution.
             if round_sink is not None and selected:
+                if wire["action"] == "delegate_task":
+                    if len(wire["params"]["tasks"]) != len(ready):
+                        raise GoldTrajectoryError("round_validation", ["round_task_count_mismatch"])
+                    # The saved action is checked now, not after some later
+                    # Sub-Agent runs. No private answer can satisfy replay.
+                    for task, fragment in zip(wire["params"]["tasks"], ready):
+                        observed = [public_record(obs) for obs in fragment["observations"]]
+                        verify_known_packet(task, evidence_cache)
+                        replay = replay_task(task, observed, public_cache=evidence_cache)
+                        contract = {
+                            "collection_mode": "multiset"
+                            if fragment["operations"][-1]["op"] == "QUERY_ATTR" else "set"
+                        }
+                        if not answers_equal(
+                            json_value(replay["result"]), fragment["expected_answer"], contract
+                        ):
+                            raise GoldTrajectoryError("round_validation",
+                                                      ["public_round_replay_mismatch"])
+                        for idx, (op, result) in enumerate(zip(
+                            fragment["operations"], fragment["operation_results"]
+                        )):
+                            local_contract = {
+                                "collection_mode": "multiset"
+                                if op["op"] == "QUERY_ATTR" else "set"
+                            }
+                            if not answers_equal(
+                                json_value(replay["step_values"][idx]),
+                                result["answer"], local_contract,
+                            ):
+                                raise GoldTrajectoryError("round_validation",
+                                                          ["public_round_step_mismatch"])
                 task_count = len(action["params"].get("tasks", []))
                 changed = sum(
                     before["task_instruction"] != after["task_instruction"]
