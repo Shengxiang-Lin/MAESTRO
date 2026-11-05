@@ -9,7 +9,13 @@ def digest(value):
 
 def check_question(gold,record,role,*,review=True):
     question=gold['question'];fingerprint={'question_sha256':digest(question),'program_sha256':digest(record['program'])}
-    audited=json.loads(Path(__file__).with_name('question_reviews.json').read_text())
+    audit_path = Path(__file__).with_name('question_reviews.json')
+    # This manually curated file is optional and not committed in all setups.
+    # Missing file is NOT an approval: a real LLM semantic check is still
+    # required before training_eligible can become true.
+    audited = json.loads(audit_path.read_text(encoding='utf-8')) if audit_path.is_file() else []
+    if not isinstance(audited, list):
+        raise ValueError("question_reviews.json must be a JSON array")
     for item in audited:
         if item['task_id']==gold['task_id'] and all(item[k]==v for k,v in fingerprint.items()):
             return {'eligible':item.get('eligible',False),'reviewed':True,'method':'audited_exact_input_review','issues':[] if item.get('eligible') else [item['reason']],'audit_reason':item['reason'],**fingerprint}
