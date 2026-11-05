@@ -17,6 +17,47 @@ from typing import Any, Mapping
 from .contract import answer_string, validate_action, validate_feedback
 from .evidence import MARKER
 
+# This is the *wire-level* report contract. Bullet points belong inside the
+# trace_summary JSON string, separated by "\n", not in a JSON array.
+SUBAGENT_REPORT_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "minLength": 1},
+        "trace_summary": {"type": "string", "minLength": 1},
+    },
+    "required": ["summary", "trace_summary"],
+    "additionalProperties": False,
+}
+
+
+def normalize_feedback_shape(proposal: Any) -> tuple[Any, tuple[str, ...]]:
+    """Losslessly coerce a list of bullet strings into one JSON string.
+
+    Only a nonempty list of NONEMPTY strings may be normalized. The output
+    passes the exact same deterministic and semantic evidence guards as a
+    directly generated string. Never fill a missing answer with templates.
+    """
+    if not isinstance(proposal, dict):
+        return proposal, ()
+    result = dict(proposal)
+    normalized = []
+    steps = result.get("trace_summary")
+    if (isinstance(steps, list) and steps
+            and all(isinstance(item, str) and item.strip() for item in steps)):
+        result["trace_summary"] = "\n".join(
+            item.strip() if re.match(r"^(?:[-*]|\d+[.)])\s", item.strip())
+            else "- " + item.strip()
+            for item in steps
+        )
+        normalized.append("trace_summary")
+    summary = result.get("summary")
+    if (isinstance(summary, list) and len(summary) == 1
+            and isinstance(summary[0], str) and summary[0].strip()):
+        result["summary"] = summary[0].strip()
+        normalized.append("summary")
+    return result, tuple(normalized)
+
+
 
 def natural_public_context(context: str, instruction: str) -> str:
     """Preserve source handles but keep exact executable checks out of prose.
@@ -282,7 +323,16 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         "You are an Orchestra-o1 Sub-Agent writing a report to the Main Agent "
         "on the ASSIGNED SUBTASK only. The exact answer and public source facts "
         "have already been verified; do not alter them. "
-        "Return JSON with precisely two strings: summary and trace_summary. "
+        "STRICT JSON OUTPUT CONTRACT: Return exactly one JSON object with "
+        "exactly two keys. summary MUST be one nonempty JSON STRING; "
+        "trace_summary MUST be one nonempty JSON STRING, NOT A JSON ARRAY. "
+        "If the trace has multiple bullet steps, put ALL steps inside that "
+        "single string separated by escaped newline characters (\\n). "
+        "Never output a list, null, extra keys or markdown fences. "
+        "For example: "
+        '{"summary":"Alice matches the requested year.",'
+        '"trace_summary":"- Inspected the relevant reference.\\n- '
+        'Confirmed Alice matches the recorded year."}. '
         "SUMMARY: one or two direct sentences stating the result and the most "
         "relevant clue. Do not grade your performance or the whole Main problem. "
         "TRACE_SUMMARY: write 2-6 concise, connected bullets or short paragraphs "
@@ -306,8 +356,10 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         "evidence is REUSED, not newly fetched. For a pure aggregation task "
         "with no newly observed sources, discuss combining earlier results "
         "without inventing a search or code run. "
-        "Do not invent search queries, URLs, timestamps, transcripts, errors, "
-        "confidence scores, extra sources, new entities, relations or numbers. "
+        "Do not invent literal search queries, URLs, timestamps, "
+        "transcripts, errors, confidence scores, extra sources, new entities, "
+        "relations or numbers. Never expose internal observation keys or "
+        "claim IDs in the natural report. "
         "Avoid robotic FILTER_TYPE/INTERSECT operator logs, unsupported "
         "tool-action storytelling, and 'no errors/all checks completed' praise. "
         "When an important exact result has multiple entities, name them "
@@ -418,9 +470,18 @@ def feedback_output_diagnostic(proposal: Any) -> str:
 def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[str, str]:
     if not isinstance(proposal, dict) or set(proposal) != {"summary", "trace_summary"}:
         raise ValueError("invalid_natural_report_fields")
+    proposal, _ = normalize_feedback_shape(proposal)
     _language_guard(proposal["summary"], limit=600)
     _language_guard(proposal["trace_summary"], limit=1400)
     joined = proposal["summary"] + " " + proposal["trace_summary"]
+    if re.search(r"\b(?:observation[ _-]?key|claim[ _-]?id|claim_key)\b",
+                 joined, re.I):
+        raise ValueError("natural_report_leaks_internal_evidence_handle")
+    if re.search(r"\b(?:searched|searching|search)\s+(?:for|using)\s+"
+                 r"[\x27\x22\x60][^\x27\x22\x60]+[\x27\x22\x60]",
+                 joined, re.I):
+        # The frozen source witness has no original literal search query.
+        raise ValueError("unverified_literal_search_query")
     value = payload["fragment"]["expected_answer"]
     if isinstance(value, list) and len(value) <= 3:
         for item in value:
@@ -467,6 +528,18 @@ def feedback_reviewer_prompt(
         "factual evidence. Reject actions with no permitted source mapping, "
         "fabricated searches/queries, website URLs, media timestamps or "
         "unsupported facts, even if the final answer is correct. "
+        "Treat the verified_operations output values as authoritative "
+        "public-replay conclusions. A derived result from FIND, FILTER_TYPE, "
+        "COUNT, INTERSECT, UNION, SELECT_BETWEEN or a relation traversal "
+        "does NOT need to be separately stated verbatim in a source claim. "
+        "In a backward relation traversal, the operation reverses which "
+        "endpoint is being discovered; do not demand a source assertion "
+        "in the traversal direction if the underlying relation is recorded "
+        "in the opposite orientation. Still require every underlying factual "
+        "source assertion (such as a specific population/date/relation) to "
+        "be supported by the correct reference, and reject facts that "
+        "contradict verified operations. A search/discovery event by itself "
+        "does not support a factual claim. "
         "Do not require exact wording or literal operator names. "
         "Return JSON ONLY: "
         '{"grounded":true|false,"issues":["brief issue"]}. '
@@ -495,6 +568,7 @@ __all__ = [
     "natural_public_context", "main_writer_prompt", "main_single_task_prompt",
     "realize_main", "main_reviewer_prompt",
     "feedback_writer_prompt", "feedback_repair_prompt",
-    "feedback_output_diagnostic", "realize_feedback_natural",
+    "feedback_output_diagnostic", "SUBAGENT_REPORT_JSON_SCHEMA",
+    "normalize_feedback_shape", "realize_feedback_natural",
     "feedback_reviewer_prompt", "check_reviewer",
 ]
