@@ -75,10 +75,18 @@ class PublicQualityTests(unittest.TestCase):
     def test_audited_review_is_bound_to_exact_inputs(self):
         q,r,t=fixture();g=compile_gold_solution(q,r,t)
         rule={'task_id':q['task_id'],'question_sha256':digest(q['question']),'program_sha256':digest(r['program']),'reason':'audited mismatch'}
-        with patch('pathlib.Path.read_text',return_value=json.dumps([rule])):
+        with patch('pathlib.Path.is_file',return_value=True), patch('pathlib.Path.read_text',return_value=json.dumps([rule])):
             self.assertFalse(check_question(g,r,PassthroughPlanner())['eligible'])
             g['question']+=' revised';result=check_question(g,r,PassthroughPlanner())
             self.assertTrue(result['eligible']);self.assertFalse(result['reviewed'])
+
+    def test_missing_manual_review_file_does_not_fake_training_eligibility(self):
+        q,r,t=fixture();g=compile_gold_solution(q,r,t)
+        with patch('pathlib.Path.is_file',return_value=False):
+            status=check_question(g,r,PassthroughPlanner())
+        self.assertTrue(status['eligible'])
+        self.assertFalse(status['reviewed'])
+        self.assertEqual(status['method'],'offline_structure_only')
 
     def test_uncertain_question_is_quarantined(self):
         q,r,t=fixture();g=compile_gold_solution(q,r,t);role=Mock(offline=False,backend=Mock())
