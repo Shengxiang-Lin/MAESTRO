@@ -330,7 +330,7 @@ def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[
     allowed_tools = permitted_tool_names(plan)
     known_tools = set(tool_profile(payload["fragment"].get("scene", "omnigaia")).available)
     explicitly_mentioned = {tool for tool in known_tools
-                            if re.search(r"(?<!\\w)" + re.escape(tool) + r"(?!\\w)", joined)}
+                            if re.search(r"(?<!\w)" + re.escape(tool) + r"(?!\w)", joined)}
     if explicitly_mentioned - allowed_tools:
         raise ValueError("unverified_tool_action_claim:" +
                          ",".join(sorted(explicitly_mentioned - allowed_tools)))
