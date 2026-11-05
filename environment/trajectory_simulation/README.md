@@ -7,6 +7,41 @@ The frozen Stage-1 ProgramIR / Fragment DAG and accepted Stage-2 question
 supply the immutable semantics. The subtask answers always come from public
 source-replayed symbolic execution; the LLM writes only language.
 
+### Answer-blind simulated Web Search (newly constructed tasks)
+
+New `web_search` and `hybrid` tasks opt into
+`task_local_ranked_public_index_v1`. Stage 3 builds a **teacher-private
+search catalog** from ALL publicly rendered task sources, including
+distractor pages. Only the public Main question, its assigned task instruction,
+and snippets returned by earlier simulated searches may form queries.
+The ranker never accepts a Gold answer or Gold source list.
+
+`GoogleSearchAction` is simulated as query → deterministically ranked hits
+(title, resource handle, snippet) with pagination and bounded query expansion.
+The matching resources can then be inspected with the assigned O1 tool
+(`ExtractUrlContentAction`, `VideoAnalysisAction`, etc). Every Gold-required
+discoverable source must actually appear among independently retrieved hits
+before public Source replay can certify the subtask. Otherwise the world is
+quarantined with `public_search_witness_unreachable` rather than silently
+inserting the answer-bearing source. A Source from an actual initial attachment
+is inspected without a fabricated search.
+
+The Sub-Agent bank retains the logged simulated queries/hits in
+`simulated_tool_provenance.search_calls` and a private `search_audit`.
+Main prompt/history never receives the index or future search hits. The
+inspection set remains teacher-guided by the frozen proof AFTER retrieval;
+this is not an autonomous search-policy benchmark. It tests whether a
+public-only search *could locate* the necessary evidence, not whether an
+untrained agent would choose the same queries or click decisions. The corpus
+is local to each synthetic world and uses synthetic Wiki/YAGO aliases, not
+real online pages.
+
+Old frozen tasks lack the new retrieval policy and remain on the legacy
+replay pathway for reproducibility. To exercise web-first simulation, rebuild
+Task Construction/freeze and Stage 2 questions in a **new output workspace**,
+then rerun Stage 3. Merely rerunning a Stage-3 command on an existing v6 Bank
+does not retrofit historical search actions.
+
 ### Candidate discovery is not an initially supplied roster
 
 An unbound `FIND_ALL` or `FIND`-by-type operation starts with **unknown
