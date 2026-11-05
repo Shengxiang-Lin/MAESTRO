@@ -84,6 +84,21 @@ class ConstructionRegressions(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertIn('synthetic_identifier_leak',result.issues)
 
+    def test_stage2_prompts_preserve_explicit_public_starting_anchors(self):
+        from environment.question_generation.prompts import author_prompt, critic_prompt
+        payload = {
+            "draft_question": (
+                "Which Way is connected through the city named after "
+                "Kingswell Airport whose IATA code is BQG?"
+            ),
+            "terminal_contract": {},
+        }
+        self.assertIn("explicitly named public starting entity",
+                      author_prompt(payload))
+        self.assertIn("public starting entity",
+                      critic_prompt(payload, payload["draft_question"]))
+        self.assertIn("IATA code", critic_prompt(payload, payload["draft_question"]))
+
     def test_stage2_critic_cannot_approve_with_remaining_ownership_issues(self):
         from environment.question_generation.prompts import author_prompt,critic_prompt
         from environment.question_generation.backend import PassthroughAuthorBackend
