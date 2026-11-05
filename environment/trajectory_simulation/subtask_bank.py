@@ -324,4 +324,104 @@ def build_subtask_bank(
     }
 
 
-__all__=["build_subtask_bank"]
+
+def generate_subtasks_jsonl(
+    worlds_path, realized_path, output_path, *,
+    reviewer, executor, max_records=None, seed=17, scene="omnigaia",
+    schedule="compact", feedback_workers=4,
+    rejected_output_path=None, quarantine_output_path=None, progress=True,
+):
+    """Complete Phase 1 and persist reusable teacher-private Subtask Banks.
+
+    This phase calls the question reviewer and Sub-Agent language model only.
+    It does NOT generate any natural Main delegation or training target.
+    Phase 2 reads the output independently, without worlds or Stage-2 files.
+    """
+    import json
+    import traceback
+    from collections import Counter
+    from pathlib import Path
+    from tqdm.auto import tqdm
+    from .eligibility import digest
+    from .pipeline import _rows, _world_map, protect_paths
+
+    rows=_rows(realized_path)
+    if max_records is not None:
+        rows=rows[:max_records]
+    worlds=_world_map(worlds_path,seed=seed)
+    output=Path(output_path)
+    rejected=Path(rejected_output_path) if rejected_output_path else Path(str(output)+".rejected.jsonl")
+    quarantined=Path(quarantine_output_path) if quarantine_output_path else Path(str(output)+".quarantine.jsonl")
+    protect_paths([worlds_path,realized_path],[output,rejected,quarantined])
+    if len({p.resolve() for p in (output,rejected,quarantined)})!=3:
+        raise ValueError("Phase-1 output paths must be distinct")
+    for p in (output,rejected,quarantined):
+        p.parent.mkdir(parents=True,exist_ok=True)
+    stats=Counter()
+    reasons=Counter()
+    with output.open("w",encoding="utf-8") as good, rejected.open(
+        "w",encoding="utf-8"
+    ) as bad, quarantined.open("w",encoding="utf-8") as isolate:
+        for row in tqdm(rows,desc="Phase 1: correct Sub-Agent reports",unit="task",disable=not progress):
+            task_id=str(row.get("task_id",""))
+            try:
+                if task_id not in worlds:
+                    raise GoldTrajectoryError("input",["missing_matching_world"])
+                world,rendered=worlds[task_id]
+                bank=build_subtask_bank(
+                    row,world,rendered,planner=reviewer,executor=executor,
+                    scene=scene,schedule=schedule,feedback_workers=feedback_workers,
+                )
+                if not (bank["eligibility"].get("eligible") and bank["eligibility"].get("reviewed")):
+                    raise GoldTrajectoryError(
+                        "question_eligibility",["semantic_review_not_confirmed"]
+                    )
+                payload=json_value(bank)
+                record={"format":"maestro.clean_subtasks.v1","bank":payload}
+                record["sha256"]=digest(record)
+                good.write(json.dumps(record,ensure_ascii=False)+"\n")
+                good.flush()
+                stats["accepted"]+=1
+                stats["subtasks"]+=len(payload["fragments"])
+                stats["natural_feedback"]+=sum(
+                    bool(item["natural_feedback"])
+                    for item in payload["fragments"].values()
+                )
+                stats["waves"]+=len(payload["waves"])
+            except (GoldTrajectoryError,ValueError,KeyError,TypeError) as exc:
+                stage=exc.stage if isinstance(exc,GoldTrajectoryError) else "unexpected_error"
+                quarantine=stage in {
+                    "question_eligibility","public_replay","public_executability",
+                }
+                dest=isolate if quarantine else bad
+                stats["quarantined" if quarantine else "rejected"]+=1
+                reasons[stage]+=1
+                dest.write(json.dumps({
+                    "task_id":task_id,"reason":stage,
+                    "issues":exc.issues if isinstance(exc,GoldTrajectoryError)
+                             else [f"{type(exc).__name__}: {exc}"],
+                    "audit":exc.audit if isinstance(exc,GoldTrajectoryError)
+                            else {"traceback":traceback.format_exc(limit=8)},
+                },ensure_ascii=False)+"\n")
+                dest.flush()
+    return {
+        "phase":"subtasks","requested":len(rows),
+        "accepted_banks":stats["accepted"],
+        "quarantined":stats["quarantined"],"rejected":stats["rejected"],
+        "subtasks":stats["subtasks"],"gold_waves":stats["waves"],
+        "natural_feedback_count":stats["natural_feedback"],
+        "natural_feedback_rate":stats["natural_feedback"]/stats["subtasks"]
+                                  if stats["subtasks"] else 0.0,
+        "reasons":dict(reasons),
+        "request_counts":{
+            "question_review":dict(getattr(reviewer,"request_counts",{})),
+            "subagent":dict(getattr(executor,"request_counts",{})),
+        },
+        "output":str(output),
+        "rejected_output":str(rejected),
+        "quarantine_output":str(quarantined),
+    }
+
+
+__all__=["build_subtask_bank","generate_subtasks_jsonl"]
+
