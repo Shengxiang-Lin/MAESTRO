@@ -316,6 +316,105 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         '{"summary":"...","trace_summary":"..."}.\n' + _json(public)
     )
 
+def feedback_repair_prompt(
+    payload: Mapping[str, Any], canonical: Mapping[str, Any],
+) -> str:
+    """A much smaller evidence-complete prompt for malformed/empty JSON retry.
+
+    Only predicates used in the verified operations are retained from each
+    source; if there is no predicate lookup (e.g. a pure FIND or aggregation),
+    the verified step inputs/outputs carry the exact reasoning contract.
+    Fallback claims provide a little context without dumping irrelevant
+    entity-wide metadata. No new/private evidence is introduced.
+    """
+    from .tool_provenance import source_evidence_guide
+
+    fragment = payload["fragment"]
+    plan = payload.get("tool_provenance") or {"steps": []}
+    predicates = {
+        str(op["inputs"][0])
+        for op in fragment["operations"]
+        if op.get("inputs") and op["op"] in {
+            "FILTER_STRING", "FILTER_NUMBER", "FILTER_DATE", "FILTER_YEAR",
+            "FILTER_ATTR", "FILTER_VALUE", "RELATE", "QUERY_ATTR",
+            "QUERY_RELATION", "VERIFY_ATTR", "VERIFY_RELATION",
+        }
+    }
+    sources = []
+    for item in source_evidence_guide(fragment, plan):
+        claims = item["claims"]
+        relevant = [claim for claim in claims
+                    if str(claim.get("predicate")) in predicates]
+        # A FIND-only task can have no relation predicates at all; do not
+        # send zero context to the writer for a source-backed identification.
+        if not predicates:
+            relevant = claims[:4]
+        sources.append({
+            "id": item["source_id"],
+            "type": item["source_type"],
+            "access": item["source_access"],
+            "tools": item["permitted_tools"],
+            "facts": [{
+                "s": c.get("subject"), "p": c.get("predicate"),
+                "o": c.get("object"),
+            } for c in relevant],
+        })
+    public = {
+        "assigned_subtask": payload["task_instruction"],
+        "fixed_answer": fragment["expected_answer"],
+        "relevant_public_source_facts": sources,
+        "verified_steps": [{
+            "op": op["op"], "args": op["inputs"],
+            "inputs": result.get("input_values", []),
+            "result": result["answer"],
+        } for op, result in zip(
+            fragment["operations"], fragment["operation_results"]
+        )],
+    }
+    return (
+        "Write the O1 Sub-Agent's brief report for this assigned task. "
+        "Your previous JSON response was empty or invalid. "
+        "BOTH required fields must be NONEMPTY strings, not null or placeholders. "
+        "Use exactly this structure: "
+        '{"summary":"A concrete supported finding.",'
+        '"trace_summary":"Examined the available evidence, verified the '
+        'relevant constraints, and returned the exact supported result."}. '
+        "Write the REAL task's findings, not the example's generic wording. "
+        "summary: 1-2 factual sentences with the exact answer. "
+        "trace_summary: 2-4 short bullets explaining relevant source/tool "
+        "inspection if permitted, observed facts, verification and conclusion. "
+        "Use natural tool verbs, NOT mandatory class names. "
+        "Tools are SIMULATED witness-supported steps, not actual live calls. "
+        "If no source inspection is permitted, describe reuse of previous "
+        "results instead. Do not invent sources, tool calls, entities, dates, "
+        "numbers, search queries, URLs or timestamps. "
+        "Only use the following verified public facts; JSON ONLY.\n"
+        + _json(public)
+    )
+
+
+def feedback_output_diagnostic(proposal: Any) -> str:
+    """Privacy-preserving format diagnostics, safe in the private bank audit."""
+    if not isinstance(proposal, dict):
+        return "response=" + type(proposal).__name__
+    fields = []
+    for name in ("summary", "trace_summary"):
+        value = proposal.get(name)
+        if value is None:
+            status = "null" if name in proposal else "missing"
+        elif not isinstance(value, str):
+            status = type(value).__name__
+        elif not value.strip():
+            status = "blank"
+        else:
+            status = "text(" + str(len(value)) + ")"
+        fields.append(name + "=" + status)
+    extras = set(proposal) - {"summary", "trace_summary"}
+    if extras:
+        fields.append("extra_keys=" + str(len(extras)))
+    return ";".join(fields)
+
+
 def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[str, str]:
     if not isinstance(proposal, dict) or set(proposal) != {"summary", "trace_summary"}:
         raise ValueError("invalid_natural_report_fields")
@@ -395,6 +494,7 @@ def check_reviewer(verdict: Any, *, flag: str) -> None:
 __all__ = [
     "natural_public_context", "main_writer_prompt", "main_single_task_prompt",
     "realize_main", "main_reviewer_prompt",
-    "feedback_writer_prompt", "realize_feedback_natural",
+    "feedback_writer_prompt", "feedback_repair_prompt",
+    "feedback_output_diagnostic", "realize_feedback_natural",
     "feedback_reviewer_prompt", "check_reviewer",
 ]
