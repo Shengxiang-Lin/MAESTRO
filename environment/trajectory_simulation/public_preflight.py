@@ -56,6 +56,17 @@ def audit_public_executability(plan: Mapping[str, Any]) -> dict[str, Any]:
             }
         if not ready:
             if len(completed) == len(fragments):
+                final_id = plan.get("final_fragment_id")
+                final_result = previous.get(final_id, {}).get("value")
+                if final_id not in previous or not answers_equal(
+                    final_result, plan["final_answer"], plan["answer_contract"]
+                ):
+                    return {
+                        "publicly_executable": False,
+                        "reason": "public_final_answer_disagrees_with_gold",
+                        "final_fragment_id": final_id,
+                        "round": round_no, "checked_fragments": len(checks),
+                    }
                 return {
                     "publicly_executable": True, "checked_rounds": round_no - 1,
                     "checked_fragments": len(checks),
