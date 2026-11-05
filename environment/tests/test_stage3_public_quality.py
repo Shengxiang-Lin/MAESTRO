@@ -5,7 +5,7 @@ from environment.tests.test_gold_trajectory import fixture
 from environment.tests.test_bound_realization import branch_fixture
 from environment.trajectory_simulation.pipeline import synthesize_one,protect_paths,_stage
 from environment.trajectory_simulation.backend import PassthroughPlanner,PassthroughExecutor,LLMPlanner
-from environment.trajectory_simulation.evidence import read_packet,MARKER
+from environment.trajectory_simulation.evidence import read_packet,verify_known_packet,MARKER
 from environment.trajectory_simulation.replay import replay_task
 from environment.trajectory_simulation.exporter import export_episode,validate_public_episode
 from environment.trajectory_simulation.eligibility import check_question,digest
@@ -27,18 +27,24 @@ def mark_reviewed(row):
 
 class PublicQualityTests(unittest.TestCase):
     def test_reused_measurement_is_available_to_fresh_subagent(self):
-        row=episode();step=row['trajectory'][-2];task=step['params']['tasks'][0];packet=read_packet(task)
+        row=episode();step=row['trajectory'][-2];task=step['params']['tasks'][0]
+        cache=step['state_before']['evidence_store']
+        packet=read_packet(task);expanded=verify_known_packet(task,cache)
         self.assertEqual(task['tools'],['ExecuteCodeAction'])
-        self.assertTrue(any(f['predicate']=='height' and f['object']==175 for record in packet['known_records'] for f in record['claims']))
-        self.assertIn('First reference',task['context']);self.assertEqual(replay_task(task,[])['result'],[175])
+        self.assertEqual(packet['version'],2)
+        self.assertTrue(any(f['predicate']=='height' and f['object']==175
+                            for record in expanded['known_records'] for f in record['claims']))
+        self.assertLess(len(task['context']),1700)
+        self.assertIn('First reference',task['context'])
+        self.assertEqual(replay_task(task,[],public_cache=cache)['result'],[175])
         self.assertEqual(row['trajectory'][0]['state_before']['evidence_store'],{})
         self.assertTrue(step['state_before']['evidence_store']);validate_public_episode(row,require_training=False)
 
     def test_missing_cached_measurement_cannot_be_filled_from_gold(self):
         row=mark_reviewed(episode());task=row['trajectory'][-2]['params']['tasks'][0];packet=read_packet(task)
-        for record in packet['known_records']:record['claims']=[f for f in record['claims'] if f['predicate']!='height']
+        packet['known_resource_ids'].append('future_unpublished_source')
         task['context']=task['context'].split(MARKER)[0]+MARKER+json.dumps(packet)
-        with self.assertRaisesRegex(ValueError,'altered cached evidence'):export_episode(row)
+        with self.assertRaisesRegex(ValueError,'unpublished or altered cached evidence'):export_episode(row)
 
     def test_parallel_siblings_cannot_see_future_results(self):
         row=mark_reviewed(episode());first=row['trajectory'][0]
