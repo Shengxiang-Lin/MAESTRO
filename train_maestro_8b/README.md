@@ -45,22 +45,25 @@ The original Qwen LM head is retained. The two new heads read the hidden state o
 
 One episode/trajectory can be projected into different supervision views.
 
-### Clean teacher-forced Main rounds (recommended starting point)
+### Clean teacher-forced Main rounds (recommended)
 
-The frozen Stage-1 ProgramIR and Stage-2 accepted question define the
-correct Fragment DAG. Stage 3 now first builds a **source-backed Subtask Bank**
-(all correct task instructions, symbolic answers, and grounded Sub-Agent
-summaries), then composes Main states from topologically earlier feedback.
-The student learns one `(Main prompt, O1 JSON action)` per selected decision
-round. **No full episode is required** to accept that row.
+Stage 3 has two **separate, sequential invocations**. First generate a complete
+Sub-Agent feedback bank with public-source-verified exact answers and grounded
+natural `summary` / `trace_summary` for every subtask. Only after that
+is complete should you use the bank to compose Main scheduling SFT examples.
 
 ```bash
-python environment/simulate_trajectories.py rounds \
-  --scene omnigaia --provider openai-compatible \
-  --style-provider natural --schedule compact \
-  --max-records 100 --output work/clean_main_rounds_100.jsonl \
-  --bank-output work/private_subtask_bank_100.jsonl
+# Phase 1: correct Sub-Agent feedback (can be inspected/reused independently).
+python environment/simulate_trajectories.py subtasks \
+  --provider openai-compatible --schedule compact \
+  --max-records 100 --output work/subtasks_100.jsonl
 
+# Phase 2: only bank input, never regenerate Sub-Agent feedback.
+python environment/simulate_trajectories.py rounds \
+  --provider openai-compatible --bank work/subtasks_100.jsonl \
+  --output work/clean_main_rounds_100.jsonl
+
+# Train the clean Main.
 accelerate launch -m train_maestro_8b.train_stage1 \
   --model /path/to/Qwen3-8B \
   --train_file work/clean_main_rounds_100.jsonl \
@@ -68,21 +71,18 @@ accelerate launch -m train_maestro_8b.train_stage1 \
   --gradient_checkpointing
 ```
 
-The JSONL is **already in Stage-1 training schema**. It needs no additional
-episode export. Private bank JSONL is for teacher audit only; it must not
-be provided to the Main Agent. Gold results and evidence are revealed to
-the Main state strictly in already-completed wave order.
+The Main dataset already matches the Stage-1 training schema and uses the
+real O1 Main prompt. It contains one label per selected Main decision round;
+no complete episode is required. Phase 1 is teacher-private and must not be
+provided to the Main as input. Its full Gold DAG, results and public evidence
+are released to simulated Main states in causal topological order only.
 
-Clean-data macro targets are only `advance` / `complete`. Do not invent
-`verify`, `retry`, `switch` or `rollback` labels before erroneous Sub-Agent
-feedback and actual interventions are generated and evaluated.
-
-A rejected natural rewrite falls back to its correct canonical wording to
-build subsequent history. In strict default mode, a current Main delegation
-with such fallback is **not** exported as a natural SFT target; use
-`--include-fallback-rounds` only for separate controlled experiments.
-The Sub-Agent's exact answers remain correct regardless of language fallback.
-To avoid leakage, split by task or source World before sampling rounds.
+The clean macro labels are `advance` / `complete`; error intervention
+labels will be trained later from actual erroneous Sub-Agent histories.
+Natural delegation rewrites that fail strict checks still provide valid
+teacher histories but are omitted as SFT targets by default. Use
+`--include-fallback-rounds` only to evaluate template-target baselines.
+Split by task or source World before sampling rounds to avoid leakage.
 
 ### Stage 1: LM + macro supervision
 
