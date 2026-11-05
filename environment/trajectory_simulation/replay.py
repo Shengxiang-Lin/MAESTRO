@@ -26,7 +26,7 @@ def replay_task(task,new_observations=(),*,public_cache=None):
     # A v2 handle without a supplied public cache must never resolve through
     # private Gold state or silently skip the missing evidence.
     raw=read_packet(task)
-    if raw['version']==2 and public_cache is None:
+    if raw['version'] in (2,3) and public_cache is None:
         raise ValueError('public evidence cache required for referenced task packet')
     packet=(verify_known_packet(task,public_cache)
             if public_cache is not None else raw)
@@ -74,7 +74,8 @@ def replay_task(task,new_observations=(),*,public_cache=None):
     def as_set(value):return value if isinstance(value,set) else set(value) if isinstance(value,list) else {value}
     def attrs(candidates,predicate):
         return [(f['subject'],f['object']) for f in facts if f['subject'] in as_set(candidates) and f['predicate']==predicate and f['object_kind']!='entity']
-    lines=re.findall(r'^\d+\. (.+)$',task['task_instruction'],re.M)
+    checks=packet['execution_checks'] if packet['version']==3 else task['task_instruction']
+    lines=re.findall(r'^\d+\. (.+)$',checks,re.M)
     if not lines:raise ValueError('public task has no executable instruction list')
     for original in lines:
         line,refs=replace_refs(original);deps=[]

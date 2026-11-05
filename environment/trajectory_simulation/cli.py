@@ -103,7 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--provider", choices=("passthrough", "openai-compatible"),
         default="passthrough",
     )
-    synth.add_argument("--style-provider",choices=("llm","template"),default="llm")
+    synth.add_argument(
+        "--style-provider",choices=("natural","llm","template"),default="natural",
+        help="natural: LLM writes/reviews fluent O1 prose with canonical replay and safe fallback; "
+             "llm: LLM selects verified fixed variants; template: offline-style fixed variants",
+    )
     synth.add_argument("--style-seed",type=int,default=17)
     synth.add_argument("--base-url")
     synth.add_argument("--model", help="override both role model names")
