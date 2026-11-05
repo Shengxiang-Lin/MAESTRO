@@ -163,16 +163,23 @@ def unsupported_tool_actions(text: str, plan: Mapping[str, Any]) -> set[str]:
             r"searched (?:the web|online)|performed (?:a )?search)\b"
         ),
         "VideoAnalysisAction": (
-            r"\b(?:analy[sz]ed|examined|inspected|reviewed)\s+(?:the |a |supplied )?"
-            r"(?:video|footage|clip|video frames?)\b"
+            r"\b(?:analy[sz]ed|examined|inspected|reviewed)\s+"
+            r"(?:the |a |an )?(?:supplied |attached |provided )?"
+            r"(?:video|footage|clip|video frames?)\b|"
+            r"\b(?:video|clip|footage)\s+(?:was |were )?"
+            r"(?:analy[sz]ed|examined|inspected|reviewed)\b"
         ),
         "ImageAnalysisAction": (
-            r"\b(?:analy[sz]ed|examined|inspected)\s+(?:the |a |supplied )?"
+            r"\b(?:analy[sz]ed|examined|inspected)\s+"
+            r"(?:the |a |an )?(?:supplied |attached |provided )?"
             r"(?:image|photo|photograph|picture)\b"
         ),
         "ParseAudioAction": (
-            r"\b(?:transcribed|listened to|analy[sz]ed)\s+(?:the |a |supplied )?"
-            r"(?:audio|recording|speech)\b"
+            r"\b(?:transcribed|listened to|analy[sz]ed)\s+"
+            r"(?:the |a |an )?(?:supplied |attached |provided )?"
+            r"(?:audio|recording|speech)\b|"
+            r"\b(?:(?:audio|speech) )?recording\s+(?:was |were )?"
+            r"(?:transcribed|analy[sz]ed)\b"
         ),
         "ExtractUrlContentAction": (
             r"\b(?:extracted|opened|fetched)\s+(?:the |a |an |supplied )?"
