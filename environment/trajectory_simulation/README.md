@@ -41,6 +41,16 @@ Every fragment is evaluated on a reachable, decision-complete evidence witness.
 Acquisition is AND over required anchors and OR over their providers. Read order
 respects those anchors. Previously read evidence is marked as reused.
 
+**Public entity universe:** Stage-1's private `world.entities` can contain
+synthetic distractors with no Source evidence. Public Replay has never seen
+those entities; its FIND_ALL and type enumeration operate on entities actually
+named in published source claims. Witness compilation now projects the same
+source-backed entity domain, and stores **publicly projected intermediate
+values** for replay validation. It still requires coverage of every
+source-observable candidate, full decision-information checks, and exact
+agreement with the unmodified private final answer. If invisible entities
+change the answer, the Gold task is rejected rather than fabricated.
+
 Uncomposed independent operands of a join are separate tasks rather than being
 hidden inside one terminal task. Only the actual join and final calculation wait
 for their operands. Non-root shared intermediates have explicit result bindings.
