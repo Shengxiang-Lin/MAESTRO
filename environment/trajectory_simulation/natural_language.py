@@ -257,6 +257,43 @@ def realize_main(
             )
             if _numbers(candidate) - allowed:
                 raise ValueError(f"natural_task_unsupported_number:{i}")
+            # The Gold verifier may inspect future FIND_ALL/type outputs to
+            # detect answer leakage, but the natural Main writer cannot see
+            # those values. Legitimate names already in the question or
+            # published earlier Sub-Agent reports are always permitted.
+            public_names = (
+                payload["public_state"]["question"]
+                + " " + task["task_instruction"]
+                + " " + " ".join(
+                    str(item.get("answer", "")) + " " + str(item.get("summary", ""))
+                    for item in payload.get("completed_subtask_contracts", [])
+                )
+            )
+            for op, result in zip(
+                fragment.get("operations", []),
+                fragment.get("operation_results", []),
+            ):
+                if not (
+                    op["op"] == "FIND_ALL"
+                    or (op["op"] == "FIND" and op.get("find_kind") == "type")
+                ):
+                    continue
+                discovered = result.get("answer", [])
+                for entity in discovered if isinstance(discovered, list) else []:
+                    if (
+                        isinstance(entity, str) and entity
+                        and not re.search(
+                            r"(?<!\\w)" + re.escape(entity) + r"(?!\\w)",
+                            public_names, re.I,
+                        )
+                        and re.search(
+                            r"(?<!\\w)" + re.escape(entity) + r"(?!\\w)",
+                            candidate, re.I,
+                        )
+                    ):
+                        raise ValueError(
+                            "natural_task_pre_discloses_unfound_candidate"
+                        )
             task["context"] = natural_public_context(
                 task["context"], task["task_instruction"]
             )
@@ -287,7 +324,10 @@ def main_reviewer_prompt(
         "and requested output must remain the same. Natural paraphrases, intermediate "
         "step omission, and concise goal-based wording are allowed ONLY when the complete "
         "semantic computation is unambiguously preserved. No invented answer clues, dates, "
-        "resource facts or hidden future results. A task may ask for evidence without "
+        "resource facts or hidden future results. A discovery-root task must "
+        "identify its candidate entities from evidence; do not present a full "
+        "list as an initial input unless already stated in the public question "
+        "or the completed Sub-Agent history. A task may ask for evidence without "
         "asserting it was already obtained. Return JSON ONLY: "
         '{"equivalent":true|false,"issues":["brief reason"]}. '
         "If uncertain, equivalent=false.\n"
