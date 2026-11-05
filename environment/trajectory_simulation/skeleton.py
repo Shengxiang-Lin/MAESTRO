@@ -7,7 +7,8 @@ from .tools import tool_profile
 def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnigaia'):
     from .compiler import (GoldCompilationError, _ancestors, _subprogram,
         _minimal_witness, _maximal_dependencies, _public_inputs, _public_answer,
-        _source_claims, _same, json_value, ready_fragments)
+        _source_claims, _same, json_value, ready_fragments,
+        _evidence_world, _public_observable_entities)
     from .acquisition import resolve_dependencies
     from environment.task_construction.rendering.pipeline import program_from_dict, world_from_dict
     from environment.task_construction.executor import SymbolicExecutor
@@ -90,12 +91,23 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
                     raise GoldCompilationError(f'unbound operation input {dep} at {nid}')
             operations.append({'node_id':nid,'op':node.op,'dependencies':list(node.dependencies),'inputs':args,'input_bindings':bindings,'find_kind':'type' if node.op=='FIND' and node.inputs[0].startswith('type:') else 'entity'})
         subtree=_subprogram(p,out)
+        # Full-world FIND_ALL and type filters include distractors that have
+        # no frozen public evidence. These cannot be read by a real Sub-Agent.
+        # Require entity coverage only for the public source domain, then check
+        # the *whole fragment answer* against the original full-world oracle.
+        observable_entities=_public_observable_entities(w)
         entity_reads=set()
         for node in subtree.nodes:
             if node.op=='FIND_ALL' or (node.op=='FIND' and node.inputs[0].startswith('type:')):
-                entity_reads.update(trace[node.node_id])
-            if node.op=='FILTER_TYPE':entity_reads.update(trace[node.dependencies[0]])
+                entity_reads.update(set(trace[node.node_id]) & observable_entities)
+            if node.op=='FILTER_TYPE':
+                entity_reads.update(set(trace[node.dependencies[0]]) & observable_entities)
         witness=_minimal_witness(subtree,w,trace[out],dependencies,max_sources=max_sources,required_entity_ids=entity_reads)
+        # A step's public intermediate value must come from public evidence,
+        # not from invisible entities in the private symbolic universe.
+        public_trace=SymbolicExecutor().execute_trace(
+            subtree, _evidence_world(w,set(witness))
+        )
         inherited=set().union(*(support[x] for x in prev)) if prev else set()
         new_sources=sorted(set(witness)-inherited)
         observations=_source_claims(w,rendered,new_sources)
@@ -111,8 +123,8 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
         tools=sorted({tool for obs in observations for tool in profile.for_resource(obs)}) or list(profile.calculation)
         fragment={'fragment_id':fid,'stage':len(fragments),'output_node_id':out,
             'depends_on':prev,'operations':operations,
-            'operation_results':[{'node_id':nid,'answer':_public_answer(trace[nid],rendered,nodes[nid]),
-                'input_values':[_public_answer(trace[d],rendered,nodes[d]) for d in nodes[nid].dependencies]}
+            'operation_results':[{'node_id':nid,'answer':_public_answer(public_trace[nid],rendered,nodes[nid]),
+                'input_values':[_public_answer(public_trace[d],rendered,nodes[d]) for d in nodes[nid].dependencies]}
                 for nid in local_order],
             'resource_ids':new_sources,'support_resource_ids':witness,
             'observations':observations,'acquisition_waves':acquisition,
