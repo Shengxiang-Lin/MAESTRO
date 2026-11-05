@@ -208,7 +208,24 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
     for src in rendered.sources:
         if by_source[src.source_id].get('visibility') in {'attached','provided','initial','visible','provided_initial'}:
             provided.append({'resource_id':src.source_id,'source_type':src.source_type,'title':src.title})
+    # A search index is built from ALL public source documents, including
+    # distractors omitted from the minimal Gold witness. No answer labels,
+    # fragment-support sets or selected Gold sources enter the search ranker.
+    catalog=_source_claims(w,rendered,sorted(w.sources))
+    for source in catalog:
+        spec=by_source[source['resource_id']]
+        source['visibility']=spec.get('visibility','provided')
+        source['anchor_dependency_resource_ids']=list(
+            spec.get('anchor_dependency_resource_ids',[])
+        )
+    retrieval_policy=next((
+        spec.get('metadata',{}).get('retrieval_policy')
+        for spec in resources if isinstance(spec.get('metadata'),dict)
+        and spec['metadata'].get('retrieval_policy')
+    ),None)
     return {'task_id':tid,'question':question,'fragments':fragments,'waves':waves,
+        'search_catalog':catalog,'retrieval_policy':retrieval_policy,
+        'source_scenario':(realized.get('capability_world') or {}).get('mode','legacy'),
         'final_answer':json_value(rendered.answer),'final_fragment_id':cut_names[final],
         'answer_contract':{'operation':nodes[final].op,'collection_mode':
             'set' if nodes[final].op in {'QUERY_NAME','QUERY_RELATION','SELECT_BETWEEN','SELECT_AMONG'} else
