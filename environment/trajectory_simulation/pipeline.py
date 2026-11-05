@@ -222,7 +222,12 @@ def synthesize_one(
                         for original, rewritten in zip(
                             action["params"]["tasks"], candidate["params"]["tasks"]
                         ):
-                            if any(rewritten[k] != original[k] for k in ("tools", "model", "context")):
+                            from .natural_language import natural_public_context
+                            if (rewritten["tools"] != original["tools"]
+                                    or rewritten["model"] != original["model"]
+                                    or rewritten["context"] != natural_public_context(
+                                        original["context"], original["task_instruction"]
+                                    )):
                                 raise ValueError("natural_task_transport_changed")
                     elif candidate["params"] != action["params"]:
                         raise ValueError("natural_complete_answer_changed")
