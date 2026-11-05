@@ -185,6 +185,45 @@ class FragmentCompilationTests(unittest.TestCase):
         self.assertEqual(first["operations"][-1]["inputs"][1], "=")
         self.assertNotIn("<CMP:", json.dumps(private_guidance(gold, set())))
 
+    def test_compact_schedule_merges_linear_decisions_without_losing_gold(self):
+        baseline = compile_gold_solution(*fixture(dependent=True), schedule="baseline")
+        compact = compile_gold_solution(*fixture(dependent=True), schedule="compact")
+        self.assertGreater(len(baseline["waves"]), len(compact["waves"]))
+        self.assertEqual(compact["final_answer"], baseline["final_answer"])
+        self.assertEqual(compact["schedule"], "compact")
+
+    def test_witness_diagnostics_report_unobservable_entity(self):
+        from environment.trajectory_simulation.compiler import _minimal_witness
+        from environment.task_construction.rendering.pipeline import program_from_dict, world_from_dict
+        q, record, rendered = fixture()
+        program = program_from_dict(record["program"])
+        world = world_from_dict(record["world"])
+        with self.assertRaises(GoldCompilationError) as caught:
+            _minimal_witness(
+                program, world, {"B"}, {"s1": [], "s2": []},
+                max_sources=8, required_entity_ids=("unknown_ghost",),
+            )
+        self.assertEqual(str(caught.exception),
+                         "witness_required_entities_not_observable")
+        self.assertIn("unknown_ghost",
+                      caught.exception.diagnostics["unobservable_required_entity_ids"])
+
+    def test_witness_diagnostics_report_unsourced_fact(self):
+        from environment.trajectory_simulation.compiler import _minimal_witness
+        from environment.task_construction.rendering.pipeline import program_from_dict, world_from_dict
+        _, record, _ = fixture()
+        program = program_from_dict(record["program"])
+        world = world_from_dict(record["world"])
+        with self.assertRaises(GoldCompilationError) as caught:
+            _minimal_witness(
+                program, world, {"B"}, {"s1": [], "s2": []},
+                max_sources=8, required_fact_ids=("missing-fact",),
+            )
+        self.assertEqual(str(caught.exception),
+                         "witness_required_facts_not_in_sources")
+        self.assertIn("missing-fact",
+                      caught.exception.diagnostics["unsourced_required_fact_ids"])
+
     def test_missing_composition_metadata_rejected_without_fallback(self):
         question, world, rendered = fixture()
         world["program"]["metadata"] = {}
