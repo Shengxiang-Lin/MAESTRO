@@ -96,6 +96,9 @@ trajectory_simulation:
   realized: environment/data/questions_{pool_size}/realized_capability_worlds.jsonl
   output: environment/data/trajectories_{pool_size}.jsonl
   max_records: null
+  # Default to delegating meaningful multi-operation goals; preserve forks.
+  # Use --schedule baseline to inspect the original fragment-by-fragment graph.
+  schedule: compact
   planner_temperature: 0.2
   executor_temperature: 0.2
   max_tokens: 2048
