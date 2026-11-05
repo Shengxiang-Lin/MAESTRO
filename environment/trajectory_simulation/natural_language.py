@@ -304,7 +304,7 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         "'finished efficiently') and grading the whole Main problem; report "
         "only this assigned subtask. Never list FILTER_TYPE/INTERSECT as robotic "
         "operator logs if plain-language reasoning suffices. No hidden graph IDs, "
-        "new entities, numbers, dates, or unsupported causal conclusions. 
+        "new entities, numbers, dates, or unsupported causal conclusions. "
         "Do not change the fixed result. Return JSON ONLY: "
         '{"summary":"...","trace_summary":"..."}.\n' + _json(public)
     )
@@ -366,7 +366,7 @@ def feedback_reviewer_prompt(
         "does not prove a fact; attribute factual claims to source observations. "
         "Reject invented calls, search phrases, video timestamps, errors, or "
         "unsupported attribution. Natural prose and concise omission of irrelevant "
-        "steps are fine; do not require literal 
+        "steps are fine; do not require literal "
         "operator names or exact quotation. Return JSON ONLY: "
         '{"grounded":true|false,"issues":["brief reason"]}. '
         "If uncertain, grounded=false.\n"
