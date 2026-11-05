@@ -24,6 +24,31 @@ frozen public authoring projection
 
 The symbolic executor is authoritative for task truth. LLMs are not used in this package.
 
+## Web-first acquisition and native O1 tool boundaries
+
+New frozen tasks identify one of three evidence scenarios:
+
+- `web_search`: all sources are `text/search/table/database`. No candidate
+  roster or first reference is initially given. The public question is the
+  search entry point; all Source records are discoverable.
+- `hybrid`: a genuine multimedia/reference clue may be initially
+  attached/provided; subsequent sources are discovered via search.
+- `provided_media`: media-only evidence retains an initial media input,
+  rather than being falsely presented as an open-web search.
+
+The resulting capability topology keeps source modality, visibility,
+`search_then_inspect` or `provided_input` access mode, and O1-compatible
+tool families distinct. All six native O1 tools remain globally available;
+the Main agent selects a relevant subset for each Sub-Agent.
+
+The `public_question` search bootstrap certifies only *potential* source
+availability, not successful retrieval. Stage 3 independently indexes ALL
+rendered public source records and verifies query-dependent discoverability
+before accepting a task. Do not count this bootstrap as a real Google tool call
+or as proof of real-world web discoverability. Wiki/YAGO-derived entity aliases
+are synthetic, and the mock index is a bounded task-local evidence corpus.
+
+
 Run from the repository root:
 
 ```bash

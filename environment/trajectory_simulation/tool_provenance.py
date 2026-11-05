@@ -18,6 +18,7 @@ from .tools import tool_profile
 
 def reconstruct_tool_observations(
     fragment: Mapping[str, Any],
+    search_audit: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     profile = tool_profile(fragment.get("scene", "omnigaia"))
     fresh = {item["resource_id"]: item for item in fragment.get("observations", [])}
@@ -27,6 +28,21 @@ def reconstruct_tool_observations(
 
     steps = []
     emitted = set()
+    discovered = (
+        set(search_audit["discovered_source_ids"])
+        if search_audit is not None else None
+    )
+    search_queries = {}
+    if search_audit is not None:
+        from .search_simulator import verify_retrieved_witnesses
+        verify_retrieved_witnesses(
+            search_audit, fragment.get("observations", [])
+        )
+        for call in search_audit.get("calls", []):
+            for hit in call.get("hits", []):
+                search_queries.setdefault(
+                    hit["resource_id"],call["query"]
+                )
 
     def append_fresh(item: Mapping[str, Any]) -> None:
         source_id = item["resource_id"]
@@ -38,6 +54,9 @@ def reconstruct_tool_observations(
         if not set(actions) <= allowed:
             raise ValueError(f"tool_not_assigned_for_public_source:{source_id}")
         for tool in actions:
+            if (tool in profile.search and discovered is not None
+                    and source_id not in discovered):
+                raise ValueError("search_tool_missing_observed_hit:" + source_id)
             steps.append({
                 "kind": "source_discovery" if tool in profile.search
                         else "source_inspection",
@@ -75,8 +94,16 @@ def reconstruct_tool_observations(
             ],
         })
     return {
-        "origin": "reconstructed_from_frozen_public_witnesses",
+        "origin": ("independent_public_search_index_and_frozen_inspection"
+                   if search_audit is not None
+                   else "reconstructed_from_frozen_public_witnesses"),
         "live_tool_calls": False,
+        "ranking_uses_gold_witness": (
+            False if search_audit is not None else None
+        ),
+        "search_calls": (
+            search_audit.get("calls", []) if search_audit is not None else []
+        ),
         "steps": steps,
     }
 

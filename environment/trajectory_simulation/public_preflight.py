@@ -26,6 +26,8 @@ def _reason(error: Exception) -> str:
         return "unavailable_predecessor_result"
     if "unknown" in message and "evidence" in message:
         return "unpublished_evidence_reference"
+    if "public_search_could_not_discover_required_source" in message:
+        return "public_search_witness_unreachable"
     if "unrecognized public instruction" in message or "unexecutable identification clue" in message:
         return "public_instruction_not_executable"
     return "public_replay_failed"
@@ -108,6 +110,22 @@ def audit_public_executability(plan: Mapping[str, Any]) -> dict[str, Any]:
                     guidance["ready"][task_index], previous, visible_resources, cache
                 )[0]
                 verify_known_packet(task, cache)
+                if plan.get("retrieval_policy")=="task_local_ranked_public_index_v1":
+                    from .search_simulator import (
+                        simulate_search, verify_retrieved_witnesses,
+                    )
+                    search_audit=simulate_search(
+                        plan["search_catalog"],
+                        public_question=plan["question"],
+                        public_task=task["task_instruction"],
+                        already_known_ids=list(cache)+[
+                            item["resource_id"]
+                            for item in plan.get("provided_resources", [])
+                        ],
+                    )
+                    verify_retrieved_witnesses(
+                        search_audit,fragment["observations"]
+                    )
                 observed = [public_record(o) for o in fragment["observations"]]
                 replay = replay_task(task, observed, public_cache=cache)
                 mode = "multiset" if fragment["operations"][-1]["op"] == "QUERY_ATTR" else "set"
