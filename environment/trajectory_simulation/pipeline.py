@@ -266,7 +266,7 @@ def synthesize_one(
                 try:
                     verify_known_packet(assigned,evidence_cache)
                     observed=[public_record(o) for o in fragment['observations']]
-                    replay=replay_task(assigned,observed)
+                    replay=replay_task(assigned,observed,public_cache=evidence_cache)
                     contract={'collection_mode':'multiset' if fragment['operations'][-1]['op']=='QUERY_ATTR' else 'set'}
                     if not answers_equal(json_value(replay['result']),fragment['expected_answer'],contract):
                         raise ValueError('public task result does not reproduce the frozen subtask answer')
