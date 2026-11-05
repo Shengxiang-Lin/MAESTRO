@@ -104,7 +104,7 @@ def _evidence_world(world: Any, source_ids: set[str]) -> Any:
     fact_ids = {fid for source in subset.sources.values() for fid in source.fact_ids}
     subset.facts = [
         fact for fact in world.facts
-        if fact.fact_id in fact_ids or fact.source_id in source_ids
+        if fact.fact_id in fact_ids
     ]
     observable = {fact.subject for fact in subset.facts} | {
         str(fact.object) for fact in subset.facts if fact.object_kind == "entity"
@@ -123,7 +123,7 @@ def _public_observable_entities(world: Any) -> set[str]:
     }
     visible_facts = [
         fact for fact in world.facts
-        if fact.fact_id in sourced or fact.source_id in world.sources
+        if fact.fact_id in sourced
     ]
     return {fact.subject for fact in visible_facts} | {
         str(fact.object) for fact in visible_facts if fact.object_kind == "entity"
@@ -186,8 +186,6 @@ def _minimal_witness(
     }
     all_fact_ids = {
         fid for source in world.sources.values() for fid in source.fact_ids
-    } | {
-        f.fact_id for f in world.facts if f.source_id in world.sources
     }
     diagnostics = {
         "output_node_id": subprogram.topological_order()[-1],
