@@ -73,6 +73,89 @@ class CandidateDiscoveryTests(unittest.TestCase):
         self.assertIn("Enumerated candidate entities",result)
         self.assertNotIn("all supplied records",result)
 
+    def test_public_replay_uses_only_source_entities_for_discovery_root(self):
+        from environment.trajectory_simulation.replay import replay_task
+
+        observations=[{
+            "resource_id":"source_01","source_type":"text",
+            "title":"Reference 1","entity_types":{
+                "Dunhaven":"Administrative Area",
+                "Maplevale":"Administrative Area",
+                "Unrelated":"Event",
+            },
+            "claims":[],
+        }]
+        fragments=[
+            ({"op":"FIND_ALL","inputs":[],"input_bindings":[]},
+             {"Dunhaven","Maplevale","Unrelated"}),
+            ({"op":"FIND","find_kind":"type",
+              "inputs":["Administrative Area"],"input_bindings":[]},
+             {"Dunhaven","Maplevale"}),
+        ]
+        for op,expected in fragments:
+            fragment={"operations":[op],
+                      "suggested_tools":["ExtractUrlContentAction"]}
+            task=task_variants(fragment,{},public_cache={})[0]
+            result=replay_task(task,observations,public_cache={})
+            self.assertEqual(result["result"],expected)
+            self.assertNotIn("Dunhaven",task["task_instruction"])
+            malicious={**task,"task_instruction":(
+                task["task_instruction"].replace(
+                    "1. ","1. Start from an arbitrary named list: Dunhaven. ",
+                    1,
+                )
+            )}
+            with self.assertRaises(ValueError):
+                replay_task(malicious,observations,public_cache={})
+
+    def test_main_naturalization_rejects_unknown_future_candidate_names(self):
+        from environment.tests.test_natural_language import main_payload
+        from environment.trajectory_simulation.natural_language import realize_main
+
+        payload,canonical=main_payload()
+        root={
+            "op":"FIND_ALL","inputs":[],"input_bindings":[],
+        }
+        payload["gold_guidance"]["ready"][0]["operations"]=[
+            root,{"op":"FILTER_YEAR","inputs":["r:birth","=","1912"]},
+        ]
+        payload["gold_guidance"]["ready"][0]["operation_results"]=[
+            {"answer":["Dunhaven","Maplevale"]},
+            {"answer":["Maplevale"]},
+        ]
+        original=canonical["params"]["tasks"][0]
+        original["task_instruction"]=(
+            "Discover the entities in the relevant sources, then "
+            "check which have r:birth equal to 1912."
+        )
+        payload["public_state"]["question"]=(
+            "Which entities documented in the reference materials have "
+            "a recorded birth year equal to 1912?"
+        )
+        invented=(
+            "Start with Dunhaven and Maplevale as the two initial candidates, "
+            "and return those whose r:birth equals 1912."
+        )
+        with self.assertRaisesRegex(ValueError,"pre_discloses_unfound_candidate"):
+            realize_main(payload,canonical,{
+                "reasoning":"","task_instructions":[invented],
+            })
+        # A prior completed result legitimately makes the entity name
+        # available to Main in a subsequent delegation.
+        payload["completed_subtask_contracts"]=[
+            {"answer":'["Dunhaven"]',"summary":"Found Dunhaven.",
+             "public_ref":"Attempt 1, subtask 1"},
+        ]
+        legitimate=(
+            "Use the previously reported Dunhaven result and search the "
+            "relevant sources to identify additional entities whose "
+            "r:birth is equal to 1912."
+        )
+        action=realize_main(payload,canonical,{
+            "reasoning":"","task_instructions":[legitimate],
+        })
+        self.assertIn("Dunhaven",action["params"]["tasks"][0]["task_instruction"])
+
     def test_stage2_preflight_rejects_presupposed_complete_supplied_roster(self):
         payload={
             "draft_question":"Among all candidate entities, which satisfy male population below 727?",
