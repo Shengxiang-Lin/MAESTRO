@@ -72,8 +72,14 @@ class BoundRealizationTests(unittest.TestCase):
         self.assertNotIn('Alice',json.dumps(guidance))
         # A hidden FIND with no public identifying clue is now quarantined,
         # rather than filled from the private target identity.
-        with self.assertRaisesRegex(GoldTrajectoryError,'missing concrete identification clue'):
+        with self.assertRaises(GoldTrajectoryError) as caught:
             synthesize_one(q,r,t,PassthroughPlanner(),PassthroughExecutor())
+        self.assertEqual(caught.exception.stage, 'public_executability')
+        self.assertEqual(caught.exception.issues, ['latent_find_missing_public_clue'])
+        self.assertEqual(
+            caught.exception.audit['public_preflight']['detail'],
+            'missing concrete identification clue',
+        )
 
     def test_wrong_explanation_is_rejected_even_when_symbolic_answer_is_fixed(self):
         class Drift(PassthroughExecutor):
