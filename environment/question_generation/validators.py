@@ -44,10 +44,10 @@ def preflight(payload:Mapping[str,Any],question:str)->QuestionValidation:
         "candidate entities discoverable from the task-related sources",
     ))
     if discovery_root and has_discoverable and re.search(
-        r"\\b(?:all|the complete|a complete|the full|a full)\\s+"
-        r"(?:candidate\\s+)?(?:list|set|records|entities)\\s+"
-        r"(?:was|were|is|are)?\\s*(?:supplied|provided|given|available initially)\\b"
-        r"|\\b(?:all|entire)\\s+(?:supplied|provided|given)\\s+records\\b",
+        r"\b(?:all|the complete|a complete|the full|a full)\s+"
+        r"(?:candidate\s+)?(?:list|set|records|entities)\s+"
+        r"(?:was|were|is|are)?\s*(?:supplied|provided|given|available initially)\b"
+        r"|\b(?:all|entire)\s+(?:supplied|provided|given)\s+records\b",
         text, re.I,
     ):
         issues.append("discovery_candidates_not_pre_supplied")
