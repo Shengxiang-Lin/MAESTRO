@@ -1,7 +1,7 @@
 """Execute only public delegated instructions and public observations, never gold."""
 from __future__ import annotations
 import json,re,copy
-from .evidence import read_packet
+from .evidence import read_packet,verify_known_packet
 from .tools import tool_profile
 
 def compare(left,op,right):
@@ -21,8 +21,16 @@ def compare(left,op,right):
     if op=='<=':return a<=b
     raise ValueError('unsupported public comparison '+op)
 
-def replay_task(task,new_observations=()):
-    packet=read_packet(task);profile=tool_profile(packet.get("scene","omnigaia"))
+def replay_task(task,new_observations=(),*,public_cache=None):
+    # The public state is the sole source for previously observed evidence.
+    # A v2 handle without a supplied public cache must never resolve through
+    # private Gold state or silently skip the missing evidence.
+    raw=read_packet(task)
+    if raw['version']==2 and public_cache is None:
+        raise ValueError('public evidence cache required for referenced task packet')
+    packet=(verify_known_packet(task,public_cache)
+            if public_cache is not None else raw)
+    profile=tool_profile(packet.get("scene","omnigaia"))
     records=[*packet['known_records'],*new_observations]
     for record in new_observations:
         if not set(profile.for_resource(record))<=set(task['tools']):
