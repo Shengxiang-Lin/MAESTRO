@@ -105,13 +105,14 @@ class NaturalLanguageTests(unittest.TestCase):
                         "task_instructions": [candidate],
                     })
 
-    def test_main_rejects_machine_checklist_as_natural_text(self):
+    def test_canonical_sibling_can_remain_unmodified_after_failed_rewrite(self):
         payload, canonical = main_payload()
-        with self.assertRaisesRegex(ValueError, "repeats_machine_checklist"):
-            realize_main(payload, canonical, {
-                "reasoning": "",
-                "task_instructions": [canonical["params"]["tasks"][0]["task_instruction"]],
-            })
+        result = realize_main(payload, canonical, {
+            "reasoning": "",
+            "task_instructions": [canonical["params"]["tasks"][0]["task_instruction"]],
+        })
+        self.assertEqual(result["params"]["tasks"][0], canonical["params"]["tasks"][0])
+        self.assertEqual(read_packet(result["params"]["tasks"][0])["version"], 2)
 
     def test_real_backend_writer_requires_semantic_critic(self):
         payload, canonical = main_payload()
@@ -128,17 +129,20 @@ class NaturalLanguageTests(unittest.TestCase):
                 self.calls.append((system_prompt, prompt))
                 if len(self.calls) == 1:
                     return {
-                        "reasoning": "The records should establish the requested person.",
-                        "task_instructions": [
+                        "task_instruction": (
                             "Identify Alice in the records, check the recorded 1912 birth year, "
                             "and return the person with evidence."
-                        ],
+                        ),
                     }
                 return self.verdict
 
         bad = LLMPlanner(FakeBackend({"equivalent": False, "issues": ["missing relation"]}))
-        with self.assertRaisesRegex(ValueError, "natural_semantic_review_failed"):
-            bad.naturalize_action(payload, canonical)
+        rejected=bad.naturalize_action(payload, canonical)
+        self.assertEqual(
+            rejected["params"]["tasks"][0],
+            canonical["params"]["tasks"][0],
+        )
+        self.assertEqual(bad.last_natural_audit["rewritten_tasks"],0)
         self.assertEqual(bad.request_counts["natural_main_review"], 1)
 
         good = LLMPlanner(FakeBackend({"equivalent": True, "issues": []}))
@@ -146,6 +150,58 @@ class NaturalLanguageTests(unittest.TestCase):
         self.assertIn("Alice", output["params"]["tasks"][0]["task_instruction"])
         self.assertEqual(good.request_counts["natural_main_write"], 1)
         self.assertEqual(good.request_counts["natural_main_review"], 1)
+
+    def test_main_parallel_tasks_keep_approved_sibling_and_reject_bad_one(self):
+        import copy
+        payload,canonical=main_payload()
+        second=copy.deepcopy(canonical["params"]["tasks"][0])
+        second["task_instruction"]=second["task_instruction"].replace("Alice","Bob")
+        canonical["params"]["tasks"].append(second)
+        second_fragment=copy.deepcopy(payload["gold_guidance"]["ready"][0])
+        second_fragment["operations"][0]["inputs"]=["Bob"]
+        payload["gold_guidance"]["ready"].append(second_fragment)
+
+        class Backend:
+            model="test"
+            base_url="test://local"
+            calls=0
+            def complete_json(self, system, prompt):
+                self.calls+=1
+                if self.calls==1:
+                    return {"task_instruction":
+                        "Identify Alice from the supplied records, verify her recorded birth year is 1912, "
+                        "and return the matching name with source evidence."}
+                if self.calls==2:
+                    return {"equivalent":True,"issues":[]}
+                return {"task_instructions":["invalid multi-task output"]}
+
+        planner=LLMPlanner(Backend())
+        result=planner.naturalize_action(payload,canonical)
+        self.assertEqual(planner.last_natural_audit["rewritten_tasks"],1)
+        self.assertEqual(planner.last_natural_audit["task_count"],2)
+        self.assertEqual(len(planner.last_natural_audit["errors"]),1)
+        self.assertEqual(planner.request_counts["natural_main_write"],2)
+        self.assertEqual(planner.request_counts["natural_main_review"],1)
+        self.assertEqual(read_packet(result["params"]["tasks"][0])["version"],3)
+        self.assertEqual(read_packet(result["params"]["tasks"][1])["version"],2)
+        self.assertEqual(result["params"]["tasks"][1],second)
+        self.assertEqual(result["reasoning"],"")
+
+    def test_realistic_main_complete_uses_fixed_answer_without_llm_request(self):
+        payload,canonical=main_payload()
+        payload["gold_guidance"]["may_complete"]=True
+        canonical={"action":"complete","reasoning":"template",
+                   "params":{"answer":"[\"Alice\"]"}}
+        class NoCalls:
+            model="test"
+            base_url="test://local"
+            def complete_json(self,*args):
+                raise AssertionError("complete must not invoke the LLM")
+        planner=LLMPlanner(NoCalls())
+        result=planner.naturalize_action(payload,canonical)
+        self.assertEqual(result["reasoning"],"")
+        self.assertEqual(result["params"]["answer"],"[\"Alice\"]")
+        self.assertEqual(planner.request_counts["natural_main_write"],0)
 
     def test_report_writer_rejects_fabricated_numbers_and_tool_calls(self):
         payload = {"fragment": {
@@ -227,6 +283,19 @@ class NaturalLanguageTests(unittest.TestCase):
         records = export_episode(episode, require_training=False)
         self.assertEqual(len(records), len(episode["trajectory"]))
         self.assertTrue(all("target_json" in row for row in records))
+        for row in records:
+            target=json.loads(row["target_json"])
+            if target["action"]=="delegate_task":
+                for task in target["params"]["tasks"]:
+                    # Teacher can replay the original public packet, while
+                    # student learns only a natural O1 context.
+                    self.assertNotIn("[Public task packet]",task["context"])
+                    self.assertNotIn("execution_checks",task["context"])
+                    self.assertTrue(task["task_instruction"].strip())
+        self.assertTrue(any(
+            "execution_checks" in task["context"]
+            for step in actions for task in step["params"]["tasks"]
+        ))
 
     def test_failing_naturalization_falls_back_to_verified_contract(self):
         class FailingPlanner(PassthroughPlanner):
