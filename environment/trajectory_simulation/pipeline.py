@@ -178,6 +178,7 @@ def synthesize_one(
                 ]}.values()),
                 # Offline passthrough test mode only. NOT included in main_prompt.
                 "offline_oracle_answer": gold["final_answer"],
+                "answer_contract": gold["answer_contract"],
             }
 
             def check_action(value):
@@ -198,7 +199,44 @@ def synthesize_one(
                 max_attempts=max_attempts,
                 diagnostics={"completed_trajectory": json_value(trajectory)},
             )
+            # Exact, executable O1 tasks are kept for source-only replay.
+            # Natural wording changes the emitted public wire, not the
+            # task graph, available tools, dependencies or gold answer.
             wire = public_action(action)
+            if (
+                getattr(planner, "style_provider", None) == "natural"
+                and callable(getattr(planner, "naturalize_action", None))
+            ):
+                try:
+                    candidate = planner.naturalize_action(payload, action)
+                    valid, issues = validate_action(
+                        candidate, guidance, gold["final_answer"],
+                        gold["answer_contract"], public_state=public_state,
+                    )
+                    if not valid:
+                        raise ValueError("natural_main_action:" + ",".join(issues))
+                    # Immutable task transport must never change.
+                    if candidate["action"] != action["action"]:
+                        raise ValueError("natural_action_type_changed")
+                    if candidate["action"] == "delegate_task":
+                        for original, rewritten in zip(
+                            action["params"]["tasks"], candidate["params"]["tasks"]
+                        ):
+                            if any(rewritten[k] != original[k] for k in ("tools", "model", "context")):
+                                raise ValueError("natural_task_transport_changed")
+                    elif candidate["params"] != action["params"]:
+                        raise ValueError("natural_complete_answer_changed")
+                    wire = public_action(candidate)
+                    generation_audit.append({
+                        "stage": f"round_{round_index}:natural_main",
+                        "accepted": True, "fallback": False,
+                    })
+                except (BackendError, ValueError, TypeError, KeyError) as exc:
+                    generation_audit.append({
+                        "stage": f"round_{round_index}:natural_main",
+                        "accepted": False, "fallback": True,
+                        "reason": f"{type(exc).__name__}:{str(exc)[:200]}",
+                    })
             if guidance["may_complete"]:
                 trajectory.append({
                     "attempt": round_index, **wire,
@@ -255,7 +293,19 @@ def synthesize_one(
                         "clean_trajectory": True,
                         "two_role_teacher": True,
                         "scene": scene, "schedule":schedule,
-                        "language_generation": ("offline_reference" if getattr(planner,"offline",False) else getattr(planner,"style_provider","llm"))+"_selection_with_public_evidence_replay",
+                        "language_generation": (
+                            "offline_reference" if getattr(planner,"offline",False) else
+                            "gold_constrained_natural_generation_with_public_replay"
+                            if getattr(planner,"style_provider",None) == "natural" else
+                            getattr(planner,"style_provider","llm")+"_selection_with_public_evidence_replay"
+                        ),
+                        "natural_language_attempted": any(
+                            entry.get("stage", "").endswith(":natural_main")
+                            for entry in generation_audit
+                        ),
+                        "natural_language_fallbacks": sum(
+                            bool(entry.get("fallback")) for entry in generation_audit
+                        ),
                         "main_public_state_matches_o1": False,
                         "public_state_contract":"o1_with_explicit_public_evidence_store",
                         "gold_guidance_private": True,
@@ -270,12 +320,14 @@ def synthesize_one(
                     },
                 }
 
-            assignments = wire["params"]["tasks"]
-            if len(assignments) != len(ready):
+            assignments = action["params"]["tasks"]
+            public_assignments = wire["params"]["tasks"]
+            if len(assignments) != len(ready) or len(public_assignments) != len(ready):
                 raise GoldTrajectoryError("validation", ["unexpected_task_count"])
 
             def generate_subagent(index: int, fragment: dict[str, Any]) -> dict[str, Any]:
                 assigned = assignments[index]
+                public_assigned = public_assignments[index]
                 try:
                     verify_known_packet(assigned,evidence_cache)
                     observed=[public_record(o) for o in fragment['observations']]
@@ -295,8 +347,8 @@ def synthesize_one(
                 ]
                 sub_payload = {
                     "question": gold["question"],
-                    "task_instruction": assigned["task_instruction"],
-                    "assigned_task": assigned,
+                    "task_instruction": public_assigned["task_instruction"],
+                    "assigned_task": public_assigned,
                     "dependency_results": predecessor_results,
                     "fragment": fragment,
                 }
@@ -317,11 +369,30 @@ def synthesize_one(
                         "fragment_id": fragment["fragment_id"],
                     },
                 )
-                # The exact answer is NOT generated or copied by the LLM.
+                # A verified source-derived result stays immutable. The
+                # Sub-Agent LLM may only rewrite report prose.
+                if (
+                    getattr(executor, "style_provider", None) == "natural"
+                    and callable(getattr(executor, "naturalize_feedback", None))
+                ):
+                    try:
+                        rewritten = executor.naturalize_feedback(sub_payload, language)
+                        valid, problems = validate_feedback(rewritten, fragment, strict=False)
+                        if not valid:
+                            raise ValueError("natural_report:" + ",".join(problems))
+                        language = rewritten
+                        language_status = {"accepted": True, "fallback": False}
+                    except (BackendError, ValueError, TypeError, KeyError) as exc:
+                        language_status = {
+                            "accepted": False, "fallback": True,
+                            "reason": f"{type(exc).__name__}:{str(exc)[:200]}",
+                        }
+                else:
+                    language_status = None
                 fixed_answer = answer_string(fragment["expected_answer"])
                 return {
                     "subtask_index": index,
-                    "task_instruction": assigned["task_instruction"],
+                    "task_instruction": public_assigned["task_instruction"],
                     "model": _model(executor),
                     "tools_assigned": assigned["tools"],
                     "done": True,
@@ -335,6 +406,7 @@ def synthesize_one(
                     "result_value": json_value(replay['result']),
                     "result_kind": fragment['answer_kind'],
                     "public_replay_verified": True,
+                    "_natural_language_audit": language_status,
                 }
 
             futures = [
@@ -344,6 +416,12 @@ def synthesize_one(
             # Run in parallel but publish all results in deterministic fragment order.
             replies = [future.result() for future in futures]
             for reply_index, (fragment, reply) in enumerate(zip(ready, replies)):
+                report_audit = reply.pop("_natural_language_audit")
+                if report_audit is not None:
+                    generation_audit.append({
+                        "stage": f"round_{round_index}:natural_subagent:{reply_index}",
+                        **report_audit,
+                    })
                 known_results[fragment["fragment_id"]] = {
                     "fragment_id": fragment["fragment_id"],
                     "public_ref": f"Attempt {round_index}, subtask {reply_index + 1}",
