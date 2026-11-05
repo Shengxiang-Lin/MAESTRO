@@ -84,6 +84,28 @@ class ConstructionRegressions(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertIn('synthetic_identifier_leak',result.issues)
 
+    def test_stage2_critic_cannot_approve_with_remaining_ownership_issues(self):
+        from environment.question_generation.prompts import author_prompt,critic_prompt
+        from environment.question_generation.backend import PassthroughAuthorBackend
+        class ContradictoryCritic:
+            def review(self, *args):
+                return {'accept':True,'semantic_fidelity':'pass',
+                        'issues':['Date constraint moved from Way to City'],
+                        'repair_question':''}
+        payload={'task_id':'test',
+                 'draft_question':'Which City is linked to the Way that began in 1912?',
+                 'terminal_contract':{}}
+        ok,_,audit=_realize_one(
+            payload,{}, {},PassthroughAuthorBackend(),ContradictoryCritic(),
+            question_max_attempts=1,use_critic=True)
+        self.assertFalse(ok)
+        self.assertTrue(audit)
+        critic_text=critic_prompt(payload,payload['draft_question'])
+        author_text=author_prompt(payload)
+        self.assertIn('Way start-date condition',critic_text)
+        self.assertIn('intermediate links',critic_text)
+        self.assertIn('grammatical entity',author_text)
+
     def test_semantically_rejected_repair_is_not_accepted(self):
         class Author:
             def author(self,*args):return {'question':'Which entities match the stated conditions?'}
