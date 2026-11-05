@@ -203,7 +203,26 @@ def build_subtask_bank(
                 original,public,fragment,evidence_cache
             )
             from .tool_provenance import reconstruct_tool_observations
-            tool_provenance = reconstruct_tool_observations(fragment)
+            search_audit = None
+            if gold.get("retrieval_policy") == "task_local_ranked_public_index_v1":
+                from .search_simulator import (
+                    simulate_search, verify_retrieved_witnesses,
+                )
+                search_audit = simulate_search(
+                    gold["search_catalog"],
+                    public_question=gold["question"],
+                    public_task=public["task_instruction"],
+                    already_known_ids=list(evidence_cache)+[
+                        x["resource_id"]
+                        for x in gold.get("provided_resources", [])
+                    ],
+                )
+                verify_retrieved_witnesses(
+                    search_audit, fragment["observations"]
+                )
+            tool_provenance = reconstruct_tool_observations(
+                fragment,search_audit
+            )
             report_payload={
                 "question":gold["question"],
                 "task_instruction":public["task_instruction"],
@@ -252,6 +271,7 @@ def build_subtask_bank(
                 "feedback_fallback_reason":language["reason"],
                 "feedback_private_audit":language.get("audit",[]),
                 "simulated_tool_provenance":tool_provenance,
+                "search_audit":search_audit,
             }
             return fragment,reply,bank_item
 
