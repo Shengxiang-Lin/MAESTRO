@@ -283,11 +283,11 @@ def realize_main(
                     if (
                         isinstance(entity, str) and entity
                         and not re.search(
-                            r"(?<!\\w)" + re.escape(entity) + r"(?!\\w)",
+                            r"(?<!\w)" + re.escape(entity) + r"(?!\w)",
                             public_names, re.I,
                         )
                         and re.search(
-                            r"(?<!\\w)" + re.escape(entity) + r"(?!\\w)",
+                            r"(?<!\w)" + re.escape(entity) + r"(?!\w)",
                             candidate, re.I,
                         )
                     ):
