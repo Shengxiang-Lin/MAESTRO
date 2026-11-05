@@ -194,6 +194,13 @@ def main_single_task_prompt(
         "For a later round, use the completed findings to target unresolved or "
         "previously ambiguous details; do not invent failures or new clues. "
         "For independent initial tasks, give each task a distinct, focused goal. "
+        "If the checks start with unbound FIND_ALL or FIND-by-type, the "
+        "candidate names are initially UNKNOWN: ask the Sub-Agent to locate "
+        "task-relevant evidence, identify the candidate entities, and only "
+        "then apply the filters. Never present a complete entity list as "
+        "an initial input merely because it appears in later verified outputs. "
+        "For later rounds, names in the completed_subtask_findings are "
+        "already publicly known and may be referenced normally. "
         "Preserve EVERY necessary hop, relation direction, constraint owner, "
         "quantifier, comparator, exact date, anchor and output type in the "
         "canonical checks, including UNION versus INTERSECTION. "
@@ -307,8 +314,14 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
 
     fragment = payload["fragment"]
     plan = payload.get("tool_provenance") or {"steps": []}
+    discovery_root = any(
+        op["op"] == "FIND_ALL"
+        or (op["op"] == "FIND" and op.get("find_kind") == "type")
+        for op in fragment["operations"]
+    )
     public = {
         "assigned_subtask": payload["task_instruction"],
+        "candidate_names_are_discovery_outputs": discovery_root,
         "fixed_result": fragment["expected_answer"],
         "source_evidence_guide": source_evidence_guide(fragment, plan),
         "verified_reasoning_steps": [{
@@ -347,6 +360,14 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         "are OPTIONAL and generally unnecessary; never list class names merely "
         "to prove a tool was used. Likewise do not enumerate every available "
         "source when only one or two provide decisive support. "
+        "When the verified steps begin with FIND_ALL or FIND-by-type, "
+        "the names in those step outputs are RESULTS OF DISCOVERY, not a "
+        "complete candidate list supplied to Main at the start. Describe "
+        "which accessible references supported identifying candidates "
+        "before any filtering. You MAY list those names in the returned "
+        "Sub-Agent report, but only as findings, never as a pre-supplied "
+        "complete roster from initial inputs. Do not claim Internet-wide "
+        "exhaustiveness; coverage is limited to the task's evidence domain. "
         "The source_evidence_guide groups every source's exact supported "
         "claims and allowed access steps. Attribute each fact to its OWN "
         "source; a search discovery event alone never proves a factual claim. "
@@ -438,7 +459,10 @@ def feedback_repair_prompt(
         "Use natural tool verbs, NOT mandatory class names. "
         "Tools are SIMULATED witness-supported steps, not actual live calls. "
         "If no source inspection is permitted, describe reuse of previous "
-        "results instead. Do not invent sources, tool calls, entities, dates, "
+        "results instead. An unbound FIND_ALL/FIND-by-type output represents "
+        "candidates discovered in task-related evidence, not a complete "
+        "candidate list provided in the initial input. "
+        "Do not invent sources, tool calls, entities, dates, "
         "numbers, search queries, URLs or timestamps. "
         "Only use the following verified public facts; JSON ONLY.\n"
         + _json(public)
@@ -482,7 +506,28 @@ def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[
                  joined, re.I):
         # The frozen source witness has no original literal search query.
         raise ValueError("unverified_literal_search_query")
-    value = payload["fragment"]["expected_answer"]
+    fragment = payload["fragment"]
+    # A FIND_ALL/type root is a discovery operation. For questions with
+    # sources that are not initially accessible, do not turn the oracle
+    # enumeration into a falsely 'supplied full list' in the report.
+    discovery_root = any(
+        op["op"] == "FIND_ALL"
+        or (op["op"] == "FIND" and op.get("find_kind") == "type")
+        for op in fragment["operations"]
+    )
+    needs_discovery = any(
+        o.get("visibility") == "discoverable"
+        for o in fragment.get("observations", [])
+    )
+    if discovery_root and needs_discovery and re.search(
+        r"\b(?:started|began|initialized)\s+(?:with|from)\s+"
+        r"(?:the\s+)?(?:full|complete|entire)\s+(?:candidate\s+)?"
+        r"(?:set|list)[^.\n]{0,220}\b(?:initial|supplied|provided)\s+"
+        r"(?:records|inputs|list)\b",
+        joined, re.I,
+    ):
+        raise ValueError("natural_report_claims_presupplied_candidate_list")
+    value = fragment["expected_answer"]
     if isinstance(value, list) and len(value) <= 3:
         for item in value:
             if isinstance(item, str) and item.casefold() not in joined.casefold():
@@ -528,6 +573,13 @@ def feedback_reviewer_prompt(
         "factual evidence. Reject actions with no permitted source mapping, "
         "fabricated searches/queries, website URLs, media timestamps or "
         "unsupported facts, even if the final answer is correct. "
+        "For FIND_ALL and FIND-by-type, names in the verified first-step "
+        "output are entities discovered in the task's evidence corpus, "
+        "NOT a complete named list necessarily supplied to the Main Agent. "
+        "Reject narratives falsely claiming the full set was already "
+        "provided initially when candidate identification depends on "
+        "discoverable sources. A later subtask MAY reuse the exact names "
+        "that an earlier completed Sub-Agent already returned. "
         "Treat the verified_operations output values as authoritative "
         "public-replay conclusions. A derived result from FIND, FILTER_TYPE, "
         "COUNT, INTERSECT, UNION, SELECT_BETWEEN or a relation traversal "
