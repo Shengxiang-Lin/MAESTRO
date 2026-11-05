@@ -8,14 +8,17 @@ from .replay import replay_task
 from .contract import answers_equal
 from .history import format_o1_subtask_history
 
-def validate_public_episode(episode,*,require_training=True):
+def validate_public_episode(episode,*,require_training=True,require_terminal=True):
     validation=episode.get('validation',{});eligibility=episode.get('input_eligibility',{})
     if require_training and not (validation.get('training_eligible') and eligibility.get('eligible') and eligibility.get('reviewed')):
         raise ValueError('episode has not passed training eligibility review')
     if digest(episode['question'])!=eligibility.get('question_sha256'):raise ValueError('question changed after eligibility review')
     if not validation.get('public_evidence_replay_verified'):raise ValueError('missing public replay validation')
     cache={};completed={};past=[];steps=episode.get('trajectory',[])
-    if not steps or steps[-1].get('action')!='complete':raise ValueError('missing terminal complete action')
+    if require_terminal and (not steps or steps[-1].get('action')!='complete'):
+        raise ValueError('missing terminal complete action')
+    if not require_terminal and steps and steps[-1].get('action')=='complete':
+        raise ValueError('completed action is not a history prefix')
     for step in steps:
         state=step['state_before']
         public_action_text=json.dumps({k:step[k] for k in ('action','reasoning','params')},ensure_ascii=False)
@@ -69,21 +72,27 @@ def public_prompt(state):
         '\n\nSUBTASK HISTORY:\n'+state['subtask_history']+'\n\nAVAILABLE TOOLS:\n'+json.dumps(state['available_tools'],ensure_ascii=False)+
         '\n\nPUBLIC EVIDENCE STORE:\n'+json.dumps(state['evidence_store'],ensure_ascii=False,separators=(',',':')))
 
+def training_target(step):
+    """Strip controller-only public replay machinery from an O1 SFT target.
+
+    Only call after canonical source-only replay and state/action verification.
+    A v2 fallback task keeps its original text/context; v3 natural targets
+    expose only the human-facing public context.
+    """
+    target=copy.deepcopy({key:step[key] for key in ('action','reasoning','params')})
+    if step['action']=='delegate_task':
+        from .evidence import read_packet, MARKER
+        for task in target['params']['tasks']:
+            if MARKER in task.get('context','') and read_packet(task)['version']==3:
+                task['context']=task['context'].split(MARKER,1)[0].strip()
+    return target
+
+
 def export_episode(episode,*,require_training=True):
     validate_public_episode(episode,require_training=require_training)
     records=[]
     for index,step in enumerate(episode['trajectory'],1):
-        # Validate the complete public source-backed execution contract first.
-        # The controller needs v3 execution_checks to replay each step, but a
-        # student Main Agent should learn the *natural* O1 target, not memorize
-        # a long machine-generated operator checklist. The original episode
-        # retains the full public packet for audit/replay.
-        target=copy.deepcopy({key:step[key] for key in ('action','reasoning','params')})
-        if step['action']=='delegate_task':
-            from .evidence import read_packet,MARKER
-            for task in target['params']['tasks']:
-                if MARKER in task.get('context','') and read_packet(task)['version']==3:
-                    task['context']=task['context'].split(MARKER,1)[0].strip()
+        target=training_target(step)
         record={'id':f"{episode['task_id']}:{index}",'task_id':episode['task_id'],'step':index,
             'input':public_prompt(step['state_before']),'target_json':json.dumps(target,ensure_ascii=False,separators=(',',':')),
             'macro_label':'complete' if step['action']=='complete' else 'advance','macro_label_source':'public_action',
@@ -91,6 +100,7 @@ def export_episode(episode,*,require_training=True):
         from train_maestro_8b.schema import validate_stage1_record
         records.append(validate_stage1_record(record))
     return records
+
 
 def export_jsonl(source,output,*,max_input_chars=None):
     from .pipeline import protect_paths
