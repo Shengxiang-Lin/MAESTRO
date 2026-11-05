@@ -68,6 +68,15 @@ class TwoPhaseTests(unittest.TestCase):
             self.assertTrue(item["trace_summary"])
             self.assertFalse(item["natural_feedback"])
             self.assertFalse(item["natural_task"])
+            self.assertEqual(
+                item["simulated_tool_provenance"]["origin"],
+                "reconstructed_from_frozen_public_witnesses",
+            )
+            self.assertFalse(item["simulated_tool_provenance"]["live_tool_calls"])
+            for event in item["simulated_tool_provenance"]["steps"]:
+                self.assertNotIn("query",event)
+                self.assertNotIn("timestamp",event)
+                self.assertNotIn("tool_result",event)
         for wave in bank["waves"]:
             self.assertEqual(wave["canonical_action"]["action"],"delegate_task")
             self.assertEqual(len(wave["bound_fragments"]),len(wave["fragment_ids"]))
