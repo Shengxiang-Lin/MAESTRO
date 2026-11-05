@@ -20,6 +20,7 @@ from tqdm.auto import tqdm
 from environment.question_generation.backend import BackendError
 from environment.task_construction.rendering.pipeline import render_task_record
 
+from .backend import PassthroughPlanner, PassthroughExecutor
 from .compiler import (
     GoldCompilationError, compile_gold_solution, json_value,
     private_guidance, ready_fragments,
@@ -124,9 +125,15 @@ def synthesize_one(
     realized: Mapping[str, Any], world_record: Mapping[str, Any], rendered: Any,
     planner: Any, executor: Any, *, max_attempts: int = 3,
     subagent_workers: int = 4, scene: str = "omnigaia", question_review: bool = True, schedule: str = "baseline",
+    round_sink=None, selected_rounds: set[int] | None = None,
+    history_style: str = "natural", stop_after_round: int | None = None,
 ) -> dict[str, Any]:
     if max_attempts < 1 or subagent_workers < 1:
         raise ValueError("max_attempts and subagent_workers must be >= 1")
+    if history_style not in {"natural","teacher"}:
+        raise ValueError("history_style must be natural or teacher")
+    if selected_rounds is not None and (not selected_rounds or min(selected_rounds)<1):
+        raise ValueError("selected_rounds must contain positive indices")
     try:
         gold = compile_gold_solution(realized, world_record, rendered, scene=scene, schedule=schedule)
     except GoldCompilationError as exc:
@@ -155,6 +162,9 @@ def synthesize_one(
     completed: set[str] = set()
     known_results: dict[str, dict[str, Any]] = {}
     fragment_by_id = {f["fragment_id"]: f for f in gold["fragments"]}
+    teacher_planner = PassthroughPlanner() if round_sink is not None else None
+    teacher_executor = PassthroughExecutor() if round_sink is not None else None
+    history_reconstructed = False
 
     with ThreadPoolExecutor(max_workers=subagent_workers,
                             thread_name_prefix="gold-fragment") as pool:
@@ -181,6 +191,12 @@ def synthesize_one(
                 "answer_contract": gold["answer_contract"],
             }
 
+            # Sample requested decisions; reconstruct other history waves from
+            # the immutable public gold witness when teacher mode is selected.
+            selected = selected_rounds is None or round_index in selected_rounds
+            using_teacher = round_sink is not None and not selected and history_style == "teacher"
+            round_planner = teacher_planner if using_teacher else planner
+
             def check_action(value):
                 okay, issues = validate_action(
                     value, guidance, gold["final_answer"], gold["answer_contract"],
@@ -191,7 +207,7 @@ def synthesize_one(
                 return validate_bound_action(value, payload)
 
             action = _stage(
-                lambda issues: planner.decide(
+                lambda issues: round_planner.decide(
                     payload, _with_feedback(main_prompt(payload), issues)
                 ),
                 check_action,
@@ -204,11 +220,11 @@ def synthesize_one(
             # task graph, available tools, dependencies or gold answer.
             wire = public_action(action)
             if (
-                getattr(planner, "style_provider", None) == "natural"
-                and callable(getattr(planner, "naturalize_action", None))
+                getattr(round_planner, "style_provider", None) == "natural"
+                and callable(getattr(round_planner, "naturalize_action", None))
             ):
                 try:
-                    candidate = planner.naturalize_action(payload, action)
+                    candidate = round_planner.naturalize_action(payload, action)
                     valid, issues = validate_action(
                         candidate, guidance, gold["final_answer"],
                         gold["answer_contract"], public_state=public_state,
@@ -245,7 +261,7 @@ def synthesize_one(
                         )
                     )
                     task_count = len(action["params"].get("tasks", []))
-                    writer_audit = getattr(planner, "last_natural_audit", {})
+                    writer_audit = getattr(round_planner, "last_natural_audit", {})
                     generation_audit.append({
                         "stage": f"round_{round_index}:natural_main",
                         "accepted": changed > 0 or guidance["may_complete"],
@@ -261,6 +277,39 @@ def synthesize_one(
                         "accepted": False, "fallback": True,
                         "reason": f"{type(exc).__name__}:{str(exc)[:200]}",
                     })
+            # Independently checked Main action and public history prefix:
+            # emit its training sample before any later Sub-Agent execution.
+            if round_sink is not None and selected:
+                task_count = len(action["params"].get("tasks", []))
+                changed = sum(
+                    before["task_instruction"] != after["task_instruction"]
+                    for before, after in zip(
+                        action["params"].get("tasks", []),
+                        wire["params"].get("tasks", []),
+                    )
+                )
+                round_sink({
+                    "task_id": gold["task_id"],
+                    "round_index": round_index,
+                    "question": gold["question"],
+                    "eligibility": eligibility,
+                    "state": public_state,
+                    "history": list(trajectory),
+                    "action": wire,
+                    "task_count": task_count,
+                    "rewritten_tasks": changed,
+                    "history_origin": (
+                        "teacher_reconstructed" if history_reconstructed else "natural"
+                    ),
+                    "natural_required": (
+                        not getattr(planner, "offline", False)
+                        and getattr(planner, "style_provider", None) == "natural"
+                    ),
+                })
+            if stop_after_round is not None and round_index >= stop_after_round:
+                return {"task_id": gold["task_id"], "partial": True,
+                        "last_round": round_index, "input_eligibility": eligibility}
+
             if guidance["may_complete"]:
                 trajectory.append({
                     "attempt": round_index, **wire,
@@ -359,6 +408,12 @@ def synthesize_one(
             if len(assignments) != len(ready) or len(public_assignments) != len(ready):
                 raise GoldTrajectoryError("validation", ["unexpected_task_count"])
 
+            round_executor = (
+                teacher_executor
+                if round_sink is not None and history_style == "teacher"
+                else executor
+            )
+
             def generate_subagent(index: int, fragment: dict[str, Any]) -> dict[str, Any]:
                 assigned = assignments[index]
                 public_assigned = public_assignments[index]
@@ -391,7 +446,7 @@ def synthesize_one(
                     return validate_feedback(value, fragment, strict=True)
 
                 language = _stage(
-                    lambda issues: executor.respond(
+                    lambda issues: round_executor.respond(
                         sub_payload,
                         _with_feedback(feedback_prompt(sub_payload), issues),
                     ),
@@ -406,11 +461,11 @@ def synthesize_one(
                 # A verified source-derived result stays immutable. The
                 # Sub-Agent LLM may only rewrite report prose.
                 if (
-                    getattr(executor, "style_provider", None) == "natural"
-                    and callable(getattr(executor, "naturalize_feedback", None))
+                    getattr(round_executor, "style_provider", None) == "natural"
+                    and callable(getattr(round_executor, "naturalize_feedback", None))
                 ):
                     try:
-                        rewritten = executor.naturalize_feedback(sub_payload, language)
+                        rewritten = round_executor.naturalize_feedback(sub_payload, language)
                         valid, problems = validate_feedback(rewritten, fragment, strict=False)
                         if not valid:
                             raise ValueError("natural_report:" + ",".join(problems))
@@ -451,6 +506,11 @@ def synthesize_one(
             replies = [future.result() for future in futures]
             for reply_index, (fragment, reply) in enumerate(zip(ready, replies)):
                 report_audit = reply.pop("_natural_language_audit")
+                if round_sink is not None and (
+                    using_teacher or getattr(round_executor, "offline", False)
+                    or (report_audit is not None and not report_audit["accepted"])
+                ):
+                    history_reconstructed = True
                 if report_audit is not None:
                     generation_audit.append({
                         "stage": f"round_{round_index}:natural_subagent:{reply_index}",
@@ -470,6 +530,18 @@ def synthesize_one(
                         raise GoldTrajectoryError('public_replay',['inconsistent source observations'])
                     evidence_cache[sid]=observation
                 completed.add(fragment["fragment_id"])
+            if round_sink is not None and (
+                using_teacher or
+                (getattr(planner, "style_provider", None) == "natural"
+                 and any(
+                     before["task_instruction"] == after["task_instruction"]
+                     for before, after in zip(
+                         action["params"].get("tasks", []),
+                         wire["params"].get("tasks", []),
+                     )
+                 ))
+            ):
+                history_reconstructed = True
             private_rounds.append({
                 "round": round_index,
                 "task_bindings": [{
