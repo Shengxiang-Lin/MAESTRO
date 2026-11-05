@@ -353,6 +353,114 @@ class NaturalLanguageTests(unittest.TestCase):
         self.assertIn('"source_evidence_guide"',review)
         self.assertIn("grounded",review)
 
+    def test_empty_subagent_json_gets_one_compact_retry_and_strict_review(self):
+        from environment.trajectory_simulation.natural_language import (
+            feedback_repair_prompt,
+        )
+        fragment={
+            "scene":"omnigaia","expected_answer":["Alice"],
+            "operations":[
+                {"op":"FIND","inputs":["Alice"]},
+                {"op":"FILTER_YEAR","inputs":["r:birth","=","1912"]},
+            ],
+            "operation_results":[
+                {"answer":["Alice"],"input_values":[]},
+                {"answer":["Alice"],"input_values":["Alice"]},
+            ],
+            "observations":[{
+                "resource_id":"source_01","title":"Reference 1","source_type":"text",
+                "claims":[
+                    {"subject":"Alice","predicate":"r:birth","object":"1912"},
+                    {"subject":"Unrelated","predicate":"postal code","object":"99999"},
+                ],
+            }],
+            "known_observations":[],
+        }
+        payload={
+            "fragment":fragment,
+            "task_instruction":"Find Alice born in 1912.",
+            "tool_provenance":{"steps":[]},
+        }
+        valid={
+            "summary":"Alice is identified as the matching person.",
+            "trace_summary":(
+                "Checked Reference 1, which records Alice's birth year "
+                "as 1912. The year matches the assigned condition."
+            ),
+        }
+        shortened=feedback_repair_prompt(payload,valid)
+        self.assertIn('"p":"r:birth"',shortened)
+        self.assertNotIn('"p":"postal code"',shortened)
+        self.assertIn("NONEMPTY",shortened)
+
+        class Backend:
+            model="test"
+            base_url="test://local"
+            def __init__(self):
+                self.calls=[]
+            def complete_json(self,system,prompt):
+                self.calls.append((system,prompt))
+                if len(self.calls)==1:
+                    return {"summary":"","trace_summary":None}
+                if len(self.calls)==2:
+                    return valid
+                return {"grounded":True,"issues":[]}
+
+        backend=Backend()
+        executor=LLMExecutor(backend)
+        self.assertEqual(executor.naturalize_feedback(payload,valid),valid)
+        self.assertEqual(executor.request_counts["natural_feedback_write"],2)
+        self.assertEqual(executor.request_counts["natural_feedback_retry"],1)
+        self.assertEqual(executor.request_counts["natural_feedback_review"],1)
+        self.assertEqual(len(backend.calls),3)
+        self.assertIn("relevant_public_source_facts",backend.calls[1][1])
+
+    def test_repeated_empty_subagent_json_preserves_field_level_diagnostics(self):
+        payload={"fragment":{
+            "expected_answer":["Alice"],
+            "operations":[{"op":"FIND","inputs":["Alice"]}],
+            "operation_results":[{"answer":["Alice"],"input_values":[]}],
+            "observations":[],"known_observations":[],
+        },"task_instruction":"Find Alice.","tool_provenance":{"steps":[]}}
+        class EmptyBackend:
+            model="test"
+            base_url="test://local"
+            calls=0
+            def complete_json(self,*args):
+                self.calls+=1
+                return {"summary":None,"trace_summary":" "}
+        backend=EmptyBackend()
+        executor=LLMExecutor(backend)
+        with self.assertRaisesRegex(
+            ValueError,r"natural_language_missing;writes=2;summary=null;trace_summary=blank"
+        ):
+            executor.naturalize_feedback(payload,{})
+        self.assertEqual(backend.calls,2)
+        self.assertEqual(executor.request_counts["natural_feedback_review"],0)
+        self.assertEqual(executor.request_counts["natural_feedback_retry"],1)
+
+    def test_unverified_action_does_not_get_format_retries(self):
+        payload={"fragment":{
+            "expected_answer":["Alice"],
+            "operations":[{"op":"FIND","inputs":["Alice"]}],
+            "operation_results":[{"answer":["Alice"],"input_values":[]}],
+            "observations":[],"known_observations":[],
+        },"task_instruction":"Find Alice.","tool_provenance":{"steps":[]}}
+        class FakeBackend:
+            model="test"
+            base_url="test://local"
+            calls=0
+            def complete_json(self,*args):
+                self.calls+=1
+                return {"summary":"Alice is the result.",
+                        "trace_summary":"I analyzed the supplied video and found Alice."}
+        backend=FakeBackend()
+        executor=LLMExecutor(backend)
+        with self.assertRaisesRegex(ValueError,"unverified_tool_action_claim"):
+            executor.naturalize_feedback(payload,{})
+        self.assertEqual(backend.calls,1)
+        self.assertEqual(executor.request_counts["natural_feedback_retry"],0)
+
     def test_public_tool_plan_preserves_acquisition_order_and_reused_sources(self):
         from environment.trajectory_simulation.tool_provenance import (
             reconstruct_tool_observations,

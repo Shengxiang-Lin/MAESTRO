@@ -51,8 +51,16 @@ For each question, this phase:
    may omit tool mechanics if it accurately explains the supported result.
    Both literal and natural-language claims of *unpermitted* tool actions
    remain forbidden. Semantic review still checks source-specific facts,
-   values and relation directions. A rejected rewrite falls back to the
-   correct canonical report; the answer is never changed by the LLM.
+   values and relation directions. If the local LLM returns missing/blank
+   `summary` or `trace_summary`, Stage 3.1 retries the writer **once** using
+   a shorter prompt with predicate-relevant source facts and the same fixed
+   answer. The retry is not a bypass: both deterministic fact checks and the
+   separate semantic reviewer still must pass. Persistent missing fields
+   are recorded as `summary=blank/null/...;trace_summary=...` in the
+   private bank's `feedback_fallback_reason` instead of losing the cause.
+   All other invalid facts/tool actions immediately fall back without retry.
+   A rejected rewrite falls back to the correct canonical report; the
+   answer is never changed by the LLM.
    Private bank entry `simulated_tool_provenance` explicitly marks
    `live_tool_calls=false` for audit.
 7. Only after all parallel siblings pass does the next wave see their public
