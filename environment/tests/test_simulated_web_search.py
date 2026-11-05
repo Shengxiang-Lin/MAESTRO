@@ -137,6 +137,45 @@ class WebSearchSimulationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"public_search_could_not_discover_required_source"):
             reconstruct_tool_observations(fragment,audit)
 
+    def test_real_compiled_web_task_requires_index_search_before_gold_replay(self):
+        import copy
+        from environment.tests.test_gold_trajectory import fixture
+        from environment.trajectory_simulation.compiler import compile_gold_solution
+        from environment.trajectory_simulation.public_preflight import (
+            audit_public_executability,
+        )
+
+        realized,record,rendered=fixture()
+        realized["capability_world"]["mode"]="web_search"
+        for entry in realized["capability_world"]["resources"]:
+            entry["visibility"]="discoverable"
+            entry["metadata"]={
+                "search_entry":"public_question",
+                "retrieval_policy":"task_local_ranked_public_index_v1",
+            }
+        gold=compile_gold_solution(
+            realized,record,rendered,schedule="compact",
+        )
+        self.assertEqual(gold["provided_resources"],[])
+        self.assertEqual(gold["retrieval_policy"],
+                         "task_local_ranked_public_index_v1")
+        self.assertEqual(
+            set(record["world"]["sources"]),
+            {item["resource_id"] for item in gold["search_catalog"]},
+        )
+        self.assertTrue(audit_public_executability(gold)["publicly_executable"])
+
+        # The answer and required witness are untouched. Merely replacing
+        # search-index text with unfindable unrelated content must prevent
+        # the formerly successful Gold replay from becoming training data.
+        blocked=copy.deepcopy(gold)
+        for source in blocked["search_catalog"]:
+            source["content"]="unrelated galactic spectroscopy"
+            source["entity_types"]={}
+        audit=audit_public_executability(blocked)
+        self.assertFalse(audit["publicly_executable"])
+        self.assertEqual(audit["reason"],"public_search_witness_unreachable")
+
     def test_o1_six_native_tools_remain_global_and_assignment_is_scoped(self):
         profile=tool_profile("omnigaia")
         self.assertEqual(set(profile.available),{
