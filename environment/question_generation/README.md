@@ -22,6 +22,24 @@ The LLM may change wording only. It may not add facts, resources,
 proof requirements, hidden criteria, answer hints, or change acquisition
 visibility. **No quality gate has been relaxed.**
 
+## Semantic ownership and multi-hop fidelity
+
+The Author and Critic now compare every public constraint against the
+deterministic draft with special attention to **which entity owns each
+number, date or attribute**, and to the direction and preservation of all
+relation hops. Preserving the word "1912" is insufficient when a Way's
+start date has been rewritten as a City's start date; preserving entity
+names is insufficient when an intermediate death-place/spouse hop was
+removed. A Critic response with `accept=true` but nonempty `issues`
+is rejected, including during wording-repair review.
+
+These stronger language checks do not retroactively alter previously
+accepted questions, and are not a formal proof of semantic equivalence.
+For already frozen/question-generated batches, Stage 3 still quarantines
+cases failing its independent graph-aware semantic review. Rerun Stage 2
+in a separate output directory or explicitly restart it if you need to
+regenerate those questions, and compare against the same frozen worlds.
+
 ## Run
 
 From the MAESTRO root, after task construction/freeze:
