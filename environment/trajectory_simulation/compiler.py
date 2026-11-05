@@ -21,7 +21,12 @@ from .acquisition import reachable_subset, resolve_dependencies
 
 
 class GoldCompilationError(ValueError):
-    pass
+    """A rejected frozen subtask with machine-readable evidence diagnostics."""
+
+    def __init__(self, reason: str, diagnostics: Mapping[str, Any] | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.diagnostics = dict(diagnostics or {})
 
 
 def json_value(value: Any) -> Any:
@@ -141,28 +146,94 @@ def _minimal_witness(
     """Brute-force the small frozen source set; never trust a model's evidence."""
     all_ids = sorted(world.sources)
     required_fact_ids = set(required_fact_ids) | _read_fact_ids(subprogram, world)
+    required_entities = set(map(str, required_entity_ids))
+    # The public replay obtains its entity domain from source records. An
+    # entity in the private world but in no source must not be silently
+    # inserted into a Gold answer, even if the private trace contains it.
+    all_observable = {
+        f.subject for f in world.facts
+    } | {
+        str(f.object) for f in world.facts if f.object_kind == "entity"
+    }
+    all_fact_ids = {
+        fid for source in world.sources.values() for fid in source.fact_ids
+    } | {
+        f.fact_id for f in world.facts if f.source_id in world.sources
+    }
+    diagnostics = {
+        "output_node_id": subprogram.topological_order()[-1],
+        "total_sources": len(all_ids),
+        "max_sources": max_sources,
+        "required_fact_count": len(required_fact_ids),
+        "required_entity_count": len(required_entities),
+        "unsourced_required_fact_ids": sorted(required_fact_ids - all_fact_ids)[:24],
+        "unobservable_required_entity_ids": sorted(required_entities - all_observable)[:24],
+        "checks": {
+            "candidate_subsets": 0, "acquisition_reachable": 0,
+            "entity_covered": 0, "fact_covered": 0,
+            "executor_succeeded": 0, "information_complete": 0,
+            "answer_matched": 0,
+        },
+    }
     if len(all_ids) > max_sources:
-        raise GoldCompilationError("world exceeds exact fragment witness budget")
+        raise GoldCompilationError("witness_source_budget_exceeded", diagnostics)
+    if diagnostics["unsourced_required_fact_ids"]:
+        raise GoldCompilationError("witness_required_facts_not_in_sources", diagnostics)
+    if diagnostics["unobservable_required_entity_ids"]:
+        raise GoldCompilationError("witness_required_entities_not_observable", diagnostics)
+    counts = diagnostics["checks"]
     for size in range(len(all_ids) + 1):
         for subset in combinations(all_ids, size):
+            counts["candidate_subsets"] += 1
             if not reachable_subset(subset, dependencies):
                 continue
+            counts["acquisition_reachable"] += 1
             scoped_world = _evidence_world(world, set(subset))
-            observed_entities={f.subject for f in scoped_world.facts}|{str(f.object) for f in scoped_world.facts if f.object_kind=="entity"}
-            if not set(required_entity_ids).issubset(observed_entities):continue
-            if not set(required_fact_ids).issubset({f.fact_id for f in scoped_world.facts}):
+            observed_entities = {f.subject for f in scoped_world.facts} | {
+                str(f.object) for f in scoped_world.facts if f.object_kind == "entity"
+            }
+            if not required_entities.issubset(observed_entities):
                 continue
+            counts["entity_covered"] += 1
+            if not required_fact_ids.issubset({f.fact_id for f in scoped_world.facts}):
+                continue
+            counts["fact_covered"] += 1
             try:
                 answer = SymbolicExecutor().execute(subprogram, scoped_world)
                 info = assess_goal_information_completeness(subprogram, scoped_world)
             except (ValueError, TypeError, RuntimeError):
                 continue
-            if info.accepted and _same(answer, expected):
+            counts["executor_succeeded"] += 1
+            if not info.accepted:
+                continue
+            counts["information_complete"] += 1
+            if _same(answer, expected):
+                counts["answer_matched"] += 1
                 return list(subset)
-    raise GoldCompilationError(
-        f"no source-complete witness for fragment output node "
-        f"{subprogram.topological_order()[-1]}"
-    )
+    # Record the full-source oracle comparison separately, so failures can be
+    # attributed without ever accepting an unsupported witness.
+    complete_world = _evidence_world(world, set(all_ids))
+    try:
+        full_result = SymbolicExecutor().execute(subprogram, complete_world)
+        diagnostics["all_sources_answer_matches"] = _same(full_result, expected)
+        info = assess_goal_information_completeness(subprogram, complete_world)
+        diagnostics["all_sources_information_complete"] = info.accepted
+        diagnostics["missing_decision_requirements"] = list(info.missing_requirements)[:12]
+    except (ValueError, TypeError, RuntimeError) as exc:
+        diagnostics["all_sources_execution_error"] = str(exc)[:250]
+    if not counts["acquisition_reachable"]:
+        code = "witness_acquisition_unreachable"
+    elif not counts["entity_covered"]:
+        code = "witness_candidate_entities_uncovered"
+    elif not counts["fact_covered"]:
+        code = "witness_required_facts_uncovered"
+    elif not counts["executor_succeeded"]:
+        code = "witness_public_execution_failed"
+    elif not counts["information_complete"]:
+        code = "witness_information_incomplete"
+    else:
+        code = "witness_answer_disagrees_with_gold"
+    raise GoldCompilationError(code, diagnostics)
 
 
 def _public_answer(value: Any, rendered: Any, node: Any) -> Any:
