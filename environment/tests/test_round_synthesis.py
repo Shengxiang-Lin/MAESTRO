@@ -62,6 +62,14 @@ class RoundCentricTests(unittest.TestCase):
         self.assertIn('"query"',text)
         self.assertNotIn("gold_supervision",text)
         self.assertNotIn("expected_answer",text)
+        from environment.trajectory_simulation.tools import tool_profile
+        # Make every synthetic tool card agree with the actual benchmark
+        # definition, not a handcrafted substitute.
+        for name in tool_profile("omnigaia").available:
+            with self.subTest(tool=name):
+                self.assertEqual(native_tool_spec(name).name,name)
+                self.assertTrue(native_tool_spec(name).parameters)
+                self.assertTrue(native_tool_spec(name).description)
 
     def test_subtask_bank_materializes_all_answers_before_main_sampling(self):
         _,_,_,bank=self.bank(dependent=True)
