@@ -170,9 +170,13 @@ def feedback_variants(fragment):
     facts=evidence_lines([*observations,*known],predicates) if predicates else []
     selected=facts[:6]
     support=(' Supporting observations: '+'; '.join(selected)+'.') if selected else ''
+    # Even the shortest report should preserve a concrete clue-to-result
+    # connection, not simply narrate an operator name. Source text and facts
+    # are provided by the frozen public witness, never invented by an LLM.
+    brief_support=(' Supporting observation: '+'; '.join(selected[:2])+'.') if selected else ''
     variants=[
-        {'summary':conclusion,'trace_summary':' '.join(evidence+sentences)},
-        {'summary':sentences[-1],'trace_summary':'\n'.join('* '+line for line in evidence+sentences)},
+        {'summary':conclusion,'trace_summary':' '.join(evidence+sentences)+brief_support},
+        {'summary':sentences[-1],'trace_summary':'\n'.join('* '+line for line in evidence+sentences+(['Supporting observation: '+ '; '.join(selected[:2])] if selected else []))},
         {'summary':conclusion,'trace_summary':' '.join(evidence+sentences)+support},
         {'summary':conclusion,'trace_summary':'\n'.join('* '+line for line in evidence+sentences+(['Supporting observations:']+selected if selected else []))},
     ]
