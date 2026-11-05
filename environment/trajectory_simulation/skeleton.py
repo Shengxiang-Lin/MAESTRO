@@ -86,7 +86,7 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
             if find.op!='FIND' or len(find.inputs)!=1 or not find.inputs[0].startswith('entity:'):
                 continue
             alias=_public_inputs(find.inputs,rendered)[0]
-            if re.search(r'(?<!\\w)'+re.escape(alias)+r'(?!\\w)',question,re.I):
+            if re.search(r'(?<!\w)'+re.escape(alias)+r'(?!\w)',question,re.I):
                 continue
             if find_id in _ancestors(p,other_id):
                 continue
