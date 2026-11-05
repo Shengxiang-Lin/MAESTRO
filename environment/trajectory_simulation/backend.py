@@ -79,6 +79,8 @@ class LLMPlanner(_LLMRole):
                 candidate=answer['task_instruction']
                 if not isinstance(candidate,str):
                     raise ValueError('natural_single_task_not_text')
+                if candidate == tasks[index]['task_instruction']:
+                    raise ValueError('natural_single_task_unchanged')
                 trial=choices.copy()
                 trial[index]=candidate
                 draft=realize_main(payload,canonical,{
