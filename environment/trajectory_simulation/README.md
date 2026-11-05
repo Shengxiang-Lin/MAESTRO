@@ -12,7 +12,7 @@ O1 actions and feedback from verified operations, exact operands, completed inpu
 bindings, source provenance and symbolic results. The LLM does not freely rewrite
 predicates, comparisons, relation directions, candidate sets or conclusions.
 This is gold-guided language realization, not an autonomous planning evaluation.
-Currently the language options are `concise` and `stepwise`.
+Currently the bounded language choices are `concise`, `stepwise`, `goal`, and `evidence`.
 
 - Main chooses a language variant for each ordered ready task and its reasoning.
   The public output is `delegate_task` with native `params.tasks`, or `complete`.
@@ -47,8 +47,16 @@ for their operands. Non-root shared intermediates have explicit result bindings.
 No source-by-source decomposition replaces the original reasoning skeleton.
 
 Main's public state contains the question, provided reference descriptors,
-available native tools, and cumulative O1-formatted subtask history. Simulated
+available native tools, an explicit public evidence store, and cumulative O1-formatted subtask history. Simulated
 records have public reference handles, not invented image paths or URLs.
+Later O1 task contexts use a version-2 **public evidence reference packet**:
+`known_resource_ids` and completed input bindings, **not full copied source
+records**. `Public Evidence Store` in the visible Main state still contains
+the actual observed records. The synthesizer and SFT exporter resolve the
+references from the chronological public store, then replay the exact same
+operation steps. An unknown or future resource reference fails validation.
+This greatly reduces JSON repetition in Main's SFT target.
+
 The teacher language-choice prompt retains completed result bindings; narrative
 history above 9000 characters uses a marked recent-history view. Saved public
 states always preserve the full cumulative history.
@@ -77,14 +85,19 @@ scene; compiler, prompt, public tool registry and feedback share this mapping.
 Run from the repository root, with the normal configured conda environment:
 
 ```bash
+# Default compact schedule merges linear steps while preserving true forks.
 python environment/simulate_trajectories.py plan --scene omnigaia \
-  --max-records 10 --output work/trajectory_plans.jsonl
+  --schedule compact --max-records 10 --output work/trajectory_plans_compact.jsonl
+
+# Diagnose the original unfused fragment graph separately.
+python environment/simulate_trajectories.py plan --scene omnigaia \
+  --schedule baseline --max-records 10 --output work/trajectory_plans_baseline.jsonl
 
 python environment/simulate_trajectories.py synthesize --scene omnigaia \
-  --provider passthrough --max-records 10 --output work/trajectory_offline.jsonl
+  --provider passthrough --schedule compact --max-records 10 --output work/trajectory_offline.jsonl
 
 python environment/simulate_trajectories.py synthesize --scene omnigaia \
-  --max-records 10 --output work/trajectory_llm.jsonl
+  --schedule compact --max-records 10 --output work/trajectory_llm.jsonl
 
 python -m unittest discover -s environment/tests
 ```
@@ -94,6 +107,16 @@ concurrency continue to come from `environment/config.yaml`. Different questions
 remain sequential. The passthrough provider is a structural reference, not
 LLM-generated training data. Synthesis overwrites its selected output paths;
 use distinct paths for smoke tests. There is no cross-run resume checkpoint.
+
+**When Gold compilation fails**, the plan JSONL or synthesized rejected JSONL
+now contains a `witness_diagnostics` object, with the output node,
+source/fact/entity coverage, acquisition reachability, exhaustive-search gate
+counts, and full-source executor/information checks. These diagnostics tell
+whether failures come from missing public entity coverage, unreachable
+resources, missing facts, or the actual proof computation. **No proof gates
+are relaxed** and Stage 1 frozen data is never repaired in this stage.
+`question_reviews.json` is optional; its absence does not satisfy the
+separate semantic review required to export training examples.
 
 ## Output and scope
 
@@ -106,5 +129,7 @@ Metadata explicitly records LLM style selection with verified semantic projectio
 The system does not execute or fabricate raw tool calls, costs or step counts.
 `language_contract_verified` proves conformance to the frozen skeleton, not that
 the Stage-2 natural-language question is equivalent to that skeleton.
-`upstream_question_semantics_revalidated` is therefore false. An incorrectly
-rewritten question must be repaired at Stage 2; Stage 3 never silently replaces it.
+`upstream_question_semantics_revalidated` records whether semantic eligibility
+was actually checked. Unreviewed offline trajectories cannot be exported as
+training data. Incorrectly rewritten questions must be repaired at Stage 2,
+not silently replaced at Stage 3.
