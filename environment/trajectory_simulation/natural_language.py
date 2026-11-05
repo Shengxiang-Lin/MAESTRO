@@ -191,6 +191,10 @@ def realize_main(
         if not isinstance(texts, list) or len(texts) != len(tasks):
             raise ValueError("natural_task_count_mismatch")
         for i, (candidate, task, fragment) in enumerate(zip(texts, tasks, fragments)):
+            # A rejected single-task rewrite may retain its exact canonical
+            # task. This preserves good sibling rewrites in the same round.
+            if candidate == task["task_instruction"]:
+                continue
             _language_guard(candidate, limit=2000)
             if re.search(r"(?m)^\s*\d+\.\s+", candidate):
                 raise ValueError("natural_task_repeats_machine_checklist")
@@ -220,7 +224,14 @@ def realize_main(
 
 def main_reviewer_prompt(
     payload: Mapping[str, Any], canonical: Mapping[str, Any], natural: Mapping[str, Any],
+    *, task_index: int | None = None,
 ) -> str:
+    originals = canonical["params"].get("tasks", [])
+    rewrites = natural["params"].get("tasks", [])
+    if task_index is not None:
+        if not 0 <= task_index < len(originals):
+            raise ValueError("invalid_reviewer_task_index")
+        originals, rewrites = [originals[task_index]], [rewrites[task_index]]
     return (
         "Audit a natural-language O1 Main delegation against an immutable, fully executable "
         "public contract. Require STRICT semantic equivalence: each entity owner, relation "
@@ -234,8 +245,8 @@ def main_reviewer_prompt(
         "If uncertain, equivalent=false.\n"
         + _json({
             "question": payload["public_state"]["question"],
-            "canonical_tasks": [t["task_instruction"] for t in canonical["params"].get("tasks", [])],
-            "rewritten_tasks": [t["task_instruction"] for t in natural["params"].get("tasks", [])],
+            "canonical_tasks": [t["task_instruction"] for t in originals],
+            "rewritten_tasks": [t["task_instruction"] for t in rewrites],
             "completed_subtasks": [
                 {"reference": r.get("public_ref"), "answer": r["answer"]}
                 for r in payload.get("completed_subtask_contracts", [])
