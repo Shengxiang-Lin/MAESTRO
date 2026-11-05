@@ -60,7 +60,7 @@ def read_packet(task):
         raise ValueError('malformed completed task references')
     if packet['version']==2:
         ids=packet.get('known_resource_ids')
-        if not isinstance(ids,list) or len(ids)!=len(set(ids)) or not all(isinstance(i,str) for i in ids):
+        if not isinstance(ids,list) or not all(isinstance(i,str) for i in ids) or len(ids)!=len(set(ids)):
             raise ValueError('malformed public evidence references')
     return packet
 
