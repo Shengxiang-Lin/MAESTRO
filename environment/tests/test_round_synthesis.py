@@ -205,6 +205,38 @@ class TwoPhaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _read_verified_bank(tampered)
 
+    def test_phase2_keeps_verified_round_one_if_round_two_export_fails(self):
+        _,_,_,bank=self.bank(dependent=True)
+        envelope={"format":"maestro.clean_subtasks.v1","bank":bank}
+        envelope["sha256"]=digest(envelope)
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path=Path(tmp)/"bank.jsonl"
+            output_path=Path(tmp)/"rounds.jsonl"
+            input_path.write_text(json.dumps(envelope,ensure_ascii=False)+"\n")
+            from environment.trajectory_simulation.rounds import make_round_record
+            calls=[0]
+
+            def fail_second(*args,**kwargs):
+                calls[0]+=1
+                if calls[0]==2:
+                    raise ValueError("simulated_second_round_export_failure")
+                return make_round_record(*args,**kwargs)
+
+            with patch(
+                "environment.trajectory_simulation.rounds.make_round_record",
+                side_effect=fail_second,
+            ):
+                stats=generate_main_rounds_jsonl(
+                    input_path,output_path,planner=PassthroughPlanner(),
+                    progress=False,
+                )
+            self.assertEqual(stats["banks_rejected"],1)
+            self.assertEqual(stats["eligible_rounds"],1)
+            items=[json.loads(line) for line in output_path.read_text().splitlines()]
+            self.assertEqual(len(items),1)
+            self.assertEqual(items[0]["round_index"],1)
+            self.assertTrue(items[0]["history_valid"])
+
     def test_main_prompt_uses_actual_orchestra_o1_tool_descriptions(self):
         state={
             "question":"Who wrote the research report?",
