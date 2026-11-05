@@ -128,22 +128,52 @@ class LLMPlanner(_LLMRole):
 class LLMExecutor(_LLMRole):
     def naturalize_feedback(self,payload,canonical):
         from .natural_language import (
-            feedback_writer_prompt, realize_feedback_natural,
+            feedback_writer_prompt, feedback_repair_prompt,
+            feedback_output_diagnostic, realize_feedback_natural,
             feedback_reviewer_prompt, check_reviewer,
         )
-        self._count('natural_feedback_write')
-        proposal=self.backend.complete_json(
-            'Write a concise natural O1 Sub-Agent report from verified public evidence. JSON only.',
-            feedback_writer_prompt(payload,canonical),
-        )
-        result=realize_feedback_natural(payload,proposal)
-        self._count('natural_feedback_review')
-        verdict=self.backend.complete_json(
-            'Strictly verify every claim against the provided observations and operations. JSON only.',
-            feedback_reviewer_prompt(payload,result),
-        )
-        check_reviewer(verdict,flag='grounded')
-        return result
+        # The local small-model JSON writer can return empty required fields.
+        # Retry ONCE with a compact source-grounded prompt, rather than
+        # silently dropping an otherwise valid Sub-Agent example. Both paths
+        # still pass the identical deterministic AND semantic evidence guards.
+        for attempt in range(2):
+            self._count('natural_feedback_write')
+            if attempt:
+                self._count('natural_feedback_retry')
+            prompt = (
+                feedback_writer_prompt(payload,canonical)
+                if attempt == 0
+                else feedback_repair_prompt(payload,canonical)
+            )
+            proposal=self.backend.complete_json(
+                'Return JSON with exactly two NONEMPTY strings: summary and '
+                'trace_summary. Report only facts supported by public evidence.',
+                prompt,
+            )
+            try:
+                result=realize_feedback_natural(payload,proposal)
+            except ValueError as exc:
+                # Only the model's response schema/empty-field failures can
+                # trigger a retry. Hallucinated facts, unauthorized actions,
+                # incorrect results or semantic errors remain hard failures.
+                reason=str(exc)
+                if reason in {'natural_language_missing',
+                              'invalid_natural_report_fields'}:
+                    if attempt == 0:
+                        continue
+                    raise ValueError(
+                        reason+';writes=2;'+feedback_output_diagnostic(proposal)
+                    ) from exc
+                raise
+            self._count('natural_feedback_review')
+            verdict=self.backend.complete_json(
+                'Strictly verify every claim against the provided observations '
+                'and operations. JSON only.',
+                feedback_reviewer_prompt(payload,result),
+            )
+            check_reviewer(verdict,flag='grounded')
+            return result
+        raise AssertionError('natural_feedback_retry_loop_exhausted')
 
     def respond(self,payload,prompt):
         if self.style_provider in ('template','natural'):
