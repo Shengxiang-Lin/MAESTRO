@@ -171,6 +171,34 @@ class RoundCentricTests(unittest.TestCase):
         self.assertNotIn("execution_checks",row["target_json"])
         self.assertNotIn("gold_supervision",row["input"])
 
+        # Main SFT accepts Round 2 without any Round-1 natural target:
+        # the offline teacher bank still supplies a complete correct history.
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "environment.trajectory_simulation.subtask_bank.build_subtask_bank",
+            return_value=bank,
+        ), patch(
+            "environment.trajectory_simulation.pipeline._rows",return_value=[q],
+        ), patch(
+            "environment.trajectory_simulation.pipeline._world_map",
+            return_value={q["task_id"]:(record,rendered)},
+        ):
+            source=Path(tmp)/"worlds.jsonl"
+            realized=Path(tmp)/"realized.jsonl"
+            source.write_text("{}\\n")
+            realized.write_text("{}\\n")
+            output=Path(tmp)/"rounds.jsonl"
+            summary=synthesize_rounds_jsonl(
+                source,realized,output,
+                planner=FirstBadThenGood(),executor=PassthroughExecutor(),
+                round_indices={1,2},progress=False,
+            )
+            self.assertEqual(summary["rounds_skipped"],1)
+            self.assertEqual(summary["eligible_rounds"],1)
+            rows=[json.loads(line) for line in output.read_text().splitlines()]
+            self.assertEqual(len(rows),1)
+            self.assertEqual(rows[0]["round_index"],2)
+            self.assertEqual(rows[0]["history_origin"],"teacher_reconstructed")
+
     def test_round_export_refuses_invalid_state_or_corrupted_prefix(self):
         q,_,_,bank=self.bank(dependent=True)
         second=bank["waves"][1]
