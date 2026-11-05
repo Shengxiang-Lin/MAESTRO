@@ -13,6 +13,7 @@ from environment.question_generation.backend import OpenAICompatibleBackend
 from .backend import (
     LLMExecutor, LLMPlanner, PassthroughExecutor, PassthroughPlanner,
 )
+from .tools import PROFILES
 from .pipeline import plan_trajectories_jsonl, synthesize_trajectories_jsonl
 
 
@@ -26,6 +27,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output")
     parser.add_argument("--max-records", type=int)
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--scene", choices=sorted(PROFILES), default="omnigaia")
 
 
 def command_plan(args: argparse.Namespace) -> None:
@@ -35,7 +37,7 @@ def command_plan(args: argparse.Namespace) -> None:
         output = str(Path(output).with_suffix(".gold_plan.jsonl"))
     _print(plan_trajectories_jsonl(
         args.worlds, args.realized, output,
-        max_records=args.max_records, seed=args.seed,
+        max_records=args.max_records, seed=args.seed, scene=args.scene,
     ))
 
 
@@ -66,7 +68,7 @@ def command_synthesize(args: argparse.Namespace) -> None:
         rejected_output_path=args.rejected_output,
         progress=not args.no_progress,
         flush_every=args.flush_every,
-        seed=args.seed,
+        seed=args.seed, scene=args.scene,
         model_roles={
             "main_planner": clean(planner_spec),
             "subagent_executor": clean(executor_spec),

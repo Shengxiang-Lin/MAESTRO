@@ -27,7 +27,7 @@ from .contract import (
     validate_action, validate_feedback,
 )
 from .history import format_o1_subtask_history
-from .review import action_review_prompt, feedback_review_prompt, review_language
+from .realization import validate_bound_action
 
 
 class GoldTrajectoryError(RuntimeError):
@@ -87,16 +87,16 @@ def _with_feedback(prompt: str, issues: list[str]) -> str:
     )
 
 
-def _public_state(question: str, trajectory: list[dict[str, Any]]) -> dict[str, Any]:
+def _public_state(question: str, trajectory: list[dict[str, Any]], *, tools=TOOLS, resources=()) -> dict[str, Any]:
     """O1-compatible observation: question + cumulative formatted subtask history.
 
     Gold fragment graph/answers remain exclusively in the teacher guidance and
     private supervision, never in the public Main state.
     """
     return {
-        "question": question,
+        "question": question + ("\n\n[Provided reference records]\n" + "\n".join(f"{r['title']} ({r['resource_id']}, {r['source_type']})" for r in resources) if resources else ""),
         "subtask_history": format_o1_subtask_history(trajectory),
-        "available_tools": list(TOOLS),
+        "available_tools": list(tools),
     }
 
 
@@ -107,12 +107,12 @@ def _model(role: Any) -> str:
 def synthesize_one(
     realized: Mapping[str, Any], world_record: Mapping[str, Any], rendered: Any,
     planner: Any, executor: Any, *, max_attempts: int = 3,
-    subagent_workers: int = 4,
+    subagent_workers: int = 4, scene: str = "omnigaia",
 ) -> dict[str, Any]:
     if max_attempts < 1 or subagent_workers < 1:
         raise ValueError("max_attempts and subagent_workers must be >= 1")
     try:
-        gold = compile_gold_solution(realized, world_record, rendered)
+        gold = compile_gold_solution(realized, world_record, rendered, scene=scene)
     except (GoldCompilationError, ValueError, TypeError, KeyError) as exc:
         raise GoldTrajectoryError("gold_compilation", [str(exc)]) from exc
 
@@ -129,11 +129,16 @@ def synthesize_one(
         for round_index in range(1, len(gold["fragments"]) + 2):
             guidance = private_guidance(gold, completed)
             ready = ready_fragments(gold, completed)
-            public_state = _public_state(gold["question"], trajectory)
+            public_state = _public_state(gold["question"], trajectory, tools=gold["available_tools"], resources=gold["provided_resources"])
             payload = {
                 "public_state": public_state,
                 "gold_guidance": guidance,
                 "completed_subtask_contracts": list(known_results.values()),
+                "visible_resources": list({r["resource_id"]: r for r in [
+                    *gold["provided_resources"],
+                    *({"resource_id": o["resource_id"], "source_type": o["source_type"], "title": o["title"]}
+                      for f in gold["fragments"] if f["fragment_id"] in completed for o in f["observations"])
+                ]}.values()),
                 # Offline passthrough test mode only. NOT included in main_prompt.
                 "offline_oracle_answer": gold["final_answer"],
             }
@@ -145,12 +150,7 @@ def synthesize_one(
                 )
                 if not okay:
                     return okay, issues
-                texts = [value["reasoning"]]
-                for task in value["params"].get("tasks", []):
-                    texts.extend([task["task_instruction"], task["context"]])
-                return review_language(
-                    planner, action_review_prompt(
-                        value, guidance, public_state, list(known_results.values()), ready), texts)
+                return validate_bound_action(value, payload)
 
             action = _stage(
                 lambda issues: planner.decide(
@@ -182,6 +182,8 @@ def synthesize_one(
                     "trajectory": trajectory,
                     "validation": {
                         "accepted": True, "final_answer_verified": True,
+                        "language_contract_verified": True,
+                        "upstream_question_semantics_revalidated": False,
                         "completed_gold_fragments": len(completed),
                         "expected_gold_fragments": len(fragment_by_id),
                         "fragment_dependencies_respected": True,
@@ -208,6 +210,8 @@ def synthesize_one(
                         "gold_policy": "first_stage_fragment_guided",
                         "clean_trajectory": True,
                         "two_role_teacher": True,
+                        "scene": scene,
+                        "language_generation": "LLM_style_selection_with_verified_semantic_projection",
                         "main_public_state_matches_o1": True,
                         "gold_guidance_private": True,
                         "subagent_answers_programmatic": True,
@@ -216,7 +220,7 @@ def synthesize_one(
                         "language_validation": (
                             "deterministic_offline_reference"
                             if getattr(planner, "offline", False) and getattr(executor, "offline", False)
-                            else "fixed_contract_review_with_quoted_issues"
+                            else "bounded_language_realization_of_verified_execution"
                         ),
                     },
                 }
@@ -239,12 +243,7 @@ def synthesize_one(
                 }
 
                 def check_feedback(value):
-                    okay, issues = validate_feedback(value, fragment)
-                    if not okay:
-                        return okay, issues
-                    return review_language(
-                        executor, feedback_review_prompt(value, sub_payload),
-                        [value["summary"], value["trace_summary"]])
+                    return validate_feedback(value, fragment, strict=True)
 
                 language = _stage(
                     lambda issues: executor.respond(
@@ -281,9 +280,10 @@ def synthesize_one(
             ]
             # Run in parallel but publish all results in deterministic fragment order.
             replies = [future.result() for future in futures]
-            for fragment, reply in zip(ready, replies):
+            for reply_index, (fragment, reply) in enumerate(zip(ready, replies)):
                 known_results[fragment["fragment_id"]] = {
                     "fragment_id": fragment["fragment_id"],
+                    "public_ref": f"Attempt {round_index}, subtask {reply_index + 1}",
                     "answer": reply["finish_result"]["result"],
                     "answer_kind": fragment["answer_kind"],
                     "summary": reply["finish_result"]["summary"],
@@ -311,7 +311,7 @@ def synthesize_one(
 
 def plan_trajectories_jsonl(
     worlds_path: str | Path, realized_path: str | Path,
-    output_path: str | Path, *, max_records: int | None = None, seed: int = 17,
+    output_path: str | Path, *, max_records: int | None = None, seed: int = 17, scene: str = "omnigaia",
 ) -> dict[str, Any]:
     realized = _rows(realized_path)
     if max_records is not None:
@@ -327,7 +327,7 @@ def plan_trajectories_jsonl(
             try:
                 if task_id not in worlds:
                     raise GoldCompilationError("world_not_found")
-                plan = compile_gold_solution(item, *worlds[task_id])
+                plan = compile_gold_solution(item, *worlds[task_id], scene=scene)
                 row = {
                     "task_id": task_id, "status": "ready",
                     "fragment_graph": [{
@@ -358,7 +358,7 @@ def synthesize_trajectories_jsonl(
     max_records: int | None = None, max_attempts: int = 3,
     subagent_workers: int = 4, rejected_output_path: str | Path | None = None,
     progress: bool = True, flush_every: int = 5, seed: int = 17,
-    model_roles: Mapping[str, Any] | None = None,
+    model_roles: Mapping[str, Any] | None = None, scene: str = "omnigaia",
 ) -> dict[str, Any]:
     if min(max_attempts, subagent_workers, flush_every) < 1:
         raise ValueError("attempts, workers, flush_every must be >= 1")
@@ -387,7 +387,7 @@ def synthesize_trajectories_jsonl(
                 record, rendered = worlds[task_id]
                 episode = synthesize_one(
                     row, record, rendered, planner, executor,
-                    max_attempts=max_attempts, subagent_workers=subagent_workers,
+                    max_attempts=max_attempts, subagent_workers=subagent_workers, scene=scene,
                 )
             except (GoldTrajectoryError, ValueError, KeyError, TypeError) as exc:
                 rejected += 1

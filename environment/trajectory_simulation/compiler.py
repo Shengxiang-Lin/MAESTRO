@@ -235,165 +235,9 @@ def ready_fragments(plan: Mapping[str, Any], completed: set[str]) -> list[dict[s
     ]
 
 
-def compile_gold_solution(
-    realized: Mapping[str, Any], world_record: Mapping[str, Any],
-    rendered: Any, *, max_sources: int = 8,
-) -> dict[str, Any]:
-    task_id = str(realized.get("task_id", ""))
-    if not task_id or task_id != rendered.task_id:
-        raise GoldCompilationError("question/world task_id mismatch")
-    program = program_from_dict(world_record["program"])
-    world = world_from_dict(world_record["world"])
-    node_map = program.node_map()
-    trace = SymbolicExecutor().execute_trace(program, world)
-    order = program.topological_order()
-    links = (program.metadata.get("deep_dependency", {}) or {}).get("composition_links")
-    if not isinstance(links, list) or not links:
-        raise GoldCompilationError("missing first-stage composition_links; no inferred fallback")
-    output_ids = [int(link["output_node_id"]) for link in links]
-    if len(set(output_ids)) != len(output_ids) or any(n not in node_map for n in output_ids):
-        raise GoldCompilationError("invalid/duplicate composition output nodes")
-    resources = (realized.get("capability_world") or {}).get("resources", [])
-    if not resources or {str(x["resource_id"]) for x in resources} != set(world.sources):
-        raise GoldCompilationError("capability resources do not match frozen world")
-    audit = (realized.get("capability_world") or {}).get("binding_audit", {})
-    discovery = (audit.get("progressive_discovery", {}) or
-                 audit.get("p1_orchestration_profile", {}).get("progressive_discovery", {}))
-    dependencies, _ = resolve_dependencies(resources, discovery.get("anchor_registry", {}))
-
-    fragments = []
-    output_to_fragment: dict[int, str] = {}
-    support_by_fragment: dict[str, set[str]] = {}
-    support_sources: set[str] = set()
-    for index, (link, output) in enumerate(zip(links, output_ids)):
-        identifier = f"fragment:{index}"
-        subtree = _subprogram(program, output)
-        witness = _minimal_witness(subtree, world, trace[output], dependencies,
-                                   max_sources=max_sources)
-        support_sources.update(witness)
-        prev = _maximal_dependencies(program, output, output_to_fragment)
-        known_sources = set().union(*(support_by_fragment[p] for p in prev)) if prev else set()
-        new_sources = sorted(set(witness) - known_sources)
-        owned = _ancestors(program, output)
-        for predecessor in output_to_fragment:
-            owned -= _ancestors(program, predecessor)
-        operations = [
-            {"node_id": nid, "op": node_map[nid].op,
-             "dependencies": list(node_map[nid].dependencies),
-             "inputs": _public_inputs(node_map[nid].inputs, rendered)}
-            for nid in order if nid in owned
-        ]
-        fragment = {
-            "fragment_id": identifier, "stage": int(link.get("stage", index)),
-            "output_node_id": output, "depends_on": prev,
-            "operations": operations,
-            "operation_results": [{
-                "node_id": op["node_id"],
-                "answer": _public_answer(trace[op["node_id"]], rendered, node_map[op["node_id"]]),
-            } for op in operations],
-            "resource_ids": new_sources,
-            "support_resource_ids": witness,
-            "observations": _source_claims(world, rendered, new_sources),
-            "known_observations": _source_claims(
-                world, rendered, sorted(set(witness) & known_sources)),
-            "expected_answer": _public_answer(trace[output], rendered, node_map[output]),
-            "answer_kind": "entity_set" if isinstance(trace[output], set) else "value",
-        }
-        fragments.append(fragment)
-        output_to_fragment[output] = identifier
-        support_by_fragment[identifier] = set(witness)
-
-    final_id = order[-1]
-    final_subprogram = _subprogram(program, final_id)
-    final_info = assess_goal_information_completeness(program, world)
-    if not final_info.accepted:
-        raise GoldCompilationError("frozen world lacks decision-complete information")
-    final_proof_sources = _minimal_witness(
-        final_subprogram, world, trace[final_id], dependencies,
-        max_sources=max_sources, required_fact_ids=final_info.required_fact_ids,
-    )
-    current_world = _evidence_world(world, support_sources)
-    current_info = assess_goal_information_completeness(program, current_world)
-    current_answer = None
-    try:
-        current_answer = SymbolicExecutor().execute(program, current_world)
-    except (ValueError, TypeError, RuntimeError):
-        pass
-    sufficient = (
-        current_info.accepted
-        and set(final_info.required_fact_ids).issubset(
-            {f.fact_id for f in current_world.facts})
-        and current_answer is not None
-        and _same(current_answer, trace[final_id])
-    )
-    covered_nodes = set().union(*(
-        _ancestors(program, output) for output in output_ids))
-    terminal_nodes = _ancestors(program, final_id) - covered_nodes
-    if terminal_nodes or not sufficient:
-        # Finish every remaining operation, not just the final COUNT/VERIFY.
-        terminal_predecessors = _maximal_dependencies(program, final_id, output_to_fragment)
-        known_sources = set().union(*(
-            support_by_fragment[parent] for parent in terminal_predecessors))
-        new_sources = sorted(set(final_proof_sources) - known_sources)
-        fragments.append({
-            "fragment_id": "fragment:terminal",
-            "stage": max(x["stage"] for x in fragments) + 1,
-            "output_node_id": final_id,
-            "depends_on": terminal_predecessors,
-            "operations": [
-                {"node_id": nid, "op": node_map[nid].op,
-                 "dependencies": list(node_map[nid].dependencies),
-                 "inputs": _public_inputs(node_map[nid].inputs, rendered)}
-                for nid in order if nid in terminal_nodes or (not terminal_nodes and nid == final_id)
-            ],
-            "operation_results": [
-                {"node_id": nid,
-                 "answer": _public_answer(trace[nid], rendered, node_map[nid])}
-                for nid in order if nid in terminal_nodes or (not terminal_nodes and nid == final_id)
-            ],
-            "resource_ids": new_sources,
-            "support_resource_ids": final_proof_sources,
-            "observations": _source_claims(world, rendered, new_sources),
-            "known_observations": _source_claims(
-                world, rendered, sorted(set(final_proof_sources) & known_sources)),
-            "expected_answer": json_value(rendered.answer),
-            "answer_kind": "terminal_evidence",
-        })
-        support_sources.update(final_proof_sources)
-
-    if not fragments:
-        raise GoldCompilationError("no composed gold fragments")
-    waves = []
-    completed: set[str] = set()
-    while len(completed) < len(fragments):
-        ready = ready_fragments({"fragments": fragments}, completed)
-        if not ready:
-            raise GoldCompilationError("cyclic or unresolved fragment dependencies")
-        wave = [item["fragment_id"] for item in ready]
-        waves.append(wave)
-        completed.update(wave)
-
-    final_op = node_map[final_id].op
-    return {
-        "task_id": task_id,
-        "question": str(realized.get("question", "")),
-        "fragments": fragments,
-        "waves": waves,
-        "final_answer": json_value(rendered.answer),
-        "answer_contract": {
-            "operation": final_op,
-            "collection_mode": (
-                "set" if final_op in {"QUERY_NAME", "QUERY_RELATION", "SELECT_BETWEEN", "SELECT_AMONG"}
-                else "multiset" if isinstance(trace[final_id], (list, tuple, set))
-                else "scalar"
-            ),
-        },
-        "terminal": {"op": final_op, "node_id": final_id,
-                     "depends_on": _maximal_dependencies(program, final_id, output_to_fragment)},
-        "symbolic_trace": {str(k): json_value(v) for k, v in trace.items()},
-        "final_proof_source_ids": final_proof_sources,
-        "policy": "first_stage_composition_links_fragment_gold",
-    }
+def compile_gold_solution(realized, world_record, rendered, *, max_sources=8, scene="omnigaia"):
+    from .skeleton import compile_fragments
+    return compile_fragments(realized, world_record, rendered, max_sources=max_sources, scene=scene)
 
 
 def private_guidance(plan: Mapping[str, Any], completed: set[str]) -> dict[str, Any]:
@@ -405,14 +249,16 @@ def private_guidance(plan: Mapping[str, Any], completed: set[str]) -> dict[str, 
             "fragment_id": f["fragment_id"], "depends_on": f["depends_on"],
             "stage": f["stage"],
             "operations": [{"node_id": op["node_id"], "op": op["op"],
-                            "dependencies": op["dependencies"], "inputs": op["inputs"]}
+                            "dependencies": op["dependencies"], "inputs": op["inputs"],
+                             "input_bindings": op.get("input_bindings", [])}
                            for op in f["operations"]],
         } for f in plan["fragments"]],
         "completed_fragments": sorted(completed),
         "ready": [{
             "fragment_id": f["fragment_id"], "depends_on": f["depends_on"],
             "operations": [{"node_id": op["node_id"], "op": op["op"],
-                            "dependencies": op["dependencies"], "inputs": op["inputs"]}
+                            "dependencies": op["dependencies"], "inputs": op["inputs"],
+                             "input_bindings": op.get("input_bindings", [])}
                            for op in f["operations"]],
             "required_resources": [{
                 "resource_id": obs["resource_id"],
@@ -420,21 +266,16 @@ def private_guidance(plan: Mapping[str, Any], completed: set[str]) -> dict[str, 
                 # An undiscovered source's title is private evidence, not
                 # an O1-visible clue for a future Main instruction.
             } for obs in f["observations"]],
-            "suggested_tools": sorted({
-                "GoogleSearchAction" if obs["source_type"] == "search" else
-                "ImageAnalysisAction" if obs["source_type"].startswith("image") else
-                "AudioAnalysisAction" if obs["source_type"].startswith("audio") else
-                "VideoAnalysisAction" if obs["source_type"].startswith("video") else
-                "ExecuteCodeAction" if obs["source_type"].startswith(("table", "database")) else
-                "ExtractUrlContentAction"
-                for obs in f["observations"]
-            }) or ["ExecuteCodeAction"],
+            "suggested_tools": f["suggested_tools"],
+            "available_tools": plan["available_tools"],
+            "input_bindings": [op.get("input_bindings", []) for op in f["operations"]],
         } for f in ready],
         "remaining_fragment_ids": [
             f["fragment_id"] for f in plan["fragments"] if f["fragment_id"] not in completed
         ],
         "terminal_operation": plan["terminal"]["op"],
         "may_complete": len(completed) == len(plan["fragments"]),
+        "available_tools": plan["available_tools"],
     }
 
 

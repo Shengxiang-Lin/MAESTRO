@@ -286,8 +286,9 @@ class FragmentTrajectoryTests(unittest.TestCase):
             "question": "Find Alice.", "task_instruction": "Finish the attribute query.",
             "dependency_results": [], "fragment": terminal,
         })
-        self.assertIn("previously_read_observations", prompt)
-        self.assertIn("1687", prompt)
+        self.assertIn("Reused the earlier observations", prompt)
+        self.assertIn("First reference", prompt)
+        self.assertNotIn("1687", prompt)  # Unused facts are not language choices.
 
     def test_main_prompt_explicitly_requires_native_params_tasks(self):
         from environment.trajectory_simulation.contract import main_prompt
