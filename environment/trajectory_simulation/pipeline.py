@@ -32,6 +32,7 @@ from .realization import validate_bound_action
 from .eligibility import check_question
 from .evidence import bind_ready,public_record,verify_known_packet
 from .replay import replay_task
+from .public_preflight import audit_public_executability
 from .contract import answers_equal
 
 
@@ -135,6 +136,14 @@ def synthesize_one(
     except (ValueError, TypeError, KeyError) as exc:
         raise GoldTrajectoryError("gold_compilation", [str(exc)]) from exc
 
+    public_preflight = audit_public_executability(gold)
+    if not public_preflight["publicly_executable"]:
+        raise GoldTrajectoryError(
+            "public_executability",
+            [str(public_preflight["reason"])],
+            {"public_preflight": public_preflight},
+        )
+
     eligibility=check_question(gold,world_record,planner,review=question_review)
     if not eligibility['eligible']:
         raise GoldTrajectoryError('question_eligibility',['frozen_question_not_eligible'],{'eligibility':eligibility})
@@ -212,6 +221,7 @@ def synthesize_one(
                         "language_contract_verified": True,
                         "upstream_question_semantics_revalidated": eligibility['reviewed'],
                         "public_evidence_replay_verified": True,
+                        "public_plan_preflight_verified": True,
                         "training_eligible": eligibility['reviewed'] and not (getattr(planner,'offline',False) or getattr(executor,'offline',False)),
                         "completed_gold_fragments": len(completed),
                         "expected_gold_fragments": len(fragment_by_id),
@@ -376,7 +386,7 @@ def plan_trajectories_jsonl(
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     protect_paths([worlds_path,realized_path],[output])
-    accepted = 0
+    accepted = rejected = quarantined = compiled = 0
     reasons: Counter[str] = Counter()
     with output.open("w", encoding="utf-8") as writer:
         for item in realized:
@@ -385,8 +395,12 @@ def plan_trajectories_jsonl(
                 if task_id not in worlds:
                     raise GoldCompilationError("world_not_found")
                 plan = compile_gold_solution(item, *worlds[task_id], scene=scene, schedule=schedule)
+                compiled += 1
+                public_preflight = audit_public_executability(plan)
                 row = {
-                    "task_id": task_id, "status": "ready",
+                    "task_id": task_id,
+                    "status": "ready" if public_preflight["publicly_executable"] else "quarantined",
+                    "public_executability": public_preflight,
                     "fragment_graph": [{
                         "fragment_id": f["fragment_id"],
                         "output_node_id": f["output_node_id"],
@@ -397,9 +411,14 @@ def plan_trajectories_jsonl(
                     "gold_waves": plan["waves"],
                     "final_answer": plan["final_answer"],
                 }
-                accepted += 1
+                if public_preflight["publicly_executable"]:
+                    accepted += 1
+                else:
+                    quarantined += 1
+                    reasons["public_executability:" + str(public_preflight["reason"])] += 1
             except (GoldCompilationError, ValueError, TypeError, KeyError) as exc:
                 reason = str(exc)
+                rejected += 1
                 reasons[reason] += 1
                 row = {
                     "task_id": task_id, "status": "rejected", "reason": reason,
@@ -408,8 +427,8 @@ def plan_trajectories_jsonl(
                     row["witness_diagnostics"] = exc.diagnostics
             writer.write(json.dumps(row, ensure_ascii=False) + "\n")
     return {
-        "planned": len(realized), "ready": accepted,
-        "rejected": len(realized) - accepted,
+        "planned": len(realized), "compiled": compiled, "ready": accepted,
+        "quarantined": quarantined, "rejected": rejected,
         "rejection_reasons": dict(reasons), "output": str(output),
     }
 
@@ -458,7 +477,7 @@ def synthesize_trajectories_jsonl(
             except (GoldTrajectoryError, ValueError, KeyError, TypeError) as exc:
                 stage = exc.stage if isinstance(exc, GoldTrajectoryError) else "unexpected_error"
                 reasons[stage] += 1
-                isolated=stage in {'question_eligibility','public_replay'}
+                isolated=stage in {'question_eligibility','public_replay','public_executability'}
                 if isolated:quarantined+=1
                 else:rejected+=1
                 (quarantine if isolated else bad).write(json.dumps({
