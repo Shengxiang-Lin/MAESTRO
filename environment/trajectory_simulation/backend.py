@@ -48,21 +48,68 @@ class _LLMRole:
 class LLMPlanner(_LLMRole):
     def naturalize_action(self, payload, canonical):
         from .natural_language import (
-            main_writer_prompt, realize_main, main_reviewer_prompt, check_reviewer,
+            main_single_task_prompt, realize_main,
+            main_reviewer_prompt, check_reviewer,
         )
-        self._count('natural_main_write')
-        candidate=self.backend.complete_json(
-            'Rewrite a verified O1 Main action naturally without changing its semantics. JSON only.',
-            main_writer_prompt(payload,canonical),
-        )
-        action=realize_main(payload,canonical,candidate)
-        self._count('natural_main_review')
-        verdict=self.backend.complete_json(
-            'Strictly check equivalence between a fixed public task and its natural rewrite. JSON only.',
-            main_reviewer_prompt(payload,canonical,action),
-        )
-        check_reviewer(verdict,flag='equivalent')
-        return action
+        # Real O1 traces frequently use empty Main reasoning. The Gold
+        # controller already fixes the answer, so do not waste a completion
+        # request or invite the model to add an accidental params field.
+        if canonical['action']=='complete':
+            self.last_natural_audit={'rewritten_tasks':0,'task_count':0,
+                                     'errors':[]}
+            return realize_main(payload,canonical,{'reasoning':''})
+        tasks=canonical['params']['tasks']
+        choices=[task['task_instruction'] for task in tasks]
+        errors=[]
+        rewritten=0
+        # One writer request per immutable ready fragment: a small LLM cannot
+        # accidentally drop a parallel sibling from a generated JSON array.
+        # Each task is checked independently; one rejected rewrite must not
+        # erase other accepted rewrites from the same parallel wave.
+        for index in range(len(tasks)):
+            try:
+                self._count('natural_main_write')
+                answer=self.backend.complete_json(
+                    'Write exactly one faithful natural O1 subtask instruction. '
+                    'Return JSON with only task_instruction.',
+                    main_single_task_prompt(payload,canonical,index),
+                )
+                if not isinstance(answer,dict) or set(answer)!={'task_instruction'}:
+                    raise ValueError('natural_single_task_schema')
+                candidate=answer['task_instruction']
+                if not isinstance(candidate,str):
+                    raise ValueError('natural_single_task_not_text')
+                trial=choices.copy()
+                trial[index]=candidate
+                draft=realize_main(payload,canonical,{
+                    'reasoning':'','task_instructions':trial,
+                })
+                self._count('natural_main_review')
+                verdict=self.backend.complete_json(
+                    'Strictly verify one rewritten public delegation against its '
+                    'canonical source-only execution contract. JSON only.',
+                    main_reviewer_prompt(payload,canonical,draft,task_index=index),
+                )
+                check_reviewer(verdict,flag='equivalent')
+                choices[index]=candidate
+                rewritten+=1
+            except (ValueError,TypeError,KeyError) as exc:
+                errors.append({'task_index':index,
+                               'reason':f'{type(exc).__name__}:{str(exc)[:200]}'})
+            except Exception as exc:
+                # Network/backend exceptions must retain a short diagnostic,
+                # but must not silently approve an unreviewed rewrite.
+                from environment.question_generation.backend import BackendError
+                if not isinstance(exc,BackendError):
+                    raise
+                errors.append({'task_index':index,
+                               'reason':f'{type(exc).__name__}:{str(exc)[:200]}'})
+        self.last_natural_audit={
+            'rewritten_tasks':rewritten,'task_count':len(tasks),'errors':errors,
+        }
+        return realize_main(payload,canonical,{
+            'reasoning':'','task_instructions':choices,
+        })
 
     def decide(self,payload,prompt):
         if self.style_provider in ('template','natural'):
