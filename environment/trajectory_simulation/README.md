@@ -5,6 +5,77 @@ It preserves composition fragment boundaries, adds cuts for independent branches
 and shared intermediate results, and dispatches every ready fragment in parallel.
 The accepted Stage-2 question is preserved.
 
+## Recommended: precompute clean Subtask Bank, then export Main rounds
+
+For **Main Agent SFT**, use the new `rounds` command, not a requirement
+that the whole question be generated as one successful episode:
+
+1. Compile and preflight the full frozen Gold Fragment DAG, then review
+   the Stage-2 question's semantic equivalence once.
+2. Build a **Subtask Bank** in DAG topological waves: every Fragment gets
+   its fixed, public-replay-verified answer, public evidence, O1 task
+   instruction, `summary`, and `trace_summary`. The LLM may naturally
+   realize language, but cannot change answers, constraints, or sources.
+   Only after the entire parallel wave is verified are its results
+   published to the next Main state; siblings never see each other early.
+3. Compose each selected Main decision state from the original question
+   and **only the already published** previous waves. Build the input using
+   the actual `OmniGAIAMainAgentPrompt.build_prompt` and native benchmark
+   tool descriptions/schemas. The target is the prevalidated Gold-bound
+   `delegate_task` action (or fixed-answer `complete`).
+4. Emit one standard `train_maestro_8b` Stage-1 JSONL row per selected
+   decision round. A failed natural rewrite is replaced in the teacher
+   history by the public-verified canonical task; that same target is
+   omitted from strict Main SFT unless `--include-fallback-rounds` is
+   explicitly set.
+
+This design assumes **correct Sub-Agent results only**. No error, retry,
+model switching, fake tool trace or unsupported "partial" feedback is
+introduced. For each Fragment the correct answer and a verified
+fallback summary can always be generated after successful public preflight;
+a fluent LLM summary is **attempted**, separately reviewed, and may still
+fall back if it invents or misattributes evidence.
+
+Example from the repository root (configured local vLLM active):
+
+```bash
+python environment/simulate_trajectories.py rounds \
+  --scene omnigaia \
+  --provider openai-compatible \
+  --style-provider natural \
+  --schedule compact \
+  --max-records 20 \
+  --round-indices 2,3 \
+  --bank-output work/subtask_bank_20.jsonl \
+  --output work/main_rounds_20.jsonl
+```
+
+`work/main_rounds_20.jsonl` is already an SFT-ready dataset with
+`input` (actual O1 Main prompt), `target_json`, `macro_label`,
+`round_index`, `history_origin` and independent validation fields.
+Use it directly with `train_maestro_8b.train_stage1 --train_file`; do not
+run the full-episode `export_stage1.py` converter over this JSONL.
+
+`work/subtask_bank_20.jsonl` is an **optional private teacher artifact**:
+it includes future answers, evidence and intermediate records to audit
+the precomputed bank. Never feed it into the Main training prompt.
+It is a diagnostic snapshot, not yet a cross-run cached/reusable bank.
+`--round-indices` selects target decision rounds; omitted predecessors
+still have their Gold-correct histories constructed first. Without it,
+all DAG-wave decisions plus the `complete` action are eligible to export.
+`--exclude-complete` omits final actions. Split train/test by task/World,
+not independently by rows of a shared question.
+
+The current composition uses the source-safe Gold topological **waves**
+rather than sampling all possible DAG linear extensions. The latter may
+be added after validating per-round causal source exposure.
+
+Round metrics include `subtask_bank_fragments`,
+`subtask_bank_feedback_natural_rate`, `eligible_rounds`,
+`round_yield`, `natural_action_rate` (all attempted Main tasks),
+`history_origins` and `round_skip_reasons`. These are more relevant
+to Main SFT coverage than whole-episode acceptance rate.
+
 ## Strict semantic boundary
 
 Gold ProgramIR, public source evidence, dependencies, tool lists, and exact
@@ -49,16 +120,11 @@ These are **gold-guided language realizations**, not autonomous planning
 evaluations. Stage 3 does not simulate actual tool traces; public evidence
 claims derive from frozen source witnesses.
 
-- Main chooses a language variant for each ordered ready task and its reasoning.
-  The public output is `delegate_task` with native `params.tasks`, or `complete`.
-- Each current-round Sub-Agent receives a separate LLM request to choose its
-  report style. Independent requests run through `subagent_workers` concurrently.
-- `summary` states the subtask's result. `trace_summary` narrates inspected/reused
-  references and the performed operations in prose or progress bullets.
-- Exact intermediate answers populate `finish_result.result`. The final Main
-  answer is copied from completed public results and checked against the oracle.
-- Projected tasks and reports must exactly match one allowed realization. A
-  same-model semantic judge cannot waive the contract or modify the gold logic.
+The legacy `synthesize` mode still generates a complete O1 episode for
+structural/replay regression, with canonical and natural variants as before.
+The new `rounds` mode uses precomputed correct Fragment reports and per-round
+Main supervision, not a second copy of the episode generator's step loop.
+Both modes use the same public replay and language guards.
 
 For example a follow-up instruction names the completed `Attempt 1, subtask 1`
 result and its exact value. It cannot replace that set with all records. Filters
