@@ -49,8 +49,43 @@ def build_anchor_registry(world:SyntheticWorld,resources:Sequence[AcquisitionRes
         question_ids.append(aid)
     for aid,item in anchors.items():item["providers"]=sorted(providers.get(aid,()))
     return {"anchors":anchors,"resource_anchor_ids":{rid:sorted(set(ids)) for rid,ids in by_resource.items()},"question_anchor_ids":sorted(set(question_ids)),"policy":"concrete_observed_values_only_no_generic_type_or_bare_numeric_anchor"}
-def bind_resource_discovery(world:SyntheticWorld,resources:Sequence[AcquisitionResource],*,question_anchor_values:Iterable[str]=())->tuple[tuple[AcquisitionResource,...],dict[str,Any]]:
-    registry=build_anchor_registry(world,resources,question_anchor_values=question_anchor_values);available=set(registry["question_anchor_ids"]);updated=[];depths={};frontiers=[];pending={resource.resource_id:resource for resource in resources}
+def bind_resource_discovery(
+    world:SyntheticWorld, resources:Sequence[AcquisitionResource], *,
+    question_anchor_values:Iterable[str]=(),
+    web_query_bootstrap:bool=False,
+)->tuple[tuple[AcquisitionResource,...],dict[str,Any]]:
+    registry=build_anchor_registry(world,resources,question_anchor_values=question_anchor_values)
+    if web_query_bootstrap:
+        if any(r.visibility!="discoverable" for r in resources):
+            raise ValueError("web_search_bootstrap_requires_all_sources_discoverable")
+        # The user question is itself a valid *search starting point*, not a
+        # file containing candidate names. This stage certifies only the
+        # potential acquisition topology. Actual query-dependent retrieval
+        # is independently tested in Stage 3 against ALL public documents.
+        bound=tuple(AcquisitionResource(
+            r.resource_id,r.source_type,r.visibility,r.role,
+            r.required_capability_ids,r.available_tool_families,
+            {**dict(r.metadata),"search_entry":"public_question"},
+            (),r.produces_anchors,(),
+        ) for r in resources)
+        ids=sorted(r.resource_id for r in resources)
+        return bound,{
+            "progressive_discovery_depth":2,
+            "resource_observation_depths":{sid:2 for sid in ids},
+            "frontiers":[
+                {"wave":1,"resource_ids":[],"available_anchor_ids":
+                 registry["question_anchor_ids"]},
+                {"wave":2,"resource_ids":ids,"available_anchor_ids":
+                 sorted(registry["anchors"])},
+            ],
+            "unreachable_resource_ids":[],
+            "all_resources_reachable":True,
+            "anchor_registry":registry,
+            "premature_anchor_leakage":False,
+            "bootstrap_policy":"public_question_search_not_preprovided_files",
+            "retrieval_verified_here":False,
+        }
+    available=set(registry["question_anchor_ids"]);updated=[];depths={};frontiers=[];pending={resource.resource_id:resource for resource in resources}
     wave=1
     # Initial/provided resources are observed at wave one.
     initial=[r for r in resources if r.visibility in {"attached","provided","initial"}]
