@@ -127,7 +127,12 @@ def synthesize_one(
         raise ValueError("max_attempts and subagent_workers must be >= 1")
     try:
         gold = compile_gold_solution(realized, world_record, rendered, scene=scene, schedule=schedule)
-    except (GoldCompilationError, ValueError, TypeError, KeyError) as exc:
+    except GoldCompilationError as exc:
+        raise GoldTrajectoryError(
+            "gold_compilation", [str(exc)],
+            audit={"witness_diagnostics": exc.diagnostics},
+        ) from exc
+    except (ValueError, TypeError, KeyError) as exc:
         raise GoldTrajectoryError("gold_compilation", [str(exc)]) from exc
 
     eligibility=check_question(gold,world_record,planner,review=question_review)
@@ -394,8 +399,13 @@ def plan_trajectories_jsonl(
                 }
                 accepted += 1
             except (GoldCompilationError, ValueError, TypeError, KeyError) as exc:
-                reasons[type(exc).__name__] += 1
-                row = {"task_id": task_id, "status": "rejected", "reason": str(exc)}
+                reason = str(exc)
+                reasons[reason] += 1
+                row = {
+                    "task_id": task_id, "status": "rejected", "reason": reason,
+                }
+                if isinstance(exc, GoldCompilationError) and exc.diagnostics:
+                    row["witness_diagnostics"] = exc.diagnostics
             writer.write(json.dumps(row, ensure_ascii=False) + "\n")
     return {
         "planned": len(realized), "ready": accepted,
