@@ -1,9 +1,9 @@
-"""Precompute a clean, source-replayable Subtask Bank before Main SFT states.
+"""Phase 1: precompute clean, source-replayable Sub-Agent feedback before Main SFT.
 
 The Gold fragment DAG determines the subtask boundaries and partial order.
 All expected results come from the frozen symbolic witness, not from an LLM.
-Sub-Agent language is a natural, evidence-grounded *description* of those
-verified results. No simulated error, retry, or unobserved future result is
+Only Sub-Agent report language is generated in this phase. Main delegation
+language and Main training decisions belong exclusively to phase 2. No simulated error, retry, or unobserved future result is
 ever placed in a Main-visible state.
 
 A bank is private teacher data. Main SFT examples are constructed separately
@@ -55,62 +55,6 @@ def _report_natural(executor, payload, template, fragment):
             raise
         return template, {
             "natural":False, "reason":f"{type(exc).__name__}:{str(exc)[:160]}",
-        }
-
-
-def _natural_action(planner, payload, canonical):
-    if not (
-        getattr(planner, "style_provider", None) == "natural"
-        and callable(getattr(planner, "naturalize_action", None))
-    ):
-        return canonical, {"rewritten_tasks":0, "errors":[], "natural":False}
-    try:
-        proposed = planner.naturalize_action(payload, canonical)
-        ok, issues = validate_action(
-            proposed, payload["gold_guidance"], payload["offline_oracle_answer"],
-            payload["answer_contract"], public_state=payload["public_state"],
-        )
-        if not ok or proposed["action"] != canonical["action"]:
-            raise ValueError("invalid_natural_action:" + ",".join(issues))
-        old_tasks=canonical["params"].get("tasks",[])
-        new_tasks=proposed["params"].get("tasks",[])
-        if len(new_tasks)!=len(old_tasks):
-            raise ValueError("natural_action_task_count_changed")
-        from .natural_language import natural_public_context
-        for original, new in zip(old_tasks,new_tasks):
-            expected = (
-                original["context"]
-                if new["task_instruction"] == original["task_instruction"]
-                else natural_public_context(
-                    original["context"],original["task_instruction"]
-                )
-            )
-            if (new["context"]!=expected or new["model"]!=original["model"]
-                    or new["tools"]!=original["tools"]):
-                raise ValueError("natural_action_transport_changed")
-        if not old_tasks and proposed["params"]!=canonical["params"]:
-            raise ValueError("natural_complete_result_changed")
-        changed=sum(
-            a["task_instruction"]!=b["task_instruction"]
-            for a,b in zip(old_tasks,new_tasks)
-        )
-        return proposed, {
-            "natural":changed>0 or proposed["action"]=="complete",
-            "rewritten_tasks":changed,
-            "errors":getattr(planner,"last_natural_audit",{}).get("errors",[]),
-        }
-    except (ValueError,KeyError,TypeError) as exc:
-        return canonical,{
-            "natural":False,"rewritten_tasks":0,
-            "errors":[{"reason":f"{type(exc).__name__}:{str(exc)[:160]}"}],
-        }
-    except Exception as exc:
-        from environment.question_generation.backend import BackendError
-        if not isinstance(exc,BackendError):
-            raise
-        return canonical,{
-            "natural":False,"rewritten_tasks":0,
-            "errors":[{"reason":f"{type(exc).__name__}:{str(exc)[:160]}"}],
         }
 
 
@@ -239,9 +183,10 @@ def build_subtask_bank(
             raise GoldTrajectoryError("subtask_bank",issues)
         if canonical["action"]!="delegate_task":
             raise GoldTrajectoryError("subtask_bank",["unexpected_complete"])
-        natural,audit=_natural_action(planner,payload,canonical)
+        # Phase 1 generates Sub-Agent evidence reports ONLY. Main task
+        # language is a phase-2 decision target, never generated here.
         original_tasks=canonical["params"]["tasks"]
-        public_tasks=natural["params"]["tasks"]
+        public_tasks=original_tasks
         if len(original_tasks)!=len(ready):
             raise GoldTrajectoryError("subtask_bank",["incorrect_ready_wave"])
         # The parallel wave shares only the PREVIOUS wave's immutable public
@@ -328,17 +273,16 @@ def build_subtask_bank(
                 evidence_cache[sid]=observation
             completed.add(fragment["fragment_id"])
         wave_step={
-            "attempt":index,**public_action(natural),
+            "attempt":index,**public_action(canonical),
             "state_before":state,
             "result":{"total_subtasks":len(reply_list),
                       "subtask_results":reply_list},
         }
         waves.append({
             "round_index":index,"state":state,
-            "action":public_action(natural),
             "canonical_action":public_action(canonical),
+            "bound_fragments":ready,
             "fragment_ids":[f["fragment_id"] for f in ready],
-            "naturalization":audit,
             "feedback_natural":[
                 records[f["fragment_id"]]["natural_feedback"] for f in ready
             ],
@@ -356,11 +300,10 @@ def build_subtask_bank(
         "answer_contract":gold["answer_contract"],
     }
     complete=teacher_main.decide(final_payload,main_prompt(final_payload))
-    natural_complete,_=_natural_action(planner,final_payload,complete)
-    if natural_complete["action"]!="complete":
+    if complete["action"]!="complete":
         raise GoldTrajectoryError("subtask_bank",["not_a_completion"])
     ok,issues=validate_action(
-        natural_complete,final_payload["gold_guidance"],
+        complete,final_payload["gold_guidance"],
         gold["final_answer"],gold["answer_contract"],public_state=state,
     )
     if not ok:
@@ -370,10 +313,13 @@ def build_subtask_bank(
         "eligibility":eligibility,"preflight":preflight,
         "fragments":records,"waves":waves,
         "complete":{"round_index":index,"state":state,
-                    "action":public_action(natural_complete)},
+                    "action":public_action(complete)},
         "schedule":schedule,
         "full_public_history":history,
         "final_answer":gold["final_answer"],  # PRIVATE: not Main-visible
+        "gold_plan":gold,  # Teacher-private; never fed to Main
+        "question_record":dict(realized),
+        "schema_version":1,
         "ready_order":[list(wave["fragment_ids"]) for wave in waves],
     }
 
