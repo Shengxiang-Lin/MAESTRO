@@ -47,8 +47,14 @@ def check_question(gold,record,role,*,review=True):
             'canonical_expression':expression_root,'canonical_steps':[{'step':nid,'action':op['op'],'arguments':op['inputs'],'input_steps':op['dependencies']} for nid,op in sorted(nodes.items())]},ensure_ascii=False,separators=(',',':')))
     cache_path=getattr(role,'eligibility_cache',None)
     if not isinstance(cache_path,(str,Path)):cache_path=None
-    cache_key=digest({**fingerprint,'reviewer_model':getattr(role.backend,'model','unknown'),
-        'reviewer_endpoint':getattr(role.backend,'base_url','unknown'),'review_contract':2})
+    # Test doubles and partially constructed clients can expose Mock objects
+    # for unknown attributes. Cache identity must be stable, JSON-native and
+    # never depend on a Mock repr or memory address.
+    def identity(field):
+        value = getattr(role.backend, field, None)
+        return value if isinstance(value, str) and value else "unknown"
+    cache_key=digest({**fingerprint,'reviewer_model':identity('model'),
+        'reviewer_endpoint':identity('base_url'),'review_contract':2})
     if cache_path and Path(cache_path).exists():
         for line in Path(cache_path).read_text().splitlines():
             item=json.loads(line)
