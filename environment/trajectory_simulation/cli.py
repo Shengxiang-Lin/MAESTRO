@@ -54,16 +54,24 @@ def _role(spec: dict, args: argparse.Namespace, *, planner: bool):
     return LLMPlanner(backend) if planner else LLMExecutor(backend)
 
 
-def command_synthesize(args: argparse.Namespace) -> None:
+def _configured_roles(args: argparse.Namespace):
     planner_spec = resolve_model(args, "trajectory_planner")
     executor_spec = resolve_model(args, "trajectory_executor")
     planner = _role(planner_spec, args, planner=True)
     executor = _role(executor_spec, args, planner=False)
-    for role in (planner,executor):role.style_provider=args.style_provider;role.style_seed=args.style_seed
+    for role in (planner, executor):
+        role.style_provider = args.style_provider
+        role.style_seed = args.style_seed
+    if args.eligibility_cache:
+        planner.eligibility_cache = args.eligibility_cache
+    return planner, executor, planner_spec, executor_spec
+
+
+def command_synthesize(args: argparse.Namespace) -> None:
+    planner, executor, planner_spec, executor_spec = _configured_roles(args)
     if args.eligibility_cache:
         from .pipeline import protect_paths
-        protect_paths([args.worlds,args.realized],[args.eligibility_cache,args.output])
-        planner.eligibility_cache=args.eligibility_cache
+        protect_paths([args.worlds, args.realized], [args.eligibility_cache, args.output])
     clean = lambda spec: {key: value for key, value in spec.items() if key != "api_key"}
     result = synthesize_trajectories_jsonl(
         args.worlds, args.realized, args.output,
@@ -84,31 +92,51 @@ def command_synthesize(args: argparse.Namespace) -> None:
     _print(result)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Generate fragment-guided official O1 trajectories from frozen tasks"
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
+def command_rounds(args: argparse.Namespace) -> None:
+    from .rounds import synthesize_rounds_jsonl
+    planner, executor, _, _ = _configured_roles(args)
+    indices = None
+    if args.round_indices:
+        try:
+            indices = {int(piece.strip()) for piece in args.round_indices.split(",")}
+        except ValueError as exc:
+            raise SystemExit("--round-indices must be comma-separated positive integers") from exc
+        if not indices or min(indices) < 1:
+            raise SystemExit("--round-indices must be positive")
+    output = args.output
+    if "--output" not in args._explicit_options:
+        path = Path(output)
+        output = str(path.with_name(path.stem + ".rounds.jsonl"))
+    if args.eligibility_cache:
+        from .pipeline import protect_paths
+        protect_paths([args.worlds, args.realized], [args.eligibility_cache, output])
+    _print(synthesize_rounds_jsonl(
+        args.worlds, args.realized, output,
+        planner=planner, executor=executor,
+        max_records=args.max_records,
+        round_indices=indices, history_style=args.history_style,
+        include_fallback_rounds=args.include_fallback_rounds,
+        include_complete=not args.exclude_complete,
+        max_o1_attempts=args.max_o1_attempts,
+        max_attempts=args.max_attempts,
+        subagent_workers=args.subagent_workers,
+        seed=args.seed, scene=args.scene, schedule=args.schedule,
+        rejected_output_path=args.rejected_output,
+        quarantine_output_path=args.quarantine_output,
+        progress=not args.no_progress,
+    ))
 
-    plan = sub.add_parser("plan", help="compile first-stage answered fragment DAGs without an LLM")
-    _add_common(plan)
-    plan.set_defaults(func=command_plan)
 
-    synth = sub.add_parser(
-        "synthesize",
-        help="per-round gold Main actions and one grounded reply per fragment",
-    )
-    _add_common(synth)
+def _add_synthesis_options(synth: argparse.ArgumentParser) -> None:
     synth.add_argument(
         "--provider", choices=("passthrough", "openai-compatible"),
         default="passthrough",
     )
     synth.add_argument(
-        "--style-provider",choices=("natural","llm","template"),default="natural",
-        help="natural: LLM writes/reviews fluent O1 prose with canonical replay and safe fallback; "
-             "llm: LLM selects verified fixed variants; template: offline-style fixed variants",
+        "--style-provider", choices=("natural","llm","template"), default="natural",
+        help="natural: guarded fluent O1 prose; llm: fixed variant choice; template: deterministic",
     )
-    synth.add_argument("--style-seed",type=int,default=17)
+    synth.add_argument("--style-seed", type=int, default=17)
     synth.add_argument("--base-url")
     synth.add_argument("--model", help="override both role model names")
     synth.add_argument("--planner-model", help="override only Main Planner model")
@@ -126,7 +154,51 @@ def build_parser() -> argparse.ArgumentParser:
     synth.add_argument("--eligibility-cache")
     synth.add_argument("--no-json-mode", action="store_true")
     synth.add_argument("--no-progress", action="store_true")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Generate fragment-guided official O1 trajectories from frozen tasks"
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    plan = sub.add_parser("plan", help="compile first-stage answered fragment DAGs without an LLM")
+    _add_common(plan)
+    plan.set_defaults(func=command_plan)
+
+    synth = sub.add_parser(
+        "synthesize",
+        help="legacy full-episode gold Main and Sub-Agent trajectories",
+    )
+    _add_common(synth)
+    _add_synthesis_options(synth)
     synth.set_defaults(func=command_synthesize)
+
+    rounds = sub.add_parser(
+        "rounds",
+        help="stream independently validated teacher-forced Main decision samples",
+    )
+    _add_common(rounds)
+    _add_synthesis_options(rounds)
+    rounds.add_argument(
+        "--round-indices", help="only target these decision rounds, e.g. 2,3; "
+        "unselected predecessor rounds are reconstructed as valid history",
+    )
+    rounds.add_argument(
+        "--history-style", choices=("natural","teacher"), default="natural",
+        help="natural: attempt grounded O1 historical prose with safe fallback; "
+        "teacher: reconstruct clean prior rounds without language-model calls",
+    )
+    rounds.add_argument(
+        "--include-fallback-rounds", action="store_true",
+        help="include canonical-template targets when some Main natural rewrites fail",
+    )
+    rounds.add_argument(
+        "--exclude-complete", action="store_true",
+        help="omit Gold complete decisions from the SFT training examples",
+    )
+    rounds.add_argument("--max-o1-attempts", type=int, default=10)
+    rounds.set_defaults(func=command_rounds)
     return parser
 
 
@@ -143,7 +215,7 @@ def main() -> None:
         raise SystemExit("Missing trajectory inputs: " + ", ".join(missing))
     if args.max_records is not None and args.max_records < 0:
         raise SystemExit("--max-records must be nonnegative")
-    if args.command == "synthesize":
+    if args.command in {"synthesize", "rounds"}:
         if min(args.max_attempts, args.subagent_workers, args.flush_every) < 1:
             raise SystemExit("attempts, workers and flush_every must be >= 1")
     try:
