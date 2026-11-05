@@ -200,7 +200,7 @@ def make_round_record(
 def synthesize_rounds_jsonl(
     worlds_path: str | Path, realized_path: str | Path, output_path: str | Path,
     *, planner, executor, max_records: int | None = None,
-    round_indices: set[int] | None = None, history_style: str = "natural",
+    round_indices: set[int] | None = None,
     include_fallback_rounds: bool = False, include_complete: bool = True,
     max_o1_attempts: int = 10, max_attempts: int = 3,
     subagent_workers: int = 4, seed: int = 17, scene: str = "omnigaia",
@@ -228,8 +228,6 @@ def synthesize_rounds_jsonl(
         )
     ):
         raise ValueError("round_indices must contain positive integers")
-    if history_style not in {"teacher","natural"}:
-        raise ValueError("history_style must be teacher or natural")
     if max_o1_attempts<1:
         raise ValueError("max_o1_attempts must be positive")
     if max_attempts<1 or subagent_workers<1:
@@ -314,13 +312,10 @@ def synthesize_rounds_jsonl(
                             skips["incomplete_naturalization"]+=1
                             continue
                         prior=bank["waves"][:wave_idx]
-                        reconstructed=(
-                            history_style=="teacher"
-                            or any(
-                                item["naturalization"]["rewritten_tasks"] != len(item["fragment_ids"])
-                                or not all(item["feedback_natural"])
-                                for item in prior
-                            )
+                        reconstructed=any(
+                            item["naturalization"]["rewritten_tasks"] != len(item["fragment_ids"])
+                            or not all(item["feedback_natural"])
+                            for item in prior
                         )
                         origin=(
                             "teacher_reconstructed" if reconstructed else "natural"
@@ -352,7 +347,7 @@ def synthesize_rounds_jsonl(
                     ):
                         rounds_considered+=1
                         prior=bank["waves"]
-                        reconstructed=history_style=="teacher" or any(
+                        reconstructed=any(
                             wave["naturalization"]["rewritten_tasks"]!=len(wave["fragment_ids"])
                             or not all(wave["feedback_natural"])
                             for wave in prior
@@ -425,7 +420,6 @@ def synthesize_rounds_jsonl(
         "rejected_output":str(bad),
         "quarantine_output":str(quarantine),
         "policy":"precomputed_clean_subtask_bank_then_main_round_sft",
-        "history_style":history_style,
         "selected_rounds":sorted(round_indices) if round_indices else "all",
     }
 
