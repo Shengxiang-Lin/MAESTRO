@@ -133,7 +133,7 @@ class PublicQualityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             target=Path(temp)/'plan.jsonl'
             inputs=Path(temp)/'realized.jsonl'
-            inputs.write_text(json.dumps(q)+'\\n',encoding='utf-8')
+            inputs.write_text(json.dumps(q)+'\n',encoding='utf-8')
             with patch('environment.trajectory_simulation.pipeline._world_map',
                        return_value={q['task_id']:(r,t)}):
                 summary=plan_trajectories_jsonl(
