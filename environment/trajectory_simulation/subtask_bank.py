@@ -13,6 +13,7 @@ is not required to emit an individually valid decision sample.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from .backend import PassthroughExecutor, PassthroughPlanner
@@ -151,7 +152,7 @@ def _verify_subtask(canonical_task, natural_task, fragment, evidence_cache):
 def build_subtask_bank(
     realized: Mapping[str,Any], world_record: Mapping[str,Any], rendered: Any,
     *, planner, executor, scene="omnigaia", schedule="compact",
-    question_review=True,
+    question_review=True, feedback_workers: int = 4,
 ) -> dict[str,Any]:
     """Generate ALL clean subtasks first, in topological waves.
 
@@ -160,6 +161,8 @@ def build_subtask_bank(
     bank contains immutable final answers but each saved state_before is an
     exact snapshot from BEFORE its delegated wave.
     """
+    if feedback_workers < 1:
+        raise ValueError("feedback_workers must be positive")
     try:
         gold=compile_gold_solution(
             realized,world_record,rendered,scene=scene,schedule=schedule
@@ -241,11 +244,11 @@ def build_subtask_bank(
         public_tasks=natural["params"]["tasks"]
         if len(original_tasks)!=len(ready):
             raise GoldTrajectoryError("subtask_bank",["incorrect_ready_wave"])
-        reply_list=[]
-        pending=[]
-        for sub_index,(fragment,original,public) in enumerate(
-            zip(ready,original_tasks,public_tasks),1
-        ):
+        # The parallel wave shares only the PREVIOUS wave's immutable public
+        # history/cache. All natural feedback jobs may run concurrently, but
+        # results are published together after their public replay succeeds.
+        def prepare_subtask(item):
+            sub_index,(fragment,original,public)=item
             observations=_verify_subtask(
                 original,public,fragment,evidence_cache
             )
@@ -264,7 +267,6 @@ def build_subtask_bank(
             report,language=_report_natural(
                 executor,report_payload,base,fragment
             )
-            # Semantic reviewers may be LLMs, but exact result is immutable.
             fixed=answer_string(fragment["expected_answer"])
             reply={
                 "subtask_index":sub_index-1,
@@ -282,7 +284,7 @@ def build_subtask_bank(
                 "result_kind":fragment["answer_kind"],
                 "public_replay_verified":True,
             }
-            records[fragment["fragment_id"]]={
+            bank_item={
                 "fragment_id":fragment["fragment_id"],
                 "depends_on":list(fragment["depends_on"]),
                 "wave_index":index,"task_index":sub_index,
@@ -296,6 +298,15 @@ def build_subtask_bank(
                 "natural_feedback":language["natural"],
                 "feedback_fallback_reason":language["reason"],
             }
+            return fragment,reply,bank_item
+
+        jobs=list(enumerate(zip(ready,original_tasks,public_tasks),1))
+        with ThreadPoolExecutor(max_workers=min(feedback_workers,len(jobs))) as pool:
+            prepared=list(pool.map(prepare_subtask,jobs))
+        pending=[]
+        reply_list=[]
+        for fragment,reply,bank_item in prepared:
+            records[fragment["fragment_id"]]=bank_item
             pending.append((fragment,reply))
             reply_list.append(reply)
         # Only after ALL sibling answers are verified are they made visible.
