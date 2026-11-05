@@ -88,7 +88,7 @@ def replay_task(task,new_observations=(),*,public_cache=None):
         elif m:=re.fullmatch(
             r'(?:Search task-relevant sources to identify entities of type |'
             r'Examine accessible task evidence to identify entities of type )'
-            r'(.+); do not assume a complete list was initially provided\\.',line
+            r'(.+); do not assume a complete list was initially provided\.',line
         ):
             # Discovery changes only how Main describes the task. The actual
             # set must still come solely from the published source records.
