@@ -48,6 +48,8 @@ class WebSearchSimulationTests(unittest.TestCase):
 
     def test_search_bootstrap_does_not_invent_a_provided_reference(self):
         world=SyntheticWorld()
+        world.sources["s1"]=EvidenceSource("s1","text",(),{})
+        world.sources["s2"]=EvidenceSource("s2","text",(),{})
         r=AcquisitionResource(
             "s1","text","discoverable","web_result",
             ("document_reading",),("search","read_text"),{},
