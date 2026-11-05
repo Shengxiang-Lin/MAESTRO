@@ -99,6 +99,53 @@ class PublicQualityTests(unittest.TestCase):
         role.check_question.return_value={'decision':'uncertain','issues':[]}
         result=check_question(g,r,role);self.assertFalse(result['eligible']);self.assertTrue(result['reviewed'])
 
+    def test_public_gold_preflight_rejects_unidentified_root(self):
+        from environment.trajectory_simulation.public_preflight import audit_public_executability
+        from environment.trajectory_simulation.pipeline import GoldTrajectoryError
+        q,r,t=fixture()
+        q['question']='Which entity satisfies the composed relationship checks?'
+        gold=compile_gold_solution(q,r,t,schedule='compact')
+        audit=audit_public_executability(gold)
+        self.assertFalse(audit['publicly_executable'])
+        self.assertEqual(audit['reason'],'latent_find_missing_public_clue')
+        self.assertIn('fragment_id',audit)
+        self.assertIn('output_node_id',audit)
+        with self.assertRaises(GoldTrajectoryError) as error:
+            synthesize_one(q,r,t,PassthroughPlanner(),PassthroughExecutor(),schedule='compact')
+        self.assertEqual(error.exception.stage,'public_executability')
+        self.assertEqual(error.exception.audit['public_preflight']['reason'],
+                         'latent_find_missing_public_clue')
+
+    def test_public_gold_preflight_accepts_fully_replayable_plan(self):
+        from environment.trajectory_simulation.public_preflight import audit_public_executability
+        q,r,t=fixture()
+        gold=compile_gold_solution(q,r,t,schedule='compact')
+        report=audit_public_executability(gold)
+        self.assertTrue(report['publicly_executable'])
+        self.assertEqual(report['checked_fragments'],len(gold['fragments']))
+
+    def test_plan_reports_compilation_separately_from_public_readiness(self):
+        import tempfile
+        from pathlib import Path
+        from environment.trajectory_simulation.pipeline import plan_trajectories_jsonl
+        q,r,t=fixture()
+        q['question']='Which entity satisfies the composed relationship checks?'
+        with tempfile.TemporaryDirectory() as temp:
+            target=Path(temp)/'plan.jsonl'
+            inputs=Path(temp)/'realized.jsonl'
+            inputs.write_text(json.dumps(q)+'\\n',encoding='utf-8')
+            with patch('environment.trajectory_simulation.pipeline._world_map',
+                       return_value={q['task_id']:(r,t)}):
+                summary=plan_trajectories_jsonl(
+                    Path(temp)/'world.jsonl',inputs,target,schedule='compact')
+            self.assertEqual(summary['compiled'],1)
+            self.assertEqual(summary['ready'],0)
+            self.assertEqual(summary['quarantined'],1)
+            item=json.loads(target.read_text().strip())
+            self.assertEqual(item['status'],'quarantined')
+            self.assertEqual(item['public_executability']['reason'],
+                             'latent_find_missing_public_clue')
+
     def test_compact_fusion_preserves_parallel_branches(self):
         row=synthesize_one(*branch_fixture(),PassthroughPlanner(),PassthroughExecutor(),schedule='compact')
         self.assertEqual(row['trajectory'][-1]['params']['answer'],'1')
