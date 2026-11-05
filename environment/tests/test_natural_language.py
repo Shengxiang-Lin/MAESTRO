@@ -269,15 +269,89 @@ class NaturalLanguageTests(unittest.TestCase):
                 **valid,"trace_summary":valid["trace_summary"]+
                 "\n- VideoAnalysisAction read a video file.",
             })
-        with self.assertRaisesRegex(ValueError,"tool_trace_does_not_reflect_supported_tool_use"):
+        # Real O1 action summaries can use ordinary verbs, with no class
+        # names. They may also concisely omit tool mechanics altogether.
+        fluent = {
+            **valid,
+            "trace_summary": (
+                "An initial search located First reference. "
+                "I then checked the webpage and confirmed that it records "
+                "Alice's birth year as 1912, supporting the result."
+            ),
+        }
+        self.assertEqual(realize_feedback_natural(payload, fluent), fluent)
+        concise = {
+            **valid,
+            "trace_summary": "First reference identifies Alice born in 1912.",
+        }
+        self.assertEqual(realize_feedback_natural(payload, concise), concise)
+        with self.assertRaisesRegex(ValueError,"unverified_tool_action_claim"):
             realize_feedback_natural(payload,{
-                **valid,"trace_summary":"First reference identifies Alice born in 1912.",
+                **valid,"trace_summary":fluent["trace_summary"] +
+                " I also analyzed the supplied video.",
+            })
+        with self.assertRaisesRegex(ValueError,"unverified_tool_action_claim"):
+            realize_feedback_natural(payload,{
+                **valid,"trace_summary":fluent["trace_summary"] +
+                " The speech recording was transcribed.",
             })
         with self.assertRaisesRegex(ValueError,"unverified_tool_action_claim"):
             realize_feedback_natural(payload,{
                 **valid,"trace_summary":valid["trace_summary"]+
                 "\n- I clicked an unrelated webpage.",
             })
+
+    def test_writer_source_guide_links_each_claim_to_correct_reference(self):
+        from environment.trajectory_simulation.tool_provenance import (
+            reconstruct_tool_observations, source_evidence_guide,
+            unsupported_tool_actions,
+        )
+        from environment.trajectory_simulation.natural_language import (
+            feedback_writer_prompt, feedback_reviewer_prompt,
+        )
+        fragment = {
+            "scene":"omnigaia","expected_answer":["Alice"],
+            "operations":[{"op":"FIND","inputs":["Alice"]}],
+            "operation_results":[{"answer":["Alice"],"input_values":[]}],
+            "suggested_tools":["ExtractUrlContentAction","ImageAnalysisAction"],
+            "observations":[
+                {"resource_id":"source_01","title":"Text page","source_type":"text",
+                 "visibility":"provided",
+                 "claims":[{"subject":"Alice","predicate":"r:birth",
+                            "object":"1912","object_kind":"year"}]},
+                {"resource_id":"source_02","title":"Photo","source_type":"image",
+                 "visibility":"provided",
+                 "claims":[{"subject":"Bob","predicate":"r:birth",
+                            "object":"1920","object_kind":"year"}]},
+            ],
+            "known_observations":[],
+        }
+        plan = reconstruct_tool_observations(fragment)
+        guide = source_evidence_guide(fragment,plan)
+        self.assertEqual(len(guide),2)
+        self.assertEqual(guide[0]["permitted_tools"],["ExtractUrlContentAction"])
+        self.assertEqual(guide[1]["permitted_tools"],["ImageAnalysisAction"])
+        self.assertEqual(guide[0]["claims"][0]["subject"],"Alice")
+        self.assertEqual(guide[1]["claims"][0]["subject"],"Bob")
+        self.assertEqual(
+            unsupported_tool_actions("Examined the supplied image to check Bob.",plan),
+            set(),
+        )
+        self.assertEqual(
+            unsupported_tool_actions("Transcribed the audio recording.",plan),
+            {"ParseAudioAction"},
+        )
+        payload={"fragment":fragment,"task_instruction":"Find Alice",
+                 "tool_provenance":plan}
+        prompt=feedback_writer_prompt(payload,{"summary":"Alice","trace_summary":"template"})
+        self.assertIn('"source_evidence_guide"',prompt)
+        self.assertIn('"source_id":"source_02"',prompt)
+        self.assertIn("class names",prompt)
+        review=feedback_reviewer_prompt(payload,{
+            "summary":"Alice matches.","trace_summary":"The text page records Alice's birth year."
+        })
+        self.assertIn('"source_evidence_guide"',review)
+        self.assertIn("grounded",review)
 
     def test_public_tool_plan_preserves_acquisition_order_and_reused_sources(self):
         from environment.trajectory_simulation.tool_provenance import (
