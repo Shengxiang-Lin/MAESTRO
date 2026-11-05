@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from .backend import PassthroughExecutor, PassthroughPlanner
+from .backend import LLMExecutor, PassthroughExecutor, PassthroughPlanner
 from .compiler import (
     GoldCompilationError, compile_gold_solution, json_value,
     private_guidance, ready_fragments,
@@ -33,20 +33,24 @@ from .replay import replay_task
 
 
 def _report_natural(executor, payload, template, fragment):
+    audit=[]
     if not (
         getattr(executor, "style_provider", None) == "natural"
         and callable(getattr(executor, "naturalize_feedback", None))
     ):
         return template, {"natural":False, "reason":"template_or_offline_mode"}
     try:
-        report = executor.naturalize_feedback(payload, template)
+        report = (executor.naturalize_feedback(payload, template, audit=audit)
+                  if isinstance(executor,LLMExecutor)
+                  else executor.naturalize_feedback(payload, template))
         okay, issues = validate_feedback(report, fragment, strict=False)
         if not okay:
             raise ValueError("unsupported_report:" + ",".join(issues))
-        return report, {"natural":True, "reason":None}
+        return report, {"natural":True, "reason":None, "audit":audit}
     except (ValueError, KeyError, TypeError) as exc:
         return template, {
             "natural":False, "reason":f"{type(exc).__name__}:{str(exc)[:160]}",
+            "audit":audit,
         }
     except Exception as exc:
         # A backend can become unavailable. Never use its unchecked prose.
@@ -55,6 +59,7 @@ def _report_natural(executor, payload, template, fragment):
             raise
         return template, {
             "natural":False, "reason":f"{type(exc).__name__}:{str(exc)[:160]}",
+            "audit":audit,
         }
 
 
@@ -245,6 +250,7 @@ def build_subtask_bank(
                 "natural_task":public["task_instruction"]!=original["task_instruction"],
                 "natural_feedback":language["natural"],
                 "feedback_fallback_reason":language["reason"],
+                "feedback_private_audit":language.get("audit",[]),
                 "simulated_tool_provenance":tool_provenance,
             }
             return fragment,reply,bank_item
@@ -363,6 +369,8 @@ def generate_subtasks_jsonl(
         p.parent.mkdir(parents=True,exist_ok=True)
     stats=Counter()
     reasons=Counter()
+    review_decisions=Counter()
+    fallback_reasons=Counter()
     with output.open("w",encoding="utf-8") as good, rejected.open(
         "w",encoding="utf-8"
     ) as bad, quarantined.open("w",encoding="utf-8") as isolate:
@@ -386,6 +394,12 @@ def generate_subtasks_jsonl(
                 good.write(json.dumps(record,ensure_ascii=False)+"\n")
                 good.flush()
                 stats["accepted"]+=1
+                review_decisions["eligible"]+=1
+                fallback_reasons.update(
+                    item["feedback_fallback_reason"].split(":",1)[-1].split(":",1)[0].split(";",1)[0]
+                    for item in payload["fragments"].values()
+                    if item["feedback_fallback_reason"]
+                )
                 stats["subtasks"]+=len(payload["fragments"])
                 stats["natural_feedback"]+=sum(
                     bool(item["natural_feedback"])
@@ -400,6 +414,10 @@ def generate_subtasks_jsonl(
                 dest=isolate if quarantine else bad
                 stats["quarantined" if quarantine else "rejected"]+=1
                 reasons[stage]+=1
+                if stage=="question_eligibility":
+                    review_decisions[exc.audit.get("eligibility",{}).get(
+                        "decision","review_error"
+                    )]+=1
                 dest.write(json.dumps({
                     "task_id":task_id,"reason":stage,
                     "issues":exc.issues if isinstance(exc,GoldTrajectoryError)
@@ -417,6 +435,8 @@ def generate_subtasks_jsonl(
         "natural_feedback_rate":stats["natural_feedback"]/stats["subtasks"]
                                   if stats["subtasks"] else 0.0,
         "reasons":dict(reasons),
+        "question_review_decisions":dict(review_decisions),
+        "feedback_fallback_reasons":dict(fallback_reasons),
         "request_counts":{
             "question_review":dict(getattr(reviewer,"request_counts",{})),
             "subagent":dict(getattr(executor,"request_counts",{})),
@@ -428,4 +448,3 @@ def generate_subtasks_jsonl(
 
 
 __all__=["build_subtask_bank","generate_subtasks_jsonl"]
-

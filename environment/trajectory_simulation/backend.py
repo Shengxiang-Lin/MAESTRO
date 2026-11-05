@@ -4,7 +4,7 @@ Language choices are internal. Native tasks, summaries and answers are rendered
 from the ledger, so wording cannot introduce a new condition or change an input.
 """
 from __future__ import annotations
-from dataclasses import asdict
+from dataclasses import replace
 import hashlib,random,threading
 from collections import Counter
 from .realization import STYLES
@@ -36,14 +36,53 @@ class _LLMRole:
         with self._lock:self.request_counts[key]+=1
     def _rng(self,text):
         return random.Random(int.from_bytes(hashlib.sha256((str(self.style_seed)+text).encode()).digest(),'big'))
-    def check_question(self,prompt):
-        self._count('question_review')
-        from environment.question_generation.backend import OpenAICompatibleBackend
-        return OpenAICompatibleBackend(**{**asdict(self.backend),'temperature':0.0,'max_tokens':1024}).complete_json('Audit question/program equivalence. Return only the requested decision/issues JSON.',prompt)
+    def check_question(self,prompt,*,audit=None):
+        return self._review_json(
+            'Audit question/program equivalence. Return only the requested decision/issues JSON.',
+            prompt, 'question_review', backend=replace(self.backend,temperature=0.0),
+            audit=audit,
+        )
+    def _review_json(self,system,prompt,key,*,backend=None,audit=None,flag=None):
+        from environment.question_generation.backend import BackendError
+        client=backend or self.backend
+        for attempt in range(2):
+            self._count(key)
+            if attempt:self._count(key+'_retry')
+            verdict=None
+            try:
+                verdict=client.complete_json(
+                    system+(' Previous output was invalid or incomplete JSON. '
+                            'Return a compact verdict with at most two short issues. '
+                            'Never put analysis, self-questions or deliberation inside strings.'
+                            if attempt else ''),prompt,
+                )
+                if flag is not None and not (
+                    isinstance(verdict,dict) and type(verdict.get(flag)) is bool
+                    and isinstance(verdict.get('issues'),list)
+                    and all(isinstance(i,str) for i in verdict['issues'])
+                    and (not verdict[flag] or verdict['issues']==[])
+                ):
+                    raise ValueError('invalid_review_schema')
+                return verdict
+            except (BackendError,ValueError) as exc:
+                if audit is not None:
+                    audit.append({'stage':key,'attempt':attempt+1,
+                                  'error':str(exc),
+                                  'diagnostic':getattr(exc,'diagnostic',None),
+                                  **({'verdict':verdict} if isinstance(exc,ValueError) else {})})
+                if attempt or not _format_error(exc):
+                    raise
     def review(self,prompt):
         # Kept for diagnostics; bounded production language needs no semantic judge.
-        from environment.question_generation.backend import OpenAICompatibleBackend
-        return OpenAICompatibleBackend(**{**asdict(self.backend),'temperature':0.0,'max_tokens':1024}).complete_json('Return a short accept/issues JSON verdict.',prompt)
+        return replace(self.backend,temperature=0.0).complete_json('Return a short accept/issues JSON verdict.',prompt)
+
+def _format_error(exc):
+    from environment.question_generation.backend import BackendError
+    return (isinstance(exc,ValueError) and str(exc)=='invalid_review_schema') or (
+        isinstance(exc,BackendError) and any(text in str(exc) for text in (
+            'JSON object','invalid JSON','non-object JSON','did not contain assistant text',
+        ))
+    )
 
 class LLMPlanner(_LLMRole):
     def naturalize_action(self, payload, canonical):
@@ -126,7 +165,7 @@ class LLMPlanner(_LLMRole):
         except ValueError as exc: raise ValueError(f'{exc}; model_language_plan={choice!r}') from exc
 
 class LLMExecutor(_LLMRole):
-    def naturalize_feedback(self,payload,canonical):
+    def naturalize_feedback(self,payload,canonical,*,audit=None):
         from .natural_language import (
             feedback_writer_prompt, feedback_repair_prompt,
             feedback_output_diagnostic, realize_feedback_natural,
@@ -136,6 +175,7 @@ class LLMExecutor(_LLMRole):
         # Retry ONCE with a compact source-grounded prompt, rather than
         # silently dropping an otherwise valid Sub-Agent example. Both paths
         # still pass the identical deterministic AND semantic evidence guards.
+        audit=[] if audit is None else audit
         for attempt in range(2):
             self._count('natural_feedback_write')
             if attempt:
@@ -145,32 +185,41 @@ class LLMExecutor(_LLMRole):
                 if attempt == 0
                 else feedback_repair_prompt(payload,canonical)
             )
-            proposal=self.backend.complete_json(
-                'Return JSON with exactly two NONEMPTY strings: summary and '
-                'trace_summary. Report only facts supported by public evidence.',
-                prompt,
-            )
+            entry={'stage':'write','attempt':attempt+1}
+            audit.append(entry)
             try:
+                proposal=self.backend.complete_json(
+                    'Return JSON with exactly two NONEMPTY strings: summary and '
+                    'trace_summary. Report only facts supported by public evidence.',
+                    prompt,
+                )
+                entry['candidate']=proposal
                 result=realize_feedback_natural(payload,proposal)
-            except ValueError as exc:
+            except Exception as exc:
+                from environment.question_generation.backend import BackendError
+                if not isinstance(exc,(ValueError,TypeError,KeyError,BackendError)):
+                    raise
+                entry.update(error=str(exc),diagnostic=getattr(exc,'diagnostic',None))
                 # Only the model's response schema/empty-field failures can
                 # trigger a retry. Hallucinated facts, unauthorized actions,
                 # incorrect results or semantic errors remain hard failures.
                 reason=str(exc)
-                if reason in {'natural_language_missing',
-                              'invalid_natural_report_fields'}:
+                if _format_error(exc) or reason in {'natural_language_missing',
+                                                   'invalid_natural_report_fields'}:
                     if attempt == 0:
                         continue
-                    raise ValueError(
-                        reason+';writes=2;'+feedback_output_diagnostic(proposal)
-                    ) from exc
+                    if isinstance(exc,ValueError):
+                        raise ValueError(
+                            reason+';writes=2;'+feedback_output_diagnostic(proposal)
+                        ) from exc
                 raise
-            self._count('natural_feedback_review')
-            verdict=self.backend.complete_json(
+            verdict=self._review_json(
                 'Strictly verify every claim against the provided observations '
                 'and operations. JSON only.',
                 feedback_reviewer_prompt(payload,result),
+                'natural_feedback_review',audit=audit,flag='grounded',
             )
+            audit.append({'stage':'review','attempt':attempt+1,'verdict':verdict})
             check_reviewer(verdict,flag='grounded')
             return result
         raise AssertionError('natural_feedback_retry_loop_exhausted')

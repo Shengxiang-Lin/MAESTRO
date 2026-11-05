@@ -47,7 +47,19 @@ class OpenAICompatibleBackend:
         try:
             with urllib.request.urlopen(request,timeout=self.timeout) as response:payload=json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError,urllib.error.HTTPError,TimeoutError,json.JSONDecodeError) as exc:raise BackendError(f"OpenAI-compatible call failed: {exc}") from exc
-        return _json_object(_extract_content(payload))
+        try:
+            return _json_object(_extract_content(payload))
+        except BackendError as exc:
+            # Attach per-call diagnostics, never shared mutable client state.
+            choices=payload.get("choices") or []
+            first=choices[0] if choices and isinstance(choices[0],dict) else {}
+            message=first.get("message") or {}
+            exc.diagnostic={
+                "finish_reason":first.get("finish_reason"),
+                "usage":payload.get("usage"),
+                "content":message.get("content") if isinstance(message,dict) else None,
+            }
+            raise
 class PassthroughAuthorBackend:
     def author(self,payload:Mapping[str,Any],prompt:str)->dict[str,Any]:return {"question":str(payload.get("draft_question") or "").strip(),"notes":"passthrough"}
 class LLMQuestionAuthor:
