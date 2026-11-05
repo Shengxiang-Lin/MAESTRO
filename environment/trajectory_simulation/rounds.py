@@ -215,7 +215,8 @@ def synthesize_rounds_jsonl(
     *, planner, executor, max_records: int | None = None,
     round_indices: set[int] | None = None,
     include_fallback_rounds: bool = False, include_complete: bool = True,
-    max_o1_attempts: int = 10, seed: int = 17, scene: str = "omnigaia",
+    max_o1_attempts: int = 10, feedback_workers: int = 4,
+    seed: int = 17, scene: str = "omnigaia",
     schedule: str = "compact", question_review: bool = True,
     quarantine_output_path: str | Path | None = None,
     rejected_output_path: str | Path | None = None,
@@ -240,8 +241,8 @@ def synthesize_rounds_jsonl(
         )
     ):
         raise ValueError("round_indices must contain positive integers")
-    if max_o1_attempts<1:
-        raise ValueError("max_o1_attempts must be positive")
+    if max_o1_attempts<1 or feedback_workers<1:
+        raise ValueError("max_o1_attempts and feedback_workers must be positive")
     rows=_rows(realized_path)
     if max_records is not None:
         rows=rows[:max_records]
@@ -291,6 +292,7 @@ def synthesize_rounds_jsonl(
                     bank=build_subtask_bank(
                         question,record,rendered,planner=planner,executor=executor,
                         scene=scene,schedule=schedule,question_review=question_review,
+                        feedback_workers=feedback_workers,
                     )
                     bank_fragments+=len(bank["fragments"])
                     attempted_rewrites+=sum(
