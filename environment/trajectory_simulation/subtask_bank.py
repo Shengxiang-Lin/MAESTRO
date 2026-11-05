@@ -197,6 +197,8 @@ def build_subtask_bank(
             observations=_verify_subtask(
                 original,public,fragment,evidence_cache
             )
+            from .tool_provenance import reconstruct_tool_observations
+            tool_provenance = reconstruct_tool_observations(fragment)
             report_payload={
                 "question":gold["question"],
                 "task_instruction":public["task_instruction"],
@@ -204,6 +206,7 @@ def build_subtask_bank(
                 "dependency_results":[known_results[dep]
                                       for dep in fragment["depends_on"]],
                 "fragment":fragment,
+                "tool_provenance":tool_provenance,
             }
             base=teacher_sub.respond(report_payload,"")
             ok,issues=validate_feedback(base,fragment,strict=True)
@@ -242,6 +245,7 @@ def build_subtask_bank(
                 "natural_task":public["task_instruction"]!=original["task_instruction"],
                 "natural_feedback":language["natural"],
                 "feedback_fallback_reason":language["reason"],
+                "simulated_tool_provenance":tool_provenance,
             }
             return fragment,reply,bank_item
 

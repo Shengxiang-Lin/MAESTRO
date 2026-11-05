@@ -33,9 +33,21 @@ For each question, this phase:
 3. Visits **all** fragments in topological waves. For each subtask, records
    the canonical task, source-replay-verified exact answer, `summary`,
    `trace_summary`, observations, dependencies, and report-language audit.
-4. Attempts fluent, evidence-grounded Sub-Agent report wording. A failed or
-   unsupported rewrite falls back to the correct canonical report; the
-   result/answer is **never** invented or changed by the LLM.
+4. Reconstructs an auditable **simulated O1 tool-observation sequence**
+   from the public Source acquisition waves and assigned native tool profile.
+   A discoverable Source can yield a `GoogleSearchAction` discovery event
+   followed by an `ExtractUrlContentAction`, `ImageAnalysisAction`,
+   `VideoAnalysisAction` or `ParseAudioAction` inspection event, as
+   supported by its modality; previously known Sources are reused without
+   creating a new tool call. No fabricated search queries, timestamps, URLs,
+   failures or unobserved facts are added.
+5. Attempts fluent, evidence-grounded Sub-Agent report wording: concise
+   `summary` and an O1-style `trace_summary` that connects simulated tool
+   activity, specific verified observations, follow-up checks and the exact
+   result. A rejected rewrite falls back to the correct canonical report;
+   the result/answer is **never** invented or changed by the LLM.
+   Private bank entry `simulated_tool_provenance` records the exact allowed
+   tool/source mapping and explicitly sets `live_tool_calls=false`.
 5. Only after all parallel siblings pass does the next wave see their public
    results. Siblings never inspect each other's unreleased outputs.
 
@@ -110,8 +122,11 @@ removed from natural Main training targets only **after verification**.
 - **No errors/attacks yet**: do not generate fabricated retries, switches,
   rollbacks or unsupported `partial` reports. Clean-data macro labels
   are only `advance` / `complete`.
-- **No actual tool traces**: public observations are frozen source witnesses;
-  do not pretend that a real browser, video tool or Python execution ran.
+- **No actual live tool traces**: the private simulated tool-observation
+  sequence represents only what is supported by frozen Source witnesses and
+  native tool assignments. Report prose may use realistic O1 action/observation
+  style, but do not interpret its action counts as real browser, media-model
+  or Python tool executions.
 - **Scheduling policy**: the current implementation follows deterministic
   ready-wave topological ordering, not all possible linear extensions of
   the DAG. Alternative feasible schedules can be added independently.

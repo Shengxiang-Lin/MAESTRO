@@ -269,6 +269,10 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
             "claims": o["claims"],
         } for o in [*fragment["observations"], *fragment.get("known_observations", [])]],
         "verified_reference_report": canonical,
+        "reconstructed_tool_observations": payload.get("tool_provenance", {
+            "origin": "no_tool_observations_available",
+            "live_tool_calls": False, "steps": [],
+        }),
     }
     return (
         "You are an O1 Sub-Agent composing a grounded answer to the ASSIGNED SUBTASK, "
@@ -278,15 +282,28 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         "summary (one or two sentences): start with the finding or the absence of matches. "
         "Sound like a real Sub-Agent reporting to Main, not a grading rubric or execution log. "
         "Acknowledge missing or ambiguous evidence only if the verified record actually supports it. "
-        "trace_summary (2-5 brief sentences or bullets): explain the relevant evidence "
-        "and why it satisfies the constraints, including necessary relation hops and "
-        "source names if supported. Avoid generic self-evaluation such as 'successfully "
-        "initiated', 'no errors', 'all requirements met', or 'finished efficiently'; "
-        "these are not task evidence. Do not narrate individual FILTER_TYPE or INTERSECT "
-        "operators, or copy a sequence of generic operator sentences. "
-        "DO NOT claim live web searches, clicks, tool executions, transcriptions, or "
-        "observations that are absent from the record; you are reporting verified "
-        "source-backed findings, not inventing a tool trace. No hidden graph IDs, "
+        "trace_summary (3-7 concise bullets when supported): resemble a real O1 "
+        "Sub-Agent action/observation report. Tell the chronological story: native "
+        "tool type and which resource it inspected, the specific facts observed, "
+        "how a second reference or previous subtask corroborated them, the "
+        "reasoning/comparison needed, and the exact finding returned. "
+        "Reference the appropriate tool NAMES (VideoAnalysisAction, "
+        "GoogleSearchAction, ExtractUrlContentAction, ParseAudioAction, "
+        "ImageAnalysisAction, ExecuteCodeAction) ONLY if the supplied reconstructed "
+        "tool observations actually include those tools. "
+        "These are SIMULATED action/observation events reconstructed from frozen "
+        "public witnesses, NOT logs of tools run live. Describe what the evidence "
+        "supports in natural past-tense execution-report style; DO NOT invent "
+        "literal queries, clicks, timestamps, file paths, execution failures, "
+        "transcripts, confidence scores or URLs beyond the provided records. "
+        "A previously available reference is REUSED, not newly searched. "
+        "When there are no tool observations, explain what was deduced from "
+        "previously completed results and the verified operations; do not pretend "
+        "that a new tool was called. "
+        "Avoid self-evaluation ('successfully initiated', 'no errors', "
+        "'finished efficiently') and grading the whole Main problem; report "
+        "only this assigned subtask. Never list FILTER_TYPE/INTERSECT as robotic "
+        "operator logs if plain-language reasoning suffices. No hidden graph IDs, "
         "new entities, numbers, dates, or unsupported causal conclusions. "
         "Do not change the fixed result. Return JSON ONLY: "
         '{"summary":"...","trace_summary":"..."}.\n' + _json(public)
@@ -307,12 +324,27 @@ def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[
     elif isinstance(value, (int, float)) and not isinstance(value, bool):
         if str(value) not in joined:
             raise ValueError("natural_report_omits_numeric_result")
-    if re.search(
-        r"\b(?:I (?:searched|browsed|clicked|opened|ran|transcribed)|"
-        r"(?:web search|browser|python|script|tool call) (?:was |were )?"
-        r"(?:executed|performed|run))\b", joined, re.I,
-    ):
+    from .tool_provenance import permitted_tool_names
+    from .tools import tool_profile
+    plan = payload.get("tool_provenance") or {"steps": []}
+    allowed_tools = permitted_tool_names(plan)
+    known_tools = set(tool_profile(payload["fragment"].get("scene", "omnigaia")).available)
+    explicitly_mentioned = {tool for tool in known_tools
+                            if re.search(r"(?<!\w)" + re.escape(tool) + r"(?!\w)", joined)}
+    if explicitly_mentioned - allowed_tools:
+        raise ValueError("unverified_tool_action_claim:" +
+                         ",".join(sorted(explicitly_mentioned - allowed_tools)))
+    # Refuse action claims without a corresponding simulated observation.
+    if re.search(r"\b(?:I (?:browsed|clicked|opened|ran|transcribed)|"
+                 r"(?:browser|python|script|tool call) (?:was |were )?"
+                 r"(?:executed|performed|run))\b", joined, re.I):
         raise ValueError("unverified_tool_action_claim")
+    if re.search(r"\b(?:I searched|web search (?:was |were )?(?:executed|performed|run))\b",
+                 joined, re.I) and "GoogleSearchAction" not in allowed_tools:
+        raise ValueError("unverified_search_action_claim")
+    if ("trace_summary" in proposal and allowed_tools
+            and not any(name in proposal["trace_summary"] for name in allowed_tools)):
+        raise ValueError("tool_trace_does_not_reflect_supported_tool_use")
     okay, issues = validate_feedback(proposal, payload["fragment"], strict=False)
     if not okay:
         raise ValueError("natural_report_unsupported_claim:" + ",".join(issues))
@@ -327,8 +359,14 @@ def feedback_reviewer_prompt(
         "Audit this Sub-Agent report strictly against the supplied PUBLIC observations "
         "and verified operations. Check every named entity, date, number, relation "
         "direction, attributed source fact, and final result. Reject invented "
-        "facts or claims of tool executions not shown in the record. Natural prose "
-        "and concise omission of irrelevant steps are fine; do not require literal "
+        "facts or claims of tool actions absent from the reconstructed witness-backed "
+        "tool observations. The tool steps are simulated from frozen PUBLIC sources, "
+        "not live API/browser logs; allow accurate O1-style action/observation "
+        "narrative for these enumerated tools only. A source discovery tool alone "
+        "does not prove a fact; attribute factual claims to source observations. "
+        "Reject invented calls, search phrases, video timestamps, errors, or "
+        "unsupported attribution. Natural prose and concise omission of irrelevant "
+        "steps are fine; do not require literal "
         "operator names or exact quotation. Return JSON ONLY: "
         '{"grounded":true|false,"issues":["brief reason"]}. '
         "If uncertain, grounded=false.\n"
@@ -344,6 +382,10 @@ def feedback_reviewer_prompt(
                 "claims": o["claims"],
             } for o in [*f["observations"], *f.get("known_observations", [])]],
             "candidate_report": natural,
+            "reconstructed_tool_observations": payload.get("tool_provenance", {
+                "origin": "no_tool_observations_available",
+                "live_tool_calls": False, "steps": [],
+            }),
         })
     )
 
