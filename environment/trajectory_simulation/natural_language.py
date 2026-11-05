@@ -256,59 +256,65 @@ def main_reviewer_prompt(
 
 
 def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, Any]) -> str:
+    """Express fixed public source findings in real-O1-style narrative.
+
+    The grouped source packet prevents source/tool attribution drift: each
+    witness's exact claims sit beside the only simulated access tools
+    permitted for that source. Class names remain optional in prose.
+    """
+    from .tool_provenance import source_evidence_guide
+
     fragment = payload["fragment"]
+    plan = payload.get("tool_provenance") or {"steps": []}
     public = {
-        "assigned_task": payload["task_instruction"],
-        "exact_result": fragment["expected_answer"],
-        "verified_steps": [{
-            "operation": op["op"], "arguments": op["inputs"],
-            "input_values": item.get("input_values", []), "output": item["answer"],
+        "assigned_subtask": payload["task_instruction"],
+        "fixed_result": fragment["expected_answer"],
+        "source_evidence_guide": source_evidence_guide(fragment, plan),
+        "verified_reasoning_steps": [{
+            "operation": op["op"],
+            "arguments": op["inputs"],
+            "input_values": item.get("input_values", []),
+            "output": item["answer"],
         } for op, item in zip(fragment["operations"], fragment["operation_results"])],
-        "published_observations": [{
-            "source_id": o["resource_id"], "title": o["title"],
-            "claims": o["claims"],
-        } for o in [*fragment["observations"], *fragment.get("known_observations", [])]],
-        "verified_reference_report": canonical,
-        "reconstructed_tool_observations": payload.get("tool_provenance", {
-            "origin": "no_tool_observations_available",
-            "live_tool_calls": False, "steps": [],
-        }),
+        "simulated_tool_observations": plan,
     }
     return (
-        "You are an O1 Sub-Agent composing a grounded answer to the ASSIGNED SUBTASK, "
-        "not the entire original Main question. The controller has already verified "
-        "every operation against the available public evidence and fixed the exact result. "
-        "Write fluent, compact report text that could plausibly be returned to the Main Agent. "
-        "summary (one or two sentences): start with the finding or the absence of matches. "
-        "Sound like a real Sub-Agent reporting to Main, not a grading rubric or execution log. "
-        "Acknowledge missing or ambiguous evidence only if the verified record actually supports it. "
-        "trace_summary (3-7 concise bullets when supported): resemble a real O1 "
-        "Sub-Agent action/observation report. Tell the chronological story: native "
-        "tool type and which resource it inspected, the specific facts observed, "
-        "how a second reference or previous subtask corroborated them, the "
-        "reasoning/comparison needed, and the exact finding returned. "
-        "Reference the appropriate tool NAMES (VideoAnalysisAction, "
-        "GoogleSearchAction, ExtractUrlContentAction, ParseAudioAction, "
-        "ImageAnalysisAction, ExecuteCodeAction) ONLY if the supplied reconstructed "
-        "tool observations actually include those tools. "
-        "These are SIMULATED action/observation events reconstructed from frozen "
-        "public witnesses, NOT logs of tools run live. Describe what the evidence "
-        "supports in natural past-tense execution-report style; DO NOT invent "
-        "literal queries, clicks, timestamps, file paths, execution failures, "
-        "transcripts, confidence scores or URLs beyond the provided records. "
-        "A previously available reference is REUSED, not newly searched. "
-        "When there are no tool observations, explain what was deduced from "
-        "previously completed results and the verified operations; do not pretend "
-        "that a new tool was called. "
-        "Avoid self-evaluation ('successfully initiated', 'no errors', "
-        "'finished efficiently') and grading the whole Main problem; report "
-        "only this assigned subtask. Never list FILTER_TYPE/INTERSECT as robotic "
-        "operator logs if plain-language reasoning suffices. No hidden graph IDs, "
-        "new entities, numbers, dates, or unsupported causal conclusions. "
-        "Do not change the fixed result. Return JSON ONLY: "
+        "You are an Orchestra-o1 Sub-Agent writing a report to the Main Agent "
+        "on the ASSIGNED SUBTASK only. The exact answer and public source facts "
+        "have already been verified; do not alter them. "
+        "Return JSON with precisely two strings: summary and trace_summary. "
+        "SUMMARY: one or two direct sentences stating the result and the most "
+        "relevant clue. Do not grade your performance or the whole Main problem. "
+        "TRACE_SUMMARY: write 2-6 concise, connected bullets or short paragraphs "
+        "in the style of a real O1 execution recap: what you examined, what "
+        "the actual source showed, what you checked next (if applicable), how "
+        "the verified facts satisfy the constraint, and what you returned. "
+        "Describe tools in NATURAL LANGUAGE where useful: 'examined the clip', "
+        "'searched for a supporting reference', 'checked the webpage', "
+        "'compared the prior results'. The quoted phrases demonstrate tone "
+        "ONLY and do not authorize those actions for this task. "
+        "Full tool class names like VideoAnalysisAction or GoogleSearchAction "
+        "are OPTIONAL and generally unnecessary; never list class names merely "
+        "to prove a tool was used. Likewise do not enumerate every available "
+        "source when only one or two provide decisive support. "
+        "The source_evidence_guide groups every source's exact supported "
+        "claims and allowed access steps. Attribute each fact to its OWN "
+        "source; a search discovery event alone never proves a factual claim. "
+        "The simulated_tool_observations reconstruct permitted tool activity "
+        "from frozen witnesses; they are NOT a record of live tool executions. "
+        "Do not claim any action absent from that record. Previously available "
+        "evidence is REUSED, not newly fetched. For a pure aggregation task "
+        "with no newly observed sources, discuss combining earlier results "
+        "without inventing a search or code run. "
+        "Do not invent search queries, URLs, timestamps, transcripts, errors, "
+        "confidence scores, extra sources, new entities, relations or numbers. "
+        "Avoid robotic FILTER_TYPE/INTERSECT operator logs, unsupported "
+        "tool-action storytelling, and 'no errors/all checks completed' praise. "
+        "When an important exact result has multiple entities, name them "
+        "concisely; maintain the Gold answer exactly. "
+        "Return JSON ONLY: "
         '{"summary":"...","trace_summary":"..."}.\n' + _json(public)
     )
-
 
 def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[str, str]:
     if not isinstance(proposal, dict) or set(proposal) != {"summary", "trace_summary"}:
@@ -324,27 +330,15 @@ def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[
     elif isinstance(value, (int, float)) and not isinstance(value, bool):
         if str(value) not in joined:
             raise ValueError("natural_report_omits_numeric_result")
-    from .tool_provenance import permitted_tool_names
-    from .tools import tool_profile
+    from .tool_provenance import unsupported_tool_actions
     plan = payload.get("tool_provenance") or {"steps": []}
-    allowed_tools = permitted_tool_names(plan)
-    known_tools = set(tool_profile(payload["fragment"].get("scene", "omnigaia")).available)
-    explicitly_mentioned = {tool for tool in known_tools
-                            if re.search(r"(?<!\w)" + re.escape(tool) + r"(?!\w)", joined)}
-    if explicitly_mentioned - allowed_tools:
-        raise ValueError("unverified_tool_action_claim:" +
-                         ",".join(sorted(explicitly_mentioned - allowed_tools)))
-    # Refuse action claims without a corresponding simulated observation.
-    if re.search(r"\b(?:I (?:browsed|clicked|opened|ran|transcribed)|"
-                 r"(?:browser|python|script|tool call) (?:was |were )?"
-                 r"(?:executed|performed|run))\b", joined, re.I):
-        raise ValueError("unverified_tool_action_claim")
-    if re.search(r"\b(?:I searched|web search (?:was |were )?(?:executed|performed|run))\b",
-                 joined, re.I) and "GoogleSearchAction" not in allowed_tools:
-        raise ValueError("unverified_search_action_claim")
-    if ("trace_summary" in proposal and allowed_tools
-            and not any(name in proposal["trace_summary"] for name in allowed_tools)):
-        raise ValueError("tool_trace_does_not_reflect_supported_tool_use")
+    unsupported = unsupported_tool_actions(joined, plan)
+    if unsupported:
+        raise ValueError(
+            "unverified_tool_action_claim:" + ",".join(sorted(unsupported))
+        )
+    # Real O1 does not require literal XXXAction tokens in a natural recap.
+    # Source/tool attribution and factual claims are still reviewed below.
     okay, issues = validate_feedback(proposal, payload["fragment"], strict=False)
     if not okay:
         raise ValueError("natural_report_unsupported_claim:" + ",".join(issues))
@@ -354,41 +348,44 @@ def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[
 def feedback_reviewer_prompt(
     payload: Mapping[str, Any], natural: Mapping[str, str],
 ) -> str:
+    from .tool_provenance import source_evidence_guide
+
     f = payload["fragment"]
+    plan = payload.get("tool_provenance") or {"steps": []}
     return (
-        "Audit this Sub-Agent report strictly against the supplied PUBLIC observations "
-        "and verified operations. Check every named entity, date, number, relation "
-        "direction, attributed source fact, and final result. Reject invented "
-        "facts or claims of tool actions absent from the reconstructed witness-backed "
-        "tool observations. The tool steps are simulated from frozen PUBLIC sources, "
-        "not live API/browser logs; allow accurate O1-style action/observation "
-        "narrative for these enumerated tools only. A source discovery tool alone "
-        "does not prove a fact; attribute factual claims to source observations. "
-        "Reject invented calls, search phrases, video timestamps, errors, or "
-        "unsupported attribution. Natural prose and concise omission of irrelevant "
-        "steps are fine; do not require literal "
-        "operator names or exact quotation. Return JSON ONLY: "
-        '{"grounded":true|false,"issues":["brief reason"]}. '
-        "If uncertain, grounded=false.\n"
-        + _json({
+        "Review this Sub-Agent natural-language report against the frozen, "
+        "PUBLIC and source-replayed facts for the ASSIGNED SUBTASK. "
+        "Every named entity, numeric/date value, attributed predicate, relation "
+        "direction and asserted observation must be supported by its specific "
+        "source or verified reasoning step. Check the exact result. "
+        "The provided tool observations are SIMULATED source-acquisition and "
+        "inspection affordances, NOT live API logs. Allow equivalent plain "
+        "language, e.g. 'examined the video' instead of VideoAnalysisAction, "
+        "IF that video source has the corresponding permitted tool activity. "
+        "Do NOT demand tool class names, one bullet per tool, or descriptions "
+        "of every available reference. A tool-free aggregation of previously "
+        "verified results is valid. Do not treat search discovery alone as "
+        "factual evidence. Reject actions with no permitted source mapping, "
+        "fabricated searches/queries, website URLs, media timestamps or "
+        "unsupported facts, even if the final answer is correct. "
+        "Do not require exact wording or literal operator names. "
+        "Return JSON ONLY: "
+        '{"grounded":true|false,"issues":["brief issue"]}. '
+        "Use grounded=true with issues=[] when fully supported, and "
+        "grounded=false when any material claim lacks support.\n" + _json({
             "task": payload["task_instruction"],
-            "result": f["expected_answer"],
-            "operations": [
-                {"op": op["op"], "args": op["inputs"], "answer": result["answer"]}
+            "fixed_result": f["expected_answer"],
+            "verified_operations": [
+                {"op": op["op"], "args": op["inputs"],
+                 "input_values": result.get("input_values", []),
+                 "answer": result["answer"]}
                 for op, result in zip(f["operations"], f["operation_results"])
             ],
-            "observations": [{
-                "resource_id": o["resource_id"], "title": o["title"],
-                "claims": o["claims"],
-            } for o in [*f["observations"], *f.get("known_observations", [])]],
+            "source_evidence_guide": source_evidence_guide(f, plan),
+            "simulated_tool_observations": plan,
             "candidate_report": natural,
-            "reconstructed_tool_observations": payload.get("tool_provenance", {
-                "origin": "no_tool_observations_available",
-                "live_tool_calls": False, "steps": [],
-            }),
         })
     )
-
 
 def check_reviewer(verdict: Any, *, flag: str) -> None:
     if not isinstance(verdict, dict) or verdict.get(flag) is not True or verdict.get("issues") != []:
