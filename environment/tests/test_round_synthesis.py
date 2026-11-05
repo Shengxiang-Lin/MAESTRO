@@ -205,6 +205,27 @@ class TwoPhaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _read_verified_bank(tampered)
 
+    def test_phase2_does_not_call_main_writer_for_unselected_history(self):
+        class CountingPlanner(PassthroughPlanner):
+            offline=False
+            style_provider="natural"
+            count=0
+            def naturalize_action(self,payload,canonical):
+                self.count+=1
+                return canonical
+
+        _,_,_,bank=self.bank(dependent=True)
+        planner=CountingPlanner()
+        rows,stats=compose_main_rounds(
+            bank,planner=planner,
+            round_indices={3},include_fallback_rounds=True,
+        )
+        self.assertEqual(planner.count,1)
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]["round_index"],3)
+        self.assertEqual(rows[0]["history_origin"],"teacher_reconstructed")
+        self.assertIn("Attempt 1",rows[0]["input"])
+
     def test_phase2_keeps_verified_round_one_if_round_two_export_fails(self):
         _,_,_,bank=self.bank(dependent=True)
         envelope={"format":"maestro.clean_subtasks.v1","bank":bank}
