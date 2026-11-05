@@ -19,6 +19,14 @@ def preflight(payload:Mapping[str,Any],question:str)->QuestionValidation:
     if _PLACEHOLDER_RE.search(text) or re.search(r"<(?:SYMBOL|YEAR|NUMBER|DATE|ATTR|REL|ENTITY_OR_TYPE|STRING|BOOL|VALUE)[^>]*>",text,re.I):issues.append("synthetic_identifier_leak")
     if not (text.endswith("?") or text.endswith(".")):issues.append("missing_terminal_punctuation")
     contract=payload.get("task_design",{}) if isinstance(payload.get("task_design"),Mapping) else {};operation=str(contract.get("final_operation") or "").upper();lower=text.lower()
+    if str(contract.get("entry_strategy") or "")=="web_search" and re.search(
+        r"\b(?:supplied|provided|attached|uploaded|given)\s+"
+        r"(?:(?:reference|source|input|document|spreadsheet|file|record)s?\b)"
+        r"|\b(?:in|from)\s+the\s+(?:supplied|provided|attached)\s+"
+        r"(?:file|document|records|spreadsheet|video|image)\b",
+        lower,
+    ):
+        issues.append("web_search_not_presupplied_file")
     if operation=="COUNT" and not any(token in lower for token in ("how many","count","number of")):issues.append("count_intent_missing")
     if operation.startswith("VERIFY_") and not any(token in lower for token in ("whether","any ","does ","is ","are ","can ")):issues.append("verify_existential_intent_missing")
     if operation in {"SELECT_BETWEEN","SELECT_AMONG"} and not any(token in lower for token in ("largest","smallest","highest","lowest","maximum","minimum","most","least")):issues.append("selection_direction_missing")
