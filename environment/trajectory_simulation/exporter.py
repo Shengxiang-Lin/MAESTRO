@@ -46,7 +46,7 @@ def validate_public_episode(episode,*,require_training=True):
                 if set(record)-{'resource_id','source_type','title','content','claims','entity_types'}:raise ValueError('unexpected evidence fields')
                 for fact in record['claims']:
                     if set(fact)-{'subject','predicate','object','object_kind','observation_key'}:raise ValueError('unexpected public claim fields')
-            replay=replay_task(task,observed)
+            replay=replay_task(task,observed,public_cache=cache)
             contract={'collection_mode':'set' if reply['result_kind']=='entity_set' else 'multiset'}
             from .compiler import json_value
             if not answers_equal(json_value(replay['result']),reply['result_value'],contract):raise ValueError('public replay result mismatch')
