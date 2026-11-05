@@ -298,7 +298,7 @@ def _read_verified_bank(record):
 
 def compose_main_rounds(bank, *, planner, round_indices=None,
                         include_fallback_rounds=False, include_complete=True,
-                        max_o1_attempts=10):
+                        max_o1_attempts=10, emit=None):
     """Phase 2: consume a FULL Subtask Bank, return validated Main SFT rows.
 
     History prefixes contain exactly the previous waves, never any future
@@ -424,6 +424,8 @@ def compose_main_rounds(bank, *, planner, round_indices=None,
                     history_origin=origin,max_o1_attempts=max_o1_attempts,
                 )
                 rows.append(row)
+                if emit is not None:
+                    emit(row)
                 stats["history_origins"][origin]=stats["history_origins"].get(origin,0)+1
         results=[]
         # Only after the entire wave succeeds do sibling observations become
@@ -471,13 +473,16 @@ def compose_main_rounds(bank, *, planner, round_indices=None,
     if include_complete and (round_indices is None or idx in round_indices):
         stats["considered"]+=1
         origin="teacher_reconstructed" if prior_fallback else "natural"
-        rows.append(make_round_record(
+        final_row=make_round_record(
             task_id=bank["task_id"],round_index=idx,question=question,
             eligibility=bank["eligibility"],state=state,prefix=history,
             action=complete,question_record=bank["question_record"],
             natural_task_count=0,assigned_task_count=0,
             history_origin=origin,max_o1_attempts=max_o1_attempts,
-        ))
+        )
+        rows.append(final_row)
+        if emit is not None:
+            emit(final_row)
         stats["history_origins"][origin]=stats["history_origins"].get(origin,0)+1
     return rows,stats
 
@@ -515,16 +520,19 @@ def generate_main_rounds_jsonl(bank_path, output_path, *, planner,
                 continue
             try:
                 bank=_read_verified_bank(json.loads(line))
+                def emit_round(row):
+                    # A verified Main decision is durable immediately, even if
+                    # a later decision in this bank fails language realization.
+                    good.write(json.dumps(row,ensure_ascii=False)+"\n")
+                    good.flush()
+                    counts["rounds"]+=1
                 rows,stats=compose_main_rounds(
                     bank,planner=planner,round_indices=round_indices,
                     include_fallback_rounds=include_fallback_rounds,
                     include_complete=include_complete,max_o1_attempts=max_o1_attempts,
+                    emit=emit_round,
                 )
-                for row in rows:
-                    good.write(json.dumps(row,ensure_ascii=False)+"\n")
-                    good.flush()
                 counts["banks"]+=1
-                counts["rounds"]+=len(rows)
                 counts["considered"]+=stats["considered"]
                 counts["skipped"]+=stats["skipped"]
                 counts["assigned"]+=stats["assigned"]
