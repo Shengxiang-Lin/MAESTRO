@@ -21,12 +21,30 @@ def check_question(gold,record,role,*,review=True):
             return {'eligible':item.get('eligible',False),'reviewed':True,'method':'audited_exact_input_review','issues':[] if item.get('eligible') else [item['reason']],'audit_reason':item['reason'],**fingerprint}
     if not review or getattr(role,'offline',False) or not getattr(role,'backend',None):
         return {'eligible':True,'reviewed':False,'method':'offline_structure_only','issues':[],**fingerprint}
-    nodes={op['node_id']:op for f in gold['fragments'] for op in f['operations']}
+    # A certified Stage-3 public projection may omit an internal FIND and
+    # its redundant INTERSECT. Their original ProgramIR dependencies remain
+    # referenced by the final operation. Semantic review must use the *full*
+    # frozen graph, not infer the question's semantics from the pruned O1
+    # delegation graph (which would KeyError on an omitted node).
+    original_nodes={
+        int(node['node_id']):node
+        for node in record['program']['nodes']
+    }
+    public_nodes={
+        int(op['node_id']):op
+        for f in gold['fragments'] for op in f['operations']
+    }
+    nodes={
+        nid:public_nodes.get(nid,raw)
+        for nid,raw in original_nodes.items()
+    }
     visited=set()
     def expression(nid):
         if nid in visited:return {'step_reference':nid}
-        visited.add(nid);node=nodes[nid]
-        return {'step':nid,'action':node['op'],'arguments':node['inputs'],'inputs':[expression(d) for d in node['dependencies']]}
+        visited.add(nid)
+        node=nodes[nid]
+        return {'step':nid,'action':node['op'],'arguments':node['inputs'],
+                'inputs':[expression(int(d)) for d in node['dependencies']]}
     expression_root=expression(max(nodes))
     prompt=('Check whether the accepted question describes EXACTLY the supplied canonical computation. '
         'Do not solve it, inspect answers, or apply real-world plausibility. Check the owner of each constraint, '
@@ -40,11 +58,21 @@ def check_question(gold,record,role,*,review=True):
         'Simplification is allowed only if the computation is unchanged. A person constraint cannot be moved '
         'to a place or vice versa. FALSE/empty outcomes do not make a question invalid. '
         'If ambiguity prevents establishing equivalence, choose uncertain. '
+        'An explicitly certified public projection may remove a redundant private singleton FIND '
+        'and its INTERSECT from agent delegation; the accepted question need not expose the '
+        'private singleton name when another public branch identifies the same entity. '
+        'Do not excuse missing, redirected, or changed constraints beyond that exact redundancy. '
         'Return JSON only: {"decision":"eligible"|"mismatch"|"uncertain","issues":'
         '[{"question_quote":"exact span from accepted question","reason":"scope or hop discrepancy"}]}. '
         'At most two issues; quotes <=140 characters and reasons <=180 characters. For eligible, issues must be empty. No answer values or regenerated questions.\n'+json.dumps({
             'accepted_question':question,'canonical_question':gold['canonical_question'],
-            'canonical_expression':expression_root,'canonical_steps':[{'step':nid,'action':op['op'],'arguments':op['inputs'],'input_steps':op['dependencies']} for nid,op in sorted(nodes.items())]},ensure_ascii=False,separators=(',',':')))
+            'certified_public_projections':gold.get('public_projections',[]),
+            'canonical_expression':expression_root,
+            'canonical_steps':[{
+                'step':nid,'action':op['op'],'arguments':op['inputs'],
+                'input_steps':op['dependencies'],
+                'projected_from_public_delegation':nid not in public_nodes,
+            } for nid,op in sorted(nodes.items())]},ensure_ascii=False,separators=(',',':')))
     cache_path=getattr(role,'eligibility_cache',None)
     if not isinstance(cache_path,(str,Path)):cache_path=None
     # Test doubles and partially constructed clients can expose Mock objects
@@ -54,7 +82,7 @@ def check_question(gold,record,role,*,review=True):
         value = getattr(role.backend, field, None)
         return value if isinstance(value, str) and value else "unknown"
     cache_key=digest({**fingerprint,'reviewer_model':identity('model'),
-        'reviewer_endpoint':identity('base_url'),'review_contract':2})
+        'reviewer_endpoint':identity('base_url'),'review_contract':3})
     if cache_path and Path(cache_path).exists():
         for line in Path(cache_path).read_text().splitlines():
             item=json.loads(line)
