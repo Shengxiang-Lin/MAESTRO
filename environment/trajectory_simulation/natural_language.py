@@ -15,6 +15,29 @@ import re
 from typing import Any, Mapping
 
 from .contract import answer_string, validate_action, validate_feedback
+from .evidence import MARKER
+
+
+def natural_public_context(context: str, instruction: str) -> str:
+    """Preserve source handles but keep exact executable checks out of prose.
+
+    The v3 packet is public metadata, not a private oracle; the independent
+    replay must still derive every result from published observations.
+    """
+    if MARKER not in context:
+        raise ValueError("canonical_task_without_public_packet")
+    prefix, serialized = context.split(MARKER, 1)
+    packet = json.loads(serialized)
+    if packet.get("version") != 2:
+        raise ValueError("naturalization_requires_v2_public_packet")
+    packet = dict(packet, version=3, execution_checks=instruction)
+    # Strip the irrelevant instruction-list sentence from human context.
+    prefix = prefix.replace(
+        "Execute the instructions in dependency order; each input refers only to the result explicitly named in that instruction.",
+        "Use the supplied reference materials and previously completed results; report only supported findings.",
+        1,
+    )
+    return prefix + MARKER + _json(packet)
 
 
 def _json(value: Any) -> str:
@@ -127,6 +150,9 @@ def realize_main(
             )
             if _numbers(candidate) - allowed:
                 raise ValueError(f"natural_task_unsupported_number:{i}")
+            task["context"] = natural_public_context(
+                task["context"], task["task_instruction"]
+            )
             task["task_instruction"] = candidate
     okay, issues = validate_action(
         output, payload["gold_guidance"], payload["offline_oracle_answer"],
@@ -258,7 +284,7 @@ def check_reviewer(verdict: Any, *, flag: str) -> None:
 
 
 __all__ = [
-    "main_writer_prompt", "realize_main", "main_reviewer_prompt",
+    "natural_public_context", "main_writer_prompt", "realize_main", "main_reviewer_prompt",
     "feedback_writer_prompt", "realize_feedback_natural",
     "feedback_reviewer_prompt", "check_reviewer",
 ]
