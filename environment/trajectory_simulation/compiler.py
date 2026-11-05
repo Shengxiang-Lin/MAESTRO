@@ -179,11 +179,7 @@ def _minimal_witness(
     # The public replay obtains its entity domain from source records. An
     # entity in the private world but in no source must not be silently
     # inserted into a Gold answer, even if the private trace contains it.
-    all_observable = {
-        f.subject for f in world.facts
-    } | {
-        str(f.object) for f in world.facts if f.object_kind == "entity"
-    }
+    all_observable = _public_observable_entities(world)
     all_fact_ids = {
         fid for source in world.sources.values() for fid in source.fact_ids
     }
