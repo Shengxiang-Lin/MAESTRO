@@ -41,14 +41,21 @@ For each question, this phase:
    supported by its modality; previously known Sources are reused without
    creating a new tool call. No fabricated search queries, timestamps, URLs,
    failures or unobserved facts are added.
-5. Attempts fluent, evidence-grounded Sub-Agent report wording: concise
-   `summary` and an O1-style `trace_summary` that connects simulated tool
-   activity, specific verified observations, follow-up checks and the exact
-   result. A rejected rewrite falls back to the correct canonical report;
-   the result/answer is **never** invented or changed by the LLM.
-   Private bank entry `simulated_tool_provenance` records the exact allowed
-   tool/source mapping and explicitly sets `live_tool_calls=false`.
-5. Only after all parallel siblings pass does the next wave see their public
+5. Pairs each permitted tool/source event with that source's EXACT
+   observed claims in a grouped `source_evidence_guide`. This reduces
+   cross-source attribution errors when the LLM writes its report.
+6. Attempts fluent, evidence-grounded Sub-Agent report wording: concise
+   `summary` plus real-O1-style `trace_summary` that naturally describes
+   what was examined, observed, verified and returned. Full class names
+   such as `VideoAnalysisAction` are **optional**, never mandatory. A trace
+   may omit tool mechanics if it accurately explains the supported result.
+   Both literal and natural-language claims of *unpermitted* tool actions
+   remain forbidden. Semantic review still checks source-specific facts,
+   values and relation directions. A rejected rewrite falls back to the
+   correct canonical report; the answer is never changed by the LLM.
+   Private bank entry `simulated_tool_provenance` explicitly marks
+   `live_tool_calls=false` for audit.
+7. Only after all parallel siblings pass does the next wave see their public
    results. Siblings never inspect each other's unreleased outputs.
 
 The output `subtask_bank_20.jsonl` is a **complete private teacher bank**:
