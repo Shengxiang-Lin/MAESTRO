@@ -340,6 +340,11 @@ def ready_fragments(plan: Mapping[str, Any], completed: set[str]) -> list[dict[s
 def compile_gold_solution(realized, world_record, rendered, *, max_sources=8, scene="omnigaia", schedule="baseline"):
     from .skeleton import compile_fragments
     plan=compile_fragments(realized, world_record, rendered, max_sources=max_sources, scene=scene)
+    # Stage 1 sometimes intentionally hides an identity already uniquely
+    # established by another public branch. Project only that certified
+    # redundant private check out of the Main delegation graph.
+    from .public_projection import project_concealed_intersections
+    plan=project_concealed_intersections(plan, rendered)
     if schedule=="compact":
         from .scheduling import compact_plan
         return compact_plan(plan)
