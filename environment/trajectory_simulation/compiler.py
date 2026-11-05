@@ -90,7 +90,15 @@ def _subprogram(program: ProgramIR, output: int) -> ProgramIR:
 
 
 def _evidence_world(world: Any, source_ids: set[str]) -> Any:
-    """Keep a fact if any retained source provides it (shared facts included)."""
+    """Project *only publicly observable* source facts and their entity types.
+
+    The private Stage-1 domain also contains distractor/background entities
+    without any source evidence. FIND_ALL over that private universe cannot
+    be reproduced by a Sub-Agent whose visible inputs are the frozen sources.
+    For witness testing, use the identical entity domain Public Replay derives
+    from source records. Still require the final projected result to match the
+    full-world oracle; otherwise reject the task (never invent missing facts).
+    """
     subset = world.copy()
     subset.sources = {sid: s for sid, s in world.sources.items() if sid in source_ids}
     fact_ids = {fid for source in subset.sources.values() for fid in source.fact_ids}
@@ -98,7 +106,28 @@ def _evidence_world(world: Any, source_ids: set[str]) -> Any:
         fact for fact in world.facts
         if fact.fact_id in fact_ids or fact.source_id in source_ids
     ]
+    observable = {fact.subject for fact in subset.facts} | {
+        str(fact.object) for fact in subset.facts if fact.object_kind == "entity"
+    }
+    subset.entities = {
+        entity: kind for entity, kind in world.entities.items()
+        if entity in observable
+    }
     return subset
+
+
+def _public_observable_entities(world: Any) -> set[str]:
+    """Entity IDs available from at least one frozen public Source."""
+    sourced = {
+        fid for source in world.sources.values() for fid in source.fact_ids
+    }
+    visible_facts = [
+        fact for fact in world.facts
+        if fact.fact_id in sourced or fact.source_id in world.sources
+    ]
+    return {fact.subject for fact in visible_facts} | {
+        str(fact.object) for fact in visible_facts if fact.object_kind == "entity"
+    }
 
 
 def _same(left: Any, right: Any) -> bool:
