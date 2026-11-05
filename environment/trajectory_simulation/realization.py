@@ -69,9 +69,15 @@ def task_variants(fragment, completed, visible_resources=(), public_cache=None):
           'Find the '+args[0]+' values for the specified entities' if op=='QUERY_ATTR' else
           'Identify the entities reached through '+args[0]+' in the required direction' if op=='RELATE' else
           'Identify the entities satisfying the specified constraints')
-    headers=['','Perform these checks and return the final result:\n',
-             goal+'. Return the result with the supporting references. Preserve the following input scopes and checks:\n',
-             goal+'. Inspect the supplied evidence and report the relevant facts and source references. Required checks:\n']
+    # An O1 Main task should lead with an information goal, not read like a
+    # bare query-plan instruction list. Keep the numbered checks unchanged so
+    # public evidence replay still deterministically verifies every step.
+    headers=[
+        goal+'. Use the available evidence and report the result. Required checks:\n',
+        'Goal: '+goal+'. Follow these checks and return the relevant conclusion:\n',
+        goal+'. Return the result with supporting references. Required checks:\n',
+        goal+'. Inspect the supplied evidence and report the relevant facts and source references. Required checks:\n',
+    ]
     return [{'task_instruction':header+instruction,'context':context,'model':'model_1','tools':tool_list} for header in headers]
 
 def action_options(payload):
