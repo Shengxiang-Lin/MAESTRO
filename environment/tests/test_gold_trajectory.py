@@ -437,7 +437,7 @@ class FragmentCompilationTests(unittest.TestCase):
             payload = None
 
             def check_question(self, prompt):
-                self.payload = json.loads(prompt.split('\\n', 1)[1])
+                self.payload = json.loads(prompt.split('\n', 1)[1])
                 return {'decision': 'eligible', 'issues': []}
 
         role = Reviewer()
