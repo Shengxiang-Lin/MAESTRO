@@ -118,8 +118,6 @@ def command_rounds(args: argparse.Namespace) -> None:
         include_fallback_rounds=args.include_fallback_rounds,
         include_complete=not args.exclude_complete,
         max_o1_attempts=args.max_o1_attempts,
-        max_attempts=args.max_attempts,
-        subagent_workers=args.subagent_workers,
         seed=args.seed, scene=args.scene, schedule=args.schedule,
         rejected_output_path=args.rejected_output,
         quarantine_output_path=args.quarantine_output,
@@ -147,9 +145,6 @@ def _add_synthesis_options(synth: argparse.ArgumentParser) -> None:
     synth.add_argument("--executor-temperature", type=float, default=0.2)
     synth.add_argument("--max-tokens", type=int, default=2048)
     synth.add_argument("--timeout", type=float, default=90.)
-    synth.add_argument("--max-attempts", type=int, default=3)
-    synth.add_argument("--subagent-workers", type=int, default=4)
-    synth.add_argument("--flush-every", type=int, default=5)
     synth.add_argument("--rejected-output")
     synth.add_argument("--quarantine-output")
     synth.add_argument("--eligibility-cache")
@@ -173,6 +168,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_common(synth)
     _add_synthesis_options(synth)
+    synth.add_argument("--max-attempts", type=int, default=3)
+    synth.add_argument("--subagent-workers", type=int, default=4)
+    synth.add_argument("--flush-every", type=int, default=5)
     synth.set_defaults(func=command_synthesize)
 
     rounds = sub.add_parser(
@@ -216,7 +214,7 @@ def main() -> None:
         raise SystemExit("Missing trajectory inputs: " + ", ".join(missing))
     if args.max_records is not None and args.max_records < 0:
         raise SystemExit("--max-records must be nonnegative")
-    if args.command in {"synthesize", "rounds"}:
+    if args.command == "synthesize":
         if min(args.max_attempts, args.subagent_workers, args.flush_every) < 1:
             raise SystemExit("attempts, workers and flush_every must be >= 1")
     try:
