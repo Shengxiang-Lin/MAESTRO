@@ -22,7 +22,12 @@ def compile_fragments(realized, record, rendered, *, max_sources=8, scene='omnig
     # Source facts. The private world may have additional unsourced distractors.
     # Project the *entire* computation first, never individual answers.
     public_world=_evidence_world(w,set(w.sources))
-    public_full_trace=SymbolicExecutor().execute_trace(p,public_world)
+    try:
+        public_full_trace=SymbolicExecutor().execute_trace(p,public_world)
+    except (ValueError,TypeError,RuntimeError) as exc:
+        raise GoldCompilationError('public_full_world_execution_failed', {
+            'error_type':type(exc).__name__, 'detail':str(exc)[:240],
+        }) from exc
     hidden=getattr(rendered,'hidden_metadata',{}) or {}
     def public_args(node):
         args=_public_inputs(node.inputs,rendered)
