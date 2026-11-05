@@ -376,7 +376,14 @@ def compose_main_rounds(bank, *, planner, round_indices=None,
         canonical=teacher.decide(payload,main_prompt(payload))
         if canonical!=wave["canonical_action"]:
             raise ValueError("phase1_canonical_action_mismatch")
-        output,changed,errors=_natural_main(planner,payload,canonical)
+        # Historical waves that are not SFT targets need no Main LLM
+        # generation. The immutable Gold action + correct Sub-Agent replies
+        # suffice to reconstruct all later states.
+        selected=round_indices is None or idx in round_indices
+        if selected:
+            output,changed,errors=_natural_main(planner,payload,canonical)
+        else:
+            output,changed,errors=canonical,0,[]
         okay,issues=validate_action(
             output,guidance,gold["final_answer"],gold["answer_contract"],
             public_state=public_state,
@@ -400,7 +407,6 @@ def compose_main_rounds(bank, *, planner, round_indices=None,
             if not answers_equal(new["result_value"],fragment["expected_answer"],kind):
                 raise ValueError("phase2_subtask_answer_mismatch")
             pending.append((fragment,new))
-        selected=round_indices is None or idx in round_indices
         if selected:
             stats["considered"]+=1
             stats["rewritten"]+=changed
