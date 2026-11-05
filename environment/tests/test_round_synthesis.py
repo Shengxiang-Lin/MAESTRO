@@ -1,22 +1,25 @@
-"""Round-centric gold SFT: independent states with causal public teacher history."""
+"""Precomputed correct Subtask Bank -> independent, causal O1 Main decisions."""
 from __future__ import annotations
 
+import copy
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from environment.tests.test_gold_trajectory import fixture
-from environment.trajectory_simulation.backend import PassthroughPlanner, PassthroughExecutor
+from environment.trajectory_simulation.backend import (
+    PassthroughPlanner, PassthroughExecutor,
+)
 from environment.trajectory_simulation.eligibility import digest
 from environment.trajectory_simulation.exporter import validate_public_episode
-from environment.trajectory_simulation.pipeline import (
-    GoldTrajectoryError, synthesize_one,
-)
+from environment.trajectory_simulation.natural_language import realize_main
 from environment.trajectory_simulation.rounds import (
-    RoundSink, make_round_record, synthesize_rounds_jsonl, o1_input,
+    make_round_record, synthesize_rounds_jsonl, o1_input, native_tool_spec,
 )
+from environment.trajectory_simulation.subtask_bank import build_subtask_bank
 
 
 def reviewed(gold, record, role, *, review=True):
@@ -24,203 +27,220 @@ def reviewed(gold, record, role, *, review=True):
         "eligible": True, "reviewed": True,
         "question_sha256": digest(gold["question"]),
         "program_sha256": digest(record["program"]),
-        "method": "test_approved_exact_question",
-        "issues": [],
+        "method": "test_exact_program_review", "issues": [],
     }
 
 
 class RoundCentricTests(unittest.TestCase):
-    def test_o1_input_reuses_real_baseline_prompt_and_only_public_history(self):
+    def bank(self, *, dependent=False, planner=None, executor=None):
+        q, record, rendered = fixture(dependent=dependent)
+        with patch(
+            "environment.trajectory_simulation.subtask_bank.check_question", reviewed
+        ):
+            bank = build_subtask_bank(
+                q, record, rendered,
+                planner=planner or PassthroughPlanner(),
+                executor=executor or PassthroughExecutor(),
+                schedule="baseline",
+            )
+        return q,record,rendered,bank
+
+    def test_real_o1_input_uses_native_prompt_and_native_tool_schema(self):
         state = {
             "question": "Who wrote the research report?",
             "subtask_history": "No subtasks completed yet.",
             "available_tools": ["GoogleSearchAction", "ExecuteCodeAction"],
             "evidence_store": {},
         }
-        text = o1_input(state, [], question_record={}, round_index=1)
-        self.assertIn("==== QUESTION ====", text)
-        self.assertIn("==== SUBTASK HISTORY ====", text)
-        self.assertIn("==== AVAILABLE TOOLS", text)
-        self.assertIn("[Attempt 1/10]", text)
-        self.assertIn("Who wrote the research report?", text)
-        self.assertNotIn("Gold", text)
-        self.assertNotIn("expected_answer", text)
+        text=o1_input(state,[],question_record={},round_index=1)
+        for phrase in ("==== QUESTION ====", "==== SUBTASK HISTORY ====",
+                       "==== AVAILABLE TOOLS", "[Attempt 1/10]"):
+            self.assertIn(phrase,text)
+        self.assertIn("Who wrote the research report?",text)
+        spec=native_tool_spec("GoogleSearchAction")
+        self.assertIn(spec.description,text)
+        self.assertIn('"query"',text)
+        self.assertNotIn("gold_supervision",text)
+        self.assertNotIn("expected_answer",text)
 
-    def test_single_selected_round_builds_prior_clean_feedback_without_future(self):
-        q, record, rendered = fixture()
-        planner, executor = PassthroughPlanner(), PassthroughExecutor()
-        with tempfile.TemporaryDirectory() as temp, patch(
-            "environment.trajectory_simulation.pipeline.check_question", reviewed
-        ):
-            out = Path(temp) / "rounds.jsonl"
-            sink = RoundSink(out, question=q, include_fallback_rounds=True)
-            try:
-                episode = synthesize_one(
-                    q, record, rendered, planner, executor,
-                    schedule="baseline",
-                    round_sink=sink,
-                    selected_rounds={2},
-                    history_style="teacher",
-                    stop_after_round=2,
-                )
-            finally:
-                sink.close()
-            self.assertTrue(episode["partial"])
-            self.assertEqual(episode["last_round"], 2)
-            self.assertEqual(sink.written, 1)
-            rows = [json.loads(line) for line in out.read_text().splitlines()]
-            self.assertEqual(len(rows), 1)
-            row = rows[0]
-            self.assertEqual(row["round_index"], 2)
-            self.assertEqual(row["history_origin"], "teacher_reconstructed")
-            self.assertEqual(row["macro_label"], "advance")
-            self.assertTrue(row["history_valid"])
-            self.assertTrue(row["current_action_valid"])
-            self.assertIn("[Attempt 2/10]", row["input"])
-            self.assertIn("[Attempt 1]", row["input"])
-            self.assertIn("Bob", row["input"])
-            self.assertNotIn("gold_supervision", row["input"])
-            self.assertEqual(json.loads(row["target_json"])["action"], "delegate_task")
+    def test_subtask_bank_materializes_all_answers_before_main_sampling(self):
+        _,_,_,bank=self.bank(dependent=True)
+        self.assertEqual(len(bank["fragments"]),3)
+        self.assertEqual(len(bank["waves"]),3)
+        self.assertEqual(bank["complete"]["round_index"],4)
+        self.assertEqual(len(bank["full_public_history"]),3)
+        for fragment in bank["fragments"].values():
+            self.assertTrue(fragment["correct_answer"])
+            self.assertTrue(fragment["summary"])
+            self.assertTrue(fragment["trace_summary"])
+            self.assertIn(fragment["natural_feedback"],{True,False})
+        results=[w["step"]["result"]["subtask_results"][0] for w in bank["waves"]]
+        self.assertEqual(results[0]["finish_result"]["status"],"done")
+        self.assertEqual(results[1]["finish_result"]["status"],"done")
+        self.assertEqual(results[2]["finish_result"]["status"],"done")
+        self.assertEqual(bank["complete"]["action"]["action"],"complete")
 
-    def test_natural_main_failure_does_not_block_later_clean_round(self):
-        class BadFirstMain(PassthroughPlanner):
-            offline = False
-            style_provider = "natural"
-
-            def naturalize_action(self, payload, canonical):
-                if canonical["action"] == "complete":
-                    return dict(canonical)
-                # Language writer fails both rounds; continue with valid
-                # canonical execution but withhold strict natural SFT labels.
-                raise ValueError("intentionally_bad_natural_language")
-
-        q, record, rendered = fixture()
-        with tempfile.TemporaryDirectory() as tmp, patch(
-            "environment.trajectory_simulation.pipeline.check_question", reviewed
-        ):
-            path = Path(tmp) / "strict.jsonl"
-            sink = RoundSink(path, question=q, include_fallback_rounds=False)
-            try:
-                synthesize_one(
-                    q, record, rendered, BadFirstMain(), PassthroughExecutor(),
-                    schedule="baseline",
-                    round_sink=sink, selected_rounds={1,2},
-                    history_style="teacher", stop_after_round=2,
-                )
-            finally:
-                sink.close()
-            self.assertEqual(sink.considered, 2)
-            self.assertEqual(sink.skipped, 2)
-            self.assertEqual(sink.written, 0)
-            self.assertEqual(sink.skip_reasons["incomplete_naturalization"], 2)
-            self.assertEqual(path.read_text(), "")
-
-    def test_successful_round_persists_if_later_main_action_raises(self):
-        class BadLaterMain(PassthroughPlanner):
-            calls = 0
-
-            def decide(self, payload, prompt):
-                self.calls += 1
-                if self.calls > 1:
-                    raise ValueError("later_main_failed")
-                return super().decide(payload,prompt)
-
-        q, record, rendered = fixture()
-        with tempfile.TemporaryDirectory() as tmp, patch(
-            "environment.trajectory_simulation.pipeline.check_question", reviewed
-        ):
-            out = Path(tmp) / "rounds.jsonl"
-            sink = RoundSink(out, question=q, include_fallback_rounds=True)
-            try:
-                with self.assertRaisesRegex(GoldTrajectoryError, "later_main_failed"):
-                    synthesize_one(
-                        q, record, rendered, BadLaterMain(), PassthroughExecutor(),
-                        max_attempts=1, schedule="baseline", round_sink=sink,
-                    )
-            finally:
-                sink.close()
-            self.assertEqual(sink.written, 1)
-            self.assertEqual(json.loads(out.read_text().strip())["round_index"], 1)
-
-    def test_full_trajectory_prefix_validator_accepts_partial_clean_history(self):
-        q, record, rendered = fixture()
-        episode = synthesize_one(
-            q, record, rendered, PassthroughPlanner(), PassthroughExecutor(),
+    def test_bank_history_is_topological_and_no_same_wave_future_results(self):
+        _,_,_,bank=self.bank(dependent=False)
+        self.assertEqual(len(bank["waves"]),2)
+        first=bank["waves"][0]
+        self.assertEqual(len(first["fragment_ids"]),2)
+        self.assertEqual(first["state"]["evidence_store"],{})
+        self.assertEqual(
+            first["state"]["subtask_history"],"No subtasks completed yet."
         )
-        prefix = episode["trajectory"][:1]
-        validate_public_episode({
-            "task_id": episode["task_id"],
-            "question": episode["question"],
-            "input_eligibility": episode["input_eligibility"],
-            "validation": episode["validation"],
-            "trajectory": prefix,
-        }, require_training=False, require_terminal=False)
-        with self.assertRaisesRegex(ValueError, "missing terminal"):
-            validate_public_episode({
-                "task_id": episode["task_id"],
-                "question": episode["question"],
-                "input_eligibility": episode["input_eligibility"],
-                "validation": episode["validation"],
-                "trajectory": prefix,
-            }, require_training=False)
-        with self.assertRaisesRegex(ValueError, "not a history prefix"):
-            validate_public_episode(episode, require_training=False,
-                                    require_terminal=False)
+        second=bank["waves"][1]
+        self.assertIn("Attempt 1",second["state"]["subtask_history"])
+        self.assertEqual(len(second["state"]["evidence_store"]),2)
+        self.assertNotIn("Attempt 2",second["state"]["subtask_history"])
+        self.assertEqual(
+            set(second["state"]["evidence_store"]),
+            {o["resource_id"] for step in [first["step"]]
+             for reply in step["result"]["subtask_results"]
+             for o in reply["observed_evidence"]},
+        )
 
-    def test_streaming_round_synthesis_retains_samples_after_later_failure(self):
-        q, record, rendered = fixture()
-        record["task_id"] = q["task_id"]
+    def test_full_public_replay_still_validates_precomputed_bank(self):
+        _,_,_,bank=self.bank(dependent=True)
+        episode={
+            "task_id":bank["task_id"],"question":bank["question"],
+            "input_eligibility":bank["eligibility"],
+            "validation":{"public_evidence_replay_verified":True},
+            "trajectory":[*bank["full_public_history"],{
+                "attempt":bank["complete"]["round_index"],
+                **bank["complete"]["action"],
+                "state_before":bank["complete"]["state"],
+                "result":{"done":True,"success":True,
+                          "answer":bank["complete"]["action"]["params"]["answer"]},
+            }],
+        }
+        validate_public_episode(episode,require_training=False)
+        prefix=episode["trajectory"][:-1]
+        validate_public_episode(
+            {**episode,"trajectory":prefix},
+            require_training=False,require_terminal=False,
+        )
+
+    def test_rejected_earlier_natural_language_does_not_block_later_target(self):
+        class FirstBadThenGood(PassthroughPlanner):
+            offline=False
+            style_provider="natural"
+            attempts=0
+            def naturalize_action(self,payload,canonical):
+                if canonical["action"]=="complete":
+                    return realize_main(payload,canonical,{"reasoning":""})
+                self.attempts+=1
+                if self.attempts==1:
+                    raise ValueError("first_natural_rewrite_rejected")
+                natural=[]
+                for task in canonical["params"]["tasks"]:
+                    instructions=[
+                        re.sub(r"^\d+\.\s+", "", line)
+                        for line in task["task_instruction"].splitlines()
+                        if re.match(r"^\d+\.\s+",line)
+                    ]
+                    natural.append(
+                        "Review the supplied references to determine the answer. "
+                        + " ".join(instructions)
+                    )
+                return realize_main(
+                    payload,canonical,
+                    {"reasoning":"","task_instructions":natural},
+                )
+
+        q,record,rendered,bank=self.bank(
+            dependent=True,planner=FirstBadThenGood(),
+        )
+        self.assertEqual(bank["waves"][0]["naturalization"]["rewritten_tasks"],0)
+        self.assertEqual(bank["waves"][1]["naturalization"]["rewritten_tasks"],1)
+        self.assertEqual(bank["waves"][2]["naturalization"]["rewritten_tasks"],1)
+        # A complete Gold-backed history is available for a later round even
+        # though the first natural Main task did not produce an SFT target.
+        second=bank["waves"][1]
+        row=make_round_record(
+            task_id=bank["task_id"],round_index=2,question=bank["question"],
+            eligibility=bank["eligibility"],state=second["state"],
+            prefix=[bank["waves"][0]["step"]],
+            action=second["action"],question_record=q,
+            natural_task_count=1,assigned_task_count=1,
+            history_origin="teacher_reconstructed",
+        )
+        self.assertEqual(row["macro_label"],"advance")
+        self.assertIn("[Attempt 1]",row["input"])
+        self.assertIn("[Attempt 2/10]",row["input"])
+        self.assertNotIn("execution_checks",row["target_json"])
+        self.assertNotIn("gold_supervision",row["input"])
+
+    def test_round_export_refuses_invalid_state_or_corrupted_prefix(self):
+        q,_,_,bank=self.bank(dependent=True)
+        second=bank["waves"][1]
+        prefix=copy.deepcopy([bank["waves"][0]["step"]])
+        broken_state=copy.deepcopy(second["state"])
+        broken_state["subtask_history"]="This is a forged summary."
+        params=dict(
+            task_id=bank["task_id"],round_index=2,
+            question=bank["question"],eligibility=bank["eligibility"],
+            prefix=prefix,action=second["action"],question_record=q,
+            natural_task_count=0,assigned_task_count=1,
+            history_origin="teacher_reconstructed",
+        )
+        with self.assertRaisesRegex(ValueError,"round_history_not_equal"):
+            make_round_record(state=broken_state,**params)
+        prefix[0]["result"]["subtask_results"][0]["result_value"]=["Incorrect"]
+        with self.assertRaises(ValueError):
+            make_round_record(state=second["state"],**params)
+
+    def test_synthesize_rounds_jsonl_uses_bank_and_selected_rounds(self):
+        q,record,rendered=fixture(dependent=True)
         with tempfile.TemporaryDirectory() as tmp, patch(
-            "environment.trajectory_simulation.pipeline.check_question", reviewed
-        ), patch(
-            "environment.trajectory_simulation.pipeline._rows", return_value=[q],
-        ), patch(
+            "environment.trajectory_simulation.subtask_bank.check_question",reviewed,
+        ),patch(
+            "environment.trajectory_simulation.pipeline._rows",
+            return_value=[q],
+        ),patch(
             "environment.trajectory_simulation.pipeline._world_map",
-            return_value={q["task_id"]:(record, rendered)},
+            return_value={q["task_id"]:(record,rendered)},
         ):
-            src = Path(tmp) / "worlds.jsonl"
-            realized = Path(tmp) / "realized.jsonl"
+            src=Path(tmp)/"worlds.jsonl"
+            realized=Path(tmp)/"realized.jsonl"
             src.write_text("{}\n")
             realized.write_text("{}\n")
-            dst = Path(tmp) / "rounds.jsonl"
-            result = synthesize_rounds_jsonl(
-                src, realized, dst,
-                planner=PassthroughPlanner(), executor=PassthroughExecutor(),
-                progress=False, schedule="baseline",
-                history_style="teacher", include_fallback_rounds=True,
-                round_indices={1,2},
+            out=Path(tmp)/"rounds.jsonl"
+            bank_file=Path(tmp)/"bank.jsonl"
+            stats=synthesize_rounds_jsonl(
+                src,realized,out,planner=PassthroughPlanner(),
+                executor=PassthroughExecutor(),round_indices={2,3},
+                schedule="baseline",progress=False,bank_output_path=bank_file,
             )
-            self.assertEqual(result["rounds_considered"], 2)
-            self.assertEqual(result["eligible_rounds"], 2)
-            self.assertEqual(result["tasks_processed"], 1)
-            self.assertEqual(result["history_origins"], {
-                "natural":1, "teacher_reconstructed":1,
+            self.assertEqual(stats["subtask_bank_fragments"],3)
+            self.assertEqual(stats["rounds_considered"],2)
+            self.assertEqual(stats["eligible_rounds"],2)
+            rows=[json.loads(line) for line in out.read_text().splitlines()]
+            self.assertEqual([r["round_index"] for r in rows],[2,3])
+            self.assertTrue(all(r["history_valid"] for r in rows))
+            private=json.loads(bank_file.read_text().strip())
+            self.assertTrue(private["private_teacher_bank"])
+            self.assertEqual(len(private["fragments"]),3)
+            self.assertEqual(stats["history_origins"],{
+                "teacher_reconstructed":2,
             })
-            lines=[json.loads(row) for row in dst.read_text().splitlines()]
-            self.assertEqual(len(lines),2)
-            self.assertEqual([row["round_index"] for row in lines],[1,2])
-            self.assertTrue(all(row["history_valid"] for row in lines))
 
-    def test_round_record_rejects_private_or_missing_history_evidence(self):
-        q, record, rendered = fixture()
-        episode = synthesize_one(q, record, rendered,
-                                  PassthroughPlanner(), PassthroughExecutor())
-        history = episode["trajectory"][:1]
-        step = episode["trajectory"][1]
-        fake = json.loads(json.dumps(history))
-        fake[0]["result"]["subtask_results"][0]["result_value"] = ["NotReally"]
-        for prior in (fake,):
-            with self.assertRaises(ValueError):
-                make_round_record(
-                    task_id=episode["task_id"], round_index=2,
-                    question=episode["question"],
-                    eligibility=episode["input_eligibility"],
-                    state=step["state_before"],prefix=prior,action=step,
-                    question_record=q, natural_task_count=0,
-                    assigned_task_count=len(step["params"].get("tasks",[])),
-                    history_origin="teacher_reconstructed",require_review=False,
+    def test_invalid_stage2_question_is_not_sft_training_data(self):
+        q,record,rendered=fixture(dependent=True)
+        with patch(
+            "environment.trajectory_simulation.subtask_bank.check_question",
+            return_value={
+                "eligible":False,"reviewed":True,"question_sha256":digest(q["question"]),
+                "method":"test_rejection",
+            },
+        ):
+            from environment.trajectory_simulation.pipeline import GoldTrajectoryError
+            with self.assertRaisesRegex(GoldTrajectoryError,"question_eligibility"):
+                build_subtask_bank(
+                    q,record,rendered,planner=PassthroughPlanner(),
+                    executor=PassthroughExecutor(),
                 )
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     unittest.main()
