@@ -34,24 +34,49 @@ def task_packet(fragment,completed,cache):
     for ref in sorted(refs):
         item=completed[ref]
         inputs[item['public_ref']]={'value':copy.deepcopy(item['value']),'answer_kind':item['answer_kind']}
-    records=[]
-    for source in fragment.get('known_resource_ids',[]):
-        if source not in cache:raise ValueError('task requested unavailable public evidence '+source)
-        records.append(public_record(cache[source]))
-    return {'version':1,'scene':fragment.get('scene','omnigaia'),'completed_inputs':inputs,'known_records':records}
+    ids=list(dict.fromkeys(fragment.get('known_resource_ids',[])))
+    for source in ids:
+        if source not in cache:
+            raise ValueError('task requested unavailable public evidence '+source)
+    # The full records already exist in state_before.evidence_store. Keeping
+    # copies in params.tasks[].context makes the SFT target mostly JSON copying.
+    # A public handle is sufficient: replay/export resolve against the
+    # chronological public cache and fail closed if a handle is unavailable.
+    return {'version':2,'scene':fragment.get('scene','omnigaia'),
+            'completed_inputs':inputs,'known_resource_ids':ids}
 
 def read_packet(task):
     context=task.get('context','')
     if MARKER not in context:raise ValueError('missing public task packet')
     packet=json.loads(context.split(MARKER,1)[1])
-    if set(packet) not in ({'version','completed_inputs','known_records'},{'version','scene','completed_inputs','known_records'}) or packet['version']!=1:
+    allowed={
+        1: ({'version','completed_inputs','known_records'},
+            {'version','scene','completed_inputs','known_records'}),
+        2: ({'version','scene','completed_inputs','known_resource_ids'},),
+    }
+    if not isinstance(packet,dict) or packet.get('version') not in allowed or set(packet) not in allowed[packet['version']]:
         raise ValueError('invalid public task packet')
+    if not isinstance(packet.get('completed_inputs'),dict):
+        raise ValueError('malformed completed task references')
+    if packet['version']==2:
+        ids=packet.get('known_resource_ids')
+        if not isinstance(ids,list) or len(ids)!=len(set(ids)) or not all(isinstance(i,str) for i in ids):
+            raise ValueError('malformed public evidence references')
     return packet
 
 def verify_known_packet(task,public_cache):
     packet=read_packet(task)
+    if packet['version']==2:
+        resolved=[]
+        for sid in packet['known_resource_ids']:
+            if sid not in public_cache:
+                raise ValueError('unpublished or altered cached evidence: '+sid)
+            resolved.append(public_record(public_cache[sid]))
+        # Runtime-expanded representation, never included in Main's target.
+        return {**packet,'known_records':resolved}
     for record in packet['known_records']:
-        if record!=public_cache.get(record['resource_id']):raise ValueError('unpublished or altered cached evidence')
+        if record!=public_cache.get(record['resource_id']):
+            raise ValueError('unpublished or altered cached evidence')
     return packet
 
 def evidence_lines(observations,predicates=()):
