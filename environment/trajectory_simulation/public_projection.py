@@ -3,7 +3,8 @@
 The deterministic question renderer may conceal a singleton FIND because an
 independent branch of the same INTERSECT already identifies the entity
 uniquely. That direct FIND is NOT a publicly executable O1 subtask.
-Only in this exact documented case may we remove the concealed FIND and its
+Only with an explicit first-stage certificate or an independently verified
+source-backed singleton intersection can we remove the concealed FIND and its
 redundant INTERSECT, keeping the genuinely observable evidence branch.
 All other latent identities must pass public replay or be quarantined.
 """
@@ -32,8 +33,9 @@ def project_concealed_intersections(
 ) -> dict[str, Any]:
     """Eliminate *only* provably redundant private singleton checks.
 
-    Preconditions are checked against the explicitly frozen concealment
-    metadata, not inferred from a matching answer alone.
+    Preconditions require either frozen concealment metadata or a
+    whole-public-source singleton proof, plus causal evidence and graph
+    safety checks. Matching two opaque answers alone is insufficient.
     """
     plan = copy.deepcopy(dict(original))
     query_plan = (getattr(rendered, "hidden_metadata", {}) or {}).get(
