@@ -122,7 +122,7 @@ def _verify_subtask(canonical_task, natural_task, fragment, evidence_cache):
         "collection_mode": "multiset"
         if fragment["operations"][-1]["op"] == "QUERY_ATTR" else "set"
     }
-    for task in (canonical_task,natural_task):
+    for first,task in enumerate((canonical_task,natural_task)):
         verify_known_packet(task,evidence_cache)
         outcome = replay_task(task,observations,public_cache=evidence_cache)
         if not answers_equal(json_value(outcome["result"]),expected,answer_mode):
@@ -140,6 +140,11 @@ def _verify_subtask(canonical_task, natural_task, fragment, evidence_cache):
                 raise GoldTrajectoryError(
                     "public_replay", ["subtask_bank_intermediate_mismatch"]
                 )
+            if first==0:
+                # Provide the report writer with the same public intermediate
+                # inputs that the offline source-only executor actually read.
+                result["input_values"]=json_value(outcome["step_inputs"][i])
+                result["answer"]=json_value(outcome["step_values"][i])
     return observations
 
 
