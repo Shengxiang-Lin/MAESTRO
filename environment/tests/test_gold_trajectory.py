@@ -394,6 +394,33 @@ class FragmentCompilationTests(unittest.TestCase):
         self.assertEqual(episode['trajectory'][-1]['params']['answer'],'["Alice"]')
         self.assertNotIn('fragment:public_join:',json.dumps(episode['trajectory']))
 
+    def test_unexpected_synthesis_error_retains_type_and_traceback(self):
+        question, record, rendered = fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with patch('environment.trajectory_simulation.pipeline._rows',
+                       return_value=[question]), patch(
+                'environment.trajectory_simulation.pipeline._world_map',
+                return_value={question['task_id']: (record, rendered)},
+            ), patch(
+                'environment.trajectory_simulation.pipeline.synthesize_one',
+                side_effect=KeyError(15),
+            ):
+                summary = synthesize_trajectories_jsonl(
+                    base / 'worlds.jsonl', base / 'realized.jsonl',
+                    base / 'good.jsonl',
+                    rejected_output_path=base / 'bad.jsonl',
+                    quarantine_output_path=base / 'quarantine.jsonl',
+                    planner=PassthroughPlanner(), executor=PassthroughExecutor(),
+                    progress=False,
+                )
+            self.assertEqual(summary['rejected'], 1)
+            item = json.loads((base / 'bad.jsonl').read_text().strip())
+            self.assertEqual(item['reason'], 'unexpected_error')
+            self.assertEqual(item['issues'], ['KeyError: 15'])
+            self.assertEqual(item['audit']['exception_type'], 'KeyError')
+            self.assertIn('KeyError: 15', item['audit']['traceback'])
+
     def test_semantic_reviewer_sees_original_nodes_removed_by_public_projection(self):
         from environment.trajectory_simulation.eligibility import check_question
         question, record, rendered = fixture()
