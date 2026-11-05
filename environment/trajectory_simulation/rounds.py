@@ -173,6 +173,10 @@ class RoundSink:
         self.include_complete = include_complete
         self.max_o1_attempts = max_o1_attempts
         self.written = 0
+        self.considered = 0
+        self.natural_task_total = 0
+        self.natural_task_rewritten = 0
+        self.history_origin_counts: dict[str,int] = {}
         self.skipped = 0
         self.skip_reasons: dict[str, int] = {}
         self._writer = self.output.open("a", encoding="utf-8")
@@ -182,6 +186,7 @@ class RoundSink:
 
     def __call__(self, event: Mapping[str, Any]):
         action = event["action"]
+        self.considered += 1
         if action["action"] == "complete" and not self.include_complete:
             self._skip("completion_not_selected")
             return
@@ -208,10 +213,153 @@ class RoundSink:
         self._writer.write(json.dumps(sample, ensure_ascii=False) + "\n")
         self._writer.flush()
         self.written += 1
+        self.natural_task_total += count
+        self.natural_task_rewritten += natural
+        origin = event["history_origin"]
+        self.history_origin_counts[origin] = self.history_origin_counts.get(origin,0)+1
 
     def _skip(self, reason: str):
         self.skipped += 1
         self.skip_reasons[reason] = self.skip_reasons.get(reason, 0) + 1
 
 
-__all__ = ["o1_input", "make_round_record", "RoundSink"]
+def synthesize_rounds_jsonl(
+    worlds_path: str | Path, realized_path: str | Path, output_path: str | Path,
+    *, planner, executor, max_records: int | None = None,
+    round_indices: set[int] | None = None, history_style: str = "natural",
+    include_fallback_rounds: bool = False, include_complete: bool = True,
+    max_o1_attempts: int = 10, max_attempts: int = 3,
+    subagent_workers: int = 4, seed: int = 17, scene: str = "omnigaia",
+    schedule: str = "compact", question_review: bool = True,
+    quarantine_output_path: str | Path | None = None,
+    rejected_output_path: str | Path | None = None,
+    progress: bool = True,
+) -> dict[str, Any]:
+    """Stream independent clean Main decisions, not all-or-nothing episodes.
+
+    Previously validated rounds remain on disk if a later round fails.
+    Previous unselected decisions and correct Sub-Agent feedback can be
+    reconstructed from the teacher's source-backed gold witness. This does
+    NOT train on an erroneous state or copy future gold into the Main prompt.
+    """
+    from collections import Counter
+    from traceback import format_exc
+    from tqdm.auto import tqdm
+    from .pipeline import (
+        _rows, _world_map, protect_paths, synthesize_one, GoldTrajectoryError,
+    )
+    if round_indices is not None and (
+        not round_indices or any(not isinstance(n,int) or n < 1 for n in round_indices)
+    ):
+        raise ValueError("round_indices must be positive integers")
+    if history_style not in {"teacher", "natural"}:
+        raise ValueError("history_style must be teacher or natural")
+    if max_o1_attempts < 1:
+        raise ValueError("max_o1_attempts must be positive")
+    rows=_rows(realized_path)
+    if max_records is not None:
+        rows=rows[:max_records]
+    worlds=_world_map(worlds_path,seed=seed)
+    output=Path(output_path)
+    bad=Path(rejected_output_path) if rejected_output_path else output.with_suffix(
+        output.suffix+".rejected.jsonl"
+    )
+    quarantine=Path(quarantine_output_path) if quarantine_output_path else output.with_suffix(
+        output.suffix+".quarantine.jsonl"
+    )
+    protect_paths([worlds_path,realized_path],[output,bad,quarantine])
+    if len({output.resolve(),bad.resolve(),quarantine.resolve()})!=3:
+        raise ValueError("round output and diagnostics must use distinct paths")
+    for path in (output,bad,quarantine):
+        path.parent.mkdir(parents=True,exist_ok=True)
+    # Truncate once. Each successful round then becomes a durable JSONL line.
+    output.write_text("",encoding="utf-8")
+    requests=Counter()
+    stats=Counter()
+    skip_counts=Counter()
+    origin_counts=Counter()
+    attempted=written=skipped=natural_total=natural_written=0
+    with bad.open("w",encoding="utf-8") as bad_writer, quarantine.open(
+        "w",encoding="utf-8"
+    ) as quarantine_writer:
+        for item in tqdm(rows,desc="Clean Main decision rounds",unit="task",disable=not progress):
+            tid=str(item.get("task_id",""))
+            sink=RoundSink(
+                output,question=item,
+                include_fallback_rounds=include_fallback_rounds,
+                include_complete=include_complete,
+                max_o1_attempts=max_o1_attempts,
+            )
+            try:
+                if tid not in worlds:
+                    raise GoldTrajectoryError("input", ["missing_matching_world"])
+                synthesize_one(
+                    item,*worlds[tid],planner,executor,
+                    max_attempts=max_attempts,subagent_workers=subagent_workers,
+                    scene=scene,question_review=question_review,schedule=schedule,
+                    round_sink=sink,selected_rounds=round_indices,
+                    history_style=history_style,
+                    stop_after_round=max(round_indices) if round_indices else None,
+                )
+                stats["tasks_processed"]+=1
+            except (GoldTrajectoryError,ValueError,KeyError,TypeError) as exc:
+                stage=exc.stage if isinstance(exc,GoldTrajectoryError) else "unexpected_error"
+                reasons=exc.issues if isinstance(exc,GoldTrajectoryError) else [
+                    f"{type(exc).__name__}: {exc}"
+                ]
+                isolated=stage in {
+                    "question_eligibility","public_replay","public_executability",
+                    "round_validation",
+                }
+                writer=quarantine_writer if isolated else bad_writer
+                stats["tasks_quarantined" if isolated else "tasks_rejected"]+=1
+                writer.write(json.dumps({
+                    "task_id":tid,"reason":stage,"issues":reasons,
+                    "rounds_already_written":sink.written,
+                    "audit":exc.audit if isinstance(exc,GoldTrajectoryError) else {
+                        "exception_type":type(exc).__name__,
+                        "traceback":format_exc(limit=8),
+                    },
+                },ensure_ascii=False)+"\n")
+                writer.flush()
+                requests[stage]+=1
+            finally:
+                sink.close()
+                attempted+=sink.considered
+                written+=sink.written
+                skipped+=sink.skipped
+                natural_total+=sink.natural_task_total
+                natural_written+=sink.natural_task_rewritten
+                skip_counts.update(sink.skip_reasons)
+                origin_counts.update(sink.history_origin_counts)
+    return {
+        "requested_tasks":len(rows),
+        "tasks_processed":stats["tasks_processed"],
+        "tasks_quarantined":stats["tasks_quarantined"],
+        "tasks_rejected":stats["tasks_rejected"],
+        "rounds_considered":attempted,
+        "eligible_rounds":written,
+        "rounds_skipped":skipped,
+        "round_yield":written/attempted if attempted else 0.0,
+        "natural_main_tasks_rewritten":natural_written,
+        "natural_main_tasks_total":natural_total,
+        "natural_action_rate":natural_written/natural_total if natural_total else 0.0,
+        "history_origins":dict(origin_counts),
+        "round_skip_reasons":dict(skip_counts),
+        "task_failure_reasons":dict(requests),
+        "request_counts":{
+            "main":dict(getattr(planner,"request_counts",{})),
+            "subagent":dict(getattr(executor,"request_counts",{})),
+        },
+        "output":str(output),"rejected_output":str(bad),
+        "quarantine_output":str(quarantine),
+        "policy":"clean_gold_teacher_forced_round_sft",
+        "history_style":history_style,
+        "selected_rounds":sorted(round_indices) if round_indices else "all",
+    }
+
+
+__all__ = [
+    "o1_input","make_round_record","RoundSink","synthesize_rounds_jsonl",
+]
+
