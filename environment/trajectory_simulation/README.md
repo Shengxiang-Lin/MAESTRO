@@ -13,8 +13,13 @@ The default LLM synthesis mode (`--style-provider natural`) makes two
 additional, independently reviewed language realizations:
 
 - Main rewrites each immutable, source-scoped gold delegation into a fluent
-  information goal and expected deliverable. It cannot choose different
-  subtasks, tools, dependencies, intermediate answers, or completion answers.
+  information goal and expected deliverable. One writer request is made per
+  assigned subtask, so a missing JSON array entry cannot silently delete a
+  parallel sibling. Each task is independently guarded/reviewed; rejected
+  rewrites retain the verified canonical task without discarding valid sibling
+  rewrites. Main `reasoning` is empty by default, matching the real O1
+  delegation traces. Completion uses the exact gold answer without an extra
+  language-model request. Tools, dependencies, results and answer remain fixed.
 - Each Sub-Agent writes a natural concise finding and evidence explanation
   from its already verified public observations and exact executed steps.
   Fabricated search/tool actions and unsupported facts are forbidden.
@@ -27,7 +32,13 @@ additional, independently reviewed language realizations:
   checks, alongside the same evidence handles and completed public bindings.
   `replay_task` and `export_episode` execute these checks solely against
   published evidence, not against hidden Gold values. The public task
-  transport and source access remain reproducible.
+  transport and source access remain reproducible. **After** the full episode
+  passes replay, the Main SFT exporter removes the v3 machine packet from
+  the training target's `params.tasks[].context`. The original episode
+  keeps the replayable contract for auditing; canonical fallback (v2) tasks
+  remain unchanged and should be analyzed separately for natural coverage.
+  `generation_audit` and `metadata.natural_main_tasks_{rewritten,total}`
+  quantify naturalization.
 
 The legacy `--style-provider llm` selects one of the four deterministic
 `concise`, `stepwise`, `goal`, and `evidence` variants. The

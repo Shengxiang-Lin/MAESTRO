@@ -115,6 +115,61 @@ def main_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, Any])
     )
 
 
+def main_single_task_prompt(
+    payload: Mapping[str, Any], canonical: Mapping[str, Any], task_index: int,
+) -> str:
+    """Ask for ONE task to avoid a small LLM dropping parallel siblings.
+
+    Real O1 assignments are short, specific requests: an evidence target,
+    a source or tool to inspect, constraints, and what to return. Later rounds
+    may refer to discoveries from completed subtasks, but not future results.
+    """
+    tasks = canonical["params"].get("tasks", [])
+    if canonical["action"] != "delegate_task" or not 0 <= task_index < len(tasks):
+        raise ValueError("invalid natural Main task index")
+    task = tasks[task_index]
+    packet = {
+        "main_question": payload["public_state"]["question"],
+        "task_index": task_index,
+        "total_parallel_tasks": len(tasks),
+        "required_public_checks": task["task_instruction"],
+        "assigned_tools": task["tools"],
+        "available_reference_handles": payload.get("visible_resources", []),
+        "completed_subtask_findings": [{
+            "reference": r.get("public_ref"), "answer": r["answer"],
+            "summary": r.get("summary", ""),
+        } for r in payload.get("completed_subtask_contracts", [])],
+        "context_for_this_task": task["context"].split("\n[Public task packet]\n", 1)[0],
+    }
+    return (
+        "Write ONE natural-language O1 Main-to-Sub-Agent task instruction "
+        "for this already-fixed assignment. Output EXACTLY one JSON object "
+        'with one string field: {"task_instruction":"..."}; no arrays, '
+        "reasoning, context, explanation, or other keys. "
+        "Use 1-4 focused sentences (about 40-110 words if needed). "
+        "Start with a concrete goal (identify, verify, compare, retrieve, investigate), "
+        "name the available source or modality and useful public clues, and finish "
+        "with what evidence or value the Sub-Agent should return. "
+        "For a later round, use the completed findings to target unresolved or "
+        "previously ambiguous details; do not invent failures or new clues. "
+        "For independent initial tasks, give each task a distinct, focused goal. "
+        "Preserve EVERY necessary hop, relation direction, constraint owner, "
+        "quantifier, comparator, exact date, anchor and output type in the "
+        "canonical checks, including UNION versus INTERSECTION. "
+        "You may express intermediate steps as connected language, but never "
+        "drop a necessary condition or add an unsupported fact. "
+        "Do not copy numbered operator instructions, mention internal graph "
+        "IDs or pretend you inspected sources. A specific public record handle "
+        "is not a local file path; do not invent web URLs, media paths or tool calls. "
+        "This is a delegated SUBTASK, not a demand to solve the entire Main question. "
+        "Use natural O1 phrasing like 'Examine the supplied video for the named "
+        "product and return the exact year with evidence' or 'The earlier report "
+        "gave two candidate dates; check the announcement source and return "
+        "the verified date.' These examples demonstrate *style only*, not task facts. "
+        "Return valid JSON ONLY.\n" + _json(packet)
+    )
+
+
 def realize_main(
     payload: Mapping[str, Any], canonical: Mapping[str, Any], proposal: Any,
 ) -> dict[str, Any]:
@@ -136,6 +191,10 @@ def realize_main(
         if not isinstance(texts, list) or len(texts) != len(tasks):
             raise ValueError("natural_task_count_mismatch")
         for i, (candidate, task, fragment) in enumerate(zip(texts, tasks, fragments)):
+            # A rejected single-task rewrite may retain its exact canonical
+            # task. This preserves good sibling rewrites in the same round.
+            if candidate == task["task_instruction"]:
+                continue
             _language_guard(candidate, limit=2000)
             if re.search(r"(?m)^\s*\d+\.\s+", candidate):
                 raise ValueError("natural_task_repeats_machine_checklist")
@@ -165,7 +224,14 @@ def realize_main(
 
 def main_reviewer_prompt(
     payload: Mapping[str, Any], canonical: Mapping[str, Any], natural: Mapping[str, Any],
+    *, task_index: int | None = None,
 ) -> str:
+    originals = canonical["params"].get("tasks", [])
+    rewrites = natural["params"].get("tasks", [])
+    if task_index is not None:
+        if not 0 <= task_index < len(originals):
+            raise ValueError("invalid_reviewer_task_index")
+        originals, rewrites = [originals[task_index]], [rewrites[task_index]]
     return (
         "Audit a natural-language O1 Main delegation against an immutable, fully executable "
         "public contract. Require STRICT semantic equivalence: each entity owner, relation "
@@ -179,8 +245,8 @@ def main_reviewer_prompt(
         "If uncertain, equivalent=false.\n"
         + _json({
             "question": payload["public_state"]["question"],
-            "canonical_tasks": [t["task_instruction"] for t in canonical["params"].get("tasks", [])],
-            "rewritten_tasks": [t["task_instruction"] for t in natural["params"].get("tasks", [])],
+            "canonical_tasks": [t["task_instruction"] for t in originals],
+            "rewritten_tasks": [t["task_instruction"] for t in rewrites],
             "completed_subtasks": [
                 {"reference": r.get("public_ref"), "answer": r["answer"]}
                 for r in payload.get("completed_subtask_contracts", [])
@@ -210,9 +276,13 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         "every operation against the available public evidence and fixed the exact result. "
         "Write fluent, compact report text that could plausibly be returned to the Main Agent. "
         "summary (one or two sentences): start with the finding or the absence of matches. "
+        "Sound like a real Sub-Agent reporting to Main, not a grading rubric or execution log. "
+        "Acknowledge missing or ambiguous evidence only if the verified record actually supports it. "
         "trace_summary (2-5 brief sentences or bullets): explain the relevant evidence "
         "and why it satisfies the constraints, including necessary relation hops and "
-        "source names if supported. Do not narrate individual FILTER_TYPE or INTERSECT "
+        "source names if supported. Avoid generic self-evaluation such as 'successfully "
+        "initiated', 'no errors', 'all requirements met', or 'finished efficiently'; "
+        "these are not task evidence. Do not narrate individual FILTER_TYPE or INTERSECT "
         "operators, or copy a sequence of generic operator sentences. "
         "DO NOT claim live web searches, clicks, tool executions, transcriptions, or "
         "observations that are absent from the record; you are reporting verified "
@@ -284,7 +354,8 @@ def check_reviewer(verdict: Any, *, flag: str) -> None:
 
 
 __all__ = [
-    "natural_public_context", "main_writer_prompt", "realize_main", "main_reviewer_prompt",
+    "natural_public_context", "main_writer_prompt", "main_single_task_prompt",
+    "realize_main", "main_reviewer_prompt",
     "feedback_writer_prompt", "realize_feedback_natural",
     "feedback_reviewer_prompt", "check_reviewer",
 ]

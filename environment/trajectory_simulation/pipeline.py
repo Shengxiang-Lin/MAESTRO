@@ -223,18 +223,37 @@ def synthesize_one(
                             action["params"]["tasks"], candidate["params"]["tasks"]
                         ):
                             from .natural_language import natural_public_context
+                            expected_context = (
+                                original["context"]
+                                if rewritten["task_instruction"] == original["task_instruction"]
+                                else natural_public_context(
+                                    original["context"], original["task_instruction"]
+                                )
+                            )
                             if (rewritten["tools"] != original["tools"]
                                     or rewritten["model"] != original["model"]
-                                    or rewritten["context"] != natural_public_context(
-                                        original["context"], original["task_instruction"]
-                                    )):
+                                    or rewritten["context"] != expected_context):
                                 raise ValueError("natural_task_transport_changed")
                     elif candidate["params"] != action["params"]:
                         raise ValueError("natural_complete_answer_changed")
                     wire = public_action(candidate)
+                    changed = sum(
+                        original["task_instruction"] != rewritten["task_instruction"]
+                        for original, rewritten in zip(
+                            action["params"].get("tasks", []),
+                            candidate["params"].get("tasks", []),
+                        )
+                    )
+                    task_count = len(action["params"].get("tasks", []))
+                    writer_audit = getattr(planner, "last_natural_audit", {})
                     generation_audit.append({
                         "stage": f"round_{round_index}:natural_main",
-                        "accepted": True, "fallback": False,
+                        "accepted": changed > 0 or guidance["may_complete"],
+                        "fallback": changed == 0 and task_count > 0,
+                        "rewritten_tasks": changed,
+                        "task_count": task_count,
+                        "errors": writer_audit.get("errors", [])
+                        if isinstance(writer_audit, dict) else [],
                     })
                 except (BackendError, ValueError, TypeError, KeyError) as exc:
                     generation_audit.append({
@@ -307,6 +326,16 @@ def synthesize_one(
                         "natural_language_attempted": any(
                             entry.get("stage", "").endswith(":natural_main")
                             for entry in generation_audit
+                        ),
+                        "natural_main_tasks_rewritten": sum(
+                            entry.get("rewritten_tasks", 0)
+                            for entry in generation_audit
+                            if entry.get("stage", "").endswith(":natural_main")
+                        ),
+                        "natural_main_tasks_total": sum(
+                            entry.get("task_count", 0)
+                            for entry in generation_audit
+                            if entry.get("stage", "").endswith(":natural_main")
                         ),
                         "natural_language_fallbacks": sum(
                             bool(entry.get("fallback")) for entry in generation_audit

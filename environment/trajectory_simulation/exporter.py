@@ -73,7 +73,17 @@ def export_episode(episode,*,require_training=True):
     validate_public_episode(episode,require_training=require_training)
     records=[]
     for index,step in enumerate(episode['trajectory'],1):
-        target={key:step[key] for key in ('action','reasoning','params')}
+        # Validate the complete public source-backed execution contract first.
+        # The controller needs v3 execution_checks to replay each step, but a
+        # student Main Agent should learn the *natural* O1 target, not memorize
+        # a long machine-generated operator checklist. The original episode
+        # retains the full public packet for audit/replay.
+        target=copy.deepcopy({key:step[key] for key in ('action','reasoning','params')})
+        if step['action']=='delegate_task':
+            from .evidence import read_packet,MARKER
+            for task in target['params']['tasks']:
+                if MARKER in task.get('context','') and read_packet(task)['version']==3:
+                    task['context']=task['context'].split(MARKER,1)[0].strip()
         record={'id':f"{episode['task_id']}:{index}",'task_id':episode['task_id'],'step':index,
             'input':public_prompt(step['state_before']),'target_json':json.dumps(target,ensure_ascii=False,separators=(',',':')),
             'macro_label':'complete' if step['action']=='complete' else 'advance','macro_label_source':'public_action',
