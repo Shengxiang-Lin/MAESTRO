@@ -192,6 +192,49 @@ class FragmentCompilationTests(unittest.TestCase):
         self.assertEqual(compact["final_answer"], baseline["final_answer"])
         self.assertEqual(compact["schedule"], "compact")
 
+    def test_unsourced_distractor_entities_do_not_block_public_witness(self):
+        # Stage-1 FIND_ALL includes 12 synthetic background entities, but
+        # no public source mentions them. The downstream RELATE restricts
+        # to a fully evidenced result; the public projection can replay it.
+        question, record, rendered = fixture()
+        record["program"]["nodes"][0]["op"] = "FIND_ALL"
+        record["program"]["nodes"][0]["inputs"] = []
+        record["world"]["entities"].update({
+            f"d{i:04d}": "schema:Person" for i in range(1, 13)
+        })
+        gold = compile_gold_solution(question, record, rendered)
+        self.assertEqual(gold["final_answer"], ["Bob"])
+        self.assertEqual(gold["fragments"][0]["expected_answer"], ["Bob"])
+        result = synthesize_one(
+            question, record, rendered,
+            PassthroughPlanner(), PassthroughExecutor(),
+        )
+        self.assertTrue(result["validation"]["public_evidence_replay_verified"])
+        self.assertEqual(result["trajectory"][-1]["params"]["answer"], '["Bob"]')
+        # Private world is untouched, and hidden distractors never appear
+        # in the public Main state or its history.
+        self.assertNotIn("d0001", json.dumps(result["trajectory"]))
+
+    def test_missing_entities_that_change_answer_still_rejected(self):
+        from environment.trajectory_simulation.compiler import _minimal_witness
+        from environment.task_construction.rendering.pipeline import program_from_dict, world_from_dict
+        _, record, _ = fixture()
+        record["program"]["nodes"] = [
+            {"node_id": 0, "op": "FIND_ALL", "dependencies": [], "inputs": []}
+        ]
+        record["world"]["entities"]["d0001"] = "schema:Person"
+        program = program_from_dict(record["program"])
+        world = world_from_dict(record["world"])
+        with self.assertRaises(GoldCompilationError) as caught:
+            _minimal_witness(
+                program, world, set(world.entities),
+                {"s1": [], "s2": []}, max_sources=8,
+            )
+        self.assertEqual(
+            str(caught.exception), "witness_answer_disagrees_with_gold"
+        )
+        self.assertFalse(caught.exception.diagnostics["all_sources_answer_matches"])
+
     def test_witness_diagnostics_report_unobservable_entity(self):
         from environment.trajectory_simulation.compiler import _minimal_witness
         from environment.task_construction.rendering.pipeline import program_from_dict, world_from_dict
