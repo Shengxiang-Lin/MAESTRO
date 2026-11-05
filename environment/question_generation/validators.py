@@ -23,6 +23,34 @@ def preflight(payload:Mapping[str,Any],question:str)->QuestionValidation:
     if operation.startswith("VERIFY_") and not any(token in lower for token in ("whether","any ","does ","is ","are ","can ")):issues.append("verify_existential_intent_missing")
     if operation in {"SELECT_BETWEEN","SELECT_AMONG"} and not any(token in lower for token in ("largest","smallest","highest","lowest","maximum","minimum","most","least")):issues.append("selection_direction_missing")
     draft=str(payload.get("draft_question") or "")
+    resources=payload.get("resources",())
+    has_discoverable=(
+        isinstance(resources,Sequence) and not isinstance(resources,(str,bytes))
+        and any(
+            isinstance(resource,Mapping)
+            and resource.get("visibility")=="discoverable"
+            for resource in resources
+        )
+    )
+    # For the search/discovery roots, a closed-set list is a result of
+    # inspecting task-scoped references, not an initial Main input. Reject
+    # misleading claims about a *complete supplied list* only when the
+    # task actually contains discoverable resources.
+    discovery_root=any(phrase in draft.casefold() for phrase in (
+        "the available entities", "the entities in the records",
+        "all candidate entities",
+        "entities identified from the relevant task evidence",
+        "entities documented across the accessible task references",
+        "candidate entities discoverable from the task-related sources",
+    ))
+    if discovery_root and has_discoverable and re.search(
+        r"\\b(?:all|the complete|a complete|the full|a full)\\s+"
+        r"(?:candidate\\s+)?(?:list|set|records|entities)\\s+"
+        r"(?:was|were|is|are)?\\s*(?:supplied|provided|given|available initially)\\b"
+        r"|\\b(?:all|entire)\\s+(?:supplied|provided|given)\\s+records\\b",
+        text, re.I,
+    ):
+        issues.append("discovery_candidates_not_pre_supplied")
     if draft:
         draft_words=_content_words(draft);question_words=_content_words(text);overlap=len(draft_words&question_words)/len(draft_words) if draft_words else 1.
         if overlap<.12:issues.append("surface_drift_extreme")
