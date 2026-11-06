@@ -36,7 +36,7 @@ def _serialize_world(world):return world.to_dict() if hasattr(world,"to_dict") e
 def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_path,*,
     min_depth=5,seed=17,min_critical_sources=2,min_noncritical_sources=1,
     min_proof_sources=2,max_sources=6,mmqa_source_motifs_path=None,progress=False,
-    world_attempts_per_candidate=3):
+    world_attempts_per_candidate=3,acquisition_scenario_weights=(45,40,15)):
     from ..task_design.planner import plan_task_design
     from ..task_design.quality import assess_task_design
     from ..scenario.validity import assess_scenario
@@ -76,7 +76,8 @@ def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_
                 world,critical_sources,critical_facts=allocate_evidence_sources(program,world,
                     min_critical_sources=min_critical_sources,min_noncritical_sources=min_noncritical_sources,
                     max_sources=max_sources,motif_prior=motif_prior,predicate_catalog=catalog,
-                    mutation_records=mutations,seed=run_seed+307)
+                    mutation_records=mutations,seed=run_seed+307,
+                     acquisition_scenario_weights=acquisition_scenario_weights)
                 semantic=observed.world(world)
                 if not semantic.get('accepted',False):
                     raise ValueError('observed_semantic_support_rejected')
@@ -129,7 +130,18 @@ def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_
     with rejected_path.open('w',encoding='utf-8') as writer:
         for row in rejected:
             writer.write(json.dumps(row,ensure_ascii=False)+'\n')
+    from ..task_design.planner import _source_scenario
+    from collections import Counter as _Counter
+    scenario_histogram=_Counter(
+        _source_scenario(
+            __import__("environment.task_construction.rendering.pipeline",
+                       fromlist=["world_from_dict"]).world_from_dict(row["world"])
+        )
+        for row in accepted
+    )
     return {
+        "acquisition_scenario_histogram":dict(scenario_histogram),
+        "acquisition_scenario_weights":list(acquisition_scenario_weights),
         "output":str(target_path),
         "rejected_output":str(rejected_path),
         "candidate_pool_size":len(rows),
