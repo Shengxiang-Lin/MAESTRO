@@ -157,6 +157,7 @@ def render_task_record(record: Mapping[str, Any], *, seed: int = 17) -> Rendered
     sources = tuple(render_source(source, world, aliases) for source in sorted(world.sources.values(), key=EvidenceSource.sort_key))
     if not sources: raise RenderingError("rendered task has no evidence sources")
     hidden = {
+        "rendering_seed": int(seed),
         "entity_aliases": aliases.to_dict(), "literal_surfaces": aliases.literal_surfaces(),
         "literal_surfaces_by_predicate": collect_literal_surfaces(program, world, aliases),
         "question_template_id": question_renderer.template_id, "reasoning_motif": record.get("reasoning_motif"),

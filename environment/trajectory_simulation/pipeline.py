@@ -145,7 +145,7 @@ def synthesize_one(
             {"public_preflight": public_preflight},
         )
 
-    eligibility=check_question(gold,world_record,planner,review=question_review)
+    eligibility=check_question(gold,world_record,planner,review=question_review,rendered=rendered)
     if not eligibility['eligible']:
         raise GoldTrajectoryError('question_eligibility',['frozen_question_not_eligible'],{'eligibility':eligibility})
     evidence_cache={}

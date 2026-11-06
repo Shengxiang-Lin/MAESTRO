@@ -1,5 +1,6 @@
 """Reject real omissions, retry format failures, and keep audits teacher-private."""
 import json
+import copy
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, patch
@@ -9,12 +10,86 @@ from environment.tests.test_gold_trajectory import fixture
 from environment.tests.test_round_synthesis import reviewed
 from environment.trajectory_simulation.backend import LLMExecutor, LLMPlanner, PassthroughPlanner
 from environment.trajectory_simulation.compiler import compile_gold_solution
-from environment.trajectory_simulation.eligibility import check_question, semantic_review_steps, semantic_review_expression
+from environment.trajectory_simulation.eligibility import (
+    check_question, controlled_question_reference,
+    semantic_review_steps, semantic_review_expression,
+)
 from environment.trajectory_simulation.rounds import compose_main_rounds
 from environment.trajectory_simulation.subtask_bank import _report_natural, build_subtask_bank
 
 
 class ReviewReliabilityTests(unittest.TestCase):
+    def rendered_fixture(self):
+        from environment.task_construction.rendering.pipeline import render_task_record
+        q,r,_=fixture()
+        t=render_task_record(r,seed=17)
+        q.update(task_id=t.task_id,question=t.question)
+        return compile_gold_solution(q,r,t,schedule="baseline"),r,t
+
+    def test_reconstructed_supported_question_does_not_need_llm_vote(self):
+        gold,record,rendered=self.rendered_fixture()
+        role=Mock(offline=False,backend=Mock())
+        result=check_question(gold,record,role,rendered=rendered)
+        self.assertTrue(result["eligible"])
+        self.assertTrue(result["reviewed"])
+        self.assertEqual(result["method"],"verified_controlled_renderer")
+        self.assertEqual(result["renderer_certificate"]["verified_node_ids"],
+                         [0,1,2,3,4])
+        role.check_question.assert_not_called()
+
+    def test_rewrite_is_reviewed_even_with_forged_canonical_question(self):
+        gold,record,rendered=self.rendered_fixture()
+        gold["question"]="Find entities associated with Alice."
+        gold["canonical_question"]=gold["question"]
+        role=Mock(offline=False,backend=Mock())
+        role.check_question.return_value=self.mismatch(gold,record)
+        result=check_question(gold,record,role,rendered=rendered)
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["method"],"llm_semantic_screen")
+        prompt=role.check_question.call_args.args[0]
+        self.assertIn("changed_spans",prompt)
+        self.assertIn(rendered.question,prompt)
+
+    def test_changed_program_cannot_reuse_old_renderer_text_certificate(self):
+        gold,record,rendered=self.rendered_fixture()
+        changed=copy.deepcopy(record)
+        changed["program"]["nodes"][1]["inputs"][0]="r:second"
+        reference=controlled_question_reference(gold,changed,rendered)
+        # Signature-based task identity changes too; either absence of a
+        # reference or a different question precludes the exact-match route.
+        self.assertTrue(reference is None or reference["question"]!=gold["question"])
+
+    def test_renderer_certificate_refuses_unconsumed_branch_and_unsupported_op(self):
+        gold,record,rendered=self.rendered_fixture()
+        changed=copy.deepcopy(record)
+        changed["program"]["nodes"].append(
+            {"node_id":5,"op":"FIND","dependencies":[],"inputs":["entity:A"]})
+        self.assertIsNone(controlled_question_reference(gold,changed,rendered))
+        changed=copy.deepcopy(record)
+        changed["program"]["nodes"][-1]["op"]="QUERY_ATTR_QUALIFIER"
+        self.assertIsNone(controlled_question_reference(gold,changed,rendered))
+
+    def test_renderer_certificate_checks_every_use_of_hidden_identity(self):
+        from environment.task_construction.rendering.query_grounding import (
+            LatentEntityPlan,PublicQueryPlan,
+        )
+        gold,record,rendered=self.rendered_fixture()
+        unsafe=PublicQueryPlan((LatentEntityPlan(
+            "A","schema:Person",(0,),"unique_attribute_clue",(1,),()),))
+        with patch("environment.task_construction.rendering.query_grounding.build_public_query_plan",
+                   return_value=unsafe):
+            self.assertIsNone(controlled_question_reference(gold,record,rendered))
+
+    def test_identical_mismatch_claims_request_review_instead_of_approval(self):
+        gold,record,role=self.review_fixture()
+        verdict=self.mismatch(gold,record)
+        verdict["issues"][0]["question_claim"]=verdict["issues"][0]["program_claim"]
+        role.check_question.return_value=verdict
+        result=check_question(gold,record,role)
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["review_failure_kind"],"contradictory_mismatch")
+        self.assertEqual(role.check_question.call_count,2)
+
     def test_expansion_keeps_inherited_filters_and_separate_branch_scopes(self):
         nodes={
             0:{"op":"FIND_ALL","inputs":[],"dependencies":[]},

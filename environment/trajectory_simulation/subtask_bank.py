@@ -132,7 +132,7 @@ def build_subtask_bank(
             "public_executability",[str(preflight["reason"])],
             {"public_preflight":preflight},
         )
-    eligibility=check_question(gold,world_record,planner,review=question_review)
+    eligibility=check_question(gold,world_record,planner,review=question_review,rendered=rendered)
     if not eligibility["eligible"]:
         raise GoldTrajectoryError(
             "question_eligibility",["frozen_question_not_eligible"],

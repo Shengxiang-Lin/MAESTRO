@@ -1,11 +1,104 @@
 """Stage-3-only eligibility; frozen questions/programs are never repaired here."""
 from __future__ import annotations
 import hashlib,json,re
+from difflib import SequenceMatcher
 from pathlib import Path
 
 def digest(value):
     text=value if isinstance(value,str) else json.dumps(value,sort_keys=True,ensure_ascii=False,separators=(',',':'))
     return hashlib.sha256(text.encode()).hexdigest()
+
+def controlled_question_reference(gold, record, rendered):
+    """Reconstruct supported renderer grammar from the executable input.
+
+    Stored canonical/draft text is not a certificate. Check complete dependency
+    coverage and the uses of every concealed identity before trusting a freshly
+    rendered reference. Unsupported grammars still require semantic review.
+    """
+    from environment.task_construction.executor import SymbolicExecutor
+    from environment.task_construction.rendering.pipeline import (
+        program_from_dict, world_from_dict, render_task_record,
+    )
+    from environment.task_construction.rendering.query_grounding import build_public_query_plan
+
+    seed=(getattr(rendered,'hidden_metadata',{}) or {}).get('rendering_seed')
+    if type(seed) is not int:
+        return None
+    program=program_from_dict(record['program'])
+    nodes=program.node_map()
+    order=program.topological_order()
+    if not order:
+        return None
+    arities={
+        'FIND':(0,1),'FIND_ALL':(0,0),'RELATE':(1,2),
+        'FILTER_TYPE':(1,1),'FILTER_STRING':(1,3),'FILTER_NUMBER':(1,3),
+        'FILTER_YEAR':(1,3),'FILTER_DATE':(1,3),
+        'QUERY_NAME':(1,0),'QUERY_ATTR':(1,1),'COUNT':(1,0),
+        'QUERY_RELATION':(2,0),'SELECT_AMONG':(1,2),'SELECT_BETWEEN':(2,2),
+        'VERIFY_STRING':(1,2),'VERIFY_NUMBER':(1,2),
+        'VERIFY_YEAR':(1,2),'VERIFY_DATE':(1,2),
+    }
+    for node in nodes.values():
+        if node.op in ('INTERSECT','UNION'):
+            if len(node.dependencies)<2 or node.inputs:
+                return None
+        elif node.op not in arities or (
+            len(node.dependencies),len(node.inputs)
+        )!=arities[node.op]:
+            return None
+        if node.op=='RELATE' and node.inputs[1] not in ('forward','backward'):
+            return None
+    # The renderer describes only the terminal's ancestors. An unconsumed
+    # branch must not be certified simply because its text was never rendered.
+    needed=set()
+    def visit(nid):
+        if nid not in needed:
+            needed.add(nid)
+            for dep in nodes[nid].dependencies:
+                visit(dep)
+    visit(order[-1])
+    if needed!=set(nodes):
+        return None
+    world=world_from_dict(record['world'])
+    plan=build_public_query_plan(record,program,world)
+    trace=SymbolicExecutor().execute_trace(program,world)
+    for clue in plan.latent_entities:
+        for find_id in clue.find_node_ids:
+            users=[n for n in nodes.values() if find_id in n.dependencies]
+            if not users:
+                return None
+            for user in users:
+                if clue.rule=='unique_attribute_clue':
+                    if (user.node_id not in clue.identifying_node_ids
+                            or user.dependencies!=(find_id,)
+                            or user.op not in (
+                                'FILTER_STRING','FILTER_NUMBER','FILTER_YEAR','FILTER_DATE'
+                            )):
+                        return None
+                elif clue.rule=='unique_intersection_clue':
+                    visible=[d for d in user.dependencies
+                             if d not in clue.find_node_ids]
+                    if user.op!='INTERSECT' or not visible:
+                        return None
+                    result=set(trace[visible[0]])
+                    for dep in visible[1:]:
+                        result.intersection_update(trace[dep])
+                    if result!={clue.entity_id} or result!=set(trace[user.node_id]):
+                        return None
+                else:
+                    return None
+    regenerated=render_task_record(record,seed=seed)
+    if regenerated.task_id!=gold['task_id']:
+        return None
+    return {
+        'question':regenerated.question,
+        'question_sha256':digest(regenerated.question),
+        'program_sha256':digest(record['program']),
+        'rendering_seed':seed,
+        'verified_node_ids':order,
+        'verified_identity_clues':[c.to_dict() for c in plan.latent_entities],
+        'contract':'controlled_renderer_dependency_and_clue_check_v1',
+    }
 
 def semantic_review_nodes(gold, record):
     """Use the full graph, eliminating only compiler-certified redundancies.
@@ -115,12 +208,12 @@ def semantic_review_expression(steps, *, max_chars=12000):
         # Keep the numbered semantics for large DAGs; never truncate a branch.
         return None
 
-def check_question(gold,record,role,*,review=True):
+def check_question(gold,record,role,*,review=True,rendered=None):
     question=gold['question'];fingerprint={'question_sha256':digest(question),'program_sha256':digest(record['program'])}
     audit_path = Path(__file__).with_name('question_reviews.json')
     # This manually curated file is optional and not committed in all setups.
-    # Missing file is NOT an approval: a real LLM semantic check is still
-    # required before training_eligible can become true.
+    # Missing file is NOT an approval: require a reconstructed renderer
+    # certificate or an actual LLM semantic review.
     audited = json.loads(audit_path.read_text(encoding='utf-8')) if audit_path.is_file() else []
     if not isinstance(audited, list):
         raise ValueError("question_reviews.json must be a JSON array")
@@ -129,6 +222,11 @@ def check_question(gold,record,role,*,review=True):
             return {'eligible':item.get('eligible',False),'reviewed':True,'method':'audited_exact_input_review','issues':[] if item.get('eligible') else [item['reason']],'audit_reason':item['reason'],**fingerprint}
     if not review or getattr(role,'offline',False) or not getattr(role,'backend',None):
         return {'eligible':True,'reviewed':False,'method':'offline_structure_only','issues':[],**fingerprint}
+    reference=controlled_question_reference(gold,record,rendered)
+    if reference and question==reference['question']:
+        return {'eligible':True,'reviewed':True,'decision':'eligible',
+                'method':'verified_controlled_renderer','issues':[],
+                'renderer_certificate':reference,**fingerprint}
     nodes=semantic_review_nodes(gold,record)
     steps=semantic_review_steps(nodes)
     # Raw SELECT '<' and RELATE direction flags tempted small reviewers to
@@ -148,6 +246,13 @@ def check_question(gold,record,role,*,review=True):
         'input_steps':op['dependencies'],
     } for nid,op in sorted(nodes.items()) if op['op']=='RELATE'
         and normalized(str(op['inputs'][0]).split(':')[-1]) not in normalized(question)]
+    # A filter mentioning an attribute does not stand in for QUERY_ATTR.
+    # If its name disappeared entirely, require explicit output evidence too.
+    relation_gaps.extend({
+        'step':nid,'attribute':op['inputs'][0],'operation':'QUERY_ATTR',
+        'input_steps':op['dependencies'],
+    } for nid,op in sorted(nodes.items()) if op['op']=='QUERY_ATTR'
+        and normalized(str(op['inputs'][0]).split(':')[-1]) not in normalized(question))
     # Explain the controlled renderer's grammar once instead of presenting a
     # long list of hypothetical objections and duplicate recursive graphs.
     review_rules=(
@@ -179,11 +284,34 @@ def check_question(gold,record,role,*,review=True):
         'relation_coverage=[] unless required hops are requested. '
         'No deliberation or rewritten questions.'
     )
-    prompt=review_rules+'\n'+json.dumps({
+    review_input={
             'accepted_question':question,
             'certified_public_projections':gold.get('public_projections',[]),
             'canonical_steps':review_steps,
-            'fully_expanded_output_meaning':expanded_meaning},ensure_ascii=False,separators=(',',':'))
+            'fully_expanded_output_meaning':expanded_meaning}
+    if reference:
+        changes=[{'reference_quote':reference['question'][a:b],
+                  'accepted_quote':question[c:d]}
+                 for tag,a,b,c,d in SequenceMatcher(
+                     None,reference['question'],question,autojunk=False
+                 ).get_opcodes() if tag!='equal']
+        review_input.update({
+            'verified_renderer_reference':reference['question'],
+            'changed_spans':changes,
+        })
+        review_rules=(
+            'The renderer reference has been reconstructed from the frozen program '
+            'and its dependency/clue proofs checked. Compare the accepted rewrite '
+            'to that reference, concentrating on changed_spans. Do not invent a '
+            'direction discrepancy in an unchanged span. A removed relation name '
+            'requires an actual equivalent traversal in the rewrite; generic '
+            '"associated with" is insufficient. A removed attribute query requires '
+            'an explicit equivalent output request, not just an attribute filter. '
+            'Replacing "connected into" with "connected to" can lose direction; '
+            'if the rewrite does not establish the endpoint, return uncertain. '
+            +review_rules
+        )
+    prompt=review_rules+'\n'+json.dumps(review_input,ensure_ascii=False,separators=(',',':'))
     cache_path=getattr(role,'eligibility_cache',None)
     if not isinstance(cache_path,(str,Path)):cache_path=None
     # Test doubles and partially constructed clients can expose Mock objects
@@ -193,7 +321,8 @@ def check_question(gold,record,role,*,review=True):
         value = getattr(role.backend, field, None)
         return value if isinstance(value, str) and value else "unknown"
     cache_key=digest({**fingerprint,'reviewer_model':identity('model'),
-        'reviewer_endpoint':identity('base_url'),'review_contract':11})
+        'reviewer_endpoint':identity('base_url'),'review_contract':12,
+        'renderer_reference_sha256':reference['question_sha256'] if reference else None})
     if cache_path and Path(cache_path).exists():
         for line in Path(cache_path).read_text().splitlines():
             item=json.loads(line)
@@ -265,11 +394,13 @@ def check_question(gold,record,role,*,review=True):
             # This contradicts the review's own conclusion; request a
             # corrected witness, NEVER infer that the question is eligible.
             if re.search(
-                r'\b(?:no|zero)\s+(?:(?:concrete|semantic|mathematical|actual)\s+)?'
+                r'\b(?:no|zero)\s+(?:(?:concrete|semantic|mathematical|actual|direction|scope|output)\s+)*'
                 r'(?:discrepanc(?:y|ies)|differences?|mismatches?)\s*'
                 r'(?:found|detected|exists?)?\b',
                 issue['reason'], re.I,
             ):
+                return 'contradictory_mismatch'
+            if normalized(issue['program_claim'])==normalized(issue['question_claim']):
                 return 'contradictory_mismatch'
         return None
 
@@ -318,11 +449,11 @@ def check_question(gold,record,role,*,review=True):
             for start in range(0,len(relation_gaps),2):
                 batch=relation_gaps[start:start+2]
                 focused_prompt=(
-                    'Focused REQUIRED-HOP audit of EXACTLY the listed relations. '
-                    'Compare each direction, input owner and relation against the '
+                    'Focused REQUIRED-HOP/output audit of EXACTLY the listed constraints. '
+                    'Compare each direction, input owner, relation or queried attribute against the '
                     'full accepted question. A type name alone does not imply a '
                     'missing hop. Paraphrases are valid only if the quote actually '
-                    'expresses that traversal. For eligible, return issues=[] and '
+                    'expresses that traversal/output query. For eligible, return issues=[] and '
                     'one short, DISTINCT, EXACT quote per required step in '
                     'relation_coverage. For missing/changed hops return mismatch '
                     'with a concrete step and <=240-character exact quote; for '
@@ -330,11 +461,8 @@ def check_question(gold,record,role,*,review=True):
                     'quotes. relation_coverage must be [] for mismatch/uncertain. '
                     +review_rules+'\n'
                     +json.dumps({
-                        'accepted_question':question,
+                        **review_input,
                         'required_hops':batch,
-                        'canonical_steps':review_steps,
-                        'fully_expanded_output_meaning':expanded_meaning,
-                        'certified_public_projections':gold.get('public_projections',[]),
                     },ensure_ascii=False,separators=(',',':'))
                 )
                 focused=call(focused_prompt)

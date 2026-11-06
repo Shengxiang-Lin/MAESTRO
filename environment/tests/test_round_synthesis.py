@@ -24,7 +24,7 @@ from environment.trajectory_simulation.subtask_bank import (
 )
 
 
-def reviewed(gold,record,role,*,review=True):
+def reviewed(gold,record,role,*,review=True,rendered=None):
     return {
         "eligible":True,"reviewed":True,
         "question_sha256":digest(gold["question"]),
