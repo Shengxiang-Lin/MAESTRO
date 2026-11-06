@@ -57,7 +57,7 @@ class TwoPhaseTests(unittest.TestCase):
                 q,world,rendered,planner=Reviewer(),
                 executor=PassthroughExecutor(),schedule="baseline",
             )
-        self.assertEqual(bank["schema_version"],1)
+        self.assertEqual(bank["schema_version"],2)
         self.assertEqual(len(bank["fragments"]),3)
         self.assertEqual(len(bank["waves"]),3)
         self.assertEqual(len(bank["full_public_history"]),3)
@@ -67,7 +67,7 @@ class TwoPhaseTests(unittest.TestCase):
             self.assertTrue(item["summary"])
             self.assertTrue(item["trace_summary"])
             self.assertFalse(item["natural_feedback"])
-            self.assertFalse(item["natural_task"])
+            self.assertNotIn("natural_task",item)
             self.assertEqual(
                 item["simulated_tool_provenance"]["origin"],
                 "reconstructed_from_frozen_public_witnesses",
@@ -198,7 +198,7 @@ class TwoPhaseTests(unittest.TestCase):
 
     def test_phase2_rejects_tampered_bank_and_future_leakage(self):
         _,_,_,bank=self.bank(dependent=True)
-        envelope={"format":"maestro.clean_subtasks.v1","bank":bank}
+        envelope={"format":"maestro.clean_subtasks.v2","bank":bank}
         envelope["sha256"]=digest(envelope)
         self.assertEqual(_read_verified_bank(envelope)["task_id"],bank["task_id"])
         tampered=copy.deepcopy(envelope)
@@ -237,7 +237,7 @@ class TwoPhaseTests(unittest.TestCase):
 
     def test_phase2_keeps_verified_round_one_if_round_two_export_fails(self):
         _,_,_,bank=self.bank(dependent=True)
-        envelope={"format":"maestro.clean_subtasks.v1","bank":bank}
+        envelope={"format":"maestro.clean_subtasks.v2","bank":bank}
         envelope["sha256"]=digest(envelope)
         with tempfile.TemporaryDirectory() as tmp:
             input_path=Path(tmp)/"bank.jsonl"
