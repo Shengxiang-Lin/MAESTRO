@@ -272,6 +272,8 @@ def _read_verified_bank(record):
         raise ValueError("phase1_surface_question_not_reviewed_and_eligible")
     if bank["eligibility"].get("question_sha256")!=digest(bank["surface_question"]):
         raise ValueError("phase1_surface_question_changed")
+    if bank["canonical_eligibility"].get("program_sha256")!=bank["eligibility"].get("program_sha256"):
+        raise ValueError("phase1_question_reviews_disagree_on_program")
     if bank["question_record"].get("question")!=bank["surface_question"]:
         raise ValueError("phase1_surface_question_record_mismatch")
     if bank.get("surface_preflight",{}).get("publicly_executable") is not True:
