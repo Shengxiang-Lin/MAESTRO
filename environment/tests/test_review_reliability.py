@@ -81,7 +81,7 @@ class ReviewReliabilityTests(unittest.TestCase):
         result=check_question(gold,record,role)
         self.assertFalse(result["eligible"])
         self.assertEqual(result["decision"],"review_error")
-        self.assertEqual(role.check_question.call_count,2)
+        self.assertEqual(role.check_question.call_count,3)
         self.assertIn("REQUIRED-HOP",role.check_question.call_args.args[0])
 
     def test_focused_coverage_audit_retains_real_missing_hop(self):
@@ -109,14 +109,16 @@ class ReviewReliabilityTests(unittest.TestCase):
     def test_question_json_retry_respects_configured_output_budget(self):
         role=LLMPlanner(OpenAICompatibleBackend("test://local","test",max_tokens=3072))
         calls=[]
-        def complete(client,*args):
-            calls.append(client.max_tokens)
+        def complete(client,*args,**kwargs):
+            calls.append((client.max_tokens,kwargs.get("response_schema")))
             if len(calls)==1:raise BackendError("model did not return a JSON object")
             return {"decision":"eligible","issues":[]}
         audit=[]
         with patch.object(OpenAICompatibleBackend,"complete_json",complete):
             self.assertEqual(role.check_question("test",audit=audit)["decision"],"eligible")
-        self.assertEqual(calls,[3072,3072])
+        self.assertEqual([budget for budget,_ in calls],[3072,3072])
+        self.assertTrue(all(schema and schema["additionalProperties"] is False
+                            for _,schema in calls))
         self.assertEqual(role.request_counts["question_review_retry"],1)
         self.assertEqual(len(audit),1)
 
@@ -133,6 +135,87 @@ class ReviewReliabilityTests(unittest.TestCase):
                             "operations":[{"op":"FIND","inputs":[name]}],
                             "operation_results":[{"answer":[name],"input_values":[]}],
                             "observations":[],"known_observations":[]}}
+
+
+    def test_contradictory_mismatch_witness_fails_closed(self):
+        """v3 de510e6...: 'No discrepancy found' cannot certify mismatch."""
+        gold,record,role=self.review_fixture()
+        contradictory=self.mismatch(gold,record)
+        contradictory["issues"][0]["reason"]=(
+            "The wording matches the computation exactly. No discrepancy found."
+        )
+        role.check_question.return_value=contradictory
+        result=check_question(gold,record,role)
+        self.assertFalse(result["eligible"])
+        self.assertFalse(result["reviewed"])
+        self.assertEqual(result["decision"],"review_error")
+        self.assertEqual(result["review_failure_kind"],"contradictory_mismatch")
+        self.assertEqual(role.check_question.call_count,2)
+
+    def test_fabricated_ellipsis_is_not_an_exact_question_witness(self):
+        """v3 6f422...: a shortened quote with '...' is not in the input."""
+        gold,record,role=self.review_fixture()
+        wrong=self.mismatch(gold,record)
+        wrong["issues"][0]["question_quote"]="entities connected ... by neighbor"
+        role.check_question.return_value=wrong
+        result=check_question(gold,record,role)
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["decision"],"review_error")
+        self.assertEqual(result["review_failure_kind"],"invalid_mismatch_quote")
+
+    def test_relation_coverage_is_chunked_and_all_hops_are_checked(self):
+        """More than two missing literal relations require separate reviews."""
+        gold,record,role=self.review_fixture()
+        record["program"]["nodes"].append({
+            "node_id":99,"op":"RELATE","dependencies":[2],
+            "inputs":["r:third","forward"],
+        })
+        gold["question"]="Follow the primary, secondary and tertiary link for Alice."
+        role.check_question.side_effect=[
+            {"decision":"eligible","issues":[]},
+            {"decision":"eligible","issues":[],"relation_coverage":[
+                {"step":1,"question_quote":"primary","interpretation":"first hop"},
+                {"step":2,"question_quote":"secondary","interpretation":"second hop"},
+            ]},
+            {"decision":"eligible","issues":[],"relation_coverage":[
+                {"step":99,"question_quote":"tertiary","interpretation":"third hop"},
+            ]},
+        ]
+        result=check_question(gold,record,role)
+        self.assertTrue(result["eligible"])
+        self.assertEqual(role.check_question.call_count,3)
+        self.assertEqual(
+            {item["step"] for item in result.get("raw_verdict",{}).get("relation_coverage",[])},
+            set(),
+        )
+
+    def test_reused_or_missing_relation_witness_stays_quarantined(self):
+        gold,record,role=self.review_fixture()
+        gold["question"]="Follow a link for Alice."
+        incomplete={"decision":"eligible","issues":[],"relation_coverage":[
+            {"step":1,"question_quote":"link","interpretation":"first hop"},
+            {"step":2,"question_quote":"link","interpretation":"second hop"},
+        ]}
+        role.check_question.side_effect=[
+            {"decision":"eligible","issues":[]},incomplete,incomplete,
+        ]
+        result=check_question(gold,record,role)
+        self.assertFalse(result["eligible"])
+        self.assertFalse(result["reviewed"])
+        self.assertEqual(result["decision"],"review_error")
+        self.assertEqual(result["review_failure_kind"],"reused_relation_coverage")
+        self.assertEqual(role.check_question.call_count,3)
+
+    def test_truncated_review_is_not_classified_as_semantic_mismatch(self):
+        gold,record,role=self.review_fixture()
+        error=BackendError("model returned invalid JSON")
+        error.diagnostic={"finish_reason":"length","usage":{"completion_tokens":2048}}
+        role.check_question.side_effect=error
+        result=check_question(gold,record,role)
+        self.assertEqual(result["decision"],"review_error")
+        self.assertEqual(result["review_failure_kind"],"review_output_truncated")
+        self.assertFalse(result["eligible"])
+        self.assertFalse(result["reviewed"])
 
     def test_feedback_json_writer_and_reviewer_get_bounded_retries(self):
         backend=Mock()
