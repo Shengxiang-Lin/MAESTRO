@@ -1,169 +1,214 @@
-"""Stage 2 publishes only ProgramIR-certified Surface questions."""
+"""End-to-end Stage-2 Author/Critic/Final-Judge behavior; no network."""
 from __future__ import annotations
 
 import copy
+import json
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from environment.tests.test_review_reliability import ReviewReliabilityTests
-from environment.question_generation.backend import (
-    LLMSemanticCritic, OpenAICompatibleBackend, PassthroughCriticBackend,
-)
-from environment.question_generation.pipeline import _realize_one
+from environment.question_generation.realization import _realize_one
 from environment.question_generation.verification import (
-    SCHEMA, certify_surface, validate_surface_certificate,
+    METHOD, SCHEMA, REVIEW_CONTRACT, validate_surface_certificate,
 )
 from environment.trajectory_simulation.eligibility import digest
 
 
+def natural_rephrase(reference):
+    if "Let the " in reference:
+        return reference.replace("Let the ", "Consider the ", 1)
+    if "Define the " in reference:
+        return reference.replace("Define the ", "Consider the ", 1)
+    return "Please identify the matching answer. " + reference
+
+
+PASS_CRITIQUE = {
+    "verdict": "pass", "issues": [], "summary": "Equivalent and clear.",
+}
+PASS_FINAL = {
+    "verdict": "pass", "semantic_equivalence": "equivalent",
+    "naturalness": "improved", "issues": [],
+    "explanation": "The conditions have been retained.",
+}
+MISSING_CRITIQUE = {
+    "verdict": "revise",
+    "issues": [{
+        "kind": "missing_constraint", "severity": "major",
+        "explanation": "The date 1914 was omitted from the location clause.",
+        "suggestion": "Restore the location's start date of 1914.",
+    }],
+    "summary": "Restore the missing location condition.",
+}
+
+
+class FakeAuthor:
+    def __init__(self):
+        self.calls = []
+
+    def complete_json(self, system, user, **kwargs):
+        data = json.loads(user)
+        self.calls.append(data)
+        return {"question": natural_rephrase(data["reference_question"])}
+
+
+class FakeCritic:
+    def __init__(self, critiques=None, final=None):
+        self.critiques = list(critiques or [PASS_CRITIQUE])
+        self.final = final or PASS_FINAL
+        self.calls = []
+        self.final_inputs = []
+
+    def complete_json(self, system, user, **kwargs):
+        data = json.loads(user)
+        self.calls.append((system, data))
+        if "final independent language and semantic judge" in system:
+            self.final_inputs.append(data)
+            return copy.deepcopy(self.final)
+        return copy.deepcopy(self.critiques.pop(0))
+
+
 class Stage2SurfaceCertificationTests(unittest.TestCase):
     def data(self):
-        gold,world,rendered=ReviewReliabilityTests().rendered_fixture()
-        world={**world,"_rendered":rendered,"_display_answer":rendered.answer}
-        # Use the frozen public capability from the same test fixture.
+        gold, world, rendered = ReviewReliabilityTests().rendered_fixture()
+        world = {**world, "_rendered": rendered,
+                 "_display_answer": rendered.answer}
         from environment.tests.test_gold_trajectory import fixture
-        q,_,_=fixture()
-        capability=q["capability_world"]
-        payload={
-            "task_id":rendered.task_id,
-            "draft_question":rendered.question,
-            "task_design":{"final_operation":"QUERY_NAME"},
-            "resources":capability["resources"],
-            "terminal_contract":{},
+        q, _, _ = fixture()
+        capability = q["capability_world"]
+        payload = {
+            "task_id": rendered.task_id,
+            "draft_question": rendered.question,
+            "task_design": {"final_operation": "QUERY_NAME"},
+            "resources": capability["resources"],
+            "terminal_contract": {},
         }
-        return payload,world,capability,rendered
+        return payload, world, capability, rendered
 
-    def test_verified_renderer_has_certificate_without_llm_call(self):
-        payload,world,capability,rendered=self.data()
-        critic=PassthroughCriticBackend()
-        cert,review=certify_surface(
-            payload,world,capability,rendered.question,critic,
+    def test_first_draft_passes_critic_and_final_judge(self):
+        payload, world, capability, rendered = self.data()
+        author, critic = FakeAuthor(), FakeCritic()
+        ok, row, audit = _realize_one(
+            payload, world, capability, author, critic,
+            max_revisions=2,
         )
-        self.assertEqual(cert["schema"],SCHEMA)
-        self.assertEqual(review["method"],"verified_controlled_renderer")
-        realized={
-            "task_id":payload["task_id"],
-            "question":rendered.question,
-            "surface_certificate":cert,
-            "authoring":{"surface_review":review},
-        }
-        result=validate_surface_certificate(realized,world,rendered.question)
-        self.assertTrue(result["eligible"])
-        self.assertTrue(result["reviewed"])
-        self.assertEqual(result["method"],"stage2_verified_programir_certificate")
+        self.assertTrue(ok, str(row))
+        self.assertEqual(row["publication_status"], "naturalized_certified")
+        self.assertEqual(row["surface_certificate"]["method"], METHOD)
+        self.assertEqual(row["surface_certificate"]["schema"], SCHEMA)
+        self.assertEqual(row["surface_certificate"]["review_contract"],
+                         REVIEW_CONTRACT)
+        self.assertEqual(len(author.calls), 1)
+        self.assertEqual(len(critic.calls), 2)
+        self.assertEqual(critic.final_inputs[0].keys(),
+                         {"reference_question", "candidate_question",
+                          "potential_literal_changes_to_check"})
+        self.assertEqual(row["authoring"]["revision_rounds"], 0)
+        self.assertNotEqual(row["question"], rendered.question)
+        verified = validate_surface_certificate(
+            row, world, rendered.question,
+        )
+        self.assertTrue(verified["eligible"])
+        self.assertEqual(verified["stage2_method"], METHOD)
 
-    def test_rewrite_needs_full_graph_review_not_old_critic(self):
-        payload,world,capability,rendered=self.data()
-        critic=PassthroughCriticBackend()
-        other=rendered.question+" In an unrelated galaxy."
-        cert,review=certify_surface(payload,world,capability,other,critic)
-        self.assertIsNone(cert)
-        self.assertEqual(review["review_failure_kind"],"graph_reviewer_unavailable")
+    def test_revisions_receive_previous_draft_and_specific_critic_feedback(self):
+        payload, world, capability, rendered = self.data()
+        author = FakeAuthor()
+        critic = FakeCritic(critiques=[MISSING_CRITIQUE, PASS_CRITIQUE])
+        ok, row, audit = _realize_one(
+            payload, world, capability, author, critic,
+            max_revisions=1,
+        )
+        self.assertTrue(ok, row)
+        self.assertEqual(len(author.calls), 2)
+        self.assertIn("previous_draft", author.calls[1])
+        self.assertEqual(
+            author.calls[1]["reviewer_feedback"]["issues"][0]["kind"],
+            "missing_constraint",
+        )
+        self.assertEqual(row["authoring"]["revision_rounds"], 1)
+        self.assertEqual(
+            [r["critic_feedback"]["verdict"] for r in audit
+             if "critic_feedback" in r], ["revise", "pass"],
+        )
 
-    def test_graph_rewrite_certificate_binds_all_inputs_and_review_audit(self):
-        payload,world,capability,rendered=self.data()
-        critic=LLMSemanticCritic(OpenAICompatibleBackend("test://local","test"))
-        paraphrase=rendered.question+" Return the matching names."
-        review={
-            "eligible":True,"reviewed":True,"decision":"eligible",
-            "method":"llm_contract_alignment","issues":[],
-            "alignment_version":1,
-            "question_sha256":digest(paraphrase),
-            "program_sha256":digest(world["program"]),
+    def test_critic_failure_never_publishes_scoped_fallback(self):
+        payload, world, capability, rendered = self.data()
+        ok, rejected, audit = _realize_one(
+            payload, world, capability,
+            FakeAuthor(), FakeCritic(critiques=[MISSING_CRITIQUE]),
+            max_revisions=0,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(rejected["publication_status"], "rejected")
+        self.assertEqual(rejected["reason"], "rejected_semantic")
+        self.assertNotIn("question", rejected)
+        self.assertEqual(len([r for r in audit if r["stage"] == "candidate"]), 1)
+
+    def test_final_judge_can_veto_critic_pass(self):
+        payload, world, capability, rendered = self.data()
+        judge = {
+            "verdict": "reject", "semantic_equivalence": "different",
+            "naturalness": "improved",
+            "issues": ["The death date is attached to the wrong entity."],
+            "explanation": "Changed date ownership.",
         }
-        with patch(
-            "environment.question_generation.alignment.check_alignment",
-            side_effect=[review, {**review, "method": "llm_scoped_programir_screen"}],
-        ) as check, patch(
-            "environment.question_generation.verification.check_question",
-            return_value={**review, "method":"llm_semantic_screen"},
-        ):
-            cert,actual=certify_surface(
-                payload,world,capability,paraphrase,critic,
-            )
-        self.assertEqual(actual["eligible"],review["eligible"])
-        review=actual
-        self.assertEqual(check.call_count,2)
-        self.assertEqual(check.call_args.args[3],paraphrase)
-        realized={
-            "task_id":payload["task_id"],"question":paraphrase,
-            "surface_certificate":cert,
-            "authoring":{"surface_review":review},
+        critic = FakeCritic(final=judge)
+        ok, rejected, audit = _realize_one(
+            payload, world, capability, FakeAuthor(), critic,
+            max_revisions=0,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(rejected["reason"], "rejected_semantic")
+        self.assertEqual(len(critic.final_inputs), 1)
+        self.assertIn("final_judgment", audit[-1])
+
+    def test_uncertainty_fails_closed_not_published(self):
+        payload, world, capability, rendered = self.data()
+        judge = {
+            "verdict": "uncertain", "semantic_equivalence": "uncertain",
+            "naturalness": "improved", "issues": [],
+            "explanation": "Ambiguous referent.",
         }
-        self.assertTrue(validate_surface_certificate(realized,world,rendered.question)["eligible"])
-        for name,mutate in (
-            ("question",lambda r,w: r.update(question="tampered")),
-            ("program",lambda r,w: w["program"].update(nodes=[])),
-            ("canonical",lambda r,w: None),
-            ("review",lambda r,w: r["authoring"]["surface_review"].update(eligible=False)),
-            ("certificate",lambda r,w: r["surface_certificate"].update(method="verified_controlled_renderer")),
-        ):
+        ok, rejected, _ = _realize_one(
+            payload, world, capability, FakeAuthor(),
+            FakeCritic(final=judge), max_revisions=0,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(rejected["reason"], "rejected_uncertain")
+
+    def test_tampering_with_question_program_or_judgment_invalidates_certificate(self):
+        payload, world, capability, rendered = self.data()
+        ok, row, _ = _realize_one(
+            payload, world, capability, FakeAuthor(),
+            FakeCritic(), max_revisions=0,
+        )
+        self.assertTrue(ok)
+        cases = [
+            ("question", lambda r, w: r.update(question="changed question?")),
+            ("program", lambda r, w: w["program"].update(nodes=[])),
+            ("review", lambda r, w: r["authoring"]["surface_review"]
+             ["final_judgment"].update(verdict="reject")),
+            ("certificate", lambda r, w: r["surface_certificate"]
+             .update(method="verified_controlled_renderer")),
+            ("status", lambda r, w: r.update(publication_status="canonical_only")),
+        ]
+        for name, mutate in cases:
             with self.subTest(name=name):
-                r=copy.deepcopy(realized);w=copy.deepcopy(world)
-                mutate(r,w)
-                reference="changed" if name=="canonical" else rendered.question
+                edited, copy_world = copy.deepcopy(row), copy.deepcopy(world)
+                mutate(edited, copy_world)
                 with self.assertRaises(ValueError):
-                    validate_surface_certificate(r,w,reference)
+                    validate_surface_certificate(
+                        edited, copy_world, rendered.question,
+                    )
 
-    def test_stage2_falls_back_to_verified_renderer_on_failed_author(self):
-        payload,world,capability,rendered=self.data()
-        author=Mock()
-        author.author.return_value={
-            "question":"Do irrelevant galaxies orbit one another?",
-        }
-        ok,row,audit=_realize_one(
-            payload,world,capability,author,PassthroughCriticBackend(),
-            question_max_attempts=2,use_critic=True,
+    def test_no_llm_rejects_instead_of_publishing_a_reference(self):
+        payload, world, capability, rendered = self.data()
+        ok, rejected, _ = _realize_one(
+            payload, world, capability, Mock(), Mock(), max_revisions=0,
         )
-        self.assertTrue(ok,str(row))
-        self.assertEqual(row["question"],rendered.question)
-        self.assertTrue(row["authoring"]["surface_fallback"])
-        self.assertEqual(row["surface_certificate"]["question_sha256"],digest(rendered.question))
-        self.assertEqual(len(audit),3)
-
-    def test_alignment_approval_cannot_override_full_graph_rejection(self):
-        payload,world,capability,rendered=self.data()
-        question=rendered.question+" Return the matching names."
-        critic=LLMSemanticCritic(OpenAICompatibleBackend("test://local","test"))
-        alignment={
-            "eligible":True,"reviewed":True,"decision":"eligible",
-            "method":"llm_contract_alignment","issues":[],
-            "question_sha256":digest(question),
-            "program_sha256":digest(world["program"]),
-        }
-        with patch("environment.question_generation.alignment.check_alignment",
-            side_effect=[alignment, {"eligible":False,"reviewed":True,"decision":"mismatch",
-                          "issues":["wrong owner"],"review_failure_kind":"semantic_mismatch"},
-            ]):
-            cert,review=certify_surface(payload,world,capability,question,critic)
-        self.assertIsNone(cert)
-        self.assertFalse(review["eligible"])
-        self.assertEqual(review["issues"],["wrong owner"])
-
-    def test_legacy_contract13_remains_consumable(self):
-        payload,world,capability,rendered=self.data()
-        cert,review=certify_surface(payload,world,capability,rendered.question,PassthroughCriticBackend())
-        cert["review_contract"]=13
-        realized={"task_id":payload["task_id"],"question":rendered.question,
-                  "surface_certificate":cert,"authoring":{"surface_review":review}}
-        self.assertEqual(validate_surface_certificate(realized,world,rendered.question)["stage2_review_contract"],13)
-
-    def test_two_alignment_views_cannot_override_complete_graph_rejection(self):
-        payload,world,capability,rendered=self.data()
-        critic=LLMSemanticCritic(OpenAICompatibleBackend("test://local","test"))
-        review={"eligible":True,"reviewed":True,"decision":"eligible",
-                "method":"llm_contract_alignment","issues":[]}
-        with patch("environment.question_generation.alignment.check_alignment",
-                   return_value=review), patch(
-            "environment.question_generation.verification.check_question",
-            return_value={"eligible":False,"reviewed":True,"decision":"mismatch",
-                          "method":"llm_semantic_screen","issues":["collapsed anchor scope"]},
-        ) as final:
-            cert,result=certify_surface(payload,world,capability,rendered.question+" Return names.",critic)
-        final.assert_called_once()
-        self.assertIsNone(cert)
-        self.assertFalse(result["eligible"])
+        self.assertFalse(ok)
+        self.assertEqual(rejected["reason"], "rejected_validation_error")
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     unittest.main()

@@ -1,15 +1,12 @@
 """Reversible, bounded English surface forms for the public question contract."""
 from __future__ import annotations
 
-import json
 import re
 from collections import Counter
 from datetime import date
 from decimal import Decimal
 
 from .public_semantics import public_question_contract
-
-METHOD = 'verified_scoped_grammar_v2'
 
 
 class UnsupportedSurface(ValueError):
@@ -409,13 +406,3 @@ def read_scoped_semantics(question, plan):
                       for options, choice, meaning in zip(plan, choices, plan.meanings, strict=True)],
     }
 
-def choose_scoped(author, groups):
-    schema = {'type':'object','properties':{'choices':{'type':'array','items':{'type':'integer','minimum':0,'maximum':max(map(len,groups))-1},'minItems':len(groups),'maxItems':len(groups)}},
-              'required':['choices'],'additionalProperties':False}
-    answer = author.backend.complete_json(
-        'Choose the most natural wording for each sentence in this question. '
-        'Return one zero-based option index per sentence, in order, as {"choices":[...]}. '
-        'Each sentence has its own valid option indices. Prefer concise wording and clear references.',
-        json.dumps({'sentences':groups}, ensure_ascii=False), response_schema=schema,
-    )
-    return answer.get('choices')

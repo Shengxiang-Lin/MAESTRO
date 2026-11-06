@@ -1,6 +1,6 @@
 """Ordered streaming question output with crash-safe committed progress.
 
-The three public sidecar JSONLs are append-only. A checkpoint records their
+The accepted/rejected JSONLs and private review audit are append-only. A checkpoint records their
 committed byte lengths, SHA-256 digests and counts. On resume, uncommitted tails
 are discarded, while every committed question and rejection is reused. Model
 settings and frozen inputs are validated by the caller's signature.
@@ -19,7 +19,7 @@ SCHEMA = "maestro.question_generation.progress.v1"
 _OUTPUTS = {
     "realized": "realized_capability_worlds.jsonl",
     "rejected": "question_rejected.jsonl",
-    "audit": "question_critic_audit.jsonl",
+    "audit": "question_review_audit.jsonl",
 }
 
 
@@ -261,9 +261,7 @@ def signature_for_question_run(
         "max_tokens": args.max_tokens,
         "critic_max_tokens": args.critic_max_tokens,
         "timeout": args.timeout,
-        "question_max_attempts": args.question_max_attempts,
-        "surface_mode": getattr(args,"surface_mode","legacy"),
-        "no_semantic_critic": args.no_semantic_critic,
+        "max_revisions": args.max_revisions,
         "no_json_mode": args.no_json_mode,
         "code_sha256": sources,
     }

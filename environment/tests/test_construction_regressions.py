@@ -9,7 +9,6 @@ from environment.task_construction.synthesis.world_sampler import WorldSampler,u
 from environment.task_construction.executor import SymbolicExecutor
 from environment.task_construction.quality.diversity import BatchDiversityTracker
 from environment.question_generation.validators import preflight
-from environment.question_generation.pipeline import _realize_one
 
 
 class ConstructionRegressions(unittest.TestCase):
@@ -84,68 +83,7 @@ class ConstructionRegressions(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertIn('synthetic_identifier_leak',result.issues)
 
-    def test_stage2_prompts_preserve_explicit_public_starting_anchors(self):
-        from environment.question_generation.prompts import author_prompt, critic_prompt
-        payload = {
-            "draft_question": (
-                "Which Way is connected through the city named after "
-                "Kingswell Airport whose IATA code is BQG?"
-            ),
-            "terminal_contract": {},
-        }
-        self.assertIn("explicitly named public starting entity",
-                      author_prompt(payload))
-        self.assertIn("public starting entity",
-                      critic_prompt(payload, payload["draft_question"]))
-        self.assertIn("IATA code", critic_prompt(payload, payload["draft_question"]))
-
-    def test_stage2_critic_cannot_approve_with_remaining_ownership_issues(self):
-        from environment.question_generation.prompts import author_prompt,critic_prompt
-        from environment.question_generation.backend import PassthroughAuthorBackend
-        class ContradictoryCritic:
-            def review(self, *args):
-                return {'accept':True,'semantic_fidelity':'pass',
-                        'issues':['Date constraint moved from Way to City'],
-                        'repair_question':''}
-        payload={'task_id':'test',
-                 'draft_question':'Which City is linked to the Way that began in 1912?',
-                 'terminal_contract':{}}
-        ok,_,audit=_realize_one(
-            payload,{}, {},PassthroughAuthorBackend(),ContradictoryCritic(),
-            question_max_attempts=1,use_critic=True)
-        self.assertFalse(ok)
-        self.assertEqual(audit,[])
-        critic_text=critic_prompt(payload,payload['draft_question'])
-        author_text=author_prompt(payload)
-        self.assertIn('Way start-date condition',critic_text)
-        self.assertIn('intermediate links',critic_text)
-        self.assertIn('grammatical entity',author_text)
-
-    def test_semantically_rejected_repair_is_not_accepted(self):
-        from unittest.mock import patch
-        from environment.tests.test_stage2_surface_certification import Stage2SurfaceCertificationTests
-        payload,world,capability,rendered=Stage2SurfaceCertificationTests().data()
-        class Author:
-            def author(self,*args):
-                return {'question':rendered.question+' Return matching names.'}
-        class Critic:
-            def review(self,*args):
-                return {'accept':True,'semantic_fidelity':'pass','issues':[],
-                        'repair_question':rendered.question+' Please return names.'}
-        # A quick Critic's positive vote must NEVER override a failed graph
-        # certification; the same rule applies to its wording repair.
-        with patch(
-            'environment.question_generation.verification.certify_surface',
-            return_value=(None,{'decision':'mismatch','review_failure_kind':'semantic_mismatch'}),
-        ):
-            ok,_,audit=_realize_one(
-                payload,world,capability,Author(),Critic(),
-                question_max_attempts=1,use_critic=True,
-            )
-        self.assertFalse(ok)
-        self.assertTrue(audit)
-        self.assertIn('semantic_critic_repair',audit[0])
-        self.assertIn('repair_programir_review',audit[0])
 
 
-if __name__=='__main__':unittest.main()
+if __name__ == "__main__":
+    unittest.main()

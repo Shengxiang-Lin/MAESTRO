@@ -1,278 +1,145 @@
-"""Teacher-private Stage-2 ProgramIR semantic certification.
+"""Publish only fully reviewed natural questions.
 
-The public Author/Critic never receive private World facts. The final
-graph-aware reviewer sees only the question, public renderer text, and
-the authoritative structured ProgramIR meanings. A certificate is an
-auditable pipeline assertion, not a formal equivalence proof or a signature.
+A certificate binds the actual Surface text, frozen ProgramIR and a
+separately reconstructed public Scoped reference to an independent final
+editorial judgment. The decision is an auditable LLM assessment, *not* a
+formal proof of semantic equivalence. Stage 3 verifies the exact record
+without another model call; it still performs its own public-executability
+and evidence checks.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from collections.abc import Mapping
+
 from environment.trajectory_simulation.eligibility import (
-    check_question, controlled_question_reference, digest,
+    controlled_question_reference, digest,
 )
 from environment.trajectory_simulation.compiler import compile_gold_solution
-from environment.trajectory_simulation.backend import LLMPlanner
 
-SCHEMA = "maestro.stage2_surface_cert.v1"
-REVIEW_CONTRACT = 18
+from .question_review import passing_judgment
 
-from .scoped_surface import METHOD as SCOPED_METHOD
-from .semantic_readback import READBACK_VERSION, validate_readback_response
-
-FREE_METHOD = "verified_blind_semantic_readback_v1"
+SCHEMA = "maestro.stage2_surface_cert.v2"
+REVIEW_CONTRACT = 19
+METHOD = "llm_iterative_editorial_review_v1"
 
 
-def certify_surface(payload, world, capability, question, critic):
-    """Return (certificate or None, graph-review decision).
-
-    Never certify an LLM rewrite on the old public-only Critic's verdict
-    alone. A reviewer error or ambiguous result is not an approval.
-    """
-    rendered = world.get("_rendered")
-    if rendered is None or rendered.task_id != payload["task_id"]:
-        raise ValueError("missing_matching_controlled_renderer")
-    canonical = rendered.question
-    realized = {
-        "task_id": payload["task_id"],
-        "question": canonical,
-        "capability_world": capability,
-    }
-    gold = compile_gold_solution(realized, world, rendered, schedule="compact")
-    reference = controlled_question_reference(gold, world, rendered)
-    if reference is None or reference["question"] != canonical:
-        raise ValueError("controlled_renderer_certificate_unavailable")
-
-    if question == canonical:
-        result = {
-            "eligible": True, "reviewed": True, "decision": "eligible",
-            "method": "verified_controlled_renderer", "issues": [],
-            "question_sha256": digest(question),
-            "program_sha256": digest(world["program"]),
-        }
-    else:
-        from .backend import LLMSemanticCritic
-        if not isinstance(critic, LLMSemanticCritic):
-            result = {
-                "eligible": False, "reviewed": False,
-                "decision": "review_error",
-                "review_failure_kind": "graph_reviewer_unavailable",
-                "issues": ["noncanonical rewrite needs a graph-aware reviewer"],
-            }
-        else:
-            # Ordinary Stage-2 Critic responses are capped at 768 tokens by
-            # default. The fuller graph reviewer needs its own budget.
-            from .alignment import check_alignment
-            result = check_alignment(
-                gold, world, canonical, question, critic.backend,
-            )
-            # Small-model alignment can miss a consistent-looking owner or
-            # endpoint substitution. Keep a differently represented full
-            # executor-semantics audit as an independent publication gate.
-            if result["eligible"]:
-                alignment = result
-                full = check_alignment(
-                    gold, world, canonical, question, critic.backend,
-                    executor_view=True,
-                )
-                executor_alignment = full
-                if full["eligible"]:
-                    full = check_question(
-                        {**gold, "question": question}, world,
-                        LLMPlanner(replace(
-                            critic.backend, temperature=0.0,
-                            max_tokens=max(2048, critic.backend.max_tokens),
-                        )), rendered=rendered,
-                    )
-                result = {
-                    **alignment, "eligible": full.get("eligible") is True
-                    and full.get("reviewed") is True
-                    and full.get("decision") == "eligible"
-                    and full.get("issues") == [],
-                    "decision": full.get("decision", "review_error"),
-                    "issues": full.get("issues", ["full_graph_review_incomplete"]),
-                    "full_graph_review": full,
-                    "executor_alignment": executor_alignment,
-                    **({"review_failure_kind": full["review_failure_kind"]}
-                       if full.get("review_failure_kind") else {}),
-                }
-    certificate = None
-    if (result.get("eligible") is True and result.get("reviewed") is True
-            and result.get("decision") == "eligible"
-            and result.get("issues") == []
-            and result.get("method") in (
-                "verified_controlled_renderer", "llm_contract_alignment",
-            )):
-        certificate = _mint_certificate(payload['task_id'], world, canonical, question, result)
-    return certificate, result
-
-
-def _mint_certificate(task_id, world, canonical, question, review):
+def _certificate(task_id, program, canonical, question, review):
     return {
-        'schema': SCHEMA, 'review_contract': REVIEW_CONTRACT, 'task_id': task_id,
-        'question_sha256': digest(question), 'program_sha256': digest(world['program']),
-        'renderer_question_sha256': digest(canonical), 'method': review['method'],
-        'review_sha256': digest(review),
-    }
-
-def certify_scoped_surface(task_id, world, canonical, question, groups):
-    from .scoped_surface import read_scoped_semantics
-    readback = read_scoped_semantics(question, groups)
-    if readback is None or readback['query'] != groups.query or question == canonical:
-        raise ValueError('scoped question did not round-trip')
-    review = {
-        'eligible': True, 'reviewed': True, 'decision': 'eligible', 'issues': [],
-        'method': SCOPED_METHOD, 'question_sha256': digest(question),
-        'program_sha256': digest(world['program']), 'grammar_sha256': digest(groups),
-        'semantic_readback': readback, 'query_contract_sha256': digest(groups.query),
-    }
-    return _mint_certificate(task_id, world, canonical, question, review), review
-
-
-
-def certify_free_surface(task_id, world, canonical, question, scoped_plan, readback):
-    """Mint a cert only for TWO independently verified question-only parses.
-
-    The generator and model's self-reported condition IDs are not evidence.
-    The stored text-only parse must match the compiled public query and quote
-    the actual question. Stage 3 will revalidate these conditions locally.
-    """
-    if (question == canonical or not readback.eligible
-            or readback.calls != 2 or len(readback.raw_responses) != 2):
-        raise ValueError("free_rewrite_independent_readback_not_verified")
-    for response in readback.raw_responses:
-        validate_readback_response(response, question, scoped_plan.query)
-    review = {
-        'eligible': True, 'reviewed': True, 'decision': 'eligible', 'issues': [],
-        'method': FREE_METHOD, 'question_sha256': digest(question),
-        'program_sha256': digest(world['program']),
-        'readback_version': READBACK_VERSION,
-        'reference_query_sha256': digest(scoped_plan.query),
-        'blind_readback': readback.to_dict(),
-    }
-    return _mint_certificate(task_id, world, canonical, question, review), review
-
-def validate_surface_certificate(realized, world, canonical, *, gold=None, rendered=None):
-    """Verify Stage-2 publication linkage; do not make an additional LLM call."""
-    cert = realized.get("surface_certificate")
-    review = (realized.get("authoring") or {}).get("surface_review")
-    question = realized.get("question")
-    if not isinstance(cert, dict) or not isinstance(review, dict):
-        raise ValueError("missing_stage2_surface_certificate")
-    if set(cert) != {
-        "schema", "review_contract", "task_id", "question_sha256",
-        "program_sha256", "renderer_question_sha256",
-        "method", "review_sha256",
-    }:
-        raise ValueError("invalid_stage2_surface_certificate")
-    expected = {
-        "schema": SCHEMA, "review_contract": cert.get("review_contract"),
-        "task_id": realized.get("task_id"),
+        "schema": SCHEMA,
+        "review_contract": REVIEW_CONTRACT,
+        "task_id": task_id,
         "question_sha256": digest(question),
-        "program_sha256": digest(world["program"]),
+        "program_sha256": digest(program),
         "renderer_question_sha256": digest(canonical),
-        "method": review.get("method"),
+        "method": METHOD,
         "review_sha256": digest(review),
     }
-    if cert != expected:
+
+
+def certify_approved_question(
+    task_id: str, world: Mapping, canonical: str, question: str,
+    scoped_reference: str, final_judgment: Mapping, *,
+    critic_verdict: str, revision_rounds: int,
+):
+    """Mint a certificate only after the Critic and independent judge pass."""
+    if (not question or question == canonical or question == scoped_reference
+            or critic_verdict != "pass"
+            or not passing_judgment(final_judgment)
+            or revision_rounds < 0):
+        raise ValueError("natural_question_not_approved")
+    review = {
+        "eligible": True, "reviewed": True, "decision": "eligible",
+        "method": METHOD, "issues": [],
+        "question_sha256": digest(question),
+        "program_sha256": digest(world["program"]),
+        "scoped_reference_sha256": digest(scoped_reference),
+        "critic_verdict": critic_verdict,
+        "revision_rounds": revision_rounds,
+        "final_judgment": dict(final_judgment),
+    }
+    return _certificate(task_id, world["program"], canonical, question, review), review
+
+
+def _rebuild_scoped_reference(realized, world, canonical, gold, rendered):
+    """Reconstruct the reference independently of Stage-2 saved prose."""
+    from .scoped_surface import build_scoped_plan, render_scoped
+    if rendered is None or rendered.question != canonical:
+        raise ValueError("missing_matching_stage1_renderer")
+    if gold is None:
+        gold = compile_gold_solution(
+            {**realized, "question": canonical}, world, rendered,
+            schedule="compact",
+        )
+    verified = controlled_question_reference(gold, world, rendered)
+    if verified is None or verified.get("question") != canonical:
+        raise ValueError("unverified_stage1_reference")
+    plan = build_scoped_plan(world, canonical, gold, verified)
+    return render_scoped(plan, [0] * len(plan))
+
+
+def validate_surface_certificate(realized, world, canonical, *, gold=None, rendered=None):
+    """Verify editorial certificate, bindings and reference; fail closed.
+
+    No automatic acceptance of Canonical or Scoped fallback is supported.
+    An LLM's semantic judgment is not mechanically provable by this check.
+    """
+    certificate = realized.get("surface_certificate")
+    authoring = realized.get("authoring") or {}
+    review = authoring.get("surface_review")
+    question = realized.get("question")
+    if (not isinstance(certificate, dict) or not isinstance(review, dict)
+            or not isinstance(question, str)):
+        raise ValueError("missing_stage2_surface_certificate")
+    required = {
+        "schema", "review_contract", "task_id", "question_sha256",
+        "program_sha256", "renderer_question_sha256", "method",
+        "review_sha256",
+    }
+    if set(certificate) != required:
+        raise ValueError("invalid_stage2_surface_certificate")
+    if (certificate.get("schema") != SCHEMA
+            or certificate.get("review_contract") != REVIEW_CONTRACT
+            or certificate.get("method") != METHOD):
+        raise ValueError("unsupported_stage2_review_contract")
+    expected = _certificate(
+        realized.get("task_id"), world["program"], canonical, question, review,
+    )
+    if certificate != expected:
         raise ValueError("stage2_surface_certificate_input_mismatch")
-    if cert["review_contract"] not in (13, 14, 15, 16, 17, REVIEW_CONTRACT):
-        raise ValueError("stage2_surface_review_contract_unsupported")
-    if (review.get("eligible") is not True
+    if (review.get("method") != METHOD
+            or review.get("eligible") is not True
             or review.get("reviewed") is not True
             or review.get("decision") != "eligible"
-            or review.get("issues") != []):
-        raise ValueError("stage2_surface_review_not_eligible")
-    if review.get("question_sha256") != digest(question) or review.get(
-        "program_sha256"
-    ) != digest(world["program"]):
-        raise ValueError("stage2_surface_review_fingerprint_mismatch")
-    if review.get("method") not in (
-        "verified_controlled_renderer", "llm_semantic_screen", "llm_contract_alignment", SCOPED_METHOD, FREE_METHOD,
-    ):
-        raise ValueError("stage2_surface_review_method_unsupported")
-    if question == canonical:
-        if review["method"] != "verified_controlled_renderer":
-            raise ValueError("canonical_surface_certificate_method_mismatch")
-    elif review['method'] == SCOPED_METHOD:
-        from .scoped_surface import build_scoped_plan, read_scoped_semantics
-        # Scoped Grammar v17 remains byte-for-byte recomputable after v18
-        # adds the separate free-text readback method. Keep old frozen rows
-        # readable; do not weaken the newer free-text certificate contract.
-        if cert['review_contract'] not in (17, REVIEW_CONTRACT):
-            raise ValueError('unsupported scoped grammar review contract')
-        rendered = rendered or world.get('_rendered')
-        if rendered is None or rendered.question != canonical:
-            raise ValueError('missing scoped grammar renderer')
-        if gold is None:
-            gold = compile_gold_solution({**realized, 'question': canonical}, world, rendered, schedule='compact')
-        reference = controlled_question_reference(gold, world, rendered)
-        if reference is None or reference['question'] != canonical:
-            raise ValueError('unverified scoped grammar reference')
-        groups = build_scoped_plan(world, canonical, gold, reference)
-        readback = read_scoped_semantics(question, groups)
-        if (review.get('grammar_sha256') != digest(groups) or readback is None
-                or readback['query'] != groups.query
-                or review.get('semantic_readback') != readback
-                or review.get('query_contract_sha256') != digest(groups.query)):
-            raise ValueError('scoped grammar round-trip mismatch')
-    elif review["method"] == FREE_METHOD:
-        from .scoped_surface import build_scoped_plan
-        if cert["review_contract"] != REVIEW_CONTRACT:
-            raise ValueError("unsupported_free_readback_contract")
-        rendered = rendered or world.get("_rendered")
-        if rendered is None or rendered.question != canonical:
-            raise ValueError("missing_free_readback_renderer")
-        if gold is None:
-            gold = compile_gold_solution(
-                {**realized, "question": canonical}, world, rendered,
-                schedule="compact",
-            )
-        reference = controlled_question_reference(gold, world, rendered)
-        if reference is None or reference["question"] != canonical:
-            raise ValueError("unverified_free_readback_renderer")
-        plan = build_scoped_plan(world, canonical, gold, reference)
-        stored = review.get("blind_readback") or {}
-        responses = stored.get("raw_responses", [])
-        if (review.get("readback_version") != READBACK_VERSION
-                or review.get("reference_query_sha256") != digest(plan.query)
-                or stored.get("eligible") is not True
-                or stored.get("version") != READBACK_VERSION
-                or stored.get("calls") != 2
-                or not isinstance(responses, list)
-                or len(responses) != 2):
-            raise ValueError("invalid_free_readback_audit")
-        try:
-            parsed = [
-                validate_readback_response(response, question, plan.query)
-                for response in responses
-            ]
-        except (ValueError, TypeError, KeyError) as exc:
-            raise ValueError("free_readback_text_witness_mismatch") from exc
-        if (parsed[0] != parsed[1]
-                or parsed[0] != stored.get("parsed_query")):
-            raise ValueError("free_readback_parsers_disagree")
-    elif review["method"] != (
-        "llm_semantic_screen" if cert["review_contract"] == 13 else "llm_contract_alignment"
-    ):
-        raise ValueError("rewritten_surface_requires_graph_semantic_review")
-    if review["method"] == "llm_contract_alignment":
-        full = review.get("full_graph_review") or {}
-        if (review.get("alignment_version") != 1
-                or full.get("eligible") is not True
-                or full.get("reviewed") is not True
-                or full.get("decision") != "eligible"
-                or full.get("issues") != []
-                or full.get("method") != "llm_semantic_screen"
-                or full.get("question_sha256") != digest(question)
-                or full.get("program_sha256") != digest(world["program"])):
-            raise ValueError("stage2_independent_graph_gate_missing")
+            or review.get("issues") != []
+            or review.get("critic_verdict") != "pass"
+            or review.get("question_sha256") != digest(question)
+            or review.get("program_sha256") != digest(world["program"])
+            or type(review.get("revision_rounds")) is not int
+            or review["revision_rounds"] < 0
+            or not isinstance(review.get("final_judgment"), dict)
+            or not passing_judgment(review["final_judgment"])):
+        raise ValueError("stage2_review_not_approved")
+    if realized.get("publication_status") != "naturalized_certified":
+        raise ValueError("stage2_publication_status_mismatch")
+    rendered = rendered or world.get("_rendered")
+    scoped = _rebuild_scoped_reference(
+        realized, world, canonical, gold, rendered,
+    )
+    if (question in (canonical, scoped)
+            or review.get("scoped_reference_sha256") != digest(scoped)):
+        raise ValueError("stage2_reference_or_naturalization_mismatch")
     return {
         "eligible": True, "reviewed": True, "decision": "eligible",
-        "method": "stage2_verified_programir_certificate",
+        "method": "stage2_verified_editorial_certificate",
         "issues": [],
         "question_sha256": digest(question),
         "program_sha256": digest(world["program"]),
-        "stage2_method": review["method"],
-        "stage2_review_contract": cert["review_contract"],
+        "stage2_method": METHOD,
+        "stage2_review_contract": REVIEW_CONTRACT,
     }
+
+
+__all__ = [
+    "SCHEMA", "REVIEW_CONTRACT", "METHOD",
+    "certify_approved_question", "validate_surface_certificate",
+]
