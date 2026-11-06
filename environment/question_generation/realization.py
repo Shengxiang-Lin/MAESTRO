@@ -23,7 +23,7 @@ from .question_review import (
 from .scoped_surface import build_scoped_plan, render_scoped
 from .semantic_checks import (
     semantic_checks, naturalness_gate, explicit_join_contradictions,
-    CheckFormatError,
+    missing_typed_literals, CheckFormatError,
 )
 from .validators import postflight
 from .verification import certify_approved_question
@@ -172,6 +172,22 @@ def _realize_one(payload, world, capability, author, critic, *,
                     "suggestion": "Restore the original intersection (ALL) versus union (ANY) meaning for this exact group.",
                 } for reason in contradictions],
                 "summary": "Do not reverse set operations while rephrasing.",
+            }
+            continue
+        missing_literals = missing_typed_literals(plan, candidate)
+        entry["missing_public_typed_literals"] = missing_literals
+        if missing_literals:
+            entry["failure"] = "missing_public_typed_literal"
+            last_failure = "rejected_semantic"
+            last_detail = ", ".join(missing_literals)
+            feedback = {
+                "verdict": "revise",
+                "issues": [{
+                    "kind": "missing_public_value", "severity": "major",
+                    "explanation": "The draft omitted a public answer-defining value: " + token,
+                    "suggestion": "Restore the value in its original entity/relationship scope, not merely anywhere in the question.",
+                } for token in missing_literals[:8]],
+                "summary": "Restore the missing reference values with their original owners.",
             }
             continue
         boundary = postflight(
