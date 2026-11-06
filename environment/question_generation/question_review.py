@@ -280,6 +280,8 @@ def judge_question(backend: Any, reference: str, candidate: str,
         "verdict", "semantic_equivalence", "naturalness",
         "issues", "explanation", "checks",
     )}
+    # Avoid mutating a shared model/fixture response across calls.
+    result["issues"] = list(result["issues"])
     if check_failures(result["checks"]) and result["verdict"] == "pass":
         result["verdict"] = "uncertain"
         result["semantic_equivalence"] = "uncertain"
