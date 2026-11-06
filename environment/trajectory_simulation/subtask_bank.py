@@ -140,7 +140,7 @@ def build_subtask_bank(
     # Review the Stage 2 surface only for future Main-Agent publication.
     # A rejected surface does not abort canonical Subtask generation.
     eligibility=(
-        canonical_eligibility if surface_question==canonical_question
+        dict(canonical_eligibility) if surface_question==canonical_question
         else check_question(
             {**gold,"question":surface_question},
             world_record,planner,review=question_review,rendered=rendered,
