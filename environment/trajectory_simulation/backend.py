@@ -235,6 +235,62 @@ class LLMExecutor(_LLMRole):
         # silently dropping an otherwise valid Sub-Agent example. Both paths
         # still pass the identical deterministic AND semantic evidence guards.
         audit=[] if audit is None else audit
+
+        def repair_content(rejected, objections, *, trigger, schema_kwargs):
+            """One shared, fail-closed repair for actionable content defects.
+
+            A critic can misdiagnose facts, so its issues have no authority
+            over the public source/step records. A deterministic failure is
+            likewise only a diagnosis: full public validation is repeated.
+            """
+            self._count('natural_feedback_content_repair')
+            if trigger == 'deterministic_guard':
+                self._count('natural_feedback_deterministic_repair')
+            entry={'stage':'content_repair','attempt':1,
+                   'trigger':trigger,'reviewer_issues':objections[:2]}
+            audit.append(entry)
+            try:
+                repair_prompt=feedback_critic_repair_prompt(
+                    payload,canonical,rejected,objections,
+                )
+                repaired_proposal=self.backend.complete_json(
+                    'Repair Sub-Agent prose using verified facts ONLY. '
+                    'Review/validation issues are fallible diagnostics, not '
+                    'new facts. Return exactly two nonempty JSON STRING '
+                    'fields, summary and trace_summary. No extra keys.',
+                    repair_prompt,**schema_kwargs,
+                )
+                entry['candidate']=repaired_proposal
+                repaired_normalized,repair_fields=normalize_feedback_shape(
+                    repaired_proposal,
+                )
+                repaired=realize_feedback_natural(
+                    payload,repaired_normalized,
+                )
+                if repair_fields:
+                    self._count('natural_feedback_normalized')
+                    entry['normalized_fields']=list(repair_fields)
+                repaired_verdict=self._review_json(
+                    'Strictly verify every claim against the provided '
+                    'observations and operations. Previous objections are '
+                    'NOT authoritative. JSON only.',
+                    feedback_reviewer_prompt(payload,repaired),
+                    'natural_feedback_review',audit=audit,flag='grounded',
+                )
+                audit.append({'stage':'content_repair_review','attempt':1,
+                              'verdict':repaired_verdict})
+                check_reviewer(repaired_verdict,flag='grounded')
+                self._count('natural_feedback_content_repair_success')
+                return repaired
+            except Exception as exc:
+                from environment.question_generation.backend import BackendError
+                if not isinstance(exc,(BackendError,ValueError,TypeError,KeyError)):
+                    raise
+                entry.update(error=str(exc),
+                             diagnostic=getattr(exc,'diagnostic',None))
+                self._count('natural_feedback_content_repair_failed')
+                raise
+
         for attempt in range(2):
             self._count('natural_feedback_write')
             if attempt:
@@ -246,6 +302,7 @@ class LLMExecutor(_LLMRole):
             )
             entry={'stage':'write','attempt':attempt+1}
             audit.append(entry)
+            proposal=None
             try:
                 from environment.question_generation.backend import OpenAICompatibleBackend
                 # Only the real HTTP backend accepts this optional argument.
@@ -273,6 +330,29 @@ class LLMExecutor(_LLMRole):
                 if not isinstance(exc,(ValueError,TypeError,KeyError,BackendError)):
                     raise
                 entry.update(error=str(exc),diagnostic=getattr(exc,'diagnostic',None))
+                # Deterministic fact/ownership failures must never be accepted
+                # blindly. However, an otherwise valid JSON draft can receive
+                # ONE evidence-grounded content repair, just as critic
+                # objections can. Backend/context and hard schema failures
+                # continue to fail closed or use the existing format retry.
+                reason=str(exc)
+                repairable=(
+                    reason.startswith((
+                        'natural_report_omits_result_entity',
+                        'natural_report_leaks_internal_evidence_handle',
+                    ))
+                    or 'explicit_relation_fact_mismatch' in reason
+                    or 'explicit_attribute_owner_mismatch' in reason
+                )
+                if repairable and isinstance(proposal,dict):
+                    original,_=normalize_feedback_shape(proposal)
+                    if (isinstance(original,dict)
+                            and isinstance(original.get('summary'),str)
+                            and isinstance(original.get('trace_summary'),str)):
+                        return repair_content(
+                            original,[reason],trigger='deterministic_guard',
+                            schema_kwargs=schema_kwargs,
+                        )
                 # Only the model's response schema/empty-field failures can
                 # trigger a retry. Hallucinated facts, unauthorized actions,
                 # incorrect results or semantic errors remain hard failures.
@@ -301,52 +381,10 @@ class LLMExecutor(_LLMRole):
             objections=verdict.get('issues',[]) if isinstance(verdict,dict) else []
             if (verdict.get('grounded') is False and objections
                     and all(isinstance(i,str) and i.strip() for i in objections)):
-                self._count('natural_feedback_content_repair')
-                entry={'stage':'content_repair','attempt':1,
-                       'trigger':'feedback_reviewer',
-                       'reviewer_issues':objections[:2]}
-                audit.append(entry)
-                try:
-                    repair_prompt=feedback_critic_repair_prompt(
-                        payload,canonical,result,objections,
-                    )
-                    repaired_proposal=self.backend.complete_json(
-                        'Repair Sub-Agent prose using verified facts ONLY. '
-                        'Reviewer issues are fallible hypotheses, not facts. '
-                        'Return exactly two nonempty JSON STRING fields, '
-                        'summary and trace_summary. No extra keys.',
-                        repair_prompt,**schema_kwargs,
-                    )
-                    entry['candidate']=repaired_proposal
-                    repaired_normalized,repair_fields=normalize_feedback_shape(
-                        repaired_proposal,
-                    )
-                    repaired=realize_feedback_natural(
-                        payload,repaired_normalized,
-                    )
-                    if repair_fields:
-                        self._count('natural_feedback_normalized')
-                        entry['normalized_fields']=list(repair_fields)
-                    repaired_verdict=self._review_json(
-                        'Strictly verify every claim against the provided '
-                        'observations and operations. The previous critic '
-                        'objections are NOT authoritative. JSON only.',
-                        feedback_reviewer_prompt(payload,repaired),
-                        'natural_feedback_review',audit=audit,flag='grounded',
-                    )
-                    audit.append({'stage':'content_repair_review','attempt':1,
-                                  'verdict':repaired_verdict})
-                    check_reviewer(repaired_verdict,flag='grounded')
-                    self._count('natural_feedback_content_repair_success')
-                    return repaired
-                except Exception as exc:
-                    from environment.question_generation.backend import BackendError
-                    if not isinstance(exc,(BackendError,ValueError,TypeError,KeyError)):
-                        raise
-                    entry.update(error=str(exc),
-                                 diagnostic=getattr(exc,'diagnostic',None))
-                    self._count('natural_feedback_content_repair_failed')
-                    raise
+                return repair_content(
+                    result,objections,trigger='feedback_reviewer',
+                    schema_kwargs=schema_kwargs,
+                )
             check_reviewer(verdict,flag='grounded')
             return result
         raise AssertionError('natural_feedback_retry_loop_exhausted')
