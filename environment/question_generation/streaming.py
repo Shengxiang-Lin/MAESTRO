@@ -250,7 +250,7 @@ def signature_for_question_run(
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1 << 20), b""):
                 digest.update(chunk)
-        sources[str(path.name)] = digest.hexdigest()
+        sources[str(path)] = digest.hexdigest()
     payload = {
         "schema": SCHEMA, "frozen": dict(frozen), "task_ids": task_ids,
         "seed": args.seed, "max_records": args.max_records,
