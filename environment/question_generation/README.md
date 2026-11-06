@@ -125,9 +125,10 @@ is rejected, including during wording-repair review.
 
 ### Stage 2 is the only full Surface semantic review boundary
 
-The public-only Author/Critic remains an inexpensive writing filter, **not**
-the final correctness authority. Before Stage 2 publishes a question, a
-teacher-private graph-aware reviewer now checks the entire ProgramIR,
+The Author uses a public-only semantic scaffold, and the short Critic
+now assists with repair **only after** full graph review fails. Neither
+one is the final correctness authority. Before Stage 2 publishes a question, a
+teacher-private graph-aware reviewer checks the entire ProgramIR,
 its controlled renderer reference, relation direction, filter ownership,
 hops, joins and output type. The reviewer is reused from the earlier
 Stage 3.1 implementation; it receives graph meanings and the candidate
@@ -151,20 +152,11 @@ be independently certified by the renderer. Stage 3 still checks whether
 public evidence is executable and discoverable; that is a different gate
 from question semantic equivalence.
 
-Existing files in `questions_2000` do not automatically gain certificates.
-To build a fresh 50-question batch without overwriting the old run:
-
-```bash
-python environment/generate_questions.py \
-  --max-records 50 \
-  --output-dir environment/data/questions_cert_v10_50
-```
-
-Then use Stage 3.1 with
-`--realized environment/data/questions_cert_v10_50/realized_capability_worlds.jsonl`.
-Do **not** combine old checkpoints and new contract versions; use a new
-directory or explicitly restart a chosen output directory. The frozen
-Stage 1 World and authoring inputs are not regenerated.
+Existing files in `questions_2000` and `questions_cert_v10_50`
+do not automatically change. Use the separate v11 directory and commands
+above for a controlled comparison. A new checkpoint signature prevents
+mixing v10 and v11 records. The frozen Stage 1 World and authoring inputs
+are not regenerated.
 
 Neither an LLM semantic judge nor literal-string checks can guarantee
 zero incorrect paraphrases. The Canonical fallback is the conservative
