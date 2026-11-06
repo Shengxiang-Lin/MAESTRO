@@ -279,9 +279,10 @@ the number of valid worlds/questions. Inspect these metrics:
 Run from the repository root after preparing source priors:
 
 ```bash
-python environment/construct_tasks.py --reuse-source-priors
-python environment/generate_questions.py
-python environment/simulate_trajectories.py synthesize
+python environment/construct_tasks.py --reuse-source-priors --reuse-candidate-pool
+python environment/generate_questions.py --provider openai-compatible --restart-questions
+python environment/simulate_trajectories.py subtasks --provider openai-compatible
+python environment/simulate_trajectories.py rounds --provider openai-compatible
 ```
 
 To change pool size, edit `task_construction.candidate_pool_size` in
@@ -318,6 +319,25 @@ be reused. World Generation, Freeze and question generation are separate
 stages, not part of the candidate checkpoint.
 
 The retained semantic candidate pool is `semantic_candidates_pool_2000.jsonl`.
+
+**New scenario-first construction:** the upstream World source layout now picks
+`web_search` / `hybrid` / `provided_media` *before* selecting modalities.
+Media (image/video/audio) can itself be discovered through Web Search, rather
+than automatically becoming a provided attachment. The default proposal
+weights are 45/40/15 and the accepted distribution is recorded under
+`build_summary.json -> worlds.acquisition_scenario_histogram`.
+The search-query entry for a pure Web scenario is accepted by TaskDesign
+quality only with independent source retrieval, not by relaxing the
+multi-source or Gold correctness requirements.
+
+When the validated 2000 ProgramIR candidates already exist, use
+`--reuse-source-priors --reuse-candidate-pool`. The latter requires a completed,
+matching candidate checkpoint (seed, pool capacity and count) and skips
+candidate proposal generation while still rebuilding Worlds, evidence,
+TaskDesign and Freeze. **Back up previous downstream artifacts first.**
+After freezing a different batch, restart Question Generation rather than
+resuming the old frozen-input checkpoint.
+
 A second duplicate `*.reservoir.jsonl` file is no longer generated.
 
 Run no-network regression tests:
