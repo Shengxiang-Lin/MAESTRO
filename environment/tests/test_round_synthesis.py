@@ -45,6 +45,110 @@ class TwoPhaseTests(unittest.TestCase):
             )
         return q,world,rendered,bank
 
+    def test_canonical_compilation_is_immutable_under_surface_rewrites(self):
+        q,world,rendered=fixture(dependent=True)
+        canonical=rendered.question
+        q["question"]="A paraphrase presented only to Main after validation."
+        reviews=[]
+        def track(gold,record,role,*,review=True,rendered=None):
+            reviews.append(gold["question"])
+            return reviewed(gold,record,role,review=review,rendered=rendered)
+        with patch(
+            "environment.trajectory_simulation.subtask_bank.check_question",track
+        ):
+            bank=build_subtask_bank(
+                q,world,rendered,planner=PassthroughPlanner(),
+                executor=PassthroughExecutor(),schedule="baseline",
+            )
+        self.assertEqual(reviews,[canonical,q["question"]])
+        self.assertEqual(bank["question"],canonical)
+        self.assertEqual(bank["surface_question"],q["question"])
+        self.assertEqual(bank["gold_plan"]["question"],canonical)
+        self.assertEqual(bank["question_record"]["question"],q["question"])
+        self.assertEqual(bank["canonical_eligibility"]["question_sha256"],digest(canonical))
+        self.assertEqual(bank["eligibility"]["question_sha256"],digest(q["question"]))
+        self.assertTrue(bank["waves"][0]["state"]["question"].startswith(canonical))
+        self.assertNotIn(q["question"],bank["waves"][0]["state"]["question"])
+        self.assertEqual(bank["schema_version"],2)
+        for fragment in bank["fragments"].values():
+            self.assertNotIn("natural_task",fragment)
+            self.assertNotIn("canonical_task_instruction",fragment)
+        samples,stats=compose_main_rounds(
+            bank,planner=PassthroughPlanner(),include_fallback_rounds=True,
+        )
+        self.assertGreater(len(samples),0)
+        self.assertIn(q["question"],samples[0]["input"])
+        self.assertNotIn(canonical,samples[0]["input"])
+        self.assertEqual(samples[0]["question_reviewed"],True)
+
+    def test_surface_failure_quarantines_completed_canonical_bank(self):
+        q,world,rendered=fixture(dependent=True)
+        q["question"]="This unrelated Stage 2 rewrite changes the question."
+        def separate(gold,record,role,*,review=True,rendered=None):
+            result=reviewed(gold,record,role,review=review,rendered=rendered)
+            if gold["question"]!=rendered.question:
+                return {**result,"eligible":False,"reviewed":True,
+                        "decision":"mismatch",
+                        "review_failure_kind":"semantic_mismatch",
+                        "issues":["unrelated rewritten question"]}
+            return result
+        with tempfile.TemporaryDirectory() as tmp,patch(
+            "environment.trajectory_simulation.subtask_bank.check_question",separate
+        ),patch(
+            "environment.trajectory_simulation.pipeline._rows",return_value=[q]
+        ),patch(
+            "environment.trajectory_simulation.pipeline._world_map",
+            return_value={q["task_id"]:(world,rendered)}
+        ):
+            inp=Path(tmp)/"realized.jsonl"
+            worldpath=Path(tmp)/"worlds.jsonl"
+            inp.write_text("{}\n")
+            worldpath.write_text("{}\n")
+            output=Path(tmp)/"bank.jsonl"
+            stats=generate_subtasks_jsonl(
+                worldpath,inp,output,
+                reviewer=PassthroughPlanner(),executor=PassthroughExecutor(),
+                schedule="baseline",progress=False,
+            )
+            self.assertEqual(stats["accepted_banks"],0)
+            self.assertEqual(stats["quarantined"],1)
+            self.assertEqual(stats["reasons"],{"question_eligibility":1})
+            self.assertEqual(output.read_text(),"")
+            item=json.loads(Path(str(output)+".quarantine.jsonl").read_text().strip())
+            self.assertEqual(item["audit"]["canonical_bank"]["question"],rendered.question)
+            self.assertEqual(item["audit"]["canonical_bank"]["surface_question"],q["question"])
+            self.assertEqual(len(item["audit"]["canonical_bank"]["fragments"]),3)
+            self.assertFalse(item["audit"]["eligibility"]["eligible"])
+            # Quarantined diagnostics are not normal Phase-2 bank envelopes.
+            with self.assertRaises(ValueError):
+                _read_verified_bank(item)
+
+    def test_phase2_rejects_surface_or_canonical_certificate_tampering(self):
+        _,_,_,bank=self.bank(dependent=True)
+        self.assertEqual(bank["surface_question"],bank["question"])
+        envelope={"format":"maestro.clean_subtasks.v2","bank":bank}
+        envelope["sha256"]=digest(envelope)
+        for name,modify in (
+            ("unreviewed",lambda b: b["eligibility"].update(eligible=False)),
+            ("surface",lambda b: b.update(surface_question="different")),
+            ("canonical",lambda b: b.update(question="different")),
+        ):
+            with self.subTest(name=name):
+                modified=copy.deepcopy(envelope)
+                modify(modified["bank"])
+                modified["sha256"]=digest({
+                    "format":modified["format"],"bank":modified["bank"],
+                })
+                with self.assertRaises(ValueError):
+                    _read_verified_bank(modified)
+        legacy=copy.deepcopy(envelope)
+        legacy["format"]="maestro.clean_subtasks.v1"
+        legacy["sha256"]=digest({
+            "format":legacy["format"],"bank":legacy["bank"],
+        })
+        with self.assertRaisesRegex(ValueError,"incompatible_phase1_bank_version"):
+            _read_verified_bank(legacy)
+
     def test_phase1_generates_all_subagent_answers_without_main_language(self):
         class Reviewer(PassthroughPlanner):
             style_provider="natural"
