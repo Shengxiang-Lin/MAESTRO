@@ -103,6 +103,8 @@ def check_question(gold,record,role,*,review=True):
         'Do not put analysis or deliberation inside the JSON strings. '
         'For eligible, issues must be empty. '
         'For mismatch, at least one issue must cite existing step IDs and an exact question span. '
+        'Always include relation_coverage: [] unless explicitly asked to certify required hops. '
+        'Keep all explanation fields short; never echo the entire question as a quote. '
         'No answer values or regenerated questions.\n'+json.dumps({
             'accepted_question':question,'canonical_question':gold['canonical_question'],
             'certified_public_projections':gold.get('public_projections',[]),
@@ -121,7 +123,7 @@ def check_question(gold,record,role,*,review=True):
         value = getattr(role.backend, field, None)
         return value if isinstance(value, str) and value else "unknown"
     cache_key=digest({**fingerprint,'reviewer_model':identity('model'),
-        'reviewer_endpoint':identity('base_url'),'review_contract':6})
+        'reviewer_endpoint':identity('base_url'),'review_contract':7})
     if cache_path and Path(cache_path).exists():
         for line in Path(cache_path).read_text().splitlines():
             item=json.loads(line)
@@ -130,37 +132,79 @@ def check_question(gold,record,role,*,review=True):
         else:verdict=None
     else:verdict=None
     cache_hit=verdict is not None
-    coverage_required=cache_hit and bool(relation_gaps)
-    def valid_verdict(value):
+    def invalid_reason(value, *, required_hops=()):
+        """Reject unsupported review *witnesses*, not the underlying question.
+
+        Mismatch must cite an existing step and an EXACT short question span.
+        Malformed / contradictory reviews are quarantined, never auto-approved.
+        """
         if not (isinstance(value,dict)
                 and value.get('decision') in ('eligible','mismatch','uncertain')
                 and isinstance(value.get('issues'),list)):
-            return False
+            return 'invalid_review_schema'
         if value['decision']=='eligible':
-            if value['issues']!=[]:return False
-            if not coverage_required:return True
+            if value['issues'] != []:
+                return 'eligible_with_issues'
+            if not required_hops:
+                return None
             coverage=value.get('relation_coverage')
-            if not isinstance(coverage,list):return False
-            return all(any(
-                isinstance(c,dict) and c.get('step')==gap['step']
-                and isinstance(c.get('question_quote'),str)
-                and 0<len(c['question_quote'])<=240 and c['question_quote'] in question
-                and isinstance(c.get('interpretation'),str) and c['interpretation'].strip()
-                for c in coverage
-            ) for gap in relation_gaps)
-        if value['decision']=='uncertain':return True
-        if not 1<=len(value['issues'])<=2:return False
-        return all(
-            isinstance(i,dict)
-            and i.get('kind') in ('missing_constraint','scope','direction','join','output')
-            and isinstance(i.get('program_steps'),list) and i['program_steps']
-            and all(type(n) is int and n in nodes for n in i['program_steps'])
-            and isinstance(i.get('question_quote'),str)
-            and 0<len(i['question_quote'])<=240 and i['question_quote'] in question
-            and all(isinstance(i.get(k),str) and i[k].strip()
-                    for k in ('program_claim','question_claim','reason'))
-            for i in value['issues']
-        )
+            if not isinstance(coverage,list):
+                return 'missing_relation_coverage'
+            used_quotes=set()
+            for gap in required_hops:
+                matching=[
+                    c for c in coverage
+                    if isinstance(c,dict) and c.get('step')==gap['step']
+                    and isinstance(c.get('question_quote'),str)
+                    and 0<len(c['question_quote'])<=240
+                    and c['question_quote'] in question
+                    and isinstance(c.get('interpretation'),str)
+                    and 0<len(c['interpretation'].strip())<=180
+                ]
+                if not matching:
+                    return 'missing_relation_coverage'
+                quote=matching[0]['question_quote']
+                if quote in used_quotes:
+                    return 'reused_relation_coverage'
+                used_quotes.add(quote)
+            return None
+        if value['decision']=='uncertain':
+            return None
+        if not 1<=len(value['issues'])<=2:
+            return 'missing_mismatch_witness'
+        for issue in value['issues']:
+            if not isinstance(issue,dict):
+                return 'invalid_mismatch_witness'
+            if issue.get('kind') not in (
+                'missing_constraint','scope','direction','join','output'
+            ):
+                return 'invalid_mismatch_kind'
+            steps=issue.get('program_steps')
+            if not (isinstance(steps,list) and 1<=len(steps)<=6
+                    and all(type(n) is int and n in nodes for n in steps)):
+                return 'invalid_mismatch_steps'
+            quote=issue.get('question_quote')
+            if not (isinstance(quote,str) and 0<len(quote)<=240
+                    and quote in question):
+                return 'invalid_mismatch_quote'
+            if not all(isinstance(issue.get(k),str)
+                       and 0<len(issue[k].strip())<=180
+                       for k in ('program_claim','question_claim','reason')):
+                return 'invalid_mismatch_explanation'
+            # Observed v3 failure: "No discrepancy found" under mismatch.
+            # This contradicts the review's own conclusion; request a
+            # corrected witness, NEVER infer that the question is eligible.
+            if re.search(
+                r'\b(?:no|zero)\s+(?:(?:concrete|semantic|mathematical|actual)\s+)?'
+                r'(?:discrepanc(?:y|ies)|differences?|mismatches?)\s*'
+                r'(?:found|detected|exists?)?\b',
+                issue['reason'], re.I,
+            ):
+                return 'contradictory_mismatch'
+        return None
+
+    def valid_verdict(value, *, required_hops=()):
+        return invalid_reason(value, required_hops=required_hops) is None
     audit=[]
     def call(text):
         from .backend import _LLMRole
@@ -173,49 +217,52 @@ def check_question(gold,record,role,*,review=True):
     try:
         if verdict is None:
             verdict=call(prompt)
-            # A negative is a hypothesis, not sufficient proof. Re-read the
-            # same frozen graph and full question with the concrete objection.
-            # This does not vote or auto-approve matching canonical text.
-            if not valid_verdict(verdict) or verdict.get('decision')=='mismatch':
+            # One full-graph objection re-audit. For a malformed verdict,
+            # avoid echoing its long/invalid JSON back into an already long
+            # prompt; it can amplify truncation and false discrepancies.
+            if not valid_verdict(verdict) or verdict['decision']=='mismatch':
+                previous={'decision':verdict.get('decision'),
+                          'issues':[
+                              {k:item.get(k) for k in (
+                                  'kind','program_steps','question_quote','reason'
+                              )} for item in verdict.get('issues',[])[:2]
+                              if isinstance(item,dict)
+                          ]} if isinstance(verdict,dict) else {'decision':'invalid'}
                 verdict=call(
-                    'Re-audit this input. The previous review below may have misread '
-                    'a branch, operation order, repeated type or an explicit condition. '
-                    'Verify its claims directly against the full question and numbered steps. '
-                    'Withdraw unsupported objections; retain any real discrepancy. '
-                    'Return the same decision/issues schema. If equivalence remains ambiguous, '
-                    'return uncertain. Do not approve merely because canonical wording matches.\n'
-                    'Previous review: '+json.dumps(verdict,ensure_ascii=False)+'\n'+prompt
+                    'Independently re-audit the FULL question and numbered graph. '
+                    'The previous verdict is only a hypothesis, not an authority. '
+                    'Reject ONLY a concrete mathematical difference supported by '
+                    'an exact short quote and existing step IDs; withdraw unsupported '
+                    'objections. An invalid witness must not be treated as a match. '
+                    'If ambiguity remains, return uncertain. Keep issue reasons <=180 '
+                    'characters and relation_coverage=[] unless requested.\\n'
+                    'Previous review: '+json.dumps(previous,ensure_ascii=False)+'\\n'+prompt
                 )
-            if valid_verdict(verdict) and verdict['decision']=='eligible' and relation_gaps:
-                coverage_required=True
-                verdict=call(
-                    'Focused REQUIRED-HOP audit. These relation names do not occur literally '
-                    'in the accepted question. They may be faithfully paraphrased, or actually '
-                    'missing. Check EACH traversal and its owner/direction against the full '
-                    'question. A publisher hop cannot stand in for a separate represented-by '
-                    'hop; naming the destination type does not express the connecting relation. '
-                    'For eligible, additionally return "relation_coverage":'
-                    '[{"step":1,"question_quote":"exact short span expressing this hop",'
-                    '"interpretation":"how this wording expresses the specific traversal"}]. '
-                    'Cover every listed step. Do not reuse a span for unrelated hops. '
-                    'If a necessary hop is absent, return mismatch with a concrete issue; '
-                    'if wording is ambiguous, return uncertain. Never infer an unstated '
-                    'relation from a destination type. FIND_ALL enumerates only '
-                    'the task-evidence domain, not the whole Internet. '
-                    'QUERY_NAME may legitimately be worded as identifying entities. '
-                    'repeated identical type filters are redundant. '
-                    'Return JSON ONLY: {"decision":"eligible"|"mismatch"|"uncertain",'
-                    '"issues":[{"kind":"missing_constraint"|"scope"|"direction",'
-                    '"program_steps":[1],"question_quote":"exact span <=240 characters",'
-                    '"program_claim":"required traversal","question_claim":"expressed or omitted hop",'
-                    '"reason":"specific discrepancy"}],'
-                    '"relation_coverage":[{"step":1,"question_quote":"exact span <=240 characters",'
-                    '"interpretation":"how the specific hop is expressed"}]}. '
-                    'For eligible, issues=[] and relation_coverage must cover EVERY required hop. '
-                    'For mismatch, issues must identify at least one concrete discrepancy.\n'
+        if (valid_verdict(verdict) and verdict['decision']=='eligible'
+                and relation_gaps
+                and not valid_verdict(verdict,required_hops=relation_gaps)):
+            coverage=[]
+            # Bound each required-hop answer: Qwen's previous long multi-hop
+            # coverage output repeatedly exhausted its 2048-token budget.
+            # Every gap still needs an exact, distinct question witness.
+            for start in range(0,len(relation_gaps),2):
+                batch=relation_gaps[start:start+2]
+                focused_prompt=(
+                    'Focused REQUIRED-HOP audit of EXACTLY the listed relations. '
+                    'Compare each direction, input owner and relation against the '
+                    'full accepted question. A type name alone does not imply a '
+                    'missing hop. Paraphrases are valid only if the quote actually '
+                    'expresses that traversal. For eligible, return issues=[] and '
+                    'one short, DISTINCT, EXACT quote per required step in '
+                    'relation_coverage. For missing/changed hops return mismatch '
+                    'with a concrete step and <=240-character exact quote; for '
+                    'ambiguity return uncertain. Do not use ellipses to fabricate '
+                    'quotes. relation_coverage must be [] for mismatch/uncertain. '
+                    'FIND_ALL is bounded to the task evidence domain and QUERY_NAME '
+                    'may mean identifying entities. All explanations <=180 chars.\\n'
                     +json.dumps({
                         'accepted_question':question,
-                        'required_hops':relation_gaps,
+                        'required_hops':batch,
                         'canonical_steps':[{
                             'step':nid,'action':op['op'],'arguments':op['inputs'],
                             'input_steps':op['dependencies'],
@@ -223,11 +270,38 @@ def check_question(gold,record,role,*,review=True):
                         'certified_public_projections':gold.get('public_projections',[]),
                     },ensure_ascii=False,separators=(',',':'))
                 )
+                focused=call(focused_prompt)
+                if not valid_verdict(focused,required_hops=batch):
+                    # A schema-valid but evidence-invalid response is still
+                    # a review failure; retry once with the same strict task.
+                    focused=call(
+                        'Your last response had an invalid or incomplete '
+                        'question/step witness. Retry the SAME audit from '
+                        'the original question and numbered graph. Use only '
+                        'exact <=240-character substrings, no ellipses or '
+                        'long copied passages; do not auto-approve.\\n'
+                        +focused_prompt
+                    )
+                if not valid_verdict(focused,required_hops=batch):
+                    verdict=focused
+                    break
+                if focused['decision']!='eligible':
+                    verdict=focused
+                    break
+                coverage.extend(focused['relation_coverage'])
+            else:
+                verdict={'decision':'eligible','issues':[],
+                         'relation_coverage':coverage}
     except Exception as exc:
+        diagnostic=getattr(exc,'diagnostic',None)
+        failure_kind=('review_output_truncated' if isinstance(diagnostic,dict)
+                      and diagnostic.get('finish_reason')=='length'
+                      else 'review_backend_error')
         return {'eligible':False,'reviewed':False,'decision':'review_error',
+                'review_failure_kind':failure_kind,
                 'method':'semantic_review_unavailable','issues':[str(exc)],
-                'review_audit':audit,'backend_diagnostic':getattr(exc,'diagnostic',None),**fingerprint}
-    valid=valid_verdict(verdict)
+                'review_audit':audit,'backend_diagnostic':diagnostic,**fingerprint}
+    valid=valid_verdict(verdict,required_hops=relation_gaps if isinstance(verdict,dict) and verdict.get('decision')=='eligible' else ())
     if valid and cache_path and not cache_hit:
         target=Path(cache_path);target.parent.mkdir(parents=True,exist_ok=True)
         with target.open('a',encoding='utf-8') as handle:handle.write(json.dumps({'cache_key':cache_key,'verdict':verdict},ensure_ascii=False)+'\n')
@@ -239,6 +313,11 @@ def check_question(gold,record,role,*,review=True):
             issues.append(issue)
     return {'eligible':False,'reviewed':bool(valid),
             'decision':verdict['decision'] if valid else 'review_error',
+            'review_failure_kind':(
+                'semantic_mismatch' if valid and verdict['decision']=='mismatch' else
+                'semantic_uncertain' if valid and verdict['decision']=='uncertain' else
+                invalid_reason(verdict,required_hops=relation_gaps if isinstance(verdict,dict) and verdict.get('decision')=='eligible' else ()) or 'invalid_review_schema'
+            ),
             'method':'llm_semantic_screen','cache_hit':cache_hit,
             'issues':issues or ['equivalence_not_established'],
             'raw_verdict':verdict,'review_audit':audit,**fingerprint}
