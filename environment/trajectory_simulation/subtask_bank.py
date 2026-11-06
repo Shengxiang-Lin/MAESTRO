@@ -292,7 +292,6 @@ def build_subtask_bank(
                 "summary":report["summary"],
                 "trace_summary":report["trace_summary"],
                 "public_evidence":observations,
-                "natural_task":original["task_instruction"]!=original["task_instruction"],
                 "natural_feedback":language["natural"],
                 "feedback_fallback_reason":language["reason"],
                 "feedback_private_audit":language.get("audit",[]),
