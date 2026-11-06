@@ -63,6 +63,27 @@ QUESTION_REVIEW_SCHEMA = {
 }
 
 
+# An independent, compact verdict for contradictory eligibility reports.
+# No issue array: this prevents the 'eligible with issues' failure mode.
+FEEDBACK_REVIEW_SCHEMA = {
+    "type": "object", "properties": {
+        "grounded": {"type": "boolean"},
+        "issues": {"type": "array", "maxItems": 2,
+                   "items": {"type": "string", "maxLength": 180}},
+    }, "required": ["grounded", "issues"], "additionalProperties": False,
+}
+
+
+QUESTION_CONSISTENCY_SCHEMA = {
+    "type": "object", "properties": {
+        "equivalent": {"type": "boolean"},
+        "question_quote": {"type": "string", "maxLength": 240},
+        "explanation": {"type": "string", "maxLength": 180},
+    }, "required": ["equivalent", "question_quote", "explanation"],
+    "additionalProperties": False,
+}
+
+
 class PassthroughPlanner:
     offline=True
     def decide(self,payload,prompt):
@@ -89,6 +110,23 @@ class _LLMRole:
         with self._lock:self.request_counts[key]+=1
     def _rng(self,text):
         return random.Random(int.from_bytes(hashlib.sha256((str(self.style_seed)+text).encode()).digest(),'big'))
+    def confirm_question_consistency(self, prompt, *, audit=None):
+        """Independent evidence-anchored answer for a contradictory review."""
+        self._count('question_review_consistency')
+        verdict = replace(self.backend, temperature=0.0).complete_json(
+            'Check the entire accepted question against every canonical '
+            'program step. Output a small independent JSON verdict. '
+            'If fully equivalent, equivalent=true and cite an EXACT short '
+            'question span relevant to the disputed clause. If any '
+            'constraint, direction or output is missing/ambiguous, '
+            'equivalent=false. Do NOT guess or repeat earlier votes.',
+            prompt, response_schema=QUESTION_CONSISTENCY_SCHEMA,
+        )
+        if audit is not None:
+            audit.append({'stage':'independent_consistency_verdict',
+                          'verdict':verdict})
+        return verdict
+
     def check_question(self,prompt,*,audit=None):
         return self._review_json(
             'Compare question/program meaning. Write concrete issues first '
@@ -118,6 +156,9 @@ class _LLMRole:
                     and isinstance(verdict.get('issues'),list)
                     and all(isinstance(i,str) for i in verdict['issues'])
                     and (not verdict[flag] or verdict['issues']==[])
+                    and (flag != 'grounded' or
+                         (len(verdict['issues']) <= 2 and
+                          all(len(i) <= 180 for i in verdict['issues'])))
                 ):
                     raise ValueError('invalid_review_schema')
                 return verdict
@@ -234,6 +275,7 @@ class LLMExecutor(_LLMRole):
         # Retry ONCE with a compact source-grounded prompt, rather than
         # silently dropping an otherwise valid Sub-Agent example. Both paths
         # still pass the identical deterministic AND semantic evidence guards.
+        from environment.question_generation.backend import OpenAICompatibleBackend
         audit=[] if audit is None else audit
 
         def repair_content(rejected, objections, *, trigger, schema_kwargs):
@@ -276,6 +318,9 @@ class LLMExecutor(_LLMRole):
                     'NOT authoritative. JSON only.',
                     feedback_reviewer_prompt(payload,repaired),
                     'natural_feedback_review',audit=audit,flag='grounded',
+                    **({'response_schema':FEEDBACK_REVIEW_SCHEMA}
+                       if isinstance(self.backend,OpenAICompatibleBackend)
+                       and self.backend.json_mode else {}),
                 )
                 audit.append({'stage':'content_repair_review','attempt':1,
                               'verdict':repaired_verdict})
@@ -343,6 +388,10 @@ class LLMExecutor(_LLMRole):
                     ))
                     or 'explicit_relation_fact_mismatch' in reason
                     or 'explicit_attribute_owner_mismatch' in reason
+                    or 'unknown_resource_title' in reason
+                    or 'unsupported_numeric_claim' in reason
+                    or 'unobserved_source' in reason
+                    or 'source_fact_mismatch' in reason
                 )
                 if repairable and isinstance(proposal,dict):
                     original,_=normalize_feedback_shape(proposal)

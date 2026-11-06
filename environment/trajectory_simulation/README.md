@@ -198,6 +198,30 @@ For each question, this phase:
    to the verified canonical wording. Reviewer objections and internal
    field names are never additional source facts.
 
+   v7 hardening: exact English count words (e.g. `three` for result 3) are
+   accepted as equivalent numeric answers, while intermediate collection
+   sizes such as "11 entities" are permitted ONLY when the verified public
+   execution has a collection of exactly that cardinality. This does not
+   authorize arbitrary new numerical facts. Unknown Reference titles,
+   out-of-scope source IDs, and unsupported numerical/source assertions
+   receive at most one full-evidence repair; both validators run again.
+   The repair Writer sees the complete list of authorized source titles.
+   Writer/Reviewer also receive explicit per-step `entity_scope` labels
+   distinguishing the owners of filtered attributes from entities discovered
+   by a subsequent RELATE.
+   Production Feedback Reviewer JSON now uses a bounded `grounded` boolean
+   plus at most two `issues` of at most 180 characters; malformed long
+   reviews are retried once or fail closed.
+
+   Contradictory Question Eligibility output (`eligible` with nonempty
+   `issues`) is NEVER automatically approved. If an authenticated controlled
+   renderer reference is available, one independent compact model check may
+   confirm the full question/program equivalence with a concrete exact
+   question quote. A negative, invalid or ungrounded check remains
+   quarantined; unchanged required-hop validation still applies. This
+   introduces `question_review_consistency` in review request counts and
+   invalidates earlier eligibility cache entries (review contract v13).
+
    A local vLLM HTTP 400 for overlong context is **not** a repairable content
    error: the server's actual `--max-model-len` controls total prompt plus
    reserved output tokens. The separate shared registry may describe a larger

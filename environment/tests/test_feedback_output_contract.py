@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 from environment.question_generation.backend import OpenAICompatibleBackend, BackendError
 from environment.trajectory_simulation.backend import LLMExecutor
-from environment.trajectory_simulation.contract import validate_feedback, explicit_public_claim_issues
+from environment.trajectory_simulation.contract import validate_feedback, explicit_public_claim_issues, mentions_exact_count
 from environment.trajectory_simulation.natural_language import (
     SUBAGENT_REPORT_JSON_SCHEMA,
     feedback_writer_prompt,
@@ -47,6 +47,79 @@ def sample_payload():
 
 
 class FeedbackContractTests(unittest.TestCase):
+    def test_v7_spelled_out_terminal_count_is_exact(self):
+        payload=sample_payload()
+        f=payload["fragment"]
+        f["expected_answer"]=3
+        f["operations"]=[{"op":"COUNT","inputs":[]}]
+        f["operation_results"]=[{
+            "answer":3,"input_values":[["Northstar","Pioneer","Willow"]],
+        }]
+        report={"summary":"The union yielded three distinct entities.",
+                "trace_summary":"Counted three matching items."}
+        self.assertEqual(realize_feedback_natural(payload,report),report)
+        self.assertTrue(mentions_exact_count("Three distinct results.",3))
+        self.assertFalse(mentions_exact_count("thirteen results",3))
+        self.assertTrue(mentions_exact_count("3 matching results",3))
+        wrong={"summary":"The union yielded two distinct entities.",
+               "trace_summary":"Counted two matching items."}
+        with self.assertRaisesRegex(ValueError,"omits_numeric_result"):
+            realize_feedback_natural(payload,wrong)
+
+    def test_v7_replayed_find_all_cardinality_is_supported_not_arbitrary(self):
+        payload=sample_payload()
+        f=payload["fragment"]
+        f["operations"]=[{"op":"FIND_ALL","inputs":[]}]
+        f["operation_results"]=[{
+            "answer":["Entity"+c for c in "ABCDEFGHIJK"],"input_values":[],
+        }]
+        f["expected_answer"]=["Alice"]
+        good={"summary":"Returned Alice.",
+              "trace_summary":"Filtered the initial list of 11 entities to the final result."}
+        self.assertTrue(validate_feedback(good,f)[0])
+        bad={"summary":"Returned Alice.",
+             "trace_summary":"Filtered the initial list of 12 entities."}
+        okay,issues=validate_feedback(bad,f)
+        self.assertFalse(okay)
+        self.assertIn("trace_summary_unsupported_numeric_claim",issues)
+        bare={"summary":"Returned Alice.",
+              "trace_summary":"The measurement was 11."}
+        self.assertFalse(validate_feedback(bare,f)[0])
+
+    def test_v7_bad_reference_title_receives_one_verified_repair(self):
+        payload=sample_payload()
+        wrong={"summary":"Returned Alice.",
+               "trace_summary":"Reference 4 recorded Alice's birth year."}
+        corrected={"summary":"Returned Alice.",
+                   "trace_summary":"Reference 1 recorded Alice's birth year."}
+        backend=Mock()
+        backend.complete_json.side_effect=[
+            wrong, corrected, {"grounded":True,"issues":[]},
+        ]
+        executor=LLMExecutor(backend)
+        audit=[]
+        self.assertEqual(
+            executor.naturalize_feedback(payload,{},audit=audit),corrected
+        )
+        self.assertEqual(executor.request_counts["natural_feedback_deterministic_repair"],1)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair_success"],1)
+        prompt=backend.complete_json.call_args_list[1].args[1]
+        self.assertIn("Allowed public reference TITLES",prompt)
+        self.assertIn("Reference 1",prompt)
+        self.assertIn("unknown_resource_title",prompt)
+
+    def test_v7_bad_reference_cannot_survive_failed_repair(self):
+        payload=sample_payload()
+        wrong={"summary":"Returned Alice.",
+               "trace_summary":"Reference 4 recorded Alice's birth year."}
+        backend=Mock()
+        backend.complete_json.side_effect=[wrong,wrong]
+        executor=LLMExecutor(backend)
+        with self.assertRaisesRegex(ValueError,"unknown_resource_title"):
+            executor.naturalize_feedback(payload,{})
+        self.assertEqual(backend.complete_json.call_count,2)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair_failed"],1)
+
     def relation_payload(self):
         payload=sample_payload()
         payload["task_instruction"]=(
