@@ -178,7 +178,7 @@ def run(args):
         author_calls = critic_calls = final_judge_calls = 0
         review_outcomes = Counter()
         accepted_after_revision = 0
-        with (output_dir / "question_critic_audit.jsonl").open(
+        with (output_dir / "question_review_audit.jsonl").open(
             encoding="utf-8",
         ) as handle:
             for line in handle:
@@ -236,7 +236,7 @@ def run(args):
                 ),
                 "rejected": str(output_dir / "question_rejected.jsonl"),
                 "review_audit": str(
-                    output_dir / "question_critic_audit.jsonl"
+                    output_dir / "question_review_audit.jsonl"
                 ),
                 "summary": str(
                     output_dir / "question_generation_summary.json"
