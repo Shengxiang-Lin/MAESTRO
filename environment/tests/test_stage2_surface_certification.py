@@ -137,7 +137,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
             payload, world, capability, author, critic,
             max_revisions=1,
         )
-        self.assertTrue(ok, row)
+        self.assertTrue(ok, repr((row, audit)))
         self.assertEqual(len(author.calls), 2)
         self.assertIn("previous_draft", author.calls[1])
         self.assertEqual(
@@ -193,7 +193,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
             FakeCritic(final=judge), max_revisions=0,
         )
         self.assertFalse(ok)
-        self.assertEqual(rejected["reason"], "rejected_uncertain")
+        self.assertEqual(rejected["reason"], "rejected_uncertain", str(rejected))
 
     def test_tampering_with_question_program_or_judgment_invalidates_certificate(self):
         payload, world, capability, rendered = self.data()
@@ -201,7 +201,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
             payload, world, capability, FakeAuthor(),
             FakeCritic(), max_revisions=0,
         )
-        self.assertTrue(ok)
+        self.assertTrue(ok, repr((row, _)))
         cases = [
             ("question", lambda r, w: r.update(question="changed question?")),
             ("program", lambda r, w: w["program"].update(nodes=[])),
