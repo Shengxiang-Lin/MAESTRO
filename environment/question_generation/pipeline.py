@@ -149,6 +149,9 @@ def run(args):
         Path(__file__).with_name("contracts.py"),
         Path(__file__).with_name("alignment.py"),
         Path(__file__).with_name("scoped_surface.py"),
+        Path(__file__).with_name("realization.py"),
+        Path(__file__).with_name("free_surface.py"),
+        Path(__file__).with_name("semantic_readback.py"),
         Path("environment/trajectory_simulation/eligibility.py"),
         Path("environment/trajectory_simulation/compiler.py"),
         Path("environment/trajectory_simulation/skeleton.py"),
@@ -172,6 +175,7 @@ def run(args):
         # naturalized and fallback counts separately to avoid inflated claims.
         certified_paraphrases=canonical_fallbacks=canonical_selected=0
         meaningful_paraphrases=0
+        free_rewrite_certified=scoped_grammar_certified=0
         total_template_reduction=0
         with (output_dir/"realized_capability_worlds.jsonl").open(
             "r",encoding="utf-8",
@@ -181,6 +185,12 @@ def run(args):
                     continue
                 row=json.loads(line)
                 author_metadata=row.get("authoring") or {}
+                method=(row.get("surface_certificate") or {}).get("method")
+                if method=="verified_blind_semantic_readback_v1":
+                    free_rewrite_certified+=1
+                elif method in ("verified_scoped_grammar_v1",
+                                "verified_scoped_grammar_v2"):
+                    scoped_grammar_certified+=1
                 gain=author_metadata.get("naturalization_metrics") or {}
                 if gain.get("meaningful_rewrite_proxy") is True:
                     meaningful_paraphrases+=1
@@ -192,7 +202,8 @@ def run(args):
                     canonical_fallbacks+=1
                 elif ((row.get("surface_certificate") or {}).get("method")
                       in ("llm_semantic_screen","llm_contract_alignment",
-                          "verified_scoped_grammar_v1","verified_scoped_grammar_v2")):
+                          "verified_scoped_grammar_v1","verified_scoped_grammar_v2",
+                          "verified_blind_semantic_readback_v1")):
                     certified_paraphrases+=1
                 else:
                     canonical_selected+=1
@@ -203,6 +214,8 @@ def run(args):
         graph_review_calls=0
         scoped_style_calls=0
         scoped_styles=Counter()
+        free_author_calls=blind_readback_calls=0
+        free_attempt_failures=Counter()
         with (output_dir/"question_critic_audit.jsonl").open(
             "r",encoding="utf-8",
         ) as traces:
@@ -211,6 +224,10 @@ def run(args):
                     continue
                 for attempt in (json.loads(line).get("audit") or []):
                     scoped_style_calls+=int(attempt.get("scoped_style_model_calls",0))
+                    free_author_calls+=int(attempt.get("free_author_calls",0))
+                    blind_readback_calls+=int(attempt.get("blind_readback_calls",0))
+                    if attempt.get("stage")=="free_rewrite" and attempt.get("failure"):
+                        free_attempt_failures[str(attempt["failure"]).split(":",1)[0]]+=1
                     if attempt.get("scoped_style"):
                         scoped_styles[attempt["scoped_style"]]+=1
                     repair_attempts+=int("semantic_critic_repair" in attempt)
@@ -240,7 +257,8 @@ def run(args):
                 "rejected":rejected,
             },
             "semantic_critic":{
-                "enabled":not args.no_semantic_critic and getattr(args,"surface_mode","legacy") != "scoped",
+                "enabled":not args.no_semantic_critic and getattr(args,"surface_mode","scoped") == "legacy",
+                "blind_readback_enabled":getattr(args,"surface_mode","scoped") == "free",
                 "configured":not args.no_semantic_critic,
             },
             "surface_certification":{
@@ -253,6 +271,11 @@ def run(args):
                 "graph_review_calls":graph_review_calls,
                 "scoped_style_model_calls":scoped_style_calls,
                 "scoped_styles":dict(scoped_styles),
+                "free_rewrite_certified":free_rewrite_certified,
+                "scoped_grammar_certified":scoped_grammar_certified,
+                "free_author_calls":free_author_calls,
+                "blind_readback_calls":blind_readback_calls,
+                "free_attempt_failure_reasons":dict(free_attempt_failures),
                 "graph_review_decisions":dict(graph_decisions),
                 "critic_repair_attempts":repair_attempts,
                 "canonical_fallbacks":canonical_fallbacks,
@@ -282,7 +305,7 @@ def run(args):
     return summary
 
 def build_parser():
-    p=argparse.ArgumentParser(description="Generate natural questions over a frozen MAESTRO task batch");p.add_argument("--manifest");p.add_argument("--authoring-inputs");p.add_argument("--worlds");p.add_argument("--capabilities");p.add_argument("--output-dir");p.add_argument("--max-records",type=int);p.add_argument("--seed",type=int,default=17);p.add_argument("--provider",choices=("passthrough","openai-compatible"),default="passthrough");p.add_argument("--base-url");p.add_argument("--model");p.add_argument("--critic-model");p.add_argument("--api-key-env",default="DASHSCOPE_API_KEY");p.add_argument("--question-temperature",type=float,default=.4);p.add_argument("--critic-temperature",type=float,default=0.);p.add_argument("--max-tokens",type=int,default=2048);p.add_argument("--critic-max-tokens",type=int,default=768);p.add_argument("--timeout",type=float,default=180.);p.add_argument("--question-max-attempts",type=int,default=2);p.add_argument("--question-workers",type=int,default=4);p.add_argument("--flush-every",type=int,default=5);p.add_argument("--restart-questions",action="store_true");p.add_argument("--no-semantic-critic",action="store_true");p.add_argument("--no-json-mode",action="store_true");p.add_argument("--no-progress",action="store_true");p.add_argument("--surface-mode",choices=("scoped","legacy"),default="scoped");return p
+    p=argparse.ArgumentParser(description="Generate natural questions over a frozen MAESTRO task batch");p.add_argument("--manifest");p.add_argument("--authoring-inputs");p.add_argument("--worlds");p.add_argument("--capabilities");p.add_argument("--output-dir");p.add_argument("--max-records",type=int);p.add_argument("--seed",type=int,default=17);p.add_argument("--provider",choices=("passthrough","openai-compatible"),default="passthrough");p.add_argument("--base-url");p.add_argument("--model");p.add_argument("--critic-model");p.add_argument("--api-key-env",default="DASHSCOPE_API_KEY");p.add_argument("--question-temperature",type=float,default=.4);p.add_argument("--critic-temperature",type=float,default=0.);p.add_argument("--max-tokens",type=int,default=2048);p.add_argument("--critic-max-tokens",type=int,default=768);p.add_argument("--timeout",type=float,default=180.);p.add_argument("--question-max-attempts",type=int,default=2);p.add_argument("--question-workers",type=int,default=4);p.add_argument("--flush-every",type=int,default=5);p.add_argument("--restart-questions",action="store_true");p.add_argument("--no-semantic-critic",action="store_true");p.add_argument("--no-json-mode",action="store_true");p.add_argument("--no-progress",action="store_true");p.add_argument("--surface-mode",choices=("scoped","free","legacy"),default="scoped");return p
 def main():
     try:
         args=parse_with_config(build_parser(),"question_generation")
