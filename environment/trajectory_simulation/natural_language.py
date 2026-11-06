@@ -350,10 +350,11 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
     witness's exact claims sit beside the only simulated access tools
     permitted for that source. Class names remain optional in prose.
     """
-    from .tool_provenance import source_evidence_guide
+    from .tool_provenance import source_evidence_guide, permitted_tool_names
 
     fragment = payload["fragment"]
     plan = payload.get("tool_provenance") or {"steps": []}
+    can_describe_search = "GoogleSearchAction" in permitted_tool_names(plan)
     discovery_root = any(
         op["op"] == "FIND_ALL"
         or (op["op"] == "FIND" and op.get("find_kind") == "type")
@@ -408,19 +409,30 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         "Sub-Agent report, but only as findings, never as a pre-supplied "
         "complete roster from initial inputs. Do not claim Internet-wide "
         "exhaustiveness; coverage is limited to the task's evidence domain. "
+        "The per-source entity_types mapping is PUBLIC source evidence "
+        "for type membership even when no explicit type predicate is present "
+        "among claims. FILTER_TYPE may also derive an exact type-qualified "
+        "result from those types; do not invent a source's missing claims. "
         "The source_evidence_guide groups every source's exact supported "
         "claims and allowed access steps. Attribute each fact to its OWN "
         "source; a search discovery event alone never proves a factual claim. "
         "The simulated_tool_observations reconstruct permitted tool activity "
         "from frozen witnesses; they are NOT a record of live tool executions. "
-        "Do not claim any action absent from that record. Previously available "
-        "evidence is REUSED, not newly fetched. For a pure aggregation task "
+        "Do not claim any action absent from that record. "
+        + ("Authorized simulated search is documented in the tool observations. "
+           if can_describe_search else
+           "NO search tool was executed for this subtask. Do not say "
+           "'searched the evidence', 'searched the records', 'web search', "
+           "or 'search results'; describe examining/reusing permitted "
+           "evidence instead. ")
+        + "Previously available evidence is REUSED, not newly fetched. For a pure aggregation task "
         "with no newly observed sources, discuss combining earlier results "
         "without inventing a search or code run. "
         "Do not invent literal search queries, URLs, timestamps, "
         "transcripts, errors, confidence scores, extra sources, new entities, "
         "relations or numbers. Never expose internal observation keys or "
-        "claim IDs in the natural report. "
+        "claim IDs, source_evidence_guide, verified_operations, or "
+        "other internal review fields in the natural report. "
         "Avoid robotic FILTER_TYPE/INTERSECT operator logs, unsupported "
         "tool-action storytelling, and 'no errors/all checks completed' praise. "
         "When an important exact result has multiple entities, name them "
@@ -467,6 +479,7 @@ def feedback_repair_prompt(
             "type": item["source_type"],
             "access": item["source_access"],
             "tools": item["permitted_tools"],
+            "entity_types": item.get("entity_types", {}),
             "facts": [{
                 "s": c.get("subject"), "p": c.get("predicate"),
                 "o": c.get("object"),
@@ -502,6 +515,11 @@ def feedback_repair_prompt(
         "results instead. An unbound FIND_ALL/FIND-by-type output represents "
         "candidates discovered in task-related evidence, not a complete "
         "candidate list provided in the initial input. "
+        "If the permitted tools do not include GoogleSearchAction, "
+        "do not claim to have searched sources or evidence; say examined "
+        "or reused records instead. Never mention internal evidence-guide "
+        "fields in the public report. Source entity_types can independently "
+        "support FILTER_TYPE conclusions. "
         "Do not invent sources, tool calls, entities, dates, "
         "numbers, search queries, URLs or timestamps. "
         "Only use the following verified public facts; JSON ONLY.\n"
@@ -538,8 +556,12 @@ def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[
     _language_guard(proposal["summary"], limit=600)
     _language_guard(proposal["trace_summary"], limit=1400)
     joined = proposal["summary"] + " " + proposal["trace_summary"]
-    if re.search(r"\b(?:observation[ _-]?key|claim[ _-]?id|claim_key)\b",
-                 joined, re.I):
+    if re.search(
+        r"\b(?:observation[ _-]?key|claim[ _-]?id|claim_key|"
+        r"source[ _-]?evidence[ _-]?guide|verified[ _-]?operations|"
+        r"simulated[ _-]?tool[ _-]?observations)\b",
+        joined, re.I,
+    ):
         raise ValueError("natural_report_leaks_internal_evidence_handle")
     if re.search(r"\b(?:searched|searching|search)\s+(?:for|using)\s+"
                  r"[\x27\x22\x60][^\x27\x22\x60]+[\x27\x22\x60]",
@@ -587,7 +609,13 @@ def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[
     okay, issues = validate_feedback(proposal, payload["fragment"], strict=False)
     if not okay:
         raise ValueError("natural_report_unsupported_claim:" + ",".join(issues))
-    return {"summary": proposal["summary"], "trace_summary": proposal["trace_summary"]}
+    # Presentation-only: split unambiguous preexisting bullet separators,
+    # leaving prose, entity names, facts, and literal values unchanged.
+    trace = re.sub(
+        r"(?<=[.!?]) +(?=-\s+[A-Z])", "\n",
+        proposal["trace_summary"],
+    )
+    return {"summary": proposal["summary"], "trace_summary": trace}
 
 
 def feedback_reviewer_prompt(
@@ -609,7 +637,11 @@ def feedback_reviewer_prompt(
         "IF that video source has the corresponding permitted tool activity. "
         "Do NOT demand tool class names, one bullet per tool, or descriptions "
         "of every available reference. A tool-free aggregation of previously "
-        "verified results is valid. Do not treat search discovery alone as "
+        "verified results is valid. Report vocabulary such as 'source_evidence_guide' "
+        "or 'verified_operations' is an internal artifact and must be rejected. "
+        "Without recorded permitted GoogleSearchAction activity, saying "
+        "'searched the available evidence' is an unsupported action claim. "
+        "Do not treat search discovery alone as "
         "factual evidence. Reject actions with no permitted source mapping, "
         "fabricated searches/queries, website URLs, media timestamps or "
         "unsupported facts, even if the final answer is correct. "
@@ -620,6 +652,12 @@ def feedback_reviewer_prompt(
         "provided initially when candidate identification depends on "
         "discoverable sources. A later subtask MAY reuse the exact names "
         "that an earlier completed Sub-Agent already returned. "
+        "The source_evidence_guide includes an entity_types mapping: "
+        "it is explicit PUBLIC evidence of an entity's type, independent "
+        "of the predicate claims list. Do not reject Administrative Area, "
+        "Person, or other type assertions solely because there is no "
+        "type predicate in claims. Verify each type against entity_types "
+        "or the corresponding replay-verified FIND/FILTER_TYPE output. "
         "Treat the verified_operations output values as authoritative "
         "public-replay conclusions. A derived result from FIND, FILTER_TYPE, "
         "COUNT, INTERSECT, UNION, SELECT_BETWEEN or a relation traversal "

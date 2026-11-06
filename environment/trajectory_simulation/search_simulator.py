@@ -55,10 +55,37 @@ def _document(source: Mapping[str, Any]) -> str:
 
 
 def _snippet(source: Mapping[str, Any]) -> str:
-    content = source.get("content", "")
-    if not isinstance(content, str):
-        content = json.dumps(content, ensure_ascii=False)
-    return " ".join(content.split())[:180]
+    """A short SEARCH teaser, not an extract of a Source's factual contents.
+
+    The index may search full public document text for relevance, but the
+    result page exposes only a couple of entity names and topic/type labels.
+    Exact predicates' object values (dates, population, relations, etc.) are
+    visible only after a separately authorized inspection tool action.
+    """
+    claims = source.get("claims") or ()
+    entity_types = source.get("entity_types") or {}
+    names = sorted({
+        str(claim["subject"]) for claim in claims
+        if isinstance(claim, Mapping) and claim.get("subject")
+    } | {str(name) for name in entity_types})
+    predicates = sorted({
+        str(claim["predicate"]) for claim in claims
+        if isinstance(claim, Mapping) and claim.get("predicate")
+    })
+    types = sorted({str(v) for v in entity_types.values()})
+    if not predicates:
+        content = source.get("content", "")
+        # Legacy or test documents without parsed claims: use only
+        # nonnumeric keywords; never splice original sentences into hits.
+        predicates = sorted(_tokens(content) - _tokens(" ".join(names)))[:3]
+    fields = []
+    if names:
+        fields.append("Entities: " + ", ".join(names[:2]))
+    if types:
+        fields.append("Types: " + ", ".join(types[:2]))
+    if predicates:
+        fields.append("Topics: " + ", ".join(predicates[:3]))
+    return " | ".join(fields)[:150]
 
 
 class SimulatedSearchIndex:

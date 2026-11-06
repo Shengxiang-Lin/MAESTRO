@@ -321,9 +321,20 @@ def validate_feedback(value: Any, fragment: Mapping[str, Any], *, strict=False) 
                 (claim["subject"].casefold(), claim["predicate"].casefold())
                 for obs in observations for claim in obs["claims"]
             }
-            for subject, predicate in all_pairs:
-                if (subject in lowered and predicate in lowered
-                        and (subject, predicate) not in source_pairs):
+            candidate_pairs = {
+                (subject, predicate)
+                for subject, predicate in all_pairs
+                if subject in lowered and predicate in lowered
+            }
+            # The literal matcher cannot resolve grammatical ownership
+            # across mixed clauses. Do not form the Cartesian product of
+            # every entity/predicate in a multi-fact sentence and pretend
+            # each pair was attributed to the named Source. The independent
+            # semantic critic remains responsible for these complex claims.
+            subjects = {subject for subject, _ in candidate_pairs}
+            predicates = {predicate for _, predicate in candidate_pairs}
+            if len(subjects) == 1 and len(predicates) == 1:
+                for subject, predicate in candidate_pairs - source_pairs:
                     issues.append(
                         f"{key}_source_fact_mismatch:{source_id}:{subject}:{predicate}")
         # Numeric assertions may only reuse supplied observed/public values.

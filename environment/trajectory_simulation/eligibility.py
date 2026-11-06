@@ -61,7 +61,16 @@ def check_question(gold,record,role,*,review=True):
         'Do not solve it, inspect answers, or apply real-world plausibility. Check the owner of each constraint, '
         'relation direction and all necessary hops, branch inputs, set joins and final operation. '
         'Compare mathematical meaning, not number of steps. Redundant type filters, filter order, '
-        'FIND_ALL with no input steps initializes ALL entities, not an empty set. '
+        'FIND_ALL with no input steps enumerates ALL entities within the '
+        'finite task evidence domain, not the entire Internet and not a '
+        'complete initial document or pre-supplied list. A question may ask '
+        'to discover those entities from relevant task sources; this is '
+        'equivalent to the bounded FIND_ALL, not a narrower arbitrary subset. '
+        'When the terminal is QUERY_NAME, phrases like "identify the entities" '
+        'and "which entities" can mean returning those entities by name. '
+        'Do NOT reject solely for not literally saying "names" unless '
+        'the requested output is substantively different (count, attribute '
+        'values, or a different entity owner). '
         'Read the numbered dependency graph literally: a filter before RELATE constrains '
         'the input entity; a filter after RELATE constrains the related entity. '
         'Repeated identical type filters do not change the set. '
@@ -75,6 +84,8 @@ def check_question(gold,record,role,*,review=True):
         'Simplification is allowed only if the computation is unchanged. A person constraint cannot be moved '
         'to a place or vice versa. FALSE/empty outcomes do not make a question invalid. '
         'If ambiguity prevents establishing equivalence, choose uncertain. '
+        'Do not replace a missing relation traversal or a moved filter owner '
+        'with an implied semantics merely because the answer types match. '
         'An explicitly certified public projection may remove a redundant private singleton FIND '
         'and its INTERSECT from agent delegation; the accepted question need not expose the '
         'private singleton name when another public branch identifies the same entity. '
@@ -110,7 +121,7 @@ def check_question(gold,record,role,*,review=True):
         value = getattr(role.backend, field, None)
         return value if isinstance(value, str) and value else "unknown"
     cache_key=digest({**fingerprint,'reviewer_model':identity('model'),
-        'reviewer_endpoint':identity('base_url'),'review_contract':5})
+        'reviewer_endpoint':identity('base_url'),'review_contract':6})
     if cache_path and Path(cache_path).exists():
         for line in Path(cache_path).read_text().splitlines():
             item=json.loads(line)
@@ -189,7 +200,9 @@ def check_question(gold,record,role,*,review=True):
                     'Cover every listed step. Do not reuse a span for unrelated hops. '
                     'If a necessary hop is absent, return mismatch with a concrete issue; '
                     'if wording is ambiguous, return uncertain. Never infer an unstated '
-                    'relation from a destination type. FIND_ALL initializes all entities; '
+                    'relation from a destination type. FIND_ALL enumerates only '
+                    'the task-evidence domain, not the whole Internet. '
+                    'QUERY_NAME may legitimately be worded as identifying entities. '
                     'repeated identical type filters are redundant. '
                     'Return JSON ONLY: {"decision":"eligible"|"mismatch"|"uncertain",'
                     '"issues":[{"kind":"missing_constraint"|"scope"|"direction",'
