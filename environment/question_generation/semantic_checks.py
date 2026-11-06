@@ -61,8 +61,10 @@ def semantic_checks(plan: ScopedPlan) -> list[dict[str, str]]:
                     f"{val.get('value')}{val.get('unit', '') if isinstance(val, dict) else ''}. "
                     "Do not move this filter to an entity reached through a relation."
                 )
-            append("condition_owner", text, excerpt, (op, node.get("relation"),
-                   node.get("direction"), condition))
+            # The full owning expression is part of identity: the same
+            # attribute/value restriction on two DIFFERENT related entity
+            # sets must remain two separately checked obligations.
+            append("condition_owner", text, excerpt, (node, condition))
         if op in ("INTERSECT", "UNION"):
             text = (
                 "INTERSECTION: the same result entity must satisfy ALL branches; "
