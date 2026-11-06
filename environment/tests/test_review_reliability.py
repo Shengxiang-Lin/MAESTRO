@@ -170,12 +170,12 @@ class ReviewReliabilityTests(unittest.TestCase):
             "node_id":99,"op":"RELATE","dependencies":[2],
             "inputs":["r:third","forward"],
         })
-        gold["question"]="Follow the primary, secondary and tertiary link for Alice."
+        gold["question"]="Follow the primary, middle and tertiary link for Alice."
         role.check_question.side_effect=[
             {"decision":"eligible","issues":[]},
             {"decision":"eligible","issues":[],"relation_coverage":[
                 {"step":1,"question_quote":"primary","interpretation":"first hop"},
-                {"step":2,"question_quote":"secondary","interpretation":"second hop"},
+                {"step":2,"question_quote":"middle","interpretation":"second hop"},
             ]},
             {"decision":"eligible","issues":[],"relation_coverage":[
                 {"step":99,"question_quote":"tertiary","interpretation":"third hop"},
@@ -185,8 +185,8 @@ class ReviewReliabilityTests(unittest.TestCase):
         self.assertTrue(result["eligible"], json.dumps(result,ensure_ascii=False,default=str)[:3500])
         self.assertEqual(role.check_question.call_count,3)
         self.assertEqual(
-            {item["step"] for item in result.get("raw_verdict",{}).get("relation_coverage",[])},
-            set(),
+            len([a for a in result["review_audit"] if a["stage"]=="focused_hop_validation"]),
+            2,
         )
 
     def test_reused_or_missing_relation_witness_stays_quarantined(self):
