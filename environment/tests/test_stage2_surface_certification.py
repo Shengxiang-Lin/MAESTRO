@@ -15,11 +15,15 @@ from environment.trajectory_simulation.eligibility import digest
 
 
 def natural_rephrase(reference):
-    if "Let the " in reference:
-        return reference.replace("Let the ", "Consider the ", 1)
-    if "Define the " in reference:
-        return reference.replace("Define the ", "Consider the ", 1)
-    return "Please identify the matching answer. " + reference
+    # Synthetic fixture for pipeline/JSON-certificate mechanics, not a model
+    # naturalness benchmark. It must satisfy the independent surface-change
+    # gate so these tests reach the Critic/Final-Judge stages.
+    return (
+        "Using the public facts and relationships described below, determine "
+        "which result the question seeks, without assuming any source was "
+        "provided in advance. " +
+        reference.replace("Let the ", "Consider the ", 1)
+    )
 
 
 PASS_CRITIQUE = {
