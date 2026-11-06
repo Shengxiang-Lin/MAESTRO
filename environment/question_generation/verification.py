@@ -67,7 +67,12 @@ def certify_surface(payload, world, capability, question, critic):
                 world, reviewer, rendered=rendered,
             )
     certificate = None
-    if result.get("eligible") is True and result.get("reviewed") is True:
+    if (result.get("eligible") is True and result.get("reviewed") is True
+            and result.get("decision") == "eligible"
+            and result.get("issues") == []
+            and result.get("method") in (
+                "verified_controlled_renderer", "llm_semantic_screen",
+            )):
         content = {
             "schema": SCHEMA,
             "review_contract": REVIEW_CONTRACT,
@@ -106,7 +111,10 @@ def validate_surface_certificate(realized, world, canonical):
     }
     if cert != expected:
         raise ValueError("stage2_surface_certificate_input_mismatch")
-    if review.get("eligible") is not True or review.get("reviewed") is not True:
+    if (review.get("eligible") is not True
+            or review.get("reviewed") is not True
+            or review.get("decision") != "eligible"
+            or review.get("issues") != []):
         raise ValueError("stage2_surface_review_not_eligible")
     if review.get("question_sha256") != digest(question) or review.get(
         "program_sha256"
