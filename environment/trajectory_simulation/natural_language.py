@@ -413,8 +413,26 @@ def feedback_execution_reference(payload: Mapping[str, Any]) -> dict[str, Any]:
                     group = corroboration.setdefault(key, {**fact, "references": []})
                     if reference not in group["references"]:
                         group["references"].append(reference)
+        # Separate filter ownership from entities discovered by a later
+        # relation traversal. Never imply that a previously filtered
+        # attribute automatically belongs to the final result entities.
+        entity_scope={
+            "input_entities":sorted(input_names),
+            "output_entities":sorted(output_names),
+        }
+        if action.startswith("FILTER_"):
+            entity_scope["filter_attribute_owner_entities"]=sorted(input_names)
+        if action=="RELATE":
+            backward=len(args)>1 and args[1]=="backward"
+            entity_scope["recorded_relation_subjects"]=sorted(
+                output_names if backward else input_names
+            )
+            entity_scope["recorded_relation_objects"]=sorted(
+                input_names if backward else output_names
+            )
         steps.append({"step": index, "meaning": meaning,
                       "input_values": inputs, "output": output,
+                      "entity_scope": entity_scope,
                       "supporting_facts": facts})
     corroborated = [
         fact for fact in corroboration.values() if len(fact["references"]) > 1
@@ -902,6 +920,11 @@ def feedback_reviewer_prompt(
         "in the opposite orientation. "
         "A recorded claim subject --predicate--> object always means subject "
         "has that relation TO object; a backward operation never reverses the fact itself. "
+        "The execution_reference entity_scope is an authoritative trace "
+        "of filter owners and relation endpoints, independent of prose. "
+        "A final-result sentence claiming an earlier filter applies to every "
+        "discovered entity is invalid unless separate facts support that "
+        "predicate on those final entities. "
         "A filter constrains its input entities only: do not attribute an input's "
         "population or date to an entity subsequently discovered by RELATE. "
         "Still require every underlying source assertion (such as a specific population/date/relation) to "
