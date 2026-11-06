@@ -108,7 +108,9 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
     free_verified = False
     if surface_mode == "free" and best is not None:
         from dataclasses import replace
-        from .free_surface import assess_free_style, call_free_rewriter
+        from .free_surface import (
+            assess_free_style, call_free_rewriter, public_rewrite_guard,
+        )
         from .semantic_readback import read_free_question
         from .verification import certify_free_surface
         reader = (
@@ -140,6 +142,15 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
                 guidance = "Return a single natural-language question as valid JSON."
                 continue
             entry["candidate"] = candidate
+            literal_issues = public_rewrite_guard(scoped_question, candidate)
+            entry["public_literal_guard"] = literal_issues
+            if literal_issues:
+                entry["failure"] = "free_rewrite_literal_or_scope_guard"
+                guidance = (
+                    "Do not introduce extra numbers or exclusion language, "
+                    "and preserve public string identifiers exactly."
+                )
+                continue
             boundary = postflight(
                 payload, candidate, oracle_answer=_oracle(world),
                 check_contract=False,
