@@ -25,7 +25,7 @@ from .contract import (
     answer_string, answers_equal, main_prompt, public_action,
     validate_action, validate_feedback,
 )
-from .eligibility import check_question
+from .eligibility import check_question, digest
 from .evidence import bind_ready, public_record, verify_known_packet
 from .pipeline import GoldTrajectoryError, _public_state
 from .public_preflight import audit_public_executability
@@ -137,15 +137,28 @@ def build_subtask_bank(
             "canonical_question",["canonical_renderer_not_certified"],
             {"canonical_eligibility":canonical_eligibility},
         )
-    # Review the Stage 2 surface only for future Main-Agent publication.
-    # A rejected surface does not abort canonical Subtask generation.
-    eligibility=(
-        dict(canonical_eligibility) if surface_question==canonical_question
-        else check_question(
-            {**gold,"question":surface_question},
-            world_record,planner,review=question_review,rendered=rendered,
-        )
-    )
+    # Stage 2 has already completed the expensive full-ProgramIR LLM review.
+    # Stage 3.1 performs only certificate / frozen-input integrity checks.
+    # Exact controlled-renderer text is also safe without an old Stage-2
+    # certificate, because the renderer itself has just been re-certified.
+    from environment.question_generation.verification import validate_surface_certificate
+    try:
+        if (surface_question==canonical_question
+                and not realized.get("surface_certificate")):
+            eligibility=dict(canonical_eligibility)
+        else:
+            eligibility=validate_surface_certificate(
+                realized,world_record,canonical_question,
+            )
+    except ValueError as exc:
+        eligibility={
+            "eligible":False,"reviewed":False,"decision":"review_error",
+            "method":"stage2_certificate_validation",
+            "review_failure_kind":str(exc),
+            "issues":[str(exc)],
+            "question_sha256":digest(surface_question),
+            "program_sha256":digest(world_record["program"]),
+        }
 
     teacher_main=PassthroughPlanner()
     teacher_sub=PassthroughExecutor()
