@@ -74,6 +74,12 @@ def build_parser():
     p.add_argument("--candidate-workers",type=int)
     p.add_argument("--candidate-proposal-batch-size",type=int)
     p.add_argument("--restart-candidates",action="store_true")
+    p.add_argument("--reuse-candidate-pool",action="store_true",
+                   help="reuse the existing 2000 validated ProgramIR candidates, "
+                        "but regenerate Worlds, evidence, TaskDesign and Freeze")
+    p.add_argument("--web-search-weight",type=float,default=45)
+    p.add_argument("--hybrid-weight",type=float,default=40)
+    p.add_argument("--provided-media-weight",type=float,default=15)
     return p
 
 def main():
@@ -88,6 +94,12 @@ def main():
         raise SystemExit("--world-attempts-per-candidate must be positive")
     if args.candidate_max_attempts is not None and args.candidate_max_attempts<1:
         raise SystemExit("--candidate-max-attempts must be positive")
+    scenario_weights=(args.web_search_weight,args.hybrid_weight,args.provided_media_weight)
+    if any(x<0 for x in scenario_weights) or not sum(scenario_weights):
+        raise SystemExit("scenario weights must be nonnegative and sum to a positive value")
+    if args.reuse_candidate_pool and (args.restart_candidates or args.resume_downstream):
+        raise SystemExit("--reuse-candidate-pool cannot be combined with "
+                         "--restart-candidates or --resume-downstream")
     progress=not args.no_progress
     OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
     candidates=OUTPUT_DIR/f"semantic_candidates_pool_{pool_size}.jsonl"
@@ -134,8 +146,41 @@ def main():
             print(summary_path)
             return
         from .deep_dependency.parallel_candidates import CandidateCheckpointError
-        try:
-            summary["candidate_selection"]=generate_candidate_pool(
+        if args.reuse_candidate_pool:
+            if not candidates.is_file():
+                raise SystemExit(f"--reuse-candidate-pool requires existing {candidates}")
+            checkpoint=candidates.with_name(
+                candidates.stem+".candidate-state.json"
+            )
+            if not checkpoint.is_file():
+                raise SystemExit(
+                    f"Cannot safely reuse candidate pool without {checkpoint}"
+                )
+            state=_read_json(checkpoint)
+            settings=state.get("signature",{}).get("settings",{})
+            if (settings.get("seed") != args.seed
+                    or settings.get("pool_size") != pool_size
+                    or state.get("status") not in {"complete","budget_exhausted"}):
+                raise SystemExit(
+                    "Reusable candidate checkpoint has incompatible seed, "
+                    "capacity or incomplete status"
+                )
+            number=_count_jsonl(candidates)
+            if number<=0 or number>pool_size or state.get("accepted") != number:
+                raise SystemExit(
+                    f"Invalid reusable candidate pool count {number}, "
+                    f"checkpoint={state.get('accepted')}, capacity={pool_size}"
+                )
+            summary["candidate_selection"]={
+                "validated_candidates":number,
+                "pool_filled":number==pool_size,
+                "reused_existing_candidates":True,
+                "candidate_pool_size":pool_size,
+                "output":str(candidates),
+            }
+        else:
+            try:
+                summary["candidate_selection"]=generate_candidate_pool(
                 [args.kqa_train,args.kqa_val],YAGO_CATALOG,YAGO_TAXONOMY_INDEX,
                 candidates,pool_size=pool_size,seed=args.seed,max_records=args.max_records,
                 min_fragment_depth=args.min_fragment_depth,
@@ -147,9 +192,9 @@ def main():
                 progress=progress,max_attempts=args.candidate_max_attempts,
                 candidate_workers=args.candidate_workers,
                 candidate_proposal_batch_size=args.candidate_proposal_batch_size,
-                restart_candidates=args.restart_candidates)
-        except CandidateCheckpointError as exc:
-            raise SystemExit(f"Candidate checkpoint error: {exc}") from exc
+                    restart_candidates=args.restart_candidates)
+            except CandidateCheckpointError as exc:
+                raise SystemExit(f"Candidate checkpoint error: {exc}") from exc
         if summary["candidate_selection"]["validated_candidates"]<=0:
             _write_json(summary_path,summary)
             raise SystemExit("No validated semantic candidates; inspect "
@@ -159,7 +204,8 @@ def main():
             min_depth=5,seed=args.seed,min_critical_sources=2,min_noncritical_sources=1,
             min_proof_sources=2,max_sources=6,
             mmqa_source_motifs_path=MMQA_SCENARIO_PRIOR,
-            progress=progress,world_attempts_per_candidate=args.world_attempts_per_candidate)
+            progress=progress,world_attempts_per_candidate=args.world_attempts_per_candidate,
+            acquisition_scenario_weights=scenario_weights)
         accepted=int(summary["worlds"]["accepted"])
         if accepted<=0:
             _write_json(summary_path,summary)

@@ -64,10 +64,18 @@ def _validate_clue_graphs(design,*,taxonomy=None):
 def assess_task_design(design,*,require_multisource=True,taxonomy=None):
     reasons=[];visibility=design.resource_visibility;initial=[item for item in visibility if item.visibility in {"attached","provided"}];discoverable=[item for item in visibility if item.visibility=="discoverable"]
     if not visibility:reasons.append("no_existing_resources")
-    if visibility and not initial:reasons.append("no_public_entry_resource")
+    if visibility and not initial and not (
+        design.entry_strategy == "web_search"
+        and len(discoverable) == len(visibility)
+        and design.metadata.get("retrieval_policy")
+            == "task_local_ranked_public_index_v1"
+    ):
+        reasons.append("no_public_entry_resource")
+    if design.entry_strategy == "web_search" and initial:
+        reasons.append("web_search_has_presupplied_source")
     if require_multisource and (design.minimum_required_source_count or 0)<=1:reasons.append("single_source_shortcut")
     if len(visibility)>1 and not discoverable:reasons.append("all_resources_initial_no_acquisition")
     if bool(design.metadata.get("adds_synthetic_resources")):reasons.append("task_design_added_synthetic_resource")
     if bool(design.metadata.get("changes_symbolic_truth")):reasons.append("task_design_changed_symbolic_truth")
     if design.motif=="compliance" and design.entry_strategy!="compliance_standard":reasons.append("implicit_compliance_motif")
-    clue_reasons,clue_metrics=_validate_clue_graphs(design,taxonomy=taxonomy);reasons.extend(clue_reasons);metrics={"resource_count":len(visibility),"initial_resource_count":len(initial),"discoverable_resource_count":len(discoverable),"latent_entity_count":len(design.latent_entity_ids),"reasoning_node_count":len(design.required_reasoning_node_ids),"minimum_required_source_count":design.minimum_required_source_count,"has_attached_media":any(item.visibility=="attached" for item in visibility),**clue_metrics};return TaskDesignQuality(not reasons,tuple(dict.fromkeys(reasons)),metrics)
+    clue_reasons,clue_metrics=_validate_clue_graphs(design,taxonomy=taxonomy);reasons.extend(clue_reasons);metrics={"resource_count":len(visibility),"initial_resource_count":len(initial),"discoverable_resource_count":len(discoverable),"latent_entity_count":len(design.latent_entity_ids),"reasoning_node_count":len(design.required_reasoning_node_ids),"minimum_required_source_count":design.minimum_required_source_count,"has_attached_media":any(item.visibility=="attached" for item in visibility),"acquisition_scenario":design.entry_strategy,"search_query_entry":design.entry_strategy=="web_search" and not initial,**clue_metrics};return TaskDesignQuality(not reasons,tuple(dict.fromkeys(reasons)),metrics)

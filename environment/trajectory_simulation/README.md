@@ -26,8 +26,13 @@ quarantined with `public_search_witness_unreachable` rather than silently
 inserting the answer-bearing source. A Source from an actual initial attachment
 is inspected without a fabricated search.
 
-The Sub-Agent bank retains the logged simulated queries/hits in
-`simulated_tool_provenance.search_calls` and a private `search_audit`.
+The Sub-Agent bank retains *executed simulated* queries/hits in
+`simulated_tool_provenance.search_calls` **only when Main assigned
+`GoogleSearchAction` and the Sub-Agent actually needs newly discoverable
+evidence**. The independent preflight retrieval check is **teacher-only**,
+not a Sub-Agent call. With no assigned search tool, the bank now has no
+search execution record; a task that nevertheless requires an unknown,
+discoverable Source fails rather than receiving an unauthorized search.
 Main prompt/history never receives the index or future search hits. The
 inspection set remains teacher-guided by the frozen proof AFTER retrieval;
 this is not an autonomous search-policy benchmark. It tests whether a

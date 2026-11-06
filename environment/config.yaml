@@ -37,6 +37,12 @@ task_construction:
   # and freeze every world that passes the unchanged quality checks.
   candidate_pool_size: 2000
   seed: 17
+  # Scenarios are chosen BEFORE source modalities. These are proposal weights,
+  # not guaranteed acceptance ratios after the strict World/P0/P1 gates.
+  web_search_weight: 45
+  hybrid_weight: 40
+  provided_media_weight: 15
+  reuse_candidate_pool: false
   # null: up to 8 processes, with 2 proposals per process in each batch.
   candidate_workers: null
   candidate_proposal_batch_size: null

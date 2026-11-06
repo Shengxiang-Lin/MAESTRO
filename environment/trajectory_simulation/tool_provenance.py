@@ -28,6 +28,11 @@ def reconstruct_tool_observations(
 
     steps = []
     emitted = set()
+    assigned_tools = set(fragment.get("suggested_tools", []))
+    if search_audit is not None and "GoogleSearchAction" not in assigned_tools:
+        if any(o.get("visibility") == "discoverable"
+               for o in fragment.get("observations", [])):
+            raise ValueError("search_tool_not_assigned_for_new_source")
     discovered = (
         set(search_audit["discovered_source_ids"])
         if search_audit is not None else None
@@ -102,7 +107,9 @@ def reconstruct_tool_observations(
             False if search_audit is not None else None
         ),
         "search_calls": (
-            search_audit.get("calls", []) if search_audit is not None else []
+            search_audit.get("calls", [])
+            if search_audit is not None and "GoogleSearchAction" in assigned_tools
+            else []
         ),
         "steps": steps,
     }

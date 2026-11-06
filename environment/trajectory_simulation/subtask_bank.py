@@ -203,8 +203,25 @@ def build_subtask_bank(
                 original,public,fragment,evidence_cache
             )
             from .tool_provenance import reconstruct_tool_observations
+            # The preflight's independent search is a TEACHER reachability
+            # test, never a Sub-Agent tool execution. Only simulate and
+            # publish search calls when the Main delegation actually assigned
+            # GoogleSearchAction AND this fragment acquires a new source.
             search_audit = None
-            if gold.get("retrieval_policy") == "task_local_ranked_public_index_v1":
+            fresh_search_sources = [
+                obs for obs in fragment["observations"]
+                if obs.get("visibility") == "discoverable"
+            ]
+            if set(original["tools"]) != set(fragment["suggested_tools"]):
+                raise GoldTrajectoryError(
+                    "tool_assignment", ["delegation_tool_mismatch"]
+                )
+            if fresh_search_sources and "GoogleSearchAction" not in original["tools"]:
+                raise GoldTrajectoryError(
+                    "tool_assignment", ["search_tool_not_assigned_for_new_source"]
+                )
+            if (fresh_search_sources and gold.get("retrieval_policy")
+                    == "task_local_ranked_public_index_v1"):
                 from .search_simulator import (
                     simulate_search, verify_retrieved_witnesses,
                 )
@@ -218,7 +235,7 @@ def build_subtask_bank(
                     ],
                 )
                 verify_retrieved_witnesses(
-                    search_audit, fragment["observations"]
+                    search_audit, fresh_search_sources
                 )
             tool_provenance = reconstruct_tool_observations(
                 fragment,search_audit
