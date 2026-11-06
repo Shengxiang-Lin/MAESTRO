@@ -117,7 +117,8 @@ _FINAL_SCHEMA = {
 }
 # Enumerated clauses are not semantic numbers.
 _LIST_MARKERS = re.compile(
-    r"(?<!\w)\(\s*\d{1,2}\s*\)(?=\s|$)|(?m)^\s*\d{1,2}[.)]\s+"
+    r"(?<!\w)\(\s*\d{1,2}\s*\)(?=\s|$)|^\s*\d{1,2}[.)]\s+",
+    re.MULTILINE,
 )
 
 
