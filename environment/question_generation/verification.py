@@ -17,10 +17,14 @@ from environment.trajectory_simulation.eligibility import (
 from environment.trajectory_simulation.compiler import compile_gold_solution
 
 from .question_review import passing_judgment
+from .semantic_checks import (
+    check_evidence, explicit_join_contradictions, naturalness_gate,
+    semantic_checks, CheckFormatError,
+)
 
-SCHEMA = "maestro.stage2_surface_cert.v2"
-REVIEW_CONTRACT = 19
-METHOD = "llm_iterative_editorial_review_v1"
+SCHEMA = "maestro.stage2_surface_cert.v3"
+REVIEW_CONTRACT = 20
+METHOD = "llm_evidence_guided_editorial_review_v2"
 
 
 def _certificate(task_id, program, canonical, question, review):
@@ -40,6 +44,7 @@ def certify_approved_question(
     task_id: str, world: Mapping, canonical: str, question: str,
     scoped_reference: str, final_judgment: Mapping, *,
     critic_verdict: str, revision_rounds: int,
+    semantic_checklist: list[dict],
 ):
     """Mint a certificate only after the Critic and independent judge pass."""
     if (not question or question == canonical or question == scoped_reference
@@ -47,6 +52,10 @@ def certify_approved_question(
             or not passing_judgment(final_judgment)
             or revision_rounds < 0):
         raise ValueError("natural_question_not_approved")
+    if (not naturalness_gate(scoped_reference, question)["improved_enough_to_review"]
+            or explicit_join_contradictions(scoped_reference, question)):
+        raise ValueError("natural_question_failed_deterministic_risk_guards")
+    check_evidence(semantic_checklist, final_judgment.get("checks"), question)
     review = {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": METHOD, "issues": [],
@@ -56,6 +65,7 @@ def certify_approved_question(
         "critic_verdict": critic_verdict,
         "revision_rounds": revision_rounds,
         "final_judgment": dict(final_judgment),
+        "semantic_checklist_sha256": digest(semantic_checklist),
     }
     return _certificate(task_id, world["program"], canonical, question, review), review
 
@@ -128,6 +138,25 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
     if (question in (canonical, scoped)
             or review.get("scoped_reference_sha256") != digest(scoped)):
         raise ValueError("stage2_reference_or_naturalization_mismatch")
+    from .scoped_surface import build_scoped_plan
+    if gold is None:
+        gold = compile_gold_solution(
+            {**realized, "question": canonical}, world, rendered,
+            schedule="compact",
+        )
+    verified = controlled_question_reference(gold, world, rendered)
+    if verified is None or verified.get("question") != canonical:
+        raise ValueError("unverified_stage1_reference")
+    plan = build_scoped_plan(world, canonical, gold, verified)
+    checks = semantic_checks(plan)
+    if (review.get("semantic_checklist_sha256") != digest(checks)
+            or not naturalness_gate(scoped, question)["improved_enough_to_review"]
+            or explicit_join_contradictions(scoped, question)):
+        raise ValueError("stage2_semantic_checklist_or_style_mismatch")
+    try:
+        check_evidence(checks, review["final_judgment"].get("checks"), question)
+    except CheckFormatError as exc:
+        raise ValueError("stage2_final_judge_evidence_invalid") from exc
     return {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": "stage2_verified_editorial_certificate",
