@@ -15,15 +15,14 @@ from environment.trajectory_simulation.eligibility import digest
 
 
 def natural_rephrase(reference):
-    # Synthetic fixture for pipeline/JSON-certificate mechanics, not a model
-    # naturalness benchmark. It must satisfy the independent surface-change
-    # gate so these tests reach the Critic/Final-Judge stages.
-    return (
-        "Using the public facts and relationships described below, determine "
-        "which result the question seeks, without assuming any source was "
-        "provided in advance. " +
-        reference.replace("Let the ", "Consider the ", 1)
-    )
+    # This fixture uses a genuinely reordered statement of the two relations
+    # so style checks do not mistake a boilerplate prefix for naturalization.
+    if "Noah Yarrow" in reference and "'first'" in reference and "'second'" in reference:
+        return (
+            "Which entities are recorded as targets of both the 'first' and "
+            "'second' relations from Noah Yarrow?"
+        )
+    return "Which candidates satisfy all the requested public conditions? " + reference
 
 
 PASS_CRITIQUE = {
