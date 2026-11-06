@@ -130,13 +130,12 @@ def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_
     with rejected_path.open('w',encoding='utf-8') as writer:
         for row in rejected:
             writer.write(json.dumps(row,ensure_ascii=False)+'\n')
-    from ..task_design.planner import _source_scenario
-    from collections import Counter as _Counter
-    scenario_histogram=_Counter(
-        _source_scenario(
-            __import__("environment.task_construction.rendering.pipeline",
-                       fromlist=["world_from_dict"]).world_from_dict(row["world"])
-        )
+    scenario_histogram=Counter(
+        row["world"].get("metadata", {})
+        .get("evidence_allocation", {})
+        .get("layout", {})
+        .get("final_layout_plan", {})
+        .get("acquisition_scenario", "legacy")
         for row in accepted
     )
     return {
