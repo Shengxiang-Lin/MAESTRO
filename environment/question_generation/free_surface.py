@@ -55,6 +55,38 @@ def call_free_rewriter(author: Any, scoped_question: str,
     return " ".join(response["question"].split())
 
 
+_NEW_SCOPE_RESTRICTIONS = re.compile(
+    r"\b(?:other|another|except|excluding|unless|only|exactly|unique|"
+    r"uniquely|besides|rather\s+than)\b", re.I,
+)
+
+
+def public_rewrite_guard(scoped: str, candidate: str) -> list[str]:
+    """Conservative literal/new-restriction check before expensive readback.
+
+    Scope ownership, relations and joins remain the BLIND parser's job.
+    Dates are normalized to calendar days; +codes are string tokens, not
+    integers. This does not claim to recognize every English paraphrase.
+    """
+    from .contracts import typed_values
+    original = typed_values(scoped, words=True)
+    observed = typed_values(candidate, words=False)
+    issues = []
+    if observed - original:
+        issues.append("free_rewrite_invents_or_changes_public_literal")
+    original_limits = {
+        match.group().casefold()
+        for match in _NEW_SCOPE_RESTRICTIONS.finditer(scoped)
+    }
+    candidate_limits = {
+        match.group().casefold()
+        for match in _NEW_SCOPE_RESTRICTIONS.finditer(candidate)
+    }
+    if candidate_limits - original_limits:
+        issues.append("free_rewrite_adds_exclusion_or_uniqueness")
+    return issues
+
+
 _GROUP_LANGUAGE = re.compile(
     r"\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth)\s+group\b"
     r"|\b(?:let|define)\s+the\s+(?:reference|first|second|third|fourth)\s+"
@@ -107,5 +139,5 @@ def assess_free_style(scoped: str, candidate: str) -> StyleAssessment:
 
 __all__ = [
     "StyleAssessment", "assess_free_style", "call_free_rewriter",
-    "free_rewrite_prompt",
+    "free_rewrite_prompt", "public_rewrite_guard",
 ]
