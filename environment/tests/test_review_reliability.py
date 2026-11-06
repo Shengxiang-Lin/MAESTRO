@@ -26,6 +26,60 @@ class ReviewReliabilityTests(unittest.TestCase):
         q.update(task_id=t.task_id,question=t.question)
         return compile_gold_solution(q,r,t,schedule="baseline"),r,t
 
+    def test_v7_eligible_with_issues_requires_independent_confirmation(self):
+        gold,record,rendered=self.rendered_fixture()
+        gold["question"] = rendered.question + " Return the exact entity names."
+        role=LLMPlanner(OpenAICompatibleBackend("test://local","test"))
+        contradictory={
+            "decision":"eligible","relation_coverage":[],
+            "issues":[{
+                "kind":"output","program_steps":[0],
+                "question_quote":"Return the exact entity names.",
+                "program_claim":"Return matching names.",
+                "question_claim":"Return entity names.",
+                "reason":"The question and program request the same output.",
+            }],
+        }
+        role.check_question=Mock(side_effect=[contradictory,contradictory])
+        role.confirm_question_consistency=Mock(return_value={
+            "equivalent":True,
+            "question_quote":"Return the exact entity names.",
+            "explanation":"The complete constraints and output agree.",
+        })
+        result=check_question(gold,record,role,rendered=rendered)
+        self.assertTrue(result["eligible"],str(result)[:1000])
+        self.assertTrue(result["reviewed"])
+        self.assertEqual(role.check_question.call_count,2)
+        role.confirm_question_consistency.assert_called_once()
+        self.assertTrue(any(
+            a.get("stage")=="consistency_resolution"
+            and a.get("result")=="independent_confirmed"
+            for a in result["review_audit"]
+        ))
+
+    def test_v7_conflicting_or_unquoted_consistency_does_not_approve(self):
+        for confirmation in (
+            {"equivalent":False, "question_quote":"Return the exact entity names.",
+             "explanation":"The scope is not the same."},
+            {"equivalent":True,"question_quote":"invented span",
+             "explanation":"No actual question witness."},
+        ):
+            with self.subTest(confirmation=confirmation):
+                gold,record,rendered=self.rendered_fixture()
+                gold["question"]=rendered.question+" Return the exact entity names."
+                role=LLMPlanner(OpenAICompatibleBackend("test://local","test"))
+                contradictory={"decision":"eligible","issues":[{
+                    "kind":"output","program_steps":[0],
+                    "question_quote":"Return the exact entity names.",
+                    "program_claim":"Return names.","question_claim":"Return names.",
+                    "reason":"These agree.",
+                }],"relation_coverage":[]}
+                role.check_question=Mock(side_effect=[contradictory,contradictory])
+                role.confirm_question_consistency=Mock(return_value=confirmation)
+                result=check_question(gold,record,role,rendered=rendered)
+                self.assertFalse(result["eligible"])
+                self.assertEqual(result["review_failure_kind"],"eligible_with_issues")
+
     def test_reconstructed_supported_question_does_not_need_llm_vote(self):
         gold,record,rendered=self.rendered_fixture()
         role=Mock(offline=False,backend=Mock())
