@@ -6,10 +6,9 @@ from pathlib import Path
 from typing import Any,Mapping
 from tqdm.auto import tqdm
 from environment.config import EnvironmentConfigError,parse_with_config,resolve_model
-from .backend import BackendError,LLMQuestionAuthor,LLMSemanticCritic,OpenAICompatibleBackend,PassthroughAuthorBackend,PassthroughCriticBackend
+from .backend import LLMQuestionAuthor,LLMSemanticCritic,OpenAICompatibleBackend,PassthroughAuthorBackend,PassthroughCriticBackend
 from .boundary import BoundaryError,validate_frozen_inputs
-from .prompts import author_prompt,critic_prompt
-from .validators import postflight,preflight
+from .realization import _realize_one
 from .streaming import (QuestionCheckpointError,QuestionProgress,
     question_output_lock,signature_for_question_run)
 
@@ -47,210 +46,6 @@ def _backends(args):
             args.critic_temperature,args.critic_max_tokens,args.timeout,
             critic_spec["json_mode"] and not args.no_json_mode))
     return author,critic
-def _oracle(world):return world.get("_display_answer",world.get("answer")) if isinstance(world,Mapping) else None
-def _critic_review(critic,payload,question,*,max_tries=2):
-    last=None
-    for _ in range(max_tries):
-        try:return critic.review(payload,question,critic_prompt(payload,question))
-        except BackendError as exc:last=exc
-    raise last or BackendError("critic failed")
-def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,use_critic,surface_mode="legacy"):
-    """Naturalize from a PUBLIC semantic scaffold, then certify against the graph.
-
-    The ordinary Stage-2 Critic is repair-only: it cannot veto a paraphrase
-    the authoritative ProgramIR reviewer certifies, or approve one it rejects.
-    """
-    from .verification import certify_surface
-    from .public_semantics import public_semantic_scaffold, public_question_contract, naturalization_metrics
-    from environment.trajectory_simulation.compiler import GoldCompilationError, compile_gold_solution
-
-    canonical=str(payload.get("draft_question") or "")
-    rendered=world.get("_rendered")
-    if not canonical or getattr(rendered,"question",None)!=canonical:
-        return False,{"task_id":payload.get("task_id"),
-                      "reason":"frozen_canonical_draft_mismatch"},[]
-    try:
-        scaffold=public_semantic_scaffold(world,canonical)
-        gold=compile_gold_solution(
-            {"task_id":payload["task_id"],"question":canonical,
-             "capability_world":capability},world,rendered,schedule="compact",
-        )
-        query_contract=public_question_contract(world,canonical,gold)
-    except (KeyError,TypeError,ValueError,GoldCompilationError) as exc:
-        # No partial or private graph information is passed to either model.
-        return False,{"task_id":payload.get("task_id"),
-                      "reason":"public_scaffold_unavailable",
-                      "error":str(exc)[:200]},[]
-
-    public_payload={**payload,"public_semantic_scaffold":scaffold,
-                    "question_contract":query_contract}
-    audits=[];feedback=None;best=None
-
-    def verify_proposal(text,entry,label):
-        local=postflight(payload,text,oracle_answer=_oracle(world))
-        entry[label+"_postflight"]=local.to_dict()
-        if not local.accepted:
-            return None,"; ".join(local.issues)
-        try:
-            certificate,review=certify_surface(
-                payload,world,capability,text,critic,
-            )
-        except (GoldCompilationError,ValueError,KeyError,TypeError,BackendError) as exc:
-            entry[label+"_graph_error"]=str(exc)[:240]
-            return None,"graph_verification_unavailable"
-        entry[label+"_programir_review"]=review
-        if certificate is None:
-            return None,"graph_review:"+str(
-                review.get("review_failure_kind") or
-                review.get("decision") or "not_confirmed"
-            )
-        return (text,certificate,review),None
-
-    scoped = surface_mode == "scoped" and isinstance(author, LLMQuestionAuthor)
-    if scoped:
-        from .scoped_surface import build_scoped_plan, choose_scoped, render_scoped
-        from .verification import certify_scoped_surface, controlled_question_reference
-        entry = {"stage": "scoped_surface", "scoped_style_model_calls": 0}
-        audits.append(entry)
-        try:
-            reference = controlled_question_reference(gold, world, rendered)
-            if reference is None or reference["question"] != canonical:
-                raise ValueError("unverified scoped grammar reference")
-            groups = build_scoped_plan(world, canonical, gold, reference)
-            entry["scoped_style_model_calls"] = 1
-            try:
-                question = render_scoped(groups, choose_scoped(author, groups))
-                entry["scoped_style"] = "llm_selected"
-            except (BackendError, ValueError) as exc:
-                entry["scoped_style_error"] = str(exc)[:240]
-                question = render_scoped(groups, [0] * len(groups))
-                entry["scoped_style"] = "deterministic_fallback"
-            # The grammar protects typed slots. Keep the ordinary public-boundary checks.
-            local = postflight(payload, question, oracle_answer=_oracle(world), check_contract=False)
-            entry["scoped_postflight"] = local.to_dict()
-            if local.accepted:
-                cert, review = certify_scoped_surface(payload["task_id"], world, canonical, question, groups)
-                metrics = naturalization_metrics(canonical, question)
-                entry["scoped_review"] = review
-                best = (question, cert, review, False, metrics)
-            else:
-                feedback = "; ".join(local.issues)
-        except (ValueError, TypeError, KeyError, IndexError) as exc:
-            entry["scoped_unsupported"] = str(exc)[:240]
-            feedback = "scoped_grammar_unavailable"
-    for attempt in range(1,1 if scoped else max(1,question_max_attempts)+1):
-        entry={"attempt":attempt,"strategy":"public_program_grounded_realization"}
-        try:
-            response=author.author(
-                public_payload,
-                author_prompt(public_payload,retry_feedback=feedback),
-            )
-            question=" ".join(str(response.get("question") or "").split())
-            entry["author_response"]=response
-        except BackendError as exc:
-            entry["author_error"]=str(exc)[:240]
-            audits.append(entry);feedback="author_response_failed"
-            continue
-        local=preflight(payload,question)
-        entry["preflight"]=local.to_dict()
-        if not local.accepted:
-            audits.append(entry);feedback="; ".join(local.issues)
-            continue
-
-        # Give every structurally valid candidate a chance with the FULL
-        # semantic graph. This prevents false negatives from the smaller
-        # public-only Critic's speculative hop/owner objections.
-        accepted,issue=verify_proposal(question,entry,"author")
-        if accepted is None and use_critic and question!=canonical:
-            # Ask the public-only Critic for a targeted wording repair, but
-            # never send it private World data or arbitrary graph-review text.
-            try:
-                critic_response=_critic_review(
-                    critic,public_payload,question,max_tries=1,
-                )
-                entry["semantic_critic_repair"]=critic_response
-                repair=" ".join(str(
-                    critic_response.get("repair_question") or ""
-                ).split())
-                if repair and repair!=question:
-                    repair_pre=preflight(payload,repair)
-                    entry["repair_preflight"]=repair_pre.to_dict()
-                    if repair_pre.accepted:
-                        accepted,repair_issue=verify_proposal(
-                            repair,entry,"repair",
-                        )
-                        if accepted is None:
-                            entry["repair_failure"]=repair_issue
-            except BackendError as exc:
-                entry["critic_repair_error"]=str(exc)[:200]
-        audits.append(entry)
-        if accepted is None:
-            # Only bounded, public, non-specific diagnostic cues are sent to
-            # Author. Never echo teacher-private audit facts into its prompt.
-            feedback=(
-                "The wording did not pass complete dependency/ownership "
-                "verification. Preserve EVERY edge direction, filter owner, "
-                "branch join and requested output from the public scaffold. "
-                "Do not assume two connected entities share attributes."
-            )
-            continue
-
-        text,certificate,review=accepted
-        metrics=naturalization_metrics(canonical,text)
-        entry["naturalization_metrics"]=metrics
-        if text!=canonical and metrics["meaningful_rewrite_proxy"]:
-            best=(text,certificate,review,False,metrics)
-            break
-        # A nearly unchanged but correct paraphrase is retained as a SAFE
-        # candidate while giving the next attempt a chance to improve style.
-        if best is None or text!=canonical:
-            best=(text,certificate,review,False,metrics)
-        feedback=(
-            "The previous wording passed semantic checks but remained too "
-            "close to the mechanical canonical template. Use shorter natural "
-            "clauses or explicit 'both/either' branches without omitting "
-            "any public condition in the scaffold."
-        )
-
-    if best is None:
-        canonical_entry={"stage":"certified_renderer_fallback",
-                         "reason":feedback}
-        best,issue=verify_proposal(canonical,canonical_entry,"canonical")
-        audits.append(canonical_entry)
-        if best is None:
-            return False,{
-                "task_id":payload.get("task_id"),
-                "reason":"question_realization_failed",
-                "last_feedback":issue,"audit":audits,
-            },audits
-        text,certificate,review=best
-        best=(text,certificate,review,True,
-              naturalization_metrics(canonical,text))
-
-    question,certificate,graph_review,fallback,metrics=best
-    realized={
-        "task_id":payload["task_id"],"question":question,
-        "draft_question":payload.get("draft_question"),
-        "task_design":payload.get("task_design",{}),
-        "resources":payload.get("resources",()),
-        "available_agents":payload.get("available_agents",()),
-        "capability_world":capability,
-        "surface_certificate":certificate,
-        "publication_status":(
-            "naturalized_certified" if question!=canonical else "canonical_only"
-        ),
-        "authoring":{
-            "attempts":len([a for a in audits if "attempt" in a])+sum(a.get("scoped_style_model_calls",0) for a in audits),
-            "semantic_critic_enabled":use_critic and not scoped,
-            "strategy":"scoped_surface_realization" if scoped else "public_question_contract_realization_v2",
-            "surface_review":graph_review,
-            "surface_fallback":fallback,
-            "naturalization_metrics":metrics,
-            "audit":audits,
-        },
-    }
-    return True,realized,audits
-
 def _safe_future_result(future,index,authoring):
     """Keep failures isolated to the corresponding frozen input task."""
     try:
@@ -291,7 +86,7 @@ def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress):
                         author,critic,
                         question_max_attempts=args.question_max_attempts,
                         use_critic=not args.no_semantic_critic,
-                        surface_mode=getattr(args,"surface_mode","legacy"))
+                        surface_mode=getattr(args,"surface_mode","scoped"))
                     active[future]=index
                     next_submit+=1
 
@@ -354,6 +149,10 @@ def run(args):
         Path(__file__).with_name("contracts.py"),
         Path(__file__).with_name("alignment.py"),
         Path(__file__).with_name("scoped_surface.py"),
+        Path(__file__).with_name("realization.py"),
+        Path(__file__).with_name("graph_realization.py"),
+        Path(__file__).with_name("free_surface.py"),
+        Path(__file__).with_name("semantic_readback.py"),
         Path("environment/trajectory_simulation/eligibility.py"),
         Path("environment/trajectory_simulation/compiler.py"),
         Path("environment/trajectory_simulation/skeleton.py"),
@@ -377,6 +176,7 @@ def run(args):
         # naturalized and fallback counts separately to avoid inflated claims.
         certified_paraphrases=canonical_fallbacks=canonical_selected=0
         meaningful_paraphrases=0
+        free_rewrite_certified=scoped_grammar_certified=0
         total_template_reduction=0
         with (output_dir/"realized_capability_worlds.jsonl").open(
             "r",encoding="utf-8",
@@ -386,6 +186,12 @@ def run(args):
                     continue
                 row=json.loads(line)
                 author_metadata=row.get("authoring") or {}
+                method=(row.get("surface_certificate") or {}).get("method")
+                if method=="verified_blind_semantic_readback_v1":
+                    free_rewrite_certified+=1
+                elif method in ("verified_scoped_grammar_v1",
+                                "verified_scoped_grammar_v2"):
+                    scoped_grammar_certified+=1
                 gain=author_metadata.get("naturalization_metrics") or {}
                 if gain.get("meaningful_rewrite_proxy") is True:
                     meaningful_paraphrases+=1
@@ -397,7 +203,8 @@ def run(args):
                     canonical_fallbacks+=1
                 elif ((row.get("surface_certificate") or {}).get("method")
                       in ("llm_semantic_screen","llm_contract_alignment",
-                          "verified_scoped_grammar_v1","verified_scoped_grammar_v2")):
+                          "verified_scoped_grammar_v1","verified_scoped_grammar_v2",
+                          "verified_blind_semantic_readback_v1")):
                     certified_paraphrases+=1
                 else:
                     canonical_selected+=1
@@ -408,6 +215,8 @@ def run(args):
         graph_review_calls=0
         scoped_style_calls=0
         scoped_styles=Counter()
+        free_author_calls=blind_readback_calls=0
+        free_attempt_failures=Counter()
         with (output_dir/"question_critic_audit.jsonl").open(
             "r",encoding="utf-8",
         ) as traces:
@@ -416,6 +225,10 @@ def run(args):
                     continue
                 for attempt in (json.loads(line).get("audit") or []):
                     scoped_style_calls+=int(attempt.get("scoped_style_model_calls",0))
+                    free_author_calls+=int(attempt.get("free_author_calls",0))
+                    blind_readback_calls+=int(attempt.get("blind_readback_calls",0))
+                    if attempt.get("stage")=="free_rewrite" and attempt.get("failure"):
+                        free_attempt_failures[str(attempt["failure"]).split(":",1)[0]]+=1
                     if attempt.get("scoped_style"):
                         scoped_styles[attempt["scoped_style"]]+=1
                     repair_attempts+=int("semantic_critic_repair" in attempt)
@@ -445,7 +258,8 @@ def run(args):
                 "rejected":rejected,
             },
             "semantic_critic":{
-                "enabled":not args.no_semantic_critic and getattr(args,"surface_mode","legacy") != "scoped",
+                "enabled":not args.no_semantic_critic and getattr(args,"surface_mode","scoped") == "graph",
+                "blind_readback_enabled":getattr(args,"surface_mode","scoped") == "free",
                 "configured":not args.no_semantic_critic,
             },
             "surface_certification":{
@@ -458,6 +272,11 @@ def run(args):
                 "graph_review_calls":graph_review_calls,
                 "scoped_style_model_calls":scoped_style_calls,
                 "scoped_styles":dict(scoped_styles),
+                "free_rewrite_certified":free_rewrite_certified,
+                "scoped_grammar_certified":scoped_grammar_certified,
+                "free_author_calls":free_author_calls,
+                "blind_readback_calls":blind_readback_calls,
+                "free_attempt_failure_reasons":dict(free_attempt_failures),
                 "graph_review_decisions":dict(graph_decisions),
                 "critic_repair_attempts":repair_attempts,
                 "canonical_fallbacks":canonical_fallbacks,
@@ -487,7 +306,7 @@ def run(args):
     return summary
 
 def build_parser():
-    p=argparse.ArgumentParser(description="Generate natural questions over a frozen MAESTRO task batch");p.add_argument("--manifest");p.add_argument("--authoring-inputs");p.add_argument("--worlds");p.add_argument("--capabilities");p.add_argument("--output-dir");p.add_argument("--max-records",type=int);p.add_argument("--seed",type=int,default=17);p.add_argument("--provider",choices=("passthrough","openai-compatible"),default="passthrough");p.add_argument("--base-url");p.add_argument("--model");p.add_argument("--critic-model");p.add_argument("--api-key-env",default="DASHSCOPE_API_KEY");p.add_argument("--question-temperature",type=float,default=.4);p.add_argument("--critic-temperature",type=float,default=0.);p.add_argument("--max-tokens",type=int,default=2048);p.add_argument("--critic-max-tokens",type=int,default=768);p.add_argument("--timeout",type=float,default=180.);p.add_argument("--question-max-attempts",type=int,default=2);p.add_argument("--question-workers",type=int,default=4);p.add_argument("--flush-every",type=int,default=5);p.add_argument("--restart-questions",action="store_true");p.add_argument("--no-semantic-critic",action="store_true");p.add_argument("--no-json-mode",action="store_true");p.add_argument("--no-progress",action="store_true");p.add_argument("--surface-mode",choices=("scoped","legacy"),default="scoped");return p
+    p=argparse.ArgumentParser(description="Generate natural questions over a frozen MAESTRO task batch");p.add_argument("--manifest");p.add_argument("--authoring-inputs");p.add_argument("--worlds");p.add_argument("--capabilities");p.add_argument("--output-dir");p.add_argument("--max-records",type=int);p.add_argument("--seed",type=int,default=17);p.add_argument("--provider",choices=("passthrough","openai-compatible"),default="passthrough");p.add_argument("--base-url");p.add_argument("--model");p.add_argument("--critic-model");p.add_argument("--api-key-env",default="DASHSCOPE_API_KEY");p.add_argument("--question-temperature",type=float,default=.4);p.add_argument("--critic-temperature",type=float,default=0.);p.add_argument("--max-tokens",type=int,default=2048);p.add_argument("--critic-max-tokens",type=int,default=768);p.add_argument("--timeout",type=float,default=180.);p.add_argument("--question-max-attempts",type=int,default=2);p.add_argument("--question-workers",type=int,default=4);p.add_argument("--flush-every",type=int,default=5);p.add_argument("--restart-questions",action="store_true");p.add_argument("--no-semantic-critic",action="store_true");p.add_argument("--no-json-mode",action="store_true");p.add_argument("--no-progress",action="store_true");p.add_argument("--surface-mode",choices=("scoped","free","graph"),default="scoped");return p
 def main():
     try:
         args=parse_with_config(build_parser(),"question_generation")

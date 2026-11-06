@@ -15,9 +15,12 @@ from environment.trajectory_simulation.compiler import compile_gold_solution
 from environment.trajectory_simulation.backend import LLMPlanner
 
 SCHEMA = "maestro.stage2_surface_cert.v1"
-REVIEW_CONTRACT = 17
+REVIEW_CONTRACT = 18
 
 from .scoped_surface import METHOD as SCOPED_METHOD
+from .semantic_readback import READBACK_VERSION, validate_readback_response
+
+FREE_METHOD = "verified_blind_semantic_readback_v1"
 
 
 def certify_surface(payload, world, capability, question, critic):
@@ -125,6 +128,30 @@ def certify_scoped_surface(task_id, world, canonical, question, groups):
     }
     return _mint_certificate(task_id, world, canonical, question, review), review
 
+
+
+def certify_free_surface(task_id, world, canonical, question, scoped_plan, readback):
+    """Mint a cert only for TWO independently verified question-only parses.
+
+    The generator and model's self-reported condition IDs are not evidence.
+    The stored text-only parse must match the compiled public query and quote
+    the actual question. Stage 3 will revalidate these conditions locally.
+    """
+    if (question == canonical or not readback.eligible
+            or readback.calls != 2 or len(readback.raw_responses) != 2):
+        raise ValueError("free_rewrite_independent_readback_not_verified")
+    for response in readback.raw_responses:
+        validate_readback_response(response, question, scoped_plan.query)
+    review = {
+        'eligible': True, 'reviewed': True, 'decision': 'eligible', 'issues': [],
+        'method': FREE_METHOD, 'question_sha256': digest(question),
+        'program_sha256': digest(world['program']),
+        'readback_version': READBACK_VERSION,
+        'reference_query_sha256': digest(scoped_plan.query),
+        'blind_readback': readback.to_dict(),
+    }
+    return _mint_certificate(task_id, world, canonical, question, review), review
+
 def validate_surface_certificate(realized, world, canonical, *, gold=None, rendered=None):
     """Verify Stage-2 publication linkage; do not make an additional LLM call."""
     cert = realized.get("surface_certificate")
@@ -149,7 +176,7 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
     }
     if cert != expected:
         raise ValueError("stage2_surface_certificate_input_mismatch")
-    if cert["review_contract"] not in (13, 14, 15, 16, REVIEW_CONTRACT):
+    if cert["review_contract"] not in (13, 14, 15, 16, 17, REVIEW_CONTRACT):
         raise ValueError("stage2_surface_review_contract_unsupported")
     if (review.get("eligible") is not True
             or review.get("reviewed") is not True
@@ -161,7 +188,7 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
     ) != digest(world["program"]):
         raise ValueError("stage2_surface_review_fingerprint_mismatch")
     if review.get("method") not in (
-        "verified_controlled_renderer", "llm_semantic_screen", "llm_contract_alignment", SCOPED_METHOD,
+        "verified_controlled_renderer", "llm_semantic_screen", "llm_contract_alignment", SCOPED_METHOD, FREE_METHOD,
     ):
         raise ValueError("stage2_surface_review_method_unsupported")
     if question == canonical:
@@ -169,7 +196,10 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
             raise ValueError("canonical_surface_certificate_method_mismatch")
     elif review['method'] == SCOPED_METHOD:
         from .scoped_surface import build_scoped_plan, read_scoped_semantics
-        if cert['review_contract'] != REVIEW_CONTRACT:
+        # Scoped Grammar v17 remains byte-for-byte recomputable after v18
+        # adds the separate free-text readback method. Keep old frozen rows
+        # readable; do not weaken the newer free-text certificate contract.
+        if cert['review_contract'] not in (17, REVIEW_CONTRACT):
             raise ValueError('unsupported scoped grammar review contract')
         rendered = rendered or world.get('_rendered')
         if rendered is None or rendered.question != canonical:
@@ -186,6 +216,42 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
                 or review.get('semantic_readback') != readback
                 or review.get('query_contract_sha256') != digest(groups.query)):
             raise ValueError('scoped grammar round-trip mismatch')
+    elif review["method"] == FREE_METHOD:
+        from .scoped_surface import build_scoped_plan
+        if cert["review_contract"] != REVIEW_CONTRACT:
+            raise ValueError("unsupported_free_readback_contract")
+        rendered = rendered or world.get("_rendered")
+        if rendered is None or rendered.question != canonical:
+            raise ValueError("missing_free_readback_renderer")
+        if gold is None:
+            gold = compile_gold_solution(
+                {**realized, "question": canonical}, world, rendered,
+                schedule="compact",
+            )
+        reference = controlled_question_reference(gold, world, rendered)
+        if reference is None or reference["question"] != canonical:
+            raise ValueError("unverified_free_readback_renderer")
+        plan = build_scoped_plan(world, canonical, gold, reference)
+        stored = review.get("blind_readback") or {}
+        responses = stored.get("raw_responses", [])
+        if (review.get("readback_version") != READBACK_VERSION
+                or review.get("reference_query_sha256") != digest(plan.query)
+                or stored.get("eligible") is not True
+                or stored.get("version") != READBACK_VERSION
+                or stored.get("calls") != 2
+                or not isinstance(responses, list)
+                or len(responses) != 2):
+            raise ValueError("invalid_free_readback_audit")
+        try:
+            parsed = [
+                validate_readback_response(response, question, plan.query)
+                for response in responses
+            ]
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ValueError("free_readback_text_witness_mismatch") from exc
+        if (parsed[0] != parsed[1]
+                or parsed[0] != stored.get("parsed_query")):
+            raise ValueError("free_readback_parsers_disagree")
     elif review["method"] != (
         "llm_semantic_screen" if cert["review_contract"] == 13 else "llm_contract_alignment"
     ):
