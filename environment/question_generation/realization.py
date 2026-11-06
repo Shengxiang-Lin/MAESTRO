@@ -21,6 +21,10 @@ from .question_review import (
     passing_judgment, rejection_reason,
 )
 from .scoped_surface import build_scoped_plan, render_scoped
+from .semantic_checks import (
+    semantic_checks, naturalness_gate, explicit_join_contradictions,
+    CheckFormatError,
+)
 from .validators import postflight
 from .verification import certify_approved_question
 
@@ -74,6 +78,9 @@ def _realize_one(payload, world, capability, author, critic, *,
             raise ValueError("unverified_controlled_reference")
         plan = build_scoped_plan(world, canonical, gold, controlled)
         scoped = render_scoped(plan, [0] * len(plan))
+        checkpoints = semantic_checks(plan)
+        if not checkpoints:
+            raise ValueError("missing_public_semantic_checkpoints")
         # No model is needed to select between nearly equivalent templates.
         check = postflight(
             payload, scoped, oracle_answer=_oracle(world),
@@ -89,6 +96,7 @@ def _realize_one(payload, world, capability, author, critic, *,
         "kind": "deterministic_scoped",
         "scoped_question": scoped,
         "scoped_question_sha256": digest(scoped),
+        "semantic_checks": checkpoints,
     })
 
     author_backend = _model(author)
@@ -114,7 +122,7 @@ def _realize_one(payload, world, capability, author, critic, *,
             candidate = author_question(
                 author_backend, scoped, previous=previous, feedback=feedback,
             )
-        except (BackendError, ReviewFormatError, ValueError, TypeError) as exc:
+        except (BackendError, ReviewFormatError, CheckFormatError, ValueError, TypeError) as exc:
             entry["failure"] = "author_model_error"
             entry["detail"] = str(exc)[:240]
             last_failure, last_detail = "rejected_validation_error", str(exc)
@@ -135,6 +143,36 @@ def _realize_one(payload, world, capability, author, critic, *,
                 "summary": "Keep every necessary clue but change the actual phrasing.",
             }
             last_failure = "rejected_quality"
+            continue
+        style = naturalness_gate(scoped, candidate)
+        entry["naturalness_gate"] = style
+        if not style["improved_enough_to_review"]:
+            entry["failure"] = "cosmetic_rephrase"
+            last_failure, last_detail = "rejected_quality", "cosmetic_rephrase"
+            feedback = {
+                "verdict": "revise",
+                "issues": [{
+                    "kind": "naturalness", "severity": "minor",
+                    "explanation": "The draft only makes cosmetic word changes.",
+                    "suggestion": "Restructure the question substantially while preserving the exact information need; reduce mechanical group definitions.",
+                }],
+                "summary": "Make a genuine natural-language rewrite, not a near-copy.",
+            }
+            continue
+        contradictions = explicit_join_contradictions(scoped, candidate)
+        entry["explicit_join_contradictions"] = contradictions
+        if contradictions:
+            entry["failure"] = "explicit_set_logic_contradiction"
+            last_failure, last_detail = "rejected_semantic", ";".join(contradictions)
+            feedback = {
+                "verdict": "revise",
+                "issues": [{
+                    "kind": "set_logic", "severity": "major",
+                    "explanation": reason,
+                    "suggestion": "Restore the original intersection (ALL) versus union (ANY) meaning for this exact group.",
+                } for reason in contradictions],
+                "summary": "Do not reverse set operations while rephrasing.",
+            }
             continue
         boundary = postflight(
             payload, candidate, oracle_answer=_oracle(world),
@@ -158,7 +196,7 @@ def _realize_one(payload, world, capability, author, critic, *,
 
         try:
             entry["critic_calls"] = 1
-            critique = critique_question(critic_backend, scoped, candidate)
+            critique = critique_question(critic_backend, scoped, candidate, checkpoints)
         except (BackendError, ReviewFormatError, ValueError, TypeError) as exc:
             entry["failure"] = "critic_protocol_error"
             entry["detail"] = str(exc)[:240]
@@ -188,7 +226,7 @@ def _realize_one(payload, world, capability, author, critic, *,
         # not necessarily a different checkpoint.
         try:
             entry["final_judge_calls"] = 1
-            final = judge_question(critic_backend, scoped, candidate)
+            final = judge_question(critic_backend, scoped, candidate, checkpoints)
         except (BackendError, ReviewFormatError, ValueError, TypeError) as exc:
             entry["failure"] = "final_judge_protocol_error"
             entry["detail"] = str(exc)[:240]
@@ -215,6 +253,7 @@ def _realize_one(payload, world, capability, author, critic, *,
             certificate, review = certify_approved_question(
                 payload["task_id"], world, canonical, candidate, scoped, final,
                 critic_verdict="pass", revision_rounds=attempt,
+                semantic_checklist=checkpoints,
             )
         except (ValueError, TypeError, KeyError) as exc:
             entry["failure"] = "certificate_error"
