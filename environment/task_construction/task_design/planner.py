@@ -63,6 +63,13 @@ _RETRIEVAL_POLICY = "task_local_ranked_public_index_v1"
 
 
 def _source_scenario(world):
+    # New worlds record the acquisition scenario *before* choosing the
+    # source modalities. Old frozen worlds retain the legacy inference.
+    layout = (world.metadata.get("evidence_allocation", {})
+              .get("layout", {}).get("final_layout_plan", {}))
+    planned = layout.get("acquisition_scenario")
+    if planned in {"web_search", "provided_media", "hybrid"}:
+        return planned
     kinds = {source.source_type for source in world.sources.values()}
     if kinds and kinds <= _WEB_SOURCE_TYPES:
         return "web_search"
