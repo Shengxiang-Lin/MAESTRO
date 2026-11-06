@@ -331,6 +331,8 @@ def run(args):
         # Acceptance now includes safely certified renderer fallbacks. Report
         # naturalized and fallback counts separately to avoid inflated claims.
         certified_paraphrases=canonical_fallbacks=canonical_selected=0
+        meaningful_paraphrases=0
+        total_template_reduction=0
         with (output_dir/"realized_capability_worlds.jsonl").open(
             "r",encoding="utf-8",
         ) as finalized:
@@ -339,6 +341,13 @@ def run(args):
                     continue
                 row=json.loads(line)
                 author_metadata=row.get("authoring") or {}
+                gain=author_metadata.get("naturalization_metrics") or {}
+                if gain.get("meaningful_rewrite_proxy") is True:
+                    meaningful_paraphrases+=1
+                    total_template_reduction+=max(
+                        0, int(gain.get("canonical_template_phrases",0))
+                         - int(gain.get("surface_template_phrases",0)),
+                    )
                 if author_metadata.get("surface_fallback") is True:
                     canonical_fallbacks+=1
                 elif ((row.get("surface_certificate") or {}).get("method")
@@ -361,6 +370,10 @@ def run(args):
             "surface_certification":{
                 "contract":"maestro.stage2_surface_cert.v1",
                 "certified_paraphrases":certified_paraphrases,
+                "meaningful_certified_paraphrases":meaningful_paraphrases,
+                "meaningful_rewrite_rate":meaningful_paraphrases/len(authoring)
+                    if authoring else 0.0,
+                "template_phrases_removed_from_meaningful":total_template_reduction,
                 "canonical_fallbacks":canonical_fallbacks,
                 "canonical_selected":canonical_selected,
                 "published_certified":accepted,
