@@ -190,7 +190,7 @@ class CertificateRoundtripTests(unittest.TestCase):
             raw_responses=(copy.deepcopy(example_parse()),
                            copy.deepcopy(example_parse())),
         )
-        plan = self_plan = ScopedPlan([], [], copy.deepcopy(example_parse()["query"]))
+        plan = ScopedPlan([], [], copy.deepcopy(example_parse()["query"]))
         return payload, world, capability, rendered, plan, result
 
     def test_stage3_revalidates_stored_readback_evidence_without_llm(self):
@@ -246,7 +246,9 @@ class CertificateRoundtripTests(unittest.TestCase):
             side_effect=lambda _, groups: [0] * len(groups),
         ), patch(
             "environment.question_generation.free_surface.call_free_rewriter",
-            return_value=QUESTION,
+            side_effect=lambda _author, scoped_question, **kwargs: scoped_question.replace(
+                "Let the first group consist of", "The first group includes",
+            ),
         ), patch(
             "environment.question_generation.free_surface.assess_free_style",
             return_value=Mock(improved=True, to_dict=lambda: {"improved": True}),
