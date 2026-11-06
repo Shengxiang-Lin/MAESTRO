@@ -1,4 +1,4 @@
-"""Question-author and semantic-critic backends."""
+"""Minimal OpenAI-compatible JSON client for Stage-2 author and reviewer."""
 from __future__ import annotations
 import json,os,urllib.error,urllib.request
 from dataclasses import dataclass
@@ -118,14 +118,4 @@ class OpenAICompatibleBackend:
             }
             raise
 
-class PassthroughAuthorBackend:
-    def author(self,payload:Mapping[str,Any],prompt:str)->dict[str,Any]:return {"question":str(payload.get("draft_question") or "").strip(),"notes":"passthrough"}
-class LLMQuestionAuthor:
-    def __init__(self,backend:OpenAICompatibleBackend):self.backend=backend
-    def author(self,payload,prompt):return self.backend.complete_json("You are a benchmark question author. Follow the public frozen contract exactly. Return JSON only.",prompt)
-class PassthroughCriticBackend:
-    def review(self,payload,question,prompt):return {"accept":True,"semantic_fidelity":"pass","repair_question":question,"issues":[]}
-class LLMSemanticCritic:
-    def __init__(self,backend:OpenAICompatibleBackend):self.backend=backend
-    def review(self,payload,question,prompt):return self.backend.complete_json("You are a strict semantic fidelity critic for a frozen benchmark task. Return JSON only.",prompt)
-__all__=["BackendError","LLMQuestionAuthor","LLMSemanticCritic","OpenAICompatibleBackend","PassthroughAuthorBackend","PassthroughCriticBackend"]
+__all__ = ["BackendError", "OpenAICompatibleBackend"]
