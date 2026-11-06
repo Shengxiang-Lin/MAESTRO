@@ -232,6 +232,9 @@ def critique_question(backend: Any, reference: str, candidate: str,
         raise ReviewFormatError("critic_summary_invalid")
     if response["verdict"] != "pass" and not issues and not response["summary"]:
         raise ReviewFormatError("critic_revision_has_no_feedback")
+    # Never mutate the model response's nested list: some scripted backends
+    # or replay fixtures reuse dictionaries across separate review calls.
+    issues = [dict(item) for item in issues]
     failures = [item for item in response["checks"]
                 if item["status"] != "preserved"]
     if failures and response["verdict"] == "pass":
