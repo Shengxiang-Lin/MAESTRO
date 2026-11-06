@@ -1,15 +1,12 @@
 """Reversible, bounded English surface forms for the public question contract."""
 from __future__ import annotations
 
-import json
 import re
 from collections import Counter
 from datetime import date
 from decimal import Decimal
 
 from .public_semantics import public_question_contract
-
-METHOD = 'verified_scoped_grammar_v2'
 
 
 class UnsupportedSurface(ValueError):
