@@ -3,21 +3,23 @@
 Natural-language realization over a frozen programmatic task batch.
 
 ```text
-frozen manifest + public authoring projection
+frozen manifest + public authoring projection + Controlled Renderer
         ↓
 public/private boundary validation (including SHA-256)
         ↓
-parallel LLM Author (per-task sequential execution)
+PUBLIC semantic dependency scaffold (only existing question facts)
         ↓
-deterministic preflight
+LLM Author generates fluent question (per-task sequential execution)
         ↓
-semantic Critic / wording-only repair
+deterministic preflight + postflight
         ↓
-deterministic postflight
+authoritative full-ProgramIR graph semantic review
+        ├─ certified → keep, optionally retry if wording barely changed
+        └─ unverified → public-only Critic proposes targeted wording repair
+                          ↓
+                     full-ProgramIR re-certification of repair
         ↓
-independent full-ProgramIR graph-aware semantic certification
-        ↓
-if unverified: retry Author, then certified Canonical Renderer fallback
+after bounded attempts: best certified rewrite OR safe Canonical fallback
         ↓
 publish Surface + review certificate + ordered streaming checkpoint
 ```
@@ -50,6 +52,62 @@ old drafts. To update the draft templates themselves, regenerate the
 upstream rendering/freeze outputs in a new batch and then re-run Stage 2.
 Do not hand-edit existing accepted questions: Stage 3 fingerprints both
 the accepted question and ProgramIR for review.
+
+## Program-grounded naturalization (v11)
+
+The v10 benchmark generated only **1/50** graph-certified noncanonical
+questions. The existing public-only Critic rejected many Author rewrites
+before the full ProgramIR judge could inspect them. v11 changes the
+generation path; it does **not** relax the publication guard.
+
+- Stage 2 derives a compact `public_semantic_scaffold` from the frozen
+  ProgramIR's operation dependencies. The projection expresses relation
+  directions, filter ownership, branch joins and terminal outputs. It does
+  **not** serialize the ProgramIR, reveal concealed `FIND` entity IDs,
+  access World facts or include raw constants unless they already appear
+  in the Controlled Renderer question. Public null values require the
+  Author to consult the existing Canonical question rather than guess.
+- Author gets both Canonical Question and this public-only scaffold. It
+  is asked to write a shorter, fluent question preserving ALL branches
+  and constraints, instead of line-by-line copying the renderer template.
+- A candidate passing deterministic checks goes **directly** to the
+  full graph-aware semantic reviewer. The old public-only Critic can
+  propose a wording repair **only if graph review failed**. Every repaired
+  text must independently pass the same preflight, postflight and full
+  graph check. Critic's vote is never a correctness certificate.
+- A faithful but superficial rewrite can trigger another bounded
+  Author attempt. The best already-certified proposal is retained if
+  that retry fails; otherwise a separately certified Canonical question
+  is the safe fallback. No unverified paraphrase is published.
+- `surface_certification.meaningful_certified_paraphrases` counts a
+  heuristic reduction in repeated renderer boilerplate or a substantial,
+  concise change in wording. It is a **readability proxy**, not a
+  human evaluation or a semantic proof. Keep reporting
+  `certified_paraphrases`, `canonical_fallbacks`, and rejection counts.
+
+The graph-aware reviewer may still produce uncertain or malformed
+verdicts; those remain unverified. A successful local CI run does not
+establish how many Qwen3.5-9B rewrites will pass in the next live batch.
+Run v11 alongside v10 using the same frozen input, a **new output
+directory**, and the same `--max-records 50`:
+
+```bash
+python environment/generate_questions.py \
+  --max-records 50 \
+  --output-dir environment/data/questions_cert_v11_50
+
+python environment/simulate_trajectories.py subtasks \
+  --scene omnigaia --provider openai-compatible --schedule compact \
+  --max-records 50 --feedback-workers 4 \
+  --realized environment/data/questions_cert_v11_50/realized_capability_worlds.jsonl \
+  --output work/subtask_bank_scenario_v11_50.jsonl
+```
+
+Review `surface_certification.graph_review_decisions` and
+`critic_repair_attempts` to tell graph-review failures apart from
+realized naturalization gains. Because Stage 2 now consumes a newly
+constructed public scaffold, changing this code invalidates the
+checkpoint signature; do not append to v10 output artifacts.
 
 ## Semantic ownership and multi-hop fidelity
 
@@ -138,7 +196,7 @@ python environment/generate_questions.py --question-workers 8
 ```
 
 `question_workers` counts concurrent tasks; within each task the
-Author → preflight → Critic → postflight → ProgramIR certification sequence remains ordered.
+Author → preflight/postflight → ProgramIR review → (optional) Critic repair → ProgramIR re-review sequence remains ordered.
 The vLLM server's GPU throughput and KV cache determine whether 8 is faster
 than 4. Start with 4, then benchmark 8 without changing generation checks.
 
