@@ -497,7 +497,7 @@ def validate_feedback(value: Any, fragment: Mapping[str, Any], *, strict=False,
             r"\b(?:step|operation)\s+(\d+)\b",
             lambda match: "" if 1 <= int(match[1]) <= len(fragment["operations"]) else match[0],
             masked, flags=re.I)
-        if numeric(masked) - numeric(supported):
+        if numeric(masked) - numeric(supported) - supported_collection_counts(masked, fragment):
             issues.append(key + "_unsupported_numeric_claim")
         issues.extend(
             key + "_" + problem
