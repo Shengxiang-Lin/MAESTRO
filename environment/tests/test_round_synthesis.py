@@ -37,11 +37,11 @@ class TwoPhaseTests(unittest.TestCase):
     def bank(self,*,dependent=True):
         q,world,rendered=fixture(dependent=dependent)
         with patch(
-            "environment.trajectory_simulation.subtask_bank.check_question",reviewed
+            "environment.trajectory_simulation.subtask_bank.controlled_question_reference",
+            return_value={"question":rendered.question}
         ):
             bank=build_subtask_bank(
-                q,world,rendered,planner=PassthroughPlanner(),
-                executor=PassthroughExecutor(),schedule="baseline",
+                q,world,rendered,executor=PassthroughExecutor(),schedule="baseline",
             )
         return q,world,rendered,bank
 
@@ -49,10 +49,10 @@ class TwoPhaseTests(unittest.TestCase):
         q,world,rendered=fixture(dependent=True)
         canonical=rendered.question
         q["question"]="A paraphrase presented only to Main after validation."
-        reviews=[]
-        def track(gold,record,role,*,review=True,rendered=None):
-            reviews.append(gold["question"])
-            return reviewed(gold,record,role,review=review,rendered=rendered)
+        canonical_checks=[]
+        def verify_canonical(gold,record,rendered):
+            canonical_checks.append(gold["question"])
+            return {"question":rendered.question}
         certificates=[]
         def certified(realized,record,renderer_question):
             certificates.append(realized["question"])
@@ -63,16 +63,16 @@ class TwoPhaseTests(unittest.TestCase):
                 "method":"stage2_verified_programir_certificate",
             }
         with patch(
-            "environment.trajectory_simulation.subtask_bank.check_question",track
+            "environment.trajectory_simulation.subtask_bank.controlled_question_reference",
+            side_effect=verify_canonical
         ),patch(
             "environment.question_generation.verification.validate_surface_certificate",
             side_effect=certified,
         ):
             bank=build_subtask_bank(
-                q,world,rendered,planner=PassthroughPlanner(),
-                executor=PassthroughExecutor(),schedule="baseline",
+                q,world,rendered,executor=PassthroughExecutor(),schedule="baseline",
             )
-        self.assertEqual(reviews,[canonical])
+        self.assertEqual(canonical_checks,[canonical])
         self.assertEqual(certificates,[q["question"]])
         self.assertEqual(bank["question"],canonical)
         self.assertEqual(bank["surface_question"],q["question"])
@@ -97,16 +97,9 @@ class TwoPhaseTests(unittest.TestCase):
     def test_surface_failure_quarantines_completed_canonical_bank(self):
         q,world,rendered=fixture(dependent=True)
         q["question"]="This unrelated Stage 2 rewrite changes the question."
-        def separate(gold,record,role,*,review=True,rendered=None):
-            result=reviewed(gold,record,role,review=review,rendered=rendered)
-            if gold["question"]!=rendered.question:
-                return {**result,"eligible":False,"reviewed":True,
-                        "decision":"mismatch",
-                        "review_failure_kind":"semantic_mismatch",
-                        "issues":["unrelated rewritten question"]}
-            return result
         with tempfile.TemporaryDirectory() as tmp,patch(
-            "environment.trajectory_simulation.subtask_bank.check_question",separate
+            "environment.trajectory_simulation.subtask_bank.controlled_question_reference",
+            return_value={"question":rendered.question}
         ),patch(
             "environment.trajectory_simulation.pipeline._rows",return_value=[q]
         ),patch(
@@ -120,7 +113,7 @@ class TwoPhaseTests(unittest.TestCase):
             output=Path(tmp)/"bank.jsonl"
             stats=generate_subtasks_jsonl(
                 worldpath,inp,output,
-                reviewer=PassthroughPlanner(),executor=PassthroughExecutor(),
+                executor=PassthroughExecutor(),
                 schedule="baseline",progress=False,
             )
             self.assertEqual(stats["accepted_banks"],0)
@@ -148,10 +141,10 @@ class TwoPhaseTests(unittest.TestCase):
             }
         original=rendered.question
         q["question"]="An independently reviewed surface rewrite."
-        reviews=[]
-        def check(gold,record,role,*,review=True,rendered=None):
-            reviews.append(gold["question"])
-            return reviewed(gold,record,role,review=review,rendered=rendered)
+        canonical_checks=[]
+        def check(gold,record,rendered):
+            canonical_checks.append(gold["question"])
+            return {"question":rendered.question}
         seen=[]
         def surface_unreachable(*args,**kwargs):
             question=kwargs.get("public_question")
@@ -169,7 +162,8 @@ class TwoPhaseTests(unittest.TestCase):
                 "method":"stage2_verified_programir_certificate",
             }
         with patch(
-            "environment.trajectory_simulation.subtask_bank.check_question",check,
+            "environment.trajectory_simulation.subtask_bank.controlled_question_reference",
+            side_effect=check,
         ),patch(
             "environment.question_generation.verification.validate_surface_certificate",
             side_effect=certified,
@@ -178,10 +172,9 @@ class TwoPhaseTests(unittest.TestCase):
             side_effect=surface_unreachable,
         ):
             bank=build_subtask_bank(
-                q,world,rendered,planner=PassthroughPlanner(),
-                executor=PassthroughExecutor(),schedule="compact",
+                q,world,rendered,executor=PassthroughExecutor(),schedule="compact",
             )
-        self.assertEqual(reviews,[original])
+        self.assertEqual(canonical_checks,[original])
         self.assertEqual(certificates,[q["question"]])
         self.assertIn(original,seen)
         self.assertIn(q["question"],seen)
@@ -230,10 +223,10 @@ class TwoPhaseTests(unittest.TestCase):
                 raise AssertionError("Phase 1 must not call Main writer")
 
         q,world,rendered=fixture(dependent=True)
-        with patch("environment.trajectory_simulation.subtask_bank.check_question",reviewed):
+        with patch("environment.trajectory_simulation.subtask_bank.controlled_question_reference",
+            return_value={"question":rendered.question}):
             bank=build_subtask_bank(
-                q,world,rendered,planner=Reviewer(),
-                executor=PassthroughExecutor(),schedule="baseline",
+                q,world,rendered,executor=PassthroughExecutor(),schedule="baseline",
             )
         self.assertEqual(bank["schema_version"],2)
         self.assertEqual(len(bank["fragments"]),3)
@@ -290,7 +283,8 @@ class TwoPhaseTests(unittest.TestCase):
     def test_phase1_output_can_be_used_by_separate_phase2_without_world(self):
         q,world,rendered=fixture(dependent=True)
         with tempfile.TemporaryDirectory() as tmp,patch(
-            "environment.trajectory_simulation.subtask_bank.check_question",reviewed
+            "environment.trajectory_simulation.subtask_bank.controlled_question_reference",
+            return_value={"question":rendered.question}
         ),patch(
             "environment.trajectory_simulation.pipeline._rows",return_value=[q]
         ),patch(
@@ -304,7 +298,7 @@ class TwoPhaseTests(unittest.TestCase):
             bankfile=Path(tmp)/"bank.jsonl"
             summary=generate_subtasks_jsonl(
                 worlds,questions,bankfile,
-                reviewer=PassthroughPlanner(),executor=PassthroughExecutor(),
+                executor=PassthroughExecutor(),
                 schedule="baseline",progress=False,
             )
             self.assertEqual(summary["accepted_banks"],1)
