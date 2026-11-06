@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .contracts import typed_values
+from .semantic_checks import check_evidence, check_failures
 
 
 class ReviewFormatError(ValueError):
@@ -49,6 +50,22 @@ SAME condition naturally. A date written as 'August 1, 1997' is the same
 as '1997-08-01'. 'Which people' can request names; 'How many' can mean COUNT.
 When a reference clause is paraphrased correctly, do not suggest reverting it.
 
+The user has also supplied a short PUBLIC checklist of high-risk semantic
+requirements. Review EACH check against the candidate's actual wording:
+set union vs intersection, who owns a numerical filter, exact relation
+direction/hops, and final output. For each check, return its id, whether
+it is preserved/changed/uncertain, a SHORT EXACT candidate substring that
+supports your decision, and a specific explanation. Preserve every id.
+Do not say 'preserved' merely because a value appears somewhere: verify
+its OWNER, branch and scope. Never substitute an execution-tree description
+for the candidate's own meaning.
+
+An example of a REAL failure: reference says the SAME entity belongs to
+BOTH groups, candidate defines the group as their UNION. Another example:
+a population filter on the returned administrative area becomes a
+population filter on the *related* area. Flag these as changed even if
+the candidate's overall prose sounds fluent.
+
 If the candidate is faithful and already reads naturally, choose pass.
 If there is a fixable issue, choose revise and provide 1-5 concise,
 ACTIONABLE, phrase-level changes. Distinguish meaning-changing issues
@@ -71,6 +88,16 @@ AND/OR, existential/count/name/ranking output and evidence scope.
 Do not compare internal execution trees, group numbering, sentence
 ordering or word-for-word phrasing. Natural paraphrases are welcome.
 
+You must fill ALL public high-risk checks with preserved/changed/uncertain,
+the smallest EXACT supporting candidate substring, and an explanation.
+A filter value appearing in the candidate does NOT suffice if its
+owning entity changed. Distinguish 'both' (intersection) from 'either'
+(union), and track each intermediate scope across references.
+If even ONE check is changed or uncertain, the final verdict CANNOT pass.
+Do not claim meaningful naturalness improvement for a near-verbatim
+replacement such as 'consist of' → 'be'; group-definition boilerplate
+alone is not good natural prose.
+
 Also decide whether the candidate is a genuinely clearer, more natural
 question than the mechanical reference. Minor cosmetic changes are
 insufficient. If any material semantic difference exists, reject and
@@ -92,14 +119,27 @@ _ISSUE_SCHEMA = {
     "required": ["kind", "severity", "explanation", "suggestion"],
     "additionalProperties": False,
 }
+
+_CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "status": {"enum": ["preserved", "changed", "uncertain"]},
+        "candidate_quote": {"type": "string"},
+        "explanation": {"type": "string"},
+    },
+    "required": ["id", "status", "candidate_quote", "explanation", "checks"],
+    "additionalProperties": False,
+}
 _CRITIC_SCHEMA = {
     "type": "object",
     "properties": {
         "verdict": {"enum": ["pass", "revise", "uncertain"]},
         "issues": {"type": "array", "items": _ISSUE_SCHEMA},
         "summary": {"type": "string"},
+        "checks": {"type": "array", "items": _CHECK_SCHEMA},
     },
-    "required": ["verdict", "issues", "summary"],
+    "required": ["verdict", "issues", "summary", "checks"],
     "additionalProperties": False,
 }
 _FINAL_SCHEMA = {
@@ -110,6 +150,7 @@ _FINAL_SCHEMA = {
         "naturalness": {"enum": ["improved", "not_improved", "uncertain"]},
         "issues": {"type": "array", "items": {"type": "string"}},
         "explanation": {"type": "string"},
+        "checks": {"type": "array", "items": _CHECK_SCHEMA},
     },
     "required": ["verdict", "semantic_equivalence", "naturalness", "issues",
                  "explanation"],
@@ -167,12 +208,15 @@ def author_question(backend: Any, reference: str, *,
     return " ".join(question.split())
 
 
-def critique_question(backend: Any, reference: str, candidate: str) -> dict:
+def critique_question(backend: Any, reference: str, candidate: str,
+                      checks: list[dict]) -> dict:
     response = _invoke(backend, _CRITIC_SYSTEM, {
         "reference_question": reference,
         "candidate_question": candidate,
+        "semantic_checks": checks,
         "potential_literal_changes_to_check": literal_warnings(reference, candidate),
     }, schema=_CRITIC_SCHEMA)
+    check_evidence(checks, response.get("checks"), candidate)
     if response.get("verdict") not in ("pass", "revise", "uncertain"):
         raise ReviewFormatError("critic_verdict_invalid")
     issues = response.get("issues")
@@ -188,17 +232,37 @@ def critique_question(backend: Any, reference: str, candidate: str) -> dict:
         raise ReviewFormatError("critic_summary_invalid")
     if response["verdict"] != "pass" and not issues and not response["summary"]:
         raise ReviewFormatError("critic_revision_has_no_feedback")
+    failures = [item for item in response["checks"]
+                if item["status"] != "preserved"]
+    if failures and response["verdict"] == "pass":
+        # Explicit checklist disagreements override an optimistic overall vote.
+        response["verdict"] = "revise"
+    for item in failures:
+        if not any(issue.get("kind") == f"semantic_check_{item['id']}"
+                   for issue in issues):
+            issues.append({
+                "kind": f"semantic_check_{item['id']}",
+                "severity": "major",
+                "explanation": item["explanation"],
+                "suggestion": (
+                    f"Restore the requirement '{next(c['expected'] for c in checks if c['id']==item['id'])}' "
+                    "with its original owner and relation direction."
+                ),
+            })
     return {"verdict": response["verdict"], "issues": issues,
-            "summary": response["summary"]}
+            "summary": response["summary"], "checks": response["checks"]}
 
 
-def judge_question(backend: Any, reference: str, candidate: str) -> dict:
-    """Independent context, no previous revisions or Critic verdicts."""
+def judge_question(backend: Any, reference: str, candidate: str,
+                   checks: list[dict]) -> dict:
+    """Independent context; candidate phrase evidence for every risk check."""
     response = _invoke(backend, _FINAL_SYSTEM, {
         "reference_question": reference,
         "candidate_question": candidate,
+        "semantic_checks": checks,
         "potential_literal_changes_to_check": literal_warnings(reference, candidate),
     }, schema=_FINAL_SCHEMA)
+    check_evidence(checks, response.get("checks"), candidate)
     if (response.get("verdict") not in ("pass", "reject", "uncertain")
             or response.get("semantic_equivalence") not in (
                 "equivalent", "different", "uncertain")
@@ -209,10 +273,15 @@ def judge_question(backend: Any, reference: str, candidate: str) -> dict:
             or len(response["issues"]) > 8
             or not isinstance(response.get("explanation"), str)):
         raise ReviewFormatError("final_judge_schema_invalid")
-    return {key: response[key] for key in (
+    result = {key: response[key] for key in (
         "verdict", "semantic_equivalence", "naturalness",
-        "issues", "explanation",
+        "issues", "explanation", "checks",
     )}
+    if check_failures(result["checks"]) and result["verdict"] == "pass":
+        result["verdict"] = "uncertain"
+        result["semantic_equivalence"] = "uncertain"
+        result["issues"].append("One or more required semantic checks did not pass.")
+    return result
 
 
 def passing_judgment(judgment: Mapping[str, Any]) -> bool:
@@ -221,6 +290,9 @@ def passing_judgment(judgment: Mapping[str, Any]) -> bool:
         and judgment.get("semantic_equivalence") == "equivalent"
         and judgment.get("naturalness") == "improved"
         and judgment.get("issues") == []
+        and isinstance(judgment.get("checks"), list)
+        and bool(judgment["checks"])
+        and not check_failures(judgment["checks"])
     )
 
 
