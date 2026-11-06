@@ -10,17 +10,10 @@ from collections.abc import Mapping
 from .backend import (
     BackendError, LLMQuestionAuthor, LLMSemanticCritic,
 )
-from .prompts import author_prompt, critic_prompt
-from .validators import postflight, preflight
+from .validators import postflight
 
 def _oracle(world):return world.get("_display_answer",world.get("answer")) if isinstance(world,Mapping) else None
-def _critic_review(critic,payload,question,*,max_tries=2):
-    last=None
-    for _ in range(max_tries):
-        try:return critic.review(payload,question,critic_prompt(payload,question))
-        except BackendError as exc:last=exc
-    raise last or BackendError("critic failed")
-def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,use_critic,surface_mode="legacy"):
+def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,use_critic,surface_mode="graph"):
     """Naturalize from a PUBLIC semantic scaffold, then certify against the graph.
 
     The ordinary Stage-2 Critic is repair-only: it cannot veto a paraphrase
@@ -198,78 +191,13 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
             free_verified = True
             break
 
-    for attempt in range(1,1 if scoped else max(1,question_max_attempts)+1):
-        entry={"attempt":attempt,"strategy":"public_program_grounded_realization"}
-        try:
-            response=author.author(
-                public_payload,
-                author_prompt(public_payload,retry_feedback=feedback),
-            )
-            question=" ".join(str(response.get("question") or "").split())
-            entry["author_response"]=response
-        except BackendError as exc:
-            entry["author_error"]=str(exc)[:240]
-            audits.append(entry);feedback="author_response_failed"
-            continue
-        local=preflight(payload,question)
-        entry["preflight"]=local.to_dict()
-        if not local.accepted:
-            audits.append(entry);feedback="; ".join(local.issues)
-            continue
-
-        # Give every structurally valid candidate a chance with the FULL
-        # semantic graph. This prevents false negatives from the smaller
-        # public-only Critic's speculative hop/owner objections.
-        accepted,issue=verify_proposal(question,entry,"author")
-        if accepted is None and use_critic and question!=canonical:
-            # Ask the public-only Critic for a targeted wording repair, but
-            # never send it private World data or arbitrary graph-review text.
-            try:
-                critic_response=_critic_review(
-                    critic,public_payload,question,max_tries=1,
-                )
-                entry["semantic_critic_repair"]=critic_response
-                repair=" ".join(str(
-                    critic_response.get("repair_question") or ""
-                ).split())
-                if repair and repair!=question:
-                    repair_pre=preflight(payload,repair)
-                    entry["repair_preflight"]=repair_pre.to_dict()
-                    if repair_pre.accepted:
-                        accepted,repair_issue=verify_proposal(
-                            repair,entry,"repair",
-                        )
-                        if accepted is None:
-                            entry["repair_failure"]=repair_issue
-            except BackendError as exc:
-                entry["critic_repair_error"]=str(exc)[:200]
-        audits.append(entry)
-        if accepted is None:
-            # Only bounded, public, non-specific diagnostic cues are sent to
-            # Author. Never echo teacher-private audit facts into its prompt.
-            feedback=(
-                "The wording did not pass complete dependency/ownership "
-                "verification. Preserve EVERY edge direction, filter owner, "
-                "branch join and requested output from the public scaffold. "
-                "Do not assume two connected entities share attributes."
-            )
-            continue
-
-        text,certificate,review=accepted
-        metrics=naturalization_metrics(canonical,text)
-        entry["naturalization_metrics"]=metrics
-        if text!=canonical and metrics["meaningful_rewrite_proxy"]:
-            best=(text,certificate,review,False,metrics)
-            break
-        # A nearly unchanged but correct paraphrase is retained as a SAFE
-        # candidate while giving the next attempt a chance to improve style.
-        if best is None or text!=canonical:
-            best=(text,certificate,review,False,metrics)
-        feedback=(
-            "The previous wording passed semantic checks but remained too "
-            "close to the mechanical canonical template. Use shorter natural "
-            "clauses or explicit 'both/either' branches without omitting "
-            "any public condition in the scaffold."
+    if not scoped:
+        from .graph_realization import realize_graph_candidate
+        best, feedback = realize_graph_candidate(
+            payload, public_payload, author, critic,
+            canonical=canonical, audits=audits,
+            question_max_attempts=question_max_attempts,
+            use_critic=use_critic, verify_proposal=verify_proposal,
         )
 
     if best is None:
