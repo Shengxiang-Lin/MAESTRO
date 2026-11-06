@@ -55,109 +55,161 @@ def _critic_review(critic,payload,question,*,max_tries=2):
         except BackendError as exc:last=exc
     raise last or BackendError("critic failed")
 def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,use_critic):
-    from .verification import certify_surface
-    feedback=None;audits=[]
-    for attempt in range(1,max(1,question_max_attempts)+1):
-        try:response=author.author(payload,author_prompt(payload,retry_feedback=feedback))
-        except BackendError as exc:
-            feedback=f"author_backend_error: {exc}";audits.append({"attempt":attempt,"author_error":str(exc)});continue
-        question=" ".join(str(response.get("question") or "").split());pre=preflight(payload,question);audit={"attempt":attempt,"author_response":response,"preflight":pre.to_dict()}
-        if not pre.accepted:
-            feedback="; ".join(pre.issues);audits.append(audit);continue
-        candidate=question
-        if use_critic:
-            try:review=_critic_review(critic,payload,candidate)
-            except BackendError as exc:
-                audit["critic_error"]=str(exc);audits.append(audit);feedback=f"semantic_critic_error: {exc}";continue
-            audit["semantic_critic"]=review
-            if (review.get("accept") is not True
-                    or str(review.get("semantic_fidelity","")).lower()!="pass"
-                    or review.get("issues") != []):
-                repair=" ".join(str(review.get("repair_question") or "").split())
-                if repair:
-                    repair_pre=preflight(payload,repair);audit["repair_preflight"]=repair_pre.to_dict()
-                    if repair_pre.accepted:
-                        try:repair_review=_critic_review(critic,payload,repair,max_tries=1)
-                        except BackendError as exc:
-                            audit["repair_critic_error"]=str(exc);audits.append(audit);feedback="repair critic failed";continue
-                        audit["repair_semantic_critic"]=repair_review
-                        if (repair_review.get("accept") is not True
-                                or str(repair_review.get("semantic_fidelity","")).lower()!="pass"
-                                or repair_review.get("issues") != []):
-                            audits.append(audit);feedback="repair still violates frozen semantics";continue
-                        candidate=repair
-                    else:
-                        audits.append(audit);feedback="critic repair failed deterministic preflight: "+"; ".join(repair_pre.issues);continue
-                else:
-                    issues=review.get("issues",());feedback="semantic critic: "+"; ".join(map(str,issues));audits.append(audit);continue
-        post=postflight(payload,candidate,oracle_answer=_oracle(world));audit["postflight"]=post.to_dict()
-        if not post.accepted:
-            feedback="; ".join(post.issues);audits.append(audit);continue
-        try:
-            certificate,graph_review=certify_surface(payload,world,capability,candidate,critic)
-        except Exception as exc:
-            # Compiler or verifier failures cannot approve a rewritten
-            # question. Keep the bounded attempt audit, then fall back only
-            # to a separately certified controlled-renderer question.
-            from environment.trajectory_simulation.compiler import GoldCompilationError
-            if not isinstance(exc,(GoldCompilationError,ValueError,KeyError,TypeError,BackendError)):
-                raise
-            audit["graph_verification_error"]=str(exc)[:240]
-            feedback="programir_graph_review_unavailable"
-            audits.append(audit)
-            continue
-        audit["programir_semantic_review"]=graph_review
-        audits.append(audit)
-        if certificate is None:
-            feedback="programir_graph_review: "+str(graph_review.get("review_failure_kind") or graph_review.get("decision") or "not_confirmed")
-            continue
-        realized={"task_id":payload["task_id"],"question":candidate,"draft_question":payload.get("draft_question"),"task_design":payload.get("task_design",{}),"resources":payload.get("resources",()),"available_agents":payload.get("available_agents",()),"capability_world":capability,
-                  "surface_certificate":certificate,
-                  "authoring":{"attempts":attempt,"semantic_critic_enabled":use_critic,
-                               "surface_review":graph_review,"surface_fallback":False,"audit":audits}}
-        return True,realized,audits
+    """Naturalize from a PUBLIC semantic scaffold, then certify against the graph.
 
-    # Never publish a graph-ambiguous paraphrase. If all wording attempts
-    # failed, publish ONLY the controlled renderer that was independently
-    # checked against the ProgramIR. This preserves task coverage without
-    # making Stage 3.1 repair an incorrect Stage-2 surface.
+    The ordinary Stage-2 Critic is repair-only: it cannot veto a paraphrase
+    the authoritative ProgramIR reviewer certifies, or approve one it rejects.
+    """
+    from .verification import certify_surface
+    from .public_semantics import public_semantic_scaffold, naturalization_metrics
+    from environment.trajectory_simulation.compiler import GoldCompilationError
+
+    canonical=str(payload.get("draft_question") or "")
     rendered=world.get("_rendered")
-    canonical=getattr(rendered,"question",None)
-    if isinstance(canonical,str):
-        fallback_post=postflight(payload,canonical,oracle_answer=_oracle(world))
-        fallback_entry={"stage":"certified_renderer_fallback",
-                        "postflight":fallback_post.to_dict(),
-                        "reason":feedback}
-        if fallback_post.accepted:
+    if not canonical or getattr(rendered,"question",None)!=canonical:
+        return False,{"task_id":payload.get("task_id"),
+                      "reason":"frozen_canonical_draft_mismatch"},[]
+    try:
+        scaffold=public_semantic_scaffold(world,canonical)
+    except (KeyError,TypeError,ValueError) as exc:
+        # No partial or private graph information is passed to either model.
+        return False,{"task_id":payload.get("task_id"),
+                      "reason":"public_scaffold_unavailable",
+                      "error":str(exc)[:200]},[]
+
+    public_payload={**payload,"public_semantic_scaffold":scaffold}
+    audits=[];feedback=None;best=None
+
+    def verify_proposal(text,entry,label):
+        local=postflight(payload,text,oracle_answer=_oracle(world))
+        entry[label+"_postflight"]=local.to_dict()
+        if not local.accepted:
+            return None,"; ".join(local.issues)
+        try:
+            certificate,review=certify_surface(
+                payload,world,capability,text,critic,
+            )
+        except (GoldCompilationError,ValueError,KeyError,TypeError,BackendError) as exc:
+            entry[label+"_graph_error"]=str(exc)[:240]
+            return None,"graph_verification_unavailable"
+        entry[label+"_programir_review"]=review
+        if certificate is None:
+            return None,"graph_review:"+str(
+                review.get("review_failure_kind") or
+                review.get("decision") or "not_confirmed"
+            )
+        return (text,certificate,review),None
+
+    for attempt in range(1,max(1,question_max_attempts)+1):
+        entry={"attempt":attempt,"strategy":"public_program_grounded_realization"}
+        try:
+            response=author.author(
+                public_payload,
+                author_prompt(public_payload,retry_feedback=feedback),
+            )
+            question=" ".join(str(response.get("question") or "").split())
+            entry["author_response"]=response
+        except BackendError as exc:
+            entry["author_error"]=str(exc)[:240]
+            audits.append(entry);feedback="author_response_failed"
+            continue
+        local=preflight(payload,question)
+        entry["preflight"]=local.to_dict()
+        if not local.accepted:
+            audits.append(entry);feedback="; ".join(local.issues)
+            continue
+
+        # Give every structurally valid candidate a chance with the FULL
+        # semantic graph. This prevents false negatives from the smaller
+        # public-only Critic's speculative hop/owner objections.
+        accepted,issue=verify_proposal(question,entry,"author")
+        if accepted is None and use_critic and question!=canonical:
+            # Ask the public-only Critic for a targeted wording repair, but
+            # never send it private World data or arbitrary graph-review text.
             try:
-                certificate,graph_review=certify_surface(
-                    payload,world,capability,canonical,critic,
+                critic_response=_critic_review(
+                    critic,public_payload,question,max_tries=1,
                 )
-            except Exception as exc:
-                from environment.trajectory_simulation.compiler import GoldCompilationError
-                if not isinstance(exc,(GoldCompilationError,ValueError,KeyError,TypeError,BackendError)):
-                    raise
-                fallback_entry["error"]=str(exc)[:240]
-            else:
-                fallback_entry["programir_semantic_review"]=graph_review
-                if certificate is not None:
-                    audits.append(fallback_entry)
-                    realized={"task_id":payload["task_id"],"question":canonical,
-                              "draft_question":payload.get("draft_question"),
-                              "task_design":payload.get("task_design",{}),
-                              "resources":payload.get("resources",()),
-                              "available_agents":payload.get("available_agents",()),
-                              "capability_world":capability,
-                              "surface_certificate":certificate,
-                              "authoring":{"attempts":max(1,question_max_attempts),
-                                           "semantic_critic_enabled":use_critic,
-                                           "surface_review":graph_review,
-                                           "surface_fallback":True,"audit":audits}}
-                    return True,realized,audits
-        audits.append(fallback_entry)
-    return False,{"task_id":payload.get("task_id"),
-                  "reason":"question_realization_failed",
-                  "last_feedback":feedback,"audit":audits},audits
+                entry["semantic_critic_repair"]=critic_response
+                repair=" ".join(str(
+                    critic_response.get("repair_question") or ""
+                ).split())
+                if repair and repair!=question:
+                    repair_pre=preflight(payload,repair)
+                    entry["repair_preflight"]=repair_pre.to_dict()
+                    if repair_pre.accepted:
+                        accepted,repair_issue=verify_proposal(
+                            repair,entry,"repair",
+                        )
+                        if accepted is None:
+                            entry["repair_failure"]=repair_issue
+            except BackendError as exc:
+                entry["critic_repair_error"]=str(exc)[:200]
+        audits.append(entry)
+        if accepted is None:
+            # Only bounded, public, non-specific diagnostic cues are sent to
+            # Author. Never echo teacher-private audit facts into its prompt.
+            feedback=(
+                "The wording did not pass complete dependency/ownership "
+                "verification. Preserve EVERY edge direction, filter owner, "
+                "branch join and requested output from the public scaffold. "
+                "Do not assume two connected entities share attributes."
+            )
+            continue
+
+        text,certificate,review=accepted
+        metrics=naturalization_metrics(canonical,text)
+        entry["naturalization_metrics"]=metrics
+        if text!=canonical and metrics["meaningful_rewrite_proxy"]:
+            best=(text,certificate,review,False,metrics)
+            break
+        # A nearly unchanged but correct paraphrase is retained as a SAFE
+        # candidate while giving the next attempt a chance to improve style.
+        if best is None or text!=canonical:
+            best=(text,certificate,review,False,metrics)
+        feedback=(
+            "The previous wording passed semantic checks but remained too "
+            "close to the mechanical canonical template. Use shorter natural "
+            "clauses or explicit 'both/either' branches without omitting "
+            "any public condition in the scaffold."
+        )
+
+    if best is None:
+        canonical_entry={"stage":"certified_renderer_fallback",
+                         "reason":feedback}
+        best,issue=verify_proposal(canonical,canonical_entry,"canonical")
+        audits.append(canonical_entry)
+        if best is None:
+            return False,{
+                "task_id":payload.get("task_id"),
+                "reason":"question_realization_failed",
+                "last_feedback":issue,"audit":audits,
+            },audits
+        text,certificate,review=best
+        best=(text,certificate,review,True,
+              naturalization_metrics(canonical,text))
+
+    question,certificate,graph_review,fallback,metrics=best
+    realized={
+        "task_id":payload["task_id"],"question":question,
+        "draft_question":payload.get("draft_question"),
+        "task_design":payload.get("task_design",{}),
+        "resources":payload.get("resources",()),
+        "available_agents":payload.get("available_agents",()),
+        "capability_world":capability,
+        "surface_certificate":certificate,
+        "authoring":{
+            "attempts":len([a for a in audits if "attempt" in a]),
+            "semantic_critic_enabled":use_critic,
+            "strategy":"public_program_grounded_realization_v1",
+            "surface_review":graph_review,
+            "surface_fallback":fallback,
+            "naturalization_metrics":metrics,
+            "audit":audits,
+        },
+    }
+    return True,realized,audits
+
 def _safe_future_result(future,index,authoring):
     """Keep failures isolated to the corresponding frozen input task."""
     try:
@@ -256,6 +308,7 @@ def run(args):
         Path(__file__).with_name("validators.py"),
         Path(__file__).with_name("boundary.py"),
         Path(__file__).with_name("verification.py"),
+        Path(__file__).with_name("public_semantics.py"),
         Path("environment/trajectory_simulation/eligibility.py"),
         Path("environment/trajectory_simulation/compiler.py"),
         Path("environment/trajectory_simulation/skeleton.py"),
@@ -278,6 +331,8 @@ def run(args):
         # Acceptance now includes safely certified renderer fallbacks. Report
         # naturalized and fallback counts separately to avoid inflated claims.
         certified_paraphrases=canonical_fallbacks=canonical_selected=0
+        meaningful_paraphrases=0
+        total_template_reduction=0
         with (output_dir/"realized_capability_worlds.jsonl").open(
             "r",encoding="utf-8",
         ) as finalized:
@@ -286,6 +341,13 @@ def run(args):
                     continue
                 row=json.loads(line)
                 author_metadata=row.get("authoring") or {}
+                gain=author_metadata.get("naturalization_metrics") or {}
+                if gain.get("meaningful_rewrite_proxy") is True:
+                    meaningful_paraphrases+=1
+                    total_template_reduction+=max(
+                        0, int(gain.get("canonical_template_phrases",0))
+                         - int(gain.get("surface_template_phrases",0)),
+                    )
                 if author_metadata.get("surface_fallback") is True:
                     canonical_fallbacks+=1
                 elif ((row.get("surface_certificate") or {}).get("method")
@@ -293,8 +355,29 @@ def run(args):
                     certified_paraphrases+=1
                 else:
                     canonical_selected+=1
+        # Record where naturalization fails. Attempts are not task counts.
+        from collections import Counter
+        graph_decisions=Counter()
+        repair_attempts=0
+        graph_review_calls=0
+        with (output_dir/"question_critic_audit.jsonl").open(
+            "r",encoding="utf-8",
+        ) as traces:
+            for line in traces:
+                if not line.strip():
+                    continue
+                for attempt in (json.loads(line).get("audit") or []):
+                    repair_attempts+=int("semantic_critic_repair" in attempt)
+                    for prefix in ("author","repair"):
+                        result=attempt.get(prefix+"_programir_review")
+                        if isinstance(result,dict):
+                            graph_review_calls+=1
+                            graph_decisions[
+                                str(result.get("review_failure_kind") or
+                                    result.get("decision") or "unclassified")
+                            ]+=1
         summary={
-            "pipeline":"frozen_public_author_critic_then_programir_surface_certificate_or_canonical_fallback",
+            "pipeline":"public_program_grounded_author_then_full_programir_certificate_with_repair",
             "frozen_batch_validation":frozen,
             "provider":args._resolved_models["question_author"]["backend"],
             "model":args._resolved_models["question_author"]["model"],
@@ -308,6 +391,13 @@ def run(args):
             "surface_certification":{
                 "contract":"maestro.stage2_surface_cert.v1",
                 "certified_paraphrases":certified_paraphrases,
+                "meaningful_certified_paraphrases":meaningful_paraphrases,
+                "meaningful_rewrite_rate":meaningful_paraphrases/len(authoring)
+                    if authoring else 0.0,
+                "template_phrases_removed_from_meaningful":total_template_reduction,
+                "graph_review_calls":graph_review_calls,
+                "graph_review_decisions":dict(graph_decisions),
+                "critic_repair_attempts":repair_attempts,
                 "canonical_fallbacks":canonical_fallbacks,
                 "canonical_selected":canonical_selected,
                 "published_certified":accepted,
