@@ -153,7 +153,7 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(EnvironmentConfigError, "does_not_exist"):
             resolve_model(args, "question_critic")
 
-    def test_thinking_setting_reaches_both_question_clients_and_readback(self):
+    def test_thinking_setting_reaches_both_question_clients(self):
         from dataclasses import replace
         from environment.question_generation.pipeline import _backends, build_parser
         self.config['models']['remote']['enable_thinking'] = False
@@ -162,9 +162,9 @@ class ConfigTests(unittest.TestCase):
         args = parse_with_config(build_parser(), 'question_generation', ['--config', str(self.path)])
         with patch.dict(os.environ, {'MAESTRO_TEST_KEY': 'test-secret'}):
             author, critic = _backends(args)
-        self.assertIs(author.backend.enable_thinking, False)
-        self.assertIs(critic.backend.enable_thinking, False)
-        self.assertIs(replace(critic.backend, max_tokens=4096).enable_thinking, False)
+        self.assertIs(author.enable_thinking, False)
+        self.assertIs(critic.enable_thinking, False)
+        self.assertIs(replace(critic, max_tokens=4096).enable_thinking, False)
 
     def test_thinking_flag_is_sent_only_when_configured(self):
         import json
