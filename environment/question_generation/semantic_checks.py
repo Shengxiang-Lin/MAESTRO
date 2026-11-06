@@ -10,6 +10,9 @@ from __future__ import annotations
 import json
 import re
 from difflib import SequenceMatcher
+from datetime import datetime
+from decimal import Decimal
+from .contracts import typed_values
 from typing import Any
 
 from .scoped_surface import ScopedPlan
@@ -185,6 +188,69 @@ def explicit_join_contradictions(reference: str, candidate: str) -> list[str]:
     ]
 
 
+_PROSE_DATE_DMY = re.compile(
+    r"\b(\d{1,2})\s+"
+    r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+    r"\s+(\d{4})\b", re.I,
+)
+
+
+def missing_typed_literals(plan: ScopedPlan, candidate: str) -> list[str]:
+    """Check only high-confidence public numbers, dates and string codes.
+
+    This never compares raw canonical lexical forms. It reads typed values
+    from the checked PUBLIC contract; comma notation, short English numbers,
+    ISO/prose dates and +prefixed codes can be equivalent. It deliberately
+    leaves names and non-code strings to natural-language reviewers.
+    """
+    found = set(typed_values(candidate, words=True))
+    for m in _PROSE_DATE_DMY.finditer(candidate):
+        try:
+            parsed = datetime.strptime(
+                f"{m[1]} {m[2]} {m[3]}", "%d %B %Y"
+            ).date().isoformat()
+            found.add(("date", parsed))
+        except ValueError:
+            pass
+    required = set()
+
+    def visit(tree):
+        values = [c.get("value") for c in tree.get("conditions", ())
+                  if isinstance(c, dict) and c.get("value") is not None]
+        if tree.get("definition", "").startswith("VERIFY_"):
+            values.append(tree.get("value"))
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            kind, raw = value.get("type"), str(value.get("value", ""))
+            if kind == "date":
+                required.add(("date", raw))
+            elif kind in ("number", "year"):
+                try:
+                    required.add(("number", Decimal(raw.replace(",", ""))))
+                except ArithmeticError:
+                    pass
+            elif kind == "string":
+                if raw.startswith("+") and raw[1:].isdigit():
+                    required.add(("string", raw))
+                elif re.fullmatch(r"\d+", raw):
+                    required.add(("number", Decimal(raw)))
+                elif re.fullmatch(r"[A-Z]{2,5}", raw):
+                    required.add(("public_code", raw))
+        for child in tree.get("inputs", ()):
+            visit(child)
+
+    visit(plan.query)
+    missing = []
+    for kind, value in sorted(required, key=lambda x: (x[0], str(x[1]))):
+        if kind == "public_code":
+            if not re.search(r"\b" + re.escape(value) + r"\b", candidate):
+                missing.append(f"code:{value}")
+        elif (kind, value) not in found:
+            missing.append(f"{kind}:{value}")
+    return missing
+
+
 def naturalness_gate(reference: str, candidate: str) -> dict[str, Any]:
     """Reject obvious cosmetic edits, not all conservatively worded questions."""
     a = _compact(reference)
@@ -213,4 +279,5 @@ def naturalness_gate(reference: str, candidate: str) -> dict[str, Any]:
 __all__ = [
     "CheckFormatError", "semantic_checks", "check_evidence",
     "check_failures", "explicit_join_contradictions", "naturalness_gate",
+    "missing_typed_literals",
 ]
