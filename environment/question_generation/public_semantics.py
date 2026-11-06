@@ -219,5 +219,4 @@ def public_question_contract(world, canonical, gold):
         ),
     }
 
-__all__ = ["VERSION", "public_semantic_scaffold", "public_question_contract",
-]
+__all__ = ["VERSION", "public_semantic_scaffold", "public_question_contract"]
