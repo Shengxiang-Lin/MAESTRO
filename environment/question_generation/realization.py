@@ -65,7 +65,7 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
             )
         return (text,certificate,review),None
 
-    scoped = surface_mode in ("scoped", "free") and isinstance(author, LLMQuestionAuthor)
+    scoped = surface_mode in ("scoped", "free")
     if scoped:
         from .scoped_surface import build_scoped_plan, choose_scoped, render_scoped
         from .verification import certify_scoped_surface, controlled_question_reference
@@ -76,14 +76,18 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
             if reference is None or reference["question"] != canonical:
                 raise ValueError("unverified scoped grammar reference")
             groups = build_scoped_plan(world, canonical, gold, reference)
-            entry["scoped_style_model_calls"] = 1
-            try:
-                question = render_scoped(groups, choose_scoped(author, groups))
-                entry["scoped_style"] = "llm_selected"
-            except (BackendError, ValueError) as exc:
-                entry["scoped_style_error"] = str(exc)[:240]
+            if isinstance(author, LLMQuestionAuthor):
+                entry["scoped_style_model_calls"] = 1
+                try:
+                    question = render_scoped(groups, choose_scoped(author, groups))
+                    entry["scoped_style"] = "llm_selected"
+                except (BackendError, ValueError) as exc:
+                    entry["scoped_style_error"] = str(exc)[:240]
+                    question = render_scoped(groups, [0] * len(groups))
+                    entry["scoped_style"] = "deterministic_fallback"
+            else:
                 question = render_scoped(groups, [0] * len(groups))
-                entry["scoped_style"] = "deterministic_fallback"
+                entry["scoped_style"] = "deterministic_without_model"
             # The grammar protects typed slots. Keep the ordinary public-boundary checks.
             local = postflight(payload, question, oracle_answer=_oracle(world), check_contract=False)
             entry["scoped_postflight"] = local.to_dict()
