@@ -285,8 +285,8 @@ def run(args):
                 if not line.strip():
                     continue
                 row=json.loads(line)
-                authoring=row.get("authoring") or {}
-                if authoring.get("surface_fallback") is True:
+                author_metadata=row.get("authoring") or {}
+                if author_metadata.get("surface_fallback") is True:
                     canonical_fallbacks+=1
                 elif ((row.get("surface_certificate") or {}).get("method")
                       =="llm_semantic_screen"):
