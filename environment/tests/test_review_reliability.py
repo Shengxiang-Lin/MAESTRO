@@ -80,6 +80,70 @@ class ReviewReliabilityTests(unittest.TestCase):
                 self.assertFalse(result["eligible"])
                 self.assertEqual(result["review_failure_kind"],"eligible_with_issues")
 
+    def test_paired_question_audit_direct_cli_imports_project_package(self):
+        """Reproduce the user's direct-file invocation without PYTHONPATH."""
+        import os
+        from pathlib import Path
+        import subprocess
+        import sys
+        import tempfile
+        from environment.task_construction.rendering.pipeline import render_task_record
+
+        _,world,_=fixture()
+        rendered=render_task_record(world,seed=17)
+        root=Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as tmp:
+            directory=Path(tmp)
+            bank_file=directory/"bank.jsonl"
+            quarantine_file=directory/"quarantine.jsonl"
+            stage2_dir=directory/"questions_sample"
+            stage2_dir.mkdir()
+            realized_file=stage2_dir/"realized_capability_worlds.jsonl"
+            critic_file=stage2_dir/"question_critic_audit.jsonl"
+            worlds_file=directory/"typed_worlds.jsonl"
+            result_file=directory/"comparison.jsonl"
+            def put(path, items):
+                path.write_text(
+                    "".join(json.dumps(item,ensure_ascii=False)+"\n" for item in items),
+                    encoding="utf-8",
+                )
+            put(bank_file,[{"bank":{
+                "task_id":rendered.task_id,
+                "eligibility":{"eligible":True,"reviewed":True},
+            }}])
+            put(quarantine_file,[])
+            put(worlds_file,[world])
+            put(realized_file,[{
+                "task_id":rendered.task_id,"question":rendered.question,
+                "draft_question":rendered.question,"authoring":{"audit":[]},
+            }])
+            put(critic_file,[{
+                "task_id":rendered.task_id,"accepted":True,"audit":[],
+            }])
+            env=os.environ.copy()
+            env.pop("PYTHONPATH",None)
+            invocation=[
+                sys.executable,str(root/"environment/audit_stage2_questions.py"),
+                "--bank",str(bank_file),
+                "--quarantine",str(quarantine_file),
+                "--realized",str(realized_file),
+                "--worlds",str(worlds_file),
+                "--max-records","1",
+                "--output",str(result_file),
+            ]
+            run=subprocess.run(
+                invocation,cwd=root,env=env,text=True,
+                capture_output=True,timeout=30,check=False,
+            )
+            self.assertEqual(run.returncode,0,run.stderr)
+            report=json.loads(run.stdout)
+            self.assertEqual(report["audited"],1)
+            self.assertEqual(report["accepted"],1)
+            result=json.loads(result_file.read_text(encoding="utf-8").strip())
+            self.assertEqual(result["task_id"],rendered.task_id)
+            self.assertEqual(result["programir"],world["program"])
+            self.assertTrue(result["same_as_renderer"])
+
     def test_reconstructed_supported_question_does_not_need_llm_vote(self):
         gold,record,rendered=self.rendered_fixture()
         role=Mock(offline=False,backend=Mock())
