@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from environment.question_generation.free_surface import (
-    assess_free_style, free_rewrite_prompt,
+    assess_free_style, free_rewrite_prompt, public_rewrite_guard,
 )
 from environment.question_generation.scoped_surface import ScopedPlan
 from environment.question_generation.semantic_readback import (
@@ -163,6 +163,30 @@ class BlindReadbackTests(unittest.TestCase):
         result = read_free_question(QUESTION, self.reference(), backend)
         self.assertFalse(result.eligible)
         self.assertEqual(result.calls, 1)
+
+    def test_typed_public_guard_allows_prose_date_but_not_modified_code(self):
+        scoped = (
+            "Which people died on 1997-08-01 and have telephone "
+            "country code +650?"
+        )
+        same = (
+            "Which people died on August 1, 1997 and have telephone "
+            "country code +650?"
+        )
+        self.assertEqual(public_rewrite_guard(scoped, same), [])
+        self.assertIn(
+            "free_rewrite_invents_or_changes_public_literal",
+            public_rewrite_guard(scoped, same.replace("+650", "650")),
+        )
+        self.assertIn(
+            "free_rewrite_invents_or_changes_public_literal",
+            public_rewrite_guard(scoped, same.replace("August 1, 1997",
+                                                       "August 2, 1997")),
+        )
+        self.assertIn(
+            "free_rewrite_adds_exclusion_or_uniqueness",
+            public_rewrite_guard(scoped, same.replace("people", "other people")),
+        )
 
     def test_readability_gate_does_not_reward_cosmetic_edit(self):
         scoped = (
