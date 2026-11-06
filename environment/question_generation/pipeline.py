@@ -86,7 +86,7 @@ def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress):
                         author,critic,
                         question_max_attempts=args.question_max_attempts,
                         use_critic=not args.no_semantic_critic,
-                        surface_mode=getattr(args,"surface_mode","legacy"))
+                        surface_mode=getattr(args,"surface_mode","scoped"))
                     active[future]=index
                     next_submit+=1
 
@@ -150,6 +150,7 @@ def run(args):
         Path(__file__).with_name("alignment.py"),
         Path(__file__).with_name("scoped_surface.py"),
         Path(__file__).with_name("realization.py"),
+        Path(__file__).with_name("graph_realization.py"),
         Path(__file__).with_name("free_surface.py"),
         Path(__file__).with_name("semantic_readback.py"),
         Path("environment/trajectory_simulation/eligibility.py"),
@@ -257,7 +258,7 @@ def run(args):
                 "rejected":rejected,
             },
             "semantic_critic":{
-                "enabled":not args.no_semantic_critic and getattr(args,"surface_mode","scoped") == "legacy",
+                "enabled":not args.no_semantic_critic and getattr(args,"surface_mode","scoped") == "graph",
                 "blind_readback_enabled":getattr(args,"surface_mode","scoped") == "free",
                 "configured":not args.no_semantic_critic,
             },
@@ -305,7 +306,7 @@ def run(args):
     return summary
 
 def build_parser():
-    p=argparse.ArgumentParser(description="Generate natural questions over a frozen MAESTRO task batch");p.add_argument("--manifest");p.add_argument("--authoring-inputs");p.add_argument("--worlds");p.add_argument("--capabilities");p.add_argument("--output-dir");p.add_argument("--max-records",type=int);p.add_argument("--seed",type=int,default=17);p.add_argument("--provider",choices=("passthrough","openai-compatible"),default="passthrough");p.add_argument("--base-url");p.add_argument("--model");p.add_argument("--critic-model");p.add_argument("--api-key-env",default="DASHSCOPE_API_KEY");p.add_argument("--question-temperature",type=float,default=.4);p.add_argument("--critic-temperature",type=float,default=0.);p.add_argument("--max-tokens",type=int,default=2048);p.add_argument("--critic-max-tokens",type=int,default=768);p.add_argument("--timeout",type=float,default=180.);p.add_argument("--question-max-attempts",type=int,default=2);p.add_argument("--question-workers",type=int,default=4);p.add_argument("--flush-every",type=int,default=5);p.add_argument("--restart-questions",action="store_true");p.add_argument("--no-semantic-critic",action="store_true");p.add_argument("--no-json-mode",action="store_true");p.add_argument("--no-progress",action="store_true");p.add_argument("--surface-mode",choices=("scoped","free","legacy"),default="scoped");return p
+    p=argparse.ArgumentParser(description="Generate natural questions over a frozen MAESTRO task batch");p.add_argument("--manifest");p.add_argument("--authoring-inputs");p.add_argument("--worlds");p.add_argument("--capabilities");p.add_argument("--output-dir");p.add_argument("--max-records",type=int);p.add_argument("--seed",type=int,default=17);p.add_argument("--provider",choices=("passthrough","openai-compatible"),default="passthrough");p.add_argument("--base-url");p.add_argument("--model");p.add_argument("--critic-model");p.add_argument("--api-key-env",default="DASHSCOPE_API_KEY");p.add_argument("--question-temperature",type=float,default=.4);p.add_argument("--critic-temperature",type=float,default=0.);p.add_argument("--max-tokens",type=int,default=2048);p.add_argument("--critic-max-tokens",type=int,default=768);p.add_argument("--timeout",type=float,default=180.);p.add_argument("--question-max-attempts",type=int,default=2);p.add_argument("--question-workers",type=int,default=4);p.add_argument("--flush-every",type=int,default=5);p.add_argument("--restart-questions",action="store_true");p.add_argument("--no-semantic-critic",action="store_true");p.add_argument("--no-json-mode",action="store_true");p.add_argument("--no-progress",action="store_true");p.add_argument("--surface-mode",choices=("scoped","free","graph"),default="scoped");return p
 def main():
     try:
         args=parse_with_config(build_parser(),"question_generation")
