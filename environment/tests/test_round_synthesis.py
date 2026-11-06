@@ -45,6 +45,158 @@ class TwoPhaseTests(unittest.TestCase):
             )
         return q,world,rendered,bank
 
+    def test_canonical_compilation_is_immutable_under_surface_rewrites(self):
+        q,world,rendered=fixture(dependent=True)
+        canonical=rendered.question
+        q["question"]="A paraphrase presented only to Main after validation."
+        reviews=[]
+        def track(gold,record,role,*,review=True,rendered=None):
+            reviews.append(gold["question"])
+            return reviewed(gold,record,role,review=review,rendered=rendered)
+        with patch(
+            "environment.trajectory_simulation.subtask_bank.check_question",track
+        ):
+            bank=build_subtask_bank(
+                q,world,rendered,planner=PassthroughPlanner(),
+                executor=PassthroughExecutor(),schedule="baseline",
+            )
+        self.assertEqual(reviews,[canonical,q["question"]])
+        self.assertEqual(bank["question"],canonical)
+        self.assertEqual(bank["surface_question"],q["question"])
+        self.assertEqual(bank["gold_plan"]["question"],canonical)
+        self.assertEqual(bank["question_record"]["question"],q["question"])
+        self.assertEqual(bank["canonical_eligibility"]["question_sha256"],digest(canonical))
+        self.assertEqual(bank["eligibility"]["question_sha256"],digest(q["question"]))
+        self.assertTrue(bank["waves"][0]["state"]["question"].startswith(canonical))
+        self.assertNotIn(q["question"],bank["waves"][0]["state"]["question"])
+        self.assertEqual(bank["schema_version"],2)
+        for fragment in bank["fragments"].values():
+            self.assertNotIn("natural_task",fragment)
+            self.assertNotIn("canonical_task_instruction",fragment)
+        samples,stats=compose_main_rounds(
+            bank,planner=PassthroughPlanner(),include_fallback_rounds=True,
+        )
+        self.assertGreater(len(samples),0)
+        self.assertIn(q["question"],samples[0]["input"])
+        self.assertNotIn(canonical,samples[0]["input"])
+        self.assertEqual(samples[0]["question_reviewed"],True)
+
+    def test_surface_failure_quarantines_completed_canonical_bank(self):
+        q,world,rendered=fixture(dependent=True)
+        q["question"]="This unrelated Stage 2 rewrite changes the question."
+        def separate(gold,record,role,*,review=True,rendered=None):
+            result=reviewed(gold,record,role,review=review,rendered=rendered)
+            if gold["question"]!=rendered.question:
+                return {**result,"eligible":False,"reviewed":True,
+                        "decision":"mismatch",
+                        "review_failure_kind":"semantic_mismatch",
+                        "issues":["unrelated rewritten question"]}
+            return result
+        with tempfile.TemporaryDirectory() as tmp,patch(
+            "environment.trajectory_simulation.subtask_bank.check_question",separate
+        ),patch(
+            "environment.trajectory_simulation.pipeline._rows",return_value=[q]
+        ),patch(
+            "environment.trajectory_simulation.pipeline._world_map",
+            return_value={q["task_id"]:(world,rendered)}
+        ):
+            inp=Path(tmp)/"realized.jsonl"
+            worldpath=Path(tmp)/"worlds.jsonl"
+            inp.write_text("{}\n")
+            worldpath.write_text("{}\n")
+            output=Path(tmp)/"bank.jsonl"
+            stats=generate_subtasks_jsonl(
+                worldpath,inp,output,
+                reviewer=PassthroughPlanner(),executor=PassthroughExecutor(),
+                schedule="baseline",progress=False,
+            )
+            self.assertEqual(stats["accepted_banks"],0)
+            self.assertEqual(stats["quarantined"],1)
+            self.assertEqual(stats["reasons"],{"question_eligibility":1})
+            self.assertEqual(output.read_text(),"")
+            item=json.loads(Path(str(output)+".quarantine.jsonl").read_text().strip())
+            self.assertEqual(item["audit"]["canonical_bank"]["question"],rendered.question)
+            self.assertEqual(item["audit"]["canonical_bank"]["surface_question"],q["question"])
+            self.assertEqual(len(item["audit"]["canonical_bank"]["fragments"]),3)
+            self.assertFalse(item["audit"]["eligibility"]["eligible"])
+            # Quarantined diagnostics are not normal Phase-2 bank envelopes.
+            with self.assertRaises(ValueError):
+                _read_verified_bank(item)
+
+    def test_surface_search_is_separately_checked_and_cannot_reuse_gold_hits(self):
+        from environment.trajectory_simulation.search_simulator import simulate_search
+        q,world,rendered=fixture(dependent=True)
+        q["capability_world"]["mode"]="web_search"
+        for item in q["capability_world"]["resources"]:
+            item["visibility"]="discoverable"
+            item["metadata"]={
+                "search_entry":"public_question",
+                "retrieval_policy":"task_local_ranked_public_index_v1",
+            }
+        original=rendered.question
+        q["question"]="An independently reviewed surface rewrite."
+        reviews=[]
+        def check(gold,record,role,*,review=True,rendered=None):
+            reviews.append(gold["question"])
+            return reviewed(gold,record,role,review=review,rendered=rendered)
+        seen=[]
+        def surface_unreachable(*args,**kwargs):
+            question=kwargs.get("public_question")
+            seen.append(question)
+            if question==q["question"]:
+                return {"discovered_source_ids":[]}
+            return simulate_search(*args,**kwargs)
+        with patch(
+            "environment.trajectory_simulation.subtask_bank.check_question",check,
+        ),patch(
+            "environment.trajectory_simulation.search_simulator.simulate_search",
+            side_effect=surface_unreachable,
+        ):
+            bank=build_subtask_bank(
+                q,world,rendered,planner=PassthroughPlanner(),
+                executor=PassthroughExecutor(),schedule="compact",
+            )
+        self.assertEqual(reviews,[original,q["question"]])
+        self.assertIn(original,seen)
+        self.assertIn(q["question"],seen)
+        self.assertFalse(bank["surface_preflight"]["publicly_executable"])
+        self.assertTrue(bank["preflight"]["publicly_executable"])
+        self.assertTrue(bank["eligibility"]["eligible"])
+        envelope={"format":"maestro.clean_subtasks.v2","bank":bank}
+        envelope["sha256"]=digest(envelope)
+        with self.assertRaisesRegex(ValueError,"surface_public_sources_not_reachable"):
+            _read_verified_bank(envelope)
+
+    def test_phase2_rejects_surface_or_canonical_certificate_tampering(self):
+        _,_,_,bank=self.bank(dependent=True)
+        self.assertEqual(bank["surface_question"],bank["question"])
+        envelope={"format":"maestro.clean_subtasks.v2","bank":bank}
+        envelope["sha256"]=digest(envelope)
+        for name,modify in (
+            ("unreviewed",lambda b: b["eligibility"].update(eligible=False)),
+            ("surface",lambda b: b.update(surface_question="different")),
+            ("canonical",lambda b: b.update(question="different")),
+            ("surface_search",lambda b: b["surface_preflight"].update(
+                publicly_executable=False)),
+            ("program_binding",lambda b: b["eligibility"].update(
+                program_sha256="different_program")),
+        ):
+            with self.subTest(name=name):
+                modified=copy.deepcopy(envelope)
+                modify(modified["bank"])
+                modified["sha256"]=digest({
+                    "format":modified["format"],"bank":modified["bank"],
+                })
+                with self.assertRaises(ValueError):
+                    _read_verified_bank(modified)
+        legacy=copy.deepcopy(envelope)
+        legacy["format"]="maestro.clean_subtasks.v1"
+        legacy["sha256"]=digest({
+            "format":legacy["format"],"bank":legacy["bank"],
+        })
+        with self.assertRaisesRegex(ValueError,"incompatible_phase1_bank_version"):
+            _read_verified_bank(legacy)
+
     def test_phase1_generates_all_subagent_answers_without_main_language(self):
         class Reviewer(PassthroughPlanner):
             style_provider="natural"
@@ -57,7 +209,7 @@ class TwoPhaseTests(unittest.TestCase):
                 q,world,rendered,planner=Reviewer(),
                 executor=PassthroughExecutor(),schedule="baseline",
             )
-        self.assertEqual(bank["schema_version"],1)
+        self.assertEqual(bank["schema_version"],2)
         self.assertEqual(len(bank["fragments"]),3)
         self.assertEqual(len(bank["waves"]),3)
         self.assertEqual(len(bank["full_public_history"]),3)
@@ -67,7 +219,7 @@ class TwoPhaseTests(unittest.TestCase):
             self.assertTrue(item["summary"])
             self.assertTrue(item["trace_summary"])
             self.assertFalse(item["natural_feedback"])
-            self.assertFalse(item["natural_task"])
+            self.assertNotIn("natural_task",item)
             self.assertEqual(
                 item["simulated_tool_provenance"]["origin"],
                 "reconstructed_from_frozen_public_witnesses",
@@ -198,7 +350,7 @@ class TwoPhaseTests(unittest.TestCase):
 
     def test_phase2_rejects_tampered_bank_and_future_leakage(self):
         _,_,_,bank=self.bank(dependent=True)
-        envelope={"format":"maestro.clean_subtasks.v1","bank":bank}
+        envelope={"format":"maestro.clean_subtasks.v2","bank":bank}
         envelope["sha256"]=digest(envelope)
         self.assertEqual(_read_verified_bank(envelope)["task_id"],bank["task_id"])
         tampered=copy.deepcopy(envelope)
@@ -237,7 +389,7 @@ class TwoPhaseTests(unittest.TestCase):
 
     def test_phase2_keeps_verified_round_one_if_round_two_export_fails(self):
         _,_,_,bank=self.bank(dependent=True)
-        envelope={"format":"maestro.clean_subtasks.v1","bank":bank}
+        envelope={"format":"maestro.clean_subtasks.v2","bank":bank}
         envelope["sha256"]=digest(envelope)
         with tempfile.TemporaryDirectory() as tmp:
             input_path=Path(tmp)/"bank.jsonl"

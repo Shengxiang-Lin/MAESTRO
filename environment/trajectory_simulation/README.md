@@ -3,8 +3,10 @@
 Stage 3 consists of **two explicitly separate, sequential phases**. It does
 not require or train on an entire autonomously executed task episode.
 
-The frozen Stage-1 ProgramIR / Fragment DAG and accepted Stage-2 question
-supply the immutable semantics. The subtask answers always come from public
+The frozen Stage-1 ProgramIR / Fragment DAG and the deterministic
+Controlled Renderer question supply the immutable semantics; the Stage-2
+natural-language rewrite is a distinct *surface* requiring independent
+certification before it may be shown to Main. Sub-Agent answers come from public
 source-replayed symbolic execution; the LLM writes only language.
 
 ### Answer-blind simulated Web Search (newly constructed tasks)
@@ -69,11 +71,11 @@ the whole Internet. A truly live-search benchmark would require an
 independently retrievable evidence index or resolvable original names.
 
 The new canonical instruction text is supported by the public replay
-parser as the same `FIND_ALL` / `FIND` operation; the older canonical
-sentences remain readable for existing banks. Old Stage-2 questions and
-already written Stage-3 banks are **not** silently rewritten. To change
-question wording, regenerate/reauthor the Stage-2 artifacts against the
-same verified ProgramIR, then rebuild the Stage-3 Subtask Bank.
+parser as the same `FIND_ALL` / `FIND` operation.
+Stage-3 Bank v2 intentionally does **not** load old v1 files. Rebuild the bank
+from the frozen Stage-1 and Stage-2 inputs before running new Main rounds.
+This protects against mixing a Stage-2 surface question with a canonical-only
+compilation from an older bank.
 
 ## Phase 1 — Complete and verify every Sub-Agent subtask
 
@@ -92,6 +94,19 @@ python environment/simulate_trajectories.py subtasks \
 Inputs: frozen Stage-1 Worlds and Stage-2 accepted questions. The defaults
 come from `environment/config.yaml`; override with `--worlds` and `--realized`.
 
+**Dual-question boundary (v2).** Stage 3.1 compiles and replays **only**
+the Controlled Renderer question reconstructed from the Stage-1 World.
+Stage 2's `realized.question` remains the separate Surface Question. Canonical
+and Surface have independent eligibility hashes. Canonical subtask language,
+hidden-identity clue handling, and simulated search queries never derive from
+the Surface rewrite. Stage 3.2 may use Surface as the Main prompt only if its
+semantic eligibility and independent public-source reachability are certified.
+If Surface fails, the *completed canonical bank* is retained only inside the
+teacher-private `.quarantine.jsonl` diagnostic under `audit.canonical_bank`;
+it is NOT emitted as an accepted bank or training example. A surface cannot
+silently fall back to canonical inside Main SFT. The summary reports
+`canonical_banks_generated` separately from `accepted_banks`.
+
 For each question, this phase:
 
 1. Compiles and preflights the complete Gold Fragment DAG against **public**
@@ -105,8 +120,8 @@ For each question, this phase:
    The frozen program and the public execution plan are not modified.
    The review also receives bounded, fully expanded output semantics so
    inherited filters stay visible across nested branches. Raw operator flags
-   are replaced by executor-derived meanings. Review contract v11 invalidates
-   earlier eligibility cache entries.
+   are replaced by executor-derived meanings. The current review contract
+   is v13, and cache entries are bound to the question and ProgramIR hashes.
    `question_review_summary` separately counts eligible questions, semantic
    mismatches, uncertain decisions and review errors. Review errors remain
    quarantined; malformed evidence never counts as an established mismatch.
@@ -237,7 +252,7 @@ For each question, this phase:
 The output `subtask_bank_20.jsonl` is a **complete private teacher bank**:
 one independently validated record per accepted question. It includes future
 Gold answers for the controller and must **never** be passed to the Main
-model as prompt text. It has schema ID `maestro.clean_subtasks.v1` and a
+model as prompt text. It has schema ID `maestro.clean_subtasks.v2` and a
 content-integrity hash. Inspect it and the accompanying rejected/quarantine
 JSONL files before starting Phase 2.
 
@@ -260,10 +275,12 @@ python environment/simulate_trajectories.py rounds \
 Phase 2 does **not** read the original World / question JSONL, recompile the
 ProgramIR, or call the Sub-Agent writer. For every bank:
 
-1. Rechecks the bank's hash, semantic review, completed public replay and
-   frozen Gold answer. A corrupted or incomplete bank is rejected.
-2. Traverses DAG waves. A Main state contains the original question and
-   only previously completed, verified Sub-Agent results and public evidence;
+1. Rechecks the v2 bank's hash, both canonical and surface semantic
+   certificates, surface search reachability, completed canonical public replay
+   and frozen Gold answer. Old v1, corrupt, or unverified banks are rejected.
+2. Traverses DAG waves. A Main state contains **only the independently
+   certified Stage-2 Surface Question**, not the Canonical compilation text,
+   and only previously completed, verified Sub-Agent results and evidence;
    the current and future waves remain invisible.
 3. Uses the stored canonical Gold delegation as immutable teacher guidance.
    The Main LLM may rewrite each task into a natural O1 instruction, subject

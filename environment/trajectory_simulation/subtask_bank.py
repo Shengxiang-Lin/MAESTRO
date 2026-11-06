@@ -66,38 +66,24 @@ def _report_natural(executor, payload, template, fragment):
         }
 
 
-def _verify_subtask(canonical_task, natural_task, fragment, evidence_cache):
-    # Native O1 params are not the execution oracle. Both target variants must
-    # replay the exact same public observations/previously published values.
+def _verify_subtask(task, fragment, evidence_cache):
+    """Replay the single immutable canonical assignment, without a duplicate pass."""
     observations = [public_record(row) for row in fragment["observations"]]
-    expected = fragment["expected_answer"]
+    verify_known_packet(task,evidence_cache)
+    outcome = replay_task(task,observations,public_cache=evidence_cache)
     answer_mode = {
         "collection_mode": "multiset"
         if fragment["operations"][-1]["op"] == "QUERY_ATTR" else "set"
     }
-    for first,task in enumerate((canonical_task,natural_task)):
-        verify_known_packet(task,evidence_cache)
-        outcome = replay_task(task,observations,public_cache=evidence_cache)
-        if not answers_equal(json_value(outcome["result"]),expected,answer_mode):
-            raise GoldTrajectoryError(
-                "public_replay", ["subtask_bank_answer_mismatch"]
-            )
-        for i,(op,result) in enumerate(zip(
-            fragment["operations"],fragment["operation_results"]
-        )):
-            contract={"collection_mode":"multiset"
-                      if op["op"]=="QUERY_ATTR" else "set"}
-            if not answers_equal(
-                json_value(outcome["step_values"][i]),result["answer"],contract
-            ):
-                raise GoldTrajectoryError(
-                    "public_replay", ["subtask_bank_intermediate_mismatch"]
-                )
-            if first==0:
-                # Provide the report writer with the same public intermediate
-                # inputs that the offline source-only executor actually read.
-                result["input_values"]=json_value(outcome["step_inputs"][i])
-                result["answer"]=json_value(outcome["step_values"][i])
+    if not answers_equal(json_value(outcome["result"]),fragment["expected_answer"],answer_mode):
+        raise GoldTrajectoryError("public_replay", ["subtask_bank_answer_mismatch"])
+    for i,(op,result) in enumerate(zip(fragment["operations"],fragment["operation_results"])):
+        contract={"collection_mode":"multiset" if op["op"]=="QUERY_ATTR" else "set"}
+        if not answers_equal(json_value(outcome["step_values"][i]),result["answer"],contract):
+            raise GoldTrajectoryError("public_replay", ["subtask_bank_intermediate_mismatch"])
+        # The report writer sees only the intermediate public replay inputs.
+        result["input_values"]=json_value(outcome["step_inputs"][i])
+        result["answer"]=json_value(outcome["step_values"][i])
     return observations
 
 
@@ -106,7 +92,7 @@ def build_subtask_bank(
     *, planner, executor, scene="omnigaia", schedule="compact",
     question_review=True, feedback_workers: int = 4,
 ) -> dict[str,Any]:
-    """Generate ALL clean subtasks first, in topological waves.
+    """Generate canonical clean subtasks independently of Stage 2 surface text.
 
     Every wave is prepared from only earlier waves' public feedback and
     evidence; siblings cannot see each other's results. The returned private
@@ -115,9 +101,19 @@ def build_subtask_bank(
     """
     if feedback_workers < 1:
         raise ValueError("feedback_workers must be positive")
+    # The frozen renderer question is the ONLY compiler input. Stage 2's
+    # language rewrite is never allowed to change hidden-identity bindings,
+    # fragment cuts, gold answers, or source-replayable task instructions.
+    canonical_question=getattr(rendered,"question",None)
+    if not isinstance(canonical_question,str) or not canonical_question.strip():
+        raise GoldTrajectoryError("canonical_question",["renderer_question_unavailable"])
+    surface_question=realized.get("question")
+    if not isinstance(surface_question,str) or not surface_question.strip():
+        raise GoldTrajectoryError("question_eligibility",["empty_stage2_surface_question"])
+    canonical_record={**realized,"question":canonical_question}
     try:
         gold=compile_gold_solution(
-            realized,world_record,rendered,scene=scene,schedule=schedule
+            canonical_record,world_record,rendered,scene=scene,schedule=schedule
         )
     except GoldCompilationError as exc:
         raise GoldTrajectoryError(
@@ -132,12 +128,24 @@ def build_subtask_bank(
             "public_executability",[str(preflight["reason"])],
             {"public_preflight":preflight},
         )
-    eligibility=check_question(gold,world_record,planner,review=question_review,rendered=rendered)
-    if not eligibility["eligible"]:
+    canonical_eligibility=check_question(
+        gold,world_record,planner,review=question_review,rendered=rendered,
+    )
+    if not (canonical_eligibility.get("reviewed") and
+            canonical_eligibility.get("eligible")) and question_review:
         raise GoldTrajectoryError(
-            "question_eligibility",["frozen_question_not_eligible"],
-            {"eligibility":eligibility},
+            "canonical_question",["canonical_renderer_not_certified"],
+            {"canonical_eligibility":canonical_eligibility},
         )
+    # Review the Stage 2 surface only for future Main-Agent publication.
+    # A rejected surface does not abort canonical Subtask generation.
+    eligibility=(
+        dict(canonical_eligibility) if surface_question==canonical_question
+        else check_question(
+            {**gold,"question":surface_question},
+            world_record,planner,review=question_review,rendered=rendered,
+        )
+    )
 
     teacher_main=PassthroughPlanner()
     teacher_sub=PassthroughExecutor()
@@ -194,16 +202,15 @@ def build_subtask_bank(
         # Phase 1 generates Sub-Agent evidence reports ONLY. Main task
         # language is a phase-2 decision target, never generated here.
         original_tasks=canonical["params"]["tasks"]
-        public_tasks=original_tasks
         if len(original_tasks)!=len(ready):
             raise GoldTrajectoryError("subtask_bank",["incorrect_ready_wave"])
         # The parallel wave shares only the PREVIOUS wave's immutable public
         # history/cache. All natural feedback jobs may run concurrently, but
         # results are published together after their public replay succeeds.
         def prepare_subtask(item):
-            sub_index,(fragment,original,public)=item
+            sub_index,(fragment,original)=item
             observations=_verify_subtask(
-                original,public,fragment,evidence_cache
+                original,fragment,evidence_cache
             )
             from .tool_provenance import reconstruct_tool_observations
             # The preflight's independent search is a TEACHER reachability
@@ -231,7 +238,7 @@ def build_subtask_bank(
                 search_audit = simulate_search(
                     gold["search_catalog"],
                     public_question=gold["question"],
-                    public_task=public["task_instruction"],
+                    public_task=original["task_instruction"],
                     already_known_ids=list(evidence_cache)+[
                         x["resource_id"]
                         for x in gold.get("provided_resources", [])
@@ -245,8 +252,8 @@ def build_subtask_bank(
             )
             report_payload={
                 "question":gold["question"],
-                "task_instruction":public["task_instruction"],
-                "assigned_task":public,
+                "task_instruction":original["task_instruction"],
+                "assigned_task":original,
                 "dependency_results":[known_results[dep]
                                       for dep in fragment["depends_on"]],
                 "fragment":fragment,
@@ -262,7 +269,7 @@ def build_subtask_bank(
             fixed=answer_string(fragment["expected_answer"])
             reply={
                 "subtask_index":sub_index-1,
-                "task_instruction":public["task_instruction"],
+                "task_instruction":original["task_instruction"],
                 "model":str(getattr(getattr(executor,"backend",None),
                                       "model","passthrough")),
                 "tools_assigned":original["tools"],
@@ -280,13 +287,11 @@ def build_subtask_bank(
                 "fragment_id":fragment["fragment_id"],
                 "depends_on":list(fragment["depends_on"]),
                 "wave_index":index,"task_index":sub_index,
-                "task_instruction":public["task_instruction"],
-                "canonical_task_instruction":original["task_instruction"],
+                "task_instruction":original["task_instruction"],
                 "correct_answer":fixed,
                 "summary":report["summary"],
                 "trace_summary":report["trace_summary"],
                 "public_evidence":observations,
-                "natural_task":public["task_instruction"]!=original["task_instruction"],
                 "natural_feedback":language["natural"],
                 "feedback_fallback_reason":language["reason"],
                 "feedback_private_audit":language.get("audit",[]),
@@ -295,7 +300,7 @@ def build_subtask_bank(
             }
             return fragment,reply,bank_item
 
-        jobs=list(enumerate(zip(ready,original_tasks,public_tasks),1))
+        jobs=list(enumerate(zip(ready,original_tasks),1))
         with ThreadPoolExecutor(max_workers=min(feedback_workers,len(jobs))) as pool:
             prepared=list(pool.map(prepare_subtask,jobs))
         pending=[]
@@ -358,9 +363,51 @@ def build_subtask_bank(
     )
     if not ok:
         raise GoldTrajectoryError("subtask_bank",issues)
+    # A valid paraphrase must be able to discover the same public evidence
+    # from its actual Main-visible question. Canonical discovery logs remain
+    # private teacher evidence; a different surface query must never inherit
+    # their success automatically.
+    surface_preflight={"publicly_executable":True,"checked_fragments":0}
+    if (surface_question!=canonical_question
+            and eligibility.get("eligible") and eligibility.get("reviewed")
+            and gold.get("retrieval_policy")=="task_local_ranked_public_index_v1"):
+        from .search_simulator import simulate_search, verify_retrieved_witnesses
+        for wave in waves:
+            known=list(wave["state"]["evidence_store"])+[
+                x["resource_id"] for x in gold["provided_resources"]
+            ]
+            for fragment in wave["bound_fragments"]:
+                fid=fragment["fragment_id"]
+                if records[fid]["search_audit"] is None:
+                    continue
+                surface_preflight["checked_fragments"]+=1
+                new_audit=simulate_search(
+                    gold["search_catalog"],
+                    public_question=surface_question,
+                    public_task=records[fid]["task_instruction"],
+                    already_known_ids=known,
+                )
+                required=[
+                    obs for obs in fragment["observations"]
+                    if obs.get("visibility")=="discoverable"
+                ]
+                try:
+                    verify_retrieved_witnesses(new_audit,required)
+                except ValueError as exc:
+                    surface_preflight={
+                        **surface_preflight,"publicly_executable":False,
+                        "reason":str(exc)[:240],"failed_fragment":fid,
+                    }
+                    break
+            if not surface_preflight["publicly_executable"]:
+                break
+
     return {
         "task_id":gold["task_id"],"question":gold["question"],
+        "surface_question":surface_question,
+        "canonical_eligibility":canonical_eligibility,
         "eligibility":eligibility,"preflight":preflight,
+        "surface_preflight":surface_preflight,
         "fragments":records,"waves":waves,
         "complete":{"round_index":index,"state":state,
                     "action":public_action(complete)},
@@ -369,7 +416,7 @@ def build_subtask_bank(
         "final_answer":gold["final_answer"],  # PRIVATE: not Main-visible
         "gold_plan":gold,  # Teacher-private; never fed to Main
         "question_record":dict(realized),
-        "schema_version":1,
+        "schema_version":2,
         "ready_order":[list(wave["fragment_ids"]) for wave in waves],
     }
 
@@ -425,12 +472,24 @@ def generate_subtasks_jsonl(
                     row,world,rendered,planner=reviewer,executor=executor,
                     scene=scene,schedule=schedule,feedback_workers=feedback_workers,
                 )
-                if not (bank["eligibility"].get("eligible") and bank["eligibility"].get("reviewed")):
+                stats["canonical_banks"]+=1
+                if not bank["surface_preflight"]["publicly_executable"]:
                     raise GoldTrajectoryError(
-                        "question_eligibility",["semantic_review_not_confirmed"]
+                        "surface_public_executability",
+                        [bank["surface_preflight"].get("reason","surface_sources_unreachable")],
+                        {"surface_preflight":bank["surface_preflight"],
+                         "canonical_bank":json_value(bank)},
+                    )
+                if not (bank["eligibility"].get("eligible") and bank["eligibility"].get("reviewed")):
+                    # Canonical Bank is valid diagnostic evidence but is NOT
+                    # eligible for Main-Agent SFT with this unverified surface.
+                    raise GoldTrajectoryError(
+                        "question_eligibility",["surface_semantics_not_confirmed"],
+                        {"eligibility":bank["eligibility"],
+                         "canonical_bank":json_value(bank)},
                     )
                 payload=json_value(bank)
-                record={"format":"maestro.clean_subtasks.v1","bank":payload}
+                record={"format":"maestro.clean_subtasks.v2","bank":payload}
                 record["sha256"]=digest(record)
                 good.write(json.dumps(record,ensure_ascii=False)+"\n")
                 good.flush()
@@ -451,6 +510,7 @@ def generate_subtasks_jsonl(
                 stage=exc.stage if isinstance(exc,GoldTrajectoryError) else "unexpected_error"
                 quarantine=stage in {
                     "question_eligibility","public_replay","public_executability",
+                    "surface_public_executability",
                 }
                 dest=isolate if quarantine else bad
                 stats["quarantined" if quarantine else "rejected"]+=1
@@ -471,6 +531,7 @@ def generate_subtasks_jsonl(
                 dest.flush()
     return {
         "phase":"subtasks","requested":len(rows),
+        "canonical_banks_generated":stats["canonical_banks"],
         "accepted_banks":stats["accepted"],
         "quarantined":stats["quarantined"],"rejected":stats["rejected"],
         "subtasks":stats["subtasks"],"gold_waves":stats["waves"],
