@@ -60,8 +60,7 @@ class FeedbackContractTests(unittest.TestCase):
         self.assertEqual(realize_feedback_natural(payload,report),report)
         self.assertTrue(mentions_exact_count("Three distinct results.",3))
         self.assertFalse(mentions_exact_count("thirteen results",3))
-        self.assertFalse(mentions_exact_count("Reference 3 contains names",3)
-                         is False)  # Numeric literal is still literal.
+        self.assertTrue(mentions_exact_count("3 matching results",3))
         wrong={"summary":"The union yielded two distinct entities.",
                "trace_summary":"Counted two matching items."}
         with self.assertRaisesRegex(ValueError,"omits_numeric_result"):
