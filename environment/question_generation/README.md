@@ -1,199 +1,150 @@
-# Stage 2 · Natural-language question realization
+# Stage 2: natural question generation
 
-Stage 2 expresses a **frozen, executable Stage-1 task** as an understandable
-question. It must not modify the ProgramIR, private World, Gold Answer,
-Subtask DAG, or the Stage-3 execution plan. Question quality and semantic
-fidelity are **separate** dimensions; grammatical compliance is not by
-itself a human naturalness score.
+Stage 1 freezes an executable ProgramIR, a synthetic World and the canonical
+task. **Stage 2 does not change the task or the Gold.** It converts the
+canonical task into a natural question while preserving the exact public
+answer-defining semantics.
 
-## The three explicit generation strategies
+There is **one** Stage-2 generation strategy. The old \`--surface-mode\`
+choice, bounded-grammar publication fallback, graph-review pipeline,
+recursive full-program readback, and their legacy interfaces have been
+removed.
 
-| \`--surface-mode\` | Model contribution | Publication guard | Role |
-| --- | --- | --- | --- |
-| \`scoped\` (default) | Select among compiler-generated sentence alternatives | Reparse the exact bounded grammar and compare the typed query | Fast, source-replayable baseline |
-| \`free\` | Generate a complete open-ended rewrite of an already certified Scoped question | Public boundary guards + **two blind text-only readbacks** + typed-tree equality and exact textual witnesses | Conservative natural-language experiment |
-| \`graph\` | Historical direct Author/ProgramIR/repair workflow | Graph/contract reviewer | Explicit A/B research baseline; not the default |
-
-The active production path is:
+## Active sequence
 
 \`\`\`text
-frozen World + ProgramIR + public task projection
-                         |
-                controlled renderer
-                         |
-          checked public Question Contract
-                         |
-             Scoped Grammar alternatives
-                         |
-           Scoped text + grammar certificate
-                         |
-     [if --surface-mode free and models configured]
-                         |
-             LLM writes NEW English question
-                         |
-        date/code/restriction and leak checks
-                         |
-        INDEPENDENT readback of free text ONLY
-          /                                 \
-       pass 1                             pass 2
-          \                                 /
-           normalized typed query comparison
-                         |
-           reference Question Contract match
-                         |
-       accepted free candidate OR Scoped fallback
-                         |
-  Stage-2 question + versioned certificate + audit
-                         |
-  Stage 3: revalidate certificate WITHOUT an LLM call
+frozen Stage 1 task + Controlled Renderer
+                   |
+       compile Gold (private; no LLM)
+                   |
+     construct deterministic Scoped question
+        (private public-only reference)
+                   |
+     Author produces complete natural draft
+                   |
+   Critic compares reference vs actual draft
+         |                       |
+       pass               revise / uncertain
+         |                       |
+         |             Author EDITS prior draft
+         |             with concrete Critic feedback
+         |                       |
+         +------ repeat (up to 2 revisions)
+                   |
+       independent FINAL Judge
+     (reference + final text only)
+                   |
+     +-------------+--------------+
+     |                            |
+  approved                  not approved /
+  publication               uncertain / bad JSON /
+     |                      leak / poor naturalness
+  accepted                        |
+  question                    REJECTED
 \`\`\`
 
-### What is allowed into model prompts?
+The deterministic Scoped question is a **reference only**. It is never
+substituted for an unsuccessful natural-language draft. Even a semantically
+valid but mechanical copy is rejected. Only \`naturalized_certified\`
+questions appear in \`realized_capability_worlds.jsonl\`.
 
-* The **free Author** receives only the previously certified Scoped question.
-  It does not receive private World facts, hidden \`FIND\` identities, evidence
-  answers, source identifiers, or the Gold Subtask DAG.
-* Each independent **semantic reader** receives the *free candidate question
-  only*, plus generic operator instructions and output-format requirements.
-  Neither reader sees the expected query tree, Canonical question, previous
-  parser response, or Author notes.
-* The deterministic comparator holds the expected typed expression *after*
-  the readers have returned. A node or condition is only admissible if its
-  supporting quotation occurs in the actual question text. Dates normalize to
-  calendar dates, numbers to numeric values, and \`+650\` remains a string code.
-* An uncertainty, malformed parse, missing quote, changed owner, relation
-  direction, conjunction/disjunction, output type, added literal or extra
-  restriction is not approved. Every candidate is checked; no unchecked
-  free rewrite is silently admitted to Main-Agent training.
+## What each model sees and produces
 
-The two parses may still share model bias (both can use the same Qwen
-checkpoint). This is a **conservative, model-assisted** semantic verification
-experiment, **not** a formal equivalence proof or a guarantee of zero errors.
-For that reason, keep independent human challenge sets and controlled
-counterexamples in the evaluation.
+* **Author**: receives the publicly rendered Scoped reference, which contains
+  no private World facts, hidden entity IDs or Gold answers. First call
+  returns \`{"question":"..."}\`. A revision call also receives the actual
+  previous candidate and the Critic's concrete findings, so that it edits
+  the prior draft instead of starting from the same reference.
+* **Critic**: receives only the reference question and the current natural
+  candidate. It emits \`pass\`, \`revise\` or \`uncertain\` with a concise list
+  of \`kind\`, \`severity\`, \`explanation\` and \`suggestion\` for each
+  identified problem. For a real omitted date, owner mismatch or reversed
+  relation, it must specify which clause needs repair. Natural paraphrase
+  and sentence reordering are not reasons to reject.
+* **Final Judge**: independently receives the reference and **final candidate
+  only**. It does not see prior revisions, Critic votes or private World.
+  It judges (i) answer-set equivalence and (ii) substantial improvement in
+  naturalness. A pass requires:
+  \`verdict=pass\`, \`semantic_equivalence=equivalent\`,
+  \`naturalness=improved\` and \`issues=[]\`.
+* **Deterministic safety checks**: before calling reviewers, reject or ask
+  Author to repair malformed questions, answer leakage, internal IDs,
+  false claims of pre-supplied discovery rosters, and other public-boundary
+  violations. Type-aware date/number/code differences are presented as
+  *advisory* to Critic/Judge, not an automatic exact-string veto.
 
-### Why keep the Scoped fallback?
+The two editorial roles can use the same local Qwen3.5-9B checkpoint, but
+different prompts and separate inference calls. The Final Judge is
+**context-independent**, not a mathematically independent verifier. Its
+approval is an auditable model assessment, not a formal proof of semantic
+equivalence. For scientific reporting, manually sample approved questions
+and test targeted adversarial edits to relations, scopes, quantifiers and
+critical clues.
 
-The current Scoped Grammar is a bounded **generator/parser**: its predefined
-productions carry typed semantics. It can prevent unlicensed edits, but its
-readback is not independent natural-language understanding. In contrast,
-a free-form rewrite must be interpreted from scratch; it is harder and may
-fail. When it does, we publish the already validated Scoped version (or the
-exact Canonical renderer if the grammar is unsupported).
+## Publication and rejection
 
-**Do not confuse these successes:**
+Every frozen task produces exactly one accepted or rejected result. No
+fallback question can be counted as a naturalization success.
 
-* \`free_rewrite_certified\`: unrestricted text passed two blind semantic parses
-  and the deterministic comparison.
-* \`scoped_grammar_certified\`: text matches compiler-generated productions;
-  **not** a verified free rewrite.
-* \`canonical_only\`: safe task/question fallback, **not** naturalization.
-* \`rejected\`: no safely publishable surface.
+| Result | Location | Meaning |
+| --- | --- | --- |
+| \`naturalized_certified\` | \`realized_capability_worlds.jsonl\` | Correct boundary checks, Critic pass and independent Final Judge pass |
+| \`rejected_semantic\` | \`question_rejected.jsonl\` | A material mismatch remains |
+| \`rejected_uncertain\` | rejected JSONL | Model cannot reliably establish equivalence |
+| \`rejected_quality\` | rejected JSONL | Insufficient natural language improvement |
+| \`rejected_validation_error\` | rejected JSONL | Model/protocol or public-boundary failure |
+| \`rejected_reference\` | rejected JSONL | Program/Controlled Renderer reference unusable |
 
-The historical \`publication_status=naturalized_certified\` also covers
-Scoped Grammar, so use the **method-level counters** above for experiments.
-\`meaningful_rewrite_rate\` is only an inexpensive text heuristic, not a
-human naturalness metric.
+Detailed per-attempt drafts, Critic feedback, judge decisions and error
+causes are recorded in \`question_critic_audit.jsonl\`. Because this is a
+teacher-side diagnostic, do not expose it to the Main Agent. Stream writes
+are atomic, input ordered and resumable.
 
-## Run a paired 10-question experiment
+## Run: local Qwen3.5-9B
 
-From the same frozen Stage-1 input, use **new output directories** to avoid
-incompatible checkpoints:
+\`environment/config.yaml\` already selects \`local_qwen35_9b\` for both
+\`question_author\` and \`question_critic\` roles, so no API key or profile
+switch is necessary. Start with the SAME first ten frozen Stage-1 tasks:
 
 \`\`\`bash
 cd ~/code/MAESTRO
+git switch main
+git pull origin main
 
-# Optional baseline: a new Scoped run over the first 10 frozen tasks
 python environment/generate_questions.py \
   --max-records 10 \
-  --surface-mode scoped \
-  --output-dir environment/data/questions_scoped_v12_10 \
-  --flush-every 1
-
-# New experiment: Scoped → free Author → two blind semantic parses
-python environment/generate_questions.py \
-  --max-records 10 \
-  --surface-mode free \
-  --output-dir environment/data/questions_free_v12_10 \
+  --max-revisions 2 \
+  --output-dir environment/data/questions_editorial_v13_10 \
+  --question-workers 4 \
   --flush-every 1
 \`\`\`
 
-The default \`environment/config.yaml\` resolves both roles to the configured
-local model. In \`free\` mode, the question Author uses the configured Author
-backend and the independent text reader uses the Critic backend with
-temperature 0 and at least 4096 reserved output tokens. To avoid model-only
-correlated failures, consider a separate Critic checkpoint for later runs.
-Do not use the explicit \`--no-semantic-critic\` override when evaluating free
-rewrites; without a real reader, the safe Scoped fallback remains in force.
-
-The summary separates:
-\`free_rewrite_certified\`, \`scoped_grammar_certified\`,
-\`free_author_calls\`, \`blind_readback_calls\`,
-\`free_attempt_failure_reasons\`, \`canonical_only\`, and \`rejected\`.
-Review these alongside actual question examples and human ratings. A high
-grammar-certified fraction is **not** a high free-naturalization success rate.
-
-Stage 3 remains an independent consumer. To check the final output boundary
-for these same ten accepted questions:
+Then inspect \`review_statistics\` and \`rejection_reasons\`, and compare
+each accepted question with its Scoped reference in the review audit.
+\`accepted\` now counts **only approved free naturalizations**.
 
 \`\`\`bash
-python environment/simulate_trajectories.py subtasks \
-  --scene omnigaia --provider openai-compatible \
-  --schedule compact --feedback-workers 4 \
-  --max-records 10 \
-  --realized environment/data/questions_free_v12_10/realized_capability_worlds.jsonl \
-  --output work/subtask_bank_free_v12_10.jsonl
+python -m unittest discover -s environment/tests -p "test_*.py"
 \`\`\`
 
-Stage 3 reconstructs the Canonical question from the frozen World, compiles
-Gold from ProgramIR, validates Stage-2's certificate and separately checks
-public source reachability under the actual Surface question. Old Scoped
-**v17** certificates remain verifiable; new publications use **v18**.
+Stage 3 remains a separate consumer: it reconstructs the canonical task,
+compiles Gold from the unchanged ProgramIR, rechecks the Stage-2 certificate
+and performs its own public-executability and evidence validation. The new
+certificate schema is \`maestro.stage2_surface_cert.v2\` (contract 19).
+Previously generated v17/v18 Scoped/Free artifacts are **not supported by
+this new validator**; keep their original code/checkpoints for comparison,
+or regenerate questions in a new directory.
 
-## Module ownership
+## Code ownership
 
-| Module | One primary responsibility |
-| --- | --- |
-| \`pipeline.py\` | CLI, frozen-input mapping, streaming, resume and metrics |
-| \`realization.py\` | Per-task selection, Scoped/Free fallback policy, publication |
-| \`scoped_surface.py\` | Deterministic grammar, productions and exact roundtrip |
-| \`free_surface.py\` | Author's public-text rewrite and style/literal guards |
-| \`semantic_readback.py\` | Blind text-only parsing, quotation witnesses, typed equality |
-| \`verification.py\` | Versioned certificates and Stage-3 local revalidation |
-| \`public_semantics.py\` | Safe public-only Question Contract projection |
-| \`graph_realization.py\` | Historical graph-review baseline, isolated from default |
-| \`streaming.py\` | Ordered durable JSONL/checkpoint writes |
+* \`realization.py\` — per-task Author/Critic/revision/Final-Judge state.
+* \`question_review.py\` — small model prompts and response contracts.
+* \`scoped_surface.py\` — deterministic public reference compiler.
+* \`public_semantics.py\` — public-only condition/scope projection.
+* \`verification.py\` — publication certificate and Stage-3 fingerprint
+  and reference replay.
+* \`validators.py\`, \`contracts.py\` — public boundary and typed literals.
+* \`pipeline.py\`, \`streaming.py\` — CLI, durable ordered outputs, resume,
+  summaries and model configuration.
 
-**Safety boundary:** The Author can only rephrase information already
-exposed by the Controlled Renderer. Structural changes to the task itself
-belong in Stage 1. Deleting an answer-defining condition requires a fresh
-task and Gold verification, not a permissive Stage-2 style check.
-
-## Recovery and diagnostics
-
-The generator validates the frozen manifest and SHA-256 of Stage-1 inputs.
-It writes accepted questions, rejected tasks, and private audit records in
-input order even when task generation runs concurrently. Checkpoint
-signatures cover the code and model configuration, and \`--flush-every 1\`
-provides the strictest crash/restart boundary.
-
-A different input/model/verification version will reject resume against an
-old checkpoint; choose another output directory or explicitly restart with
-\`--restart-questions\`. This restart removes only the chosen Stage-2
-output files, **never** the frozen Stage-1 World.
-
-Run no-network regressions:
-
-\`\`\`bash
-python -m unittest discover -s environment/tests -p "test_*question*.py"
-python -m unittest discover -s environment/tests -p "test_semantic_readback.py"
-python -m unittest discover -s environment/tests -p "test_scoped_surface.py"
-\`\`\`
-
-Limitations: independently parsed English can still be ambiguous; two
-parsers sharing one model are not statistically independent. A grammar
-production might itself encode the wrong English relation despite carrying
-the right typed label. Validate a representative set of sentences manually,
-with explicit adversarial relation/owner/quantifier probes, before scaling
-beyond the first 10–50 samples. Improving the *motivation* and coherence of
-the underlying question is a separate Stage-1 Task Design problem.
+There are no legacy graph or recursive semantic readback publication paths.
