@@ -380,6 +380,38 @@ def explicit_public_claim_issues(
     return sorted(set(relation_issues + attribute_issues))
 
 
+COUNT_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven",
+               "eight", "nine", "ten", "eleven", "twelve", "thirteen",
+               "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+               "nineteen", "twenty")
+
+
+def mentions_exact_count(text: str, value: int) -> bool:
+    if not isinstance(text, str) or type(value) is not int:
+        return False
+    if re.search(r"(?<![\\w.])" + re.escape(str(value)) + r"(?![\\w.])", text):
+        return True
+    return (0 <= value < len(COUNT_WORDS) and
+            re.search(r"\\b" + COUNT_WORDS[value] + r"\\b", text, re.I)
+            is not None)
+
+
+def supported_collection_counts(content: str, fragment: Mapping[str, Any]) -> set[Decimal]:
+    """Match count phrases only against publicly replayed collection sizes."""
+    outputs = [row.get("answer") for row in fragment.get("operation_results", [])]
+    lengths = {len(x) for x in outputs if isinstance(x, (list, tuple, set))}
+    answer = fragment.get("expected_answer")
+    if isinstance(answer, (list, tuple, set)):
+        lengths.add(len(answer))
+    pattern = (r"\\b(\\d{1,4})\\s+(?:(?:distinct|unique|matching|initial|retained)\\s+)*"
+               r"(?:entities|candidates|records|items|results|objects|subjects|"
+               r"organizations|persons|books)\\b")
+    return {
+        Decimal(int(m.group(1))) for m in re.finditer(pattern, content, re.I)
+        if int(m.group(1)) in lengths
+    }
+
+
 def validate_feedback(value: Any, fragment: Mapping[str, Any], *, strict=False,
                       public_refs=()) -> tuple[bool, list[str]]:
     if strict:
