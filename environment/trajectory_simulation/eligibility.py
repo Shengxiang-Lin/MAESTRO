@@ -282,7 +282,11 @@ def check_question(gold,record,role,*,review=True):
                         'long copied passages; do not auto-approve.\\n'
                         +focused_prompt
                     )
-                if not valid_verdict(focused,required_hops=batch):
+                focus_error=invalid_reason(focused,required_hops=batch)
+                audit.append({'stage':'focused_hop_validation',
+                              'required_steps':[gap['step'] for gap in batch],
+                              'validation_error':focus_error})
+                if focus_error:
                     verdict=focused
                     break
                 if focused['decision']!='eligible':
