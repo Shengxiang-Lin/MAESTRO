@@ -146,38 +146,6 @@ def public_semantic_scaffold(world: Mapping, canonical: str) -> dict:
     }
 
 
-def naturalization_metrics(canonical: str, candidate: str) -> dict:
-    """Readability proxy only; NEVER a semantic-quality certificate."""
-    from difflib import SequenceMatcher
-    boilerplate = (
-        "entities drawn from", "candidates in", "entities for which",
-        "after requiring", "entities connected from", "entities connected into",
-        "entities appearing in at least one of", "entities meeting both sides of",
-        "what entity or entities are selected",
-    )
-    def count(text):
-        lower = text.lower()
-        return sum(lower.count(term) for term in boilerplate)
-    original_count = count(canonical)
-    candidate_count = count(candidate)
-    similarity = round(SequenceMatcher(
-        None, canonical, candidate, autojunk=False,
-    ).ratio(), 4)
-    # Do not confuse superficial additions with improved natural phrasing.
-    meaningful = (
-        candidate != canonical
-        and (original_count - candidate_count >= 2
-             or (similarity < .85 and len(candidate.split()) <= len(canonical.split()) * 1.2))
-    )
-    return {
-        "character_similarity": similarity,
-        "canonical_words": len(canonical.split()),
-        "surface_words": len(candidate.split()),
-        "canonical_template_phrases": original_count,
-        "surface_template_phrases": candidate_count,
-        "meaningful_rewrite_proxy": meaningful,
-    }
-
 def public_question_contract(world, canonical, gold):
     """Group unary filters, using only the compiler's public projection.
 
@@ -252,4 +220,4 @@ def public_question_contract(world, canonical, gold):
     }
 
 __all__ = ["VERSION", "public_semantic_scaffold", "public_question_contract",
-           "naturalization_metrics"]
+]
