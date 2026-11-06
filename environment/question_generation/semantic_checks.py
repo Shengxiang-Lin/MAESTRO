@@ -194,7 +194,10 @@ def naturalness_gate(reference: str, candidate: str) -> dict[str, Any]:
     new_words = len(candidate.split())
     # A major shortening or meaningful restructuring can be worthwhile even
     # if some public group identifiers are retained.
-    requires_real_rewrite = (
+    # Adding a generic preamble to an unchanged reference can lower string
+    # similarity without making the actual problem any more natural.
+    wraps_original = a in b
+    requires_real_rewrite = not wraps_original and (
         similarity < 0.90 or
         (new_words <= int(old_words * 0.80) and similarity < 0.965)
     )
