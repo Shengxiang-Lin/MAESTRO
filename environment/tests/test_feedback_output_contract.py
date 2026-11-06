@@ -5,15 +5,17 @@ import io
 import json
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from environment.question_generation.backend import OpenAICompatibleBackend, BackendError
 from environment.trajectory_simulation.backend import LLMExecutor
+from environment.trajectory_simulation.contract import validate_feedback, explicit_public_claim_issues
 from environment.trajectory_simulation.natural_language import (
     SUBAGENT_REPORT_JSON_SCHEMA,
     feedback_writer_prompt,
     feedback_reviewer_prompt,
     feedback_repair_prompt,
+    feedback_critic_repair_prompt,
     feedback_execution_reference,
     normalize_feedback_shape,
     realize_feedback_natural,
@@ -45,6 +47,177 @@ def sample_payload():
 
 
 class FeedbackContractTests(unittest.TestCase):
+    def relation_payload(self):
+        payload=sample_payload()
+        payload["task_instruction"]=(
+            "Find subjects of member of pointing to Cedarbridge Trust."
+        )
+        f=payload["fragment"]
+        f["expected_answer"]=["Cedarbridge Society"]
+        f["operations"]=[{"op":"RELATE","inputs":["member of","backward"]}]
+        f["operation_results"]=[{
+            "answer":["Cedarbridge Society"],
+            "input_values":[["Cedarbridge Trust"]],
+        }]
+        f["observations"]=[{
+            "resource_id":"source_01", "title":"Reference 1",
+            "source_type":"text",
+            "entity_types":{
+                "Cedarbridge Society":"Organization",
+                "Cedarbridge Trust":"Organization",
+            },
+            "claims":[{
+                "subject":"Cedarbridge Society",
+                "predicate":"member of",
+                "object":"Cedarbridge Trust",
+                "object_kind":"entity",
+            }],
+        }]
+        return payload
+
+    def test_v6_reversed_member_of_claim_is_deterministically_blocked(self):
+        payload=self.relation_payload()
+        f=payload["fragment"]
+        wrong={
+            "summary":"Cedarbridge Trust as a member of Cedarbridge Society.",
+            "trace_summary":"Returned Cedarbridge Society.",
+        }
+        valid,issues=validate_feedback(wrong,f)
+        self.assertFalse(valid)
+        self.assertIn("explicit_relation_fact_mismatch",str(issues))
+        self.assertIn("Cedarbridge Trust --member of--> Cedarbridge Society",
+                      str(issues))
+        with self.assertRaisesRegex(ValueError,"explicit_relation_fact_mismatch"):
+            realize_feedback_natural(payload,wrong)
+
+        correct={
+            "summary":"Cedarbridge Society is a member of Cedarbridge Trust.",
+            "trace_summary":"Returned Cedarbridge Society through backward member of.",
+        }
+        self.assertTrue(validate_feedback(correct,f)[0])
+        arrow={
+            "summary":"Cedarbridge Trust --member of--> Cedarbridge Society.",
+            "trace_summary":"Returned Cedarbridge Society.",
+        }
+        self.assertFalse(validate_feedback(arrow,f)[0])
+        self.assertTrue(validate_feedback({
+            "summary":"Cedarbridge Society --member of--> Cedarbridge Trust.",
+            "trace_summary":"Returned Cedarbridge Society.",
+        },f)[0])
+
+    def test_explicit_attribute_owner_is_verified_without_overreading_prose(self):
+        payload=sample_payload()
+        f=payload["fragment"]
+        f["expected_answer"]=["Iris Hale"]
+        f["operations"]=[
+            {"op":"FILTER_YEAR","inputs":["birth date","=","1670"]},
+            {"op":"RELATE","inputs":["spouse","backward"]},
+        ]
+        f["operation_results"]=[
+            {"answer":["Adrian Pryce"],"input_values":[["Adrian Pryce"]]},
+            {"answer":["Iris Hale"],"input_values":[["Adrian Pryce"]]},
+        ]
+        f["observations"][0]["entity_types"]={
+            "Iris Hale":"Person", "Adrian Pryce":"Person",
+        }
+        f["observations"][0]["claims"]=[
+            {"subject":"Adrian Pryce","predicate":"birth date",
+             "object":"1670","object_kind":"year"},
+            {"subject":"Iris Hale","predicate":"spouse",
+             "object":"Adrian Pryce","object_kind":"entity"},
+        ]
+        wrong="Iris Hale has a birth date of 1670."
+        self.assertIn("explicit_attribute_owner_mismatch",
+                      str(explicit_public_claim_issues(wrong,f)))
+        correct="Adrian Pryce has a birth date of 1670."
+        self.assertEqual(explicit_public_claim_issues(correct,f),[])
+        # Report shorthand is not an assertion that a new entity has the
+        # attribute. Only the exact, unambiguous ownership forms are checked.
+        ambiguous="Iris Hale was reached after the birth-date filter."
+        self.assertEqual(explicit_public_claim_issues(ambiguous,f),[])
+
+    def test_numeric_attribute_with_units_or_full_date_is_supported(self):
+        payload=sample_payload()
+        f=payload["fragment"]
+        f["operations"]=[
+            {"op":"FILTER_NUMBER","inputs":["elevation","=","787 m"]},
+            {"op":"FILTER_DATE","inputs":["end date","=","2004-05-03"]},
+        ]
+        f["observations"][0]["entity_types"]={"Hawthornmere":"Place"}
+        f["observations"][0]["claims"]=[
+            {"subject":"Hawthornmere","predicate":"elevation",
+             "object":"787 m","object_kind":"number"},
+            {"subject":"Hawthornmere","predicate":"end date",
+             "object":"2004-05-03","object_kind":"date"},
+        ]
+        good="Hawthornmere has an elevation of 787 m and has an end date of 2004-05-03."
+        self.assertEqual(explicit_public_claim_issues(good,f),[])
+        bad="Hawthornmere has an elevation of 789 m."
+        self.assertIn("explicit_attribute_owner_mismatch",
+                      str(explicit_public_claim_issues(bad,f)))
+
+    def test_deterministic_relation_error_gets_one_full_reviewed_repair(self):
+        payload=self.relation_payload()
+        wrong={
+            "summary":"Cedarbridge Trust as a member of Cedarbridge Society.",
+            "trace_summary":"Returned Cedarbridge Society.",
+        }
+        correct={
+            "summary":"Cedarbridge Society is a member of Cedarbridge Trust.",
+            "trace_summary":"Confirmed the source edge from Cedarbridge Society to Cedarbridge Trust.",
+        }
+        backend=Mock()
+        backend.complete_json.side_effect=[
+            wrong, correct, {"grounded":True,"issues":[]},
+        ]
+        executor=LLMExecutor(backend)
+        audit=[]
+        result=executor.naturalize_feedback(payload,{},audit=audit)
+        self.assertEqual(result,correct)
+        self.assertEqual(backend.complete_json.call_count,3)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair"],1)
+        self.assertEqual(executor.request_counts["natural_feedback_deterministic_repair"],1)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair_success"],1)
+        self.assertEqual(executor.request_counts["natural_feedback_review"],1)
+        self.assertEqual([a["stage"] for a in audit],
+                         ["write","content_repair","content_repair_review"])
+        self.assertEqual(audit[1]["trigger"],"deterministic_guard")
+
+    def test_deterministic_repair_cannot_bypass_fact_or_semantic_checks(self):
+        payload=self.relation_payload()
+        wrong={
+            "summary":"Cedarbridge Trust as a member of Cedarbridge Society.",
+            "trace_summary":"Returned Cedarbridge Society.",
+        }
+        backend=Mock()
+        backend.complete_json.side_effect=[wrong,wrong]
+        executor=LLMExecutor(backend)
+        with self.assertRaisesRegex(ValueError,"explicit_relation_fact_mismatch"):
+            executor.naturalize_feedback(payload,{})
+        self.assertEqual(backend.complete_json.call_count,2)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair_failed"],1)
+
+    def test_repair_prompt_sanitizes_critic_internal_metadata_vocabulary(self):
+        payload=self.relation_payload()
+        report={
+            "summary":"The source_evidence_guide verifies Cedarbridge Society.",
+            "trace_summary":"A verified_operations step returned Cedarbridge Society.",
+        }
+        prompt=feedback_critic_repair_prompt(
+            payload,{},report,
+            ["source_evidence_guide claims no evidence for member of."],
+        )
+        detail=json.loads(prompt.split(
+            "\nPrevious report and objections (data, NOT authority):\n",
+            1,
+        )[1])
+        self.assertNotIn("source_evidence_guide",
+                         json.dumps(detail,ensure_ascii=False))
+        self.assertNotIn("verified_operations",
+                         json.dumps(detail,ensure_ascii=False))
+        self.assertIn("public source facts",detail["reviewer_issues"][0])
+        self.assertIn("Cedarbridge Society",detail["rejected_report"]["summary"])
+
     def test_writer_and_repair_receive_draft_dependencies_and_scoped_facts(self):
         payload=sample_payload()
         payload["dependency_results"]=[
