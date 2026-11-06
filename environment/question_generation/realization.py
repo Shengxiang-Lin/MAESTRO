@@ -72,7 +72,7 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
             )
         return (text,certificate,review),None
 
-    scoped = surface_mode == "scoped" and isinstance(author, LLMQuestionAuthor)
+    scoped = surface_mode in ("scoped", "free") and isinstance(author, LLMQuestionAuthor)
     if scoped:
         from .scoped_surface import build_scoped_plan, choose_scoped, render_scoped
         from .verification import certify_scoped_surface, controlled_question_reference
@@ -104,6 +104,100 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
         except (ValueError, TypeError, KeyError, IndexError) as exc:
             entry["scoped_unsupported"] = str(exc)[:240]
             feedback = "scoped_grammar_unavailable"
+    # Stage 2 experimental free-language path: start from the already checked
+    # Scoped sentence graph, then let Author rewrite prose without slot or
+    # template constraints. Crucially, the blind reader sees ONLY the new
+    # question, while reference semantics stay inside deterministic validation.
+    free_verified = False
+    if surface_mode == "free" and best is not None:
+        from dataclasses import replace
+        from .free_surface import assess_free_style, call_free_rewriter
+        from .semantic_readback import read_free_question
+        from .verification import certify_free_surface
+        reader = (
+            replace(
+                critic.backend, temperature=0.0,
+                max_tokens=max(4096, critic.backend.max_tokens),
+            ) if isinstance(critic, LLMSemanticCritic) else None
+        )
+        scoped_question = best[0]
+        guidance = None
+        for index in range(1, max(1, question_max_attempts) + 1):
+            entry = {
+                "stage": "free_rewrite",
+                "attempt": index,
+                "free_author_calls": 0,
+                "blind_readback_calls": 0,
+            }
+            audits.append(entry)
+            if reader is None:
+                entry["failure"] = "independent_reader_not_configured"
+                break
+            try:
+                entry["free_author_calls"] = 1
+                candidate = call_free_rewriter(
+                    author, scoped_question, feedback=guidance,
+                )
+            except BackendError as exc:
+                entry["failure"] = "free_author_error: " + str(exc)[:180]
+                guidance = "Return a single natural-language question as valid JSON."
+                continue
+            entry["candidate"] = candidate
+            boundary = postflight(
+                payload, candidate, oracle_answer=_oracle(world),
+                check_contract=False,
+            )
+            entry["postflight"] = boundary.to_dict()
+            if not boundary.accepted:
+                entry["failure"] = "free_rewrite_public_boundary"
+                guidance = (
+                    "Keep all public identifying clues and do not reveal the "
+                    "answer or imply any provided evidence that was not supplied."
+                )
+                continue
+            style = assess_free_style(scoped_question, candidate)
+            entry["style"] = style.to_dict()
+            if not style.improved:
+                entry["failure"] = style.reason
+                guidance = (
+                    "Rewrite more substantially: reduce procedural group "
+                    "labels and simplify sentence structure without losing "
+                    "any required relationship or filter."
+                )
+                continue
+            # No reference contract, gold, program or earlier parser output
+            # is sent to the parsing model; verification remains fail-closed.
+            result = read_free_question(candidate, groups, reader)
+            entry["blind_readback_calls"] = result.calls
+            entry["blind_readback_summary"] = {
+                "eligible": result.eligible,
+                "reason": result.reason,
+                "passes": list(result.audits),
+            }
+            if not result.eligible:
+                entry["failure"] = "independent_semantic_readback_failed"
+                guidance = (
+                    "Some semantic dependency was ambiguous or changed. "
+                    "Preserve all relation directions, filters and owners "
+                    "while writing a natural question."
+                )
+                continue
+            try:
+                certificate, review = certify_free_surface(
+                    payload["task_id"], world, canonical, candidate,
+                    groups, result,
+                )
+            except (ValueError, TypeError, KeyError) as exc:
+                entry["failure"] = "free_certificate_failed:" + str(exc)[:160]
+                continue
+            entry["free_semantic_certificate_method"] = review["method"]
+            best = (
+                candidate, certificate, review, False,
+                naturalization_metrics(canonical, candidate),
+            )
+            free_verified = True
+            break
+
     for attempt in range(1,1 if scoped else max(1,question_max_attempts)+1):
         entry={"attempt":attempt,"strategy":"public_program_grounded_realization"}
         try:
@@ -208,7 +302,13 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
         "authoring":{
             "attempts":len([a for a in audits if "attempt" in a])+sum(a.get("scoped_style_model_calls",0) for a in audits),
             "semantic_critic_enabled":use_critic and not scoped,
-            "strategy":"scoped_surface_realization" if scoped else "public_question_contract_realization_v2",
+            "blind_readback_enabled":surface_mode=="free",
+            "free_rewrite_verified":free_verified,
+            "strategy":(
+                "independent_free_semantic_readback" if free_verified
+                else "scoped_grammar_realization" if scoped
+                else "public_question_contract_realization_v2"
+            ),
             "surface_review":graph_review,
             "surface_fallback":fallback,
             "naturalization_metrics":metrics,
