@@ -53,14 +53,27 @@ class TwoPhaseTests(unittest.TestCase):
         def track(gold,record,role,*,review=True,rendered=None):
             reviews.append(gold["question"])
             return reviewed(gold,record,role,review=review,rendered=rendered)
+        certificates=[]
+        def certified(realized,record,renderer_question):
+            certificates.append(realized["question"])
+            return {
+                "eligible":True,"reviewed":True,"decision":"eligible",
+                "issues":[],"question_sha256":digest(realized["question"]),
+                "program_sha256":digest(record["program"]),
+                "method":"stage2_verified_programir_certificate",
+            }
         with patch(
             "environment.trajectory_simulation.subtask_bank.check_question",track
+        ),patch(
+            "environment.question_generation.verification.validate_surface_certificate",
+            side_effect=certified,
         ):
             bank=build_subtask_bank(
                 q,world,rendered,planner=PassthroughPlanner(),
                 executor=PassthroughExecutor(),schedule="baseline",
             )
-        self.assertEqual(reviews,[canonical,q["question"]])
+        self.assertEqual(reviews,[canonical])
+        self.assertEqual(certificates,[q["question"]])
         self.assertEqual(bank["question"],canonical)
         self.assertEqual(bank["surface_question"],q["question"])
         self.assertEqual(bank["gold_plan"]["question"],canonical)
@@ -146,8 +159,20 @@ class TwoPhaseTests(unittest.TestCase):
             if question==q["question"]:
                 return {"discovered_source_ids":[]}
             return simulate_search(*args,**kwargs)
+        certificates=[]
+        def certified(realized,record,renderer_question):
+            certificates.append(realized["question"])
+            return {
+                "eligible":True,"reviewed":True,"decision":"eligible",
+                "issues":[],"question_sha256":digest(realized["question"]),
+                "program_sha256":digest(record["program"]),
+                "method":"stage2_verified_programir_certificate",
+            }
         with patch(
             "environment.trajectory_simulation.subtask_bank.check_question",check,
+        ),patch(
+            "environment.question_generation.verification.validate_surface_certificate",
+            side_effect=certified,
         ),patch(
             "environment.trajectory_simulation.search_simulator.simulate_search",
             side_effect=surface_unreachable,
@@ -156,7 +181,8 @@ class TwoPhaseTests(unittest.TestCase):
                 q,world,rendered,planner=PassthroughPlanner(),
                 executor=PassthroughExecutor(),schedule="compact",
             )
-        self.assertEqual(reviews,[original,q["question"]])
+        self.assertEqual(reviews,[original])
+        self.assertEqual(certificates,[q["question"]])
         self.assertIn(original,seen)
         self.assertIn(q["question"],seen)
         self.assertFalse(bank["surface_preflight"]["publicly_executable"])
