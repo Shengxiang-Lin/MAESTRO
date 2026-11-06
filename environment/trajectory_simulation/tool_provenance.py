@@ -147,6 +147,7 @@ def source_evidence_guide(
             "source_type": source.get("source_type", "unspecified"),
             "source_access": "source_witness_only",
             "permitted_tools": [],
+            "entity_types": dict(source.get("entity_types", {})),
             "claims": source.get("claims", []),
         } for sid, source in sources.items()]
     for event in plan.get("steps", []):
@@ -163,6 +164,7 @@ def source_evidence_guide(
                     if event["kind"] == "previously_available_evidence"
                     else "newly_available_public_evidence",
                 "permitted_tools": [],
+                "entity_types": dict(source.get("entity_types", {})),
                 "claims": source.get("claims", []),
             }
         tool = event.get("tool")
@@ -194,7 +196,10 @@ def unsupported_tool_actions(text: str, plan: Mapping[str, Any]) -> set[str]:
         "GoogleSearchAction": (
             r"\b(?:web search|online search|search results|search engine|"
             r"(?:initial|refined|targeted|follow-up) search|"
-            r"searched (?:the web|online)|performed (?:a )?search)\b"
+            r"searched (?:the web|online)|performed (?:a )?search|"
+            r"searched (?:the |through the )?(?:available )?"
+            r"(?:evidence|records|references|sources|materials)|"
+            r"searched for (?:a |the )?(?:reference|source|record|evidence))\b"
         ),
         "VideoAnalysisAction": (
             r"\b(?:analy[sz]ed|examined|inspected|reviewed)\s+"
