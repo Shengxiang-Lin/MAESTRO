@@ -10,6 +10,56 @@ from collections import Counter
 from .realization import STYLES
 from .realization import realize_action, realize_feedback
 
+# Constrain Question Eligibility reviews at generation time. Deterministic
+# checking in eligibility.py is still authoritative: JSON Schema alone never
+# establishes question/program equivalence.
+QUESTION_REVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["eligible", "mismatch", "uncertain"]},
+        "issues": {
+            "type": "array", "maxItems": 2,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": [
+                        "missing_constraint", "scope", "direction", "join", "output",
+                    ]},
+                    "program_steps": {
+                        "type": "array", "minItems": 1, "maxItems": 6,
+                        "items": {"type": "integer"},
+                    },
+                    "question_quote": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "program_claim": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "question_claim": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                "required": [
+                    "kind", "program_steps", "question_quote",
+                    "program_claim", "question_claim", "reason",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "relation_coverage": {
+            "type": "array", "maxItems": 2,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "step": {"type": "integer"},
+                    "question_quote": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "interpretation": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                "required": ["step", "question_quote", "interpretation"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["decision", "issues", "relation_coverage"],
+    "additionalProperties": False,
+}
+
+
 class PassthroughPlanner:
     offline=True
     def decide(self,payload,prompt):
@@ -40,9 +90,10 @@ class _LLMRole:
         return self._review_json(
             'Audit question/program equivalence. Return only the requested decision/issues JSON.',
             prompt, 'question_review', backend=replace(self.backend,temperature=0.0),
-            audit=audit,
+            audit=audit, response_schema=QUESTION_REVIEW_SCHEMA,
         )
-    def _review_json(self,system,prompt,key,*,backend=None,audit=None,flag=None):
+    def _review_json(self,system,prompt,key,*,backend=None,audit=None,flag=None,
+                     response_schema=None):
         from environment.question_generation.backend import BackendError
         client=backend or self.backend
         for attempt in range(2):
@@ -55,6 +106,7 @@ class _LLMRole:
                             'Return a compact verdict with at most two short issues. '
                             'Never put analysis, self-questions or deliberation inside strings.'
                             if attempt else ''),prompt,
+                    **({'response_schema': response_schema} if response_schema is not None else {}),
                 )
                 if flag is not None and not (
                     isinstance(verdict,dict) and type(verdict.get(flag)) is bool

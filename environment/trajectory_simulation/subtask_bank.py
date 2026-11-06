@@ -407,6 +407,7 @@ def generate_subtasks_jsonl(
     stats=Counter()
     reasons=Counter()
     review_decisions=Counter()
+    review_failure_kinds=Counter()
     fallback_reasons=Counter()
     with output.open("w",encoding="utf-8") as good, rejected.open(
         "w",encoding="utf-8"
@@ -452,8 +453,10 @@ def generate_subtasks_jsonl(
                 stats["quarantined" if quarantine else "rejected"]+=1
                 reasons[stage]+=1
                 if stage=="question_eligibility":
-                    review_decisions[exc.audit.get("eligibility",{}).get(
-                        "decision","review_error"
+                    eligibility=exc.audit.get("eligibility",{})
+                    review_decisions[eligibility.get("decision","review_error")]+=1
+                    review_failure_kinds[eligibility.get(
+                        "review_failure_kind", "unclassified_review_failure"
                     )]+=1
                 dest.write(json.dumps({
                     "task_id":task_id,"reason":stage,
@@ -473,6 +476,7 @@ def generate_subtasks_jsonl(
                                   if stats["subtasks"] else 0.0,
         "reasons":dict(reasons),
         "question_review_decisions":dict(review_decisions),
+        "question_review_failure_kinds":dict(review_failure_kinds),
         "feedback_fallback_reasons":dict(fallback_reasons),
         "request_counts":{
             "question_review":dict(getattr(reviewer,"request_counts",{})),
