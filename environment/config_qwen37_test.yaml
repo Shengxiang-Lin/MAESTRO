@@ -1,0 +1,112 @@
+# Central configuration for the synthetic environment.
+# Paths are relative to the MAESTRO repository root. Secrets are read only
+# from environment variables; never put an API key in this file.
+version: 1
+
+models:
+  dashscope_qwen:
+    backend: api
+    model: qwen3.7-plus
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: DASHSCOPE_API_KEY
+    json_mode: true
+
+  local_qwen:
+    backend: vllm
+    # Original Qwen3-8B example, retained as an optional alternative.
+    model: qwen3-8b-local
+    base_url: http://127.0.0.1:8803/v1
+    api_key_env: null
+    json_mode: true
+
+  local_qwen35_9b:
+    backend: vllm
+    # Match the --served-model-name and --port used by vllm serve.
+    # This matches config/model_config.yaml's local-qwen3.5-9b endpoint.
+    model: local-qwen3.5-9b
+    base_url: http://127.0.0.1:8807/v1
+    # Local server normally needs no key; if protected, set the env var name.
+    api_key_env: null
+    json_mode: true
+
+  offline:
+    backend: passthrough
+
+task_construction:
+  # Collect up to 2000 validated semantic candidates, evaluate each one,
+  # and freeze every world that passes the unchanged quality checks.
+  candidate_pool_size: 2000
+  seed: 17
+  # Scenarios are chosen BEFORE source modalities. These are proposal weights,
+  # not guaranteed acceptance ratios after the strict World/P0/P1 gates.
+  web_search_weight: 45
+  hybrid_weight: 40
+  provided_media_weight: 15
+  reuse_candidate_pool: false
+  # null: up to 8 processes, with 2 proposals per process in each batch.
+  candidate_workers: null
+  candidate_proposal_batch_size: null
+  restart_candidates: false
+  max_records: null
+  min_fragment_depth: 2
+  max_fragment_depth: 4
+  min_orchestration_depth: 3
+  max_orchestration_depth: 5
+  min_latent_anchors: 2
+  min_parallel_width: 2
+  yago_profile_limit: 4096
+  mmqa_max_records: null
+  reuse_source_priors: false
+  prepare_sources_only: false
+  resume_downstream: false
+  no_progress: false
+  kqa_train: data/world-source/KQA-Pro/train.json
+  kqa_val: data/world-source/KQA-Pro/val.json
+  yago_facts: data/world-source/YAGO-4.6/yago-facts.ttl
+  yago_schema: data/world-source/YAGO-4.6/yago-schema.ttl
+  yago_taxonomy: data/world-source/YAGO-4.6/yago-taxonomy.ttl
+  mmqa_train: data/world-source/MultiModalQA/MMQA_train.jsonl.gz
+  mmqa_dev: data/world-source/MultiModalQA/MMQA_dev.jsonl.gz
+
+question_generation:
+  # Both question generation roles use the same local Qwen3.5-9B vLLM service.
+  author_profile: dashscope_qwen
+  critic_profile: dashscope_qwen
+  manifest: environment/data/frozen_manifest_{pool_size}.json
+  authoring_inputs: environment/data/authoring_inputs_{pool_size}.jsonl
+  worlds: environment/data/typed_worlds_{pool_size}.jsonl
+  capabilities: environment/data/capability_worlds_{pool_size}.jsonl
+  output_dir: environment/data/questions_{pool_size}
+  max_records: null
+  question_temperature: 0.4
+  critic_temperature: 0.0
+  max_tokens: 2048
+  critic_max_tokens: 768
+  timeout: 180
+  question_max_attempts: 2
+  question_workers: 4
+  # Stream completed tasks in frozen-input order, fsync after every 5 writes.
+  flush_every: 5
+  # Only set true to explicitly discard existing question-generation progress.
+  restart_questions: false
+  no_semantic_critic: false
+  no_json_mode: false
+  no_progress: false
+
+trajectory_simulation:
+  # Two explicit independent phases. Phase 2 ONLY reads the completed bank.
+  planner_profile: local_qwen35_9b
+  executor_profile: local_qwen35_9b
+  worlds: environment/data/typed_worlds_{pool_size}.jsonl
+  realized: environment/data/questions_{pool_size}/realized_capability_worlds.jsonl
+  bank: environment/data/subtask_bank_{pool_size}.jsonl
+  output: environment/data/main_rounds_{pool_size}.jsonl
+  max_records: null
+  schedule: compact
+  planner_temperature: 0.2
+  executor_temperature: 0.2
+  max_tokens: 2048
+  timeout: 90
+  rejected_output: null
+  no_json_mode: false
+  no_progress: false
