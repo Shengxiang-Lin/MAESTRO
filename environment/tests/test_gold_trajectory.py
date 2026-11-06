@@ -116,7 +116,7 @@ def fixture(*, dependent=False, terminal_evidence=False):
         "capability_world": {"resources": resources, "binding_audit": {}},
     }
     rendered = SimpleNamespace(
-        task_id="world-test",
+        task_id="world-test", question=realized["question"],
         answer=[175] if terminal_evidence else ["Carol"] if dependent else ["Bob"],
         hidden_metadata={
             "entity_aliases": {"A": "Alice", "B": "Bob", "C": "Carol"},
