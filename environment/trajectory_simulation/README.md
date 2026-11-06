@@ -98,6 +98,18 @@ For each question, this phase:
    Source evidence. Hidden private entities cannot satisfy a public lookup.
 2. Revalidates the question/program semantic equivalence using the configured
    question reviewer. Unreviewed or mismatched questions are not exported.
+   The reviewer receives the full semantic graph with explicit filter owners,
+   recorded relation endpoints, and minimum/maximum selection semantics.
+   Only compiler-certified redundant singleton `FIND`/`INTERSECT` checks
+   are eliminated; their consumers are rewired in this separate review view.
+   The frozen program and the public execution plan are not modified.
+   The review also receives bounded, fully expanded output semantics so
+   inherited filters stay visible across nested branches. Raw operator flags
+   are replaced by executor-derived meanings. Review contract v11 invalidates
+   earlier eligibility cache entries.
+   `question_review_summary` separately counts eligible questions, semantic
+   mismatches, uncertain decisions and review errors. Review errors remain
+   quarantined; malformed evidence never counts as an established mismatch.
 3. Visits **all** fragments in topological waves. For each subtask, records
    the canonical task, source-replay-verified exact answer, `summary`,
    `trace_summary`, observations, dependencies, and report-language audit.
@@ -114,11 +126,25 @@ For each question, this phase:
    cross-source attribution errors when the LLM writes its report.
 6. Attempts fluent, evidence-grounded Sub-Agent report wording: concise
    `summary` plus real-O1-style `trace_summary` that naturally describes
-   what was examined, observed, verified and returned. Full class names
+   what was examined, observed, verified and returned. The writer receives
+   the canonical report and the same `execution_reference` as the reviewer:
+   explicit step meanings, exact inputs/outputs, completed dependency
+   references, and relevant facts bound to their subjects and source titles.
+   Relation steps distinguish starting entities from discovered entities;
+   ranking steps explicitly state minimum/maximum and ties. A safe result
+   statement and facts about the final entities prevent transferring earlier
+   entities' attributes into the summary. Multiple sources supporting the
+   exact same relevant fact are grouped as `corroborated_facts`; the writer
+   must describe their agreement when present. Format-repair prompts retain
+   this execution reference. Full class names
    such as `VideoAnalysisAction` are **optional**, never mandatory. A trace
    may omit tool mechanics if it accurately explains the supported result.
    Both literal and natural-language claims of *unpermitted* tool actions
-   remain forbidden. The output contract has **exactly two nonempty JSON
+   remain forbidden. Actual completed dependency labels (`Attempt N,
+   subtask M`) are provenance metadata rather than observed numeric facts.
+   Both naturalization and publication use the same dependency references;
+   unknown labels, crossed attempt/subtask pairs, and unsupported factual
+   numbers are still rejected. The output contract has **exactly two nonempty JSON
    strings**, `summary` and `trace_summary`; trace bullets belong inside
    the latter string, separated by escaped newlines. For local vLLM, Stage 3.1
    requests a JSON Schema response for those two fields and falls back to
@@ -131,6 +157,9 @@ For each question, this phase:
    and backward relation results from unsupported direct Source claims;
    facts and relation directions must still be correctly attributed.
    Internal observation keys and invented quoted search queries are rejected.
+   Numeric guards exempt `Attempt N` / `subtask N` labels only when they
+   occur in the assigned subtask's completed dependency references. Other
+   unsupported numeric claims still fail the same checks.
    If the local LLM returns missing/blank
    `summary` or `trace_summary`, Stage 3.1 retries the writer **once** using
    a shorter prompt with predicate-relevant source facts and the same fixed

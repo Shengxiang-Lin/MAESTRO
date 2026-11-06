@@ -43,7 +43,10 @@ def _report_natural(executor, payload, template, fragment):
         report = (executor.naturalize_feedback(payload, template, audit=audit)
                   if isinstance(executor,LLMExecutor)
                   else executor.naturalize_feedback(payload, template))
-        okay, issues = validate_feedback(report, fragment, strict=False)
+        okay, issues = validate_feedback(
+            report,fragment,strict=False,
+            public_refs=[r.get("public_ref") for r in payload.get("dependency_results",[])],
+        )
         if not okay:
             raise ValueError("unsupported_report:" + ",".join(issues))
         return report, {"natural":True, "reason":None, "audit":audit}
@@ -476,6 +479,12 @@ def generate_subtasks_jsonl(
                                   if stats["subtasks"] else 0.0,
         "reasons":dict(reasons),
         "question_review_decisions":dict(review_decisions),
+        "question_review_summary":{
+            "eligible":review_decisions["eligible"],
+            "semantic_mismatch":review_decisions["mismatch"],
+            "semantic_uncertain":review_decisions["uncertain"],
+            "review_errors":review_decisions["review_error"],
+        },
         "question_review_failure_kinds":dict(review_failure_kinds),
         "feedback_fallback_reasons":dict(fallback_reasons),
         "request_counts":{

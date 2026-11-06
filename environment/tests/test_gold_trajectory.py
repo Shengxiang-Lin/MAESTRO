@@ -421,7 +421,7 @@ class FragmentCompilationTests(unittest.TestCase):
             self.assertEqual(item['audit']['exception_type'], 'KeyError')
             self.assertIn('KeyError: 15', item['audit']['traceback'])
 
-    def test_semantic_reviewer_sees_original_nodes_removed_by_public_projection(self):
+    def test_semantic_reviewer_rewires_only_certified_redundant_nodes(self):
         from environment.trajectory_simulation.eligibility import check_question
         question, record, rendered = fixture()
         record['program']['nodes'] = [
@@ -471,13 +471,16 @@ class FragmentCompilationTests(unittest.TestCase):
         verdict = check_question(gold, record, role)
         self.assertTrue(verdict['reviewed'])
         self.assertTrue(verdict['eligible'])
-        self.assertEqual(role.payload['canonical_expression']['step'], 4)
         steps = {item['step']: item for item in role.payload['canonical_steps']}
-        self.assertEqual(set(steps), {0, 1, 2, 3, 4})
-        self.assertTrue(steps[0]['projected_from_public_delegation'])
-        self.assertTrue(steps[3]['projected_from_public_delegation'])
-        self.assertFalse(steps[2]['projected_from_public_delegation'])
+        self.assertEqual(set(steps), {1, 2, 4})
+        self.assertEqual(steps[4]['input_steps'], [2])
+        self.assertEqual(record['program']['nodes'][-1]['dependencies'], [3])
         self.assertEqual(len(role.payload['certified_public_projections']), 1)
+        # A pruned delegation view alone is NOT permission to erase semantics.
+        from environment.trajectory_simulation.eligibility import semantic_review_nodes
+        full=semantic_review_nodes({**gold,'public_projections':[]},record)
+        self.assertEqual(set(full), {0, 1, 2, 3, 4})
+        self.assertEqual(full[4]['dependencies'], [3])
 
     def test_missing_composition_metadata_rejected_without_fallback(self):
         question, world, rendered = fixture()

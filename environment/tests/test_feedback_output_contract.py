@@ -13,6 +13,8 @@ from environment.trajectory_simulation.natural_language import (
     SUBAGENT_REPORT_JSON_SCHEMA,
     feedback_writer_prompt,
     feedback_reviewer_prompt,
+    feedback_repair_prompt,
+    feedback_execution_reference,
     normalize_feedback_shape,
     realize_feedback_natural,
 )
@@ -43,6 +45,140 @@ def sample_payload():
 
 
 class FeedbackContractTests(unittest.TestCase):
+    def test_writer_and_repair_receive_draft_dependencies_and_scoped_facts(self):
+        payload=sample_payload()
+        payload["dependency_results"]=[
+            {"public_ref":"Attempt 1, subtask 3","answer":["Alice"]},
+        ]
+        fragment=payload["fragment"]
+        fragment["operations"]=[
+            {"op":"FILTER_YEAR","inputs":["r:birth","=","1912"]},
+            {"op":"RELATE","inputs":["neighbor","backward"]},
+        ]
+        fragment["operation_results"]=[
+            {"input_values":[["Alice","Bob"]],"answer":["Alice"]},
+            {"input_values":[["Alice"]],"answer":["Carol"]},
+        ]
+        fragment["expected_answer"]=["Carol"]
+        fragment["observations"][0]["claims"] += [
+            {"subject":"Carol","predicate":"neighbor","object":"Alice"},
+            {"subject":"Unrelated","predicate":"neighbor","object":"Other"},
+        ]
+        canonical={"summary":"DRAFT_CANARY","trace_summary":"Fixed steps."}
+        reference=feedback_execution_reference(payload)
+        self.assertEqual(reference["completed_dependency_results"][0]["reference"],
+                         "Attempt 1, subtask 3")
+        self.assertEqual(reference["execution_steps"][0]["supporting_facts"][0]["subject"],
+                         "Alice")
+        hop=reference["execution_steps"][1]
+        self.assertEqual([fact["subject"] for fact in hop["supporting_facts"]],["Carol"])
+        self.assertIn("subjects",hop["meaning"])
+        self.assertIn("not transferred",hop["meaning"])
+        self.assertEqual([fact["predicate"] for fact in reference["final_result_facts"]],
+                         ["neighbor"])
+        self.assertNotIn("r:birth",str(reference["final_result_facts"]))
+        self.assertIn("Carol",reference["result_statement"])
+        for build in (feedback_writer_prompt,feedback_repair_prompt):
+            prompt=build(payload,canonical)
+            data=json.loads(prompt.split("\n",1)[1])
+            self.assertEqual(data["canonical_report"],canonical)
+            self.assertEqual(data["execution_reference"],reference)
+        review=feedback_reviewer_prompt(payload,canonical)
+        self.assertEqual(json.loads(review.split("\n",1)[1])["execution_reference"],
+                         reference)
+
+    def test_corroboration_requires_same_relevant_fact_in_distinct_sources(self):
+        payload=sample_payload()
+        fact={"subject":"Alice","predicate":"r:birth","object":"1912"}
+        payload["fragment"]["observations"].append({
+            "resource_id":"source_02","title":"Reference 2","source_type":"text",
+            "claims":[fact,dict(fact)],
+        })
+        groups=feedback_execution_reference(payload)["corroborated_facts"]
+        self.assertEqual(len(groups),1)
+        self.assertEqual([r["title"] for r in groups[0]["references"]],
+                         ["Reference 1","Reference 2"])
+        self.assertIn("Cross-checked Reference 1, Reference 2",
+                      feedback_execution_reference(payload)["corroboration_statements"][0])
+        payload["fragment"]["observations"][1]["claims"]=[
+            {**fact,"object":"1913"},
+        ]
+        self.assertEqual(feedback_execution_reference(payload)["corroborated_facts"],[])
+
+    def test_attribute_writer_sources_do_not_offer_unrelated_source_values(self):
+        payload=sample_payload()
+        payload["fragment"]["operations"]=payload["fragment"]["operations"][1:]
+        payload["fragment"]["operation_results"]=payload["fragment"]["operation_results"][1:]
+        payload["fragment"]["observations"].append({
+            "resource_id":"source_02","title":"Reference 2","source_type":"text",
+            "claims":[{"subject":"Alice","predicate":"population","object":"1912"}],
+        })
+        data=json.loads(feedback_writer_prompt(payload,{}).split("\n",1)[1])
+        sources=data["source_evidence_guide"]
+        self.assertEqual(len(sources[0]["claims"]),1)
+        self.assertEqual(sources[1]["claims"],[])
+
+    def test_selection_reference_explains_extremum_and_candidate_fact_owners(self):
+        payload=sample_payload()
+        f=payload["fragment"]
+        f["operations"]=[{"op":"SELECT_BETWEEN","inputs":["population","<"]}]
+        f["operation_results"]=[{"input_values":[["Alice"],["Bob"]],"answer":["Bob"]}]
+        f["observations"][0]["claims"]=[
+            {"subject":"Alice","predicate":"population","object":"12"},
+            {"subject":"Bob","predicate":"population","object":"8"},
+        ]
+        step=feedback_execution_reference(payload)["execution_steps"][0]
+        self.assertIn("minimum",step["meaning"])
+        self.assertIn("union",step["meaning"])
+        self.assertIn("including ties",step["meaning"])
+        self.assertEqual({fact["subject"] for fact in step["supporting_facts"]},
+                         {"Alice","Bob"})
+
+    def test_bank_publication_rechecks_with_the_same_dependency_references(self):
+        from environment.trajectory_simulation.subtask_bank import _report_natural
+        payload=sample_payload()
+        payload["dependency_results"]=[
+            {"public_ref":"Attempt 1, subtask 3","answer":["Alice"]},
+        ]
+        candidate={"summary":"Attempt 1 returned Alice.",
+                   "trace_summary":"Attempt 1, subtask 3 returned Alice."}
+        class Executor:
+            style_provider="natural"
+            def naturalize_feedback(self,payload,template):
+                return candidate
+        report,status=_report_natural(Executor(),payload,{},payload["fragment"])
+        self.assertTrue(status["natural"],status)
+        self.assertEqual(report,candidate)
+        payload["dependency_results"]=[]
+        _,status=_report_natural(Executor(),payload,{},payload["fragment"])
+        self.assertFalse(status["natural"])
+
+    def test_completed_task_numbers_are_metadata_but_new_numbers_still_fail(self):
+        payload=sample_payload()
+        payload["dependency_results"]=[
+            {"public_ref":"Attempt 1, subtask 3","answer":["Alice"]},
+            {"public_ref":"Attempt 1, subtask 2","answer":["Alice","Bob"]},
+        ]
+        good={
+            "summary":"The intersection of Attempt 1 results is Alice.",
+            "trace_summary":"Intersected Attempt 1, subtask 3 with Attempt 1, subtask 2 to obtain Alice.",
+        }
+        self.assertEqual(realize_feedback_natural(payload,good),good)
+        for text in ("Returned Alice with population 99.",
+                     "Attempt 99 returned Alice.",
+                     "Subtask 99 returned Alice."):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(ValueError,"unsupported_numeric_claim"):
+                    realize_feedback_natural(payload,{**good,"trace_summary":text})
+        with self.assertRaisesRegex(ValueError,"unsupported_numeric_claim"):
+            realize_feedback_natural({**payload,"dependency_results":[]},good)
+        crossed={**payload,"dependency_results":[
+            {"public_ref":"Attempt 1, subtask 2","answer":["Alice"]},
+            {"public_ref":"Attempt 2, subtask 3","answer":["Bob"]},
+        ]}
+        with self.assertRaisesRegex(ValueError,"unobserved_task_reference"):
+            realize_feedback_natural(crossed,good)
+
     def test_prompt_explicitly_requires_string_bullets(self):
         payload=sample_payload()
         prompt=feedback_writer_prompt(payload, {})

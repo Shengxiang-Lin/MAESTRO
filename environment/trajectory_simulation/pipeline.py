@@ -411,7 +411,10 @@ def synthesize_one(
                 ):
                     try:
                         rewritten = executor.naturalize_feedback(sub_payload, language)
-                        valid, problems = validate_feedback(rewritten, fragment, strict=False)
+                        valid, problems = validate_feedback(
+                            rewritten,fragment,strict=False,
+                            public_refs=[r.get("public_ref") for r in predecessor_results],
+                        )
                         if not valid:
                             raise ValueError("natural_report:" + ",".join(problems))
                         language = rewritten

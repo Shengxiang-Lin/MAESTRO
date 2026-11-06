@@ -253,15 +253,17 @@ def validate_action(value: Any, guidance: Mapping[str, Any],
     return not issues, issues
 
 
-def validate_feedback(value: Any, fragment: Mapping[str, Any], *, strict=False) -> tuple[bool, list[str]]:
+def validate_feedback(value: Any, fragment: Mapping[str, Any], *, strict=False,
+                      public_refs=()) -> tuple[bool, list[str]]:
     if strict:
         from .realization import validate_bound_feedback
         okay, bound_issues = validate_bound_feedback(value,fragment)
         if okay: return True, []
-        _, legacy_issues = validate_feedback(value,fragment,strict=False)
+        _, legacy_issues = validate_feedback(value,fragment,strict=False,public_refs=public_refs)
         return False, sorted(set(legacy_issues + bound_issues))
     if not isinstance(value, Mapping):
         return False, ["feedback_not_object"]
+    public_refs=tuple(ref for ref in public_refs if isinstance(ref,str))
     issues = []
     if set(value) != {"summary", "trace_summary"}:
         issues.append("unexpected_feedback_fields")
@@ -347,8 +349,23 @@ def validate_feedback(value: Any, fragment: Mapping[str, Any], *, strict=False) 
                 except (InvalidOperation, ValueError, TypeError):
                     pass
             return result
+        # Only labels of actually completed dependency results are metadata.
+        # Do not mask arbitrary "Attempt N"/"subtask N" factual hallucinations.
+        history_labels={
+            label.casefold() for ref in public_refs
+            for label in re.findall(r'\b(?:Attempt|subtask)\s+\d+\b',ref,re.I)
+        }
+        reference_pattern=r'\bAttempt\s+(\d+)\s*,?\s*subtask\s+(\d+)\b'
+        known_pairs={pair for ref in public_refs
+                     for pair in re.findall(reference_pattern,ref,re.I)}
+        if set(re.findall(reference_pattern,content,re.I))-known_pairs:
+            issues.append(key+"_unobserved_task_reference")
         # Source IDs are provenance handles, not numeric observations.
         masked = re.sub(r"source_\d+", "", content)
+        masked = re.sub(
+            r'\b(?:Attempt|subtask)\s+\d+\b',
+            lambda match: '' if match[0].casefold() in history_labels else match[0],
+            masked,flags=re.I)
         masked = re.sub(
             r"\b(?:step|operation)\s+(\d+)\b",
             lambda match: "" if 1 <= int(match[1]) <= len(fragment["operations"]) else match[0],

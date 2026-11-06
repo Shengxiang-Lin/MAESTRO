@@ -16,7 +16,6 @@ from .realization import realize_action, realize_feedback
 QUESTION_REVIEW_SCHEMA = {
     "type": "object",
     "properties": {
-        "decision": {"type": "string", "enum": ["eligible", "mismatch", "uncertain"]},
         "issues": {
             "type": "array", "maxItems": 2,
             "items": {
@@ -54,6 +53,10 @@ QUESTION_REVIEW_SCHEMA = {
                 "additionalProperties": False,
             },
         },
+        # With constrained decoding, committing to "mismatch" before writing
+        # evidence made the small reviewer invent objections to support it.
+        # Produce evidence first and the final verdict last.
+        "decision": {"type": "string", "enum": ["eligible", "mismatch", "uncertain"]},
     },
     "required": ["decision", "issues", "relation_coverage"],
     "additionalProperties": False,
@@ -88,7 +91,9 @@ class _LLMRole:
         return random.Random(int.from_bytes(hashlib.sha256((str(self.style_seed)+text).encode()).digest(),'big'))
     def check_question(self,prompt,*,audit=None):
         return self._review_json(
-            'Audit question/program equivalence. Return only the requested decision/issues JSON.',
+            'Compare question/program meaning. Write concrete issues first '
+            '(empty if equivalent), then relation_coverage, then the final decision. '
+            'Matching steps are not issues. Return compact JSON only.',
             prompt, 'question_review', backend=replace(self.backend,temperature=0.0),
             audit=audit, response_schema=QUESTION_REVIEW_SCHEMA,
         )

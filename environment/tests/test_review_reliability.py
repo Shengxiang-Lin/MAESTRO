@@ -9,12 +9,50 @@ from environment.tests.test_gold_trajectory import fixture
 from environment.tests.test_round_synthesis import reviewed
 from environment.trajectory_simulation.backend import LLMExecutor, LLMPlanner, PassthroughPlanner
 from environment.trajectory_simulation.compiler import compile_gold_solution
-from environment.trajectory_simulation.eligibility import check_question
+from environment.trajectory_simulation.eligibility import check_question, semantic_review_steps, semantic_review_expression
 from environment.trajectory_simulation.rounds import compose_main_rounds
 from environment.trajectory_simulation.subtask_bank import _report_natural, build_subtask_bank
 
 
 class ReviewReliabilityTests(unittest.TestCase):
+    def test_expansion_keeps_inherited_filters_and_separate_branch_scopes(self):
+        nodes={
+            0:{"op":"FIND_ALL","inputs":[],"dependencies":[]},
+            1:{"op":"FILTER_YEAR","inputs":["birth date","<","1840"],"dependencies":[0]},
+            2:{"op":"RELATE","inputs":["winner","backward"],"dependencies":[1]},
+            3:{"op":"FILTER_YEAR","inputs":["start date",">","1915"],"dependencies":[1]},
+            4:{"op":"INTERSECT","inputs":[],"dependencies":[2,3]},
+        }
+        steps=semantic_review_steps(nodes)
+        text=semantic_review_expression(steps)
+        self.assertEqual(text.count("whose own birth date < 1840"),2)
+        self.assertIn("subjects x",text)
+        self.assertIn("Intersection",text)
+        self.assertNotRegex(text,r"\bS\d+\b")
+        self.assertIsNone(semantic_review_expression(steps,max_chars=20))
+
+    def test_relation_endpoints_filter_owners_and_selection_union_are_explicit(self):
+        nodes={
+            0:{"op":"FIND_ALL","inputs":[],"dependencies":[]},
+            1:{"op":"FILTER_YEAR","inputs":["birth date","<","1840"],"dependencies":[0]},
+            2:{"op":"RELATE","inputs":["winner","backward"],"dependencies":[1]},
+            3:{"op":"RELATE","inputs":["neighbor","forward"],"dependencies":[1]},
+            4:{"op":"SELECT_BETWEEN","inputs":["female population",">"],"dependencies":[2,3]},
+            5:{"op":"QUERY_ATTR","inputs":["start date"],"dependencies":[4]},
+            6:{"op":"VERIFY_YEAR","inputs":[">","1915"],"dependencies":[5]},
+        }
+        steps={s["step"]:s for s in semantic_review_steps(nodes)}
+        self.assertIn("whose own birth date",steps[1]["meaning"])
+        self.assertIn("subjects x",steps[2]["meaning"])
+        self.assertIn("y in S1",steps[2]["meaning"])
+        self.assertIn("objects y",steps[3]["meaning"])
+        self.assertIn("x in S1",steps[3]["meaning"])
+        self.assertIn("union of S2, S3",steps[4]["meaning"])
+        self.assertIn("maximum",steps[4]["meaning"])
+        self.assertIn("not a threshold filter",steps[4]["meaning"])
+        self.assertIn("recorded start date values",steps[5]["meaning"])
+        self.assertIn("any value in S5 > 1915",steps[6]["meaning"])
+
     def review_fixture(self):
         q,r,t=fixture()
         gold=compile_gold_solution(q,r,t)

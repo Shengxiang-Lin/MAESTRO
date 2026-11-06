@@ -7,6 +7,114 @@ def digest(value):
     text=value if isinstance(value,str) else json.dumps(value,sort_keys=True,ensure_ascii=False,separators=(',',':'))
     return hashlib.sha256(text.encode()).hexdigest()
 
+def semantic_review_nodes(gold, record):
+    """Use the full graph, eliminating only compiler-certified redundancies.
+
+    Public delegation cuts are not a semantic graph: they retain original
+    node dependencies even after projection. Rewire those dependencies here
+    without modifying either the frozen program or the execution plan.
+    """
+    original={int(n['node_id']):n for n in record['program']['nodes']}
+    public={int(op['node_id']):op for f in gold['fragments'] for op in f['operations']}
+    replacements={}
+    removed=set()
+    for certificate in gold.get('public_projections',[]):
+        if certificate.get('rule') not in (
+            'unique_intersection_clue','witness_verified_intersection'
+        ):
+            continue
+        hidden=certificate.get('concealed_find_node_id')
+        visible=certificate.get('identifying_node_id')
+        if (hidden not in original or visible not in original
+                or hidden in public or original[hidden]['op']!='FIND'):
+            continue
+        joins=[nid for nid,n in original.items()
+               if nid not in public and n['op']=='INTERSECT'
+               and len(n['dependencies'])==2
+               and set(n['dependencies'])=={hidden,visible}]
+        if len(joins)!=1:
+            continue
+        join=joins[0]
+        if {nid for nid,n in original.items() if hidden in n['dependencies']}!={join}:
+            continue
+        replacements[join]=visible
+        removed.update((hidden,join))
+    def resolve(nid):
+        while nid in replacements:
+            nid=replacements[nid]
+        return nid
+    return {
+        nid:{**public.get(nid,raw),
+             'dependencies':[resolve(int(d)) for d in raw['dependencies']]}
+        for nid,raw in original.items() if nid not in removed
+    }
+
+def semantic_review_steps(nodes):
+    """Give the reviewer explicit endpoint and branch semantics, not op guesses."""
+    steps=[]
+    for nid,op in sorted(nodes.items()):
+        action,args,deps=op['op'],op['inputs'],op['dependencies']
+        inputs=', '.join(f'S{d}' for d in deps)
+        meaning=''
+        if action=='FIND_ALL':
+            meaning='All entities in the finite task evidence domain; discover them from task sources.'
+        elif action=='FIND':
+            meaning=f'Identify the entity/type matching {args[0]}.'
+        elif action=='RELATE':
+            backward=len(args)>1 and args[1]=='backward'
+            meaning=(f'Return subjects x with x --{args[0]}--> y and y in {inputs}.'
+                     if backward else
+                     f'Return objects y with x --{args[0]}--> y and x in {inputs}.')
+        elif action=='FILTER_TYPE':
+            meaning=f'Keep entities in {inputs} of type {args[0]}.'
+        elif action.startswith('FILTER_') and len(args)>=3:
+            meaning=f'Keep entities x in {inputs} whose own {args[0]} {args[1]} {args[2]}.'
+        elif action in ('INTERSECT','UNION'):
+            meaning=f'{"Intersection" if action=="INTERSECT" else "Union"} of {inputs}.'
+        elif action in ('SELECT_AMONG','SELECT_BETWEEN'):
+            candidates=f'union of {inputs}' if action=='SELECT_BETWEEN' else inputs
+            from environment.task_construction.executor import _select_minimum
+            rank='minimum' if _select_minimum(args[1]) else 'maximum'
+            meaning=f'Return entities attaining the {rank} recorded {args[0]} across the {candidates}; include ties. This is ranking, not a threshold filter.'
+        elif action=='QUERY_ATTR':
+            meaning=f'Return recorded {args[0]} values of entities in {inputs}.'
+        elif action=='QUERY_NAME':
+            meaning=f'Identify entities in {inputs} by name.'
+        elif action=='COUNT':
+            meaning=f'Count distinct entities in {inputs}.'
+        elif action.startswith('VERIFY_'):
+            meaning=f'Check whether any value in {inputs} {args[0]} {args[1]}.'
+        elif action=='QUERY_RELATION':
+            meaning=f'Return relation names from subjects in S{deps[0]} to objects in S{deps[1]}.'
+        steps.append({'step':nid,'action':action,'arguments':args,
+                      'input_steps':deps,'meaning':meaning})
+    return steps
+
+def semantic_review_expression(steps, *, max_chars=12000):
+    """Expand dependency scopes, with a bound against repeated DAG branches."""
+    by_id={step['step']:step for step in steps}
+    expanded={}
+    def expand(nid):
+        if nid in expanded:
+            return expanded[nid]
+        step=by_id[nid]
+        dependencies={d:expand(d) for d in step['input_steps']}
+        text=re.sub(r'\bS(\d+)\b',
+                    lambda match:'('+dependencies[int(match[1])]+')',
+                    step['meaning'])
+        if len(text)>max_chars:
+            raise OverflowError
+        expanded[nid]=text
+        return text
+    consumed={d for step in steps for d in step['input_steps']}
+    try:
+        roots=[expand(nid) for nid in by_id if nid not in consumed]
+        result='\n'.join(roots)
+        return result if len(result)<=max_chars else None
+    except OverflowError:
+        # Keep the numbered semantics for large DAGs; never truncate a branch.
+        return None
+
 def check_question(gold,record,role,*,review=True):
     question=gold['question'];fingerprint={'question_sha256':digest(question),'program_sha256':digest(record['program'])}
     audit_path = Path(__file__).with_name('question_reviews.json')
@@ -21,23 +129,14 @@ def check_question(gold,record,role,*,review=True):
             return {'eligible':item.get('eligible',False),'reviewed':True,'method':'audited_exact_input_review','issues':[] if item.get('eligible') else [item['reason']],'audit_reason':item['reason'],**fingerprint}
     if not review or getattr(role,'offline',False) or not getattr(role,'backend',None):
         return {'eligible':True,'reviewed':False,'method':'offline_structure_only','issues':[],**fingerprint}
-    # A certified Stage-3 public projection may omit an internal FIND and
-    # its redundant INTERSECT. Their original ProgramIR dependencies remain
-    # referenced by the final operation. Semantic review must use the *full*
-    # frozen graph, not infer the question's semantics from the pruned O1
-    # delegation graph (which would KeyError on an omitted node).
-    original_nodes={
-        int(node['node_id']):node
-        for node in record['program']['nodes']
-    }
-    public_nodes={
-        int(op['node_id']):op
-        for f in gold['fragments'] for op in f['operations']
-    }
-    nodes={
-        nid:public_nodes.get(nid,raw)
-        for nid,raw in original_nodes.items()
-    }
+    nodes=semantic_review_nodes(gold,record)
+    steps=semantic_review_steps(nodes)
+    # Raw SELECT '<' and RELATE direction flags tempted small reviewers to
+    # substitute their own operator definitions despite the explicit meaning.
+    # Audit the executor-derived semantics, retaining IDs for exact witnesses.
+    review_steps=[{'step':s['step'],'input_steps':s['input_steps'],
+                   'meaning':s['meaning']} for s in steps]
+    expanded_meaning=semantic_review_expression(steps)
     def normalized(text):
         return re.sub(r'[^a-z0-9]+','',str(text).casefold())
     # Missing literal relation wording is a review trigger, not a rejection:
@@ -49,71 +148,42 @@ def check_question(gold,record,role,*,review=True):
         'input_steps':op['dependencies'],
     } for nid,op in sorted(nodes.items()) if op['op']=='RELATE'
         and normalized(str(op['inputs'][0]).split(':')[-1]) not in normalized(question)]
-    visited=set()
-    def expression(nid):
-        if nid in visited:return {'step_reference':nid}
-        visited.add(nid)
-        node=nodes[nid]
-        return {'step':nid,'action':node['op'],'arguments':node['inputs'],
-                'inputs':[expression(int(d)) for d in node['dependencies']]}
-    expression_root=expression(max(nodes))
-    prompt=('Check whether the accepted question describes EXACTLY the supplied canonical computation. '
-        'Do not solve it, inspect answers, or apply real-world plausibility. Check the owner of each constraint, '
-        'relation direction and all necessary hops, branch inputs, set joins and final operation. '
-        'Compare mathematical meaning, not number of steps. Redundant type filters, filter order, '
-        'FIND_ALL with no input steps enumerates ALL entities within the '
-        'finite task evidence domain, not the entire Internet and not a '
-        'complete initial document or pre-supplied list. A question may ask '
-        'to discover those entities from relevant task sources; this is '
-        'equivalent to the bounded FIND_ALL, not a narrower arbitrary subset. '
-        'When the terminal is QUERY_NAME, phrases like "identify the entities" '
-        'and "which entities" can mean returning those entities by name. '
-        'Do NOT reject solely for not literally saying "names" unless '
-        'the requested output is substantively different (count, attribute '
-        'values, or a different entity owner). '
-        'Read the numbered dependency graph literally: a filter before RELATE constrains '
-        'the input entity; a filter after RELATE constrains the related entity. '
-        'Repeated identical type filters do not change the set. '
-        'and explicitly naming an already implied type are allowed. SELECT_AMONG and '
-        'SELECT_BETWEEN return selected entities, not their ranking attribute values; '
-        'QUERY_ATTR returns attribute values. Impossible numerical conditions '
-        'are valid questions if the program asks that condition. Filtering people by any height > a, '
-        'then checking their recorded heights for b, may be phrased as a height for a person whose '
-        'height exceeds a that equals b; accept this even when b<a. Attributes may have multiple '
-        'recorded values. Do not invent scalar uniqueness. '
-        'Simplification is allowed only if the computation is unchanged. A person constraint cannot be moved '
-        'to a place or vice versa. FALSE/empty outcomes do not make a question invalid. '
-        'If ambiguity prevents establishing equivalence, choose uncertain. '
-        'Do not replace a missing relation traversal or a moved filter owner '
-        'with an implied semantics merely because the answer types match. '
-        'An explicitly certified public projection may remove a redundant private singleton FIND '
-        'and its INTERSECT from agent delegation; the accepted question need not expose the '
-        'private singleton name when another public branch identifies the same entity. '
-        'Do not excuse missing, redirected, or changed constraints beyond that exact redundancy. '
-        'Reject only a concrete mathematical discrepancy, never stylistic wording. '
-        'Before claiming a missing condition, check the ENTIRE accepted question, including its ending. '
-        'Identical canonical wording is not proof of equivalence: verify the actual steps. '
-        'Return JSON only: {"decision":"eligible"|"mismatch"|"uncertain","issues":'
-        '[{"kind":"missing_constraint"|"scope"|"direction"|"join"|"output",'
-        '"program_steps":[1],"question_quote":"exact span from accepted question",'
-        '"program_claim":"what these steps compute",'
-        '"question_claim":"what the quoted wording means or omits",'
-        '"reason":"specific mathematical discrepancy"}]}. '
-        'At most two issues; quotes <=240 characters, claims and reasons <=180 characters each. '
-        'Do not put analysis or deliberation inside the JSON strings. '
-        'For eligible, issues must be empty. '
-        'For mismatch, at least one issue must cite existing step IDs and an exact question span. '
-        'Always include relation_coverage: [] unless explicitly asked to certify required hops. '
-        'Keep all explanation fields short; never echo the entire question as a quote. '
-        'No answer values or regenerated questions.\n'+json.dumps({
-            'accepted_question':question,'canonical_question':gold['canonical_question'],
+    # Explain the controlled renderer's grammar once instead of presenting a
+    # long list of hypothetical objections and duplicate recursive graphs.
+    review_rules=(
+        'Audit whether the accepted question computes canonical_steps. Do not solve or use real-world assumptions. '
+        'Read each step meaning as authoritative operator semantics; report only an actual difference in the question. '
+        'Controlled question grammar: FIND_ALL discovers all entities in the finite task evidence domain. '
+        'Task sources/references/web search specify acquisition, not extra eligibility constraints. '
+        'For a nested description D, "entities connected from D by R", "R targets of D", '
+        '"entities reached through R from D" and "entities linked to D via R" mean forward R from D. '
+        '"entities whose R points to D", "entities linked to D as the source of R", '
+        '"entities for which D is the R target" and "entities connected into D by R" mean backward R into D. '
+        'A suffix "D with/whose/after requiring attribute condition" filters D, not an inner anchor. '
+        '"overlap", "meeting both sides" and "satisfy each constraint" mean intersection. '
+        '"union"/"either side"/"or" combine complete branches; filters within one branch stay in that branch. '
+        'Selecting "which entity has the smallest/largest attribute value" returns entities attaining the minimum/maximum '
+        'over the input pool, NOT attribute values and NOT a threshold comparison. '
+        'When the terminal is QUERY_NAME, identifying entities means returning their names. '
+        'Redundant type filters and equivalent filter/intersection forms are allowed. '
+        'Attributes may have multiple values; impossible conditions/empty results are valid. '
+        'Certified redundant singleton checks are already eliminated; all other steps remain required. '
+        'Check the entire question, including its ending, for every constraint and final queried attribute. '
+        'A missing relation traversal or changed filter owner is a real mismatch; a mere type match cannot excuse it. '
+        'For ambiguity choose uncertain; for equivalence choose eligible with issues=[]. '
+        'For mismatch cite existing program_steps and a SHORT EXACT question_quote (no ellipses) plus '
+        'program_claim, question_claim and reason; kind is missing_constraint/scope/direction/join/output. '
+        'At most two issues; quotes <=240 characters, claims/reasons <=180 characters. '
+        'Write issues FIRST (only actual differences; matching steps are not issues), relation_coverage next, '
+        'then the final decision LAST. If all proposed objections were withdrawn, issues=[] and decision=eligible. '
+        'relation_coverage=[] unless required hops are requested. '
+        'No deliberation or rewritten questions.'
+    )
+    prompt=review_rules+'\n'+json.dumps({
+            'accepted_question':question,
             'certified_public_projections':gold.get('public_projections',[]),
-            'canonical_expression':expression_root,
-            'canonical_steps':[{
-                'step':nid,'action':op['op'],'arguments':op['inputs'],
-                'input_steps':op['dependencies'],
-                'projected_from_public_delegation':nid not in public_nodes,
-            } for nid,op in sorted(nodes.items())]},ensure_ascii=False,separators=(',',':')))
+            'canonical_steps':review_steps,
+            'fully_expanded_output_meaning':expanded_meaning},ensure_ascii=False,separators=(',',':'))
     cache_path=getattr(role,'eligibility_cache',None)
     if not isinstance(cache_path,(str,Path)):cache_path=None
     # Test doubles and partially constructed clients can expose Mock objects
@@ -123,7 +193,7 @@ def check_question(gold,record,role,*,review=True):
         value = getattr(role.backend, field, None)
         return value if isinstance(value, str) and value else "unknown"
     cache_key=digest({**fingerprint,'reviewer_model':identity('model'),
-        'reviewer_endpoint':identity('base_url'),'review_contract':7})
+        'reviewer_endpoint':identity('base_url'),'review_contract':11})
     if cache_path and Path(cache_path).exists():
         for line in Path(cache_path).read_text().splitlines():
             item=json.loads(line)
@@ -258,15 +328,12 @@ def check_question(gold,record,role,*,review=True):
                     'with a concrete step and <=240-character exact quote; for '
                     'ambiguity return uncertain. Do not use ellipses to fabricate '
                     'quotes. relation_coverage must be [] for mismatch/uncertain. '
-                    'FIND_ALL is bounded to the task evidence domain and QUERY_NAME '
-                    'may mean identifying entities. All explanations <=180 chars.\\n'
+                    +review_rules+'\n'
                     +json.dumps({
                         'accepted_question':question,
                         'required_hops':batch,
-                        'canonical_steps':[{
-                            'step':nid,'action':op['op'],'arguments':op['inputs'],
-                            'input_steps':op['dependencies'],
-                        } for nid,op in sorted(nodes.items())],
+                        'canonical_steps':review_steps,
+                        'fully_expanded_output_meaning':expanded_meaning,
                         'certified_public_projections':gold.get('public_projections',[]),
                     },ensure_ascii=False,separators=(',',':'))
                 )

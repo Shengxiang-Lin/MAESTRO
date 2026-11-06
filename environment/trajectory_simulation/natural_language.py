@@ -343,6 +343,123 @@ def main_reviewer_prompt(
     )
 
 
+def feedback_execution_reference(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Narrate replayed steps and bind relevant facts to their actual sources."""
+    from .realization import report_sentence, report_value
+    from .tool_provenance import source_evidence_guide
+    from environment.task_construction.executor import _select_minimum
+
+    fragment = payload["fragment"]
+    guide = source_evidence_guide(fragment, payload.get("tool_provenance") or {"steps": []})
+    def names(value):
+        if isinstance(value, str):
+            return {value}
+        if isinstance(value, (list, tuple)):
+            return {name for item in value for name in names(item)}
+        return set()
+    steps = []
+    corroboration = {}
+    for index, (op, result) in enumerate(zip(
+        fragment["operations"], fragment["operation_results"]
+    ), 1):
+        action, args = op["op"], op["inputs"]
+        inputs = result.get("input_values", [])
+        output = result["answer"]
+        input_names, output_names = names(inputs), names(output)
+        meaning = report_sentence(op, result)
+        if action == "RELATE":
+            backward = len(args) > 1 and args[1] == "backward"
+            subject, target = (output, inputs) if backward else (inputs, output)
+            meaning = (
+                f"Starting with {'relation targets' if backward else 'relation subjects'} "
+                f"{report_value(inputs)}, found {report_value(output)}. "
+                f"The underlying recorded fact is subject --{args[0]}--> object: "
+                f"subjects {report_value(subject)}, objects {report_value(target)}. "
+                "Attributes filtered before this traversal belong to the starting "
+                "entities; they are not transferred to the discovered entities."
+            )
+        elif action.startswith("FILTER_") and action != "FILTER_TYPE":
+            meaning += " This condition applies to the input entities' own attribute."
+        elif action in {"SELECT_AMONG", "SELECT_BETWEEN"}:
+            rank = "minimum" if _select_minimum(args[1]) else "maximum"
+            meaning = (
+                f"Compared the recorded {args[0]} values across "
+                f"{'the union of the input pools' if action == 'SELECT_BETWEEN' else 'the input pool'} "
+                f"{report_value(inputs)}; returned entities attaining the {rank}: "
+                f"{report_value(output)} (including ties). This is ranking, not a threshold check."
+            )
+        facts = []
+        if args and (action.startswith("FILTER_") or action in {
+            "RELATE", "QUERY_ATTR", "SELECT_AMONG", "SELECT_BETWEEN",
+        }) and action != "FILTER_TYPE":
+            for source in guide:
+                for claim in source["claims"]:
+                    if claim.get("predicate") != args[0]:
+                        continue
+                    subject, target = claim.get("subject"), claim.get("object")
+                    relevant = subject in input_names
+                    if action == "RELATE":
+                        relevant = (
+                            subject in output_names and target in input_names
+                            if len(args) > 1 and args[1] == "backward"
+                            else subject in input_names and target in output_names
+                        )
+                    if not relevant:
+                        continue
+                    fact = {key: claim.get(key) for key in ("subject", "predicate", "object")}
+                    reference = {"source_id": source["source_id"], "title": source["title"]}
+                    facts.append({**fact, "reference": reference})
+                    key = _json(fact)
+                    group = corroboration.setdefault(key, {**fact, "references": []})
+                    if reference not in group["references"]:
+                        group["references"].append(reference)
+        steps.append({"step": index, "meaning": meaning,
+                      "input_values": inputs, "output": output,
+                      "supporting_facts": facts})
+    corroborated = [
+        fact for fact in corroboration.values() if len(fact["references"]) > 1
+    ]
+    return {
+        "result_statement": f"The assigned checks returned {report_value(fragment['expected_answer'])}.",
+        "final_result_facts": [
+            {key: fact[key] for key in ("subject", "predicate", "object", "reference")}
+            for step in steps for fact in step["supporting_facts"]
+            if fact["subject"] in names(fragment["expected_answer"])
+        ],
+        "completed_dependency_results": [{
+            "reference": result.get("public_ref"), "answer": result["answer"],
+        } for result in payload.get("dependency_results", [])],
+        "execution_steps": steps,
+        "corroborated_facts": corroborated,
+        "corroboration_statements": [
+            f"Cross-checked {', '.join(r['title'] for r in fact['references'])}; "
+            f"these sources agree on the recorded fact "
+            f"{fact['subject']} --{fact['predicate']}--> {fact['object']}."
+            for fact in corroborated
+        ],
+    }
+
+
+def feedback_writer_sources(payload, reference):
+    """Keep access/type evidence, removing distracting unused attribute facts."""
+    from .tool_provenance import source_evidence_guide
+    guide = source_evidence_guide(payload["fragment"],
+                                  payload.get("tool_provenance") or {"steps": []})
+    if any(op["op"] in {"FIND", "QUERY_RELATION"}
+           for op in payload["fragment"]["operations"]):
+        return guide
+    used = {
+        (fact["reference"]["source_id"],
+         _json({k: fact[k] for k in ("subject", "predicate", "object")}))
+        for step in reference["execution_steps"] for fact in step["supporting_facts"]
+    }
+    return [{**source, "claims": [
+        claim for claim in source["claims"]
+        if (source["source_id"], _json({k: claim.get(k) for k in
+                                       ("subject", "predicate", "object")})) in used
+    ]} for source in guide]
+
+
 def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, Any]) -> str:
     """Express fixed public source findings in real-O1-style narrative.
 
@@ -360,23 +477,44 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         or (op["op"] == "FIND" and op.get("find_kind") == "type")
         for op in fragment["operations"]
     )
+    reference = feedback_execution_reference(payload)
     public = {
         "assigned_subtask": payload["task_instruction"],
         "candidate_names_are_discovery_outputs": discovery_root,
         "fixed_result": fragment["expected_answer"],
-        "source_evidence_guide": source_evidence_guide(fragment, plan),
-        "verified_reasoning_steps": [{
-            "operation": op["op"],
-            "arguments": op["inputs"],
-            "input_values": item.get("input_values", []),
-            "output": item["answer"],
-        } for op, item in zip(fragment["operations"], fragment["operation_results"])],
+        "source_evidence_guide": feedback_writer_sources(payload, reference),
+        "canonical_report": dict(canonical),
+        "execution_reference": reference,
         "simulated_tool_observations": plan,
     }
     return (
         "You are an Orchestra-o1 Sub-Agent writing a report to the Main Agent "
         "on the ASSIGNED SUBTASK only. The exact answer and public source facts "
         "have already been verified; do not alter them. "
+        "Rewrite the canonical_report using the explicit execution_reference, "
+        "not a new solution to the task. Its step meanings, inputs and outputs "
+        "fix the computation; source_evidence_guide fixes which tools and facts "
+        "may be described. The canonical prose is a draft, not authority for "
+        "additional tool actions. Preserve the causal chain in BOTH summary and "
+        "trace_summary: an attribute of a starting entity never becomes an "
+        "attribute of an entity discovered later. Use supporting_facts to bind "
+        "each attribute/relation to its subject and its exact reference title. "
+        "Use result_statement as the safe summary conclusion. Only attach an "
+        "attribute to the final entity if final_result_facts supports that "
+        "subject/predicate/value. Put earlier entities' constraints in the "
+        "trace instead. For example, if A has population 488 and B --neighbor--> A, "
+        "say 'Returned B, whose neighbor A has population 488'; NEVER say "
+        "'B has population 488 (via its neighbor A)'. Do not describe the "
+        "returned entity as personally satisfying every earlier attribute filter. "
+        "For a ranking step, say minimum/maximum, not 'meets the constraint'. "
+        "Completed dependency references may be copied exactly or omitted; "
+        "never invent or renumber them. If corroborated_facts is nonempty, "
+        "explicitly describe the agreement of its listed sources on at least "
+        "one such fact; otherwise do not invent cross-validation. "
+        "Include a corroboration_statement in trace_summary when supplied; "
+        "listing inspected references alone does not express cross-validation. "
+        "For attributes, copy the source title from the matching supporting_fact, "
+        "not from another source or a nearby sentence in the canonical draft. "
         "STRICT JSON OUTPUT CONTRACT: Return exactly one JSON object with "
         "exactly two keys. summary MUST be one nonempty JSON STRING; "
         "trace_summary MUST be one nonempty JSON STRING, NOT A JSON ARRAY. "
@@ -488,6 +626,8 @@ def feedback_repair_prompt(
     public = {
         "assigned_subtask": payload["task_instruction"],
         "fixed_answer": fragment["expected_answer"],
+        "canonical_report": dict(canonical),
+        "execution_reference": feedback_execution_reference(payload),
         "relevant_public_source_facts": sources,
         "verified_steps": [{
             "op": op["op"], "args": op["inputs"],
@@ -499,6 +639,12 @@ def feedback_repair_prompt(
     }
     return (
         "Write the O1 Sub-Agent's brief report for this assigned task. "
+        "Paraphrase canonical_report according to execution_reference. Preserve "
+        "each fact's subject and source, the relation direction, ranking "
+        "minimum/maximum and completed dependency references. If supplied, "
+        "describe agreement on a corroborated_fact without inventing other "
+        "cross-validation. Source/tool permissions come from the source facts, "
+        "not from the draft's prose. "
         "Your previous JSON response was empty or invalid. "
         "BOTH required fields must be NONEMPTY strings, not null or placeholders. "
         "Use exactly this structure: "
@@ -606,7 +752,10 @@ def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[
         )
     # Real O1 does not require literal XXXAction tokens in a natural recap.
     # Source/tool attribution and factual claims are still reviewed below.
-    okay, issues = validate_feedback(proposal, payload["fragment"], strict=False)
+    okay, issues = validate_feedback(
+        proposal,payload["fragment"],strict=False,
+        public_refs=[r.get("public_ref") for r in payload.get("dependency_results",[])],
+    )
     if not okay:
         raise ValueError("natural_report_unsupported_claim:" + ",".join(issues))
     # Presentation-only: split unambiguous preexisting bullet separators,
@@ -628,6 +777,11 @@ def feedback_reviewer_prompt(
     return (
         "Review this Sub-Agent natural-language report against the frozen, "
         "PUBLIC and source-replayed facts for the ASSIGNED SUBTASK. "
+        "The execution_reference is an authoritative record, not a candidate "
+        "solution to re-solve. Audit the candidate_report, including its summary, "
+        "for differences from that record and its supporting facts. Do not "
+        "reject a verified filter result or relation direction merely because "
+        "you would execute the task differently. "
         "Every named entity, numeric/date value, attributed predicate, relation "
         "direction and asserted observation must be supported by its specific "
         "source or verified reasoning step. Check the exact result. "
@@ -665,18 +819,27 @@ def feedback_reviewer_prompt(
         "In a backward relation traversal, the operation reverses which "
         "endpoint is being discovered; do not demand a source assertion "
         "in the traversal direction if the underlying relation is recorded "
-        "in the opposite orientation. Still require every underlying factual "
-        "source assertion (such as a specific population/date/relation) to "
+        "in the opposite orientation. "
+        "A recorded claim subject --predicate--> object always means subject "
+        "has that relation TO object; a backward operation never reverses the fact itself. "
+        "A filter constrains its input entities only: do not attribute an input's "
+        "population or date to an entity subsequently discovered by RELATE. "
+        "Still require every underlying source assertion (such as a specific population/date/relation) to "
         "be supported by the correct reference, and reject facts that "
         "contradict verified operations. A search/discovery event by itself "
         "does not support a factual claim. "
         "Do not require exact wording or literal operator names. "
         "Return JSON ONLY: "
         '{"grounded":true|false,"issues":["brief issue"]}. '
+        "At most two concrete issues, each <=180 characters; no deliberation. "
         "Use grounded=true with issues=[] when fully supported, and "
         "grounded=false when any material claim lacks support.\n" + _json({
             "task": payload["task_instruction"],
+            "completed_dependency_results": [{
+                "reference":r.get("public_ref"),"answer":r["answer"],
+            } for r in payload.get("dependency_results",[])],
             "fixed_result": f["expected_answer"],
+              "execution_reference": feedback_execution_reference(payload),
             "verified_operations": [
                 {"op": op["op"], "args": op["inputs"],
                  "input_values": result.get("input_values", []),
