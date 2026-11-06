@@ -123,6 +123,50 @@ class TwoPhaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _read_verified_bank(item)
 
+    def test_surface_search_is_separately_checked_and_cannot_reuse_gold_hits(self):
+        from environment.trajectory_simulation.search_simulator import simulate_search
+        q,world,rendered=fixture(dependent=True)
+        q["capability_world"]["mode"]="web_search"
+        for item in q["capability_world"]["resources"]:
+            item["visibility"]="discoverable"
+            item["metadata"]={
+                "search_entry":"public_question",
+                "retrieval_policy":"task_local_ranked_public_index_v1",
+            }
+        original=rendered.question
+        q["question"]="An independently reviewed surface rewrite."
+        reviews=[]
+        def check(gold,record,role,*,review=True,rendered=None):
+            reviews.append(gold["question"])
+            return reviewed(gold,record,role,review=review,rendered=rendered)
+        seen=[]
+        def surface_unreachable(*args,**kwargs):
+            question=kwargs.get("public_question")
+            seen.append(question)
+            if question==q["question"]:
+                return {"discovered_source_ids":[]}
+            return simulate_search(*args,**kwargs)
+        with patch(
+            "environment.trajectory_simulation.subtask_bank.check_question",check,
+        ),patch(
+            "environment.trajectory_simulation.search_simulator.simulate_search",
+            side_effect=surface_unreachable,
+        ):
+            bank=build_subtask_bank(
+                q,world,rendered,planner=PassthroughPlanner(),
+                executor=PassthroughExecutor(),schedule="compact",
+            )
+        self.assertEqual(reviews,[original,q["question"]])
+        self.assertIn(original,seen)
+        self.assertIn(q["question"],seen)
+        self.assertFalse(bank["surface_preflight"]["publicly_executable"])
+        self.assertTrue(bank["preflight"]["publicly_executable"])
+        self.assertTrue(bank["eligibility"]["eligible"])
+        envelope={"format":"maestro.clean_subtasks.v2","bank":bank}
+        envelope["sha256"]=digest(envelope)
+        with self.assertRaisesRegex(ValueError,"surface_public_sources_not_reachable"):
+            _read_verified_bank(envelope)
+
     def test_phase2_rejects_surface_or_canonical_certificate_tampering(self):
         _,_,_,bank=self.bank(dependent=True)
         self.assertEqual(bank["surface_question"],bank["question"])
