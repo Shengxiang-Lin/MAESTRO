@@ -303,20 +303,24 @@ def explicit_public_claim_issues(
         predicates = "(?:" + "|".join(
             re.escape(p) for p in sorted(relations, key=len, reverse=True)
         ) + ")"
-        pattern = (
-            rf"(?<!\w)({names})\s+"
-            rf"(?:is|was|are|were|as)\s+"
-            rf"(?:(?:a|an|the)\s+)?({predicates})"
-            rf"(?:\s+(?:of|to))?\s+({names})(?!\w)"
-        )
+        patterns = [
+            (
+                rf"(?<!\w)({names})\s+"
+                rf"(?:is|was|are|were|as)\s+"
+                rf"(?:(?:a|an|the)\s+)?({predicates})"
+                rf"(?:\s+(?:of|to))?\s+({names})(?!\w)"
+            ),
+            rf"(?<!\w)({names})\s*--\s*({predicates})\s*-->\s*({names})(?!\w)",
+        ]
         relation_issues = []
-        for match in re.finditer(pattern, report_text, re.I):
-            subject, predicate, obj = match.groups()
-            if (subject.casefold(), predicate.casefold(), obj.casefold()) not in facts:
-                relation_issues.append(
-                    "explicit_relation_fact_mismatch:"
-                    + subject + " --" + predicate + "--> " + obj
-                )
+        for pattern in patterns:
+            for match in re.finditer(pattern, report_text, re.I):
+                subject, predicate, obj = match.groups()
+                if (subject.casefold(), predicate.casefold(), obj.casefold()) not in facts:
+                    relation_issues.append(
+                        "explicit_relation_fact_mismatch:"
+                        + subject + " --" + predicate + "--> " + obj
+                    )
 
     # Numeric/date ownership can also be checked when the report uses the
     # unambiguous syntax "X has P of V" or "X's P is V". Do not attempt to
