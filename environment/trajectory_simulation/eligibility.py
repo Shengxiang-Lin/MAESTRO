@@ -321,7 +321,7 @@ def check_question(gold,record,role,*,review=True,rendered=None):
         value = getattr(role.backend, field, None)
         return value if isinstance(value, str) and value else "unknown"
     cache_key=digest({**fingerprint,'reviewer_model':identity('model'),
-        'reviewer_endpoint':identity('base_url'),'review_contract':12,
+        'reviewer_endpoint':identity('base_url'),'review_contract':13,
         'renderer_reference_sha256':reference['question_sha256'] if reference else None})
     if cache_path and Path(cache_path).exists():
         for line in Path(cache_path).read_text().splitlines():
@@ -439,6 +439,46 @@ def check_question(gold,record,role,*,review=True,rendered=None):
                     'characters and relation_coverage=[] unless requested.\\n'
                     'Previous review: '+json.dumps(previous,ensure_ascii=False)+'\\n'+prompt
                 )
+        # A common local-model error is the self-contradictory verdict
+        # eligible+issues, often with an issue that actually describes
+        # semantic agreement. Never clear issues by fiat. Instead, ask an
+        # independent compact full-question consistency check exactly once.
+        # This path requires the reconstructed renderer reference and a
+        # concrete question quote, followed by the ordinary hop audit.
+        if (reference and invalid_reason(verdict)=='eligible_with_issues'):
+            from .backend import _LLMRole
+            if isinstance(role,_LLMRole):
+                try:
+                    confirmation=role.confirm_question_consistency(
+                        'Independent full-question equivalence check. '
+                        'Evaluate all graph steps and all changed spans, '
+                        'not just the quoted phrase. No guessing.\\n'
+                        +prompt,audit=audit,
+                    )
+                    if (isinstance(confirmation,dict)
+                            and type(confirmation.get('equivalent')) is bool
+                            and confirmation['equivalent'] is True
+                            and isinstance(confirmation.get('question_quote'),str)
+                            and len(confirmation['question_quote']) >= 8
+                            and confirmation['question_quote'] in question
+                            and isinstance(confirmation.get('explanation'),str)
+                            and 10 <= len(confirmation['explanation']) <= 180):
+                        audit.append({
+                            'stage':'consistency_resolution',
+                            'result':'independent_confirmed',
+                        })
+                        verdict={'decision':'eligible','issues':[],
+                                 'relation_coverage':[]}
+                    else:
+                        audit.append({
+                            'stage':'consistency_resolution',
+                            'result':'not_confirmed',
+                        })
+                except Exception as exc:
+                    audit.append({
+                        'stage':'consistency_resolution',
+                        'result':'confirmation_failed','error':str(exc)[:200],
+                    })
         if (valid_verdict(verdict) and verdict['decision']=='eligible'
                 and relation_gaps
                 and not valid_verdict(verdict,required_hops=relation_gaps)):
