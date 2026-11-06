@@ -96,7 +96,7 @@ fallback question can be counted as a naturalization success.
 | \`rejected_reference\` | rejected JSONL | Program/Controlled Renderer reference unusable |
 
 Detailed per-attempt drafts, Critic feedback, judge decisions and error
-causes are recorded in \`question_critic_audit.jsonl\`. Because this is a
+causes are recorded in \`question_review_audit.jsonl\`. Because this is a
 teacher-side diagnostic, do not expose it to the Main Agent. Stream writes
 are atomic, input ordered and resumable.
 
