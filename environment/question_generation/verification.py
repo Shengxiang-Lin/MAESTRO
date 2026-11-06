@@ -19,7 +19,7 @@ from environment.trajectory_simulation.compiler import compile_gold_solution
 from .question_review import passing_judgment
 from .semantic_checks import (
     check_evidence, explicit_join_contradictions, naturalness_gate,
-    semantic_checks, CheckFormatError,
+    semantic_checks, missing_typed_literals, CheckFormatError,
 )
 
 SCHEMA = "maestro.stage2_surface_cert.v3"
@@ -151,7 +151,9 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
     checks = semantic_checks(plan)
     if (review.get("semantic_checklist_sha256") != digest(checks)
             or not naturalness_gate(scoped, question)["improved_enough_to_review"]
-            or explicit_join_contradictions(scoped, question)):
+            or explicit_join_contradictions(scoped, question)
+            or missing_typed_literals(plan, question)):
+
         raise ValueError("stage2_semantic_checklist_or_style_mismatch")
     try:
         check_evidence(checks, review["final_judgment"].get("checks"), question)
