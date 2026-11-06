@@ -31,6 +31,24 @@ class ScopedSurfaceTests(unittest.TestCase):
         self.assertEqual(call.call_count, 1)
         self.assertTrue(validate_surface_certificate(row, world, rendered.question)['eligible'])
 
+    def test_scoped_v17_certificate_remains_valid_after_free_v18_upgrade(self):
+        payload, world, capability, rendered, gold, groups = self.fixture()
+        question = render_scoped(groups, [0]*len(groups))
+        cert, review = certify_scoped_surface(
+            payload["task_id"], world, rendered.question, question, groups,
+        )
+        # Existing questions_scoped_50 artifacts were created with contract v17.
+        cert["review_contract"] = 17
+        realized = {
+            **payload, "question": question, "capability_world": capability,
+            "surface_certificate": cert,
+            "authoring": {"surface_review": review},
+        }
+        self.assertTrue(validate_surface_certificate(
+            realized, world, rendered.question,
+            gold=gold, rendered=rendered,
+        )["eligible"])
+
     def test_consumer_reparses_even_if_changed_text_has_fresh_hashes(self):
         payload, world, capability, rendered, gold, groups = self.fixture()
         question = render_scoped(groups, [0]*len(groups)) + ' Exclude Alice.'
