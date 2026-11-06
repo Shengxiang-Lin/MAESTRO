@@ -37,14 +37,16 @@ def _backends(args):
         author=LLMQuestionAuthor(OpenAICompatibleBackend(
             author_spec["base_url"],author_spec["model"],author_spec["api_key"],
             args.question_temperature,args.max_tokens,args.timeout,
-            author_spec["json_mode"] and not args.no_json_mode))
+            author_spec["json_mode"] and not args.no_json_mode,
+            enable_thinking=author_spec.get("enable_thinking")))
     if critic_spec["provider"]=="passthrough":
         critic=PassthroughCriticBackend()
     else:
         critic=LLMSemanticCritic(OpenAICompatibleBackend(
             critic_spec["base_url"],critic_spec["model"],critic_spec["api_key"],
             args.critic_temperature,args.critic_max_tokens,args.timeout,
-            critic_spec["json_mode"] and not args.no_json_mode))
+            critic_spec["json_mode"] and not args.no_json_mode,
+            enable_thinking=critic_spec.get("enable_thinking")))
     return author,critic
 def _safe_future_result(future,index,authoring):
     """Keep failures isolated to the corresponding frozen input task."""

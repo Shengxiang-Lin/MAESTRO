@@ -220,6 +220,9 @@ def resolve_model(args: argparse.Namespace, role: str) -> dict[str, Any]:
         raise EnvironmentConfigError(
             f"set {env_name} before calling API model profile {profile_name}"
         )
+    enable_thinking = profile.get("enable_thinking")
+    if enable_thinking is not None and type(enable_thinking) is not bool:
+        raise EnvironmentConfigError("model enable_thinking must be a boolean")
     return {
         "backend": backend,
         "provider": "openai-compatible",
@@ -227,4 +230,5 @@ def resolve_model(args: argparse.Namespace, role: str) -> dict[str, Any]:
         "base_url": str(base_url),
         "api_key": api_key,
         "json_mode": bool(profile.get("json_mode", True)),
+        "enable_thinking": enable_thinking,
     }

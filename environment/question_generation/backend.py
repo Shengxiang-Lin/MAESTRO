@@ -36,6 +36,7 @@ def _json_object(text:str)->dict[str,Any]:
 @dataclass
 class OpenAICompatibleBackend:
     base_url:str;model:str;api_key:str|None=None;temperature:float=.4;max_tokens:int=2048;timeout:float=180.;json_mode:bool=True
+    enable_thinking:bool|None=None
     def complete_json(
         self,system_prompt:str,user_prompt:str,*,
         response_schema:Mapping[str,Any]|None=None,
@@ -52,6 +53,8 @@ class OpenAICompatibleBackend:
               "messages":[{"role":"system","content":system_prompt},
                           {"role":"user","content":user_prompt}],
               "temperature":self.temperature,"max_tokens":self.max_tokens}
+        if self.enable_thinking is not None:
+            body["enable_thinking"] = self.enable_thinking
         if response_schema is not None and self.json_mode:
             body["response_format"]={
                 "type":"json_schema",

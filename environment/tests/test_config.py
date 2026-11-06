@@ -153,6 +153,39 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(EnvironmentConfigError, "does_not_exist"):
             resolve_model(args, "question_critic")
 
+    def test_thinking_setting_reaches_both_question_clients_and_readback(self):
+        from dataclasses import replace
+        from environment.question_generation.pipeline import _backends, build_parser
+        self.config['models']['remote']['enable_thinking'] = False
+        self.config['question_generation']['critic_profile'] = 'remote'
+        self.path.write_text(yaml.safe_dump(self.config), encoding='utf-8')
+        args = parse_with_config(build_parser(), 'question_generation', ['--config', str(self.path)])
+        with patch.dict(os.environ, {'MAESTRO_TEST_KEY': 'test-secret'}):
+            author, critic = _backends(args)
+        self.assertIs(author.backend.enable_thinking, False)
+        self.assertIs(critic.backend.enable_thinking, False)
+        self.assertIs(replace(critic.backend, max_tokens=4096).enable_thinking, False)
+
+    def test_thinking_flag_is_sent_only_when_configured(self):
+        import json
+        from unittest.mock import MagicMock
+        from environment.question_generation.backend import OpenAICompatibleBackend
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            'choices': [{'message': {'content': '{"ok":true}'}}],
+        }).encode()
+        for setting in (None, False, True):
+            backend = OpenAICompatibleBackend('http://test.local/v1', 'stub',
+                                              enable_thinking=setting)
+            with patch('environment.question_generation.backend.urllib.request.urlopen',
+                       return_value=response) as request:
+                self.assertEqual(backend.complete_json('system', 'question'), {'ok': True})
+                body = json.loads(request.call_args.args[0].data)
+                if setting is None:
+                    self.assertNotIn('enable_thinking', body)
+                else:
+                    self.assertIs(body['enable_thinking'], setting)
+
 
 if __name__ == "__main__":
     unittest.main()
