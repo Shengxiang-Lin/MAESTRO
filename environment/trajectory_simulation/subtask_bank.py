@@ -288,7 +288,7 @@ def build_subtask_bank(
                 "depends_on":list(fragment["depends_on"]),
                 "wave_index":index,"task_index":sub_index,
                 "task_instruction":original["task_instruction"],
-                    "correct_answer":fixed,
+                "correct_answer":fixed,
                 "summary":report["summary"],
                 "trace_summary":report["trace_summary"],
                 "public_evidence":observations,
