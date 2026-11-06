@@ -84,7 +84,7 @@ def _rebuild_scoped_reference(realized, world, canonical, gold, rendered):
     if verified is None or verified.get("question") != canonical:
         raise ValueError("unverified_stage1_reference")
     plan = build_scoped_plan(world, canonical, gold, verified)
-    return render_scoped(plan, [0] * len(plan))
+    return render_scoped(plan, [0] * len(plan)), plan
 
 
 def validate_surface_certificate(realized, world, canonical, *, gold=None, rendered=None):
@@ -132,22 +132,12 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
     if realized.get("publication_status") != "naturalized_certified":
         raise ValueError("stage2_publication_status_mismatch")
     rendered = rendered or world.get("_rendered")
-    scoped = _rebuild_scoped_reference(
+    scoped, plan = _rebuild_scoped_reference(
         realized, world, canonical, gold, rendered,
     )
     if (question in (canonical, scoped)
             or review.get("scoped_reference_sha256") != digest(scoped)):
         raise ValueError("stage2_reference_or_naturalization_mismatch")
-    from .scoped_surface import build_scoped_plan
-    if gold is None:
-        gold = compile_gold_solution(
-            {**realized, "question": canonical}, world, rendered,
-            schedule="compact",
-        )
-    verified = controlled_question_reference(gold, world, rendered)
-    if verified is None or verified.get("question") != canonical:
-        raise ValueError("unverified_stage1_reference")
-    plan = build_scoped_plan(world, canonical, gold, verified)
     checks = semantic_checks(plan)
     if (review.get("semantic_checklist_sha256") != digest(checks)
             or not naturalness_gate(scoped, question)["improved_enough_to_review"]
