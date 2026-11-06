@@ -256,6 +256,51 @@ class CertificateRoundtripTests(unittest.TestCase):
                     gold={"task_id": payload["task_id"]}, rendered=rendered,
                 )
 
+    def test_free_mode_can_publish_only_after_positive_blind_verification(self):
+        payload, world, capability, rendered, _, result = self.fixture()
+        author = LLMQuestionAuthor(
+            OpenAICompatibleBackend("http://test.local/v1", "stub"),
+        )
+        critic = LLMSemanticCritic(
+            OpenAICompatibleBackend("http://test.local/v1", "stub"),
+        )
+        def good_rewrite(_, scoped_question, **kwargs):
+            return scoped_question.replace(
+                "Let the first group consist of", "The first group includes",
+            )
+        with patch(
+            "environment.question_generation.scoped_surface.choose_scoped",
+            side_effect=lambda _, groups: [0] * len(groups),
+        ), patch(
+            "environment.question_generation.free_surface.call_free_rewriter",
+            side_effect=good_rewrite,
+        ), patch(
+            "environment.question_generation.free_surface.assess_free_style",
+            return_value=Mock(improved=True, to_dict=lambda: {"improved": True}),
+        ), patch(
+            "environment.question_generation.semantic_readback.read_free_question",
+            return_value=result,
+        ), patch(
+            "environment.question_generation.verification.certify_free_surface",
+            return_value=(
+                {"method": "verified_blind_semantic_readback_v1"},
+                {"method": "verified_blind_semantic_readback_v1"},
+            ),
+        ) as certify:
+            ok, row, audits = _realize_one(
+                payload, world, capability, author, critic,
+                question_max_attempts=1, use_critic=True,
+                surface_mode="free",
+            )
+        self.assertTrue(ok)
+        self.assertTrue(row["authoring"]["free_rewrite_verified"])
+        self.assertEqual(row["authoring"]["strategy"],
+                         "independent_free_semantic_readback")
+        self.assertEqual(row["surface_certificate"]["method"],
+                         "verified_blind_semantic_readback_v1")
+        self.assertEqual(certify.call_count, 1)
+        self.assertEqual(sum(a.get("blind_readback_calls", 0) for a in audits), 2)
+
     def test_explicit_free_mode_falls_back_to_scoped_when_readback_fails(self):
         from environment.question_generation.semantic_readback import ReadbackResult
         payload, world, capability, rendered, plan, _ = self.fixture()
