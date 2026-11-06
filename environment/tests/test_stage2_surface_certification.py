@@ -51,6 +51,18 @@ class FakeAuthor:
         return {"question": natural_rephrase(data["reference_question"])}
 
 
+def supported_checks(data):
+    candidate = data["candidate_question"]
+    # The scripted judge uses real substrings; this tests the publisher's
+    # witness and checklist protocol, NOT the model's semantic accuracy.
+    witness = candidate[:min(60, len(candidate))]
+    return [{
+        "id": check["id"], "status": "preserved",
+        "candidate_quote": witness,
+        "explanation": "Scripted: condition retained.",
+    } for check in data["semantic_checks"]]
+
+
 class FakeCritic:
     def __init__(self, critiques=None, final=None):
         self.critiques = list(critiques or [PASS_CRITIQUE])
@@ -63,8 +75,11 @@ class FakeCritic:
         self.calls.append((system, data))
         if "final independent language and semantic judge" in system:
             self.final_inputs.append(data)
-            return copy.deepcopy(self.final)
-        return copy.deepcopy(self.critiques.pop(0))
+            response = copy.deepcopy(self.final)
+        else:
+            response = copy.deepcopy(self.critiques.pop(0))
+        response["checks"] = supported_checks(data)
+        return response
 
 
 class Stage2SurfaceCertificationTests(unittest.TestCase):
@@ -101,7 +116,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         self.assertEqual(len(critic.calls), 2)
         self.assertEqual(critic.final_inputs[0].keys(),
                          {"reference_question", "candidate_question",
-                          "potential_literal_changes_to_check"})
+                          "potential_literal_changes_to_check", "semantic_checks"})
         self.assertEqual(row["authoring"]["revision_rounds"], 0)
         self.assertNotEqual(row["question"], rendered.question)
         verified = validate_surface_certificate(
@@ -209,6 +224,76 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(rejected["reason"], "rejected_validation_error")
 
+
+
+    def test_v13_known_false_positive_near_copy_is_rejected(self):
+        from environment.question_generation.semantic_checks import naturalness_gate
+        ref = (
+            "Let the first group consist of places with a start date of 1914 "
+            "recorded as birthplaces of the person born on March 8, 2000. "
+            "Let the second group consist of events that point to the first group."
+        )
+        draft = ref.replace("consist of", "be", 1)
+        self.assertFalse(naturalness_gate(ref, draft)["improved_enough_to_review"])
+
+    def test_explicit_intersection_to_union_is_not_approved(self):
+        from environment.question_generation.semantic_checks import explicit_join_contradictions
+        ref = (
+            "Let the first group consist of administrative areas in Central Valley. "
+            "Let the second group consist of entities in both entities with "
+            "population 1203 from the first group and administrative areas "
+            "with a neighbor of an entity with male population 488."
+        )
+        bad = (
+            "First, identify areas in Central Valley to form Group 1. "
+            "Next, define Group 2 as the union of: (1) entities with "
+            "population 1203, and (2) areas with a neighbor relation."
+        )
+        self.assertEqual(
+            explicit_join_contradictions(ref, bad),
+            ["group_2_changed_intersection_to_union"],
+        )
+        self.assertFalse(explicit_join_contradictions(ref, ref))
+
+    def test_missing_or_forged_grounding_blocks_final_certificate(self):
+        from environment.question_generation.semantic_checks import (
+            check_evidence, CheckFormatError,
+        )
+        sample = "Which people have a recorded spouse who died in this place?"
+        checks = [{"id": "C1", "kind": "relation_scope",
+                   "expected": "Preserve spouse direction",
+                   "reference_excerpt": "whose spouse died in this place"}]
+        for bad in (
+            [], [{"id": "wrong", "status": "preserved",
+                  "candidate_quote": "spouse", "explanation": "yes"}],
+            [{"id": "C1", "status": "preserved",
+              "candidate_quote": "invented relationship", "explanation": "yes"}],
+            [{"id": "C1", "status": "preserved",
+              "candidate_quote": "spouse", "explanation": ""}],
+        ):
+            with self.subTest(bad=bad), self.assertRaises(CheckFormatError):
+                check_evidence(checks, bad, sample)
+
+    def test_model_cannot_pass_a_known_changed_semantic_check(self):
+        from environment.question_generation.question_review import (
+            judge_question, critique_question,
+        )
+        class ContradictoryReviewer:
+            def complete_json(self, system, user, **kwargs):
+                data = json.loads(user)
+                checks = supported_checks(data)
+                checks[0]["status"] = "changed"
+                if "final independent" in system:
+                    return {**PASS_FINAL, "checks": checks}
+                return {**PASS_CRITIQUE, "checks": checks}
+        c = [{"id": "C1", "kind": "set_logic",
+              "expected": "all branches", "reference_excerpt": "both groups"}]
+        draft = "Which entities belong to either group?"
+        feedback = critique_question(ContradictoryReviewer(), "both groups", draft, c)
+        self.assertEqual(feedback["verdict"], "revise")
+        self.assertTrue(feedback["issues"])
+        judged = judge_question(ContradictoryReviewer(), "both groups", draft, c)
+        self.assertNotEqual(judged["verdict"], "pass")
 
 if __name__ == "__main__":
     unittest.main()
