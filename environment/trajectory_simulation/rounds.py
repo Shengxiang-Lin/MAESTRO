@@ -274,6 +274,8 @@ def _read_verified_bank(record):
         raise ValueError("phase1_surface_question_changed")
     if bank["question_record"].get("question")!=bank["surface_question"]:
         raise ValueError("phase1_surface_question_record_mismatch")
+    if bank.get("surface_preflight",{}).get("publicly_executable") is not True:
+        raise ValueError("phase1_surface_public_sources_not_reachable")
     gold=bank["gold_plan"]
     if gold["task_id"]!=bank["task_id"] or gold["question"]!=bank["question"]:
         raise ValueError("phase1_gold_task_question_mismatch")
