@@ -229,6 +229,38 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
 
 
 
+    def test_same_filter_on_different_relation_owners_stays_distinct(self):
+        from environment.question_generation.scoped_surface import ScopedPlan
+        from environment.question_generation.semantic_checks import semantic_checks
+        restriction = {
+            "attribute": "population number", "comparison": "less than",
+            "value": {"type": "number", "value": "1765"},
+        }
+        def relation(anchor):
+            return {
+                "definition": "RELATE", "relation": "location",
+                "direction": "forward",
+                "conditions": [copy.deepcopy(restriction)],
+                "inputs": [{
+                    "definition": "FIND", "anchor": anchor,
+                    "conditions": [], "inputs": [],
+                }],
+            }
+        combined = {
+            "definition": "INTERSECT", "conditions": [],
+            "inputs": [relation("Alpha"), relation("Beta")],
+        }
+        plan = ScopedPlan(
+            [("Which matching entities satisfy both location branches?",)],
+            [combined], combined,
+        )
+        checks = semantic_checks(plan)
+        ownership = [item for item in checks
+                     if item["kind"] == "condition_owner"
+                     and "population number" in item["expected"]]
+        self.assertEqual(len(ownership), 2)
+        self.assertEqual(len({item["id"] for item in ownership}), 2)
+
     def test_scoped_contract_typed_literals_allow_date_paraphrases_not_code_loss(self):
         from environment.question_generation.scoped_surface import ScopedPlan
         from environment.question_generation.semantic_checks import missing_typed_literals
