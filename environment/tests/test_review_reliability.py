@@ -182,7 +182,7 @@ class ReviewReliabilityTests(unittest.TestCase):
             ]},
         ]
         result=check_question(gold,record,role)
-        self.assertTrue(result["eligible"])
+        self.assertTrue(result["eligible"], json.dumps(result,ensure_ascii=False,default=str)[:3500])
         self.assertEqual(role.check_question.call_count,3)
         self.assertEqual(
             {item["step"] for item in result.get("raw_verdict",{}).get("relation_coverage",[])},
