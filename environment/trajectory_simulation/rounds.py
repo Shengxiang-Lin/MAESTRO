@@ -256,15 +256,24 @@ def _read_verified_bank(record):
     from .contract import answers_equal
     if not isinstance(record,dict) or set(record)!={"format","bank","sha256"}:
         raise ValueError("invalid_phase1_bank_envelope")
-    if record["format"]!="maestro.clean_subtasks.v1":
+    if record["format"]!="maestro.clean_subtasks.v2":
         raise ValueError("incompatible_phase1_bank_version")
     if digest({key:record[key] for key in ("format","bank")})!=record["sha256"]:
         raise ValueError("phase1_bank_integrity_mismatch")
     bank=record["bank"]
-    if bank.get("schema_version")!=1:
+    if bank.get("schema_version")!=2:
         raise ValueError("incompatible_subtask_schema")
+    if not (bank["canonical_eligibility"].get("reviewed")
+            and bank["canonical_eligibility"].get("eligible")):
+        raise ValueError("phase1_canonical_question_not_certified")
+    if bank["canonical_eligibility"].get("question_sha256")!=digest(bank["question"]):
+        raise ValueError("phase1_canonical_question_changed")
     if not (bank["eligibility"].get("reviewed") and bank["eligibility"].get("eligible")):
-        raise ValueError("phase1_question_not_reviewed_and_eligible")
+        raise ValueError("phase1_surface_question_not_reviewed_and_eligible")
+    if bank["eligibility"].get("question_sha256")!=digest(bank["surface_question"]):
+        raise ValueError("phase1_surface_question_changed")
+    if bank["question_record"].get("question")!=bank["surface_question"]:
+        raise ValueError("phase1_surface_question_record_mismatch")
     gold=bank["gold_plan"]
     if gold["task_id"]!=bank["task_id"] or gold["question"]!=bank["question"]:
         raise ValueError("phase1_gold_task_question_mismatch")
@@ -286,7 +295,7 @@ def _read_verified_bank(record):
     }
     validate_public_episode({
         "task_id":bank["task_id"],"question":bank["question"],
-        "input_eligibility":bank["eligibility"],
+        "input_eligibility":bank["canonical_eligibility"],
         "validation":{"public_evidence_replay_verified":True},
         "trajectory":[*steps,final],
     },require_training=False)
@@ -315,7 +324,8 @@ def compose_main_rounds(bank, *, planner, round_indices=None,
     from .compiler import json_value
 
     gold=bank["gold_plan"]
-    question=bank["question"]
+    # Only the reviewed surface is published to Main-Agent prompts.
+    question=bank["surface_question"]
     history=[]
     cache={}
     known={}
@@ -345,13 +355,10 @@ def compose_main_rounds(bank, *, planner, round_indices=None,
             question,history,tools=gold["available_tools"],
             resources=gold["provided_resources"],evidence_store=cache,
         )
-        if public_state!=wave["state"]:
-            # A Main-visible source/summary was changed after the Phase-1 bank
-            # was produced. Exact state equality is expected before natural
-            # Main wording is substituted in history (hence check all fields
-            # except previously delegated task text).
-            if public_state["evidence_store"]!=wave["state"]["evidence_store"]:
-                raise ValueError("bank_prior_evidence_store_mismatch")
+        # Phase 1 stores canonical states, whereas Phase 2 reconstructs
+        # public history under the independently certified surface question.
+        if public_state["evidence_store"]!=wave["state"]["evidence_store"]:
+            raise ValueError("bank_prior_evidence_store_mismatch")
         visible=list({
             item["resource_id"]:item
             for item in [
