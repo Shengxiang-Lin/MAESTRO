@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any,Mapping
 from tqdm.auto import tqdm
 from environment.config import EnvironmentConfigError,parse_with_config,resolve_model
-from .backend import LLMQuestionAuthor,LLMSemanticCritic,OpenAICompatibleBackend,PassthroughAuthorBackend,PassthroughCriticBackend
+from .backend import OpenAICompatibleBackend
 from .boundary import BoundaryError,validate_frozen_inputs
 from .realization import _realize_one
 from .streaming import (QuestionCheckpointError,QuestionProgress,
@@ -24,30 +24,30 @@ def _world_by_task(path,seed=17):
     return result
 def _capability_by_task(path):return {str(row.get("task_id")):row for row in _rows(path) if row.get("task_id")}
 def _backends(args):
-    author_spec=resolve_model(args,"question_author")
-    critic_spec=resolve_model(args,"question_critic") if not args.no_semantic_critic else {"provider":"passthrough","backend":"passthrough","model":None,"base_url":None,"api_key":None,"json_mode":False}
-    # Keep resolved metadata free from API keys.
-    args._resolved_models={
-        "question_author":{k:v for k,v in author_spec.items() if k!="api_key"},
-        "question_critic":{k:v for k,v in critic_spec.items() if k!="api_key"},
+    author_spec = resolve_model(args, "question_author")
+    critic_spec = resolve_model(args, "question_critic")
+    if (author_spec["provider"] == "passthrough"
+            or critic_spec["provider"] == "passthrough"):
+        raise EnvironmentConfigError(
+            "Stage 2 naturalization requires both Author and Critic LLM backends"
+        )
+    args._resolved_models = {
+        "question_author": {k: v for k, v in author_spec.items() if k != "api_key"},
+        "question_critic": {k: v for k, v in critic_spec.items() if k != "api_key"},
     }
-    if author_spec["provider"]=="passthrough":
-        author=PassthroughAuthorBackend()
-    else:
-        author=LLMQuestionAuthor(OpenAICompatibleBackend(
-            author_spec["base_url"],author_spec["model"],author_spec["api_key"],
-            args.question_temperature,args.max_tokens,args.timeout,
-            author_spec["json_mode"] and not args.no_json_mode,
-            enable_thinking=author_spec.get("enable_thinking")))
-    if critic_spec["provider"]=="passthrough":
-        critic=PassthroughCriticBackend()
-    else:
-        critic=LLMSemanticCritic(OpenAICompatibleBackend(
-            critic_spec["base_url"],critic_spec["model"],critic_spec["api_key"],
-            args.critic_temperature,args.critic_max_tokens,args.timeout,
-            critic_spec["json_mode"] and not args.no_json_mode,
-            enable_thinking=critic_spec.get("enable_thinking")))
-    return author,critic
+    def backend(spec, temperature, max_tokens):
+        return OpenAICompatibleBackend(
+            spec["base_url"], spec["model"], spec["api_key"],
+            temperature, max_tokens, args.timeout,
+            spec["json_mode"] and not args.no_json_mode,
+            enable_thinking=spec.get("enable_thinking"),
+        )
+    return (
+        backend(author_spec, args.question_temperature, args.max_tokens),
+        backend(critic_spec, args.critic_temperature, args.critic_max_tokens),
+    )
+
+
 def _safe_future_result(future,index,authoring):
     """Keep failures isolated to the corresponding frozen input task."""
     try:
@@ -86,9 +86,7 @@ def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress):
                         worlds.get(str(payload.get("task_id")),{}),
                         capabilities.get(str(payload.get("task_id")),{}),
                         author,critic,
-                        question_max_attempts=args.question_max_attempts,
-                        use_critic=not args.no_semantic_critic,
-                        surface_mode=getattr(args,"surface_mode","scoped"))
+                        max_revisions=args.max_revisions)
                     active[future]=index
                     next_submit+=1
 
@@ -130,6 +128,8 @@ def run(args):
     capabilities=_capability_by_task(args.capabilities)
     if any(str(row.get("task_id")) not in worlds for row in authoring):
         raise SystemExit("authoring tasks are missing corresponding executable worlds")
+    if args.max_revisions<0 or args.max_revisions>8:
+        raise SystemExit("--max-revisions must be in [0, 8]")
     if args.flush_every<1:
         raise SystemExit("--flush-every must be >= 1")
     if args.question_workers<1:
@@ -138,27 +138,20 @@ def run(args):
     output_dir=Path(args.output_dir)
     output_dir.mkdir(parents=True,exist_ok=True)
     task_ids=[str(row.get("task_id","")) for row in authoring]
-    source_files=[
-        Path(args.manifest),Path(args.authoring_inputs),
-        Path(args.worlds),Path(args.capabilities),
-        Path(__file__),Path(__file__).with_name("streaming.py"),
-        Path(__file__).with_name("backend.py"),
-        Path(__file__).with_name("prompts.py"),
-        Path(__file__).with_name("validators.py"),
-        Path(__file__).with_name("boundary.py"),
-        Path(__file__).with_name("verification.py"),
-        Path(__file__).with_name("public_semantics.py"),
-        Path(__file__).with_name("contracts.py"),
-        Path(__file__).with_name("alignment.py"),
-        Path(__file__).with_name("scoped_surface.py"),
-        Path(__file__).with_name("realization.py"),
-        Path(__file__).with_name("graph_realization.py"),
-        Path(__file__).with_name("free_surface.py"),
-        Path(__file__).with_name("semantic_readback.py"),
+    source_files = [
+        Path(args.manifest), Path(args.authoring_inputs),
+        Path(args.worlds), Path(args.capabilities),
+        *(
+            Path(__file__).with_name(name) for name in (
+                "pipeline.py", "realization.py", "question_review.py",
+                "verification.py", "scoped_surface.py", "public_semantics.py",
+                "contracts.py", "validators.py", "backend.py", "boundary.py",
+                "streaming.py",
+            )
+        ),
         Path("environment/trajectory_simulation/eligibility.py"),
         Path("environment/trajectory_simulation/compiler.py"),
         Path("environment/trajectory_simulation/skeleton.py"),
-        Path("environment/trajectory_simulation/backend.py"),
     ]
     signature=signature_for_question_run(
         frozen,args,task_ids,source_files=source_files)
@@ -174,130 +167,80 @@ def run(args):
             if progress.completed!=len(authoring):
                 raise QuestionCheckpointError(
                     f"question stream incomplete: {progress.completed}/{len(authoring)}")
-        # Acceptance now includes safely certified renderer fallbacks. Report
-        # naturalized and fallback counts separately to avoid inflated claims.
-        certified_paraphrases=canonical_fallbacks=canonical_selected=0
-        meaningful_paraphrases=0
-        free_rewrite_certified=scoped_grammar_certified=0
-        total_template_reduction=0
-        with (output_dir/"realized_capability_worlds.jsonl").open(
-            "r",encoding="utf-8",
-        ) as finalized:
-            for line in finalized:
-                if not line.strip():
-                    continue
-                row=json.loads(line)
-                author_metadata=row.get("authoring") or {}
-                method=(row.get("surface_certificate") or {}).get("method")
-                if method=="verified_blind_semantic_readback_v1":
-                    free_rewrite_certified+=1
-                elif method in ("verified_scoped_grammar_v1",
-                                "verified_scoped_grammar_v2"):
-                    scoped_grammar_certified+=1
-                gain=author_metadata.get("naturalization_metrics") or {}
-                if gain.get("meaningful_rewrite_proxy") is True:
-                    meaningful_paraphrases+=1
-                    total_template_reduction+=max(
-                        0, int(gain.get("canonical_template_phrases",0))
-                         - int(gain.get("surface_template_phrases",0)),
-                    )
-                if author_metadata.get("surface_fallback") is True:
-                    canonical_fallbacks+=1
-                elif ((row.get("surface_certificate") or {}).get("method")
-                      in ("llm_semantic_screen","llm_contract_alignment",
-                          "verified_scoped_grammar_v1","verified_scoped_grammar_v2",
-                          "verified_blind_semantic_readback_v1")):
-                    certified_paraphrases+=1
-                else:
-                    canonical_selected+=1
-        # Record where naturalization fails. Attempts are not task counts.
         from collections import Counter
-        graph_decisions=Counter()
-        repair_attempts=0
-        graph_review_calls=0
-        scoped_style_calls=0
-        scoped_styles=Counter()
-        free_author_calls=blind_readback_calls=0
-        free_attempt_failures=Counter()
-        with (output_dir/"question_critic_audit.jsonl").open(
-            "r",encoding="utf-8",
-        ) as traces:
-            for line in traces:
+        reasons = Counter()
+        with (output_dir / "question_rejected.jsonl").open(
+            encoding="utf-8",
+        ) as handle:
+            for line in handle:
+                if line.strip():
+                    reasons[json.loads(line).get("reason", "unknown")] += 1
+        author_calls = critic_calls = final_judge_calls = 0
+        review_outcomes = Counter()
+        accepted_after_revision = 0
+        with (output_dir / "question_critic_audit.jsonl").open(
+            encoding="utf-8",
+        ) as handle:
+            for line in handle:
                 if not line.strip():
                     continue
-                for attempt in (json.loads(line).get("audit") or []):
-                    scoped_style_calls+=int(attempt.get("scoped_style_model_calls",0))
-                    free_author_calls+=int(attempt.get("free_author_calls",0))
-                    blind_readback_calls+=int(attempt.get("blind_readback_calls",0))
-                    if attempt.get("stage")=="free_rewrite" and attempt.get("failure"):
-                        free_attempt_failures[str(attempt["failure"]).split(":",1)[0]]+=1
-                    if attempt.get("scoped_style"):
-                        scoped_styles[attempt["scoped_style"]]+=1
-                    repair_attempts+=int("semantic_critic_repair" in attempt)
-                    for prefix in ("author","repair"):
-                        result=attempt.get(prefix+"_programir_review")
-                        if isinstance(result,dict):
-                            graph_review_calls+=1
-                            graph_decisions[
-                                str(result.get("review_failure_kind") or
-                                    result.get("decision") or "unclassified")
-                            ]+=1
-        summary={
-            "pipeline":"public_question_contract_surface_certification",
-            "surface_mode":getattr(args,"surface_mode","legacy"),
-            "frozen_batch_validation":frozen,
-            "provider":args._resolved_models["question_author"]["backend"],
-            "model":args._resolved_models["question_author"]["model"],
-            "critic_model":args._resolved_models["question_critic"]["model"] if not args.no_semantic_critic else None,
-            "model_roles":args._resolved_models,
-            "requested":len(authoring),
-            "accepted":accepted,
-            "rejected":rejected,
-            "acceptance_rate":accepted/len(authoring) if authoring else 0.,
-            "publication_status_counts":{
-                "naturalized_certified":certified_paraphrases,
-                "canonical_only":canonical_fallbacks+canonical_selected,
-                "rejected":rejected,
+                event = json.loads(line)
+                for attempt in event.get("audit", ()):
+                    author_calls += int(attempt.get("author_calls", 0))
+                    critic_calls += int(attempt.get("critic_calls", 0))
+                    final_judge_calls += int(attempt.get("final_judge_calls", 0))
+                    if attempt.get("stage") == "candidate":
+                        review_outcomes[attempt.get(
+                            "failure", "accepted" if attempt.get("accepted")
+                            else "unclassified",
+                        )] += 1
+                if event.get("accepted") and sum(
+                    row.get("stage") == "candidate"
+                    for row in event.get("audit", ())
+                ) > 1:
+                    accepted_after_revision += 1
+        summary = {
+            "pipeline": "scoped_reference_iterative_author_critic_final_judge",
+            "frozen_batch_validation": frozen,
+            "model_roles": args._resolved_models,
+            "requested": len(authoring),
+            "accepted": accepted,
+            "rejected": rejected,
+            "acceptance_rate": (
+                accepted / len(authoring) if authoring else 0.0
+            ),
+            "publication_status_counts": {
+                "naturalized_certified": accepted,
+                "rejected": rejected,
             },
-            "semantic_critic":{
-                "enabled":not args.no_semantic_critic and getattr(args,"surface_mode","scoped") == "graph",
-                "blind_readback_enabled":getattr(args,"surface_mode","scoped") == "free",
-                "configured":not args.no_semantic_critic,
+            "rejection_reasons": dict(reasons),
+            "review_statistics": {
+                "max_revisions": args.max_revisions,
+                "author_calls": author_calls,
+                "critic_calls": critic_calls,
+                "final_judge_calls": final_judge_calls,
+                "accepted_after_revision": accepted_after_revision,
+                "candidate_decisions": dict(review_outcomes),
             },
-            "surface_certification":{
-                "contract":"maestro.stage2_surface_cert.v1",
-                "certified_paraphrases":certified_paraphrases,
-                "meaningful_certified_paraphrases":meaningful_paraphrases,
-                "meaningful_rewrite_rate":meaningful_paraphrases/len(authoring)
-                    if authoring else 0.0,
-                "template_phrases_removed_from_meaningful":total_template_reduction,
-                "graph_review_calls":graph_review_calls,
-                "scoped_style_model_calls":scoped_style_calls,
-                "scoped_styles":dict(scoped_styles),
-                "free_rewrite_certified":free_rewrite_certified,
-                "scoped_grammar_certified":scoped_grammar_certified,
-                "free_author_calls":free_author_calls,
-                "blind_readback_calls":blind_readback_calls,
-                "free_attempt_failure_reasons":dict(free_attempt_failures),
-                "graph_review_decisions":dict(graph_decisions),
-                "critic_repair_attempts":repair_attempts,
-                "canonical_fallbacks":canonical_fallbacks,
-                "canonical_selected":canonical_selected,
-                "published_certified":accepted,
+            "streaming": {
+                "enabled": True,
+                "ordered_writes": True,
+                "flush_every": args.flush_every,
+                "question_workers": args.question_workers,
+                "resumed_records": resumed_count,
+                "checkpoint": str(output_dir / "question_progress_state.json"),
             },
-            "streaming":{
-                "enabled":True,
-                "ordered_writes":True,
-                "flush_every":args.flush_every,
-                "question_workers":args.question_workers,
-                "resumed_records":resumed_count,
-                "checkpoint":str(output_dir/"question_progress_state.json"),
-            },
-            "artifacts":{
-                "realized":str(output_dir/"realized_capability_worlds.jsonl"),
-                "rejected":str(output_dir/"question_rejected.jsonl"),
-                "critic_audit":str(output_dir/"question_critic_audit.jsonl"),
-                "summary":str(output_dir/"question_generation_summary.json"),
+            "artifacts": {
+                "realized": str(
+                    output_dir / "realized_capability_worlds.jsonl"
+                ),
+                "rejected": str(output_dir / "question_rejected.jsonl"),
+                "review_audit": str(
+                    output_dir / "question_critic_audit.jsonl"
+                ),
+                "summary": str(
+                    output_dir / "question_generation_summary.json"
+                ),
             },
         }
         # Write completion summary only when all ordered records are committed.
@@ -308,7 +251,30 @@ def run(args):
     return summary
 
 def build_parser():
-    p=argparse.ArgumentParser(description="Generate natural questions over a frozen MAESTRO task batch");p.add_argument("--manifest");p.add_argument("--authoring-inputs");p.add_argument("--worlds");p.add_argument("--capabilities");p.add_argument("--output-dir");p.add_argument("--max-records",type=int);p.add_argument("--seed",type=int,default=17);p.add_argument("--provider",choices=("passthrough","openai-compatible"),default="passthrough");p.add_argument("--base-url");p.add_argument("--model");p.add_argument("--critic-model");p.add_argument("--api-key-env",default="DASHSCOPE_API_KEY");p.add_argument("--question-temperature",type=float,default=.4);p.add_argument("--critic-temperature",type=float,default=0.);p.add_argument("--max-tokens",type=int,default=2048);p.add_argument("--critic-max-tokens",type=int,default=768);p.add_argument("--timeout",type=float,default=180.);p.add_argument("--question-max-attempts",type=int,default=2);p.add_argument("--question-workers",type=int,default=4);p.add_argument("--flush-every",type=int,default=5);p.add_argument("--restart-questions",action="store_true");p.add_argument("--no-semantic-critic",action="store_true");p.add_argument("--no-json-mode",action="store_true");p.add_argument("--no-progress",action="store_true");p.add_argument("--surface-mode",choices=("scoped","free","graph"),default="scoped");return p
+    p = argparse.ArgumentParser(
+        description="Generate naturally written and semantically reviewed MAESTRO questions"
+    )
+    for name in ("manifest", "authoring-inputs", "worlds", "capabilities",
+                 "output-dir", "base-url", "model", "critic-model"):
+        p.add_argument("--" + name)
+    p.add_argument("--max-records", type=int)
+    p.add_argument("--seed", type=int, default=17)
+    p.add_argument("--provider", choices=("passthrough", "openai-compatible"),
+                   default="passthrough")
+    p.add_argument("--api-key-env", default="DASHSCOPE_API_KEY")
+    p.add_argument("--question-temperature", type=float, default=0.4)
+    p.add_argument("--critic-temperature", type=float, default=0.0)
+    p.add_argument("--max-tokens", type=int, default=2048)
+    p.add_argument("--critic-max-tokens", type=int, default=1536)
+    p.add_argument("--timeout", type=float, default=180.0)
+    p.add_argument("--max-revisions", type=int, default=2)
+    p.add_argument("--question-workers", type=int, default=4)
+    p.add_argument("--flush-every", type=int, default=5)
+    p.add_argument("--restart-questions", action="store_true")
+    p.add_argument("--no-json-mode", action="store_true")
+    p.add_argument("--no-progress", action="store_true")
+    return p
+
 def main():
     try:
         args=parse_with_config(build_parser(),"question_generation")
