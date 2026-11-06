@@ -149,10 +149,27 @@ def main():
         if args.reuse_candidate_pool:
             if not candidates.is_file():
                 raise SystemExit(f"--reuse-candidate-pool requires existing {candidates}")
-            number=_count_jsonl(candidates)
-            if number<=0 or number>pool_size:
+            checkpoint=candidates.with_name(
+                candidates.stem+".candidate-state.json"
+            )
+            if not checkpoint.is_file():
                 raise SystemExit(
-                    f"Invalid reusable candidate pool count {number}, capacity {pool_size}"
+                    f"Cannot safely reuse candidate pool without {checkpoint}"
+                )
+            state=_read_json(checkpoint)
+            settings=state.get("signature",{}).get("settings",{})
+            if (settings.get("seed") != args.seed
+                    or settings.get("pool_size") != pool_size
+                    or state.get("status") not in {"complete","budget_exhausted"}):
+                raise SystemExit(
+                    "Reusable candidate checkpoint has incompatible seed, "
+                    "capacity or incomplete status"
+                )
+            number=_count_jsonl(candidates)
+            if number<=0 or number>pool_size or state.get("accepted") != number:
+                raise SystemExit(
+                    f"Invalid reusable candidate pool count {number}, "
+                    f"checkpoint={state.get('accepted')}, capacity={pool_size}"
                 )
             summary["candidate_selection"]={
                 "validated_candidates":number,
