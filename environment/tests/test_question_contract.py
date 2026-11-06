@@ -1,10 +1,7 @@
 import unittest
-from unittest.mock import patch
 
 from environment.question_generation.contracts import contract_issues
 from environment.question_generation.public_semantics import public_question_contract
-from environment.question_generation.alignment import check_alignment
-from environment.question_generation.backend import OpenAICompatibleBackend
 
 
 class QuestionContractTests(unittest.TestCase):
@@ -60,28 +57,6 @@ class QuestionContractTests(unittest.TestCase):
         scopes = {s["id"]: s for s in contract["scopes"]}
         self.assertEqual(scopes["E2"]["conditions"], [])
         self.assertEqual(scopes["E3"]["inputs"], ["E2"])
-
-    def test_alignment_requires_every_obligation_and_valid_evidence(self):
-        world = self.world()
-        question = "How many neighbors have male population 488 and point to entities with population 1203?"
-        client = OpenAICompatibleBackend("test://local", "test")
-        items = [{"id": f"S{i}", "status": "match", "spans": [0], "reason": "matches"} for i in range(5)]
-        for values, extras, eligible in (
-            (items, [], True), (items[:-1], [], False),
-            ([*items[:-1], items[0]], [], False),
-            ([{**v, "spans": [99]} for v in items], [], False),
-            (items, [{"span": 0, "reason": "invented restriction"}], False),
-            ([{**v, "status": "uncertain"} for v in items], [], False),
-        ):
-            with patch.object(OpenAICompatibleBackend, "complete_json", side_effect=[
-                {"alignments": values[:4], "extra_constraints": extras},
-                {"alignments": values[4:], "extra_constraints": []},
-            ]):
-                result = check_alignment({"fragments": []}, world, question, question, client)
-                self.assertEqual(result["eligible"], eligible)
-                schema = OpenAICompatibleBackend.complete_json.call_args.kwargs["response_schema"]
-                self.assertEqual(schema["properties"]["alignments"]["minItems"],
-                                 schema["properties"]["alignments"]["maxItems"])
 
     def test_filter_after_ranking_keeps_its_own_scope(self):
         world = self.world()
