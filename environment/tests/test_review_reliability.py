@@ -104,7 +104,7 @@ class ReviewReliabilityTests(unittest.TestCase):
             result_file=directory/"comparison.jsonl"
             def put(path, items):
                 path.write_text(
-                    "".join(json.dumps(item,ensure_ascii=False)+"\\n" for item in items),
+                    "".join(json.dumps(item,ensure_ascii=False)+"\n" for item in items),
                     encoding="utf-8",
                 )
             put(bank_file,[{"bank":{
