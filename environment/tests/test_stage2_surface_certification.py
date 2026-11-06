@@ -20,16 +20,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
     def data(self):
         gold,world,rendered=ReviewReliabilityTests().rendered_fixture()
         world={**world,"_rendered":rendered,"_display_answer":rendered.answer}
-        capability={
-            "resources":[{
-                "resource_id":resource["resource_id"],
-                "source_type":resource["source_type"],
-                "visibility":"provided",
-                "anchor_dependency_resource_ids":[],
-            } for resource in gold.get("search_catalog",[])
-        ]
-        # Reuse the frozen capability's actual source metadata instead of
-        # synthesizing an answer-leaking authoring prompt.
+        # Use the frozen public capability from the same test fixture.
         from environment.tests.test_gold_trajectory import fixture
         q,_,_=fixture()
         capability=q["capability_world"]
