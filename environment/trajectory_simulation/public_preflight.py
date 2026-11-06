@@ -110,7 +110,17 @@ def audit_public_executability(plan: Mapping[str, Any]) -> dict[str, Any]:
                     guidance["ready"][task_index], previous, visible_resources, cache
                 )[0]
                 verify_known_packet(task, cache)
-                if plan.get("retrieval_policy")=="task_local_ranked_public_index_v1":
+                fresh_discoverable=[
+                    obs for obs in fragment["observations"]
+                    if obs.get("visibility") == "discoverable"
+                ]
+                if fresh_discoverable and "GoogleSearchAction" not in task["tools"]:
+                    raise ValueError("search_tool_not_assigned_for_new_source")
+                # This query is a TEACHER-ONLY reachability certificate,
+                # not a simulated Sub-Agent search event. Executed searches
+                # are emitted later only when explicitly authorized.
+                if (fresh_discoverable and plan.get("retrieval_policy")
+                        == "task_local_ranked_public_index_v1"):
                     from .search_simulator import (
                         simulate_search, verify_retrieved_witnesses,
                     )
@@ -124,7 +134,7 @@ def audit_public_executability(plan: Mapping[str, Any]) -> dict[str, Any]:
                         ],
                     )
                     verify_retrieved_witnesses(
-                        search_audit,fragment["observations"]
+                        search_audit,fresh_discoverable
                     )
                 observed = [public_record(o) for o in fragment["observations"]]
                 replay = replay_task(task, observed, public_cache=cache)
