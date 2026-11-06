@@ -167,9 +167,25 @@ For each question, this phase:
    separate semantic reviewer still must pass. Persistent missing fields
    are recorded as `summary=blank/null/...;trace_summary=...` in the
    private bank's `feedback_fallback_reason` instead of losing the cause.
-   All other invalid facts/tool actions immediately fall back without retry.
-   A rejected rewrite falls back to the correct canonical report; the
-   answer is never changed by the LLM.
+   If the grounded-feedback reviewer returns concrete `issues`, Stage 3.1
+   performs **at most one critic-guided content repair**. The Writer sees its
+   previous report, reviewer objections, and the original complete fixed
+   execution/source/tool evidence. Objections are fallible diagnostics, NOT
+   additional facts: the Writer must check them against the frozen evidence
+   rather than blindly adopting them. The revised report must independently
+   pass the identical deterministic evidence/tool guards and a fresh full
+   semantic review. Repair requests/successes/failures are counted separately
+   as `natural_feedback_content_repair{,_success,_failed}`. A rejected repair
+   falls back to the correct canonical report; the answer is never changed.
+   Deterministic hallucinations and unauthorized actions are still hard
+   failures and do not trigger an unreviewed rewrite.
+   A local vLLM HTTP 400 for overlong context is **not** a repairable content
+   error: the server's actual `--max-model-len` controls total prompt plus
+   reserved output tokens. The separate shared registry may describe a larger
+   context than an already-running reused service; inspect/restart the vLLM
+   process rather than increasing client `--max-tokens` (which reserves
+   MORE output budget).
+
    Private bank entry `simulated_tool_provenance` explicitly marks
    `live_tool_calls=false` for audit.
 7. Only after all parallel siblings pass does the next wave see their public
