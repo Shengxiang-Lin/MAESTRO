@@ -363,11 +363,51 @@ def build_subtask_bank(
     )
     if not ok:
         raise GoldTrajectoryError("subtask_bank",issues)
+    # A valid paraphrase must be able to discover the same public evidence
+    # from its actual Main-visible question. Canonical discovery logs remain
+    # private teacher evidence; a different surface query must never inherit
+    # their success automatically.
+    surface_preflight={"publicly_executable":True,"checked_fragments":0}
+    if (surface_question!=canonical_question
+            and eligibility.get("eligible") and eligibility.get("reviewed")
+            and gold.get("retrieval_policy")=="task_local_ranked_public_index_v1"):
+        from .search_simulator import simulate_search, verify_retrieved_witnesses
+        for wave in waves:
+            known=list(wave["state"]["evidence_store"])+[
+                x["resource_id"] for x in gold["provided_resources"]
+            ]
+            for fragment in wave["bound_fragments"]:
+                fid=fragment["fragment_id"]
+                if records[fid]["search_audit"] is None:
+                    continue
+                surface_preflight["checked_fragments"]+=1
+                new_audit=simulate_search(
+                    gold["search_catalog"],
+                    public_question=surface_question,
+                    public_task=records[fid]["task_instruction"],
+                    already_known_ids=known,
+                )
+                required=[
+                    obs for obs in fragment["observations"]
+                    if obs.get("visibility")=="discoverable"
+                ]
+                try:
+                    verify_retrieved_witnesses(new_audit,required)
+                except ValueError as exc:
+                    surface_preflight={
+                        **surface_preflight,"publicly_executable":False,
+                        "reason":str(exc)[:240],"failed_fragment":fid,
+                    }
+                    break
+            if not surface_preflight["publicly_executable"]:
+                break
+
     return {
         "task_id":gold["task_id"],"question":gold["question"],
         "surface_question":surface_question,
         "canonical_eligibility":canonical_eligibility,
         "eligibility":eligibility,"preflight":preflight,
+        "surface_preflight":surface_preflight,
         "fragments":records,"waves":waves,
         "complete":{"round_index":index,"state":state,
                     "action":public_action(complete)},
@@ -432,6 +472,14 @@ def generate_subtasks_jsonl(
                     row,world,rendered,planner=reviewer,executor=executor,
                     scene=scene,schedule=schedule,feedback_workers=feedback_workers,
                 )
+                stats["canonical_banks"]+=1
+                if not bank["surface_preflight"]["publicly_executable"]:
+                    raise GoldTrajectoryError(
+                        "surface_public_executability",
+                        [bank["surface_preflight"].get("reason","surface_sources_unreachable")],
+                        {"surface_preflight":bank["surface_preflight"],
+                         "canonical_bank":json_value(bank)},
+                    )
                 if not (bank["eligibility"].get("eligible") and bank["eligibility"].get("reviewed")):
                     # Canonical Bank is valid diagnostic evidence but is NOT
                     # eligible for Main-Agent SFT with this unverified surface.
@@ -462,6 +510,7 @@ def generate_subtasks_jsonl(
                 stage=exc.stage if isinstance(exc,GoldTrajectoryError) else "unexpected_error"
                 quarantine=stage in {
                     "question_eligibility","public_replay","public_executability",
+                    "surface_public_executability",
                 }
                 dest=isolate if quarantine else bad
                 stats["quarantined" if quarantine else "rejected"]+=1
@@ -482,6 +531,7 @@ def generate_subtasks_jsonl(
                 dest.flush()
     return {
         "phase":"subtasks","requested":len(rows),
+        "canonical_banks_generated":stats["canonical_banks"],
         "accepted_banks":stats["accepted"],
         "quarantined":stats["quarantined"],"rejected":stats["rejected"],
         "subtasks":stats["subtasks"],"gold_waves":stats["waves"],
