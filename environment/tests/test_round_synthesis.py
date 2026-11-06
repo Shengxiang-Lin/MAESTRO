@@ -132,6 +132,10 @@ class TwoPhaseTests(unittest.TestCase):
             ("unreviewed",lambda b: b["eligibility"].update(eligible=False)),
             ("surface",lambda b: b.update(surface_question="different")),
             ("canonical",lambda b: b.update(question="different")),
+            ("surface_search",lambda b: b["surface_preflight"].update(
+                publicly_executable=False)),
+            ("program_binding",lambda b: b["eligibility"].update(
+                program_sha256="different_program")),
         ):
             with self.subTest(name=name):
                 modified=copy.deepcopy(envelope)
