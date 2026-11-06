@@ -346,6 +346,98 @@ class ReviewReliabilityTests(unittest.TestCase):
         self.assertIn(candidate,[item.get("candidate") for item in audit])
         self.assertIn({"grounded":"yes","issues":[]},[item.get("verdict") for item in audit])
 
+    def test_feedback_reviewer_issues_trigger_one_grounded_writer_repair(self):
+        """Stage 2 style critic feedback is a hypothesis, not a new fact."""
+        first={"summary":"Alice is the result.",
+               "trace_summary":"Returned Alice from the assigned record."}
+        repaired={"summary":"Alice is the result.",
+                  "trace_summary":"Verified the assigned result Alice without adding claims."}
+        backend=Mock()
+        backend.complete_json.side_effect=[
+            first,
+            {"grounded":False,"issues":["Source attribution should be checked."]},
+            repaired,
+            {"grounded":True,"issues":[]},
+        ]
+        executor=LLMExecutor(backend)
+        audit=[]
+        result=executor.naturalize_feedback(
+            self.payload("Alice"),{},audit=audit,
+        )
+        self.assertEqual(result,repaired)
+        self.assertEqual(backend.complete_json.call_count,4)
+        self.assertEqual(executor.request_counts["natural_feedback_write"],1)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair"],1)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair_success"],1)
+        self.assertEqual(executor.request_counts["natural_feedback_retry"],0)
+        repair_prompt=backend.complete_json.call_args_list[2].args[1]
+        self.assertIn("UNTRUSTED DIAGNOSTICS",repair_prompt)
+        self.assertIn("Source attribution should be checked.",repair_prompt)
+        self.assertIn(first["trace_summary"],repair_prompt)
+        self.assertIn("fixed_result",repair_prompt)
+        self.assertIn("assigned_subtask",repair_prompt)
+        self.assertIn("execution_reference",repair_prompt)
+        self.assertIn("content_repair_review",[e["stage"] for e in audit])
+
+    def test_false_critic_issue_does_not_override_fixed_answer(self):
+        backend=Mock()
+        supported={"summary":"Alice is the result.",
+                   "trace_summary":"The verified result is Alice."}
+        backend.complete_json.side_effect=[
+            supported,
+            {"grounded":False,"issues":["Alice is unsupported; replace with Bob."]},
+            supported,
+            {"grounded":True,"issues":[]},
+        ]
+        executor=LLMExecutor(backend)
+        result=executor.naturalize_feedback(self.payload("Alice"),{})
+        self.assertEqual(result,supported)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair_success"],1)
+
+    def test_critic_repair_hallucination_fails_closed(self):
+        backend=Mock()
+        backend.complete_json.side_effect=[
+            {"summary":"Alice is the result.","trace_summary":"Returned Alice."},
+            {"grounded":False,"issues":["Check factual attribution."]},
+            {"summary":"Bob is the result.","trace_summary":"Returned Bob."},
+        ]
+        executor=LLMExecutor(backend)
+        with self.assertRaisesRegex(ValueError,"omits_result_entity"):
+            executor.naturalize_feedback(self.payload("Alice"),{})
+        self.assertEqual(backend.complete_json.call_count,3)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair_failed"],1)
+
+    def test_failed_critic_repair_returns_canonical_report(self):
+        backend=Mock()
+        backend.complete_json.side_effect=[
+            {"summary":"Alice is the result.","trace_summary":"Returned Alice."},
+            {"grounded":False,"issues":["Check factual attribution."]},
+            {"summary":"Alice is the result.","trace_summary":"Returned Alice."},
+            {"grounded":False,"issues":["Still unsupported."]},
+        ]
+        executor=LLMExecutor(backend)
+        executor.style_provider="natural"
+        payload=self.payload("Alice")
+        template={"summary":"Verified Alice.","trace_summary":"Canonical Alice."}
+        report,meta=_report_natural(executor,payload,template,payload["fragment"])
+        self.assertEqual(report,template)
+        self.assertFalse(meta["natural"])
+        self.assertIn("natural_semantic_review_failed",meta["reason"])
+        self.assertEqual(backend.complete_json.call_count,4)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair_failed"],1)
+
+    def test_critic_without_specific_issues_does_not_trigger_repair(self):
+        backend=Mock()
+        backend.complete_json.side_effect=[
+            {"summary":"Alice is the result.","trace_summary":"Returned Alice."},
+            {"grounded":False,"issues":[]},
+        ]
+        executor=LLMExecutor(backend)
+        with self.assertRaisesRegex(ValueError,"natural_semantic_review_failed"):
+            executor.naturalize_feedback(self.payload("Alice"),{})
+        self.assertEqual(backend.complete_json.call_count,2)
+        self.assertEqual(executor.request_counts["natural_feedback_content_repair"],0)
+
     def test_parallel_failed_candidates_have_separate_complete_audits(self):
         class Backend:
             def complete_json(self,system,prompt):
