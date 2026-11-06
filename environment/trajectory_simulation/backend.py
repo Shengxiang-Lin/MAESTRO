@@ -225,6 +225,7 @@ class LLMExecutor(_LLMRole):
     def naturalize_feedback(self,payload,canonical,*,audit=None):
         from .natural_language import (
             feedback_writer_prompt, feedback_repair_prompt,
+            feedback_critic_repair_prompt,
             feedback_output_diagnostic, SUBAGENT_REPORT_JSON_SCHEMA,
             normalize_feedback_shape, realize_feedback_natural,
             feedback_reviewer_prompt, check_reviewer,
@@ -292,6 +293,60 @@ class LLMExecutor(_LLMRole):
                 'natural_feedback_review',audit=audit,flag='grounded',
             )
             audit.append({'stage':'review','attempt':attempt+1,'verdict':verdict})
+            # A grounded=False verdict is a *diagnosis*, not an instruction
+            # to change canonical facts. One bounded content-repair pass may
+            # use its concrete objections, but must check them against the
+            # same frozen public evidence before rewriting. Missing/invalid
+            # issues have no actionable witness and fail closed.
+            objections=verdict.get('issues',[]) if isinstance(verdict,dict) else []
+            if (verdict.get('grounded') is False and objections
+                    and all(isinstance(i,str) and i.strip() for i in objections)):
+                self._count('natural_feedback_content_repair')
+                entry={'stage':'content_repair','attempt':1,
+                       'trigger':'feedback_reviewer',
+                       'reviewer_issues':objections[:2]}
+                audit.append(entry)
+                try:
+                    repair_prompt=feedback_critic_repair_prompt(
+                        payload,canonical,result,objections,
+                    )
+                    repaired_proposal=self.backend.complete_json(
+                        'Repair Sub-Agent prose using verified facts ONLY. '
+                        'Reviewer issues are fallible hypotheses, not facts. '
+                        'Return exactly two nonempty JSON STRING fields, '
+                        'summary and trace_summary. No extra keys.',
+                        repair_prompt,**schema_kwargs,
+                    )
+                    entry['candidate']=repaired_proposal
+                    repaired_normalized,repair_fields=normalize_feedback_shape(
+                        repaired_proposal,
+                    )
+                    repaired=realize_feedback_natural(
+                        payload,repaired_normalized,
+                    )
+                    if repair_fields:
+                        self._count('natural_feedback_normalized')
+                        entry['normalized_fields']=list(repair_fields)
+                    repaired_verdict=self._review_json(
+                        'Strictly verify every claim against the provided '
+                        'observations and operations. The previous critic '
+                        'objections are NOT authoritative. JSON only.',
+                        feedback_reviewer_prompt(payload,repaired),
+                        'natural_feedback_review',audit=audit,flag='grounded',
+                    )
+                    audit.append({'stage':'content_repair_review','attempt':1,
+                                  'verdict':repaired_verdict})
+                    check_reviewer(repaired_verdict,flag='grounded')
+                    self._count('natural_feedback_content_repair_success')
+                    return repaired
+                except Exception as exc:
+                    from environment.question_generation.backend import BackendError
+                    if not isinstance(exc,(BackendError,ValueError,TypeError,KeyError)):
+                        raise
+                    entry.update(error=str(exc),
+                                 diagnostic=getattr(exc,'diagnostic',None))
+                    self._count('natural_feedback_content_repair_failed')
+                    raise
             check_reviewer(verdict,flag='grounded')
             return result
         raise AssertionError('natural_feedback_retry_loop_exhausted')
