@@ -179,6 +179,25 @@ For each question, this phase:
    falls back to the correct canonical report; the answer is never changed.
    Deterministic hallucinations and unauthorized actions are still hard
    failures and do not trigger an unreviewed rewrite.
+   Stage 3.1 also checks explicit public fact assertions in natural
+   `summary`/`trace_summary`: unambiguous `X is a R Y`, `X as a R Y`,
+   and `X --R--> Y` statements must match a scoped public source's exact
+   subject/predicate/object orientation. Likewise, direct `X has attribute
+   of number/date` and `X's attribute is number/date` claims must match
+   the owning entity's public evidence (including recorded units).
+   Ambiguous paraphrases are left to semantic review rather than being
+   guessed by regex; this guard proves **some incorrect claims**, not the
+   correctness of all other prose. Both initial and repaired model reports
+   pass these deterministic checks.
+   A parseable draft failing a precise relation/attribute check, omitting a
+   required final entity, or leaking an internal evidence field can receive
+   the SAME at-most-once evidence-grounded repair, followed by deterministic
+   checks and a fresh Feedback Reviewer. The private counter
+   `natural_feedback_deterministic_repair` distinguishes this path from
+   `feedback_reviewer`-triggered repair; unrepaired reports still fall back
+   to the verified canonical wording. Reviewer objections and internal
+   field names are never additional source facts.
+
    A local vLLM HTTP 400 for overlong context is **not** a repairable content
    error: the server's actual `--max-model-len` controls total prompt plus
    reserved output tokens. The separate shared registry may describe a larger

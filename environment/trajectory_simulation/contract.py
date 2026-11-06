@@ -253,6 +253,133 @@ def validate_action(value: Any, guidance: Mapping[str, Any],
     return not issues, issues
 
 
+def explicit_public_claim_issues(
+    report_text: str, fragment: Mapping[str, Any],
+) -> list[str]:
+    """Conservatively check *explicitly phrased* public fact assertions.
+
+    A known entity + relation + entity in a positive copular assertion has
+    an unambiguous subject -> object direction. The source witness, not the
+    symbolically computed *answer*, is authoritative about that direction.
+    Ambiguous natural-language paraphrases are deliberately left to the
+    semantic reviewer; this is a high-precision check, not general NLP.
+    """
+    observations = [
+        *fragment.get("observations", []),
+        *fragment.get("known_observations", []),
+    ]
+    if not isinstance(report_text, str) or not observations:
+        return []
+    facts = {
+        (str(c["subject"]).casefold(), str(c["predicate"]).casefold(),
+         str(c["object"]).casefold())
+        for src in observations for c in src.get("claims", [])
+    }
+    entities = {
+        str(name) for src in observations
+        for name in src.get("entity_types", {})
+    }
+    entities.update(
+        str(c["subject"])
+        for src in observations for c in src.get("claims", [])
+    )
+    entities.update(
+        str(c["object"]) for src in observations
+        for c in src.get("claims", []) if c.get("object_kind") == "entity"
+    )
+    relations = {
+        str(op["inputs"][0])
+        for op in fragment.get("operations", [])
+        if op.get("op") == "RELATE" and op.get("inputs")
+    }
+    if len(entities) < 2 or not relations:
+        relation_issues = []
+    else:
+        # Prefer longer names; match whole entities and supported relation
+        # vocabulary rather than guessing the meaning of arbitrary nouns.
+        names = "(?:" + "|".join(
+            re.escape(n) for n in sorted(entities, key=len, reverse=True)
+        ) + ")"
+        predicates = "(?:" + "|".join(
+            re.escape(p) for p in sorted(relations, key=len, reverse=True)
+        ) + ")"
+        patterns = [
+            (
+                rf"(?<!\w)({names})\s+"
+                rf"(?:is|was|are|were|as)\s+"
+                rf"(?:(?:a|an|the)\s+)?({predicates})"
+                rf"(?:\s+(?:of|to))?\s+({names})(?!\w)"
+            ),
+            rf"(?<!\w)({names})\s*--\s*({predicates})\s*-->\s*({names})(?!\w)",
+        ]
+        relation_issues = []
+        for pattern in patterns:
+            for match in re.finditer(pattern, report_text, re.I):
+                subject, predicate, obj = match.groups()
+                if (subject.casefold(), predicate.casefold(), obj.casefold()) not in facts:
+                    relation_issues.append(
+                        "explicit_relation_fact_mismatch:"
+                        + subject + " --" + predicate + "--> " + obj
+                    )
+
+    # Numeric/date ownership can also be checked when the report uses the
+    # unambiguous syntax "X has P of V" or "X's P is V". Do not attempt to
+    # assign ownership across long conjunctions, relative clauses or quotes.
+    attributes = {
+        str(op["inputs"][0])
+        for op in fragment.get("operations", [])
+        if op.get("op") in {
+            "FILTER_STRING", "FILTER_NUMBER", "FILTER_YEAR", "FILTER_DATE",
+            "QUERY_ATTR",
+        } and op.get("inputs")
+    }
+    observed_attrs = {
+        str(c["predicate"])
+        for src in observations for c in src.get("claims", [])
+    }
+    attributes &= observed_attrs
+    attribute_issues = []
+    if entities and attributes:
+        names = "(?:" + "|".join(
+            re.escape(n) for n in sorted(entities, key=len, reverse=True)
+        ) + ")"
+        predicates = "(?:" + "|".join(
+            re.escape(p) for p in sorted(attributes, key=len, reverse=True)
+        ) + ")"
+        value = r"(\d{4}-\d\d-\d\d|\d[\d,]*(?:\.\d+)?)"
+        patterns = [
+            rf"(?<!\w)({names})\s+(?:has|had|with)\s+"
+            rf"(?:(?:a|an|the|recorded)\s+)?({predicates})\s+"
+            rf"(?:of|=|is|was|:)\s*{value}",
+            rf"(?<!\w)({names})['’]s\s+({predicates})\s+"
+            rf"(?:is|was|=|:|of)\s*{value}",
+        ]
+        for pattern in patterns:
+            for match in re.finditer(pattern, report_text, re.I):
+                subject, predicate, number = match.groups()
+                # A numeric prefix may legitimately be followed by units
+                # (e.g. "787 m") in an observed literal.
+                expected_values = [
+                    obj for sub, pred, obj in facts
+                    if sub == subject.casefold() and pred == predicate.casefold()
+                ]
+                def numeric_prefix_matches(observed):
+                    first = re.match(
+                        r"\d{4}-\d\d-\d\d|\d[\d,]*(?:\.\d+)?",
+                        observed,
+                    )
+                    return (
+                        first is not None and
+                        first[0].replace(",", "") == number.replace(",", "")
+                    )
+                if not any(numeric_prefix_matches(obj) for obj in expected_values):
+                    attribute_issues.append(
+                        "explicit_attribute_owner_mismatch:"
+                        + subject + " --" + predicate + "--> " + number
+                    )
+    return sorted(set(relation_issues + attribute_issues))
+
+
 def validate_feedback(value: Any, fragment: Mapping[str, Any], *, strict=False,
                       public_refs=()) -> tuple[bool, list[str]]:
     if strict:
@@ -372,6 +499,10 @@ def validate_feedback(value: Any, fragment: Mapping[str, Any], *, strict=False,
             masked, flags=re.I)
         if numeric(masked) - numeric(supported):
             issues.append(key + "_unsupported_numeric_claim")
+        issues.extend(
+            key + "_" + problem
+            for problem in explicit_public_claim_issues(content, fragment)
+        )
     return not issues, sorted(set(issues))
 
 
@@ -382,5 +513,6 @@ def public_action(value: Mapping[str, Any]) -> dict[str, Any]:
 __all__ = [
     "TOOLS", "action_schema", "feedback_schema", "main_prompt", "feedback_prompt",
     "answer_string", "answers_equal", "validate_action", "validate_feedback",
+    "explicit_public_claim_issues",
     "public_action",
 ]
