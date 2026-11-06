@@ -1,6 +1,6 @@
 """Minimal OpenAI-compatible JSON client for Stage-2 author and reviewer."""
 from __future__ import annotations
-import json,os,urllib.error,urllib.request
+import json,urllib.error,urllib.request
 from dataclasses import dataclass
 from typing import Any,Mapping
 class BackendError(RuntimeError):pass
@@ -58,7 +58,7 @@ class OpenAICompatibleBackend:
         if response_schema is not None and self.json_mode:
             body["response_format"]={
                 "type":"json_schema",
-                "json_schema":{"name":"subagent_feedback","strict":True,
+                "json_schema":{"name":"question_review","strict":True,
                                "schema":response_schema},
             }
         elif self.json_mode:
