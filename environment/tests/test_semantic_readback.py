@@ -188,6 +188,46 @@ class BlindReadbackTests(unittest.TestCase):
             public_rewrite_guard(scoped, same.replace("people", "other people")),
         )
 
+    def test_scope_guard_does_not_misread_equalities_or_reference_labels(self):
+        scoped = (
+            "How many people have a population equal to 1,190 and a "
+            "telephone country code of +650?"
+        )
+        self.assertEqual(public_rewrite_guard(
+            scoped,
+            "How many people have a population of exactly 1,190 and a "
+            "telephone country code of +650?",
+        ), [])
+        self.assertEqual(public_rewrite_guard(
+            scoped,
+            "Count (1) the matching people, and (2) only those meeting the "
+            "population equal to 1,190 and code +650 requirements.",
+        ), [])
+        # The parser must still resolve possible semantic changes in "only"
+        # and "other than". The deterministic token guard is not its judge.
+        self.assertEqual(public_rewrite_guard(
+            "Which entities have a floruit not equal to 419?",
+            "Which entities have a floruit other than 419?",
+        ), [])
+        self.assertIn("free_rewrite_adds_exclusion_or_uniqueness",
+                      public_rewrite_guard(scoped, scoped + " Exclude Alice."))
+        self.assertIn("free_rewrite_adds_exclusion_or_uniqueness",
+                      public_rewrite_guard(scoped, scoped.replace("people", "other people")))
+
+    def test_failed_parse_retains_raw_response_and_schema_hint(self):
+        backend = Mock()
+        raw = {"uncertain": True, "reason": "ambiguous reference",
+               "query": copy.deepcopy(example_parse()["query"])}
+        backend.complete_json.return_value = raw
+        report = read_free_question(QUESTION, self.reference(), backend)
+        self.assertFalse(report.eligible)
+        self.assertEqual(report.raw_responses, (raw,))
+        self.assertEqual(report.audits[0]["uncertain"], True)
+        self.assertIn("query_keys", report.audits[0])
+        schema = backend.complete_json.call_args.kwargs["response_schema"]
+        self.assertIn("$defs", schema)
+        self.assertEqual(schema["$defs"]["node"]["additionalProperties"], False)
+
     def test_readability_gate_does_not_reward_cosmetic_edit(self):
         scoped = (
             "Let the first group consist of people in the relevant records. "

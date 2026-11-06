@@ -183,6 +183,14 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
                 "passes": list(result.audits),
             }
             if not result.eligible:
+                # Private audit: preserve the model's actual attempted parse
+                # (from the public candidate only). Without it, v12 could
+                # report only an opaque "readback_uncertain_or_missing" and
+                # could not identify protocol errors or unsupported wording.
+                entry["blind_readback_debug"] = {
+                    "raw_responses": list(result.raw_responses),
+                    "parser_audits": list(result.audits),
+                }
                 entry["failure"] = "independent_semantic_readback_failed"
                 guidance = (
                     "Some semantic dependency was ambiguous or changed. "

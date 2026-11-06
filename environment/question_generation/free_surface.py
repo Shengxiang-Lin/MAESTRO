@@ -55,9 +55,20 @@ def call_free_rewriter(author: Any, scoped_question: str,
     return " ".join(response["question"].split())
 
 
+# Hard exclusions are structurally new restrictions. Ordinary English
+# comparators like "exactly 1,190" (= 1,190), "only those satisfying",
+# "other than 1160" (!= 1160) are NOT automatic semantic errors.
+# Their ownership and logical meaning must pass the independent readback.
 _NEW_SCOPE_RESTRICTIONS = re.compile(
-    r"\b(?:other|another|except|excluding|unless|only|exactly|unique|"
-    r"uniquely|besides|rather\s+than)\b", re.I,
+    r"\b(?:except|exclude|excludes|excluded|excluding|unless|besides|uniquely|unique)\b"
+    r"|\b(?:other|another)\s+(?:people|persons?|entities|members|candidates)\b",
+    re.I,
+)
+
+_ENUMERATION_LABEL = re.compile(
+    r"\(\s*(?:group|branch|step)\s+\d{1,3}\s*\)"
+    r"|(?<!\w)\(\s*\d{1,2}\s*\)(?=\s|$)",
+    re.I,
 )
 
 
@@ -70,7 +81,9 @@ def public_rewrite_guard(scoped: str, candidate: str) -> list[str]:
     """
     from .contracts import typed_values
     original = typed_values(scoped, words=True)
-    observed = typed_values(candidate, words=False)
+    # List item markers such as (1), (2) and (Group 1) are structural
+    # punctuation, not new numerical task constraints.
+    observed = typed_values(_ENUMERATION_LABEL.sub(" ", candidate), words=False)
     issues = []
     if observed - original:
         issues.append("free_rewrite_invents_or_changes_public_literal")

@@ -43,6 +43,72 @@ _TOKENS = {
     "different from": "different from", "!=": "different from",
 }
 
+
+# A schema steers the 9B reader away from inventing keys and emitting untyped
+# values. OpenAI-compatible servers without recursive JSON-schema support
+# already fall back to ordinary JSON via OpenAICompatibleBackend.
+_READBACK_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"$ref": "#/$defs/node"},
+        "uncertain": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["query", "uncertain", "reason"],
+    "additionalProperties": False,
+    "$defs": {
+        "value": {
+            "type": "object",
+            "properties": {
+                "type": {"enum": ["date", "year", "number", "string"]},
+                "value": {"type": "string"},
+                "unit": {"type": "string"},
+            },
+            "required": ["type", "value"],
+            "additionalProperties": False,
+        },
+        "condition": {
+            "type": "object",
+            "properties": {
+                "entity_type": {"type": "string"},
+                "attribute": {"type": "string"},
+                "comparison": {"type": "string"},
+                "value": {"$ref": "#/$defs/value"},
+                "evidence": {"type": "string"},
+            },
+            "required": ["evidence"],
+            "additionalProperties": False,
+        },
+        "node": {
+            "type": "object",
+            "properties": {
+                "definition": {"enum": sorted(_KINDS)},
+                "inputs": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+                "conditions": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/condition"},
+                },
+                "evidence": {"type": "string"},
+                "relation": {"type": "string"},
+                "direction": {"enum": ["forward", "backward"]},
+                "ranking": {"type": "string"},
+                "rank_attribute": {"type": "string"},
+                "output_attribute": {"type": "string"},
+                "anchor_type": {"type": "string"},
+                "anchor": {"type": "string"},
+                "type_anchor": {"type": "string"},
+                "range": {"type": "string"},
+                "comparison": {"type": "string"},
+                "value": {"$ref": "#/$defs/value"},
+                "quantifier": {"type": "string"},
+                "include_ties": {"type": "boolean"},
+            },
+            "required": ["definition", "inputs", "conditions", "evidence"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 _SYSTEM = """You are a semantic parser, NOT a reviewer and NOT a solver.
 Read the supplied English question only. No ProgramIR, reference contract,
 ground-truth answer, generated grammar or previous parse is available.
@@ -283,22 +349,33 @@ def read_free_question(question: str, reference: ScopedPlan, backend: Any,
             # No program, canonical, scope labels, answer or previous parse.
             response = backend.complete_json(
                 system, json.dumps({"question": question}, ensure_ascii=False),
+                response_schema=_READBACK_RESPONSE_SCHEMA,
             )
+            # Retain failed parses in the private Stage-2 diagnostic audit.
+            # Previously every first-pass rejection erased the raw response,
+            # so protocol mistakes could not be distinguished from drift.
+            raw.append(response)
             actual = validate_readback_response(response, question, reference.query)
             if first is not None and actual != first:
                 raise ValueError("independent_readback_passes_disagree")
             first = actual
-            raw.append(response)
             audits.append({"pass": index, "status": "verified"})
         except Exception as exc:
             # The actual candidate is not approved on parser failures.
             from .backend import BackendError
             if not isinstance(exc, (BackendError, ValueError, TypeError, KeyError)):
                 raise
-            audits.append({
+            diagnostic = {
                 "pass": index, "status": "failed",
                 "reason": str(exc)[:200],
-            })
+            }
+            if raw and isinstance(raw[-1], dict):
+                diagnostic["uncertain"] = raw[-1].get("uncertain")
+                diagnostic["root_keys"] = sorted(map(str, raw[-1].keys()))
+                query = raw[-1].get("query")
+                if isinstance(query, dict):
+                    diagnostic["query_keys"] = sorted(map(str, query.keys()))
+            audits.append(diagnostic)
             return ReadbackResult(
                 False, str(exc)[:200], None, index, tuple(audits), tuple(raw),
             )
