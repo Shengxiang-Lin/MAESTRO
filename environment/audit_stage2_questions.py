@@ -8,6 +8,17 @@ import argparse
 from collections import Counter
 import json
 from pathlib import Path
+import sys
+
+# Support both documented CLI forms:
+#   python environment/audit_stage2_questions.py ...
+#   python -m environment.audit_stage2_questions ...
+# Direct script execution puts environment/ (rather than the repository
+# root) on sys.path; resolve the local package without changing cwd or files.
+if __package__ in (None, ""):
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
 
 def records(path):
     path = Path(path)
