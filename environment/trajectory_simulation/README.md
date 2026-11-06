@@ -120,8 +120,8 @@ For each question, this phase:
    The frozen program and the public execution plan are not modified.
    The review also receives bounded, fully expanded output semantics so
    inherited filters stay visible across nested branches. Raw operator flags
-   are replaced by executor-derived meanings. Review contract v11 invalidates
-   earlier eligibility cache entries.
+   are replaced by executor-derived meanings. The current review contract
+   is v13, and cache entries are bound to the question and ProgramIR hashes.
    `question_review_summary` separately counts eligible questions, semantic
    mismatches, uncertain decisions and review errors. Review errors remain
    quarantined; malformed evidence never counts as an established mismatch.
