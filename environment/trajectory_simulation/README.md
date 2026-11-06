@@ -111,20 +111,15 @@ For each question, this phase:
 
 1. Compiles and preflights the complete Gold Fragment DAG against **public**
    Source evidence. Hidden private entities cannot satisfy a public lookup.
-2. Revalidates the question/program semantic equivalence using the configured
-   question reviewer. Unreviewed or mismatched questions are not exported.
-   The reviewer receives the full semantic graph with explicit filter owners,
-   recorded relation endpoints, and minimum/maximum selection semantics.
-   Only compiler-certified redundant singleton `FIND`/`INTERSECT` checks
-   are eliminated; their consumers are rewired in this separate review view.
-   The frozen program and the public execution plan are not modified.
-   The review also receives bounded, fully expanded output semantics so
-   inherited filters stay visible across nested branches. Raw operator flags
-   are replaced by executor-derived meanings. The current review contract
-   is v13, and cache entries are bound to the question and ProgramIR hashes.
-   `question_review_summary` separately counts eligible questions, semantic
-   mismatches, uncertain decisions and review errors. Review errors remain
-   quarantined; malformed evidence never counts as an established mismatch.
+2. Certifies the Canonical Renderer directly from the frozen World and
+   ProgramIR and validates the **Stage-2-issued Surface certificate** against
+   the exact question, canonical renderer and ProgramIR hashes. All expensive
+   full-graph LLM semantic review happens upstream in Stage 2, not here.
+   A changed/uncertified Surface is quarantined; no Stage-3.1 question-review
+   model is instantiated. An exact Canonical question is independently safe
+   through its local renderer certificate, even without an older Stage-2
+   publication record. This is a fail-closed data-integrity check, not a
+   mathematical proof that every approved paraphrase is equivalent.
 3. Visits **all** fragments in topological waves. For each subtask, records
    the canonical task, source-replay-verified exact answer, `summary`,
    `trace_summary`, observations, dependencies, and report-language audit.
@@ -228,14 +223,13 @@ For each question, this phase:
    plus at most two `issues` of at most 180 characters; malformed long
    reviews are retried once or fail closed.
 
-   Contradictory Question Eligibility output (`eligible` with nonempty
-   `issues`) is NEVER automatically approved. If an authenticated controlled
-   renderer reference is available, one independent compact model check may
-   confirm the full question/program equivalence with a concrete exact
-   question quote. A negative, invalid or ungrounded check remains
-   quarantined; unchanged required-hop validation still applies. This
-   introduces `question_review_consistency` in review request counts and
-   invalidates earlier eligibility cache entries (review contract v13).
+   Full graph-aware Question Eligibility (including contradictory verdict
+   repair and focused hop checks) now belongs to the **Stage-2 final
+   publication gate**. Stage 3.1 consumes its versioned certificate and
+   does not repeat these model requests. Rebuild Stage-2 question files
+   against the same frozen inputs before running a fresh v2 Subtask Bank;
+   old, uncertified Surface rewrites will be quarantined at the certificate
+   boundary.
 
    A local vLLM HTTP 400 for overlong context is **not** a repairable content
    error: the server's actual `--max-model-len` controls total prompt plus
@@ -278,8 +272,8 @@ ProgramIR, or call the Sub-Agent writer. For every bank:
 1. Rechecks the v2 bank's hash, both canonical and surface semantic
    certificates, surface search reachability, completed canonical public replay
    and frozen Gold answer. Old v1, corrupt, or unverified banks are rejected.
-2. Traverses DAG waves. A Main state contains **only the independently
-   certified Stage-2 Surface Question**, not the Canonical compilation text,
+2. Traverses DAG waves. A Main state contains **only the Stage-2-certified
+   Surface Question**, not the Canonical compilation text,
    and only previously completed, verified Sub-Agent results and evidence;
    the current and future waves remain invisible.
 3. Uses the stored canonical Gold delegation as immutable teacher guidance.

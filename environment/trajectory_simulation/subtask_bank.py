@@ -25,7 +25,7 @@ from .contract import (
     answer_string, answers_equal, main_prompt, public_action,
     validate_action, validate_feedback,
 )
-from .eligibility import check_question
+from .eligibility import controlled_question_reference, digest
 from .evidence import bind_ready, public_record, verify_known_packet
 from .pipeline import GoldTrajectoryError, _public_state
 from .public_preflight import audit_public_executability
@@ -89,8 +89,8 @@ def _verify_subtask(task, fragment, evidence_cache):
 
 def build_subtask_bank(
     realized: Mapping[str,Any], world_record: Mapping[str,Any], rendered: Any,
-    *, planner, executor, scene="omnigaia", schedule="compact",
-    question_review=True, feedback_workers: int = 4,
+    *, executor, scene="omnigaia", schedule="compact",
+    feedback_workers: int = 4,
 ) -> dict[str,Any]:
     """Generate canonical clean subtasks independently of Stage 2 surface text.
 
@@ -128,24 +128,41 @@ def build_subtask_bank(
             "public_executability",[str(preflight["reason"])],
             {"public_preflight":preflight},
         )
-    canonical_eligibility=check_question(
-        gold,world_record,planner,review=question_review,rendered=rendered,
-    )
-    if not (canonical_eligibility.get("reviewed") and
-            canonical_eligibility.get("eligible")) and question_review:
+    # Canonical is verified deterministically, without an LLM role.
+    reference=controlled_question_reference(gold,world_record,rendered)
+    if reference is None or reference["question"]!=canonical_question:
         raise GoldTrajectoryError(
             "canonical_question",["canonical_renderer_not_certified"],
-            {"canonical_eligibility":canonical_eligibility},
         )
-    # Review the Stage 2 surface only for future Main-Agent publication.
-    # A rejected surface does not abort canonical Subtask generation.
-    eligibility=(
-        dict(canonical_eligibility) if surface_question==canonical_question
-        else check_question(
-            {**gold,"question":surface_question},
-            world_record,planner,review=question_review,rendered=rendered,
-        )
-    )
+    canonical_eligibility={
+        "eligible":True,"reviewed":True,"decision":"eligible",
+        "method":"verified_controlled_renderer","issues":[],
+        "renderer_certificate":reference,
+        "question_sha256":digest(canonical_question),
+        "program_sha256":digest(world_record["program"]),
+    }
+    # Stage 2 has already completed the expensive full-ProgramIR LLM review.
+    # Stage 3.1 performs only certificate / frozen-input integrity checks.
+    # Exact controlled-renderer text is also safe without an old Stage-2
+    # certificate, because the renderer itself has just been re-certified.
+    from environment.question_generation.verification import validate_surface_certificate
+    try:
+        if (surface_question==canonical_question
+                and not realized.get("surface_certificate")):
+            eligibility=dict(canonical_eligibility)
+        else:
+            eligibility=validate_surface_certificate(
+                realized,world_record,canonical_question,
+            )
+    except ValueError as exc:
+        eligibility={
+            "eligible":False,"reviewed":False,"decision":"review_error",
+            "method":"stage2_certificate_validation",
+            "review_failure_kind":str(exc),
+            "issues":[str(exc)],
+            "question_sha256":digest(surface_question),
+            "program_sha256":digest(world_record["program"]),
+        }
 
     teacher_main=PassthroughPlanner()
     teacher_sub=PassthroughExecutor()
@@ -424,13 +441,13 @@ def build_subtask_bank(
 
 def generate_subtasks_jsonl(
     worlds_path, realized_path, output_path, *,
-    reviewer, executor, max_records=None, seed=17, scene="omnigaia",
+    executor, max_records=None, seed=17, scene="omnigaia",
     schedule="compact", feedback_workers=4,
     rejected_output_path=None, quarantine_output_path=None, progress=True,
 ):
     """Complete Phase 1 and persist reusable teacher-private Subtask Banks.
 
-    This phase calls the question reviewer and Sub-Agent language model only.
+    This phase checks Stage-2 certificates and calls only the Sub-Agent language model.
     It does NOT generate any natural Main delegation or training target.
     Phase 2 reads the output independently, without worlds or Stage-2 files.
     """
@@ -469,7 +486,7 @@ def generate_subtasks_jsonl(
                     raise GoldTrajectoryError("input",["missing_matching_world"])
                 world,rendered=worlds[task_id]
                 bank=build_subtask_bank(
-                    row,world,rendered,planner=reviewer,executor=executor,
+                    row,world,rendered,executor=executor,
                     scene=scene,schedule=schedule,feedback_workers=feedback_workers,
                 )
                 stats["canonical_banks"]+=1
@@ -549,7 +566,6 @@ def generate_subtasks_jsonl(
         "question_review_failure_kinds":dict(review_failure_kinds),
         "feedback_fallback_reasons":dict(fallback_reasons),
         "request_counts":{
-            "question_review":dict(getattr(reviewer,"request_counts",{})),
             "subagent":dict(getattr(executor,"request_counts",{})),
         },
         "output":str(output),

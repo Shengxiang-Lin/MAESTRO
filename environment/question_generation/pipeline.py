@@ -21,7 +21,7 @@ def _world_by_task(path,seed=17):
     for index,row in enumerate(_rows(path)):
         task=render_task_record(row,seed=seed+index)
         if task.task_id in result:raise BoundaryError(f"duplicate world task_id: {task.task_id}")
-        result[task.task_id]={**row,"_display_answer":task.answer}
+        result[task.task_id]={**row,"_display_answer":task.answer,"_rendered":task}
     return result
 def _capability_by_task(path):return {str(row.get("task_id")):row for row in _rows(path) if row.get("task_id")}
 def _backends(args):
@@ -55,6 +55,7 @@ def _critic_review(critic,payload,question,*,max_tries=2):
         except BackendError as exc:last=exc
     raise last or BackendError("critic failed")
 def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,use_critic):
+    from .verification import certify_surface
     feedback=None;audits=[]
     for attempt in range(1,max(1,question_max_attempts)+1):
         try:response=author.author(payload,author_prompt(payload,retry_feedback=feedback))
@@ -89,12 +90,74 @@ def _realize_one(payload,world,capability,author,critic,*,question_max_attempts,
                         audits.append(audit);feedback="critic repair failed deterministic preflight: "+"; ".join(repair_pre.issues);continue
                 else:
                     issues=review.get("issues",());feedback="semantic critic: "+"; ".join(map(str,issues));audits.append(audit);continue
-        post=postflight(payload,candidate,oracle_answer=_oracle(world));audit["postflight"]=post.to_dict();audits.append(audit)
+        post=postflight(payload,candidate,oracle_answer=_oracle(world));audit["postflight"]=post.to_dict()
         if not post.accepted:
-            feedback="; ".join(post.issues);continue
-        realized={"task_id":payload["task_id"],"question":candidate,"draft_question":payload.get("draft_question"),"task_design":payload.get("task_design",{}),"resources":payload.get("resources",()),"available_agents":payload.get("available_agents",()),"capability_world":capability,"authoring":{"attempts":attempt,"semantic_critic_enabled":use_critic,"audit":audits}}
+            feedback="; ".join(post.issues);audits.append(audit);continue
+        try:
+            certificate,graph_review=certify_surface(payload,world,capability,candidate,critic)
+        except Exception as exc:
+            # Compiler or verifier failures cannot approve a rewritten
+            # question. Keep the bounded attempt audit, then fall back only
+            # to a separately certified controlled-renderer question.
+            from environment.trajectory_simulation.compiler import GoldCompilationError
+            if not isinstance(exc,(GoldCompilationError,ValueError,KeyError,TypeError,BackendError)):
+                raise
+            audit["graph_verification_error"]=str(exc)[:240]
+            feedback="programir_graph_review_unavailable"
+            audits.append(audit)
+            continue
+        audit["programir_semantic_review"]=graph_review
+        audits.append(audit)
+        if certificate is None:
+            feedback="programir_graph_review: "+str(graph_review.get("review_failure_kind") or graph_review.get("decision") or "not_confirmed")
+            continue
+        realized={"task_id":payload["task_id"],"question":candidate,"draft_question":payload.get("draft_question"),"task_design":payload.get("task_design",{}),"resources":payload.get("resources",()),"available_agents":payload.get("available_agents",()),"capability_world":capability,
+                  "surface_certificate":certificate,
+                  "authoring":{"attempts":attempt,"semantic_critic_enabled":use_critic,
+                               "surface_review":graph_review,"surface_fallback":False,"audit":audits}}
         return True,realized,audits
-    return False,{"task_id":payload.get("task_id"),"reason":"question_realization_failed","last_feedback":feedback,"audit":audits},audits
+
+    # Never publish a graph-ambiguous paraphrase. If all wording attempts
+    # failed, publish ONLY the controlled renderer that was independently
+    # checked against the ProgramIR. This preserves task coverage without
+    # making Stage 3.1 repair an incorrect Stage-2 surface.
+    rendered=world.get("_rendered")
+    canonical=getattr(rendered,"question",None)
+    if isinstance(canonical,str):
+        fallback_post=postflight(payload,canonical,oracle_answer=_oracle(world))
+        fallback_entry={"stage":"certified_renderer_fallback",
+                        "postflight":fallback_post.to_dict(),
+                        "reason":feedback}
+        if fallback_post.accepted:
+            try:
+                certificate,graph_review=certify_surface(
+                    payload,world,capability,canonical,critic,
+                )
+            except Exception as exc:
+                from environment.trajectory_simulation.compiler import GoldCompilationError
+                if not isinstance(exc,(GoldCompilationError,ValueError,KeyError,TypeError,BackendError)):
+                    raise
+                fallback_entry["error"]=str(exc)[:240]
+            else:
+                fallback_entry["programir_semantic_review"]=graph_review
+                if certificate is not None:
+                    audits.append(fallback_entry)
+                    realized={"task_id":payload["task_id"],"question":canonical,
+                              "draft_question":payload.get("draft_question"),
+                              "task_design":payload.get("task_design",{}),
+                              "resources":payload.get("resources",()),
+                              "available_agents":payload.get("available_agents",()),
+                              "capability_world":capability,
+                              "surface_certificate":certificate,
+                              "authoring":{"attempts":max(1,question_max_attempts),
+                                           "semantic_critic_enabled":use_critic,
+                                           "surface_review":graph_review,
+                                           "surface_fallback":True,"audit":audits}}
+                    return True,realized,audits
+        audits.append(fallback_entry)
+    return False,{"task_id":payload.get("task_id"),
+                  "reason":"question_realization_failed",
+                  "last_feedback":feedback,"audit":audits},audits
 def _safe_future_result(future,index,authoring):
     """Keep failures isolated to the corresponding frozen input task."""
     try:
@@ -192,6 +255,11 @@ def run(args):
         Path(__file__).with_name("prompts.py"),
         Path(__file__).with_name("validators.py"),
         Path(__file__).with_name("boundary.py"),
+        Path(__file__).with_name("verification.py"),
+        Path("environment/trajectory_simulation/eligibility.py"),
+        Path("environment/trajectory_simulation/compiler.py"),
+        Path("environment/trajectory_simulation/skeleton.py"),
+        Path("environment/trajectory_simulation/backend.py"),
     ]
     signature=signature_for_question_run(
         frozen,args,task_ids,source_files=source_files)
@@ -207,8 +275,26 @@ def run(args):
             if progress.completed!=len(authoring):
                 raise QuestionCheckpointError(
                     f"question stream incomplete: {progress.completed}/{len(authoring)}")
+        # Acceptance now includes safely certified renderer fallbacks. Report
+        # naturalized and fallback counts separately to avoid inflated claims.
+        certified_paraphrases=canonical_fallbacks=canonical_selected=0
+        with (output_dir/"realized_capability_worlds.jsonl").open(
+            "r",encoding="utf-8",
+        ) as finalized:
+            for line in finalized:
+                if not line.strip():
+                    continue
+                row=json.loads(line)
+                author_metadata=row.get("authoring") or {}
+                if author_metadata.get("surface_fallback") is True:
+                    canonical_fallbacks+=1
+                elif ((row.get("surface_certificate") or {}).get("method")
+                      =="llm_semantic_screen"):
+                    certified_paraphrases+=1
+                else:
+                    canonical_selected+=1
         summary={
-            "pipeline":"frozen_public_author_then_deterministic_preflight_then_semantic_critic_repair_then_postflight",
+            "pipeline":"frozen_public_author_critic_then_programir_surface_certificate_or_canonical_fallback",
             "frozen_batch_validation":frozen,
             "provider":args._resolved_models["question_author"]["backend"],
             "model":args._resolved_models["question_author"]["model"],
@@ -219,6 +305,13 @@ def run(args):
             "rejected":rejected,
             "acceptance_rate":accepted/len(authoring) if authoring else 0.,
             "semantic_critic":{"enabled":not args.no_semantic_critic},
+            "surface_certification":{
+                "contract":"maestro.stage2_surface_cert.v1",
+                "certified_paraphrases":certified_paraphrases,
+                "canonical_fallbacks":canonical_fallbacks,
+                "canonical_selected":canonical_selected,
+                "published_certified":accepted,
+            },
             "streaming":{
                 "enabled":True,
                 "ordered_writes":True,

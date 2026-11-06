@@ -52,12 +52,11 @@ def _role(args, role):
 
 def command_subtasks(args):
     from .subtask_bank import generate_subtasks_jsonl
-    reviewer=_role(args,"main")  # Used ONLY for frozen question review.
     executor=_role(args,"subagent")
     output=args.output if "--output" in args._explicit_options else args.bank
     _print(generate_subtasks_jsonl(
         args.worlds,args.realized,output,
-        reviewer=reviewer,executor=executor,
+        executor=executor,
         max_records=args.max_records,seed=args.seed,scene=args.scene,
         schedule=args.schedule,feedback_workers=args.feedback_workers,
         rejected_output_path=args.rejected_output,
@@ -94,7 +93,7 @@ def build_parser():
     )
     sub=parser.add_subparsers(dest="command",required=True)
     subtasks=sub.add_parser(
-        "subtasks",help="Phase 1: generate all correct Sub-Agent answers, summary, trace_summary"
+        "subtasks",help="Phase 1: verify Stage-2 surface certificates and generate source-replayable Sub-Agent reports"
     )
     subtasks.add_argument("--worlds")
     subtasks.add_argument("--realized")

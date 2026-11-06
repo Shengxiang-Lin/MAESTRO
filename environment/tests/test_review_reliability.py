@@ -578,8 +578,9 @@ class ReviewReliabilityTests(unittest.TestCase):
 
     def test_bank_diagnostics_do_not_enter_main_training_or_public_history(self):
         q,r,t=fixture()
-        with patch("environment.trajectory_simulation.subtask_bank.check_question",reviewed):
-            bank=build_subtask_bank(q,r,t,planner=PassthroughPlanner(),
+        with patch("environment.trajectory_simulation.subtask_bank.controlled_question_reference",
+                   return_value={"question":t.question}):
+            bank=build_subtask_bank(q,r,t,
                                    executor=LLMExecutor(Mock()),schedule="baseline")
         for item in bank["fragments"].values():
             item["feedback_private_audit"]=[{"candidate":"PRIVATE_CANARY"}]

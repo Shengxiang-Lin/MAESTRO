@@ -15,7 +15,11 @@ semantic Critic / wording-only repair
         ↓
 deterministic postflight
         ↓
-ordered streaming JSONL + resumable checkpoint
+independent full-ProgramIR graph-aware semantic certification
+        ↓
+if unverified: retry Author, then certified Canonical Renderer fallback
+        ↓
+publish Surface + review certificate + ordered streaming checkpoint
 ```
 
 The LLM may change wording only. It may not add facts, resources,
@@ -61,12 +65,52 @@ draft), rather than replacing them with a potentially non-unique IATA
 code or shifting dates across the relation chain. A Critic response with `accept=true` but nonempty `issues`
 is rejected, including during wording-repair review.
 
-These stronger language checks do not retroactively alter previously
-accepted questions, and are not a formal proof of semantic equivalence.
-For already frozen/question-generated batches, Stage 3 still quarantines
-cases failing its independent graph-aware semantic review. Rerun Stage 2
-in a separate output directory or explicitly restart it if you need to
-regenerate those questions, and compare against the same frozen worlds.
+### Stage 2 is the only full Surface semantic review boundary
+
+The public-only Author/Critic remains an inexpensive writing filter, **not**
+the final correctness authority. Before Stage 2 publishes a question, a
+teacher-private graph-aware reviewer now checks the entire ProgramIR,
+its controlled renderer reference, relation direction, filter ownership,
+hops, joins and output type. The reviewer is reused from the earlier
+Stage 3.1 implementation; it receives graph meanings and the candidate
+question, **not** private World answer records. Only `eligible` with a
+valid review protocol is accepted. Critic errors, uncertain decisions,
+missing witnesses and reviewer output errors are all unverified.
+
+The bounded Author retry loop may attempt a new rewrite. When no safe rewrite
+emerges, Stage 2 falls back to the exact controlled-renderer question,
+**only** if the renderer's dependency/hidden-clue certificate and deterministic
+postflight both pass. An unsafe or unverified renderer is rejected rather
+than emitted. Every published row includes `surface_certificate` and a
+private `authoring.surface_review`, linked by exact question, ProgramIR and
+renderer hashes and a versioned review contract. The certificate is an
+auditable pipeline assertion, **not** a formal mathematical equivalence
+proof or a cryptographic signature.
+
+Stage 3.1 no longer calls a Surface semantic LLM Reviewer. It validates
+this certificate against the frozen inputs; exact Canonical questions can
+be independently certified by the renderer. Stage 3 still checks whether
+public evidence is executable and discoverable; that is a different gate
+from question semantic equivalence.
+
+Existing files in `questions_2000` do not automatically gain certificates.
+To build a fresh 50-question batch without overwriting the old run:
+
+```bash
+python environment/generate_questions.py \
+  --max-records 50 \
+  --output-dir environment/data/questions_cert_v10_50
+```
+
+Then use Stage 3.1 with
+`--realized environment/data/questions_cert_v10_50/realized_capability_worlds.jsonl`.
+Do **not** combine old checkpoints and new contract versions; use a new
+directory or explicitly restart a chosen output directory. The frozen
+Stage 1 World and authoring inputs are not regenerated.
+
+Neither an LLM semantic judge nor literal-string checks can guarantee
+zero incorrect paraphrases. The Canonical fallback is the conservative
+route when the reviewer cannot establish equivalence.
 
 ## Run
 
@@ -94,7 +138,7 @@ python environment/generate_questions.py --question-workers 8
 ```
 
 `question_workers` counts concurrent tasks; within each task the
-Author → preflight → Critic → postflight sequence remains ordered.
+Author → preflight → Critic → postflight → ProgramIR certification sequence remains ordered.
 The vLLM server's GPU throughput and KV cache determine whether 8 is faster
 than 4. Start with 4, then benchmark 8 without changing generation checks.
 
