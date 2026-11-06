@@ -196,7 +196,10 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
             raise ValueError("canonical_surface_certificate_method_mismatch")
     elif review['method'] == SCOPED_METHOD:
         from .scoped_surface import build_scoped_plan, read_scoped_semantics
-        if cert['review_contract'] != REVIEW_CONTRACT:
+        # Scoped Grammar v17 remains byte-for-byte recomputable after v18
+        # adds the separate free-text readback method. Keep old frozen rows
+        # readable; do not weaken the newer free-text certificate contract.
+        if cert['review_contract'] not in (17, REVIEW_CONTRACT):
             raise ValueError('unsupported scoped grammar review contract')
         rendered = rendered or world.get('_rendered')
         if rendered is None or rendered.question != canonical:
