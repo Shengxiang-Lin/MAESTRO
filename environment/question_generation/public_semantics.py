@@ -178,5 +178,78 @@ def naturalization_metrics(canonical: str, candidate: str) -> dict:
         "meaningful_rewrite_proxy": meaningful,
     }
 
+def public_question_contract(world, canonical, gold):
+    """Group unary filters, using only the compiler's public projection.
 
-__all__ = ["VERSION", "public_semantic_scaffold", "naturalization_metrics"]
+    This removes presentation steps, not answer constraints. In particular a
+    shared DAG result cannot absorb a filter from just one of its consumers.
+    """
+    from environment.trajectory_simulation.eligibility import semantic_review_nodes
+    nodes = semantic_review_nodes(gold, world)
+    graph = public_semantic_scaffold(
+        {"program": {"nodes": list(nodes.values())}}, canonical,
+    )
+    users = {nid: [] for nid in nodes}
+    for nid, node in nodes.items():
+        for dep in node["dependencies"]:
+            users[dep].append(nid)
+    scopes, scope_for, obligations = [], {}, []
+    remaining = dict(nodes)
+    while remaining:
+        ready = [nid for nid, n in remaining.items()
+                 if all(d in scope_for for d in n["dependencies"])]
+        if not ready:
+            raise ValueError("invalid_public_contract_dependencies")
+        for nid in sorted(ready):
+            node = remaining.pop(nid)
+            step = next(s for s in graph["steps"] if s["id"] == f"S{nid}")
+            deps = node["dependencies"]
+            op = node["op"]
+            if (op.startswith("FILTER_") and len(users[deps[0]]) == 1
+                    and scope_for[deps[0]]["definition"] in (
+                        "FIND", "FIND_ALL", "RELATE", "FILTER_TYPE",
+                        "FILTER_STRING", "FILTER_NUMBER", "FILTER_DATE", "FILTER_YEAR",
+                    )):
+                scope = scope_for[deps[0]]
+            else:
+                scope = {
+                    "id": f"E{nid}", "definition": op,
+                    "inputs": [scope_for[d]["id"] for d in deps],
+                    "conditions": [], "program_steps": [],
+                }
+                scopes.append(scope)
+            scope_for[nid] = scope
+            scope["program_steps"].append(nid)
+            public = {k: v for k, v in step.items()
+                      if k not in ("id", "inputs_from", "operation")}
+            if op == "FIND":
+                public["public_anchor"] = _public_match(node["inputs"][0], canonical)
+            if op == "RELATE":
+                upstream = scope_for[deps[0]]["id"]
+                public["subject_set"] = upstream if public["direction"] == "forward" else scope["id"]
+                public["object_set"] = scope["id"] if public["direction"] == "forward" else upstream
+            if op.startswith("FILTER_"):
+                scope["conditions"].append({"step": nid, **public})
+            else:
+                scope.update(public)
+            obligations.append({
+                "id": f"S{nid}", "owner": scope["id"], "operation": op,
+                "inputs": [scope_for[d]["id"] for d in deps], **public,
+            })
+    return {
+        "version": "public_question_contract.v1",
+        "scopes": scopes, "output": scope_for[int(graph["output"][1:])]["id"],
+        "obligations": obligations,
+        "guidance": (
+            "E identifiers denote sets, not single individuals. Conditions "
+            "belong only to their owner. For RELATE preserve directed endpoints; "
+            "for INTERSECT require the same entities in every branch; UNION "
+            "admits either branch. Use separate sentences and clear references "
+            "for intermediate groups. Every condition is retained. FIND_ALL "
+            "is evidence acquisition, not a supplied roster. Null public "
+            "labels require the canonical wording; never invent hidden names."
+        ),
+    }
+
+__all__ = ["VERSION", "public_semantic_scaffold", "public_question_contract",
+           "naturalization_metrics"]

@@ -66,20 +66,25 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         paraphrase=rendered.question+" Return the matching names."
         review={
             "eligible":True,"reviewed":True,"decision":"eligible",
-            "method":"llm_semantic_screen","issues":[],
+            "method":"llm_contract_alignment","issues":[],
+            "alignment_version":1,
             "question_sha256":digest(paraphrase),
             "program_sha256":digest(world["program"]),
         }
         with patch(
+            "environment.question_generation.alignment.check_alignment",
+            side_effect=[review, {**review, "method": "llm_scoped_programir_screen"}],
+        ) as check, patch(
             "environment.question_generation.verification.check_question",
-            return_value=review,
-        ) as check:
+            return_value={**review, "method":"llm_semantic_screen"},
+        ):
             cert,actual=certify_surface(
                 payload,world,capability,paraphrase,critic,
             )
-        self.assertEqual(actual,review)
-        self.assertEqual(check.call_count,1)
-        self.assertEqual(check.call_args.args[0]["question"],paraphrase)
+        self.assertEqual(actual["eligible"],review["eligible"])
+        review=actual
+        self.assertEqual(check.call_count,2)
+        self.assertEqual(check.call_args.args[3],paraphrase)
         realized={
             "task_id":payload["task_id"],"question":paraphrase,
             "surface_certificate":cert,
@@ -115,6 +120,49 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         self.assertTrue(row["authoring"]["surface_fallback"])
         self.assertEqual(row["surface_certificate"]["question_sha256"],digest(rendered.question))
         self.assertEqual(len(audit),3)
+
+    def test_alignment_approval_cannot_override_full_graph_rejection(self):
+        payload,world,capability,rendered=self.data()
+        question=rendered.question+" Return the matching names."
+        critic=LLMSemanticCritic(OpenAICompatibleBackend("test://local","test"))
+        alignment={
+            "eligible":True,"reviewed":True,"decision":"eligible",
+            "method":"llm_contract_alignment","issues":[],
+            "question_sha256":digest(question),
+            "program_sha256":digest(world["program"]),
+        }
+        with patch("environment.question_generation.alignment.check_alignment",
+            side_effect=[alignment, {"eligible":False,"reviewed":True,"decision":"mismatch",
+                          "issues":["wrong owner"],"review_failure_kind":"semantic_mismatch"},
+            ]):
+            cert,review=certify_surface(payload,world,capability,question,critic)
+        self.assertIsNone(cert)
+        self.assertFalse(review["eligible"])
+        self.assertEqual(review["issues"],["wrong owner"])
+
+    def test_legacy_contract13_remains_consumable(self):
+        payload,world,capability,rendered=self.data()
+        cert,review=certify_surface(payload,world,capability,rendered.question,PassthroughCriticBackend())
+        cert["review_contract"]=13
+        realized={"task_id":payload["task_id"],"question":rendered.question,
+                  "surface_certificate":cert,"authoring":{"surface_review":review}}
+        self.assertEqual(validate_surface_certificate(realized,world,rendered.question)["stage2_review_contract"],13)
+
+    def test_two_alignment_views_cannot_override_complete_graph_rejection(self):
+        payload,world,capability,rendered=self.data()
+        critic=LLMSemanticCritic(OpenAICompatibleBackend("test://local","test"))
+        review={"eligible":True,"reviewed":True,"decision":"eligible",
+                "method":"llm_contract_alignment","issues":[]}
+        with patch("environment.question_generation.alignment.check_alignment",
+                   return_value=review), patch(
+            "environment.question_generation.verification.check_question",
+            return_value={"eligible":False,"reviewed":True,"decision":"mismatch",
+                          "method":"llm_semantic_screen","issues":["collapsed anchor scope"]},
+        ) as final:
+            cert,result=certify_surface(payload,world,capability,rendered.question+" Return names.",critic)
+        final.assert_called_once()
+        self.assertIsNone(cert)
+        self.assertFalse(result["eligible"])
 
 
 if __name__=="__main__":

@@ -54,7 +54,7 @@ class TwoPhaseTests(unittest.TestCase):
             canonical_checks.append(gold["question"])
             return {"question":rendered.question}
         certificates=[]
-        def certified(realized,record,renderer_question):
+        def certified(realized,record,renderer_question,**kwargs):
             certificates.append(realized["question"])
             return {
                 "eligible":True,"reviewed":True,"decision":"eligible",
@@ -153,7 +153,7 @@ class TwoPhaseTests(unittest.TestCase):
                 return {"discovered_source_ids":[]}
             return simulate_search(*args,**kwargs)
         certificates=[]
-        def certified(realized,record,renderer_question):
+        def certified(realized,record,renderer_question,**kwargs):
             certificates.append(realized["question"])
             return {
                 "eligible":True,"reviewed":True,"decision":"eligible",

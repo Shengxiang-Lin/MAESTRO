@@ -152,7 +152,7 @@ def build_subtask_bank(
             eligibility=dict(canonical_eligibility)
         else:
             eligibility=validate_surface_certificate(
-                realized,world_record,canonical_question,
+                realized,world_record,canonical_question,gold=gold,rendered=rendered,
             )
     except ValueError as exc:
         eligibility={

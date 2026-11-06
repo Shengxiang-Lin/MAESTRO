@@ -262,6 +262,7 @@ def signature_for_question_run(
         "critic_max_tokens": args.critic_max_tokens,
         "timeout": args.timeout,
         "question_max_attempts": args.question_max_attempts,
+        "surface_mode": getattr(args,"surface_mode","legacy"),
         "no_semantic_critic": args.no_semantic_critic,
         "no_json_mode": args.no_json_mode,
         "code_sha256": sources,
