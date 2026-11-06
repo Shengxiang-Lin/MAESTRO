@@ -239,12 +239,14 @@ class ReadbackResult:
     parsed_query: dict | None
     calls: int
     audits: tuple[dict, ...]
+    raw_responses: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         return {
             "eligible": self.eligible, "reason": self.reason,
             "parsed_query": self.parsed_query, "calls": self.calls,
             "audits": list(self.audits),
+            "raw_responses": list(self.raw_responses),
             "version": READBACK_VERSION,
         }
 
@@ -274,6 +276,7 @@ def read_free_question(question: str, reference: ScopedPlan, backend: Any,
     if passes != 2:
         raise ValueError("two independent parse passes are mandatory")
     audits: list[dict] = []
+    raw: list[dict] = []
     first = None
     for index, system in enumerate((_SYSTEM, _SECOND_SYSTEM), start=1):
         try:
@@ -285,6 +288,7 @@ def read_free_question(question: str, reference: ScopedPlan, backend: Any,
             if first is not None and actual != first:
                 raise ValueError("independent_readback_passes_disagree")
             first = actual
+            raw.append(response)
             audits.append({"pass": index, "status": "verified"})
         except Exception as exc:
             # The actual candidate is not approved on parser failures.
@@ -296,10 +300,10 @@ def read_free_question(question: str, reference: ScopedPlan, backend: Any,
                 "reason": str(exc)[:200],
             })
             return ReadbackResult(
-                False, str(exc)[:200], None, index, tuple(audits),
+                False, str(exc)[:200], None, index, tuple(audits), tuple(raw),
             )
     return ReadbackResult(True, "independent_typed_readback_matched",
-                          first, 2, tuple(audits))
+                          first, 2, tuple(audits), tuple(raw))
 
 
 __all__ = [
