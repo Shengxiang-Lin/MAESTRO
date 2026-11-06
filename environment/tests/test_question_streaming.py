@@ -38,7 +38,7 @@ class QuestionProgressTests(unittest.TestCase):
             self.assertEqual([r["task_id"] for r in _rows(realized)],
                              ["task-0","task-2"])
             self.assertEqual([r["index"] for r in _rows(
-                directory/"question_critic_audit.jsonl")],[0,1,2])
+                directory/"question_review_audit.jsonl")],[0,1,2])
             self.assertEqual([r["task_id"] for r in _rows(
                 directory/"question_rejected.jsonl")],["task-1"])
 
@@ -126,7 +126,7 @@ class QuestionPipelineTests(unittest.TestCase):
             self.assertEqual(first["accepted"],3)
             self.assertEqual(first["rejected"],3)
             self.assertEqual(first["streaming"]["question_workers"],3)
-            audit=_rows(self.output/"question_critic_audit.jsonl")
+            audit=_rows(self.output/"question_review_audit.jsonl")
             self.assertEqual([r["task_id"] for r in audit],self.ids)
             self.assertEqual([r["accepted"] for r in audit],
                              [True,False,True,False,True,False])
@@ -157,7 +157,7 @@ class QuestionPipelineTests(unittest.TestCase):
                 self.assertEqual(result["accepted"],4)
                 self.assertEqual(result["rejected"],2)
                 self.assertEqual([row["task_id"] for row in _rows(
-                    self.output/"question_critic_audit.jsonl")],self.ids)
+                    self.output/"question_review_audit.jsonl")],self.ids)
 
     def test_changed_model_settings_block_resume_without_discarding_outputs(self):
         a,b,c=self.patches()
@@ -169,7 +169,7 @@ class QuestionPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(QuestionCheckpointError,
                                         "--restart-questions"):
                 run(self.args)
-            self.assertEqual(len(_rows(self.output/"question_critic_audit.jsonl")),6)
+            self.assertEqual(len(_rows(self.output/"question_review_audit.jsonl")),6)
 
     def test_existing_outputs_without_checkpoint_are_not_overwritten(self):
         a,b,c=self.patches()
