@@ -376,7 +376,7 @@ def run(args):
                                 str(result.get("review_failure_kind") or
                                     result.get("decision") or "unclassified")
                             ]+=1
-                summary={
+        summary={
             "pipeline":"public_program_grounded_author_then_full_programir_certificate_with_repair",
             "frozen_batch_validation":frozen,
             "provider":args._resolved_models["question_author"]["backend"],
