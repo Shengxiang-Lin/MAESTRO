@@ -65,6 +65,15 @@ QUESTION_REVIEW_SCHEMA = {
 
 # An independent, compact verdict for contradictory eligibility reports.
 # No issue array: this prevents the 'eligible with issues' failure mode.
+FEEDBACK_REVIEW_SCHEMA = {
+    "type": "object", "properties": {
+        "grounded": {"type": "boolean"},
+        "issues": {"type": "array", "maxItems": 2,
+                   "items": {"type": "string", "maxLength": 180}},
+    }, "required": ["grounded", "issues"], "additionalProperties": False,
+}
+
+
 QUESTION_CONSISTENCY_SCHEMA = {
     "type": "object", "properties": {
         "equivalent": {"type": "boolean"},
@@ -147,6 +156,9 @@ class _LLMRole:
                     and isinstance(verdict.get('issues'),list)
                     and all(isinstance(i,str) for i in verdict['issues'])
                     and (not verdict[flag] or verdict['issues']==[])
+                    and (flag != 'grounded' or
+                         (len(verdict['issues']) <= 2 and
+                          all(len(i) <= 180 for i in verdict['issues'])))
                 ):
                     raise ValueError('invalid_review_schema')
                 return verdict
@@ -263,6 +275,7 @@ class LLMExecutor(_LLMRole):
         # Retry ONCE with a compact source-grounded prompt, rather than
         # silently dropping an otherwise valid Sub-Agent example. Both paths
         # still pass the identical deterministic AND semantic evidence guards.
+        from environment.question_generation.backend import OpenAICompatibleBackend
         audit=[] if audit is None else audit
 
         def repair_content(rejected, objections, *, trigger, schema_kwargs):
@@ -305,6 +318,9 @@ class LLMExecutor(_LLMRole):
                     'NOT authoritative. JSON only.',
                     feedback_reviewer_prompt(payload,repaired),
                     'natural_feedback_review',audit=audit,flag='grounded',
+                    **({'response_schema':FEEDBACK_REVIEW_SCHEMA}
+                       if isinstance(self.backend,OpenAICompatibleBackend)
+                       and self.backend.json_mode else {}),
                 )
                 audit.append({'stage':'content_repair_review','attempt':1,
                               'verdict':repaired_verdict})
@@ -372,6 +388,10 @@ class LLMExecutor(_LLMRole):
                     ))
                     or 'explicit_relation_fact_mismatch' in reason
                     or 'explicit_attribute_owner_mismatch' in reason
+                    or 'unknown_resource_title' in reason
+                    or 'unsupported_numeric_claim' in reason
+                    or 'unobserved_source' in reason
+                    or 'source_fact_mismatch' in reason
                 )
                 if repairable and isinstance(proposal,dict):
                     original,_=normalize_feedback_shape(proposal)
