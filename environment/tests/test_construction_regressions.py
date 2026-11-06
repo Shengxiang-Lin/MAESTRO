@@ -114,7 +114,7 @@ class ConstructionRegressions(unittest.TestCase):
             payload,{}, {},PassthroughAuthorBackend(),ContradictoryCritic(),
             question_max_attempts=1,use_critic=True)
         self.assertFalse(ok)
-        self.assertTrue(audit)
+        self.assertEqual(audit,[])
         critic_text=critic_prompt(payload,payload['draft_question'])
         author_text=author_prompt(payload)
         self.assertIn('Way start-date condition',critic_text)
@@ -122,14 +122,30 @@ class ConstructionRegressions(unittest.TestCase):
         self.assertIn('grammatical entity',author_text)
 
     def test_semantically_rejected_repair_is_not_accepted(self):
+        from unittest.mock import patch
+        from environment.tests.test_stage2_surface_certification import Stage2SurfaceCertificationTests
+        payload,world,capability,rendered=Stage2SurfaceCertificationTests().data()
         class Author:
-            def author(self,*args):return {'question':'Which entities match the stated conditions?'}
+            def author(self,*args):
+                return {'question':rendered.question+' Return matching names.'}
         class Critic:
-            def review(self,*args):return {'accept':False,'semantic_fidelity':'fail',
-                'repair_question':'Which entities satisfy the stated conditions?'}
-        ok,_,audit=_realize_one({'task_id':'test'}, {}, {},Author(),Critic(),question_max_attempts=1,use_critic=True)
+            def review(self,*args):
+                return {'accept':True,'semantic_fidelity':'pass','issues':[],
+                        'repair_question':rendered.question+' Please return names.'}
+        # A quick Critic's positive vote must NEVER override a failed graph
+        # certification; the same rule applies to its wording repair.
+        with patch(
+            'environment.question_generation.verification.certify_surface',
+            return_value=(None,{'decision':'mismatch','review_failure_kind':'semantic_mismatch'}),
+        ):
+            ok,_,audit=_realize_one(
+                payload,world,capability,Author(),Critic(),
+                question_max_attempts=1,use_critic=True,
+            )
         self.assertFalse(ok)
-        self.assertIn('repair_semantic_critic',audit[0])
+        self.assertTrue(audit)
+        self.assertIn('semantic_critic_repair',audit[0])
+        self.assertIn('repair_programir_review',audit[0])
 
 
 if __name__=='__main__':unittest.main()
