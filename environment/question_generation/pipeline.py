@@ -275,6 +275,24 @@ def run(args):
             if progress.completed!=len(authoring):
                 raise QuestionCheckpointError(
                     f"question stream incomplete: {progress.completed}/{len(authoring)}")
+        # Acceptance now includes safely certified renderer fallbacks. Report
+        # naturalized and fallback counts separately to avoid inflated claims.
+        certified_paraphrases=canonical_fallbacks=canonical_selected=0
+        with (output_dir/"realized_capability_worlds.jsonl").open(
+            "r",encoding="utf-8",
+        ) as finalized:
+            for line in finalized:
+                if not line.strip():
+                    continue
+                row=json.loads(line)
+                authoring=row.get("authoring") or {}
+                if authoring.get("surface_fallback") is True:
+                    canonical_fallbacks+=1
+                elif ((row.get("surface_certificate") or {}).get("method")
+                      =="llm_semantic_screen"):
+                    certified_paraphrases+=1
+                else:
+                    canonical_selected+=1
         summary={
             "pipeline":"frozen_public_author_critic_then_programir_surface_certificate_or_canonical_fallback",
             "frozen_batch_validation":frozen,
@@ -287,6 +305,13 @@ def run(args):
             "rejected":rejected,
             "acceptance_rate":accepted/len(authoring) if authoring else 0.,
             "semantic_critic":{"enabled":not args.no_semantic_critic},
+            "surface_certification":{
+                "contract":"maestro.stage2_surface_cert.v1",
+                "certified_paraphrases":certified_paraphrases,
+                "canonical_fallbacks":canonical_fallbacks,
+                "canonical_selected":canonical_selected,
+                "published_certified":accepted,
+            },
             "streaming":{
                 "enabled":True,
                 "ordered_writes":True,
