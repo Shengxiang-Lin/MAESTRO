@@ -355,7 +355,28 @@ def run(args):
                     certified_paraphrases+=1
                 else:
                     canonical_selected+=1
-        summary={
+        # Record where naturalization fails. Attempts are not task counts.
+        from collections import Counter
+        graph_decisions=Counter()
+        repair_attempts=0
+        graph_review_calls=0
+        with (output_dir/"question_critic_audit.jsonl").open(
+            "r",encoding="utf-8",
+        ) as traces:
+            for line in traces:
+                if not line.strip():
+                    continue
+                for attempt in (json.loads(line).get("audit") or []):
+                    repair_attempts+=int("semantic_critic_repair" in attempt)
+                    for prefix in ("author","repair"):
+                        result=attempt.get(prefix+"_programir_review")
+                        if isinstance(result,dict):
+                            graph_review_calls+=1
+                            graph_decisions[
+                                str(result.get("review_failure_kind") or
+                                    result.get("decision") or "unclassified")
+                            ]+=1
+                summary={
             "pipeline":"public_program_grounded_author_then_full_programir_certificate_with_repair",
             "frozen_batch_validation":frozen,
             "provider":args._resolved_models["question_author"]["backend"],
@@ -374,6 +395,9 @@ def run(args):
                 "meaningful_rewrite_rate":meaningful_paraphrases/len(authoring)
                     if authoring else 0.0,
                 "template_phrases_removed_from_meaningful":total_template_reduction,
+                "graph_review_calls":graph_review_calls,
+                "graph_review_decisions":dict(graph_decisions),
+                "critic_repair_attempts":repair_attempts,
                 "canonical_fallbacks":canonical_fallbacks,
                 "canonical_selected":canonical_selected,
                 "published_certified":accepted,
