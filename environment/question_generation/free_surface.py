@@ -60,7 +60,7 @@ def call_free_rewriter(author: Any, scoped_question: str,
 # "other than 1160" (!= 1160) are NOT automatic semantic errors.
 # Their ownership and logical meaning must pass the independent readback.
 _NEW_SCOPE_RESTRICTIONS = re.compile(
-    r"\b(?:except|excluding|unless|besides|uniquely|unique)\b"
+    r"\b(?:except|exclude|excludes|excluded|excluding|unless|besides|uniquely|unique)\b"
     r"|\b(?:other|another)\s+(?:people|persons?|entities|members|candidates)\b",
     re.I,
 )
