@@ -21,16 +21,92 @@ def _plan_bundle_targets(source_count,*,fact_count,max_bundle_size,seed,weights=
     rng=random.Random(seed^0xB61D1E);targets=[int(rng.choices(sizes,weights=raw,k=1)[0]) for _ in range(source_count)]
     if source_count>=4 and active_max>=4 and max(targets)<4:targets[rng.randrange(source_count)]=4
     return targets
-def _plan_modality_layout(source_count,*,motif_prior,synthetic_modality_probability,seed):
-    rng=random.Random(seed^0xF1A14E);motif=motif_prior.sample(source_count,rng=rng,prefer_cross_modal=True);modalities=list(motif.source_types)
-    if len(modalities)!=source_count:raise ValueError("source motif slot count mismatch")
-    origins=[motif.origin for _ in modalities];synthetic_cap=max(1,source_count//2);synthetic_count=sum(v in SYNTHETIC_MODALITIES for v in modalities);order=list(range(source_count));rng.shuffle(order)
+_MEDIA_SOURCE_TYPES = frozenset(("image", "image_report", "video",
+                                "video_report", "audio", "audio_transcript"))
+_ACQUISITION_SCENARIOS = ("web_search", "hybrid", "provided_media")
+_DEFAULT_SCENARIO_WEIGHTS = (45, 40, 15)
+
+
+def _plan_acquisition_scenario(seed, weights=_DEFAULT_SCENARIO_WEIGHTS):
+    """Choose how information is acquired BEFORE sampling source modalities.
+
+    Modality and initial availability are independent: web search may return
+    videos/images, not only HTML pages. The weights affect *proposals*, not
+    the final quality-filtered distribution.
+    """
+    if len(weights) != 3 or any(float(w) < 0 for w in weights) or not sum(weights):
+        raise ValueError("acquisition_scenario_weights must contain three nonnegative values with positive sum")
+    rng = random.Random(seed ^ 0x5EAC70)
+    return rng.choices(_ACQUISITION_SCENARIOS, weights=weights, k=1)[0]
+
+
+def _plan_modality_layout(
+    source_count, *, motif_prior, synthetic_modality_probability, seed,
+    acquisition_scenario_weights=_DEFAULT_SCENARIO_WEIGHTS,
+):
+    scenario = _plan_acquisition_scenario(seed, acquisition_scenario_weights)
+    rng = random.Random(seed ^ 0xF1A14E)
+    motif = motif_prior.sample(source_count, rng=rng, prefer_cross_modal=scenario != "provided_media")
+    modalities = list(motif.source_types)
+    if len(modalities) != source_count:
+        raise ValueError("source motif slot count mismatch")
+    origins = [motif.origin for _ in modalities]
+    synthetic_cap = max(1, source_count // 2)
+    synthetic_count = sum(v in SYNTHETIC_MODALITIES for v in modalities)
+    order = list(range(source_count))
+    rng.shuffle(order)
     for index in order:
-        if synthetic_count>=synthetic_cap:break
-        if modalities[index] in SYNTHETIC_MODALITIES:continue
-        if rng.random()<synthetic_modality_probability:modalities[index]=rng.choice(SYNTHETIC_MODALITIES);origins[index]="final_layout_synthetic_augmentation";synthetic_count+=1
-    if source_count>=4 and synthetic_count==0 and synthetic_modality_probability>0 and rng.random()<.75:index=rng.randrange(source_count);modalities[index]=rng.choice(SYNTHETIC_MODALITIES);origins[index]="final_layout_synthetic_augmentation";synthetic_count=1
-    slot_order=list(range(source_count));rng.shuffle(slot_order);return modalities,origins,slot_order,{"base_motif":motif.to_dict(),"synthetic_modality_count":synthetic_count,"planned_before_roles":True}
+        if synthetic_count >= synthetic_cap:
+            break
+        if modalities[index] in SYNTHETIC_MODALITIES:
+            continue
+        if rng.random() < synthetic_modality_probability:
+            modalities[index] = rng.choice(SYNTHETIC_MODALITIES)
+            origins[index] = "final_layout_synthetic_augmentation"
+            synthetic_count += 1
+    if (source_count >= 4 and synthetic_count == 0
+            and synthetic_modality_probability > 0 and rng.random() < .75):
+        index = rng.randrange(source_count)
+        modalities[index] = rng.choice(SYNTHETIC_MODALITIES)
+        origins[index] = "final_layout_synthetic_augmentation"
+        synthetic_count = 1
+
+    # Scenario-specific constraints are applied at this *same upstream stage*,
+    # before the world has materialized source roles, facts or visibility.
+    # Web-search worlds may contain every media type: the media is DISCOVERED,
+    # not assumed to be an initial attachment.
+    if scenario in {"hybrid", "provided_media"} and not any(
+        typ in _MEDIA_SOURCE_TYPES for typ in modalities
+    ):
+        index = rng.randrange(source_count)
+        modalities[index] = "image_report"
+        origins[index] = "acquisition_scenario_media_entry"
+    if scenario == "hybrid" and source_count > 1 and all(
+        typ in _MEDIA_SOURCE_TYPES for typ in modalities
+    ):
+        index = rng.randrange(source_count)
+        modalities[index] = "text"
+        origins[index] = "acquisition_scenario_search_document"
+    if scenario == "provided_media":
+        # A media-centric task begins with a real media input. Other media
+        # sources may still require discovery/inspection across later waves.
+        for index, typ in enumerate(modalities):
+            if typ not in _MEDIA_SOURCE_TYPES:
+                modalities[index] = "image_report"
+                origins[index] = "acquisition_scenario_media_only"
+
+    slot_order = list(range(source_count))
+    rng.shuffle(slot_order)
+    return modalities, origins, slot_order, {
+        "base_motif": motif.to_dict(),
+        "synthetic_modality_count": synthetic_count,
+        "planned_before_roles": True,
+        "acquisition_scenario": scenario,
+        "acquisition_scenario_weights": list(acquisition_scenario_weights),
+        "scenario_planned_before_source_modalities": True,
+    }
+
+
 def _final_material_metadata(*,slot,source_type,plan_meta):
     motif=plan_meta.get("base_motif",{})
     if not isinstance(motif,Mapping):return {}
@@ -77,8 +153,8 @@ def _apply_planned_bundle_targets(program,world,*,targets_by_slot,seed):
     allocation=dict(world.metadata.get("evidence_allocation",{}));previous=allocation.get("target_bundle_sizes")
     if previous is not None:allocation["prelayout_target_bundle_sizes"]=previous
     allocation.update({"target_bundle_sizes":planned,"realized_bundle_sizes":realized,"bundle_size_target_match_rate":sum(realized[sid]==planned[sid] for sid in planned)/len(planned) if planned else 0.,"bundle_size_plan_padding_fact_count":padding_total,"bundle_size_plan_overflow_source_ids":sorted(overflow_sources),"bundle_size_plan_overflow_source_count":len(overflow_sources)});layout=dict(allocation.get("layout",{}));layout["bundle_size_targets"]=list(map(int,targets_by_slot));layout["bundle_size_planned_before_roles"]=True;allocation["layout"]=layout;policy=dict(allocation.get("policy",{}));policy["bundle_size_planned_before_roles"]=True;policy["bundle_size_plan_is_minimum_visible_target"]=True;allocation["policy"]=policy;world.metadata={**world.metadata,"evidence_allocation":allocation};return world
-def allocate_evidence_sources(program:ProgramIR,world:SyntheticWorld,*,min_critical_sources:int=2,min_noncritical_sources:int=1,max_sources:int=6,motif_prior:SourceMotifPrior|None=None,predicate_catalog:Mapping[str,Any]|None=None,mutation_records:Sequence[Mapping[str,Any]]|None=None,role_bundle_max_facts:int=3,critical_padding_max_facts:int=3,synthetic_modality_probability:float=.35,proof_corroboration_probability:float=.30,source_count_corroboration_probability:float|None=None,bundle_size_weights:Sequence[float]=DEFAULT_BUNDLE_SIZE_WEIGHTS,bundle_target_max_facts:int=DEFAULT_BUNDLE_TARGET_MAX_FACTS,source_count_weights:Sequence[tuple[int,float]]=DEFAULT_SOURCE_COUNT_WEIGHTS,seed:int=17):
-    motif_prior=motif_prior or SourceMotifPrior.fallback();planning_rng=random.Random(seed^0x50A2CE);target_source_count=sample_target_source_count(min_sources=min_critical_sources+min_noncritical_sources,max_sources=max_sources,rng=planning_rng,weights=source_count_weights);modalities,origins,slot_order,plan_meta=_plan_modality_layout(target_source_count,motif_prior=motif_prior,synthetic_modality_probability=synthetic_modality_probability,seed=seed);bundle_targets=_plan_bundle_targets(target_source_count,fact_count=len(world.facts),max_bundle_size=bundle_target_max_facts,seed=seed,weights=bundle_size_weights);plan_meta={**plan_meta,"bundle_size_targets":list(bundle_targets),"bundle_target_max_facts":int(bundle_target_max_facts),"bundle_size_planned_before_roles":True,"world_fact_count_at_planning":len(world.facts)};effective=proof_corroboration_probability if source_count_corroboration_probability is None else source_count_corroboration_probability
+def allocate_evidence_sources(program:ProgramIR,world:SyntheticWorld,*,min_critical_sources:int=2,min_noncritical_sources:int=1,max_sources:int=6,motif_prior:SourceMotifPrior|None=None,predicate_catalog:Mapping[str,Any]|None=None,mutation_records:Sequence[Mapping[str,Any]]|None=None,role_bundle_max_facts:int=3,critical_padding_max_facts:int=3,synthetic_modality_probability:float=.35,proof_corroboration_probability:float=.30,source_count_corroboration_probability:float|None=None,bundle_size_weights:Sequence[float]=DEFAULT_BUNDLE_SIZE_WEIGHTS,bundle_target_max_facts:int=DEFAULT_BUNDLE_TARGET_MAX_FACTS,source_count_weights:Sequence[tuple[int,float]]=DEFAULT_SOURCE_COUNT_WEIGHTS,acquisition_scenario_weights:Sequence[float]=_DEFAULT_SCENARIO_WEIGHTS,seed:int=17):
+    motif_prior=motif_prior or SourceMotifPrior.fallback();planning_rng=random.Random(seed^0x50A2CE);target_source_count=sample_target_source_count(min_sources=min_critical_sources+min_noncritical_sources,max_sources=max_sources,rng=planning_rng,weights=source_count_weights);modalities,origins,slot_order,plan_meta=_plan_modality_layout(target_source_count,motif_prior=motif_prior,synthetic_modality_probability=synthetic_modality_probability,seed=seed,acquisition_scenario_weights=acquisition_scenario_weights);bundle_targets=_plan_bundle_targets(target_source_count,fact_count=len(world.facts),max_bundle_size=bundle_target_max_facts,seed=seed,weights=bundle_size_weights);plan_meta={**plan_meta,"bundle_size_targets":list(bundle_targets),"bundle_target_max_facts":int(bundle_target_max_facts),"bundle_size_planned_before_roles":True,"world_fact_count_at_planning":len(world.facts)};effective=proof_corroboration_probability if source_count_corroboration_probability is None else source_count_corroboration_probability
     if not 0<=effective<=1:raise ValueError("source_count_corroboration_probability must be in [0, 1]")
     result,ind_sources,ind_facts=_allocate_source_count_balanced(program,world,min_critical_sources=min_critical_sources,min_noncritical_sources=min_noncritical_sources,max_sources=max_sources,motif_prior=motif_prior,predicate_catalog=predicate_catalog,mutation_records=mutation_records,role_bundle_max_facts=role_bundle_max_facts,critical_padding_max_facts=critical_padding_max_facts,synthetic_modality_probability=synthetic_modality_probability,proof_corroboration_probability=effective,bundle_size_weights=bundle_size_weights,source_count_weights=source_count_weights,seed=seed);realized=int(result.metadata.get("evidence_allocation",{}).get("realized_source_count",len(result.sources)))
     if realized!=target_source_count:raise ValueError(f"planned source count {target_source_count} != realized source count {realized}")
