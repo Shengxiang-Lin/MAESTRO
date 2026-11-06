@@ -128,8 +128,11 @@ def literal_warnings(reference: str, candidate: str) -> dict[str, list[str]]:
     A reviewer must still determine whether an apparent difference changes
     meaning. ISO/prose dates, comma-separated numbers and +codes are typed.
     """
-    original = typed_values(_LIST_MARKERS.sub(" ", reference), words=True)
-    changed = typed_values(_LIST_MARKERS.sub(" ", candidate), words=True)
+    # Natural phrases such as "one of those places" are not numeric
+    # predicates. Treat spelled-out numbers as a reviewer issue rather than
+    # labelling every ordinary "one/two" as an invented literal here.
+    original = typed_values(_LIST_MARKERS.sub(" ", reference), words=False)
+    changed = typed_values(_LIST_MARKERS.sub(" ", candidate), words=False)
     def display(values):
         return sorted(f"{kind}:{value}" for kind, value in values)
     return {"possibly_missing": display(original - changed),
