@@ -229,6 +229,47 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
 
 
 
+    def test_scoped_contract_typed_literals_allow_date_paraphrases_not_code_loss(self):
+        from environment.question_generation.scoped_surface import ScopedPlan
+        from environment.question_generation.semantic_checks import missing_typed_literals
+        tree = {
+            "definition": "COUNT", "inputs": [{
+                "definition": "FIND_ALL", "inputs": [],
+                "conditions": [
+                    {"attribute": "death date", "comparison": "equal to",
+                     "value": {"type": "date", "value": "1997-08-01"}},
+                    {"attribute": "telephone country code", "comparison": "equal to",
+                     "value": {"type": "string", "value": "+650"}},
+                    {"attribute": "population", "comparison": "equal to",
+                     "value": {"type": "number", "value": "1203"}},
+                ],
+            }], "conditions": [],
+        }
+        plan = ScopedPlan([], [], tree)
+        for date in ("1997-08-01", "August 1, 1997", "1 August 1997"):
+            text = f"How many people died on {date}, with code +650 and population 1,203?"
+            self.assertEqual(missing_typed_literals(plan, text), [])
+            self.assertIn(
+                "string:+650",
+                missing_typed_literals(plan, text.replace("+650", "650")),
+            )
+            self.assertIn(
+                "number:1203",
+                missing_typed_literals(plan, text.replace("1,203", "1,204")),
+            )
+
+    def test_boilerplate_prefix_does_not_game_naturalization_gate(self):
+        from environment.question_generation.semantic_checks import naturalness_gate
+        ref = (
+            "Which entities listed as targets of the first relation from Noah "
+            "Yarrow are also targets of the second relation from Noah Yarrow?"
+        )
+        bad = (
+            "Using the public records, please determine the requested "
+            "result according to the following details. " + ref
+        )
+        self.assertFalse(naturalness_gate(ref, bad)["improved_enough_to_review"])
+
     def test_v13_known_false_positive_near_copy_is_rejected(self):
         from environment.question_generation.semantic_checks import naturalness_gate
         ref = (
