@@ -837,7 +837,7 @@ def realize_feedback_natural(payload: Mapping[str, Any], proposal: Any) -> dict[
     elif isinstance(value, (int, float)) and not isinstance(value, bool):
         if (type(value) is int and not mentions_exact_count(joined, value)
                 or type(value) is float and not re.search(
-                    r"(?<![\\w.])" + re.escape(str(value)) + r"(?![\\w.])",
+                    r"(?<![\w.])" + re.escape(str(value)) + r"(?![\w.])",
                     joined,
                 )):
             raise ValueError("natural_report_omits_numeric_result")
