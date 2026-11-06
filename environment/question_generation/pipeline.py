@@ -265,7 +265,7 @@ def build_parser():
     p.add_argument("--question-temperature", type=float, default=0.4)
     p.add_argument("--critic-temperature", type=float, default=0.0)
     p.add_argument("--max-tokens", type=int, default=2048)
-    p.add_argument("--critic-max-tokens", type=int, default=1536)
+    p.add_argument("--critic-max-tokens", type=int, default=3072)
     p.add_argument("--timeout", type=float, default=180.0)
     p.add_argument("--max-revisions", type=int, default=2)
     p.add_argument("--question-workers", type=int, default=4)

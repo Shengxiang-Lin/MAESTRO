@@ -114,7 +114,7 @@ git pull origin main
 python environment/generate_questions.py \
   --max-records 10 \
   --max-revisions 2 \
-  --output-dir environment/data/questions_editorial_v13_10 \
+  --output-dir environment/data/questions_editorial_v14_10 \
   --question-workers 4 \
   --flush-every 1
 \`\`\`
@@ -130,7 +130,7 @@ python -m unittest discover -s environment/tests -p "test_*.py"
 Stage 3 remains a separate consumer: it reconstructs the canonical task,
 compiles Gold from the unchanged ProgramIR, rechecks the Stage-2 certificate
 and performs its own public-executability and evidence validation. The new
-certificate schema is \`maestro.stage2_surface_cert.v2\` (contract 19).
+certificate schema is \`maestro.stage2_surface_cert.v3\` (contract 20).
 Previously generated v17/v18 Scoped/Free artifacts are **not supported by
 this new validator**; keep their original code/checkpoints for comparison,
 or regenerate questions in a new directory.
@@ -148,3 +148,41 @@ or regenerate questions in a new directory.
   summaries and model configuration.
 
 There are no legacy graph or recursive semantic readback publication paths.
+
+## Evidence-guided review (v14)
+
+The v13 10-question audit exposed false-positive approvals: one explicit
+intersection was rewritten as a union, one filter was attached to a different
+related entity, and another question changed only a few mechanical words
+yet received a naturalness pass. The v14 reviewer no longer issues only a
+whole-question \`equivalent=true\` vote.
+
+* The compiler supplies **public-only, compact semantic checks** about set
+  joins, filters and their owners, directed relations, and final output type.
+  Neither the private World nor the Gold Answer is given to a reviewer.
+* Critic and Final Judge independently return \`preserved\` / \`changed\` /
+  \`uncertain\` for every check, with an **exact phrase from the candidate**
+  and a concise reason. All check IDs must be covered. Missing checks,
+  malformed evidence and unsubstantiated approvals cannot publish.
+* A small high-confidence gate independently flags an explicitly labelled
+  group whose \`intersection\` is rewritten as a \`union\`. Type-aware checks
+  also require public numeric/date/code values (including normalized
+  English dates and comma-formatted numbers), while leaving attribute
+  *ownership* and more general paraphrase meaning to model review.
+* A separate style gate rejects near-verbatim edits and generic prefixes
+  appended to an otherwise unchanged reference. These gates produce
+  actionable feedback for the next Author revision; they do not silently
+  accept the Scoped reference.
+* Stage 3 revalidates the published reviewer evidence, checklist digest,
+  typed values and high-confidence guards locally, without more LLM calls.
+
+The new model response may be longer; the local Qwen3.5-9B Critic output
+budget defaults to 3072 tokens. These checks **reduce obvious false
+positives** but do not prove arbitrary natural-language equivalence:
+a model can still misunderstand an owner or misinterpret its own quote.
+Evaluate approved questions with an independently annotated adversarial
+challenge set before generating the full frozen pool.
+
+Run a **fresh directory** when comparing with v13, since the new
+\`maestro.stage2_surface_cert.v3\` (contract 20) is intentionally not
+backward-compatible with previously published v13 questions.

@@ -15,11 +15,14 @@ from environment.trajectory_simulation.eligibility import digest
 
 
 def natural_rephrase(reference):
-    if "Let the " in reference:
-        return reference.replace("Let the ", "Consider the ", 1)
-    if "Define the " in reference:
-        return reference.replace("Define the ", "Consider the ", 1)
-    return "Please identify the matching answer. " + reference
+    # This fixture uses a genuinely reordered statement of the two relations
+    # so style checks do not mistake a boilerplate prefix for naturalization.
+    if "Noah Yarrow" in reference and "'first'" in reference and "'second'" in reference:
+        return (
+            "Which entities are recorded as targets of both the 'first' and "
+            "'second' relations from Noah Yarrow?"
+        )
+    return "Which candidates satisfy all the requested public conditions? " + reference
 
 
 PASS_CRITIQUE = {
@@ -51,6 +54,18 @@ class FakeAuthor:
         return {"question": natural_rephrase(data["reference_question"])}
 
 
+def supported_checks(data):
+    candidate = data["candidate_question"]
+    # The scripted judge uses real substrings; this tests the publisher's
+    # witness and checklist protocol, NOT the model's semantic accuracy.
+    witness = candidate[:min(60, len(candidate))]
+    return [{
+        "id": check["id"], "status": "preserved",
+        "candidate_quote": witness,
+        "explanation": "Scripted: condition retained.",
+    } for check in data["semantic_checks"]]
+
+
 class FakeCritic:
     def __init__(self, critiques=None, final=None):
         self.critiques = list(critiques or [PASS_CRITIQUE])
@@ -63,8 +78,11 @@ class FakeCritic:
         self.calls.append((system, data))
         if "final independent language and semantic judge" in system:
             self.final_inputs.append(data)
-            return copy.deepcopy(self.final)
-        return copy.deepcopy(self.critiques.pop(0))
+            response = copy.deepcopy(self.final)
+        else:
+            response = copy.deepcopy(self.critiques.pop(0))
+        response["checks"] = supported_checks(data)
+        return response
 
 
 class Stage2SurfaceCertificationTests(unittest.TestCase):
@@ -101,7 +119,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         self.assertEqual(len(critic.calls), 2)
         self.assertEqual(critic.final_inputs[0].keys(),
                          {"reference_question", "candidate_question",
-                          "potential_literal_changes_to_check"})
+                          "potential_literal_changes_to_check", "semantic_checks"})
         self.assertEqual(row["authoring"]["revision_rounds"], 0)
         self.assertNotEqual(row["question"], rendered.question)
         verified = validate_surface_certificate(
@@ -118,7 +136,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
             payload, world, capability, author, critic,
             max_revisions=1,
         )
-        self.assertTrue(ok, row)
+        self.assertTrue(ok, repr((row, audit)))
         self.assertEqual(len(author.calls), 2)
         self.assertIn("previous_draft", author.calls[1])
         self.assertEqual(
@@ -174,7 +192,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
             FakeCritic(final=judge), max_revisions=0,
         )
         self.assertFalse(ok)
-        self.assertEqual(rejected["reason"], "rejected_uncertain")
+        self.assertEqual(rejected["reason"], "rejected_uncertain", str(rejected))
 
     def test_tampering_with_question_program_or_judgment_invalidates_certificate(self):
         payload, world, capability, rendered = self.data()
@@ -182,7 +200,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
             payload, world, capability, FakeAuthor(),
             FakeCritic(), max_revisions=0,
         )
-        self.assertTrue(ok)
+        self.assertTrue(ok, repr((row, _)))
         cases = [
             ("question", lambda r, w: r.update(question="changed question?")),
             ("program", lambda r, w: w["program"].update(nodes=[])),
@@ -209,6 +227,149 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(rejected["reason"], "rejected_validation_error")
 
+
+
+    def test_same_filter_on_different_relation_owners_stays_distinct(self):
+        from environment.question_generation.scoped_surface import ScopedPlan
+        from environment.question_generation.semantic_checks import semantic_checks
+        restriction = {
+            "attribute": "population number", "comparison": "less than",
+            "value": {"type": "number", "value": "1765"},
+        }
+        def relation(anchor):
+            return {
+                "definition": "RELATE", "relation": "location",
+                "direction": "forward",
+                "conditions": [copy.deepcopy(restriction)],
+                "inputs": [{
+                    "definition": "FIND", "anchor": anchor,
+                    "conditions": [], "inputs": [],
+                }],
+            }
+        combined = {
+            "definition": "INTERSECT", "conditions": [],
+            "inputs": [relation("Alpha"), relation("Beta")],
+        }
+        plan = ScopedPlan(
+            [("Which matching entities satisfy both location branches?",)],
+            [combined], combined,
+        )
+        checks = semantic_checks(plan)
+        ownership = [item for item in checks
+                     if item["kind"] == "condition_owner"
+                     and "population number" in item["expected"]]
+        self.assertEqual(len(ownership), 2)
+        self.assertEqual(len({item["id"] for item in ownership}), 2)
+
+    def test_scoped_contract_typed_literals_allow_date_paraphrases_not_code_loss(self):
+        from environment.question_generation.scoped_surface import ScopedPlan
+        from environment.question_generation.semantic_checks import missing_typed_literals
+        tree = {
+            "definition": "COUNT", "inputs": [{
+                "definition": "FIND_ALL", "inputs": [],
+                "conditions": [
+                    {"attribute": "death date", "comparison": "equal to",
+                     "value": {"type": "date", "value": "1997-08-01"}},
+                    {"attribute": "telephone country code", "comparison": "equal to",
+                     "value": {"type": "string", "value": "+650"}},
+                    {"attribute": "population", "comparison": "equal to",
+                     "value": {"type": "number", "value": "1203"}},
+                ],
+            }], "conditions": [],
+        }
+        plan = ScopedPlan([], [], tree)
+        for date in ("1997-08-01", "August 1, 1997", "1 August 1997"):
+            text = f"How many people died on {date}, with code +650 and population 1,203?"
+            self.assertEqual(missing_typed_literals(plan, text), [])
+            self.assertIn(
+                "string:+650",
+                missing_typed_literals(plan, text.replace("+650", "650")),
+            )
+            self.assertIn(
+                "number:1203",
+                missing_typed_literals(plan, text.replace("1,203", "1,204")),
+            )
+
+    def test_boilerplate_prefix_does_not_game_naturalization_gate(self):
+        from environment.question_generation.semantic_checks import naturalness_gate
+        ref = (
+            "Which entities listed as targets of the first relation from Noah "
+            "Yarrow are also targets of the second relation from Noah Yarrow?"
+        )
+        bad = (
+            "Using the public records, please determine the requested "
+            "result according to the following details. " + ref
+        )
+        self.assertFalse(naturalness_gate(ref, bad)["improved_enough_to_review"])
+
+    def test_v13_known_false_positive_near_copy_is_rejected(self):
+        from environment.question_generation.semantic_checks import naturalness_gate
+        ref = (
+            "Let the first group consist of places with a start date of 1914 "
+            "recorded as birthplaces of the person born on March 8, 2000. "
+            "Let the second group consist of events that point to the first group."
+        )
+        draft = ref.replace("consist of", "be", 1)
+        self.assertFalse(naturalness_gate(ref, draft)["improved_enough_to_review"])
+
+    def test_explicit_intersection_to_union_is_not_approved(self):
+        from environment.question_generation.semantic_checks import explicit_join_contradictions
+        ref = (
+            "Let the first group consist of administrative areas in Central Valley. "
+            "Let the second group consist of entities in both entities with "
+            "population 1203 from the first group and administrative areas "
+            "with a neighbor of an entity with male population 488."
+        )
+        bad = (
+            "First, identify areas in Central Valley to form Group 1. "
+            "Next, define Group 2 as the union of: (1) entities with "
+            "population 1203, and (2) areas with a neighbor relation."
+        )
+        self.assertEqual(
+            explicit_join_contradictions(ref, bad),
+            ["group_2_changed_intersection_to_union"],
+        )
+        self.assertFalse(explicit_join_contradictions(ref, ref))
+
+    def test_missing_or_forged_grounding_blocks_final_certificate(self):
+        from environment.question_generation.semantic_checks import (
+            check_evidence, CheckFormatError,
+        )
+        sample = "Which people have a recorded spouse who died in this place?"
+        checks = [{"id": "C1", "kind": "relation_scope",
+                   "expected": "Preserve spouse direction",
+                   "reference_excerpt": "whose spouse died in this place"}]
+        for bad in (
+            [], [{"id": "wrong", "status": "preserved",
+                  "candidate_quote": "spouse", "explanation": "yes"}],
+            [{"id": "C1", "status": "preserved",
+              "candidate_quote": "invented relationship", "explanation": "yes"}],
+            [{"id": "C1", "status": "preserved",
+              "candidate_quote": "spouse", "explanation": ""}],
+        ):
+            with self.subTest(bad=bad), self.assertRaises(CheckFormatError):
+                check_evidence(checks, bad, sample)
+
+    def test_model_cannot_pass_a_known_changed_semantic_check(self):
+        from environment.question_generation.question_review import (
+            judge_question, critique_question,
+        )
+        class ContradictoryReviewer:
+            def complete_json(self, system, user, **kwargs):
+                data = json.loads(user)
+                checks = supported_checks(data)
+                checks[0]["status"] = "changed"
+                if "final independent" in system:
+                    return {**PASS_FINAL, "checks": checks}
+                return {**PASS_CRITIQUE, "checks": checks}
+        c = [{"id": "C1", "kind": "set_logic",
+              "expected": "all branches", "reference_excerpt": "both groups"}]
+        draft = "Which entities belong to either group?"
+        feedback = critique_question(ContradictoryReviewer(), "both groups", draft, c)
+        self.assertEqual(feedback["verdict"], "revise")
+        self.assertTrue(feedback["issues"])
+        judged = judge_question(ContradictoryReviewer(), "both groups", draft, c)
+        self.assertNotEqual(judged["verdict"], "pass")
 
 if __name__ == "__main__":
     unittest.main()
