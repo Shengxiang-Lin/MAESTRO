@@ -175,7 +175,7 @@ def run(args):
             for line in handle:
                 if line.strip():
                     reasons[json.loads(line).get("reason", "unknown")] += 1
-        author_calls = critic_calls = final_judge_calls = 0
+        author_calls = critic_calls = candidate_probe_calls = final_judge_calls = 0
         review_outcomes = Counter()
         accepted_after_revision = 0
         with (output_dir / "question_review_audit.jsonl").open(
@@ -188,6 +188,7 @@ def run(args):
                 for attempt in event.get("audit", ()):
                     author_calls += int(attempt.get("author_calls", 0))
                     critic_calls += int(attempt.get("critic_calls", 0))
+                    candidate_probe_calls += int(attempt.get("candidate_probe_calls", 0))
                     final_judge_calls += int(attempt.get("final_judge_calls", 0))
                     if attempt.get("stage") == "candidate":
                         review_outcomes[attempt.get(
@@ -218,6 +219,7 @@ def run(args):
                 "max_revisions": args.max_revisions,
                 "author_calls": author_calls,
                 "critic_calls": critic_calls,
+                "candidate_probe_calls": candidate_probe_calls,
                 "final_judge_calls": final_judge_calls,
                 "accepted_after_revision": accepted_after_revision,
                 "candidate_decisions": dict(review_outcomes),
