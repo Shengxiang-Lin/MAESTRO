@@ -27,9 +27,9 @@ from .semantic_checks import (
     relation_semantic_contradictions, CheckFormatError,
 )
 
-SCHEMA = "maestro.stage2_surface_cert.v6"
-REVIEW_CONTRACT = 23
-METHOD = "candidate_only_semantic_probe_review_v5"
+SCHEMA = "maestro.stage2_surface_cert.v7"
+REVIEW_CONTRACT = 24
+METHOD = "candidate_owner_semantic_probe_review_v6"
 
 
 def _certificate(task_id, program, canonical, question, review):
@@ -51,6 +51,7 @@ def certify_approved_question(
     critic_verdict: str, revision_rounds: int,
     semantic_checklist: list[dict],
     candidate_probes: list[dict] | None = None,
+    candidate_probe_specs: list[dict] | None = None,
 ):
     """Mint a certificate only after the Critic and independent judge pass."""
     if (not question or question == canonical or question == scoped_reference
@@ -63,9 +64,12 @@ def certify_approved_question(
             or relation_semantic_contradictions(scoped_reference, question)):
         raise ValueError("natural_question_failed_deterministic_risk_guards")
     validate_group_decisions(semantic_checklist, final_judgment.get("checks"))
-    if candidate_probes is None:
+    if candidate_probes is None or candidate_probe_specs is None:
         raise ValueError("candidate_probe_records_required")
-    # Actual public-plan comparison runs at issuance and Stage-3 replay.
+    if explicit_probe_contradictions(candidate_probe_specs, question):
+        raise ValueError("explicit_candidate_scope_contradiction")
+    validate_candidate_probe_records(candidate_probe_specs, candidate_probes)
+    # Stage 3 also rebuilds the plan and recomputes expected probes.
     review = {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": METHOD, "issues": [],
