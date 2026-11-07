@@ -245,6 +245,39 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
                         edited, copy_world, rendered.question,
                     )
 
+    def test_stage3_rejects_missing_coverage_even_if_attacker_rehashes_certificate(self):
+        from environment.question_generation.verification import _certificate
+        payload, world, capability, rendered = self.data()
+        ok, row, audit = _realize_one(
+            payload, world, capability, FakeAuthor(),
+            FakeCritic(), max_revisions=0,
+        )
+        self.assertTrue(ok, repr((row, audit)))
+        self.assertTrue(
+            row["authoring"]["surface_review"]["candidate_probes"],
+        )
+        cases = [
+            ("missing_model_records", lambda review: review.update(
+                candidate_probes=[])),
+            ("false_complete_manifest", lambda review: review[
+                "semantic_coverage"].update(verified=0)),
+            ("fake_obligations", lambda review: review.update(
+                coverage_obligation_sha256="0" * 64)),
+        ]
+        for label, mutate in cases:
+            with self.subTest(case=label):
+                forged = copy.deepcopy(row)
+                review = forged["authoring"]["surface_review"]
+                mutate(review)
+                forged["surface_certificate"] = _certificate(
+                    forged["task_id"], world["program"], rendered.question,
+                    forged["question"], review,
+                )
+                with self.assertRaises(ValueError):
+                    validate_surface_certificate(
+                        forged, world, rendered.question,
+                    )
+
     def test_json_schema_does_not_require_recursive_checks_in_child(self):
         from environment.question_generation.question_review import (
             _CHECK_SCHEMA, _FINAL_SCHEMA, _CRITIC_SCHEMA,
