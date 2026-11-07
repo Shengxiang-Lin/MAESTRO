@@ -162,9 +162,13 @@ def _realize_one(payload, world, capability, author, critic, *,
         blueprint_audit["goals"] = blueprint["goals"]
     except (BackendError, ValueError, KeyError, TypeError) as exc:
         blueprint_audit["failure"] = str(exc)[:240]
-        return _reject(
-            payload, "rejected_blueprint", audit, detail=exc,
+        reason = (
+            "rejected_validation_error" if (
+                isinstance(exc, BackendError) or
+                str(exc) in ("blueprint_response_schema", "blueprint_author_backend_missing")
+            ) else "rejected_blueprint"
         )
+        return _reject(payload, reason, audit, detail=exc)
 
     previous, feedback = None, None
     last_reason, last_detail = "rejected_quality", "not_naturalized"
@@ -189,6 +193,15 @@ def _realize_one(payload, world, capability, author, critic, *,
 
         entry["question"] = candidate
         previous = candidate
+        if not _meaningful_edit(scoped, candidate) or not _meaningful_edit(canonical, candidate):
+            entry["failure"] = "not_naturalized"
+            feedback = _feedback(
+                "The draft is essentially unchanged.",
+                "Make a user-facing lexical rewrite, not punctuation-only changes; "
+                "keep the original condition logic and entity scopes.",
+            )
+            last_reason, last_detail = "rejected_quality", "unchanged_question"
+            continue
 
         # A literal operator-list reproduction is not a benchmark-style user
         # question. This is a narrow surface check, not semantic parsing.
@@ -204,16 +217,6 @@ def _realize_one(payload, world, capability, author, critic, *,
                 "the same constraints; keep all branches and entity owners.",
             )
             last_reason, last_detail = "rejected_quality", "mechanical_group_template"
-            continue
-
-        if not _meaningful_edit(scoped, candidate) or not _meaningful_edit(canonical, candidate):
-            entry["failure"] = "not_naturalized"
-            feedback = _feedback(
-                "The draft is essentially unchanged.",
-                "Improve readability with a small lexical edit; keep all "
-                "original conditions and grouping.",
-            )
-            last_reason, last_detail = "rejected_quality", "unchanged_question"
             continue
 
         # These guards are intentionally few and *high precision*. They
