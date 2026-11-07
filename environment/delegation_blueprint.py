@@ -201,7 +201,9 @@ def _terminal_result_contract(outline, fragment):
     if not operations:
         return None
     final_action = operations[-1]
-    result = {"action": final_action, "output_kind": fragment["output_kind"]}
+    result = {"action": final_action}
+    if fragment.get("output_kind") is not None:
+        result["output_kind"] = fragment["output_kind"]
     if final_action == "QUERY_ATTR":
         last = fragment["public_steps"][-1]
         if last.get("output_attribute"):
