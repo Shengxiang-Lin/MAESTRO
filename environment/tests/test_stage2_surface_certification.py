@@ -72,7 +72,7 @@ class FakeCritic:
     def complete_json(self, system, user, **kwargs):
         data = json.loads(user)
         self.calls.append((system, data))
-        if "final independent language and semantic judge" in system:
+        if "independent final semantic and language judge" in system:
             self.final_inputs.append(data)
             response = copy.deepcopy(self.final)
         else:
@@ -387,7 +387,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
                 data = json.loads(user)
                 checks = supported_checks(data)
                 checks[0]["status"] = "changed"
-                if "final independent" in system:
+                if "independent final" in system:
                     return {**PASS_FINAL, "checks": checks}
                 return {**PASS_CRITIQUE, "checks": checks}
         c = [{"id": "R1", "kind": "set_logic",
