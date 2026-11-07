@@ -27,9 +27,9 @@ from .semantic_checks import (
     relation_semantic_contradictions, CheckFormatError,
 )
 
-SCHEMA = "maestro.stage2_surface_cert.v7"
-REVIEW_CONTRACT = 24
-METHOD = "candidate_owner_semantic_probe_review_v6"
+SCHEMA = "maestro.stage2_surface_cert.v8"
+REVIEW_CONTRACT = 25
+METHOD = "candidate_scope_coverage_review_v7"
 
 
 def _certificate(task_id, program, canonical, question, review):
