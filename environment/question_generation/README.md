@@ -344,7 +344,7 @@ Qwen3.5-9B. Check every accepted output and the 3/5/8 task regressions
 before increasing to 50 questions, and do not use 70% reviewer
 acceptance as a proxy for semantic precision.
 
-## v19 label-free coverage, group identity and conditional semantics (current)
+## v19 label-free coverage, group identity and conditional semantics (previous)
 
 On the real ten-question v18 Qwen3.5-9B run (8/10 accepted), audits showed
 three material gaps: task 3 removed the literal "second group" label, so
@@ -397,3 +397,72 @@ python environment/generate_questions.py \
   --output-dir environment/data/questions_editorial_v19_10 \
   --question-workers 4 --flush-every 1
 ```
+
+## v20 coverage-aware semantic certification (current; 50-task evaluation)
+
+v19 (real local Qwen3.5-9B on the same 10 frozen tasks) accepted 6/10.
+Five of its six accepted drafts had NO candidate-only probe call, and the
+one probed acceptance missed a directed `location` hop. Consequently,
+per-candidate groups, typed literal preservation, Critic agreement and
+a `naturalized_certified` label cannot be treated as proof of semantic
+equivalence.
+
+v20 adds an independent mandatory **public semantic obligation manifest**
+in `coverage_review.py`. Compiling from the frozen PUBLIC `ScopedPlan`
+does not depend on whether Author retains mechanical group labels:
+
+- Every distinct supported `RELATE` node gets a candidate-only direction /
+  relation-meaning probe: `FORWARD`, `BACKWARD`, `DIRECT`, `OTHER`,
+  `UNCLEAR`. These are intended to catch reference relations replaced
+  by direct attributes or weaker name/reference associations.
+- Every distinct `INTERSECT`/`UNION` node gets a candidate-only
+  `AND`/`OR`/`UNCLEAR` probe.
+- Every task gets a final answer-type probe (`COUNT`, `ENTITIES`,
+  `ATTRIBUTE`, `RELATIONS`, `RANK`, `VERIFY`, or `UNCLEAR`).
+- Existing high-confidence public condition-owner, conditional, member
+  scope and group-identity probes remain in place.
+
+Review questions include only public, short clause anchors and candidate
+text, **not** the full reference, Gold, private World or expected answer
+label. The compiler holds the expected answer separately. A mismatched
+or `UNCLEAR` response means the candidate is not certified; Author may
+revise against feedback within the existing revision budget.
+
+To avoid silent truncation, all required obligations must fit the bounded
+compiler budget (24 total). Large/deep unsupported structures fail closed
+as `rejected_coverage_unverifiable` rather than dropping checks.
+Requests are batched 4 probes at a time, retaining the existing
+same-candidate bounded protocol retry. Every accepted candidate must have
+a nonempty, **complete** model-checked coverage manifest; no zero-probe
+acceptance is allowed. This is model-evaluated *coverage* rather than
+formal proof of semantics.
+
+The Stage-2 certificate is now `maestro.stage2_surface_cert.v9` /
+review contract `26`; Stage 3 deterministically rebuilds the same
+public obligations, checks the manifest hash and every saved answer, and
+refuses missing/modified coverage. The resume signature also fingerprints
+`coverage_review.py`, `semantic_probes.py` and `semantic_checks.py`.
+Older v19 certified outputs are not compatible with v20 Stage-3 replay.
+
+**Evaluate on the FIRST 50 frozen questions, in a new output directory,
+not the old first-10 test directory:**
+
+```bash
+cd ~/code/MAESTRO
+git switch main
+git pull origin main
+python environment/generate_questions.py \
+  --max-records 50 --max-revisions 2 \
+  --output-dir environment/data/questions_coverage_v20_50 \
+  --question-workers 4 --flush-every 1
+```
+
+The summary includes `accepted_with_complete_coverage`,
+`compiled_probe_kinds`, `verified_probe_kinds` and
+`candidate_probe_calls`. Collect the JSONL audit/accepted/rejected files
+and manually inspect **semantic precision, false positives, false
+negatives, validation errors, probe coverage and inference cost**. It is
+acceptable for the acceptance rate to fall if actual false positives are
+caught; a model saying `FORWARD` is NOT ground-truth proof of a relation.
+The 50 tasks are an evaluation slice, not held-out once they are used to
+tune future versions. No local Qwen inference was run in repository CI.
