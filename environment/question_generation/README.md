@@ -10,7 +10,8 @@ DAG. Neither Stage 2 job edits task semantics or generates Gold answers.
 Frozen ProgramIR + compact Gold DAG
     └─ compile_delegation_outline (deterministic PUBLIC projection)
         └─ each fragment concurrently/independently:
-            ├─ Local Goal Author (current public steps + direct dependencies)
+            ├─ Structured Intent compiler (action, target, output; no LLM)
+            ├─ Local Goal Author (intent + local steps + direct dependencies)
             ├─ deterministic checks (numbers, comparisons, foreign branch literals)
             ├─ Local Goal Critic (main intent + output alignment + no contradiction)
             └─ bounded local repair, max --max-goal-revisions
@@ -40,8 +41,8 @@ A model summary that says "matching the specified date conditions" may
 PASS; one that explicitly changes "not equal to 1160" into "after 1160"
 must REVISE. Deterministic guards no longer require any local number to
 appear in the Goal. They check explicit comparison contradictions, foreign-branch
-numerals, and narrowly defined output / attribute-owner errors. An invalid Critic JSON
-is retried on the SAME Goal at most once, without rewriting it.
+numerals, and narrowly defined output / attribute-owner errors. An invalid Critic JSON is retried on the SAME Goal, including a
+JSON-object fallback after schema-mode retries, without rewriting it.
 A PASS remains an auditable model judgment, not semantic proof.
 
 This is a bounded **automatic fidelity review**, not a formal mathematical
@@ -54,7 +55,7 @@ Run from the MAESTRO root with the existing configured local vLLM:
 python environment/generate_goals.py \
   --max-records 50 \
   --max-goal-revisions 2 \
-  --output-dir environment/data/stage2a_intents_v4_50 \
+  --output-dir environment/data/stage2a_intents_v5_50 \
   --question-workers 4 \
   --blueprint-workers 2 \
   --flush-every 1
@@ -70,9 +71,12 @@ Stage 2A outputs are separate and checkpointed:
 | \`goal_generation_summary.json\` | Task yield, reviewer and author calls, failure reasons |
 | \`goal_progress_state.json\` | Crash-safe ordered checkpoint; resumable with identical inputs/code/model settings |
 
-Older v1-v3 Stage-2A data does not carry this version's terminal
-output and attribute-owner review. Preserve those files for comparison.
-Generate a new v4 Goal dataset before running Stage 2B on the v4 code.
+Older v1-v4 Stage-2A Goal certifications used different Author/Reviewer
+contracts. Preserve them for comparison; create a new v5 output directory.
+A prior **v5** audit can be reused using --reuse-goal-audit pointing to
+goal_review_audit.jsonl. Passed Goals are reused only when model roles,
+review version and exact public outline hash match. Cached fragments are
+revalidated before any new certificate is issued.
 
 To intentionally overwrite an earlier Stage-2A run, add
 \`--restart-goals\`. To preserve previous experiments, prefer a new
@@ -85,8 +89,12 @@ the completed Stage-2A Goal dataset.
 Stage 2A certified_blueprints.jsonl
     └─ join frozen task IDs / discard non-certified originals
         └─ independently rebuild compact Gold DAG and replay 2A certificate
-            └─ benchmark Question Author (Goal Blueprint + original contract)
-                └─ existing deterministic guards + Question Critic / local repair
+            └─ deterministic Branch-Level Question Brief
+                ├─ collapse only serial Fragment chains (never forks/joins)
+                ├─ one Stage2A Goal per workstream plus exact PUBLIC constraints
+                ├─ preserve anchors, relations, ownership and AND/OR joins
+                └─ Question Author (Brief only; no mechanical reference)
+                    └─ deterministic guards + Critic (FULL public contract)
                     └─ Stage 2B certified Question, including signed 2A review
                         └─ Stage 3: verified source-based Sub-Agent reports
                                       → just-in-time Main delegations
@@ -95,9 +103,10 @@ Stage 2A certified_blueprints.jsonl
 \`\`\`bash
 python environment/generate_questions.py \
   --max-records 50 \
-  --blueprints environment/data/stage2a_intents_v4_50/certified_blueprints.jsonl \
+  --blueprints environment/data/stage2a_intents_v5_50/certified_blueprints.jsonl \
   --max-revisions 2 \
-  --output-dir environment/data/stage2b_intents_v4_50 \
+  --output-dir environment/data/stage2b_branch_v5_50 \
+  --question-brief-mode branch \
   --question-workers 4 \
   --flush-every 1
 \`\`\`
@@ -113,6 +122,18 @@ accepted Question carries the source \`delegation_blueprint\`,
 it can be rerun against the same frozen certified Goal dataset to improve
 Question prompts without regenerating Goals.
 
+Stage 2B Author now defaults to **--question-brief-mode branch**, which
+uses a compact topology-preserving workstream Brief instead of sending
+the entire Reference + recursive semantic tree + every raw Fragment Goal.
+The independent Critic still sees the complete scoped reference and
+semantic contract. The final Question must preserve exact details that
+the brief's high-level Goals can omit. The signed Stage-2B review stores
+the compact Brief hash and Stage 3 recomputes it at replay.
+
+For a paired A/B baseline on the SAME v5 certified Goals, run
+`--question-brief-mode full` in a separate output directory to restore
+the legacy all-input Question Author, keeping the independent Critic fixed.
+
 Stage-2B outputs and checkpoints retain the existing names:
 \`realized_capability_worlds.jsonl\`,
 \`question_rejected.jsonl\`,
@@ -123,7 +144,7 @@ and \`question_progress_state.json\`.
 ### Contract versions and Stage 3
 
 - Goal Blueprint: \`maestro.delegation_blueprint.v2\`.
-- Stage-2A Goal certificate: \`maestro.stage2a.certified_blueprint.v4\`.
+- Stage-2A Goal certificate: \`maestro.stage2a.certified_blueprint.v5\`.
 - Stage-2B Question certificate for these Goals:
   \`maestro.stage2_surface_cert.certified_goals.v3\` (review contract 32).
 - Existing earlier v2 Question certificates continue to replay for
