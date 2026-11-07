@@ -173,9 +173,12 @@ def main_single_task_prompt(
     packet = {
         "main_question": payload["public_state"]["question"],
         "task_index": task_index,
-        "preplanned_goal": goal_for_fragment(
-            payload.get("delegation_blueprint"),
-            payload["gold_guidance"]["ready"][task_index]["fragment_id"],
+        "preplanned_goal": (
+            goal_for_fragment(
+                payload["delegation_blueprint"],
+                payload["gold_guidance"]["ready"][task_index]["fragment_id"],
+            ) if (payload.get("delegation_blueprint") is not None
+                  and "gold_guidance" in payload) else None
         ),
         "total_parallel_tasks": len(tasks),
         "required_public_checks": task["task_instruction"],
