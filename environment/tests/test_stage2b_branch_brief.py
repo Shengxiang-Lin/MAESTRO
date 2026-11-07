@@ -7,6 +7,9 @@ import unittest
 
 from environment.delegation_blueprint import _structured_intent
 from environment.question_generation.question_brief import compile_question_brief
+from environment.question_generation.semantic_checks import (
+    explicit_global_join_contradictions,
+)
 from environment.question_generation.realization import _realize_one
 from environment.question_generation.verification import validate_surface_certificate
 from environment.tests.test_stage2_surface_certification import (
@@ -111,6 +114,41 @@ class BranchQuestionBriefTests(unittest.TestCase):
             row, world, rendered.question,
         )
         self.assertTrue(replay["eligible"])
+
+    def test_unambiguous_intersection_cannot_be_rewritten_as_either_or(self):
+        from types import SimpleNamespace
+        tree = {
+            "definition": "QUERY_NAME",
+            "inputs": [{
+                "definition": "INTERSECT",
+                "inputs": [
+                    {"definition": "FILTER_NUMBER", "inputs": []},
+                    {"definition": "FILTER_DATE", "inputs": []},
+                ],
+            }],
+        }
+        plan = SimpleNamespace(query=tree)
+        self.assertEqual(
+            explicit_global_join_contradictions(
+                plan, "Which entities satisfy either condition A or condition B?"
+            ), ["all_branch_intersection_rewritten_as_either_or"],
+        )
+        self.assertEqual(
+            explicit_global_join_contradictions(
+                plan, "Which entities satisfy both condition A and condition B?"
+            ), [],
+        )
+        tree["inputs"][0]["inputs"].append({
+            "definition": "UNION",
+            "inputs": [{"definition": "FIND", "inputs": []}],
+        })
+        # Mixed logical expressions cannot be rejected by a global keyword
+        # rule: a valid nested union may naturally use "either ... or".
+        self.assertEqual(
+            explicit_global_join_contradictions(
+                plan, "Which entities satisfy either condition A or condition B?"
+            ), [],
+        )
 
     def test_structured_intent_targets_are_local_not_global(self):
         blueprint = self.fixture()[-1]["delegation_blueprint"]
