@@ -89,7 +89,6 @@ def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress,
                         capabilities.get(str(payload.get("task_id")),{}),
                         author,critic,
                         max_revisions=args.max_revisions,
-                        blueprint_workers=args.blueprint_workers,
                         goal_record=(goal_records or {}).get(str(payload.get("task_id"))))
                     active[future]=index
                     next_submit+=1
@@ -302,7 +301,7 @@ def run(args):
                 "ordered_writes": True,
                 "flush_every": args.flush_every,
                 "question_workers": args.question_workers,
-                "blueprint_workers_per_task": args.blueprint_workers,
+                "stage2a_goals_regenerated": False,
                 "resumed_records": resumed_count,
                 "checkpoint": str(output_dir / "question_progress_state.json"),
             },
