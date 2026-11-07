@@ -268,6 +268,13 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
                 "semantic_coverage"].update(verified=0)),
             ("fake_obligations", lambda review: review.update(
                 coverage_obligation_sha256="0" * 64)),
+            ("remove_evidence_status", lambda review: review[
+                "candidate_probes"][0].pop("evidence_status")),
+            ("forge_raw_model_answer", lambda review: review[
+                "candidate_probes"][0].update(raw_answer="UNCLEAR")),
+            ("forge_grounding_reason", lambda review: review[
+                "candidate_probes"][0].update(
+                    evidence_reason="model_returned_unclear")),
         ]
         for label, mutate in cases:
             with self.subTest(case=label):

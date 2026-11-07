@@ -622,15 +622,72 @@ def _grounded_answer(probe, item, candidate):
     return answer
 
 
+# v23: explicitly separate model semantic answers from quote grounding.
+# These fields are candidate-only audit data, never private World/Gold.
+_DIAGNOSTIC_FIELDS = {"raw_answer", "evidence_status", "evidence_reason"}
+
+
+def _evidence_failure_reason(probe, item, candidate):
+    """Return a bounded local formatting/grounding reason, not a semantic vote."""
+    if item.get("answer") == "UNCLEAR":
+        return "model_uncertain"
+    quote = item.get("evidence")
+    if not isinstance(quote, str) or not quote.strip():
+        return "evidence_missing"
+    if quote not in candidate:
+        return "evidence_not_verbatim"
+    kind = probe["kind"]
+    if kind == "relation_path":
+        roles = (item.get("subject_role"), item.get("object_role"))
+        mapped = {("A", "B"): "A_TO_B", ("B", "A"): "B_TO_A"}.get(roles)
+        if mapped != item["answer"]:
+            return "relation_role_label_inconsistent"
+        for name in ("subject", "object"):
+            value = item.get(name)
+            if not isinstance(value, str) or not value.strip() or value not in quote:
+                return f"relation_{name}_quote_invalid"
+        if item.get("subject") == item.get("object"):
+            return "identical_relation_endpoints"
+    elif kind == "condition_owner":
+        owner = item.get("owner")
+        if item.get("answer") not in ("A", "B"):
+            return "owner_role_label_invalid"
+        if not isinstance(owner, str) or not owner.strip() or owner not in quote:
+            return "owner_quote_invalid"
+        if re.search(r"\b(?:whose|that has|which has|who has)\b", owner, re.I):
+            return "owner_quote_contains_condition"
+        if not _contains_condition_value(probe, quote):
+            return "owner_condition_value_not_in_evidence"
+    elif kind == "ranking_attribute":
+        answer = str(item.get("answer", "")).strip().strip("'\"")
+        if not answer or not re.search(
+                r"(?<!\w)" + re.escape(answer) + r"(?!\w)", quote, re.I):
+            return "ranking_attribute_not_in_evidence"
+    return "evidence_grounding_unverified"
+
+
+def _semantic_evidence_status(probe, item, candidate, grounded):
+    """Classify independently of a final approve/reject decision."""
+    if item["answer"] == "UNCLEAR":
+        return "model_uncertain", "model_returned_unclear"
+    if grounded == "UNCLEAR":
+        return "evidence_invalid", _evidence_failure_reason(probe, item, candidate)
+    if grounded != probe["expected"]:
+        return "semantic_mismatch", "model_claim_differs_from_public_expected_label"
+    return "verified", "model_claim_and_evidence_format_passed"
+
+
 def validate_candidate_probe_records(probes: list[dict], records: Any, *,
                                      candidate: str | None = None) -> None:
     """Fail closed if the saved v17 probe certificate differs from public plan."""
     if not isinstance(records, list) or len(records) != len(probes):
         raise ValueError("candidate_probe_certificate_incomplete")
     for probe, record in zip(probes, records, strict=True):
+        basic_fields = ({"id", "kind", "expected", "answer"} |
+                        (_EVIDENCE_FIELDS if probe.get("evidence_required") else set()))
+        actual_fields = set(record) if isinstance(record, dict) else set()
         if (not isinstance(record, dict)
-                or set(record) != ({"id", "kind", "expected", "answer"} |
-                    (_EVIDENCE_FIELDS if probe.get("evidence_required") else set()))
+                or actual_fields not in (basic_fields, basic_fields | _DIAGNOSTIC_FIELDS)
                 or record["id"] != probe["id"]
                 or record["kind"] != probe["kind"]
                 or record["expected"] != probe["expected"]
@@ -641,11 +698,22 @@ def validate_candidate_probe_records(probes: list[dict], records: Any, *,
                     or candidate is None
                     or _grounded_answer(probe, record, candidate) != record["answer"]):
                 raise ValueError("candidate_probe_certificate_ungrounded")
+            if _DIAGNOSTIC_FIELDS.issubset(record):
+                raw = {**record, "answer": record["raw_answer"]}
+                normalized = _grounded_answer(probe, raw, candidate)
+                status, reason = _semantic_evidence_status(
+                    probe, raw, candidate, normalized,
+                )
+                if (record["answer"] != normalized
+                        or record["evidence_status"] != status
+                        or record["evidence_reason"] != reason):
+                    raise ValueError("candidate_probe_certificate_diagnostic_mismatch")
 
 
 def probe_candidate_semantics(
     backend: Any, reference: str, candidate: str,
     probes: list[dict[str, str]], *, use_schema: bool = True, focused: bool = False,
+    claimed_answers: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
     """Read candidate only; reference argument is deliberately not transmitted.
 
@@ -658,7 +726,9 @@ def probe_candidate_semantics(
         raise CandidateProbeFormatError("candidate_probe_backend_unavailable")
     evidence_mode = any(p.get("evidence_required") for p in probes)
     public = [{"id": p["id"], "question": p["question"],
-               **({"kind": p["kind"]} if evidence_mode else {})}
+               **({"kind": p["kind"]} if evidence_mode else {}),
+               **({"initial_model_answer": claimed_answers[p["id"]]}
+                  if claimed_answers and p["id"] in claimed_answers else {})}
               for p in probes]
     system = _EVIDENCE_SYSTEM if evidence_mode else _PROBE_SYSTEM
     schema = _PROBE_SCHEMA
@@ -677,6 +747,16 @@ def probe_candidate_semantics(
                    "Check local grammatical attachments and passive relation endpoints "
                    "carefully. A new answer requires fresh verbatim evidence. "
                    "Remain UNCLEAR if the text does not resolve the distinction.")
+    if claimed_answers:
+        # These are the model's OWN previous claims, never teacher expected labels.
+        system += (
+            "\nEVIDENCE-ONLY REPAIR: the initial_model_answer was your own "
+            "previous candidate reading. Supply a short EXACT contiguous "
+            "candidate quote and its actual noun phrases for that reading. "
+            "Do not invent a quote or paraphrase the candidate. Do not "
+            "change the semantic answer just to make a quote fit; answer "
+            "UNCLEAR if a faithful quote cannot support your own claim."
+        )
     raw = backend.complete_json(
         system,
         json.dumps({"candidate_question": candidate, "probes": public},
@@ -708,10 +788,18 @@ def probe_candidate_semantics(
     for p in probes:
         item = by_id[p["id"]]
         answer = _grounded_answer(p, item, candidate) if evidence_mode else item["answer"]
+        status, reason = _semantic_evidence_status(
+            p, item, candidate, answer,
+        ) if evidence_mode else (
+            "verified" if answer == p["expected"] else "semantic_mismatch",
+            "model_label_only_without_grounding",
+        )
         records.append({
             "id": p["id"], "kind": p["kind"], "expected": p["expected"],
             "answer": answer,
             **({key: item.get(key, "") for key in _EVIDENCE_FIELDS} if evidence_mode else {}),
+            **({"raw_answer": item["answer"], "evidence_status": status,
+                "evidence_reason": reason} if evidence_mode else {}),
         })
     return records
 
