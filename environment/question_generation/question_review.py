@@ -241,6 +241,7 @@ def _guard_unverified_omission_feedback(
     candidate or erases a failed risk-group judgment.
     """
     present = set(typed_values(candidate, words=False))
+    has_unverified_omission = False
     for issue in issues:
         explanation = issue.get("explanation", "")
         if (not re.search(r"\b(?:omit(?:ted|ting|s)?|miss(?:es|ing)?|dropped|absent)\b",
@@ -250,6 +251,7 @@ def _guard_unverified_omission_feedback(
         cited = set(typed_values(explanation, words=False))
         if not cited.intersection(present):
             continue
+        has_unverified_omission = True
         issue["explanation"] = (
             "Reviewer claimed that a value was omitted, but a cited numeric "
             "value appears in the candidate. This is an unverified claim: "
@@ -261,6 +263,7 @@ def _guard_unverified_omission_feedback(
             "reference; do not add or remove a numeric condition merely "
             "because the reviewer called it missing."
         )
+    return has_unverified_omission
 
 
 def author_question(backend: Any, reference: str, *,
@@ -332,9 +335,16 @@ def critique_question(backend: Any, reference: str, candidate: str,
                     "requirements with their original owners and relations."
                 ),
             })
-    _guard_unverified_omission_feedback(candidate, issues)
+    ungrounded_omission = _guard_unverified_omission_feedback(candidate, issues)
+    summary = (
+        "At least one reviewer omission claim concerns a numeric value "
+        "already present in the candidate. Check its OWNER and other "
+        "reference constraints before making any edit; do not blindly "
+        "reinsert the cited number."
+        if ungrounded_omission else response["summary"]
+    )
     return {"verdict": verdict, "issues": issues,
-            "summary": response["summary"], "checks": response["checks"]}
+            "summary": summary, "checks": response["checks"]}
 
 
 def judge_question(backend: Any, reference: str, candidate: str,
