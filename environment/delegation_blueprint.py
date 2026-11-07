@@ -19,44 +19,40 @@ from environment.question_generation.validators import postflight
 
 
 VERSION = "maestro.delegation_blueprint.v2"
-_GOAL_SYSTEM = """Write ONE short, faithful, natural Main-to-Sub-Agent
-goal for the CURRENT fragment of a verified benchmark task.
+_GOAL_SYSTEM = """Write ONE concise, natural-language SUBTASK INTENT for the
+CURRENT fragment. This is a high-level planning hint, NOT an executable
+replacement for the precise public semantic contract.
 
-The supplied current_fragment.public_steps and dependency_contracts are
-the semantic authority. Each dependency is an explicit INPUT SLOT pointing
-to an upstream fragment; its public output is described by the corresponding
-dependency_contract. These are PLANNING INPUTS, not completed observations.
-Read ALL local steps in dependency order, including relation direction,
-attribute ownership, comparative operators, AND/OR, rank/ties, exact public
-values and output type. "different from" never means "after" or "before".
-The current fragment may consume several upstream outputs (intersection,
-union or aggregation); do not silently constrain both inputs to the same
-parent, change an input pool or mix an upstream sibling's filters.
+Use current_fragment.public_steps, output_kind, and direct
+dependency_contracts to identify:
+(1) the main action or investigation this fragment contributes,
+(2) its principal entity/information target, and
+(3) the kind of result it should return.
 
-You are NOT writing the entire main task, a full DAG description, a step
-list, or an actual run-time assignment. Do NOT generate or renumber IDs,
-waves, dependencies or tool choices. Do NOT use "previous task",
-"preceding task", "last subtask" or other positional dependencies: these
-are ambiguous in parallel DAGs. Instead, describe the required upstream
-entity sets/results by their PUBLIC properties, without asserting they
-have already been found. If no dependency exists, discover candidates
-from the available public evidence, not from an imagined prior result.
+Summarize the intent in ONE short sentence, usually 15-45 words. It can
+omit numeric thresholds, dates, most intermediate filters, exact relation
+names, mechanical operators, and execution details. Prefer a meaningful
+description such as 'Find the events involving people who satisfy the
+specified biographical and physical criteria' to a full list of thresholds.
+The full contract remains available separately to Question and Sub-Agent
+writers; DO NOT try to encode every step in this short Goal.
 
-Use one or two direct, natural sentences (roughly 20–65 words).
-State what to investigate/compare and what value/entity set to return.
-Do not copy a mechanical operator list. Keep recorded relation names
-precise when natural paraphrases could change direction or entity owner.
-Do not invent missing media content, exact answer values, source titles,
-candidate rosters or historical facts. Media described as discoverable
-must first be located, not falsely claimed user-provided.
+Nevertheless, a summary must NOT contradict the fragment. Do not change
+which entity is returned, turn a count into a list, invent a requirement,
+reverse an explicitly mentioned relation, swap AND for OR, or borrow filters
+from another branch. For a multi-input operation, describe its role
+(e.g. reconcile or combine the upstream candidate groups) without falsely
+imposing a dependency on a parallel sibling. Describe prerequisite outputs
+by their public meaning; do not call them 'the previous task'.
 
-Only public fields in the LOCAL contract are authoritative. A null
-label means it was not public in the corresponding step; describe the
-operation generically instead of guessing an identifier or copying a
-condition from another task branch.
+Do not generate fragment IDs, waves, tools, evidence facts, candidate rosters,
+source titles, private labels, Gold results or output answers. Public null
+labels are unspecified: do not guess their precise values. Discoverable
+sources must not be described as already attached or inspected.
 
-Return exactly one JSON object with one string key:
-{"goal":"One faithful natural-language goal for this fragment."}
+Your output is only the intent; the immutable DAG retains ALL exact
+numbers, dates, filters and conditions for downstream semantic checks.
+Return exactly one JSON object: {"goal":"..."}.
 """
 
 _GOAL_SCHEMA = {
