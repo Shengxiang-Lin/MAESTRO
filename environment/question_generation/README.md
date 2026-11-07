@@ -114,7 +114,7 @@ git pull origin main
 python environment/generate_questions.py \
   --max-records 10 \
   --max-revisions 2 \
-  --output-dir environment/data/questions_editorial_v15_10 \
+  --output-dir environment/data/questions_editorial_v16_10 \
   --question-workers 4 \
   --flush-every 1
 \`\`\`
@@ -130,7 +130,7 @@ python -m unittest discover -s environment/tests -p "test_*.py"
 Stage 3 remains a separate consumer: it reconstructs the canonical task,
 compiles Gold from the unchanged ProgramIR, rechecks the Stage-2 certificate
 and performs its own public-executability and evidence validation. The new
-certificate schema is \`maestro.stage2_surface_cert.v4\` (contract 21).
+certificate schema is \`maestro.stage2_surface_cert.v5\` (contract 22).
 Previously generated v17/v18 Scoped/Free artifacts are **not supported by
 this new validator**; keep their original code/checkpoints for comparison,
 or regenerate questions in a new directory.
@@ -205,3 +205,40 @@ independently assess relation ownership, AND/OR, filter omission,
 scope, and genuinely improved naturalness on approved examples and
 controlled negative pairs. The local CI runs mocked backends, not an
 actual Qwen inference experiment.
+
+## v16 pinned-atomic risk review (current)
+
+A local Qwen3.5-9B v15 run accepted 4/10 frozen questions; there were no
+observed review protocol errors. Audit nevertheless found an accepted
+named-after/name-equality substitution and an inconsistent negative verdict.
+The 40% figure measures reviewer acceptance, not proven semantic precision.
+
+v16 retains at most four grouped reviewer decisions, but every public semantic
+obligation now has a stable atomic requirement ID. Filter obligations name
+the publicly reconstructed relation-owner route. When a reviewer returns
+changed or uncertain, it must identify one or more problematic atomic IDs
+in `problem_ids`; preserved requires an empty list. Unknown, repeated and
+missing IDs fail closed. Some clearly self-contradictory negative explanations
+are treated as a protocol error and retried on the same candidate.
+
+A narrow public-text guard additionally flags a named-after relation replaced
+with name equality, including when the draft retains other named-after
+clauses. It requests an Author repair; it is not a general-purpose relation
+parser or formal equivalence proof.
+
+The v16 certificate is `maestro.stage2_surface_cert.v5` (review contract 22,
+method `llm_pinned_atomic_risk_review_v4`). Old v15 artifacts cannot be
+silently reused for Stage 3 and must be regenerated with matching code.
+
+Run on the same ten frozen tasks, with a NEW output directory:
+
+```bash
+python environment/generate_questions.py --max-records 10 --max-revisions 2 \
+  --output-dir environment/data/questions_editorial_v16_10 \
+  --question-workers 4 --flush-every 1
+```
+
+CI uses scripted reviewers, not a real Qwen inference run. Manually audit
+accepted questions and compare real-model acceptance, semantic precision,
+false rejects and call counts before scaling. Counterfactual-world execution
+and general independent atomic re-review are **not implemented** in v16.

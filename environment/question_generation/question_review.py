@@ -47,6 +47,11 @@ The input has at most FOUR risk groups (some containing many requirements).
 Give ONE status per GROUP: preserved only if ALL listed requirements are
 preserved, changed if ANY is changed, uncertain if meaning is ambiguous.
 Explain the most decisive discrepancy, not a full report per node.
+Each group's requirements have public atomic ids. Report problem_ids=[] for
+preserved; for changed/uncertain provide the exact ids whose meaning changed
+or cannot be verified. A relation such as "named after" is not equivalent
+to sharing the same name. Do not label a group changed while explaining
+that every requirement was preserved.
 
 Choose pass only for equivalent and genuinely more natural text. For revise
 return actionable changes to the previous draft, naming the specific lost
@@ -61,8 +66,11 @@ not see past Critic votes or revision history.
 For each of at most FOUR risk groups, assess ALL its requirements:
 intersection vs union, owner of each filter, relation direction/hop,
 and final requested answer. Treat any changed or uncertain requirement
-as a reason NOT to pass. Do not rubber-stamp a fluent paraphrase. In
-particular, a group described as a union when the reference demands an
+as a reason NOT to pass. For each check provide problem_ids:
+[] when preserved; otherwise the ids of specific altered/ambiguous public
+requirements. A negative group without a concrete problematic requirement
+is not justified. Do not label changed while explaining all requirements
+are preserved. Do not rubber-stamp a fluent paraphrase. In particular, a group described as a union when the reference demands an
 intersection changes the answer; so does transferring a population/date
 filter from the answer entity to a related place.
 
@@ -91,8 +99,10 @@ _CHECK_SCHEMA = {
         "id": {"type": "string"},
         "status": {"enum": ["preserved", "changed", "uncertain"]},
         "explanation": {"type": "string"},
+        "problem_ids": {"type": "array", "items": {"type": "string"},
+                        "maxItems": 5},
     },
-    "required": ["id", "status", "explanation"],
+    "required": ["id", "status", "explanation", "problem_ids"],
     "additionalProperties": False,
 }
 _CRITIC_SCHEMA = {

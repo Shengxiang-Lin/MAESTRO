@@ -23,7 +23,8 @@ from .question_review import (
 from .scoped_surface import build_scoped_plan, render_scoped
 from .semantic_checks import (
     semantic_checks, grouped_semantic_checks, naturalness_gate,
-    explicit_join_contradictions, missing_typed_literals, CheckFormatError,
+    explicit_join_contradictions, relation_semantic_contradictions,
+    missing_typed_literals, CheckFormatError,
 )
 from .validators import postflight
 from .verification import certify_approved_question
@@ -208,6 +209,28 @@ def _realize_one(payload, world, capability, author, critic, *,
                     "suggestion": "Restore the original intersection (ALL) versus union (ANY) meaning for this exact group.",
                 } for reason in contradictions],
                 "summary": "Do not reverse set operations while rephrasing.",
+            }
+            continue
+        relation_changes = relation_semantic_contradictions(scoped, candidate)
+        entry["relation_semantic_contradictions"] = relation_changes
+        if relation_changes:
+            entry["failure"] = "relation_semantic_substitution"
+            last_failure, last_detail = "rejected_semantic", ";".join(relation_changes)
+            feedback = {
+                "verdict": "revise",
+                "issues": [{
+                    "kind": "relation_meaning", "severity": "major",
+                    "explanation": (
+                        "The draft replaces a naming relationship with name "
+                        "equality, which does not preserve the original relation."
+                    ),
+                    "suggestion": (
+                        "Restore the original 'named after' relationship, "
+                        "including its endpoints and direction; do not replace "
+                        "it with a claim that entity names match."
+                    ),
+                }],
+                "summary": "Preserve the actual directed relation, not a name comparison.",
             }
             continue
         missing_literals = missing_typed_literals(plan, candidate)
