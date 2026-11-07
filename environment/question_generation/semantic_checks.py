@@ -34,6 +34,25 @@ def semantic_checks(plan: ScopedPlan) -> list[dict[str, str]]:
     checks: list[dict[str, str]] = []
     seen = set()
 
+    def public_owner_path(node: dict) -> str:
+        """Name the relation path of a filter using PUBLIC scoped semantics."""
+        steps = []
+        cursor = node
+        for _ in range(4):
+            op = cursor.get("definition")
+            if op == "RELATE":
+                relation = str(cursor.get("relation") or "unspecified")
+                direction = str(cursor.get("direction") or "unspecified")
+                steps.append(f"{direction} traversal of '{relation}'")
+            elif op in ("INTERSECT", "UNION"):
+                break  # Multiple owners cannot be represented by one path.
+            children = cursor.get("inputs") or []
+            if not children or not isinstance(children[0], dict):
+                break
+            cursor = children[0]
+        return (" from ".join(steps) if steps
+                else "the entity set identified by this reference clause")
+
     def append(kind: str, expected: str, excerpt: str, signature: Any):
         key = (kind, json.dumps(signature, ensure_ascii=False, sort_keys=True))
         if key in seen:
@@ -52,14 +71,19 @@ def semantic_checks(plan: ScopedPlan) -> list[dict[str, str]]:
         op = node.get("definition", "")
         for condition in node.get("conditions", ()):
             if condition.get("entity_type"):
-                text = f"Entity type restriction: {condition['entity_type']}; keep its owner."
+                text = (
+                    f"Entity type restriction: {condition['entity_type']}. "
+                    f"Owning scope: {public_owner_path(node)}; "
+                    "do not transfer the type restriction to a related entity."
+                )
             else:
                 val = condition.get("value", {})
                 text = (
                     f"Filter on the SAME owning entity set: "
                     f"{condition['attribute']} {condition['comparison']} "
                     f"{val.get('value')}{val.get('unit', '') if isinstance(val, dict) else ''}. "
-                    "Do not move this filter to an entity reached through a relation."
+                    f"Owning scope: {public_owner_path(node)}. "
+                    "Do not move this filter to a different relation endpoint."
                 )
             # The full owning expression is part of identity: the same
             # attribute/value restriction on two DIFFERENT related entity
@@ -78,7 +102,9 @@ def semantic_checks(plan: ScopedPlan) -> list[dict[str, str]]:
             text = (
                 f"Preserve the complete '{node.get('relation')}' relation chain: "
                 f"{node.get('direction')} traversal, including which entity "
-                "is the subject and which is the object."
+                "is the subject and which is the object. Retain the actual "
+                "relation meaning (e.g., 'named after' is NOT the same as "
+                "'has the same name')."
             )
             append("relation_scope", text, excerpt, node)
         if op in ("QUERY_NAME", "COUNT", "QUERY_ATTR", "QUERY_RELATION",
@@ -122,6 +148,7 @@ def grouped_semantic_checks(plan: ScopedPlan) -> list[dict]:
         seen = set()
         for item in members:
             requirement = {
+                "id": item["id"],
                 "expected": item["expected"],
                 "reference_excerpt": item["reference_excerpt"][:190],
             }
@@ -147,6 +174,7 @@ def validate_group_decisions(groups: list[dict], outcomes: Any) -> None:
     if not isinstance(outcomes, list) or len(outcomes) != len(groups):
         raise CheckFormatError("review_group_results_incomplete")
     expected = {group["id"] for group in groups}
+    by_id = {group["id"]: group for group in groups}
     seen = set()
     for item in outcomes:
         if not isinstance(item, dict):
@@ -160,6 +188,21 @@ def validate_group_decisions(groups: list[dict], outcomes: Any) -> None:
         explanation = item.get("explanation")
         if not isinstance(explanation, str) or len(explanation.strip()) < 8:
             raise CheckFormatError("review_group_reason_missing")
+        # Changed/uncertain judgments must identify WHICH public atomic
+        # obligation failed. A generic group-level negative is not actionable
+        # and cannot be trusted as a semantic difference.
+        problem_ids = item.get("problem_ids")
+        allowed = {str(req["id"]) for req in by_id[ident]["requirements"]
+                   if "id" in req}
+        if (not isinstance(problem_ids, list)
+                or len(problem_ids) != len(set(map(str, problem_ids)))
+                or any(not isinstance(pid, str) or pid not in allowed
+                       for pid in problem_ids)):
+            raise CheckFormatError("review_problem_ids_invalid")
+        if item["status"] == "preserved" and problem_ids:
+            raise CheckFormatError("preserved_review_has_problem_ids")
+        if item["status"] != "preserved" and not problem_ids:
+            raise CheckFormatError("negative_review_missing_problem_ids")
 
 
 def _compact(value: str) -> str:
@@ -214,6 +257,26 @@ def explicit_join_contradictions(reference: str, candidate: str) -> list[str]:
         for idx, expected in reference_joins.items()
         if idx in candidate_joins and candidate_joins[idx] != expected
     ]
+
+
+_NAMED_AFTER = re.compile(r"\\b(?:named after|named for|named in honou?r of|namesake of)\\b", re.I)
+_NAME_EQUALITY = re.compile(
+    r"\\b(?:names? match(?:es|ing|ed)?|matching names?|share(?:s|d)? "
+    r"(?:the )?same name|(?:have|has|had) (?:the )?same name|"
+    r"(?:their|whose) names? (?:are|is) (?:the )?same)\\b", re.I,
+)
+
+
+def relation_semantic_contradictions(reference: str, candidate: str) -> list[str]:
+    """Catch narrow, unambiguous meaning substitutions, not missing phrases.
+
+    This public-text-only guard is deliberately conservative: it does not
+    demand the original wording, and it is NOT an exhaustive relation parser.
+    """
+    if (_NAMED_AFTER.search(reference) and _NAME_EQUALITY.search(candidate)
+            and not _NAMED_AFTER.search(candidate)):
+        return ["named_after_replaced_by_name_equality"]
+    return []
 
 
 _PROSE_DATE_DMY = re.compile(
@@ -307,6 +370,6 @@ def naturalness_gate(reference: str, candidate: str) -> dict[str, Any]:
 __all__ = [
     "CheckFormatError", "semantic_checks",
     "check_failures", "explicit_join_contradictions", "naturalness_gate",
-    "missing_typed_literals",
+    "missing_typed_literals", "relation_semantic_contradictions",
     "grouped_semantic_checks", "validate_group_decisions",
 ]
