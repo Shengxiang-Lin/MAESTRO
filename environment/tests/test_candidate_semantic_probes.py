@@ -11,6 +11,7 @@ from environment.question_generation.scoped_surface import ScopedPlan
 from environment.question_generation.semantic_probes import (
     CandidateProbeFormatError, compile_candidate_probes,
     probe_candidate_semantics, validate_candidate_probe_records,
+    explicit_probe_contradictions,
 )
 from environment.question_generation.question_review import (
     critique_question, ReviewFormatError,
@@ -57,6 +58,10 @@ class ProbeTests(unittest.TestCase):
             "answer": "OR", "expected": p["expected"],
         } for p in probes]
         self.assertNotEqual(answers[0]["answer"], answers[0]["expected"])
+        self.assertTrue(
+            any("explicit_intersection_to_either_or" in e for e in
+                explicit_probe_contradictions(probes, candidate)),
+        )
         with self.assertRaises(ValueError):
             validate_candidate_probe_records(probes, answers)
 
@@ -90,6 +95,10 @@ class ProbeTests(unittest.TestCase):
                       [(p["kind"], p["expected"]) for p in probes])
         self.assertIn(("group_join", "AND"),
                       [(p["kind"], p["expected"]) for p in probes])
+        self.assertTrue(
+            any("union_branch_restricted_to_group" in e for e in
+                explicit_probe_contradictions(probes, candidate)),
+        )
 
     def test_v16_case8_member_scope_does_not_move_inside_both(self):
         fifth = (
@@ -112,6 +121,20 @@ class ProbeTests(unittest.TestCase):
                       [(p["kind"], p["expected"]) for p in probes])
         self.assertIn(("group_join", "AND"),
                       [(p["kind"], p["expected"]) for p in probes])
+        self.assertTrue(
+            any("member_scope_moved_into_intersection" in e for e in
+                explicit_probe_contradictions(probes, candidate)),
+        )
+        faithful = (
+            "The fifth group consists of organizations drawn from entities "
+            "that have at least one member in the third group and that "
+            "themselves belong to the fourth group."
+        )
+        self.assertEqual(
+            explicit_probe_contradictions(
+                compile_candidate_probes(plan, fifth, faithful), faithful,
+            ), [],
+        )
 
     def test_naturally_unlabelled_candidate_is_not_assigned_undefined_probe(self):
         second = "Let the second group consist of entities in both X and Y."
