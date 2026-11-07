@@ -15,7 +15,8 @@ from tqdm.auto import tqdm
 
 from environment.config import EnvironmentConfigError
 from environment.delegation_blueprint import (
-    VERSION, compile_delegation_outline, naturalize_fragment_goal,
+    VERSION, _validate_goal, compile_delegation_outline,
+    naturalize_fragment_goal,
 )
 from environment.trajectory_simulation.compiler import (
     GoldCompilationError, compile_gold_solution,
@@ -25,8 +26,10 @@ from environment.trajectory_simulation.eligibility import (
 )
 from .boundary import BoundaryError, validate_frozen_inputs
 from .goal_review import (
-    certify_goal_record, review_fragment_goal,
+    GOAL_REVIEW_METHOD, certify_goal_record, deterministic_goal_issues,
+    review_fragment_goal, validate_review,
 )
+from .goal_cache import load_reusable_fragments
 from .pipeline import (
     _rows, _world_by_task, _capability_by_task, _backends,
 )
@@ -46,7 +49,8 @@ def _reject(payload, reason, audit, exc=None):
 
 
 def generate_goal_record(payload, world, capability, author, critic, *,
-                         max_goal_revisions=2, blueprint_workers=2):
+                         max_goal_revisions=2, blueprint_workers=2,
+                         reused_fragments=None):
     """Compile public DAG once; review one Goal at a time, fail closed."""
     from .backend import BackendError
     canonical = payload.get("draft_question", "")
@@ -77,7 +81,8 @@ def generate_goal_record(payload, world, capability, author, critic, *,
         )
     except (GoldCompilationError, ValueError, KeyError, TypeError, IndexError) as exc:
         return _reject(payload, "rejected_reference", audit, exc)
-    audit.append({"stage": "reference", "outline_sha256": digest(outline)})
+    outline_hash = digest(outline)
+    audit.append({"stage": "reference", "outline_sha256": outline_hash})
     if (not callable(getattr(author, "complete_json", None))
             or not callable(getattr(critic, "complete_json", None))):
         return _reject(payload, "rejected_validation_error", audit,
@@ -96,6 +101,27 @@ def generate_goal_record(payload, world, capability, author, critic, *,
         log = fragment_audits[index]
         feedback = None
         last_reason = "rejected_goal_semantic"
+        cache_key = (str(payload["task_id"]), outline_hash, fragment["fragment_id"])
+        cached = (reused_fragments or {}).get(cache_key)
+        if cached:
+            try:
+                goal = _validate_goal(
+                    cached["goal"], fragment["fragment_id"],
+                    payload=payload, oracle_answer=world.get("_display_answer"),
+                )
+                validate_review(cached["review"], fragment, goal)
+                if (cached["review"]["verdict"] == "pass"
+                        and not deterministic_goal_issues(outline, fragment, goal)):
+                    log["reused"] = True
+                    log["accepted"] = True
+                    return (
+                        {"fragment_id": fragment["fragment_id"], "goal": goal},
+                        {"fragment_id": fragment["fragment_id"], "review": cached["review"]},
+                        None,
+                    )
+            except (ValueError, TypeError, KeyError):
+                pass  # Invalid cache entries never authorize a pass.
+        repeated = 0
         for attempt_index in range(max_goal_revisions + 1):
             entry = {"attempt": attempt_index + 1}
             log["attempts"].append(entry)
@@ -114,6 +140,26 @@ def generate_goal_record(payload, world, capability, author, critic, *,
                 continue
             goal = item["goal"]
             entry["goal"] = goal
+            if feedback and "previous_goal" in feedback and (
+                " ".join(goal.casefold().split()).rstrip(".") ==
+                " ".join(feedback["previous_goal"].casefold().split()).rstrip(".")
+            ):
+                repeated += 1
+                entry["failure"] = "repeated_unchanged_goal"
+                last_reason = "rejected_goal_semantic"
+                if repeated >= 2:
+                    log["failure"] = last_reason
+                    log["accepted"] = False
+                    return None, None, last_reason
+                feedback = {
+                    "previous_goal": goal,
+                    "issues": feedback["issues"] + [
+                        "The last attempted revision was identical to the "
+                        "rejected Goal. Change the incorrect clause."
+                    ],
+                    "must_change": True,
+                }
+                continue
             review = review_fragment_goal(
                 critic, outline, fragment, scoped, goal, audit=log,
             )
@@ -181,7 +227,7 @@ def _safe_result(future, index, authoring):
 
 
 def _generate_parallel(authoring, worlds, capabilities, author, critic,
-                       args, progress):
+                       args, progress, reused_fragments=None):
     total = len(authoring)
     next_submit = progress.completed
     pending = {}
@@ -203,6 +249,7 @@ def _generate_parallel(authoring, worlds, capabilities, author, critic,
                         author, critic,
                         max_goal_revisions=args.max_goal_revisions,
                         blueprint_workers=args.blueprint_workers,
+                        reused_fragments=reused_fragments,
                     )
                     active[future] = index
                     next_submit += 1
@@ -244,6 +291,10 @@ def run(args):
     if any(str(row.get("task_id")) not in worlds for row in authoring):
         raise SystemExit("authoring tasks are missing executable worlds")
     author, critic = _backends(args)
+    reused_fragments = load_reusable_fragments(
+        getattr(args, "reuse_goal_audit", None),
+        model_roles=args._resolved_models,
+    )
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     ids = [str(row["task_id"]) for row in authoring]
@@ -251,6 +302,7 @@ def run(args):
         Path(args.manifest), Path(args.authoring_inputs),
         Path(args.worlds), Path(args.capabilities),
         Path(__file__), Path(__file__).with_name("goal_review.py"),
+        Path(__file__).with_name("goal_cache.py"),
         Path(__file__).with_name("realization.py"),
         Path(__file__).with_name("scoped_surface.py"),
         Path(__file__).with_name("public_semantics.py"),
@@ -264,6 +316,7 @@ def run(args):
         extra_settings={
             "phase": "stage2a", "max_goal_revisions": args.max_goal_revisions,
             "blueprint_workers": args.blueprint_workers,
+            "reuse_goal_audit": getattr(args, "reuse_goal_audit", None),
         },
     )
     with question_output_lock(output_dir):
@@ -274,6 +327,7 @@ def run(args):
             resumed = progress.completed
             _generate_parallel(
                 authoring, worlds, capabilities, author, critic, args, progress,
+                reused_fragments=reused_fragments,
             )
             if progress.completed != len(authoring):
                 raise QuestionCheckpointError("incomplete_stage2a_goal_journal")
@@ -283,17 +337,19 @@ def run(args):
         for row in _rows(output_dir / "rejected_blueprints.jsonl"):
             reasons[row["reason"]] += 1
         author_calls = critic_calls = 0
-        fragment_count = passed_fragments = 0
+        fragment_count = passed_fragments = reused_fragment_count = 0
         for entry in _rows(output_dir / "goal_review_audit.jsonl"):
             for step in entry.get("audit", []):
                 if step.get("stage") != "fragment_goal":
                     continue
                 fragment_count += 1
                 passed_fragments += bool(step.get("accepted"))
+                reused_fragment_count += bool(step.get("reused"))
                 author_calls += step.get("author_calls", 0)
                 critic_calls += step.get("critic_calls", 0)
         summary = {
             "pipeline": "stage2a_independent_reviewed_fragment_goals",
+            "goal_review_contract": GOAL_REVIEW_METHOD,
             "frozen_batch_validation": frozen,
             "model_roles": args._resolved_models,
             "requested": len(authoring), "certified": accepted,
@@ -303,6 +359,7 @@ def run(args):
             "review_statistics": {
                 "fragments_attempted": fragment_count,
                 "fragments_passed": passed_fragments,
+                "fragments_reused": reused_fragment_count,
                 "goal_author_calls": author_calls,
                 "goal_critic_calls": critic_calls,
                 "total_model_calls": author_calls + critic_calls,

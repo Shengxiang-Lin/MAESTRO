@@ -17,8 +17,8 @@ from environment.delegation_blueprint import (
 from environment.trajectory_simulation.eligibility import digest
 
 
-GOAL_CERT_SCHEMA = "maestro.stage2a.certified_blueprint.v4"
-GOAL_REVIEW_METHOD = "subtask_intent_target_and_owner_critic_v4"
+GOAL_CERT_SCHEMA = "maestro.stage2a.certified_blueprint.v5"
+GOAL_REVIEW_METHOD = "structured_intent_target_owner_critic_v5"
 
 _REVIEW_SYSTEM = """Review ONE brief Sub-Agent SUBTASK INTENT against its
 immutable local fragment contract and its declared direct dependencies.
@@ -28,7 +28,8 @@ executable query. The exact step contract remains separately available
 to Question and Sub-Agent writers. Do NOT demand that the Goal alone
 return the same precise answer as executing every program step.
 
-Check just THREE things:
+Check just THREE things; structured_intent gives the locally derived
+main action, target and expected output and is not a complete program:
 1) RELEVANCE: Does it describe the actual main job for THIS fragment,
    rather than a different sibling, the whole Main task or a generic
    request without a meaningful target/action?
@@ -343,18 +344,18 @@ def review_fragment_goal(backend, outline, fragment, reference, goal,
         }
     packet = _fragment_goal_packet(outline, fragment, reference)
     packet["candidate_goal"] = goal
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             if audit is not None:
                 audit["critic_calls"] = audit.get("critic_calls", 0) + 1
             output = backend.complete_json(
                 _REVIEW_SYSTEM + (
-                    "\nYour previous reply failed the JSON protocol. Return "
-                    "only verdict, issues and summary; no extra keys."
+                    "\nJSON repair: output only verdict, issues and summary; "
+                    "do not add an explanation outside the JSON object."
                     if attempt else ""
                 ),
                 json.dumps(packet, ensure_ascii=False),
-                response_schema=_REVIEW_SCHEMA,
+                response_schema=_REVIEW_SCHEMA if attempt < 2 else None,
             )
             return validate_review(output, fragment, goal)
         except (BackendError, ValueError, TypeError, KeyError) as exc:
@@ -362,7 +363,7 @@ def review_fragment_goal(backend, outline, fragment, reference, goal,
                 audit.setdefault("protocol_failures", []).append(str(exc)[:180])
             last_error = exc
     # Reviewer failure is not a semantic discrepancy and must not certify.
-    # Both attempts reviewed the SAME Goal: never waste a Goal Author call
+    # All attempts reviewed the SAME Goal: never waste a Goal Author call
     # merely because the Critic was unable to serialize its decision.
     return {
         "verdict": "uncertain", "issues": [],

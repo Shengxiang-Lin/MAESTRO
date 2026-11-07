@@ -55,6 +55,36 @@ def explicit_join_contradictions(reference: str, candidate: str) -> list[str]:
     ]
 
 
+def explicit_global_join_contradictions(plan, candidate: str) -> list[str]:
+    """Reject only a clear OR substitution in an otherwise AND-only query.
+
+    A mixed INTERSECT/UNION DAG may legitimately contain 'either ... or'
+    within a branch; leave those cases to independent semantic review.
+    This is a high-precision safety net, NOT a general natural-language
+    parser or full proof of Boolean equivalence.
+    """
+    query = getattr(plan, "query", None)
+    if not isinstance(query, dict):
+        return []
+    join_ops = set()
+    def scan(node):
+        if not isinstance(node, dict):
+            return
+        kind = node.get("definition")
+        if kind in ("INTERSECT", "UNION"):
+            join_ops.add(kind)
+        for child in node.get("inputs", ()):
+            scan(child)
+    scan(query)
+    if join_ops != {"INTERSECT"}:
+        return []
+    # This explicit template changes the required all-branch membership
+    # into an alternative. A plain "or" is too broad to reject safely.
+    if re.search(r"\beither\b[^.!?;]{0,160}\bor\b", candidate, re.I):
+        return ["all_branch_intersection_rewritten_as_either_or"]
+    return []
+
+
 _NAMED_AFTER = re.compile(
     r"\b(?:named after|named for|named in honou?r of|namesake of)\b", re.I,
 )
@@ -137,6 +167,6 @@ def missing_typed_literals(plan: ScopedPlan, candidate: str) -> list[str]:
 
 
 __all__ = [
-    "explicit_join_contradictions", "relation_semantic_contradictions",
-    "missing_typed_literals",
+    "explicit_join_contradictions", "explicit_global_join_contradictions",
+    "relation_semantic_contradictions", "missing_typed_literals",
 ]

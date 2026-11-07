@@ -89,7 +89,8 @@ def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress,
                         capabilities.get(str(payload.get("task_id")),{}),
                         author,critic,
                         max_revisions=args.max_revisions,
-                        goal_record=(goal_records or {}).get(str(payload.get("task_id"))))
+                        goal_record=(goal_records or {}).get(str(payload.get("task_id"))),
+                        question_brief_mode=args.question_brief_mode)
                     active[future]=index
                     next_submit+=1
 
@@ -147,6 +148,12 @@ def run(args):
             raise SystemExit("uncertified Stage 2A record in --blueprints: " + task_id)
         goal_records[task_id] = record
     candidate_count = len(authoring)
+    # Preserve original frozen input positions *before* Stage2A filtering.
+    # Otherwise filtered indices corrupt diagnostic/holdout slice stats.
+    original_position = {
+        str(row["task_id"]): start + i
+        for i, row in enumerate(authoring)
+    }
     authoring = [row for row in authoring
                  if str(row.get("task_id")) in goal_records]
     skipped_uncertified = candidate_count - len(authoring)
@@ -173,7 +180,7 @@ def run(args):
             Path(__file__).with_name(name) for name in (
                 "pipeline.py", "realization.py", "question_review.py",
                 "verification.py", "semantic_checks.py", "scoped_surface.py",
-                "public_semantics.py", "goal_review.py",
+                "public_semantics.py", "goal_review.py", "question_brief.py",
                 "contracts.py", "validators.py", "backend.py", "boundary.py",
                 "streaming.py",
             )
@@ -223,7 +230,7 @@ def run(args):
                 if not line.strip():
                     continue
                 event = json.loads(line)
-                original_index = start + event_index
+                original_index = original_position[event["task_id"]]
                 slice_stats = (
                     regression_10 if original_index < 10
                     else expansion if original_index < 50
@@ -257,6 +264,7 @@ def run(args):
                     accepted_after_revision += 1
         summary = {
             "pipeline": "stage2b_question_from_certified_stage2a_blueprints",
+            "question_brief_mode": args.question_brief_mode,
             "frozen_batch_validation": frozen,
             "model_roles": args._resolved_models,
             "input_candidates": candidate_count,
@@ -346,6 +354,10 @@ def build_parser():
     p.add_argument("--critic-max-tokens", type=int, default=3072)
     p.add_argument("--timeout", type=float, default=180.0)
     p.add_argument("--max-revisions", type=int, default=2)
+    p.add_argument("--question-brief-mode", choices=("branch", "full"),
+                   default="branch",
+                   help="Question Author input: compact DAG workstreams (default) "
+                        "or legacy full reference/semantic tree baseline")
     p.add_argument("--question-workers", type=int, default=4)
     p.add_argument("--blueprint-workers", type=int, default=2,
                    help="Concurrent independent Fragment-Goal requests per task")

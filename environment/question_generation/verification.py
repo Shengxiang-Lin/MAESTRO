@@ -20,8 +20,8 @@ from environment.delegation_blueprint import (
 from .goal_review import validate_goal_record
 from .question_review import passing_judgment
 from .semantic_checks import (
-    explicit_join_contradictions, missing_typed_literals,
-    relation_semantic_contradictions,
+    explicit_join_contradictions, explicit_global_join_contradictions,
+    missing_typed_literals, relation_semantic_contradictions,
 )
 
 SCHEMA = "maestro.stage2_surface_cert.blueprint.v2"
@@ -57,8 +57,9 @@ def _meaningful_edit(reference, candidate):
 def _simple_guards(plan, scoped, candidate):
     return {
         "missing_typed_literals": missing_typed_literals(plan, candidate),
-        "explicit_join_contradictions": explicit_join_contradictions(
-            scoped, candidate,
+        "explicit_join_contradictions": (
+            explicit_join_contradictions(scoped, candidate)
+            + explicit_global_join_contradictions(plan, candidate)
         ),
         "relation_semantic_contradictions": relation_semantic_contradictions(
             scoped, candidate,
@@ -80,7 +81,7 @@ def certify_approved_question(
     task_id: str, world: Mapping, canonical: str, question: str,
     scoped_reference: str, critic_review: Mapping, *,
     revision_rounds: int, plan, blueprint, gold, resources=(),
-    goal_record=None,
+    goal_record=None, question_brief=None,
 ):
     """Issue a small certificate, only after Critic PASS and public checks."""
     if (not isinstance(critic_review, Mapping)
@@ -116,6 +117,9 @@ def certify_approved_question(
         "revision_rounds": revision_rounds,
         "public_guards_sha256": digest(guards),
         "blueprint_sha256": blueprint_hash,
+        **({
+            "question_brief_sha256": digest(question_brief),
+        } if question_brief is not None else {}),
         **({
             "goal_certificate_sha256": digest(goal_record["goal_certificate"]),
         } if goal_record is not None else {}),
@@ -219,6 +223,13 @@ def validate_surface_certificate(
     )
     if review.get("blueprint_sha256") != valid_hash:
         raise ValueError("stage2_blueprint_binding_mismatch")
+    if "question_brief_sha256" in review:
+        from .question_brief import compile_question_brief
+        expected_brief = compile_question_brief(
+            blueprint, world, canonical, gold,
+        )
+        if review["question_brief_sha256"] != digest(expected_brief):
+            raise ValueError("stage2_question_brief_binding_mismatch")
     if certified:
         record = {
             "task_id": realized["task_id"],

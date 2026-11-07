@@ -23,7 +23,10 @@ _GOAL_SYSTEM = """Write ONE concise, natural-language SUBTASK INTENT for the
 CURRENT fragment. This is a high-level planning hint, NOT an executable
 replacement for the precise public semantic contract.
 
-Use current_fragment.public_steps, output_kind, and direct
+Use structured_intent as the deterministic guide for the main
+action, target kind and output. It is derived solely from the CURRENT
+public fragment and never replaces exact public_steps. Use
+current_fragment.public_steps, output_kind, and direct
 dependency_contracts to identify:
 (1) the main action or investigation this fragment contributes,
 (2) its principal entity/information target, and
@@ -242,6 +245,59 @@ def _terminal_result_contract(outline, fragment):
     return result
 
 
+def _structured_intent(outline, fragment):
+    """Minimal deterministic action/target/output guidance for a short Goal.
+
+    Never infer a concrete entity type across a RELATE hop from the source
+    type. Exact numeric filters remain in the separate public_steps.
+    """
+    steps = fragment["public_steps"]
+    terminal = _terminal_result_contract(outline, fragment)
+    final_action = steps[-1]["operation"]
+    relation = next((
+        step for step in reversed(steps)
+        if step["operation"] == "RELATE"
+    ), None)
+    if final_action == "COUNT":
+        action, result = "count matching entities", "total count"
+    elif final_action == "QUERY_NAME":
+        action, result = "identify matching entity names", "entity names"
+    elif final_action == "QUERY_ATTR":
+        action, result = "retrieve attribute values", "attribute values"
+    elif final_action.startswith("VERIFY_"):
+        action, result = "check whether a condition holds", "yes/no"
+    elif final_action.startswith("SELECT_"):
+        action, result = "select ranked candidates", "ranked entity set"
+    elif final_action == "INTERSECT":
+        action, result = "identify common candidates", "shared entity set"
+    elif final_action == "UNION":
+        action, result = "combine candidate groups", "combined entity set"
+    elif relation is not None:
+        action, result = "trace relevant entity relations", "entity set"
+    elif final_action.startswith("FILTER_"):
+        action, result = "identify entities meeting specified criteria", "entity set"
+    else:
+        action, result = "locate public evidence candidates", fragment["output_kind"]
+    spec = {
+        "intent_action": action,
+        "target_kind": "public candidate entities",
+        "expected_output": result,
+        "direct_upstream_inputs": len(fragment["depends_on"]),
+    }
+    if terminal and terminal.get("target_entity_type"):
+        spec["target_kind"] = terminal["target_entity_type"]
+    elif steps[-1].get("entity_type"):
+        spec["target_kind"] = steps[-1]["entity_type"]
+    if terminal and terminal.get("output_attribute"):
+        spec["output_attribute"] = terminal["output_attribute"]
+    if relation and relation.get("relation"):
+        spec["key_relation"] = {
+            "relation": relation["relation"],
+            "direction": relation.get("direction"),
+        }
+    return spec
+
+
 def _fragment_goal_packet(outline, fragment, reference):
     """Only this fragment, immutable direct prerequisites and final goal.
 
@@ -257,6 +313,7 @@ def _fragment_goal_packet(outline, fragment, reference):
     } for dep in fragment["depends_on"]]
     return {
         "current_fragment": fragment,
+        "structured_intent": _structured_intent(outline, fragment),
         "dependency_contracts": dependencies,
         "global_output": {
             "kind": outline["tasks"][-1]["output_kind"],
@@ -279,6 +336,7 @@ def naturalize_fragment_goal(backend, outline, fragment, reference, *,
         packet["revision_feedback"] = {
             "previous_goal": feedback.get("previous_goal"),
             "issues": feedback.get("issues", []),
+            "must_change": bool(feedback.get("must_change")),
         }
     last_error = None
     for attempt in range(max_attempts):
@@ -289,6 +347,11 @@ def naturalize_fragment_goal(backend, outline, fragment, reference, *,
             # Each request has its own immutable local packet.
             answer = backend.complete_json(
                 _GOAL_SYSTEM + (
+                    "\nRevision: fix only the incorrect clause identified "
+                    "in revision_feedback. If must_change=true, repeating "
+                    "previous_goal verbatim is invalid."
+                    if feedback else ""
+                ) + (
                     "\nYour prior output was invalid. Correct the JSON "
                     "format and respect the exact local constraints."
                     if attempt else ""
