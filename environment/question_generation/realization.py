@@ -22,8 +22,8 @@ from .question_review import (
 )
 from .scoped_surface import build_scoped_plan, render_scoped
 from .semantic_checks import (
-    semantic_checks, naturalness_gate, explicit_join_contradictions,
-    missing_typed_literals, CheckFormatError,
+    semantic_checks, grouped_semantic_checks, naturalness_gate,
+    explicit_join_contradictions, missing_typed_literals, CheckFormatError,
 )
 from .validators import postflight
 from .verification import certify_approved_question
@@ -52,6 +52,40 @@ def _reject(payload, reason, audit, *, detail=None):
     return False, result, audit
 
 
+def _review_diagnostic(exc):
+    """Persist enough provider detail to diagnose empty/truncated JSON output."""
+    result = {"reason": str(exc)[:220]}
+    diagnostic = getattr(exc, "diagnostic", None)
+    if isinstance(diagnostic, Mapping):
+        result["finish_reason"] = diagnostic.get("finish_reason")
+        result["usage"] = diagnostic.get("usage")
+        raw = diagnostic.get("content")
+        result["model_content_tail"] = (
+            raw[-400:] if isinstance(raw, str) else None
+        )
+    return result
+
+
+def _review_attempt(fn, backend, reference, candidate, checkpoints, entry, role):
+    """Retry a JSON/protocol failure against the SAME candidate, not Author.
+
+    Attempt #1 uses structured JSON schema, #2 uses simpler JSON-object mode.
+    A second failure is terminal for this candidate; do not resample it and
+    misclassify a reviewer formatting problem as semantic rejection.
+    """
+    for use_schema in (True, False):
+        entry[role + "_calls"] += 1
+        try:
+            return fn(backend, reference, candidate, checkpoints,
+                      use_schema=use_schema)
+        except (BackendError, ReviewFormatError, CheckFormatError,
+                ValueError, TypeError) as exc:
+            entry.setdefault(role + "_protocol_failures", []).append(
+                {"schema_mode": use_schema, **_review_diagnostic(exc)}
+            )
+    return None
+
+
 def _realize_one(payload, world, capability, author, critic, *,
                  max_revisions=2):
     """No legacy modes, no grammar-only publication and no fallback.
@@ -78,7 +112,8 @@ def _realize_one(payload, world, capability, author, critic, *,
             raise ValueError("unverified_controlled_reference")
         plan = build_scoped_plan(world, canonical, gold, controlled)
         scoped = render_scoped(plan, [0] * len(plan))
-        checkpoints = semantic_checks(plan)
+        atomic_checks = semantic_checks(plan)
+        checkpoints = grouped_semantic_checks(plan)
         if not checkpoints:
             raise ValueError("missing_public_semantic_checkpoints")
         # No model is needed to select between nearly equivalent templates.
@@ -96,7 +131,8 @@ def _realize_one(payload, world, capability, author, critic, *,
         "kind": "deterministic_scoped",
         "scoped_question": scoped,
         "scoped_question_sha256": digest(scoped),
-        "semantic_checks": checkpoints,
+        "semantic_risk_groups": checkpoints,
+        "atomic_semantic_check_count": len(atomic_checks),
     })
 
     author_backend = _model(author)
@@ -210,18 +246,14 @@ def _realize_one(payload, world, capability, author, critic, *,
             last_detail = ";".join(boundary.issues)
             continue
 
-        try:
-            entry["critic_calls"] = 1
-            critique = critique_question(critic_backend, scoped, candidate, checkpoints)
-        except (BackendError, ReviewFormatError, ValueError, TypeError) as exc:
+        critique = _review_attempt(
+            critique_question, critic_backend, scoped, candidate, checkpoints,
+            entry, "critic",
+        )
+        if critique is None:
             entry["failure"] = "critic_protocol_error"
-            entry["detail"] = str(exc)[:240]
-            last_failure, last_detail = "rejected_validation_error", str(exc)
-            feedback = {
-                "verdict": "revise", "issues": [],
-                "summary": "Review parsing failed. Preserve the full semantics and return clear JSON.",
-            }
-            continue
+            return _reject(payload, "rejected_validation_error", audit,
+                           detail="critic_exhausted_same_candidate_protocol_retries")
 
         entry["critic_feedback"] = critique
         if (critique["verdict"] != "pass"
@@ -240,14 +272,14 @@ def _realize_one(payload, world, capability, author, critic, *,
         # The final judge sees the reference, final text and *no previous*
         # review history or previous answers. It is a different prompt/role,
         # not necessarily a different checkpoint.
-        try:
-            entry["final_judge_calls"] = 1
-            final = judge_question(critic_backend, scoped, candidate, checkpoints)
-        except (BackendError, ReviewFormatError, ValueError, TypeError) as exc:
+        final = _review_attempt(
+            judge_question, critic_backend, scoped, candidate, checkpoints,
+            entry, "final_judge",
+        )
+        if final is None:
             entry["failure"] = "final_judge_protocol_error"
-            entry["detail"] = str(exc)[:240]
-            last_failure, last_detail = "rejected_validation_error", str(exc)
-            continue
+            return _reject(payload, "rejected_validation_error", audit,
+                           detail="final_judge_exhausted_same_candidate_protocol_retries")
 
         entry["final_judgment"] = final
         if not passing_judgment(final):
