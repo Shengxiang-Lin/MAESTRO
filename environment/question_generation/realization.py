@@ -293,7 +293,8 @@ def _realize_one(payload, world, capability, author, critic, *,
             certificate, review = certify_approved_question(
                 payload["task_id"], world, canonical, candidate, scoped,
                 critique, revision_rounds=attempt, plan=plan,
-                blueprint=blueprint,
+                blueprint=blueprint, gold=gold,
+                resources=payload.get("resources", ()),
             )
         except (ValueError, TypeError, KeyError) as exc:
             entry["failure"] = "certificate_error"
