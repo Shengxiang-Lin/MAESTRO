@@ -242,3 +242,54 @@ CI uses scripted reviewers, not a real Qwen inference run. Manually audit
 accepted questions and compare real-model acceptance, semantic precision,
 false rejects and call counts before scaling. Counterfactual-world execution
 and general independent atomic re-review are **not implemented** in v16.
+
+## v17 candidate-centric semantic probes (current)
+
+A real local Qwen3.5-9B v16 10-task run accepted 7/10 questions but
+three rejected tasks failed Critic protocol validation; the audit only
+reported \`review_group_results_incomplete\`. Independent manual inspection of
+the accepted questions found candidate-side scope changes, including:
+- Group 2 defined with "either" when the public contract requires BOTH branches.
+- A final OR branch accidentally restricted to Group 2, although that branch
+  does not require Group-2 membership.
+- "The entity itself belongs to Group 4" replaced by "a member of the entity
+  belongs to Group 4."
+
+v17 keeps the four-group Critic/Final-Judge contract but, on candidates that
+pass Critic, selectively adds **candidate-only semantic probes**. The
+probe model sees the candidate text and short multiple-choice questions,
+not the reference, expected answers, private World or Gold. The compiler
+constructs expected answers from the public ScopedPlan and asks about (a)
+labeled group intersection/union, (b) member-vs-entity quantifier scope, and
+(c) independent final union branch scope. At most five probes are issued in
+one compact model request for a candidate, and only when supported surface
+patterns remain explicit in the natural candidate. Models may still misread
+these probes; the result is an additional fallible diagnostic, not formal
+equivalence verification.
+
+Probe mismatches or UNCLEAR readings request targeted Author revisions.
+Malformed/incomplete probe JSON gets one same-candidate retry and is rejected
+as validation error if still unusable. Stage 3 independently reconstructs
+which probes were required and compares the saved answer/expected pairs.
+This new publication record is \`maestro.stage2_surface_cert.v6\`, review
+contract \`23\`. **Do not reuse v16 certificate files.**
+
+\`question_review_audit.jsonl\` now retains expected/received risk-group IDs,
+received group count and response field names on malformed Critic or Judge
+output, without logging any private Gold or World facts. The final summary
+reports \`candidate_probe_calls\` separately from Critic/Final-Judge calls.
+
+Run the SAME 10 frozen tasks in a new output directory:
+
+\`\`\`bash
+python environment/generate_questions.py \
+  --max-records 10 \
+  --max-revisions 2 \
+  --output-dir environment/data/questions_editorial_v17_10 \
+  --question-workers 4 --flush-every 1
+\`\`\`
+
+Do not scale up solely on acceptance percentage: manually compare final
+accepted questions against their Scoped references, check false positives
+and false negatives, and inspect protocol diagnostics. Automated unit tests
+use scripted probe readers, not an actual local Qwen checkpoint.
