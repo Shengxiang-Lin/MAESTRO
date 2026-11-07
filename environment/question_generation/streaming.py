@@ -70,14 +70,24 @@ class QuestionProgress:
     def __init__(
         self, directory: Path, signature: str, task_ids: list[str],
         *, flush_every: int = 5, restart: bool = False,
+        output_names: Mapping[str, str] | None = None,
+        state_name: str = "question_progress_state.json",
+        summary_name: str = "question_generation_summary.json",
+        restart_flag: str = "--restart-questions",
     ) -> None:
         if flush_every < 1:
             raise ValueError("flush_every must be >= 1")
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.paths = {key: self.directory / name for key, name in _OUTPUTS.items()}
-        self.state_path = self.directory / "question_progress_state.json"
-        self.summary_path = self.directory / "question_generation_summary.json"
+        self.paths = {
+            key: self.directory / name
+            for key, name in (output_names or _OUTPUTS).items()
+        }
+        if set(self.paths) != {"realized", "rejected", "audit"}:
+            raise ValueError("invalid_progress_artifact_names")
+        self.state_path = self.directory / state_name
+        self.summary_path = self.directory / summary_name
+        self.restart_flag = restart_flag
         self.signature = signature
         self.task_ids = task_ids
         self.flush_every = flush_every
@@ -95,7 +105,7 @@ class QuestionProgress:
             if self.state.get("schema") != SCHEMA or self.state.get("signature") != signature:
                 raise QuestionCheckpointError(
                     "question-generation checkpoint has different frozen inputs, "
-                    "code or model settings; use --restart-questions to start over"
+                    "code or model settings; use " + self.restart_flag + " to start over"
                 )
             completed = self.completed
             if not 0 <= completed <= len(task_ids):
@@ -132,7 +142,7 @@ class QuestionProgress:
             if self.summary_path.is_file() or any(p.exists() for p in self.paths.values()):
                 raise QuestionCheckpointError(
                     "question output already exists without a checkpoint; "
-                    "use --restart-questions to discard it explicitly"
+                    "use " + self.restart_flag + " to discard it explicitly"
                 )
             self.state = {
                 "schema": SCHEMA, "signature": signature,
@@ -239,9 +249,31 @@ class QuestionProgress:
         self.close()
 
 
+_GOAL_OUTPUTS = {
+    "realized": "certified_blueprints.jsonl",
+    "rejected": "rejected_blueprints.jsonl",
+    "audit": "goal_review_audit.jsonl",
+}
+
+
+class GoalProgress(QuestionProgress):
+    """Same ordered crash-safe journal with dedicated Stage 2A artifacts."""
+
+    def __init__(self, directory, signature, task_ids, *,
+                 flush_every=5, restart=False):
+        super().__init__(
+            directory, signature, task_ids,
+            flush_every=flush_every, restart=restart,
+            output_names=_GOAL_OUTPUTS,
+            state_name="goal_progress_state.json",
+            summary_name="goal_generation_summary.json",
+            restart_flag="--restart-goals",
+        )
+
+
 def signature_for_question_run(
     frozen: Mapping[str, Any], args: Any, task_ids: list[str],
-    *, source_files: list[Path],
+    *, source_files: list[Path], extra_settings: Mapping[str, Any] | None = None,
 ) -> str:
     """Hash all inputs and contract settings that affect question outcomes."""
     sources = {}
@@ -266,12 +298,14 @@ def signature_for_question_run(
         "blueprint_workers": getattr(args, "blueprint_workers", 2),
         "no_json_mode": args.no_json_mode,
         "code_sha256": sources,
+        "extra_settings": dict(extra_settings or {}),
     }
     data = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(data).hexdigest()
 
 
 __all__ = [
-    "QuestionCheckpointError", "QuestionProgress", "question_output_lock",
+    "QuestionCheckpointError", "QuestionProgress", "GoalProgress",
+    "question_output_lock",
     "signature_for_question_run",
 ]
