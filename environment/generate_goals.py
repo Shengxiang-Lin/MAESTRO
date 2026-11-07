@@ -23,6 +23,11 @@ def main():
         "save only fully certified Blueprints for Stage 2B."
     )
     parser.add_argument("--max-goal-revisions", type=int, default=2)
+    parser.add_argument(
+        "--reuse-goal-audit", default=None,
+        help="Optional Stage2A v5 goal_review_audit.jsonl from a prior run; "
+             "reuse only already passed same-contract Fragments with matching models.",
+    )
     parser.add_argument("--restart-goals", action="store_true")
     try:
         args = parse_with_config(parser, "question_generation")
