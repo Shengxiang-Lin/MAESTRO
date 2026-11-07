@@ -654,14 +654,14 @@ def _evidence_failure_reason(probe, item, candidate):
             return "owner_role_label_invalid"
         if not isinstance(owner, str) or not owner.strip() or owner not in quote:
             return "owner_quote_invalid"
-        if re.search(r"\\b(?:whose|that has|which has|who has)\\b", owner, re.I):
+        if re.search(r"\b(?:whose|that has|which has|who has)\b", owner, re.I):
             return "owner_quote_contains_condition"
         if not _contains_condition_value(probe, quote):
             return "owner_condition_value_not_in_evidence"
     elif kind == "ranking_attribute":
-        answer = item.get("answer", "").strip("'\\\" ")
+        answer = item.get("answer", "").strip("'\\" ")
         if not answer or not re.search(
-                r"(?<!\\w)" + re.escape(answer) + r"(?!\\w)", quote, re.I):
+                r"(?<!\w)" + re.escape(answer) + r"(?!\w)", quote, re.I):
             return "ranking_attribute_not_in_evidence"
     return "evidence_grounding_unverified"
 
