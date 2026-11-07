@@ -57,7 +57,7 @@ class FakeAuthor:
 def supported_checks(data):
     # Simulates review verdict formatting; not a proof of semantic accuracy.
     return [{
-        "id": group["id"], "status": "preserved",
+        "id": group["id"], "status": "preserved", "problem_ids": [],
         "explanation": "Scripted: all requirements in this category are preserved.",
     } for group in data["risk_groups"]]
 
@@ -221,7 +221,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         )
         self.assertEqual(
             set(_CHECK_SCHEMA["required"]),
-            {"id", "status", "explanation"},
+            {"id", "status", "explanation", "problem_ids"},
         )
         self.assertIn("checks", _CRITIC_SCHEMA["required"])
         self.assertIn("checks", _FINAL_SCHEMA["required"])
@@ -433,6 +433,74 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
                  for r in group["requirements"]]), 12,
         )
 
+    def test_v16_relation_meaning_drift_is_flagged_without_private_gold(self):
+        from environment.question_generation.semantic_checks import (
+            relation_semantic_contradictions,
+        )
+        reference = (
+            "Which places are named after members of the target group, "
+            "who are named after an earlier person?"
+        )
+        candidate = (
+            "Which places have names that match members of the target group, "
+            "who are named after an earlier person?"
+        )
+        self.assertEqual(
+            relation_semantic_contradictions(reference, candidate),
+            ["named_after_replaced_by_name_equality"],
+        )
+        self.assertFalse(relation_semantic_contradictions(
+            reference,
+            "Which places were named in honor of members of the target group?",
+        ))
+        self.assertFalse(relation_semantic_contradictions(
+            "Which cities have matching names?",
+            "What cities share the same name?",
+        ))
+
+    def test_v16_negative_review_requires_specific_public_obligation_id(self):
+        from environment.question_generation.semantic_checks import (
+            validate_group_decisions, CheckFormatError,
+        )
+        groups = [{"id": "R1", "kind": "relation_scope",
+                   "requirements": [
+                       {"id": "C4", "expected": "Preserve directed naming"},
+                       {"id": "C5", "expected": "Preserve spouse"},
+                   ]}]
+        good = [{"id": "R1", "status": "changed",
+                 "problem_ids": ["C4"],
+                 "explanation": "Name equality replaces a naming relationship."}]
+        validate_group_decisions(groups, good)
+        for bad in (
+            [{**good[0], "problem_ids": []}],
+            [{**good[0], "problem_ids": ["C7"]}],
+            [{**good[0], "problem_ids": ["C4", "C4"]}],
+            [{**good[0], "status": "preserved"}],
+            [{**good[0], "explanation":
+              "The directed naming relation is preserved correctly."}],
+        ):
+            with self.subTest(bad=bad), self.assertRaises(CheckFormatError):
+                validate_group_decisions(groups, bad)
+
+    def test_v16_relation_owner_route_is_explicit_in_atomic_requirements(self):
+        from environment.question_generation.scoped_surface import ScopedPlan
+        from environment.question_generation.semantic_checks import semantic_checks
+        source = {"definition": "FIND", "anchor": "Alpha",
+                  "conditions": [], "inputs": []}
+        node = {
+            "definition": "RELATE", "direction": "forward",
+            "relation": "location", "inputs": [source],
+            "conditions": [{"attribute": "population",
+                            "comparison": "greater than",
+                            "value": {"type": "number", "value": "1190"}}],
+        }
+        plan = ScopedPlan([("Which location entities have population >1190?",)],
+                          [node], node)
+        owners = [c for c in semantic_checks(plan)
+                  if c["kind"] == "condition_owner"]
+        self.assertEqual(len(owners), 1)
+        self.assertIn("forward traversal of 'location'", owners[0]["expected"])
+
     def test_model_cannot_pass_a_known_changed_semantic_check(self):
         from environment.question_generation.question_review import (
             judge_question, critique_question,
@@ -442,11 +510,15 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
                 data = json.loads(user)
                 checks = supported_checks(data)
                 checks[0]["status"] = "changed"
+                checks[0]["problem_ids"] = ["C1"]
+                checks[0]["explanation"] = (
+                    "The candidate uses either group where both are required."
+                )
                 if "independent final" in system:
                     return {**PASS_FINAL, "checks": checks}
                 return {**PASS_CRITIQUE, "checks": checks}
         c = [{"id": "R1", "kind": "set_logic",
-              "requirements": [{"expected": "all branches",
+              "requirements": [{"id": "C1", "expected": "all branches",
                                 "reference_excerpt": "both groups"}]}]
         draft = "Which entities belong to either group?"
         feedback = critique_question(ContradictoryReviewer(), "both groups", draft, c)
