@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 from environment.question_generation.pipeline import build_parser, run
 from environment.question_generation.streaming import (
-    QuestionCheckpointError, QuestionProgress, question_output_lock,
+    QuestionCheckpointError, QuestionProgress, GoalProgress,
+    question_output_lock,
 )
 
 
@@ -63,6 +64,36 @@ class QuestionProgressTests(unittest.TestCase):
                         pass
 
 
+class GoalProgressTests(unittest.TestCase):
+    def test_stage2a_checkpoint_is_independent_and_recoverable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)
+            ids = ["task0", "task1", "task2"]
+            with GoalProgress(path, "goal-signature", ids, flush_every=1) as p:
+                p.append(0, True, {
+                    "task_id": "task0", "publication_status": "goals_certified",
+                }, [{"stage": "fragment_goal", "accepted": True}])
+            with (path / "certified_blueprints.jsonl").open("ab") as handle:
+                handle.write(b'{"uncommitted": true}\n')
+            with GoalProgress(path, "goal-signature", ids, flush_every=1) as p:
+                self.assertEqual(p.completed, 1)
+                p.append(1, False, {
+                    "task_id": "task1", "reason": "rejected_goal_fidelity",
+                }, [])
+                p.append(2, True, {
+                    "task_id": "task2", "publication_status": "goals_certified",
+                }, [])
+            self.assertEqual(
+                [r["task_id"] for r in _rows(path/"certified_blueprints.jsonl")],
+                ["task0", "task2"],
+            )
+            self.assertEqual(
+                [r["task_id"] for r in _rows(path/"rejected_blueprints.jsonl")],
+                ["task1"],
+            )
+            with self.assertRaisesRegex(QuestionCheckpointError, "restart-goals"):
+                GoalProgress(path, "changed-goal-signature", ids)
+
 class QuestionPipelineTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
@@ -79,12 +110,20 @@ class QuestionPipelineTests(unittest.TestCase):
         for path in (self.manifest,self.worlds,self.capabilities):
             path.write_text("{}\n",encoding="utf-8")
         self.output=self.root/"questions"
+        self.blueprints=self.root/"certified_blueprints.jsonl"
+        self.blueprints.write_text(
+            "".join(json.dumps({
+                "task_id": id_, "publication_status": "goals_certified",
+                "goal_certificate": {"test": True}
+            }) + "\n" for id_ in self.ids), encoding="utf-8"
+        )
         self.args=build_parser().parse_args([
             "--manifest",str(self.manifest),
             "--authoring-inputs",str(self.authoring),
             "--worlds",str(self.worlds),
             "--capabilities",str(self.capabilities),
             "--output-dir",str(self.output),
+            "--blueprints",str(self.blueprints),
             "--question-workers","3","--flush-every","2","--no-progress",
         ])
 
@@ -139,7 +178,8 @@ class QuestionPipelineTests(unittest.TestCase):
 
     def test_interruption_resume_only_missing_frozen_tasks(self):
         a,b,c=self.patches()
-        def interrupted(authoring,worlds,capabilities,author,critic,args,progress):
+        def interrupted(authoring,worlds,capabilities,author,critic,args,progress,
+                        goal_records=None):
             for index in range(2):
                 progress.append(index,True,{"task_id":self.ids[index],
                                             "question":f"Partial {index}"},[])
@@ -191,6 +231,56 @@ class QuestionPipelineTests(unittest.TestCase):
                 run(self.args)
             self.assertEqual([row["task_id"] for row in _rows(
                 self.output/"question_review_audit.jsonl")],["task-2","task-3"])
+
+    def test_stage2b_filters_uncertified_tasks_before_author_calls(self):
+        kept = (self.ids[1], self.ids[4])
+        self.blueprints.write_text(
+            "".join(json.dumps({
+                "task_id": task_id, "publication_status": "goals_certified",
+                "goal_certificate": {"test": True},
+            }) + "\n" for task_id in kept),
+            encoding="utf-8",
+        )
+        a,b,c = self.patches()
+        with a,b,c,patch(
+            "environment.question_generation.pipeline._realize_one",
+            side_effect=self.fake_realize,
+        ) as realization:
+            result = run(self.args)
+        self.assertEqual(result["input_candidates"], 6)
+        self.assertEqual(result["skipped_uncertified"], 4)
+        self.assertEqual(result["certified_input_count"], 2)
+        self.assertEqual(
+            [call.args[0]["task_id"] for call in realization.call_args_list],
+            list(kept),
+        )
+        self.assertEqual(
+            [row["task_id"] for row in _rows(
+                self.output / "question_review_audit.jsonl"
+            )], list(kept),
+        )
+
+    def test_stage2b_rejects_missing_blueprint_input(self):
+        self.args.blueprints = None
+        a,b,c = self.patches()
+        with a,b,c:
+            with self.assertRaisesRegex(SystemExit, "requires --blueprints"):
+                run(self.args)
+
+    def test_stage2b_rejects_duplicate_certified_ids(self):
+        row = {
+            "task_id": self.ids[0],
+            "publication_status": "goals_certified",
+            "goal_certificate": {"test": True},
+        }
+        self.blueprints.write_text(
+            json.dumps(row) + "\n" + json.dumps(row) + "\n",
+            encoding="utf-8",
+        )
+        a,b,c = self.patches()
+        with a,b,c:
+            with self.assertRaisesRegex(SystemExit, "duplicate"):
+                run(self.args)
 
     def test_existing_outputs_without_checkpoint_are_not_overwritten(self):
         a,b,c=self.patches()

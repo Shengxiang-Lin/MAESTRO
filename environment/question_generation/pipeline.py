@@ -61,7 +61,8 @@ def _safe_future_result(future,index,authoring):
         },[]
 
 
-def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress):
+def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress,
+                     goal_records=None):
     """Bound in-flight requests and append completed results in input order.
 
     The Author/Critic calls within an individual task remain sequential.
@@ -88,7 +89,7 @@ def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress):
                         capabilities.get(str(payload.get("task_id")),{}),
                         author,critic,
                         max_revisions=args.max_revisions,
-                        blueprint_workers=args.blueprint_workers)
+                        goal_record=(goal_records or {}).get(str(payload.get("task_id"))))
                     active[future]=index
                     next_submit+=1
 
@@ -131,6 +132,24 @@ def run(args):
     authoring=authoring[start:]
     if args.max_records is not None:
         authoring=authoring[:args.max_records]
+    if not args.blueprints:
+        raise SystemExit(
+            "Stage 2B requires --blueprints from a completed Stage 2A run. "
+            "Run environment/generate_goals.py first."
+        )
+    goal_records = {}
+    for record in _rows(args.blueprints):
+        task_id = str(record.get("task_id", ""))
+        if not task_id or task_id in goal_records:
+            raise SystemExit("duplicate or missing Stage 2A task ID: " + task_id)
+        if (record.get("publication_status") != "goals_certified"
+                or not isinstance(record.get("goal_certificate"), dict)):
+            raise SystemExit("uncertified Stage 2A record in --blueprints: " + task_id)
+        goal_records[task_id] = record
+    candidate_count = len(authoring)
+    authoring = [row for row in authoring
+                 if str(row.get("task_id")) in goal_records]
+    skipped_uncertified = candidate_count - len(authoring)
     worlds=_world_by_task(args.worlds,seed=args.seed)
     capabilities=_capability_by_task(args.capabilities)
     if any(str(row.get("task_id")) not in worlds for row in authoring):
@@ -149,12 +168,12 @@ def run(args):
     task_ids=[str(row.get("task_id","")) for row in authoring]
     source_files = [
         Path(args.manifest), Path(args.authoring_inputs),
-        Path(args.worlds), Path(args.capabilities),
+        Path(args.worlds), Path(args.capabilities), Path(args.blueprints),
         *(
             Path(__file__).with_name(name) for name in (
                 "pipeline.py", "realization.py", "question_review.py",
                 "verification.py", "semantic_checks.py", "scoped_surface.py",
-                "public_semantics.py",
+                "public_semantics.py", "goal_review.py",
                 "contracts.py", "validators.py", "backend.py", "boundary.py",
                 "streaming.py",
             )
@@ -172,7 +191,10 @@ def run(args):
             flush_every=args.flush_every,restart=args.restart_questions
         ) as progress:
             resumed_count=progress.completed
-            _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress)
+            _stream_parallel(
+                authoring, worlds, capabilities, author, critic, args,
+                progress, goal_records=goal_records,
+            )
             accepted=progress.accepted
             rejected=progress.rejected
             if progress.completed!=len(authoring):
@@ -234,9 +256,12 @@ def run(args):
                 ) > 1:
                     accepted_after_revision += 1
         summary = {
-            "pipeline": "per_fragment_blueprint_dag_assembly_question_subtask",
+            "pipeline": "stage2b_question_from_certified_stage2a_blueprints",
             "frozen_batch_validation": frozen,
             "model_roles": args._resolved_models,
+            "input_candidates": candidate_count,
+            "skipped_uncertified": skipped_uncertified,
+            "certified_input_count": len(authoring),
             "requested": len(authoring),
             "accepted": accepted,
             "rejected": rejected,
@@ -254,7 +279,10 @@ def run(args):
                 "holdout_tasks_51_to_100": dict(holdout),
                 "later_tasks": dict(later),
             },
-            "frozen_task_range": {"start_record": start, "end_record_exclusive": start + len(authoring)},
+            "frozen_task_range": {
+                "start_record": start,
+                "end_record_exclusive": start + candidate_count,
+            },
             "current_invocation_elapsed_seconds": round(monotonic() - started, 3),
             "review_statistics": {
                 "max_revisions": args.max_revisions,
@@ -273,11 +301,12 @@ def run(args):
                 "ordered_writes": True,
                 "flush_every": args.flush_every,
                 "question_workers": args.question_workers,
-                "blueprint_workers_per_task": args.blueprint_workers,
+                "stage2a_goals_regenerated": False,
                 "resumed_records": resumed_count,
                 "checkpoint": str(output_dir / "question_progress_state.json"),
             },
             "artifacts": {
+                "stage2a_blueprints": str(args.blueprints),
                 "realized": str(
                     output_dir / "realized_capability_worlds.jsonl"
                 ),
@@ -302,7 +331,7 @@ def build_parser():
         description="Generate naturally written and semantically reviewed MAESTRO questions"
     )
     for name in ("manifest", "authoring-inputs", "worlds", "capabilities",
-                 "output-dir", "base-url", "model", "critic-model"):
+                 "output-dir", "blueprints", "base-url", "model", "critic-model"):
         p.add_argument("--" + name)
     p.add_argument("--max-records", type=int)
     p.add_argument("--start-record", type=int, default=0,
@@ -331,7 +360,7 @@ def main():
         args=parse_with_config(build_parser(),"question_generation")
     except EnvironmentConfigError as exc:
         raise SystemExit(f"Environment configuration error: {exc}") from exc
-    missing=[key for key in ("manifest","authoring_inputs","worlds","capabilities","output_dir") if not getattr(args,key,None)]
+    missing=[key for key in ("manifest","authoring_inputs","worlds","capabilities","output_dir","blueprints") if not getattr(args,key,None)]
     if missing:raise SystemExit("Missing question-generation inputs (CLI or YAML): "+", ".join(missing))
     if args.question_workers<1:raise SystemExit("--question-workers must be >= 1")
     if args.blueprint_workers<1:raise SystemExit("--blueprint-workers must be >= 1")

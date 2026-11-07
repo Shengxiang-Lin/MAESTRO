@@ -11,9 +11,12 @@ source-replayed symbolic execution; the LLM writes only language.
 
 ### Shared Delegation Blueprint (Stage 2 → Stage 3)
 
-Stage 2 now pre-compiles the **compact** Gold fragment DAG and writes a
-PUBLIC, answer-free delegation goal for each immutable fragment. These
-goals are stored in the Stage-2 `delegation_blueprint` with a v30 certificate.
+Stage 2A pre-compiles the **compact** Gold fragment DAG, writes a
+PUBLIC, answer-free delegation goal for each immutable fragment, and reviews
+each Goal's semantic fidelity independently. Only tasks whose entire DAG
+passes receive a Stage-2A Goal certificate. Stage 2B then builds Questions
+exclusively from those certified Blueprints, with a v3 Question certificate
+binding the Stage-2A reviews.
 In Phase 1 (`subtask_bank.py`), certificate replay independently rebuilds
 the compact DAG and verifies the fragment topology and blueprint binding.
 Only the goal for the CURRENT subtask can assist the report writer; all
@@ -30,7 +33,7 @@ validated by the original execution contract.
 The blueprint is **teacher-only guidance**: it must not be included in
 O1 public state, exported prompts, or source retrieval catalogs. Existing
 legacy controlled-reference fixtures without Stage-2 certificates continue
-to work offline; new natural questions must carry the v30 certificate.
+to work offline; new Stage-2B questions must carry the certified-Goal v3 certificate.
 For newly authored tasks, use `--schedule compact` in Phase 1 to match
 Stage 2's signed DAG. A deliberate `--schedule baseline` run cannot reuse
 the compact certificate as if it were the same plan.
