@@ -114,7 +114,7 @@ git pull origin main
 python environment/generate_questions.py \
   --max-records 10 \
   --max-revisions 2 \
-  --output-dir environment/data/questions_editorial_v14_10 \
+  --output-dir environment/data/questions_editorial_v15_10 \
   --question-workers 4 \
   --flush-every 1
 \`\`\`
@@ -130,7 +130,7 @@ python -m unittest discover -s environment/tests -p "test_*.py"
 Stage 3 remains a separate consumer: it reconstructs the canonical task,
 compiles Gold from the unchanged ProgramIR, rechecks the Stage-2 certificate
 and performs its own public-executability and evidence validation. The new
-certificate schema is \`maestro.stage2_surface_cert.v3\` (contract 20).
+certificate schema is \`maestro.stage2_surface_cert.v4\` (contract 21).
 Previously generated v17/v18 Scoped/Free artifacts are **not supported by
 this new validator**; keep their original code/checkpoints for comparison,
 or regenerate questions in a new directory.
@@ -149,40 +149,59 @@ or regenerate questions in a new directory.
 
 There are no legacy graph or recursive semantic readback publication paths.
 
-## Evidence-guided review (v14)
+## v15 compact risk review (local Qwen3.5-9B)
 
-The v13 10-question audit exposed false-positive approvals: one explicit
-intersection was rewritten as a union, one filter was attached to a different
-related entity, and another question changed only a few mechanical words
-yet received a naturalness pass. The v14 reviewer no longer issues only a
-whole-question \`equivalent=true\` vote.
+A frozen 10-task evaluation of v14 yielded 0 accepted questions, primarily
+because of REVIEW PROTOCOL errors, not confirmed semantic drift:
 
-* The compiler supplies **public-only, compact semantic checks** about set
-  joins, filters and their owners, directed relations, and final output type.
-  Neither the private World nor the Gold Answer is given to a reviewer.
-* Critic and Final Judge independently return \`preserved\` / \`changed\` /
-  \`uncertain\` for every check, with an **exact phrase from the candidate**
-  and a concise reason. All check IDs must be covered. Missing checks,
-  malformed evidence and unsubstantiated approvals cannot publish.
-* A small high-confidence gate independently flags an explicitly labelled
-  group whose \`intersection\` is rewritten as a \`union\`. Type-aware checks
-  also require public numeric/date/code values (including normalized
-  English dates and comma-formatted numbers), while leaving attribute
-  *ownership* and more general paraphrase meaning to model review.
-* A separate style gate rejects near-verbatim edits and generic prefixes
-  appended to an otherwise unchanged reference. These gates produce
-  actionable feedback for the next Author revision; they do not silently
-  accept the Scoped reference.
-* Stage 3 revalidates the published reviewer evidence, checklist digest,
-  typed values and high-confidence guards locally, without more LLM calls.
+* 11 Critic responses did not contain a parseable JSON object.
+* 12 "preserved" and 2 "changed/uncertain" evidence quotes failed exact
+  substring matching.
+* 1 Final Judge omitted the required checklist response.
+* The v14 JSON Schema mistakenly required the nested \`checks\` field in
+  each individual check, while failing to require it at the final top level.
+  That implementation bug has been corrected.
 
-The new model response may be longer; the local Qwen3.5-9B Critic output
-budget defaults to 3072 tokens. These checks **reduce obvious false
-positives** but do not prove arbitrary natural-language equivalence:
-a model can still misunderstand an owner or misinterpret its own quote.
-Evaluate approved questions with an independently annotated adversarial
-challenge set before generating the full frozen pool.
+v15 replaces the 9–20 item output form with **at most four review decisions**:
+set logic, condition ownership, directed relations, and final answer. Every
+original public semantic obligation remains listed in the INPUT under its
+category. The model returns one \`preserved/changed/uncertain\` status and a
+reason for each category, not 20 byte-identical candidate quotations.
+A category is preserved only if ALL its listed requirements survive.
+The same local model can still make a false-positive semantic judgment:
+grouping is a pragmatic model-facing review format, **not a proof**.
 
-Run a **fresh directory** when comparing with v13, since the new
-\`maestro.stage2_surface_cert.v3\` (contract 20) is intentionally not
-backward-compatible with previously published v13 questions.
+The deterministic safety checks still reject changed public typed
+numbers/dates/codes, explicit group intersection-to-union flips, output
+boundary violations, and trivial or boilerplate naturalizations. Critic
+can request targeted revisions. A malformed Critic/Final response now
+retries ONCE on the **same candidate** using simpler JSON-object mode.
+If both reviews fail, the task is rejected as \`rejected_validation_error\`;
+it does not consume another Author revision just because the Reviewer
+failed to format JSON. The private audit retains the backend's finish
+reason, token usage, and a truncated model response tail when available.
+
+Run with local Qwen3.5-9B on the same first 10 frozen tasks:
+
+\`\`\`bash
+cd ~/code/MAESTRO
+git switch main
+git pull origin main
+python environment/generate_questions.py \
+  --max-records 10 --max-revisions 2 \
+  --output-dir environment/data/questions_editorial_v15_10 \
+  --question-workers 4 --flush-every 1
+\`\`\`
+
+Use a NEW output directory. The new Stage 2 certificate is
+\`maestro.stage2_surface_cert.v4\` / review contract 21. Stage 3 verifies
+the final-review status, grouped risk decisions, typed/public boundaries,
+and hashes, without invoking the Reviewer or redoing Gold compilation.
+Legacy v13/v14 accepted datasets need their original code or regeneration.
+
+This update should lower PROTOCOL failure rates, but a higher accepted
+fraction by itself is not success. Before scaling to 50 or 1120 tasks,
+independently assess relation ownership, AND/OR, filter omission,
+scope, and genuinely improved naturalness on approved examples and
+controlled negative pairs. The local CI runs mocked backends, not an
+actual Qwen inference experiment.
