@@ -20,8 +20,8 @@ from environment.delegation_blueprint import (
 from .goal_review import validate_goal_record
 from .question_review import passing_judgment
 from .semantic_checks import (
-    explicit_join_contradictions, missing_typed_literals,
-    relation_semantic_contradictions,
+    explicit_join_contradictions, explicit_global_join_contradictions,
+    missing_typed_literals, relation_semantic_contradictions,
 )
 
 SCHEMA = "maestro.stage2_surface_cert.blueprint.v2"
@@ -57,8 +57,9 @@ def _meaningful_edit(reference, candidate):
 def _simple_guards(plan, scoped, candidate):
     return {
         "missing_typed_literals": missing_typed_literals(plan, candidate),
-        "explicit_join_contradictions": explicit_join_contradictions(
-            scoped, candidate,
+        "explicit_join_contradictions": (
+            explicit_join_contradictions(scoped, candidate)
+            + explicit_global_join_contradictions(plan, candidate)
         ),
         "relation_semantic_contradictions": relation_semantic_contradictions(
             scoped, candidate,
