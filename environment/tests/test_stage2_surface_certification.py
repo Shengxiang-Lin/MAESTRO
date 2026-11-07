@@ -12,7 +12,8 @@ from environment.question_generation.question_review import (
     ReviewFormatError, author_question, critique_question, passing_judgment,
 )
 from environment.question_generation.verification import (
-    METHOD, SCHEMA, REVIEW_CONTRACT, _certificate, validate_surface_certificate,
+    CERTIFIED_METHOD, CERTIFIED_SCHEMA, CERTIFIED_REVIEW_CONTRACT,
+    _certificate, validate_surface_certificate,
 )
 
 
@@ -56,6 +57,37 @@ class FakeAuthor:
         return {"question": natural_rephrase(data["reference_question"])}
 
 
+class FakeGoalAuthor:
+    def complete_json(self, system, user, **kwargs):
+        packet = json.loads(user)
+        fragment = packet["current_fragment"]
+        values = [
+            str(s["public_value"]) for s in fragment["public_steps"]
+            if s.get("public_value") is not None
+        ]
+        text = (
+            "Investigate the relevant recorded entities and preserve all "
+            "specified public relation and filter requirements."
+        )
+        if values:
+            text += " Public values: " + ", ".join(values) + "."
+        return {"goal": text}
+
+
+class FakeGoalCritic:
+    def complete_json(self, system, user, **kwargs):
+        from environment.question_generation.goal_review import substantive_step_ids
+        packet = json.loads(user)
+        return {
+            "verdict": "pass", "issues": [],
+            "summary": "All local semantic steps are represented.",
+            "coverage": [{
+                "step_id": step_id,
+                "goal_quote": "Investigate the relevant recorded entities",
+            } for step_id in substantive_step_ids(packet["current_fragment"])],
+        }
+
+
 class FakeCritic:
     def __init__(self, reviews=None):
         self.reviews = list(reviews if reviews is not None else [PASS_CRITIQUE])
@@ -83,48 +115,53 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         }
         return payload, world, capability, rendered
 
+    def certified(self, payload, world, capability):
+        from environment.question_generation.goals_pipeline import generate_goal_record
+        ok, record, audit = generate_goal_record(
+            payload, world, capability,
+            FakeGoalAuthor(), FakeGoalCritic(), max_goal_revisions=0,
+        )
+        assert ok, str((record, audit))
+        return record
+
     def run_one(self, *, reviews=None, revisions=0, author=None):
         payload, world, capability, rendered = self.data()
         author = author or FakeAuthor()
         critic = FakeCritic(reviews)
+        goal_record = self.certified(payload, world, capability)
         result = _realize_one(
             payload, world, capability, author, critic,
-            max_revisions=revisions,
+            max_revisions=revisions, goal_record=goal_record,
         )
         return result, payload, world, rendered, author, critic
 
-    def test_one_goal_per_fragment_plus_question_and_no_extra_critic(self):
+    def test_certified_blueprint_reused_with_one_question_author_one_critic(self):
         (ok, row, audit), payload, world, rendered, author, critic = self.run_one()
         self.assertTrue(ok, str((row, audit)))
         self.assertEqual(row["publication_status"], "naturalized_certified")
-        self.assertEqual(row["surface_certificate"]["method"], METHOD)
-        self.assertEqual(row["surface_certificate"]["schema"], SCHEMA)
-        self.assertEqual(row["surface_certificate"]["review_contract"], REVIEW_CONTRACT)
-        self.assertEqual(row["authoring"]["strategy"], "blueprint_guided_benchmark_author_critic")
+        self.assertEqual(row["surface_certificate"]["method"], CERTIFIED_METHOD)
+        self.assertEqual(row["surface_certificate"]["schema"], CERTIFIED_SCHEMA)
+        self.assertEqual(row["surface_certificate"]["review_contract"], CERTIFIED_REVIEW_CONTRACT)
+        self.assertEqual(row["authoring"]["strategy"], "certified_goal_blueprint_question_author_critic")
         self.assertEqual(len(row["delegation_blueprint"]["goals"]),
                          len(row["delegation_blueprint"]["outline"]["tasks"]))
-        self.assertTrue(any(a["stage"] == "delegation_blueprint" for a in audit))
-        goal_count = len(row["delegation_blueprint"]["goals"])
-        self.assertEqual(len(author.calls), goal_count + 1)
-        self.assertEqual(
-            sum("current_fragment" in call for call in author.calls),
-            goal_count,
-        )
+        self.assertTrue(any(a["stage"] == "certified_blueprint_reused" for a in audit))
+        self.assertEqual(len(author.calls), 1)
+        self.assertTrue(all("current_fragment" not in x for x in author.calls))
         self.assertEqual(len(critic.calls), 1)
         self.assertNotIn("risk_groups", critic.calls[0][1])
         self.assertNotIn("candidate_probes", row["authoring"]["surface_review"])
         self.assertNotIn("final_judgment", row["authoring"]["surface_review"])
         validated = validate_surface_certificate(row, world, rendered.question)
         self.assertTrue(validated["eligible"])
-        self.assertEqual(validated["stage2_method"], METHOD)
+        self.assertEqual(validated["stage2_method"], CERTIFIED_METHOD)
 
     def test_specific_local_difference_returns_to_previous_draft(self):
         (ok, row, audit), _, _, _, author, critic = self.run_one(
             reviews=[MISSING_CRITIQUE, PASS_CRITIQUE], revisions=1,
         )
         self.assertTrue(ok, str((row, audit)))
-        goal_count = len(row["delegation_blueprint"]["goals"])
-        self.assertEqual(len(author.calls), goal_count + 2)
+        self.assertEqual(len(author.calls), 2)
         second = next(call for call in reversed(author.calls)
                       if "previous_draft" in call)
         self.assertEqual(second["previous_draft"], natural_rephrase(second["reference_question"]))
@@ -144,10 +181,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertEqual(row["reason"], "rejected_uncertain")
-        self.assertEqual(
-            len(author.calls),
-            len([call for call in author.calls if "current_fragment" in call]) + 1,
-        )  # one question plus independent fragment goals
+        self.assertEqual(len(author.calls), 1)  # Stage 2B never writes Goals
         self.assertEqual(len(critic.calls), 1)
 
     def test_nonsemantic_punctuation_changes_are_not_naturalization(self):
@@ -239,8 +273,10 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
 
     def test_missing_model_cannot_publish_reference_fallback(self):
         payload, world, capability, rendered = self.data()
+        goal_record = self.certified(payload, world, capability)
         ok, row, audit = _realize_one(
             payload, world, capability, Mock(), Mock(), max_revisions=1,
+            goal_record=goal_record,
         )
         self.assertFalse(ok)
         self.assertEqual(row["reason"], "rejected_validation_error")
