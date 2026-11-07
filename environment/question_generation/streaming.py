@@ -254,6 +254,7 @@ def signature_for_question_run(
     payload = {
         "schema": SCHEMA, "frozen": dict(frozen), "task_ids": task_ids,
         "seed": args.seed, "max_records": args.max_records,
+        "start_record": getattr(args, "start_record", 0),
         "author_model": args._resolved_models["question_author"],
         "critic_model": args._resolved_models["question_critic"],
         "question_temperature": args.question_temperature,

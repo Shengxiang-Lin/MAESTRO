@@ -72,15 +72,15 @@ class FakeCritic:
     def complete_json(self, system, user, **kwargs):
         data = json.loads(user)
         self.calls.append((system, data))
-        if "candidate-only semantic reader" in system:
+        if "independent reader of candidate text only" in system:
             # This is a scripted output contract test, NOT semantic evidence.
             # The renderer fixture contains two FORWARD relations, an AND
             # result selection and a QUERY_NAME terminal.
             answers = []
             for spec in data["probes"]:
                 question = spec["question"]
-                if "Which structure" in question:
-                    answer = "FORWARD"
+                if "actual subject" in question:
+                    answer = "A_TO_B"
                 elif "set-building clause" in question:
                     answer = "AND"
                 elif "final candidate question" in question:
@@ -93,7 +93,12 @@ class FakeCritic:
                     answer = "AND"
                 else:
                     answer = "UNCLEAR"
-                answers.append({"id": spec["id"], "answer": answer})
+                answers.append({
+                    "id": spec["id"], "answer": answer,
+                    "evidence": data["candidate_question"],
+                    "subject": "Noah Yarrow", "object": "entities",
+                    "subject_role": "A", "object_role": "B", "owner": "",
+                })
             return {"answers": answers}
         if "independent final semantic and language judge" in system:
             self.final_inputs.append(data)

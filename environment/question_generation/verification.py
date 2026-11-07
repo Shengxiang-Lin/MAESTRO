@@ -27,9 +27,9 @@ from .semantic_checks import (
     relation_semantic_contradictions, CheckFormatError,
 )
 
-SCHEMA = "maestro.stage2_surface_cert.v9"
-REVIEW_CONTRACT = 26
-METHOD = "coverage_aware_semantic_review_v8"
+SCHEMA = "maestro.stage2_surface_cert.v10"
+REVIEW_CONTRACT = 27
+METHOD = "grounded_endpoint_semantic_review_v21"
 
 
 def _certificate(task_id, program, canonical, question, review):
@@ -71,7 +71,7 @@ def certify_approved_question(
     if explicit_probe_contradictions(candidate_probe_specs, question):
         raise ValueError("explicit_candidate_scope_contradiction")
     validate_coverage_manifest(
-        candidate_probe_specs, candidate_probes, semantic_coverage,
+        candidate_probe_specs, candidate_probes, semantic_coverage, candidate=question,
     )
     # Stage 3 independently reconstructs public ScopedPlan and probe set.
     review = {
@@ -177,7 +177,7 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
         raise ValueError("stage2_semantic_coverage_obligations_changed")
     validate_coverage_manifest(
         expected_probes, review.get("candidate_probes"),
-        review.get("semantic_coverage"),
+        review.get("semantic_coverage"), candidate=question,
     )
     return {
         "eligible": True, "reviewed": True, "decision": "eligible",

@@ -17,6 +17,13 @@ from environment.question_generation.coverage_review import (
 from environment.question_generation.semantic_probes import probe_candidate_semantics
 
 
+def scripted_item(identifier, answer, candidate, *, subject="", object="",
+                  subject_role="", object_role="", owner=""):
+    return {"id": identifier, "answer": answer, "evidence": candidate,
+            "subject": subject, "object": object, "subject_role": subject_role,
+            "object_role": object_role, "owner": owner}
+
+
 def node(op, *children, relation=None, direction=None, conditions=()):
     result = {"definition": op, "inputs": list(children),
               "conditions": list(conditions)}
@@ -53,7 +60,7 @@ class CoverageReviewTests(unittest.TestCase):
             "How many such areas are there?"
         )
         probes = compile_coverage_probes(plan, ref, candidate)
-        self.assertIn(("relation_path", "BACKWARD"),
+        self.assertIn(("relation_path", "B_TO_A"),
                       [(p["kind"], p["expected"]) for p in probes])
         self.assertIn(("set_scope", "AND"),
                       [(p["kind"], p["expected"]) for p in probes])
@@ -77,12 +84,14 @@ class CoverageReviewTests(unittest.TestCase):
                 assert "reference_question" not in user
                 assert '"expected"' not in user
                 return {"answers": [
-                    {"id": p["id"], "answer": (
-                        "BACKWARD" if "Which structure" in p["question"] else
+                    scripted_item(p["id"], (
+                        "B_TO_A" if "actual subject" in p["question"] else
                         "AND" if "set-building clause" in p["question"] else
-                        "SELECTED" if "which entity must satisfy" in p["question"] else
+                        "B" if "owns this attribute" in p["question"] else
                         "COUNT"
-                    )} for p in data["probes"]
+                    ), candidate, subject="areas", object="North Cedar",
+                    subject_role="B", object_role="A", owner="areas")
+                    for p in data["probes"]
                 ]}
         records = []
         for start in range(0, len(probes), PROBE_BATCH_SIZE):
@@ -93,7 +102,7 @@ class CoverageReviewTests(unittest.TestCase):
         manifest = coverage_manifest(probes, records)
         self.assertEqual(manifest["status"], "complete")
         self.assertEqual(manifest["required"], manifest["verified"])
-        validate_coverage_manifest(probes, records, manifest)
+        validate_coverage_manifest(probes, records, manifest, candidate=candidate)
 
     def test_wrong_hop_cannot_certify_even_when_count_and_and_are_correct(self):
         plan, ref = self.plan()
@@ -110,12 +119,16 @@ class CoverageReviewTests(unittest.TestCase):
 
     def test_tampering_and_missing_relation_records_fail_closed(self):
         plan, ref = self.plan()
-        probes = compile_coverage_probes(plan, ref, "Count qualifying areas.")
-        records = [{"id": p["id"], "kind": p["kind"],
-                    "expected": p["expected"], "answer": p["expected"]}
-                   for p in probes]
+        candidate = "Count areas under 1765 with a recorded location pointing to North Cedar."
+        probes = compile_coverage_probes(plan, ref, candidate)
+        records = [{
+            **scripted_item(p["id"], p["expected"], candidate,
+                            subject="areas", object="North Cedar",
+                            subject_role="B", object_role="A", owner="areas"),
+            "kind": p["kind"], "expected": p["expected"],
+        } for p in probes]
         manifest = coverage_manifest(probes, records)
-        validate_coverage_manifest(probes, records, manifest)
+        validate_coverage_manifest(probes, records, manifest, candidate=candidate)
         for label, altered_records, altered_manifest in (
             ("missing", records[:-1], manifest),
             ("relation", [
@@ -125,7 +138,8 @@ class CoverageReviewTests(unittest.TestCase):
             ("hash", records, dict(manifest, required=0)),
         ):
             with self.subTest(label=label), self.assertRaises(ValueError):
-                validate_coverage_manifest(probes, altered_records, altered_manifest)
+                validate_coverage_manifest(probes, altered_records, altered_manifest,
+                                           candidate=candidate)
 
     def test_output_only_tasks_are_checked_not_zero_probe(self):
         plan = ScopedPlan([], [], node("QUERY_NAME", node("FIND_ALL")))
@@ -147,8 +161,8 @@ class CoverageReviewTests(unittest.TestCase):
         paths = [(p["relation"], p["expected"]) for p in probes
                  if p["kind"] == "relation_path"]
         self.assertEqual(set(paths), {
-            ("named after", "FORWARD"), ("location", "BACKWARD"),
-            ("participant", "BACKWARD"),
+            ("named after", "A_TO_B"), ("location", "B_TO_A"),
+            ("participant", "B_TO_A"),
         })
         self.assertEqual(len(paths), 3)
 

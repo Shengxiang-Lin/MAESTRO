@@ -171,6 +171,27 @@ class QuestionPipelineTests(unittest.TestCase):
                 run(self.args)
             self.assertEqual(len(_rows(self.output/"question_review_audit.jsonl")),6)
 
+    def test_offset_selects_disjoint_inputs_and_preserves_original_slice_indices(self):
+        self.args.start_record = 2
+        self.args.max_records = 2
+        a,b,c=self.patches()
+        with a,b,c,patch(
+            "environment.question_generation.pipeline._realize_one",
+            side_effect=self.fake_realize,
+        ) as realization:
+            result=run(self.args)
+            self.assertEqual([call.args[0]["task_id"] for call in realization.call_args_list],
+                             ["task-2","task-3"])
+            self.assertEqual(result["frozen_task_range"],
+                             {"start_record":2,"end_record_exclusive":4})
+            self.assertEqual(result["evaluation_slices"]["previously_debugged_first_10"]["tasks"],2)
+            self.assertEqual(result["evaluation_slices"]["holdout_tasks_51_to_100"],{})
+            self.args.start_record = 3
+            with self.assertRaises(QuestionCheckpointError):
+                run(self.args)
+            self.assertEqual([row["task_id"] for row in _rows(
+                self.output/"question_review_audit.jsonl")],["task-2","task-3"])
+
     def test_existing_outputs_without_checkpoint_are_not_overwritten(self):
         a,b,c=self.patches()
         self.output.mkdir()

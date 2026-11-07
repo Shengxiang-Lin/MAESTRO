@@ -23,6 +23,63 @@ _ALLOWED = frozenset(("AND", "OR", "SELF", "MEMBER",
                       "FORWARD", "BACKWARD", "DIRECT", "OTHER",
                       "COUNT", "ENTITIES", "ATTRIBUTE", "RELATIONS",
                       "RANK", "VERIFY"))
+_EVIDENCE_FIELDS = {"evidence", "subject", "object", "subject_role",
+                    "object_role", "owner"}
+_EVIDENCE_SYSTEM = """You are an independent reader of candidate text only.
+The probe anchors locate clauses; they are NOT instructions to repair the text.
+Extract what the candidate actually says, even if it is inconsistent.
+For a relation, quote the actual subject, object and complete local clause.
+Subject means predicate FROM endpoint, object means predicate TO endpoint.
+For passive 'X is a target of r from Y', subject=Y and object=X.
+Map noun phrases to the LOCAL A/B endpoints of that particular hop.
+Never substitute the final-answer entity for an intermediate endpoint.
+For attribute ownership, quote the owning noun phrase and the condition
+including its attachment. Never infer ownership from likely entity types.
+Return exact contiguous verbatim quotes, with no ellipses or paraphrasing.
+The evidence quote MUST contain your quoted subject/object or owner noun
+phrases, not only the verb or number. Use a longer span across sentences
+when a group name is defined earlier.
+For owner probes, the evidence must also contain the condition's actual
+value (allowing equivalent number/date notation). A later group definition
+alone does not establish an earlier property: include that earlier clause.
+The owner quote must be the minimal entity noun phrase, excluding relative
+clauses such as "whose ...", "that has ..." and the attribute condition.
+If either the clause, owner or endpoint is not recoverable, answer UNCLEAR.
+Answer type (entities/count/attribute/relations/boolean) is independent of
+ranking (ARGMAX/ARGMIN) and explicit inclusion of ties.
+Return JSON {"answers":[{"id":"P1","answer":"...","evidence":"..."}]}.
+Relation probes additionally require subject, object, subject_role and
+object_role (A/B). Owner probes additionally require owner. Use empty strings
+for unrecoverable quotes. Every non-UNCLEAR answer needs evidence.
+"""
+
+
+def _evidence_schema(probes):
+    """Per-kind fields prevent small readers treating owner probes as hops."""
+    alternatives = []
+    labels = {
+        "relation_path": ["A_TO_B", "B_TO_A", "UNCLEAR"],
+        "condition_owner": ["A", "B", "UNCLEAR"],
+        "answer_type": ["COUNT", "ENTITIES", "ATTRIBUTE", "RELATIONS", "VERIFY", "UNCLEAR"],
+        "selection_operation": ["ARGMAX", "ARGMIN", "ALL", "THRESHOLD", "UNCLEAR"],
+        "ranking_ties": ["INCLUDE", "EXCLUDE", "UNCLEAR"],
+    }
+    for p in probes:
+        properties = {"id": {"const": p["id"]}, "answer": {"type": "string"},
+                      "evidence": {"type": "string"}}
+        if p["kind"] in labels:
+            properties["answer"] = {"enum": labels[p["kind"]]}
+        if p["kind"] == "relation_path":
+            properties.update({key: {"type": "string"} for key in
+                               ("subject", "object", "subject_role", "object_role")})
+        elif p["kind"] == "condition_owner":
+            properties["owner"] = {"type": "string"}
+        alternatives.append({"type": "object", "properties": properties,
+                             "required": list(properties), "additionalProperties": False})
+    return {"type": "object", "properties": {"answers": {
+        "type": "array", "minItems": len(probes), "maxItems": len(probes),
+        "items": {"anyOf": alternatives}}},
+        "required": ["answers"], "additionalProperties": False}
 _PROBE_SYSTEM = """You are a candidate-only semantic reader.
 Read ONLY the candidate question below. You are NOT given the reference,
 gold answer, expected probe answers or private world. For each requested
@@ -356,6 +413,16 @@ def explicit_probe_contradictions(
     for probe in probes:
         ordinal = probe["group"]
         kind = probe["kind"]
+        if (kind == "condition_owner" and probe.get("expected") == "B"
+                and probe.get("direction") in ("forward", "backward")
+                and not any(other.get("kind") == "condition_owner"
+                            and other.get("expected") == "A"
+                            and all(other.get(key) == probe.get(key) for key in
+                                    ("relation", "direction", "attribute", "comparison",
+                                     "value_type", "canonical_value"))
+                            for other in probes)
+                and _related_relative_owns_condition(probe, candidate)):
+            issues.append(f"{probe['id']}:result_filter_moved_to_input_endpoint")
         if kind == "conditional_scope" and probe["expected"] == "CONDITIONAL":
             if (re.search(r"\bassuming\b", candidate, re.I)
                     and not re.search(
@@ -416,6 +483,33 @@ def explicit_probe_contradictions(
                     f"{probe['id']}:selected_filter_moved_to_related_location"
                 )
         elif kind == "group_join" and probe["expected"] == "AND":
+            # Conjoining two entity noun phrases lists sets, rather than
+            # asserting that the SAME entity satisfies both restrictions.
+            # Keep decimal points inside the bounded definition clause.
+            definition = re.search(
+                rf"\b(?:the\s+)?{ordinal}\s+group\s+"
+                rf"(?:includes?|consists? of|contains?|comprises?)\s+",
+                candidate, flags=re.I,
+            )
+            if definition:
+                body = re.split(r"[;!?]|\.(?!\d)",
+                                candidate[definition.end():definition.end() + 800],
+                                maxsplit=1)[0]
+                entity_head = (
+                    r"(?:entities|people|organizations|countries|cities|places|"
+                    r"events|ways|administrative areas|creative works|TV series|"
+                    r"Award entities)"
+                )
+                explicit_same_entity = re.search(
+                    r"\bboth\b|\b(?:each|every|same)\s+(?:result\s+)?entit(?:y|ies)\b",
+                    body, flags=re.I,
+                )
+                if (not explicit_same_entity
+                        and re.match(rf"(?:the\s+)?{entity_head}\b", body, re.I)
+                        and re.search(
+                            rf"\b(?:AND|as well as)\s+(?:the\s+)?{entity_head}\b",
+                            body, flags=re.I)):
+                    issues.append(f"{probe['id']}:intersection_replaced_by_entity_list")
             # v16 #3: "second group includes areas that are either ... or ...".
             # Do not search outside the one local group-definition clause.
             m = re.search(
@@ -452,23 +546,106 @@ def explicit_probe_contradictions(
     return issues
 
 
-def validate_candidate_probe_records(probes: list[dict], records: Any) -> None:
+def _contains_condition_value(probe, text):
+    if probe.get("value_type") in ("number", "year", "date"):
+        from .semantic_checks import missing_typed_literals
+        tiny = {"definition": "FIND_ALL", "inputs": [], "conditions": [{
+            "value": {"type": probe["value_type"], "value": probe["canonical_value"]}}]}
+        return not missing_typed_literals(ScopedPlan([], [], tiny), text)
+    raw = str(probe.get("canonical_value", ""))
+    return bool(raw and re.search(r"(?<![\w+])" + re.escape(raw) + r"(?!\w)", text, re.I))
+
+
+def _related_relative_owns_condition(probe, candidate):
+    """Only recognize an explicit local 'input that has ... AND attr value'.
+
+    End at sentence/clause boundaries or a new entity subject; unsupported
+    English remains the reader's responsibility.
+    """
+    relation = re.escape(probe["relation"])
+    if probe["direction"] == "backward":
+        prefix = rf"(?:recorded\s+)?['\"]?{relation}['\"]?\s+points?\s+to\s+"
+    else:
+        prefix = rf"targets?\s+of\s+(?:the\s+)?['\"]?{relation}['\"]?\s+(?:relation\s+)?from\s+"
+    pattern = prefix + r"[^.;!?,]{1,120}?\s+that\s+has\s+"
+    for match in re.finditer(pattern, candidate, re.I):
+        tail = candidate[match.end():match.end() + 350]
+        body = re.split(r"[;!?]|\.(?!\d)|(?<!\d),(?!\d)|"
+                        r"\b(?:and|but)\s+(?:are|have|they|these|those|themselves)\b",
+                        tail, maxsplit=1, flags=re.I)[0]
+        attribute = re.escape(probe["attribute"])
+        for cond in re.finditer(
+                rf"(?:^|\bAND\s+(?:an?\s+)?)(?:recorded\s+)?['\"]?{attribute}['\"]?\s+",
+                body, re.I):
+            span = re.split(r"\bAND\b", body[cond.end():], maxsplit=1, flags=re.I)[0]
+            if _contains_condition_value(probe, span):
+                return True
+    return False
+
+
+def _grounded_answer(probe, item, candidate):
+    """Evidence integrity check; endpoint interpretation remains a model judgment."""
+    answer = item["answer"]
+    if answer == "UNCLEAR":
+        return answer
+    evidence = item.get("evidence")
+    if not isinstance(evidence, str) or not evidence.strip() or evidence not in candidate:
+        return "UNCLEAR"
+    if probe["kind"] == "ranking_attribute":
+        # Strip selection wording, not attribute semantics; no expected label
+        # is used to repair or constrain the independent reader's answer.
+        answer = re.sub(r"^(?:(?:the|largest|smallest|greatest|least|highest|lowest|"
+                        r"maximum|minimum|recorded)\s+)+", "", answer.strip(), flags=re.I)
+        answer = answer.strip("'\"")
+        if not answer or not re.search(r"(?<!\w)" + re.escape(answer) + r"(?!\w)", evidence, re.I):
+            return "UNCLEAR"
+    if probe["kind"] == "relation_path":
+        roles = (item.get("subject_role"), item.get("object_role"))
+        derived = {("A", "B"): "A_TO_B", ("B", "A"): "B_TO_A"}.get(roles)
+        if derived != answer:
+            return "UNCLEAR"
+        for key in ("subject", "object"):
+            quote = item.get(key)
+            if not isinstance(quote, str) or not quote.strip() or quote not in evidence:
+                return "UNCLEAR"
+        if item["subject"] == item["object"]:
+            return "UNCLEAR"
+    if probe["kind"] == "condition_owner" and probe.get("evidence_required"):
+        owner = item.get("owner")
+        if (answer not in ("A", "B") or not isinstance(owner, str)
+                or not owner.strip() or owner not in evidence):
+            return "UNCLEAR"
+        if re.search(r"\b(?:whose|that has|which has|who has)\b", owner, re.I):
+            return "UNCLEAR"
+        if not _contains_condition_value(probe, evidence):
+            return "UNCLEAR"
+    return answer
+
+
+def validate_candidate_probe_records(probes: list[dict], records: Any, *,
+                                     candidate: str | None = None) -> None:
     """Fail closed if the saved v17 probe certificate differs from public plan."""
     if not isinstance(records, list) or len(records) != len(probes):
         raise ValueError("candidate_probe_certificate_incomplete")
     for probe, record in zip(probes, records, strict=True):
         if (not isinstance(record, dict)
-                or set(record) != {"id", "kind", "expected", "answer"}
+                or set(record) != ({"id", "kind", "expected", "answer"} |
+                    (_EVIDENCE_FIELDS if probe.get("evidence_required") else set()))
                 or record["id"] != probe["id"]
                 or record["kind"] != probe["kind"]
                 or record["expected"] != probe["expected"]
                 or record["answer"] != probe["expected"]):
             raise ValueError("candidate_probe_certificate_mismatch")
+        if probe.get("evidence_required"):
+            if (any(not isinstance(record[key], str) for key in _EVIDENCE_FIELDS)
+                    or candidate is None
+                    or _grounded_answer(probe, record, candidate) != record["answer"]):
+                raise ValueError("candidate_probe_certificate_ungrounded")
 
 
 def probe_candidate_semantics(
     backend: Any, reference: str, candidate: str,
-    probes: list[dict[str, str]], *, use_schema: bool = True,
+    probes: list[dict[str, str]], *, use_schema: bool = True, focused: bool = False,
 ) -> list[dict[str, str]]:
     """Read candidate only; reference argument is deliberately not transmitted.
 
@@ -479,33 +656,64 @@ def probe_candidate_semantics(
     del reference
     if not callable(getattr(backend, "complete_json", None)):
         raise CandidateProbeFormatError("candidate_probe_backend_unavailable")
-    public = [{"id": p["id"], "question": p["question"]}
+    evidence_mode = any(p.get("evidence_required") for p in probes)
+    public = [{"id": p["id"], "question": p["question"],
+               **({"kind": p["kind"]} if evidence_mode else {})}
               for p in probes]
+    system = _EVIDENCE_SYSTEM if evidence_mode else _PROBE_SYSTEM
+    schema = _PROBE_SCHEMA
+    if evidence_mode:
+        system += (f"\nReturn exactly {len(probes)} answer objects, one for EACH "
+                   f"of these IDs: {', '.join(p['id'] for p in probes)}. "
+                   "All probe kinds require a response, including output/conditional probes. "
+                   "Set answer to UNCLEAR when unsure; never return an empty array.")
+        system += ("\nRespect each probe's kind: condition_owner answers ONLY A/B/UNCLEAR "
+                   "and requires owner; relation_path answers A_TO_B/B_TO_A/UNCLEAR "
+                   "and requires subject, object and roles. Other kinds require only "
+                   "id, answer and evidence. Do not turn owner probes into relation probes.")
+        schema = _evidence_schema(probes)
+    if focused:
+        system += ("\nThis is the ONE focused rereading of disputed clauses. "
+                   "Check local grammatical attachments and passive relation endpoints "
+                   "carefully. A new answer requires fresh verbatim evidence. "
+                   "Remain UNCLEAR if the text does not resolve the distinction.")
     raw = backend.complete_json(
-        _PROBE_SYSTEM,
+        system,
         json.dumps({"candidate_question": candidate, "probes": public},
                    ensure_ascii=False),
-        response_schema=_PROBE_SCHEMA if use_schema else None,
+        response_schema=schema if use_schema else None,
     )
     answers = raw.get("answers") if isinstance(raw, dict) else None
     ids = [p["id"] for p in probes]
     got = ([x.get("id") for x in answers if isinstance(x, dict)]
            if isinstance(answers, list) else [])
     if (not isinstance(answers, list) or len(answers) != len(probes)
+            or any(not isinstance(identifier, str) for identifier in got)
             or len(set(got)) != len(ids) or set(got) != set(ids)):
         raise CandidateProbeFormatError(
             "candidate_probe_answers_incomplete", expected=ids, received=got,
         )
     by_id = {a["id"]: a for a in answers}
     for item in answers:
-        if (not isinstance(item, dict) or set(item) != {"id", "answer"}
-                or item["answer"] not in _ALLOWED):
+        if (not isinstance(item, dict)
+                or (evidence_mode and (not {"id", "answer", "evidence"}.issubset(item)
+                    or not set(item).issubset({"id", "answer"} | _EVIDENCE_FIELDS)))
+                or (not evidence_mode and set(item) != {"id", "answer"})
+                or (not evidence_mode and item["answer"] not in _ALLOWED)
+                or (evidence_mode and any(not isinstance(v, str) for v in item.values()))):
             raise CandidateProbeFormatError(
                 "candidate_probe_answer_invalid", expected=ids, received=got,
             )
-    return [{"id": p["id"], "kind": p["kind"],
-             "expected": p["expected"], "answer": by_id[p["id"]]["answer"]}
-            for p in probes]
+    records = []
+    for p in probes:
+        item = by_id[p["id"]]
+        answer = _grounded_answer(p, item, candidate) if evidence_mode else item["answer"]
+        records.append({
+            "id": p["id"], "kind": p["kind"], "expected": p["expected"],
+            "answer": answer,
+            **({key: item.get(key, "") for key in _EVIDENCE_FIELDS} if evidence_mode else {}),
+        })
+    return records
 
 
 __all__ = [

@@ -1,6 +1,7 @@
 """Frozen-boundary LLM question generation with deterministic and semantic review."""
 from __future__ import annotations
 import argparse,json
+from time import monotonic
 from concurrent.futures import FIRST_COMPLETED,ThreadPoolExecutor,wait
 from pathlib import Path
 from typing import Any,Mapping
@@ -116,12 +117,17 @@ def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress):
 
 
 def run(args):
+    started = monotonic()
     try:
         frozen=validate_frozen_inputs(
             args.manifest,args.authoring_inputs,args.capabilities,worlds_path=args.worlds)
     except (BoundaryError,FileNotFoundError,json.JSONDecodeError) as exc:
         raise SystemExit(f"Frozen-input validation failed: {exc}") from exc
     authoring=_rows(args.authoring_inputs)
+    start = getattr(args, "start_record", 0)
+    if start < 0:
+        raise SystemExit("--start-record must be >= 0")
+    authoring=authoring[start:]
     if args.max_records is not None:
         authoring=authoring[:args.max_records]
     worlds=_world_by_task(args.worlds,seed=args.seed)
@@ -177,6 +183,10 @@ def run(args):
                 if line.strip():
                     reasons[json.loads(line).get("reason", "unknown")] += 1
         author_calls = critic_calls = candidate_probe_calls = final_judge_calls = 0
+        candidate_probe_recheck_calls = 0
+        protocol_failures = Counter()
+        observed_kinds = Counter()
+        mismatch_kinds = Counter()
         review_outcomes = Counter()
         probe_kinds = Counter()
         verified_probe_kinds = Counter()
@@ -185,6 +195,8 @@ def run(args):
         accepted_after_revision = 0
         regression_10 = Counter()
         expansion = Counter()
+        holdout = Counter()
+        later = Counter()
         with (output_dir / "question_review_audit.jsonl").open(
             encoding="utf-8",
         ) as handle:
@@ -192,7 +204,10 @@ def run(args):
                 if not line.strip():
                     continue
                 event = json.loads(line)
-                slice_stats = regression_10 if event_index < 10 else expansion
+                original_index = start + event_index
+                slice_stats = (regression_10 if original_index < 10 else
+                               expansion if original_index < 50 else
+                               holdout if original_index < 100 else later)
                 slice_stats["tasks"] += 1
                 slice_stats[
                     "accepted" if event.get("accepted") else "rejected"
@@ -201,7 +216,14 @@ def run(args):
                     author_calls += int(attempt.get("author_calls", 0))
                     critic_calls += int(attempt.get("critic_calls", 0))
                     candidate_probe_calls += int(attempt.get("candidate_probe_calls", 0))
+                    candidate_probe_recheck_calls += int(attempt.get("candidate_probe_recheck_calls", 0))
                     final_judge_calls += int(attempt.get("final_judge_calls", 0))
+                    for role in ("critic", "candidate_probe", "candidate_probe_recheck", "final_judge"):
+                        protocol_failures[role] += len(attempt.get(role + "_protocol_failures", ()))
+                    for record in attempt.get("candidate_probe_answers", ()):
+                        observed_kinds[record["kind"]] += 1
+                        if record["answer"] != record["expected"]:
+                            mismatch_kinds[record["kind"]] += 1
                     if attempt.get("stage") == "candidate":
                         specs = attempt.get("candidate_probe_specs") or []
                         if specs:
@@ -243,13 +265,22 @@ def run(args):
             "rejection_reasons": dict(reasons),
             "evaluation_slices": {
                 "previously_debugged_first_10": dict(regression_10),
-                "next_tasks_after_first_10": dict(expansion),
+                "diagnostic_tasks_11_to_50": dict(expansion),
+                "holdout_tasks_51_to_100": dict(holdout),
+                "later_tasks": dict(later),
             },
+            "frozen_task_range": {"start_record": start, "end_record_exclusive": start + len(authoring)},
+            "current_invocation_elapsed_seconds": round(monotonic() - started, 3),
             "review_statistics": {
                 "max_revisions": args.max_revisions,
                 "author_calls": author_calls,
                 "critic_calls": critic_calls,
                 "candidate_probe_calls": candidate_probe_calls,
+                "candidate_probe_recheck_calls": candidate_probe_recheck_calls,
+                "total_model_calls": author_calls + critic_calls + candidate_probe_calls + candidate_probe_recheck_calls + final_judge_calls,
+                "protocol_failures_by_role": dict(protocol_failures),
+                "observed_probe_answers_by_kind": dict(observed_kinds),
+                "probe_mismatches_by_kind": dict(mismatch_kinds),
                 "candidates_with_probes": candidates_with_probes,
                 "accepted_without_probes": accepted_without_probes,
                 "compiled_probe_kinds": dict(probe_kinds),
@@ -295,6 +326,8 @@ def build_parser():
                  "output-dir", "base-url", "model", "critic-model"):
         p.add_argument("--" + name)
     p.add_argument("--max-records", type=int)
+    p.add_argument("--start-record", type=int, default=0,
+                   help="Zero-based offset in the validated frozen authoring pool")
     p.add_argument("--seed", type=int, default=17)
     p.add_argument("--provider", choices=("passthrough", "openai-compatible"),
                    default="passthrough")

@@ -7,6 +7,7 @@ public-boundary checks enters the accepted questions JSONL.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from functools import partial
 
 from environment.trajectory_simulation.compiler import (
     GoldCompilationError, compile_gold_solution,
@@ -168,6 +169,7 @@ def _realize_one(payload, world, capability, author, critic, *,
             "stage": "candidate", "attempt": attempt + 1,
             "author_calls": 0, "critic_calls": 0,
             "candidate_probe_calls": 0, "final_judge_calls": 0,
+            "candidate_probe_recheck_calls": 0,
         }
         audit.append(entry)
         try:
@@ -358,6 +360,26 @@ def _realize_one(payload, world, capability, author, critic, *,
                 probe_protocol_error = True
                 break
             probe_records.extend(observed)
+        entry["candidate_probe_initial_answers"] = list(probe_records)
+        # One bounded focused rereading per disputed obligation, with no
+        # expected labels or reference text transmitted to the reader.
+        if not probe_protocol_error:
+            disputed = {r["id"] for r in probe_records if r["answer"] != r["expected"]}
+            focused_probes = [p for p in probes if p["id"] in disputed]
+            replacements = {}
+            for begin in range(0, len(focused_probes), PROBE_BATCH_SIZE):
+                observed = _review_attempt(
+                    partial(probe_candidate_semantics, focused=True),
+                    critic_backend, scoped, candidate,
+                    focused_probes[begin:begin + PROBE_BATCH_SIZE],
+                    entry, "candidate_probe_recheck",
+                )
+                if observed is None:
+                    probe_protocol_error = True
+                    break
+                replacements.update((r["id"], r) for r in observed)
+            entry["candidate_probe_recheck_answers"] = list(replacements.values())
+            probe_records = [replacements.get(r["id"], r) for r in probe_records]
         entry["candidate_probe_answers"] = probe_records
         entry["semantic_coverage"] = coverage_manifest(probes, probe_records)
         if probe_protocol_error:
