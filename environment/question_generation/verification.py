@@ -1,8 +1,8 @@
-"""Lightweight Stage-2 editorial certificate and Stage-3 deterministic replay.
+"""Stage-2 blueprint/question certificate and independent Stage-3 replay.
 
-A checked reference and bounded public guards are independently rebuilt.
-The Critic's PASS is an auditable model assessment, NOT a formal proof.
-No final judge, evidence tree, or probe coverage is required.
+The task DAG topology is recompiled, then the PUBLIC blueprint is checked
+against that graph and its bound question. This checks integrity, not a
+mathematical proof of natural-language semantic equivalence.
 """
 from __future__ import annotations
 
@@ -14,15 +14,18 @@ from environment.trajectory_simulation.eligibility import (
 )
 from environment.trajectory_simulation.compiler import compile_gold_solution
 
+from environment.delegation_blueprint import (
+    compile_delegation_outline, validate_delegation_blueprint,
+)
 from .question_review import passing_judgment
 from .semantic_checks import (
     explicit_join_contradictions, missing_typed_literals,
     relation_semantic_contradictions,
 )
 
-SCHEMA = "maestro.stage2_surface_cert.simple.v1"
-REVIEW_CONTRACT = 29
-METHOD = "simple_author_critic_local_repair_v1"
+SCHEMA = "maestro.stage2_surface_cert.blueprint.v1"
+REVIEW_CONTRACT = 30
+METHOD = "blueprint_guided_author_critic_v1"
 
 
 def _certificate(task_id, program, canonical, question, review):
@@ -69,7 +72,7 @@ def _check_public_candidate(plan, canonical, scoped, candidate):
 def certify_approved_question(
     task_id: str, world: Mapping, canonical: str, question: str,
     scoped_reference: str, critic_review: Mapping, *,
-    revision_rounds: int, plan,
+    revision_rounds: int, plan, blueprint, gold, resources=(),
 ):
     """Issue a small certificate, only after Critic PASS and public checks."""
     if (not isinstance(critic_review, Mapping)
@@ -78,6 +81,14 @@ def certify_approved_question(
         raise ValueError("natural_question_not_approved")
     guards = _check_public_candidate(
         plan, canonical, scoped_reference, question,
+    )
+    expected_outline = compile_delegation_outline(
+        gold, world, canonical, plan, resources,
+    )
+    blueprint_hash = validate_delegation_blueprint(
+        blueprint, expected_outline,
+        payload={"resources": resources},
+        oracle_answer=world.get("_display_answer"),
     )
     review = {
         "eligible": True, "reviewed": True, "decision": "eligible",
@@ -88,6 +99,7 @@ def certify_approved_question(
         "critic_review": dict(critic_review),
         "revision_rounds": revision_rounds,
         "public_guards_sha256": digest(guards),
+        "blueprint_sha256": blueprint_hash,
     }
     return _certificate(
         task_id, world["program"], canonical, question, review,
@@ -120,11 +132,12 @@ def validate_surface_certificate(
     public-evidence checks run independently as before.
     """
     certificate = realized.get("surface_certificate")
+    blueprint = realized.get("delegation_blueprint")
     authoring = realized.get("authoring") or {}
     review = authoring.get("surface_review")
     question = realized.get("question")
     if (not isinstance(certificate, dict) or not isinstance(review, dict)
-            or not isinstance(question, str)):
+            or not isinstance(question, str) or not isinstance(blueprint, dict)):
         raise ValueError("missing_stage2_surface_certificate")
     required = {
         "schema", "review_contract", "task_id", "question_sha256",
@@ -158,6 +171,11 @@ def validate_surface_certificate(
         raise ValueError("stage2_publication_status_mismatch")
 
     rendered = rendered or world.get("_rendered")
+    if gold is None:
+        gold = compile_gold_solution(
+            {**realized, "question": canonical}, world, rendered,
+            schedule="compact",
+        )
     scoped, plan = _rebuild_scoped_reference(
         realized, world, canonical, gold, rendered,
     )
@@ -168,6 +186,15 @@ def validate_surface_certificate(
     )
     if review.get("public_guards_sha256") != digest(guards):
         raise ValueError("stage2_public_guard_record_changed")
+    outline = compile_delegation_outline(
+        gold, world, canonical, plan, realized.get("resources", ()),
+    )
+    valid_hash = validate_delegation_blueprint(
+        blueprint, outline, payload=realized,
+        oracle_answer=world.get("_display_answer", getattr(rendered, "answer", None)),
+    )
+    if review.get("blueprint_sha256") != valid_hash:
+        raise ValueError("stage2_blueprint_binding_mismatch")
     return {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": "stage2_verified_editorial_certificate",
