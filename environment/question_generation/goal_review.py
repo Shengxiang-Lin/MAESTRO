@@ -11,13 +11,14 @@ import re
 from collections.abc import Mapping
 
 from environment.delegation_blueprint import (
-    _fragment_goal_packet, _validate_goal, validate_delegation_blueprint,
+    _fragment_goal_packet, _terminal_result_contract,
+    validate_delegation_blueprint,
 )
 from environment.trajectory_simulation.eligibility import digest
 
 
-GOAL_CERT_SCHEMA = "maestro.stage2a.certified_blueprint.v3"
-GOAL_REVIEW_METHOD = "subtask_intent_alignment_critic_v3"
+GOAL_CERT_SCHEMA = "maestro.stage2a.certified_blueprint.v4"
+GOAL_REVIEW_METHOD = "subtask_intent_target_and_owner_critic_v4"
 
 _REVIEW_SYSTEM = """Review ONE brief Sub-Agent SUBTASK INTENT against its
 immutable local fragment contract and its declared direct dependencies.
@@ -31,13 +32,23 @@ Check just THREE things:
 1) RELEVANCE: Does it describe the actual main job for THIS fragment,
    rather than a different sibling, the whole Main task or a generic
    request without a meaningful target/action?
-2) OUTPUT: Does it aim at the correct broad kind of result (entities vs
-   count vs value, and the principal entity/information type) and respect
-   its actual upstream input role?
+2) OUTPUT: Does it aim at the correct kind of result (entity names,
+   entity set, NUMBER/COUNT, or attribute VALUE), and correct PUBLIC
+   entity target when specified? For a terminal COUNT, a Goal that only
+   says 'identify the single entity' FAILS: it must say count/how many/
+   total number. For QUERY_NAME, returning names of PEOPLE instead of
+   EVENTS FAILS when the terminal_result_contract says Event. For
+   QUERY_ATTR, returning names instead of attribute values FAILS.
+   terminal_result_contract, when provided, is the authoritative small
+   output hint; it does not contain the full question or other branches.
 3) NO CONTRADICTION: Does anything it explicitly CLAIM reverse a
    relation, misattribute a property, alter AND/OR, alter a comparison,
    add an unrelated branch condition, invent an answer, or narrow/expand
-   the candidate pool in a way incompatible with the contract?
+   the candidate pool in a way incompatible with the contract? In particular
+   'male population < 727' means an area with THAT population ATTRIBUTE,
+   NOT an entity that is male. A place's end date must not become the
+   end date of an event found later along a relation hop. Track which
+   input entities own attributes at EACH relevant step.
 
 ALLOWED abstraction: omitted thresholds, dates, names, intermediate
 steps, attribute predicates and explicit operator names. A phrase like
@@ -48,9 +59,11 @@ Do not reject faithful high-level paraphrases for brevity or style.
 
 Not allowed: 'people born after 1840' when the contract requires before
 1840 (if explicitly stated); 'A OR B' when the fragment requires A AND B;
-returning people when the fragment must return their events; pretending
-a sibling's output is already known; or a generic Goal such as 'find
-relevant information' that does not identify an actual subtask target.
+returning people when the fragment must return their events; replacing
+'count matching entities' with 'find one entity'; turning an entity's
+male population into that entity's gender; pretending a sibling's output
+is already known; or a generic Goal such as 'find relevant information'
+that does not identify an actual subtask target.
 
 Public null labels mean the exact literal was withheld; never invent
 missing identity labels. Upstream dependencies are planning inputs, not
@@ -83,6 +96,107 @@ def _numeric_tokens(text):
         m.group(0).replace(",", "")
         for m in re.finditer(r"(?<![\w])\d[\d,]*(?:\.\d+)?(?![\w])", str(text))
     }
+
+
+_COUNT_INTENT = re.compile(
+    r"\b(?:count|counting|tally|tallying|how many|number of|total number|"
+    r"total count|quantity of|cardinality)\b", re.I
+)
+_NAME_INTENT = re.compile(
+    r"\b(?:name|names|named|identity|identities|which|who)\b", re.I
+)
+_ATTRIBUTE_INTENT = re.compile(
+    r"\b(?:attribute|value|values|date|year|population|height|mass|"
+    r"weight|address|age|measurement|number|score|rank|ranking|"
+    r"largest|smallest)\b", re.I
+)
+_OUTPUT_ENTITY_ALIASES = {
+    "event": r"\bevents?\b",
+    "person": r"\b(?:person|people|persons|individuals?|humans?)\b",
+    "individual": r"\b(?:person|people|persons|individuals?|humans?)\b",
+    "human": r"\b(?:person|people|persons|individuals?|humans?)\b",
+    "organization": r"\b(?:organizations?|organisations?|companies|company|firms?)\b",
+    "place": r"\b(?:places?|locations?|sites?)\b",
+    "administrative area": r"\b(?:administrative areas?|regions?|districts?)\b",
+    "taxon": r"\b(?:taxa|taxons?|species)\b",
+    "creative work": r"\b(?:creative works?|works?)\b",
+}
+
+
+def _terminal_goal_issues(outline, fragment, goal):
+    """High-confidence final answer-type mismatches, NOT detail coverage."""
+    output = _terminal_result_contract(outline, fragment)
+    if not output:
+        return []
+    action = output["action"]
+    issues = []
+    count = bool(_COUNT_INTENT.search(goal))
+    if action == "COUNT":
+        # Unlike numeric thresholds, a COUNT result is the very purpose
+        # of the terminal subtask. A Goal that just finds one entity is
+        # not an adequate intent hint for a counting task.
+        if not count:
+            issues.append("terminal_count_intent_missing")
+    elif action == "QUERY_NAME":
+        if count and not _NAME_INTENT.search(goal):
+            issues.append("terminal_names_replaced_by_count")
+        # Natural "identify matching entities" can mean finding names,
+        # so do not require a literal QUERY_NAME/names token.
+    elif action == "QUERY_ATTR":
+        if re.search(
+            r"\b(?:return|report|list|give|provide)\s+"
+            r"(?:the\s+)?(?:names?|identities)\s+of\b", goal, re.I
+        ) and not _ATTRIBUTE_INTENT.search(goal):
+            issues.append("terminal_attribute_values_replaced_by_names")
+
+    # Check *explicit* result noun only. The Goal may mention Persons
+    # as input conditions while its actual output is Events.
+    target = str(output.get("target_entity_type", "")).lower()
+    expected = _OUTPUT_ENTITY_ALIASES.get(target)
+    if expected:
+        clauses = re.findall(
+            r"\b(?:return|report|give|provide|list|count)\b[^.;]{0,115}",
+            goal, flags=re.I,
+        )
+        for clause in clauses:
+            if re.search(expected, clause, re.I):
+                continue
+            for other, alias in _OUTPUT_ENTITY_ALIASES.items():
+                if other == target:
+                    continue
+                # Overlap in entity synonyms is intentional.
+                if (target in {"person", "individual", "human"}
+                        and other in {"person", "individual", "human"}):
+                    continue
+                if re.search(alias, clause, re.I):
+                    issues.append(
+                        "terminal_wrong_result_entity_type:" + target
+                    )
+                    return list(dict.fromkeys(issues))
+    return list(dict.fromkeys(issues))
+
+
+def _explicit_attribute_owner_issues(fragment, goal):
+    """Flag explicit gender/aggregate confusion, not omitted attributes."""
+    attributes = {
+        str(s.get("attribute", "")).lower()
+        for s in fragment.get("public_steps", ())
+    }
+    issues = []
+    for sex in ("male", "female"):
+        if sex + " population" not in attributes:
+            continue
+        if re.search(
+            r"\b(?:entities|areas|regions|places|organizations|events)\b"
+            r"[^.;]{0,85}\b(?:are|were|is)\s+" + sex + r"\b",
+            goal, re.I,
+        ) or re.search(
+            r"\b" + sex +
+            r"\s+(?:entities|areas|regions|places|organizations|events)\b",
+            goal, re.I,
+        ):
+            issues.append("population_attribute_misread_as_gender:" + sex)
+    return issues
 
 
 def deterministic_goal_issues(outline, fragment, goal):
@@ -148,6 +262,8 @@ def deterministic_goal_issues(outline, fragment, goal):
                     goal, re.I,
                 ):
                     issues.append("not_equal_rewritten_as_ordered_comparison:" + str(value))
+    issues.extend(_terminal_goal_issues(outline, fragment, goal))
+    issues.extend(_explicit_attribute_owner_issues(fragment, goal))
     return list(dict.fromkeys(issues))
 
 
