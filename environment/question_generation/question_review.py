@@ -1,9 +1,8 @@
-"""Minimal Author → Critic → Author local-repair review.
+"""Benchmark-style question authoring with one local-difference Critic.
 
-The reference is a compiler-checked PUBLIC question. The Critic is an
-imperfect LLM reviewer, not a semantic theorem prover. It must identify
-specific textual differences before asking Author to change a sentence.
-No risk-group trees, A/B roles, candidate-only probes or final judge.
+The immutable public delegation blueprint supplies goals and a compositional
+semantic contract. The mechanical reference is a literal-spelling fallback,
+NOT the target style. No parser-like probes or independent final judge.
 """
 from __future__ import annotations
 
@@ -13,111 +12,84 @@ from typing import Any
 
 
 class ReviewFormatError(ValueError):
-    """A model response violates this small editing protocol."""
+    """A model response violates the editorial protocol."""
 
 
-_AUTHOR_SYSTEM = """You are naturalizing a compiler-checked mechanical
-question. Your only job is to make its English easier to read WITHOUT
-changing which entities qualify or which answer is requested.
+_AUTHOR_SYSTEM = """Write ONE realistic, natural benchmark question for an
+autonomous information-seeking/multimodal agent. The immutable public task
+contract states what the question must mean. A delegation blueprint describes
+how independent Sub-Agents could work on it, but must NOT be reproduced as a
+numbered list of tasks. The mechanical reference is ONLY a fallback for
+public names, exact values and ambiguous relation wording.
 
-Use conservative, local wording edits. Keep clear numbered/grouped steps
-when necessary; a readable multi-sentence question is better than a short
-but ambiguous one. Do not shorten just for its own sake.
+Start with the user's final information need, then integrate the clues
+naturally. Prefer a compact investigation, comparison, identification or
+calculation question, as appropriate. Avoid 'Let the first group consist
+of...' and numbered operator descriptions. Clear multi-sentence requests
+are acceptable if the logic is complicated. Naturalness is meaningful
+rewriting, not inserting 'that', 'relation' or punctuation into the original.
 
-Before writing, carefully preserve these semantic commitments:
-- "in both A and B" = SAME entity must satisfy A AND B. Never reword as
-  "either", "one of", "two types of entities", or "A and B entities" when
-  that describes a union. "At least one of A or B" is an OR.
-- Every branch belongs to its original candidate pool. A filter applied
-  later to a subset must NOT be inserted into the definition of an earlier
-  group. An alternative branch from all relevant records must NOT be
-  restricted to the first/second group.
-- For "entities whose recorded RELATION points to X", keep the chosen
-  entity, relationship, direction, and X distinct. For "entities listed
-  as targets of RELATION from Y", keep the target/source direction.
-- Keep filters on the SAME entity as in the reference. In particular,
-  "organizations targeted by a relation from EVENTS WITH A LOGO" does
-  not allow moving the logo onto the organizations. "Locations of taxa"
-  are not the taxa themselves.
-- Preserve every date, numeric comparison, code, negation, conditional
-  empty case, return type, ranking direction and tie rule.
+Preserve ALL answer-defining semantics: directed relation hops; attributes
+on their original entities; shared-entity AND vs branch-wise OR; independent
+candidate pools; dates, numeric comparisons, negations, ranking, ties,
+output type and conditional empty results. 'both A and B' means one
+candidate satisfies BOTH, not 'two types of' candidates. Do not make
+an entity into a group containing that entity. Do not erase a relation
+hop simply because its endpoints have the right types.
 
-Prefer retaining precise recorded relation words in quotes and using
-clearer transitions between steps. Naturalization does not require new
-logical phrasing. A modest improvement is sufficient.
+Only mention media if the public modalities actually include it. A
+discoverable video/document is not a user-attached file. Never invent
+the media's contents, a real-world story, source title, unknown entities,
+intermediate results, answer, or additional evidence requirements.
+Do not expose internal graph IDs, task splits or model tools.
 
-If previous_draft and reviewer_feedback are supplied, PATCH ONLY the
-local difference described by the Critic. Keep the remaining clauses
-unchanged. Do not start again from the reference and do not make
-unrequested logical changes.
-
-Return JSON only: {"question": "the complete edited question"}.
+When given a previous_draft plus reviewer_feedback, edit the previous
+question by making the smallest repairs to its specified semantic problems.
+If only the style is weak, make a more user-facing rephrase WITHOUT changing
+any task semantics. Return JSON {"question":"..."} only.
 """
 
-_CRITIC_SYSTEM = """You are a semantic copy editor for question naturalization.
-The reference is correct; the candidate should be MORE READABLE and
-have EXACTLY the SAME answer-defining conditions. You must actively
-look for errors before voting PASS. Natural language fluency is NOT
-evidence of equivalence.
+_CRITIC_SYSTEM = """Act as a semantic reviewer of a natural benchmark question.
+The public semantic contract is authoritative; the delegation blueprint
+explains which subtasks compute the answer. Review whether a user solving
+the candidate would seek EXACTLY the same answer under the same filters,
+not whether it resembles the mechanical reference.
 
-Make a short, careful reference-to-candidate comparison. Specifically:
-1. SAME GROUPS / LOGIC? "in both" means one entity in A AND B;
-   "at least one" means A OR B. Check each group independently, even
-   when the candidate puts 'both' in one clause and 'either' in another.
-   "two types", "A and B", "includes X and Y" can denote a UNION rather
-   than the required INTERSECTION. Never approve merely because all
-   condition words are present.
-2. SAME FILTER OWNERS? For each number, date, logo, population etc.,
-   identify which entity it modifies in BOTH versions. Watch for filters
-   moving from event to organization, from subject to related place, or
-   from an answer entity to a relation target.
-3. SAME RELATION PATH AND ENTITY TYPE? Check the subject, target and
-   direction of each "points to" or "targets of ... from" relation.
-   Locations of taxa are not taxa. Do not turn a recorded relation
-   into simple shared names or a direct attribute.
-4. SAME POOLS? A reference "A drawn from group G OR B from all records"
-   does not allow the candidate to require B to belong to G. Check
-   earlier group definitions are not narrowed by downstream filters.
-5. SAME ANSWER? Preserve required values, comparisons, negation,
-   conditional false/empty cases, ranking/max/min/ties and answer type.
+Before PASS, compare: (1) every required relation hop and its direction;
+(2) which entity owns each number/date/attribute; (3) intersection (SAME
+entity must satisfy every branch) vs union, including independent candidate
+pools; (4) entity types, named singleton anchors and evidence discovery
+requirements; (5) final answer type, rank/ties and empty/negative cases.
+Check that the question's goal can be fulfilled by the blueprint's terminal
+subtask and that it does not demand an unrelated extra step.
 
-Calibration examples (these are NOT the user's question):
-- Reference: "entities in BOTH entities with height H and entities
-  with width W." Candidate: "entities with EITHER height H OR width W."
-  This is CHANGED (AND became OR), even though both values remain.
-- Reference: "organizations targeted by relation R FROM EVENTS with
-  logo L." Candidate: "organizations targeted by R from events, with
-  logo L." Do not silently PASS if the logo is now on organizations;
-  if its attachment is genuinely unresolved, choose UNCERTAIN.
-- Reference: "A from group G OR B in the relevant records."
-  Candidate: "A or B from group G." This is CHANGED: B was restricted.
-- Conversely, "entities that have H and have W" faithfully expresses
-  intersection; merely combining clauses with AND is NOT an error.
+A candidate can be equivalent without listing every internal Sub-Agent
+task, naming tools or duplicating source acquisition steps. Do not require
+the reader to follow the hidden graph. A concise user-facing question is
+better than a copied mechanical query. A 'group containing X' is not
+equivalent to the singleton X unless expressly defined as that one entity.
+Do not add unsupported real-world facts or claim an unprovided source is
+attached. Do not assume a final answer matches merely because all words
+or numeric values appear.
 
-A clear semantic difference -> REVISE and at most THREE localized edits.
-For each, quote a short ACTUAL excerpt from reference AND candidate,
-explain which logical operator, entity owner, direction, or candidate
-pool changed, and give the SMALLEST correction to the previous draft.
-Do not invent missing requirements or demand identical wording.
-An ambiguous but consequential attachment -> UNCERTAIN; do not guess.
-A modest improvement in English is acceptable; do not force extensive
-rewriting. A merely unchanged or unreadable candidate can be REVISE
-with naturalness='needs_polish'.
+For a clear semantic discrepancy, REVISE with at most THREE local
+differences and minimal repair instructions, quoting short ACTUAL spans
+from the reference (if present) and candidate. For a missing clause,
+candidate_excerpt may be an adjacent actual phrase. For a genuine
+unresolved meaning, UNCERTAIN; never invent a reason for failure.
+If correct but mechanical/only cosmetic, REVISE with naturalness
+'needs_polish' and give a concrete style request. Do not force rewrites
+of already natural, faithful questions.
 
-PASS ONLY AFTER the above comparisons do not reveal a discrepancy.
-For PASS, differences=[] and the summary should mention a concrete
-preserved constraint, NOT a generic "all semantics preserved" claim.
-A false PASS is worse than requesting one localized correction.
-Still, do not reject a faithful reordering or faithful AND expression.
-
-Return SHORT JSON only:
+PASS only when the meaning is preserved AND the phrasing is substantially
+more like a user request. No requirement for large edit distance.
+Return JSON only:
 {"verdict":"pass|revise|uncertain",
  "naturalness":"acceptable|needs_polish",
  "differences":[{"reference_excerpt":"...", "candidate_excerpt":"...",
                  "problem":"...", "minimal_fix":"..."}],
  "summary":"..."}
-For PASS differences must be empty. REVISE requires a real localized
-difference or genuine readability issue. Do not add any other keys.
+A PASS requires differences=[]; no other keys.
 """
 
 _AUTHOR_SCHEMA = {
@@ -127,12 +99,12 @@ _AUTHOR_SCHEMA = {
 }
 _DIFF_SCHEMA = {
     "type": "object",
-    "properties": {
-        k: {"type": "string"} for k in (
-            "reference_excerpt", "candidate_excerpt", "problem", "minimal_fix"
-        )
-    },
-    "required": ["reference_excerpt", "candidate_excerpt", "problem", "minimal_fix"],
+    "properties": {k: {"type": "string"} for k in (
+        "reference_excerpt", "candidate_excerpt", "problem", "minimal_fix"
+    )},
+    "required": [
+        "reference_excerpt", "candidate_excerpt", "problem", "minimal_fix",
+    ],
     "additionalProperties": False,
 }
 _CRITIC_SCHEMA = {
@@ -151,25 +123,47 @@ _CRITIC_SCHEMA = {
 def _invoke(backend: Any, system: str, payload: dict, *, schema: dict | None):
     if not callable(getattr(backend, "complete_json", None)):
         raise ReviewFormatError("review_backend_unavailable")
-    response = backend.complete_json(
-        system, json.dumps(payload, ensure_ascii=False),
-        response_schema=schema,
+    result = backend.complete_json(
+        system, json.dumps(payload, ensure_ascii=False), response_schema=schema,
     )
-    if not isinstance(response, dict):
+    if not isinstance(result, dict):
         raise ReviewFormatError("review_json_not_object")
-    return response
+    return result
+
+
+def _brief(blueprint: Mapping | None):
+    if blueprint is None:
+        return None
+    outline = blueprint["outline"]
+    return {
+        "task_semantics": outline["task_semantics"],
+        "public_modalities": outline["public_modalities"],
+        "subtask_goals": blueprint["goals"],
+        "subtask_dependencies": [{
+            "fragment_id": task["fragment_id"],
+            "depends_on": task["depends_on"],
+            "public_steps": task["public_steps"],
+            "output_kind": task["output_kind"],
+        } for task in outline["tasks"]],
+    }
 
 
 def author_question(
     backend: Any, reference: str, *, previous: str | None = None,
-    feedback: dict | None = None,
+    feedback: dict | None = None, blueprint: Mapping | None = None,
 ) -> str:
     payload = {"reference_question": reference}
+    if blueprint is not None:
+        payload["benchmark_task_brief"] = _brief(blueprint)
+        payload["instruction"] = (
+            "Write the final user question; do not reproduce the subtask plan."
+        )
     if previous is not None:
         payload["previous_draft"] = previous
         payload["reviewer_feedback"] = feedback or {}
         payload["instruction"] = (
-            "Patch only the localized issues in the previous draft."
+            "Patch the previous draft's local semantic issues or improve its "
+            "naturalness, while keeping the full task semantics."
         )
     response = _invoke(backend, _AUTHOR_SYSTEM, payload, schema=_AUTHOR_SCHEMA)
     question = response.get("question")
@@ -180,15 +174,17 @@ def author_question(
 
 def critique_question(
     backend: Any, reference: str, candidate: str,
-    *, use_schema: bool = True,
+    *, use_schema: bool = True, blueprint: Mapping | None = None,
 ) -> dict:
     payload = {
         "reference_question": reference,
         "candidate_question": candidate,
     }
+    if blueprint is not None:
+        payload["benchmark_task_brief"] = _brief(blueprint)
     if not use_schema:
         payload["format_repair_instruction"] = (
-            "Respond with the four JSON fields verbatim. If unclear, set "
+            "Return the four requested JSON fields. If truly unclear, set "
             "verdict to uncertain; do not invent missing clauses."
         )
     answer = _invoke(
@@ -206,14 +202,14 @@ def critique_question(
         raise ReviewFormatError("critic_review_invalid")
     for d in diffs:
         if (not isinstance(d, dict)
-                or not all(isinstance(d.get(k), str) for k in
-                           ("reference_excerpt", "candidate_excerpt",
-                            "problem", "minimal_fix"))):
+                or not all(isinstance(d.get(k), str) for k in (
+                    "reference_excerpt", "candidate_excerpt",
+                    "problem", "minimal_fix",
+                ))):
             raise ReviewFormatError("critic_difference_invalid")
         if not d["problem"].strip() or not d["minimal_fix"].strip():
             raise ReviewFormatError("critic_difference_empty")
     if verdict == "pass" and (diffs or naturalness != "acceptable"):
-        # Contradictory reviews must not authorize publication.
         raise ReviewFormatError("critic_pass_contradiction")
     if verdict == "revise" and not diffs and naturalness != "needs_polish":
         raise ReviewFormatError("critic_revision_without_local_issue")
