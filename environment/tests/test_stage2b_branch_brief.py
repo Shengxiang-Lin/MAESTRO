@@ -128,6 +128,8 @@ class BranchQuestionBriefTests(unittest.TestCase):
         self.assertEqual(len(brief["workstreams"]), 3)
         serial, independent, merged = brief["workstreams"]
         self.assertEqual(serial["id"], "B1")
+        self.assertIn("entry_goal", serial)
+        self.assertNotIn("entry_goal", independent)
         self.assertEqual(
             [s["id"] for s in serial["precise_public_steps"]],
             ["S0", "S1"],
