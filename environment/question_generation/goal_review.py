@@ -1,7 +1,7 @@
-"""Stage 2A: independent local Goal fidelity reviews and replayable certificates.
+"""Stage 2A: lightweight Subtask-intent reviews and replayable certificates.
 
 A pass is an audited (fallible) semantic judgement, NOT a formal proof.
-The deterministic checks protect obvious public literals, numeric operators,
+The deterministic checks protect against explicit cross-branch literals, numeric operators,
 branch leakage and an independently replayed reviewer verdict. No private Gold facts are sent to models.
 """
 from __future__ import annotations
@@ -16,44 +16,53 @@ from environment.delegation_blueprint import (
 from environment.trajectory_simulation.eligibility import digest
 
 
-GOAL_CERT_SCHEMA = "maestro.stage2a.certified_blueprint.v2"
-GOAL_REVIEW_METHOD = "local_contract_goal_critic_v2"
+GOAL_CERT_SCHEMA = "maestro.stage2a.certified_blueprint.v3"
+GOAL_REVIEW_METHOD = "subtask_intent_alignment_critic_v3"
 
-_REVIEW_SYSTEM = """Review ONE natural-language Sub-Agent goal for semantic
-faithfulness to its LOCAL public fragment contract and direct dependencies.
+_REVIEW_SYSTEM = """Review ONE brief Sub-Agent SUBTASK INTENT against its
+immutable local fragment contract and its declared direct dependencies.
 
-Decide whether executing the candidate goal would return the SAME answer
-as executing the immutable local public steps, in the same candidate pool.
-Inspect relation direction and subjects/objects, attribute owner, exact
-literals and comparisons (!= is NOT > or <), AND vs OR, upstream input
-binding, ranking/counting, final output and extra unsupported constraints.
+IMPORTANT: This Goal is ONLY a high-level planning hint, not a fully
+executable query. The exact step contract remains separately available
+to Question and Sub-Agent writers. Do NOT demand that the Goal alone
+return the same precise answer as executing every program step.
 
-The natural goal is a compact ASSIGNMENT, not an operator-by-operator
-execution trace. One clause may faithfully express several filters or
-INTERSECT operations. DO NOT require the model to explicitly name step IDs,
-state INTERSECT as an operation, or preserve commutative filter ordering.
-"Entities satisfying A and B" already correctly represents intersection.
-"Different from X" means != X (not simply after/before X).
-"Entity type": null in a public step means that the exact type label
-is WITHHELD from the public projection, NOT that the FILTER_TYPE step
-does not exist. Do not demand a private entity type or invent it.
-Check whether the goal retains the type restriction in public wording.
+Check just THREE things:
+1) RELEVANCE: Does it describe the actual main job for THIS fragment,
+   rather than a different sibling, the whole Main task or a generic
+   request without a meaningful target/action?
+2) OUTPUT: Does it aim at the correct broad kind of result (entities vs
+   count vs value, and the principal entity/information type) and respect
+   its actual upstream input role?
+3) NO CONTRADICTION: Does anything it explicitly CLAIM reverse a
+   relation, misattribute a property, alter AND/OR, alter a comparison,
+   add an unrelated branch condition, invent an answer, or narrow/expand
+   the candidate pool in a way incompatible with the contract?
 
-Public dependency contracts are PLANNING requirements, not completed
-observations. Never assume their answers or introduce constraints from
-other sibling branches. Unspecified public anchor values must not be
-invented or replaced by precise facts. Source evidence must be discovered
-if not already provided.
+ALLOWED abstraction: omitted thresholds, dates, names, intermediate
+steps, attribute predicates and explicit operator names. A phrase like
+'people meeting the specified criteria' may stand for multiple accurate
+filters whose details remain in the separate contract. Do not require
+EVERY public step to be mentioned or 'INTERSECT' to be spelled out.
+Do not reject faithful high-level paraphrases for brevity or style.
 
-Return ONLY a compact JSON object:
+Not allowed: 'people born after 1840' when the contract requires before
+1840 (if explicitly stated); 'A OR B' when the fragment requires A AND B;
+returning people when the fragment must return their events; pretending
+a sibling's output is already known; or a generic Goal such as 'find
+relevant information' that does not identify an actual subtask target.
+
+Public null labels mean the exact literal was withheld; never invent
+missing identity labels. Upstream dependencies are planning inputs, not
+completed findings. No private source results or Gold answers are present.
+
+Return ONLY compact JSON:
 {"verdict":"pass|revise|uncertain","issues":[],"summary":"..."}
-For PASS use issues=[] and briefly explain that the answer-defining
-constraints are preserved. For REVISE give one to three concrete
-answer-changing discrepancies in issues and a minimal semantic repair.
-For UNCERTAIN briefly explain which specific meaning cannot be confirmed.
-Do not reject a faithful natural paraphrase merely for merging steps,
-changing wording, or omitting internal tool mechanics.
-Do not claim PASS unless ALL answer-defining conditions are faithful.
+PASS when the core intent and expected output are recognizable and NO
+explicit conflicting claim is present. For REVISE, specify 1-3 genuine
+core-intent/output contradictions plus the minimal fix. For genuinely
+ambiguous core intent return UNCERTAIN. Do NOT turn the omission of
+fine-grained implementation details into a failure.
 """
 
 _REVIEW_SCHEMA = {
@@ -77,61 +86,68 @@ def _numeric_tokens(text):
 
 
 def deterministic_goal_issues(outline, fragment, goal):
-    """High-confidence violations only. Unclear equivalence goes to critic."""
+    """Catch only explicit local intent contradictions, never missing details.
+
+    Goals may legitimately summarize filters as 'specified criteria'.
+    Exact literals and every intermediate step still live in the public
+    semantic contract, so absence of a numeric/date value is NOT a failure.
+    """
     issues = []
-    own = {
+    by_id = {task["fragment_id"]: task for task in outline["tasks"]}
+    allowed = {
         str(s["public_value"]) for s in fragment["public_steps"]
         if s.get("public_value") is not None
     }
-    by_id = {task["fragment_id"]: task for task in outline["tasks"]}
-    allowed = set(own)
     for dep in fragment["depends_on"]:
         allowed.update(
             str(s["public_value"])
             for s in by_id[dep]["public_steps"]
             if s.get("public_value") is not None
         )
-    available = _numeric_tokens(goal)
     present = set()
     for value in allowed:
         present.update(_numeric_tokens(value))
-    # Local numerical comparisons are answer-defining. If the model omits a
-    # value, this is a repair request, not a license to hallucinate it.
-    for value in own:
-        digits = _numeric_tokens(value)
-        if digits and not digits.issubset(available):
-            # ISO dates may be rendered in natural prose; a matching year is
-            # sufficient for this cheap check, the critic judges full date.
-            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-                if value[:4] in available:
-                    continue
-            issues.append("missing_local_numeric:" + value)
-    # Only foreign explicit public numerals are suspicious; avoid rejecting
-    # text merely because it mentions 'one' or 'two' in natural language.
+    # An unambiguous number unique to an unrelated branch is still a
+    # concrete sign of scope contamination. No requirement that any local
+    # number itself be repeated in the Goal.
     foreign = set()
     for other in outline["tasks"]:
-        if other["fragment_id"] == fragment["fragment_id"] or other["fragment_id"] in fragment["depends_on"]:
+        if (other["fragment_id"] == fragment["fragment_id"]
+                or other["fragment_id"] in fragment["depends_on"]):
             continue
-        for s in other["public_steps"]:
-            if s.get("public_value") is not None:
-                foreign.update(_numeric_tokens(s["public_value"]))
-    for val in sorted((available & foreign) - present):
-        # A shared literal may be valid in both sibling branches. The
-        # explicit 'present' set above deliberately permits that case.
-        issues.append("unrelated_branch_numeric:" + val)
-    # Preserve clear comparisons, especially the != -> > regression.
+        for step in other["public_steps"]:
+            if step.get("public_value") is not None:
+                foreign.update(_numeric_tokens(step["public_value"]))
+    for value in sorted((_numeric_tokens(goal) & foreign) - present):
+        issues.append("unrelated_branch_numeric:" + value)
+
+    # If a specific != threshold IS explicitly given, check that the goal
+    # has not replaced != with an ordered comparison on that SAME literal.
+    # If it omits the threshold entirely, that's valid summarization.
     for step in fragment["public_steps"]:
         value = step.get("public_value")
-        cmp = str(step.get("comparison") or "").lower()
-        if not value or not _numeric_tokens(value):
+        comparison = str(step.get("comparison") or "").lower()
+        if value is None or not any(
+            key in comparison for key in ("not equal", "different", "unequal", "other than")
+        ):
             continue
-        if any(k in cmp for k in ("not equal", "different", "unequal", "other than")):
-            if re.search(r"\b(?:after|before|later than|earlier than|greater than|less than)\b",
-                         goal, re.I) and not re.search(
-                r"\b(?:not equal|different from|other than|except|excluding|isn't|is not)\b",
-                goal, re.I
-            ):
-                issues.append("not_equal_rewritten_as_ordered_comparison:" + str(value))
+        for literal in _numeric_tokens(value):
+            if literal not in _numeric_tokens(goal):
+                continue
+            escaped = re.escape(literal)
+            ordered = (
+                r"(?:after|before|later than|earlier than|greater than|less than)"
+                r"\s+(?:the\s+year\s+)?"
+            )
+            if re.search(r"\b" + ordered + escaped + r"\b", goal, re.I):
+                # Broader context may include multiple criteria. Preserve
+                # conservative behaviour: flag the clear ordered-comparison
+                # phrase when no explicit != wording occurs elsewhere.
+                if not re.search(
+                    r"\b(?:not equal|different from|other than|except|excluding|isn't|is not)\b",
+                    goal, re.I,
+                ):
+                    issues.append("not_equal_rewritten_as_ordered_comparison:" + str(value))
     return list(dict.fromkeys(issues))
 
 

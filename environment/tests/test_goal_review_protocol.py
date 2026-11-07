@@ -46,8 +46,8 @@ class GoalReviewProtocolTests(unittest.TestCase):
         self.assertEqual(len(critic.calls), 1)
         self.assertIn("candidate_goal", critic.calls[0])
         self.assertNotIn("reference_for_public_literal_spelling_only", critic.calls[0])
-        self.assertIn("v2", GOAL_CERT_SCHEMA)
-        self.assertIn("v2", GOAL_REVIEW_METHOD)
+        self.assertIn("v3", GOAL_CERT_SCHEMA)
+        self.assertIn("v3", GOAL_REVIEW_METHOD)
 
     def test_valid_deterministic_goal_error_skips_critic(self):
         critic = SmallCritic({
@@ -58,9 +58,50 @@ class GoalReviewProtocolTests(unittest.TestCase):
             critic, self.outline, self.fragment, "", wrong,
         )
         self.assertEqual(review["verdict"], "revise")
-        self.assertTrue(any("missing_local_numeric:10" in i
+        self.assertTrue(any("unrelated_branch_numeric:20" in i
                             for i in review["issues"]))
         self.assertEqual(critic.calls, [])
+
+    def test_summarized_intent_can_omit_all_numeric_thresholds(self):
+        concise = (
+            "Identify the relevant public entities that satisfy the "
+            "specified population criteria and return those entities."
+        )
+        critic = SmallCritic({
+            "verdict": "pass", "issues": [],
+            "summary": "The population-oriented entity search and output are aligned.",
+        })
+        self.assertEqual(
+            deterministic_goal_issues(self.outline, self.fragment, concise), [],
+        )
+        review = review_fragment_goal(
+            critic, self.outline, self.fragment, "", concise,
+        )
+        self.assertEqual(review["verdict"], "pass")
+        self.assertEqual(len(critic.calls), 1)
+
+    def test_explicit_not_equal_misread_is_still_rejected(self):
+        fragment = {
+            "fragment_id": "fragment:0", "depends_on": [],
+            "public_steps": [{
+                "id": "S1", "operation": "FILTER_YEAR",
+                "public_value": "1160", "comparison": "not equal to",
+            }],
+        }
+        outline = {"tasks": [fragment]}
+        self.assertEqual(
+            deterministic_goal_issues(
+                outline, fragment,
+                "Find relevant people meeting the specified date constraints.",
+            ), [],
+        )
+        self.assertIn(
+            "not_equal_rewritten_as_ordered_comparison:1160",
+            deterministic_goal_issues(
+                outline, fragment,
+                "Find relevant people who died after 1160.",
+            ),
+        )
 
     def test_invalid_critic_json_retries_same_goal_not_new_goal(self):
         good = {
@@ -118,9 +159,10 @@ class GoalReviewProtocolTests(unittest.TestCase):
 
     def test_null_public_entity_type_does_not_cancel_filter(self):
         from environment.question_generation.goal_review import _REVIEW_SYSTEM
-        self.assertIn("WITHHELD", _REVIEW_SYSTEM)
-        self.assertIn("FILTER_TYPE", _REVIEW_SYSTEM)
-        self.assertIn("satisfying A and B", _REVIEW_SYSTEM)
+        self.assertIn("Public null labels", _REVIEW_SYSTEM)
+        self.assertIn("ALLOWED abstraction", _REVIEW_SYSTEM)
+        self.assertIn("OUTPUT", _REVIEW_SYSTEM)
+        self.assertIn("NO CONTRADICTION", _REVIEW_SYSTEM)
 
 
 if __name__ == "__main__":

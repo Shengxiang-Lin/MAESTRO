@@ -12,7 +12,7 @@ Frozen ProgramIR + compact Gold DAG
         └─ each fragment concurrently/independently:
             ├─ Local Goal Author (current public steps + direct dependencies)
             ├─ deterministic checks (numbers, comparisons, foreign branch literals)
-            ├─ Local Goal Critic (answer equivalence, relation direction, owners, AND/OR)
+            ├─ Local Goal Critic (main intent + output alignment + no contradiction)
             └─ bounded local repair, max --max-goal-revisions
         └─ require ALL fragments PASS; otherwise quarantine whole task
             └─ deterministic DAG assembly + goal_certificate
@@ -22,12 +22,19 @@ The writer and Critic **do not** see the full mechanical reference,
 other siblings' authored Goals, private world facts, Gold answers or
 future observed results. The LLM returns only \`{"goal": "..."}\`;
 fragment IDs, \`depends_on\` and \`waves\` are determined by the compiler.
-The Local Critic returns only a verdict, concrete semantic issues, and a
-summary. It checks whether answer-defining conditions are preserved,
-allowing natural compression of multiple operations. This is an audited
-model judgement, NOT proof. Deterministic guards still check obvious
-numerical/branch/comparator violations. An invalid Critic JSON response
-is retried on the SAME Goal at most once, without regenerating Goal prose.
+The Goal is a short **Subtask Intent**, not a complete executable query.
+It should describe the main work, principal target and expected output, in
+roughly 15–45 words. Exact numeric thresholds, dates, intermediate filters and
+other details may be omitted because the full public semantic contract is
+saved separately. The Local Critic checks only: (1) main-task relevance,
+(2) expected output alignment, and (3) no *explicit* contradictions.
+A model summary that says "matching the specified date conditions" may
+PASS; one that explicitly changes "not equal to 1160" into "after 1160"
+must REVISE. Deterministic guards no longer require any local number to
+appear in the Goal. They only check explicit, conflicting comparisons and
+numeric values introduced from unrelated branches. An invalid Critic JSON
+is retried on the SAME Goal at most once, without rewriting it.
+A PASS remains an auditable model judgment, not semantic proof.
 
 This is a bounded **automatic fidelity review**, not a formal mathematical
 proof of natural-language equivalence. A reviewer may miss semantic
@@ -39,7 +46,7 @@ Run from the MAESTRO root with the existing configured local vLLM:
 python environment/generate_goals.py \
   --max-records 50 \
   --max-goal-revisions 2 \
-  --output-dir environment/data/stage2a_goals_v2_50 \
+  --output-dir environment/data/stage2a_intents_v3_50 \
   --question-workers 4 \
   --blueprint-workers 2 \
   --flush-every 1
@@ -57,7 +64,7 @@ Stage 2A outputs are separate and checkpointed:
 
 The earlier 50-task Stage-2A pilot used an incompatible v1 reviewer
 protocol. Keep its artifacts for analysis and use a new output directory
-for this v2 experiment.
+for this v3 intent-level experiment.
 
 To intentionally overwrite an earlier Stage-2A run, add
 \`--restart-goals\`. To preserve previous experiments, prefer a new
@@ -80,7 +87,7 @@ Stage 2A certified_blueprints.jsonl
 \`\`\`bash
 python environment/generate_questions.py \
   --max-records 50 \
-  --blueprints environment/data/stage2a_goals_v2_50/certified_blueprints.jsonl \
+  --blueprints environment/data/stage2a_intents_v3_50/certified_blueprints.jsonl \
   --max-revisions 2 \
   --output-dir environment/data/stage2b_questions_50 \
   --question-workers 4 \
@@ -108,7 +115,7 @@ and \`question_progress_state.json\`.
 ### Contract versions and Stage 3
 
 - Goal Blueprint: \`maestro.delegation_blueprint.v2\`.
-- Stage-2A Goal certificate: \`maestro.stage2a.certified_blueprint.v2\`.
+- Stage-2A Goal certificate: \`maestro.stage2a.certified_blueprint.v3\`.
 - Stage-2B Question certificate for these Goals:
   \`maestro.stage2_surface_cert.certified_goals.v3\` (review contract 32).
 - Existing earlier v2 Question certificates continue to replay for
@@ -126,7 +133,7 @@ is required of the final Question; it should remain a coherent user request.
 ## Performance and troubleshooting
 
 The two stages intentionally have distinct model-call budgets. Stage 2A
-uses one Goal writer and up to one local Critic per attempt per Fragment;
+uses one brief Goal writer and one light intent Critic per attempt per Fragment;
 \`--max-goal-revisions 2\` allows up to three local attempts for a failed
 Fragment. Stage 2B uses Author and Question Critic only.
 
