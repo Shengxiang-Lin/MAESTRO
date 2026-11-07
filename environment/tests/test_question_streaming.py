@@ -79,12 +79,20 @@ class QuestionPipelineTests(unittest.TestCase):
         for path in (self.manifest,self.worlds,self.capabilities):
             path.write_text("{}\n",encoding="utf-8")
         self.output=self.root/"questions"
+        self.blueprints=self.root/"certified_blueprints.jsonl"
+        self.blueprints.write_text(
+            "".join(json.dumps({
+                "task_id": id_, "publication_status": "goals_certified",
+                "goal_certificate": {"test": True}
+            }) + "\n" for id_ in self.ids), encoding="utf-8"
+        )
         self.args=build_parser().parse_args([
             "--manifest",str(self.manifest),
             "--authoring-inputs",str(self.authoring),
             "--worlds",str(self.worlds),
             "--capabilities",str(self.capabilities),
             "--output-dir",str(self.output),
+            "--blueprints",str(self.blueprints),
             "--question-workers","3","--flush-every","2","--no-progress",
         ])
 
@@ -139,7 +147,8 @@ class QuestionPipelineTests(unittest.TestCase):
 
     def test_interruption_resume_only_missing_frozen_tasks(self):
         a,b,c=self.patches()
-        def interrupted(authoring,worlds,capabilities,author,critic,args,progress):
+        def interrupted(authoring,worlds,capabilities,author,critic,args,progress,
+                        goal_records=None):
             for index in range(2):
                 progress.append(index,True,{"task_id":self.ids[index],
                                             "question":f"Partial {index}"},[])
