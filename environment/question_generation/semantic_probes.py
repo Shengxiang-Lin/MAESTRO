@@ -659,7 +659,7 @@ def _evidence_failure_reason(probe, item, candidate):
         if not _contains_condition_value(probe, quote):
             return "owner_condition_value_not_in_evidence"
     elif kind == "ranking_attribute":
-        answer = item.get("answer", "").strip("'\\" ")
+        answer = str(item.get("answer", "")).strip().strip("'\"")
         if not answer or not re.search(
                 r"(?<!\w)" + re.escape(answer) + r"(?!\w)", quote, re.I):
             return "ranking_attribute_not_in_evidence"
