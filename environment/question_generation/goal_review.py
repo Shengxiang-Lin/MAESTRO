@@ -173,22 +173,31 @@ def review_fragment_goal(backend, outline, fragment, reference, goal,
         }
     packet = _fragment_goal_packet(outline, fragment, reference)
     packet["candidate_goal"] = goal
-    try:
-        if audit is not None:
-            audit["critic_calls"] = audit.get("critic_calls", 0) + 1
-        output = backend.complete_json(
-            _REVIEW_SYSTEM, json.dumps(packet, ensure_ascii=False),
-            response_schema=_REVIEW_SCHEMA,
-        )
-        return validate_review(output, fragment, goal)
-    except (BackendError, ValueError, TypeError, KeyError) as exc:
-        if audit is not None:
-            audit.setdefault("protocol_failures", []).append(str(exc)[:180])
-        # Invalid reviewer JSON is NEVER a PASS.
-        return {
-            "verdict": "uncertain", "issues": [],
-            "summary": "goal_review_protocol_error:" + str(exc)[:160],
-        }
+    for attempt in range(2):
+        try:
+            if audit is not None:
+                audit["critic_calls"] = audit.get("critic_calls", 0) + 1
+            output = backend.complete_json(
+                _REVIEW_SYSTEM + (
+                    "\nYour previous reply failed the JSON protocol. Return "
+                    "only verdict, issues and summary; no extra keys."
+                    if attempt else ""
+                ),
+                json.dumps(packet, ensure_ascii=False),
+                response_schema=_REVIEW_SCHEMA,
+            )
+            return validate_review(output, fragment, goal)
+        except (BackendError, ValueError, TypeError, KeyError) as exc:
+            if audit is not None:
+                audit.setdefault("protocol_failures", []).append(str(exc)[:180])
+            last_error = exc
+    # Reviewer failure is not a semantic discrepancy and must not certify.
+    # Both attempts reviewed the SAME Goal: never waste a Goal Author call
+    # merely because the Critic was unable to serialize its decision.
+    return {
+        "verdict": "uncertain", "issues": [],
+        "summary": "goal_review_protocol_error:" + str(last_error)[:160],
+    }
 
 
 def certify_goal_record(payload, world, canonical, outline, blueprint, reviews,
