@@ -17,15 +17,18 @@ from environment.trajectory_simulation.eligibility import (
 from environment.trajectory_simulation.compiler import compile_gold_solution
 
 from .question_review import passing_judgment
+from .semantic_probes import (
+    compile_candidate_probes, validate_candidate_probe_records,
+)
 from .semantic_checks import (
     validate_group_decisions, explicit_join_contradictions, naturalness_gate,
     grouped_semantic_checks, missing_typed_literals,
     relation_semantic_contradictions, CheckFormatError,
 )
 
-SCHEMA = "maestro.stage2_surface_cert.v5"
-REVIEW_CONTRACT = 22
-METHOD = "llm_pinned_atomic_risk_review_v4"
+SCHEMA = "maestro.stage2_surface_cert.v6"
+REVIEW_CONTRACT = 23
+METHOD = "candidate_only_semantic_probe_review_v5"
 
 
 def _certificate(task_id, program, canonical, question, review):
@@ -46,6 +49,7 @@ def certify_approved_question(
     scoped_reference: str, final_judgment: Mapping, *,
     critic_verdict: str, revision_rounds: int,
     semantic_checklist: list[dict],
+    candidate_probes: list[dict] | None = None,
 ):
     """Mint a certificate only after the Critic and independent judge pass."""
     if (not question or question == canonical or question == scoped_reference
@@ -58,6 +62,9 @@ def certify_approved_question(
             or relation_semantic_contradictions(scoped_reference, question)):
         raise ValueError("natural_question_failed_deterministic_risk_guards")
     validate_group_decisions(semantic_checklist, final_judgment.get("checks"))
+    if candidate_probes is None:
+        raise ValueError("candidate_probe_records_required")
+    # Actual public-plan comparison runs at issuance and Stage-3 replay.
     review = {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": METHOD, "issues": [],
@@ -68,6 +75,7 @@ def certify_approved_question(
         "revision_rounds": revision_rounds,
         "final_judgment": dict(final_judgment),
         "semantic_checklist_sha256": digest(semantic_checklist),
+        "candidate_probes": list(candidate_probes),
     }
     return _certificate(task_id, world["program"], canonical, question, review), review
 
@@ -152,6 +160,10 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
         validate_group_decisions(checks, review["final_judgment"].get("checks"))
     except CheckFormatError as exc:
         raise ValueError("stage2_final_judge_risk_decision_invalid") from exc
+    expected_probes = compile_candidate_probes(plan, scoped, question)
+    validate_candidate_probe_records(
+        expected_probes, review.get("candidate_probes"),
+    )
     return {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": "stage2_verified_editorial_certificate",
