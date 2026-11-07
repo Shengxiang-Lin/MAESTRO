@@ -80,6 +80,7 @@ class CoverageReviewTests(unittest.TestCase):
                     {"id": p["id"], "answer": (
                         "BACKWARD" if "Which structure" in p["question"] else
                         "AND" if "set-building clause" in p["question"] else
+                        "SELECTED" if "which entity must satisfy" in p["question"] else
                         "COUNT"
                     )} for p in data["probes"]
                 ]}
