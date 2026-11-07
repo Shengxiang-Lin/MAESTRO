@@ -11,50 +11,57 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 
 from environment.trajectory_simulation.eligibility import digest
 from environment.question_generation.public_semantics import public_semantic_scaffold
 from environment.question_generation.validators import postflight
 
 
-VERSION = "maestro.delegation_blueprint.v1"
-_GOAL_SYSTEM = """Write concise, natural Main-to-Sub-Agent GOALS for a benchmark task.
-A verified task graph fixes the independent work, dependency order and
-final output. Describe what EACH assigned worker should discover, inspect,
-compare or return in a clear 1-2 sentence goal (not a numbered query plan).
-These are reusable INTENT descriptions, not actual runtime assignments.
+VERSION = "maestro.delegation_blueprint.v2"
+_GOAL_SYSTEM = """Write ONE short, faithful, natural Main-to-Sub-Agent
+goal for the CURRENT fragment of a verified benchmark task.
 
-DO NOT change task boundaries or invent another task. Preserve each directed
-relation, attribute owner, AND/OR join, comparison, candidate pool and output.
-A task that requires earlier results must say 'the preceding task result',
-NOT reveal those results. Do not claim future sources were already provided:
-'discoverable' means the agent must locate them. Do not invent source titles,
-media contents, entity names, dates, candidate lists, search results or
-answers. Refer to a video/image/audio only if the PUBLIC resource modalities
-actually include that medium; for discoverable media, say it must be found.
-Do not include internal node IDs or fragment IDs inside the goal text.
+The supplied current_fragment.public_steps and dependency_contracts are
+the semantic authority. Each dependency is an explicit INPUT SLOT pointing
+to an upstream fragment; its public output is described by the corresponding
+dependency_contract. These are PLANNING INPUTS, not completed observations.
+Read ALL local steps in dependency order, including relation direction,
+attribute ownership, comparative operators, AND/OR, rank/ties, exact public
+values and output type. "different from" never means "after" or "before".
+The current fragment may consume several upstream outputs (intersection,
+union or aggregation); do not silently constrain both inputs to the same
+parent, change an input pool or mix an upstream sibling's filters.
 
-Return exactly {"goals":[{"fragment_id":"EXACT ID","goal":"..."}]} with one
-entry per input fragment, in the same order. Only the goal strings are free.
+You are NOT writing the entire main task, a full DAG description, a step
+list, or an actual run-time assignment. Do NOT generate or renumber IDs,
+waves, dependencies or tool choices. Do NOT use "previous task",
+"preceding task", "last subtask" or other positional dependencies: these
+are ambiguous in parallel DAGs. Instead, describe the required upstream
+entity sets/results by their PUBLIC properties, without asserting they
+have already been found. If no dependency exists, discover candidates
+from the available public evidence, not from an imagined prior result.
+
+Use one or two direct, natural sentences (roughly 20–65 words).
+State what to investigate/compare and what value/entity set to return.
+Do not copy a mechanical operator list. Keep recorded relation names
+precise when natural paraphrases could change direction or entity owner.
+Do not invent missing media content, exact answer values, source titles,
+candidate rosters or historical facts. Media described as discoverable
+must first be located, not falsely claimed user-provided.
+
+The full reference is supplied ONLY to resolve public literal spelling
+where a local step has null or ambiguous labels; never copy the whole
+reference or its other branches into the current goal.
+
+Return exactly one JSON object with one string key:
+{"goal":"One faithful natural-language goal for this fragment."}
 """
 
 _GOAL_SCHEMA = {
     "type": "object",
-    "properties": {
-        "goals": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "fragment_id": {"type": "string"},
-                    "goal": {"type": "string"},
-                },
-                "required": ["fragment_id", "goal"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["goals"],
+    "properties": {"goal": {"type": "string"}},
+    "required": ["goal"],
     "additionalProperties": False,
 }
 
@@ -150,6 +157,11 @@ def _validate_goal(goal, task_id, payload=None, oracle_answer=None):
     # Do not let the LLM serialize teacher-private identifiers in the goal.
     if re.search(r"\b(?:fragment|node|step)[:_ -]?\d+\b", goal, re.I):
         raise ValueError("blueprint_internal_graph_id_in_goal")
+    if re.search(
+        r"\b(?:previous|preceding|last)\s+(?:task|subtask)(?:'s)?\b",
+        goal, re.I,
+    ):
+        raise ValueError("blueprint_ambiguous_positional_dependency")
     public_payload = {
         "task_design": {},
         "draft_question": "",
@@ -165,38 +177,109 @@ def _validate_goal(goal, task_id, payload=None, oracle_answer=None):
     return goal.rstrip(". ") + "."
 
 
-def naturalize_delegation_blueprint(backend, outline, reference, *,
-                                     payload=None, oracle_answer=None):
-    """One LLM request creates reusable GOALS for the whole immutable DAG."""
+def _fragment_goal_packet(outline, fragment, reference):
+    """Only this fragment, immutable direct prerequisites and final goal.
+
+    Deliberately exclude siblings' authored prose, operation_results,
+    future answers and evidence. Internal IDs are routing labels in the
+    PRIVATE author prompt, never user-visible text.
+    """
+    by_id = {task["fragment_id"]: task for task in outline["tasks"]}
+    dependencies = [{
+        "input_slot": {"from_fragment": dep, "kind": "completed_result"},
+        "output_kind": by_id[dep]["output_kind"],
+        "public_steps": by_id[dep]["public_steps"],
+    } for dep in fragment["depends_on"]]
+    return {
+        "current_fragment": fragment,
+        "dependency_contracts": dependencies,
+        "global_output": {
+            "kind": outline["tasks"][-1]["output_kind"],
+            "task_goal": outline["task_semantics"],
+        },
+        "public_modalities": outline["public_modalities"],
+        "reference_for_public_literal_spelling_only": reference,
+    }
+
+
+def naturalize_fragment_goal(backend, outline, fragment, reference, *,
+                             payload=None, oracle_answer=None,
+                             max_attempts=2, call_log=None):
+    """Naturalize ONE fragment; caller binds ID and DAG properties itself."""
     if not callable(getattr(backend, "complete_json", None)):
         raise ValueError("blueprint_author_backend_missing")
-    response = backend.complete_json(
-        _GOAL_SYSTEM,
-        json.dumps({
-            "verified_public_outline": outline,
-            "verified_reference_for_literal_spelling_only": reference,
-        }, ensure_ascii=False),
-        response_schema=_GOAL_SCHEMA,
-    )
-    if not isinstance(response, dict) or set(response) != {"goals"}:
-        raise ValueError("blueprint_response_schema")
-    goals = response["goals"]
-    if not isinstance(goals, list) or len(goals) != len(outline["tasks"]):
-        raise ValueError("blueprint_goal_count")
-    checked = []
-    for item, fragment in zip(goals, outline["tasks"]):
-        if not isinstance(item, dict) or set(item) != {"fragment_id", "goal"}:
-            raise ValueError("blueprint_goal_item_schema")
-        if item["fragment_id"] != fragment["fragment_id"]:
-            raise ValueError("blueprint_goal_id_mismatch")
-        checked.append({
-            "fragment_id": item["fragment_id"],
-            "goal": _validate_goal(
-                item["goal"], item["fragment_id"],
+    if not 1 <= max_attempts <= 2:
+        raise ValueError("invalid_blueprint_goal_attempts")
+    packet = _fragment_goal_packet(outline, fragment, reference)
+    last_error = None
+    for attempt in range(max_attempts):
+        if call_log is not None:
+            call_log["calls"] += 1
+        try:
+            # The caller may generate multiple fragments concurrently.
+            # Each request has its own immutable local packet.
+            answer = backend.complete_json(
+                _GOAL_SYSTEM + (
+                    "\nYour prior output was invalid. Correct the JSON "
+                    "format and respect the exact local constraints."
+                    if attempt else ""
+                ),
+                json.dumps(packet, ensure_ascii=False),
+                response_schema=_GOAL_SCHEMA,
+            )
+            if not isinstance(answer, dict) or set(answer) != {"goal"}:
+                raise ValueError("blueprint_fragment_goal_schema")
+            goal = _validate_goal(
+                answer["goal"], fragment["fragment_id"],
                 payload=payload, oracle_answer=oracle_answer,
-            ),
-        })
-    return {"version": VERSION, "outline": outline, "goals": checked}
+            )
+            return {"fragment_id": fragment["fragment_id"], "goal": goal}
+        except (ValueError, KeyError, TypeError) as exc:
+            last_error = exc
+            if call_log is not None:
+                call_log.setdefault("issues", []).append(str(exc)[:160])
+    raise ValueError(
+        "blueprint_fragment_failed:" + fragment["fragment_id"] +
+        ":" + str(last_error)
+    )
+
+
+def naturalize_delegation_blueprint(backend, outline, reference, *,
+                                     payload=None, oracle_answer=None,
+                                     max_workers=2, audit=None):
+    """Independently write one goal PER fragment, then assemble by Gold DAG.
+
+    Calls can run concurrently, but assembly is deterministic and cannot
+    change fragment order, wave/parallelism, dependencies or tool choices.
+    One malformed fragment is locally retried; another's successful goal
+    is not sent back into the failing fragment's prompt.
+    """
+    if max_workers < 1:
+        raise ValueError("blueprint_workers_must_be_positive")
+    fragments = outline["tasks"]
+    logs = [{
+        "fragment_id": f["fragment_id"], "calls": 0, "issues": [],
+    } for f in fragments]
+    def write_one(pair):
+        index, fragment = pair
+        return naturalize_fragment_goal(
+            backend, outline, fragment, reference,
+            payload=payload, oracle_answer=oracle_answer,
+            call_log=logs[index],
+        )
+    try:
+        with ThreadPoolExecutor(
+            max_workers=min(max_workers, max(1, len(fragments))),
+            thread_name_prefix="blueprint-goal",
+        ) as pool:
+            # map() returns in canonical Fragment order regardless of which
+            # request completes first. No model-generated Fragment IDs.
+            goals = list(pool.map(write_one, enumerate(fragments)))
+    finally:
+        if audit is not None:
+            audit["author_calls"] = sum(x["calls"] for x in logs)
+            audit["fragments"] = logs
+    return {"version": VERSION, "outline": outline, "goals": goals}
 
 
 def validate_delegation_blueprint(blueprint, outline, *,
@@ -233,6 +316,7 @@ def goal_for_fragment(blueprint, fragment_id):
 
 __all__ = [
     "VERSION", "compile_delegation_outline",
-    "naturalize_delegation_blueprint", "validate_delegation_blueprint",
+    "naturalize_fragment_goal", "naturalize_delegation_blueprint",
+    "validate_delegation_blueprint",
     "goal_for_fragment",
 ]

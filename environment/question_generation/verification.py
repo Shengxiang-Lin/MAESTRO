@@ -23,9 +23,9 @@ from .semantic_checks import (
     relation_semantic_contradictions,
 )
 
-SCHEMA = "maestro.stage2_surface_cert.blueprint.v1"
-REVIEW_CONTRACT = 30
-METHOD = "blueprint_guided_author_critic_v1"
+SCHEMA = "maestro.stage2_surface_cert.blueprint.v2"
+REVIEW_CONTRACT = 31
+METHOD = "fragment_blueprint_guided_author_critic_v2"
 
 
 def _certificate(task_id, program, canonical, question, review):

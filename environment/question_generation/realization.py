@@ -96,7 +96,7 @@ def _review_attempt(backend, reference, candidate, entry, *, blueprint=None):
 
 
 def _realize_one(payload, world, capability, author, critic, *,
-                 max_revisions=2):
+                 max_revisions=2, blueprint_workers=2):
     """Generate up to 1+max_revisions drafts; Critic returns local patches."""
     canonical = str(payload.get("draft_question") or "")
     rendered = world.get("_rendered")
@@ -152,12 +152,13 @@ def _realize_one(payload, world, capability, author, critic, *,
         )
     except (KeyError, ValueError, TypeError) as exc:
         return _reject(payload, "rejected_reference", audit, detail=exc)
-    blueprint_audit = {"stage": "delegation_blueprint", "author_calls": 1}
+    blueprint_audit = {"stage": "delegation_blueprint", "author_calls": 0}
     audit.append(blueprint_audit)
     try:
         blueprint = naturalize_delegation_blueprint(
             author_backend, outline, scoped, payload=payload,
-            oracle_answer=_oracle(world),
+            oracle_answer=_oracle(world), max_workers=blueprint_workers,
+            audit=blueprint_audit,
         )
         blueprint_audit["goals"] = blueprint["goals"]
     except (BackendError, ValueError, KeyError, TypeError) as exc:
@@ -165,7 +166,8 @@ def _realize_one(payload, world, capability, author, critic, *,
         reason = (
             "rejected_validation_error" if (
                 isinstance(exc, BackendError) or
-                str(exc) in ("blueprint_response_schema", "blueprint_author_backend_missing")
+                "blueprint_fragment_goal_schema" in str(exc) or
+                str(exc) == "blueprint_author_backend_missing"
             ) else "rejected_blueprint"
         )
         return _reject(payload, reason, audit, detail=exc)

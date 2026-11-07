@@ -87,7 +87,8 @@ def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress):
                         worlds.get(str(payload.get("task_id")),{}),
                         capabilities.get(str(payload.get("task_id")),{}),
                         author,critic,
-                        max_revisions=args.max_revisions)
+                        max_revisions=args.max_revisions,
+                        blueprint_workers=args.blueprint_workers)
                     active[future]=index
                     next_submit+=1
 
@@ -140,6 +141,8 @@ def run(args):
         raise SystemExit("--flush-every must be >= 1")
     if args.question_workers<1:
         raise SystemExit("--question-workers must be >= 1")
+    if args.blueprint_workers<1:
+        raise SystemExit("--blueprint-workers must be >= 1")
     author,critic=_backends(args)
     output_dir=Path(args.output_dir)
     output_dir.mkdir(parents=True,exist_ok=True)
@@ -184,6 +187,7 @@ def run(args):
                 if line.strip():
                     reasons[json.loads(line).get("reason", "unknown")] += 1
         author_calls = critic_calls = 0
+        blueprint_calls = blueprint_fragments = blueprint_retries = 0
         critic_protocol_failures = 0
         review_outcomes = Counter()
         accepted_after_revision = 0
@@ -208,6 +212,14 @@ def run(args):
                 for attempt in event.get("audit", ()):
                     author_calls += int(attempt.get("author_calls", 0))
                     critic_calls += int(attempt.get("critic_calls", 0))
+                    if attempt.get("stage") == "delegation_blueprint":
+                        blueprint_calls += int(attempt.get("author_calls", 0))
+                        fragments = attempt.get("fragments", [])
+                        blueprint_fragments += len(fragments)
+                        blueprint_retries += sum(
+                            max(0, int(x.get("calls", 0)) - 1)
+                            for x in fragments
+                        )
                     critic_protocol_failures += len(
                         attempt.get("critic_protocol_failures", ())
                     )
@@ -222,7 +234,7 @@ def run(args):
                 ) > 1:
                     accepted_after_revision += 1
         summary = {
-            "pipeline": "gold_dag_shared_blueprint_question_subtask",
+            "pipeline": "per_fragment_blueprint_dag_assembly_question_subtask",
             "frozen_batch_validation": frozen,
             "model_roles": args._resolved_models,
             "requested": len(authoring),
@@ -247,6 +259,9 @@ def run(args):
             "review_statistics": {
                 "max_revisions": args.max_revisions,
                 "author_calls": author_calls,
+                "blueprint_goal_calls": blueprint_calls,
+                "blueprint_fragments_attempted": blueprint_fragments,
+                "blueprint_goal_retries": blueprint_retries,
                 "critic_calls": critic_calls,
                 "total_model_calls": author_calls + critic_calls,
                 "critic_protocol_failures": critic_protocol_failures,
@@ -258,6 +273,7 @@ def run(args):
                 "ordered_writes": True,
                 "flush_every": args.flush_every,
                 "question_workers": args.question_workers,
+                "blueprint_workers_per_task": args.blueprint_workers,
                 "resumed_records": resumed_count,
                 "checkpoint": str(output_dir / "question_progress_state.json"),
             },
@@ -302,6 +318,8 @@ def build_parser():
     p.add_argument("--timeout", type=float, default=180.0)
     p.add_argument("--max-revisions", type=int, default=2)
     p.add_argument("--question-workers", type=int, default=4)
+    p.add_argument("--blueprint-workers", type=int, default=2,
+                   help="Concurrent independent Fragment-Goal requests per task")
     p.add_argument("--flush-every", type=int, default=5)
     p.add_argument("--restart-questions", action="store_true")
     p.add_argument("--no-json-mode", action="store_true")
@@ -316,6 +334,7 @@ def main():
     missing=[key for key in ("manifest","authoring_inputs","worlds","capabilities","output_dir") if not getattr(args,key,None)]
     if missing:raise SystemExit("Missing question-generation inputs (CLI or YAML): "+", ".join(missing))
     if args.question_workers<1:raise SystemExit("--question-workers must be >= 1")
+    if args.blueprint_workers<1:raise SystemExit("--blueprint-workers must be >= 1")
     if args.flush_every<1:raise SystemExit("--flush-every must be >= 1")
     try:
         result=run(args)
