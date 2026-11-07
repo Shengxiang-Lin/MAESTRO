@@ -165,16 +165,16 @@ def grouped_semantic_checks(plan: ScopedPlan) -> list[dict]:
 
 
 _AFFIRMATIVE_EXPLANATION = re.compile(
-    r"\\b(?:is|are|was|were|remain|remains)\\s+(?:fully\\s+|correctly\\s+)?"
-    r"(?:preserved|retained|correct|unchanged)\\b|"
-    r"\\bcorrectly\\s+(?:assigned|maps|mapped|preserves|preserved|retains|"
-    r"represents|matches|reflects)\\b|"
-    r"\\bmatching the reference (?:logic|meaning)\\b", re.I,
+    r"\b(?:is|are|was|were|remain|remains)\s+(?:fully\s+|correctly\s+)?"
+    r"(?:preserved|retained|correct|unchanged)\b|"
+    r"\bcorrectly\s+(?:assigned|maps|mapped|preserves|preserved|retains|"
+    r"represents|matches|reflects)\b|"
+    r"\bmatching the reference (?:logic|meaning)\b", re.I,
 )
 _CONTRAST_EXPLANATION = re.compile(
-    r"\\b(?:not|never|except|but|however|although|instead|incorrectly|"
+    r"\b(?:not|never|except|but|however|although|instead|incorrectly|"
     r"different|differs|changed|missing|omitted|lost|ambiguous|unclear|"
-    r"mismatch|unverifiable|cannot|doesn't|fails?)\\b", re.I,
+    r"mismatch|unverifiable|cannot|doesn't|fails?)\b", re.I,
 )
 
 
@@ -277,11 +277,11 @@ def explicit_join_contradictions(reference: str, candidate: str) -> list[str]:
     ]
 
 
-_NAMED_AFTER = re.compile(r"\\b(?:named after|named for|named in honou?r of|namesake of)\\b", re.I)
+_NAMED_AFTER = re.compile(r"\b(?:named after|named for|named in honou?r of|namesake of)\b", re.I)
 _NAME_EQUALITY = re.compile(
-    r"\\b(?:names? (?:that |which )?match(?:es|ing|ed)?|matching names?|share(?:s|d)? "
+    r"\b(?:names? (?:that |which )?match(?:es|ing|ed)?|matching names?|share(?:s|d)? "
     r"(?:the )?same name|(?:have|has|had) (?:the )?same name|"
-    r"(?:their|whose) names? (?:are|is) (?:the )?same)\\b", re.I,
+    r"(?:their|whose) names? (?:are|is) (?:the )?same)\b", re.I,
 )
 
 
