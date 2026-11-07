@@ -53,16 +53,11 @@ class GoalCritic:
         data = json.loads(user)
         self.calls.append(data)
         assert "candidate_goal" in data
-        steps = data["current_fragment"]["public_steps"]
         return {
             "verdict": self.verdict,
             "issues": [] if self.verdict == "pass" else ["Missing local relation details"],
-            "summary": "All public local steps are covered." if
+            "summary": "Local answer-defining conditions are preserved." if
                        self.verdict == "pass" else "Need a more specific local goal.",
-            "coverage": [{
-                "step_id": s["id"],
-                "goal_quote": "Investigate the relevant recorded entities",
-            } for s in steps if s["operation"] not in ("FIND", "FIND_ALL")],
         }
 
 
