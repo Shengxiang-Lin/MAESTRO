@@ -76,15 +76,11 @@ class FakeGoalAuthor:
 
 class FakeGoalCritic:
     def complete_json(self, system, user, **kwargs):
-        from environment.question_generation.goal_review import substantive_step_ids
         packet = json.loads(user)
+        assert "candidate_goal" in packet
         return {
             "verdict": "pass", "issues": [],
-            "summary": "All local semantic steps are represented.",
-            "coverage": [{
-                "step_id": step_id,
-                "goal_quote": "Investigate the relevant recorded entities",
-            } for step_id in substantive_step_ids(packet["current_fragment"])],
+            "summary": "All answer-defining local semantics were preserved.",
         }
 
 

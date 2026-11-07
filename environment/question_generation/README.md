@@ -12,7 +12,7 @@ Frozen ProgramIR + compact Gold DAG
         └─ each fragment concurrently/independently:
             ├─ Local Goal Author (current public steps + direct dependencies)
             ├─ deterministic checks (numbers, comparisons, foreign branch literals)
-            ├─ Local Goal Critic (step coverage, relation direction, owners, AND/OR)
+            ├─ Local Goal Critic (answer equivalence, relation direction, owners, AND/OR)
             └─ bounded local repair, max --max-goal-revisions
         └─ require ALL fragments PASS; otherwise quarantine whole task
             └─ deterministic DAG assembly + goal_certificate
@@ -22,11 +22,12 @@ The writer and Critic **do not** see the full mechanical reference,
 other siblings' authored Goals, private world facts, Gold answers or
 future observed results. The LLM returns only \`{"goal": "..."}\`;
 fragment IDs, \`depends_on\` and \`waves\` are determined by the compiler.
-The separate reviewer records each substantive step's short verbatim
-supporting quote in the Goal. The server validates every quote; it never
-trusts a bare LLM "pass". Deterministic guards reject obvious missing
-public numeric constraints, incompatible comparison language and
-explicit numeric values taken from unrelated branches.
+The Local Critic returns only a verdict, concrete semantic issues, and a
+summary. It checks whether answer-defining conditions are preserved,
+allowing natural compression of multiple operations. This is an audited
+model judgement, NOT proof. Deterministic guards still check obvious
+numerical/branch/comparator violations. An invalid Critic JSON response
+is retried on the SAME Goal at most once, without regenerating Goal prose.
 
 This is a bounded **automatic fidelity review**, not a formal mathematical
 proof of natural-language equivalence. A reviewer may miss semantic
@@ -38,7 +39,7 @@ Run from the MAESTRO root with the existing configured local vLLM:
 python environment/generate_goals.py \
   --max-records 50 \
   --max-goal-revisions 2 \
-  --output-dir environment/data/stage2a_goals_50 \
+  --output-dir environment/data/stage2a_goals_v2_50 \
   --question-workers 4 \
   --blueprint-workers 2 \
   --flush-every 1
@@ -53,6 +54,10 @@ Stage 2A outputs are separate and checkpointed:
 | \`goal_review_audit.jsonl\` | Every writer/reviewer attempt, local feedback and per-task provenance |
 | \`goal_generation_summary.json\` | Task yield, reviewer and author calls, failure reasons |
 | \`goal_progress_state.json\` | Crash-safe ordered checkpoint; resumable with identical inputs/code/model settings |
+
+The earlier 50-task Stage-2A pilot used an incompatible v1 reviewer
+protocol. Keep its artifacts for analysis and use a new output directory
+for this v2 experiment.
 
 To intentionally overwrite an earlier Stage-2A run, add
 \`--restart-goals\`. To preserve previous experiments, prefer a new
@@ -75,7 +80,7 @@ Stage 2A certified_blueprints.jsonl
 \`\`\`bash
 python environment/generate_questions.py \
   --max-records 50 \
-  --blueprints environment/data/stage2a_goals_50/certified_blueprints.jsonl \
+  --blueprints environment/data/stage2a_goals_v2_50/certified_blueprints.jsonl \
   --max-revisions 2 \
   --output-dir environment/data/stage2b_questions_50 \
   --question-workers 4 \
@@ -103,7 +108,7 @@ and \`question_progress_state.json\`.
 ### Contract versions and Stage 3
 
 - Goal Blueprint: \`maestro.delegation_blueprint.v2\`.
-- Stage-2A Goal certificate: \`maestro.stage2a.certified_blueprint.v1\`.
+- Stage-2A Goal certificate: \`maestro.stage2a.certified_blueprint.v2\`.
 - Stage-2B Question certificate for these Goals:
   \`maestro.stage2_surface_cert.certified_goals.v3\` (review contract 32).
 - Existing earlier v2 Question certificates continue to replay for

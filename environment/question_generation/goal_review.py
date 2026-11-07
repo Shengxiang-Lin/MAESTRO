@@ -2,7 +2,7 @@
 
 A pass is an audited (fallible) semantic judgement, NOT a formal proof.
 The deterministic checks protect obvious public literals, numeric operators,
-branch leakage and review evidence. No private Gold facts are sent to models.
+branch leakage and an independently replayed reviewer verdict. No private Gold facts are sent to models.
 """
 from __future__ import annotations
 
@@ -16,72 +16,56 @@ from environment.delegation_blueprint import (
 from environment.trajectory_simulation.eligibility import digest
 
 
-GOAL_CERT_SCHEMA = "maestro.stage2a.certified_blueprint.v1"
-GOAL_REVIEW_METHOD = "local_contract_goal_critic_v1"
-_SEMANTIC_OPS = {
-    "RELATE", "INTERSECT", "UNION", "COUNT", "QUERY_NAME",
-    "QUERY_ATTR", "QUERY_RELATION", "SELECT_AMONG", "SELECT_BETWEEN",
-    "FILTER_TYPE", "FILTER_YEAR", "FILTER_DATE", "FILTER_NUMBER",
-    "FILTER_STRING", "VERIFY_STRING", "VERIFY_YEAR", "VERIFY_DATE",
-    "VERIFY_NUMBER",
-}
-_REVIEW_SYSTEM = """Independently review ONE Sub-Agent goal against its LOCAL
-authoritative public semantic steps and EXACT direct dependency contracts.
-Do not use other fragments' generated text or assume knowledge of Gold answers.
+GOAL_CERT_SCHEMA = "maestro.stage2a.certified_blueprint.v2"
+GOAL_REVIEW_METHOD = "local_contract_goal_critic_v2"
 
-Check EVERY substantive operation. For RELATE check the edge direction and
-which entities are subjects vs objects. For FILTER/VERIFY check owner, exact
-date/value, comparator (not equal != after/before), conjunction, and scope.
-For INTERSECT require same entity in ALL branches; for UNION require ANY
-branch. Check named singleton vs groups, separate candidate pools and final
-output type. A goal must not impose any condition from a sibling branch,
-silently narrow a pool, substitute a parent for a child or invent source
-information. The upstream dependency contracts are INPUT descriptions:
-do not claim their answers are already known or received.
+_REVIEW_SYSTEM = """Review ONE natural-language Sub-Agent goal for semantic
+faithfulness to its LOCAL public fragment contract and direct dependencies.
 
-The goal is allowed to combine consecutive semantics in natural prose.
-Do not require literal operator names, steps or internal fragment IDs.
+Decide whether executing the candidate goal would return the SAME answer
+as executing the immutable local public steps, in the same candidate pool.
+Inspect relation direction and subjects/objects, attribute owner, exact
+literals and comparisons (!= is NOT > or <), AND vs OR, upstream input
+binding, ranking/counting, final output and extra unsupported constraints.
 
-Return compact JSON with fields:
-- verdict: pass, revise or uncertain;
-- issues: 0-3 concrete local errors, empty for pass;
-- summary: concise reason;
-- coverage: one item for EACH substantive local step with step_id and an
-  ACTUAL short verbatim quote from the candidate goal that expresses the step.
-Do not invent quote spans; the caller checks quotes against the goal.
-If a local semantic step is unexpressed, verdict=revise, explain which step
-and give a minimal repair. If unclear, verdict=uncertain; do not guess.
-PASS only with no issues and coverage of EVERY substantive local step.
+The natural goal is a compact ASSIGNMENT, not an operator-by-operator
+execution trace. One clause may faithfully express several filters or
+INTERSECT operations. DO NOT require the model to explicitly name step IDs,
+state INTERSECT as an operation, or preserve commutative filter ordering.
+"Entities satisfying A and B" already correctly represents intersection.
+"Different from X" means != X (not simply after/before X).
+"Entity type": null in a public step means that the exact type label
+is WITHHELD from the public projection, NOT that the FILTER_TYPE step
+does not exist. Do not demand a private entity type or invent it.
+Check whether the goal retains the type restriction in public wording.
+
+Public dependency contracts are PLANNING requirements, not completed
+observations. Never assume their answers or introduce constraints from
+other sibling branches. Unspecified public anchor values must not be
+invented or replaced by precise facts. Source evidence must be discovered
+if not already provided.
+
+Return ONLY a compact JSON object:
+{"verdict":"pass|revise|uncertain","issues":[],"summary":"..."}
+For PASS use issues=[] and briefly explain that the answer-defining
+constraints are preserved. For REVISE give one to three concrete
+answer-changing discrepancies in issues and a minimal semantic repair.
+For UNCERTAIN briefly explain which specific meaning cannot be confirmed.
+Do not reject a faithful natural paraphrase merely for merging steps,
+changing wording, or omitting internal tool mechanics.
+Do not claim PASS unless ALL answer-defining conditions are faithful.
 """
+
 _REVIEW_SCHEMA = {
     "type": "object",
     "properties": {
         "verdict": {"enum": ["pass", "revise", "uncertain"]},
         "issues": {"type": "array", "items": {"type": "string"}},
         "summary": {"type": "string"},
-        "coverage": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "step_id": {"type": "string"},
-                    "goal_quote": {"type": "string"},
-                },
-                "required": ["step_id", "goal_quote"],
-                "additionalProperties": False,
-            },
-        },
     },
-    "required": ["verdict", "issues", "summary", "coverage"],
+    "required": ["verdict", "issues", "summary"],
     "additionalProperties": False,
 }
-
-
-def substantive_step_ids(fragment):
-    return [
-        step["id"] for step in fragment["public_steps"]
-        if step["operation"] in _SEMANTIC_OPS
-    ]
 
 
 def _numeric_tokens(text):
@@ -152,36 +136,27 @@ def deterministic_goal_issues(outline, fragment, goal):
 
 
 def validate_review(review, fragment, goal):
+    """Verify the compact reviewer protocol, not brittle word/step alignment.
+
+    LLM assessment is not semantic proof: explicit deterministic fidelity
+    issues are independently checked before review and on certificate replay.
+    """
     if not isinstance(review, dict) or set(review) != {
-        "verdict", "issues", "summary", "coverage",
+        "verdict", "issues", "summary",
     }:
         raise ValueError("invalid_goal_review_schema")
     if review["verdict"] not in ("pass", "revise", "uncertain"):
         raise ValueError("invalid_goal_review_verdict")
     if (not isinstance(review["issues"], list) or len(review["issues"]) > 3
-            or any(not isinstance(x, str) or not x.strip() for x in review["issues"])
+            or any(not isinstance(x, str) or not x.strip()
+                   for x in review["issues"])
             or not isinstance(review["summary"], str)
-            or not review["summary"].strip()
-            or not isinstance(review["coverage"], list)):
+            or not review["summary"].strip()):
         raise ValueError("invalid_goal_review_details")
-    ids = substantive_step_ids(fragment)
-    seen = []
-    for row in review["coverage"]:
-        if (not isinstance(row, dict) or set(row) != {"step_id", "goal_quote"}
-                or not isinstance(row["step_id"], str)
-                or not isinstance(row["goal_quote"], str)
-                or not row["goal_quote"].strip()
-                or row["goal_quote"].casefold() not in goal.casefold()):
-            raise ValueError("invalid_goal_review_quote")
-        seen.append(row["step_id"])
-    if len(seen) != len(set(seen)) or any(s not in ids for s in seen):
-        raise ValueError("invalid_goal_review_coverage_ids")
-    if review["verdict"] == "pass":
-        if review["issues"] or set(seen) != set(ids):
-            raise ValueError("goal_review_pass_without_full_coverage")
-    else:
-        if review["verdict"] == "revise" and not review["issues"]:
-            raise ValueError("goal_review_revision_without_issue")
+    if review["verdict"] == "pass" and review["issues"]:
+        raise ValueError("goal_review_pass_with_issues")
+    if review["verdict"] == "revise" and not review["issues"]:
+        raise ValueError("goal_review_revision_without_issue")
     return review
 
 
@@ -195,27 +170,34 @@ def review_fragment_goal(backend, outline, fragment, reference, goal,
         return {
             "verdict": "revise", "issues": issues[:3],
             "summary": "Fix explicit public-contract violations first.",
-            "coverage": [],
         }
     packet = _fragment_goal_packet(outline, fragment, reference)
     packet["candidate_goal"] = goal
-    try:
-        if audit is not None:
-            audit["critic_calls"] = audit.get("critic_calls", 0) + 1
-        output = backend.complete_json(
-            _REVIEW_SYSTEM, json.dumps(packet, ensure_ascii=False),
-            response_schema=_REVIEW_SCHEMA,
-        )
-        return validate_review(output, fragment, goal)
-    except (BackendError, ValueError, TypeError, KeyError) as exc:
-        if audit is not None:
-            audit.setdefault("protocol_failures", []).append(str(exc)[:180])
-        # Invalid reviewer JSON or fake quotes are NEVER a PASS.
-        return {
-            "verdict": "uncertain", "issues": [],
-            "summary": "goal_review_protocol_error:" + str(exc)[:160],
-            "coverage": [],
-        }
+    for attempt in range(2):
+        try:
+            if audit is not None:
+                audit["critic_calls"] = audit.get("critic_calls", 0) + 1
+            output = backend.complete_json(
+                _REVIEW_SYSTEM + (
+                    "\nYour previous reply failed the JSON protocol. Return "
+                    "only verdict, issues and summary; no extra keys."
+                    if attempt else ""
+                ),
+                json.dumps(packet, ensure_ascii=False),
+                response_schema=_REVIEW_SCHEMA,
+            )
+            return validate_review(output, fragment, goal)
+        except (BackendError, ValueError, TypeError, KeyError) as exc:
+            if audit is not None:
+                audit.setdefault("protocol_failures", []).append(str(exc)[:180])
+            last_error = exc
+    # Reviewer failure is not a semantic discrepancy and must not certify.
+    # Both attempts reviewed the SAME Goal: never waste a Goal Author call
+    # merely because the Critic was unable to serialize its decision.
+    return {
+        "verdict": "uncertain", "issues": [],
+        "summary": "goal_review_protocol_error:" + str(last_error)[:160],
+    }
 
 
 def certify_goal_record(payload, world, canonical, outline, blueprint, reviews,
@@ -279,7 +261,7 @@ def validate_goal_record(record, payload, world, canonical, outline, *,
 
 __all__ = [
     "GOAL_CERT_SCHEMA", "GOAL_REVIEW_METHOD",
-    "substantive_step_ids", "deterministic_goal_issues",
+    "deterministic_goal_issues",
     "validate_review", "review_fragment_goal", "certify_goal_record",
     "validate_goal_record",
 ]
