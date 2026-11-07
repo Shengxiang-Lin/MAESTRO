@@ -275,19 +275,19 @@ def compile_candidate_probes(
     # must NOT be attached to Group 1 itself. This is grounded in the PUBLIC
     # reference wording, not any hidden entity or execution result.
     first_and_second = re.search(
-        r"Let the first group consist of (?P<first>.*?)\\. "
-        r"Let the second group consist of (?P<second>.*?)\\.",
+        r"Let the first group consist of (?P<first>.*?)\. "
+        r"Let the second group consist of (?P<second>.*?)\.",
         reference, re.I | re.S,
     )
     if first_and_second:
         first_text = first_and_second.group("first")
         second_text = first_and_second.group("second")
         pop = re.search(
-            r"with a population number of (?P<value>[\\d,]+) drawn from "
+            r"with a population number of (?P<value>[\d,]+) drawn from "
             r"the first group", second_text, re.I,
         )
         if (pop and not re.search(r"population number", first_text, re.I)
-                and re.search(r"\\bfirst group\\b", candidate, re.I)):
+                and re.search(r"\bfirst group\b", candidate, re.I)):
             candidates.append({
                 "kind": "group_identity", "group": "first",
                 "expected": "NOT_ALL", "value": pop.group("value"),
@@ -304,9 +304,9 @@ def compile_candidate_probes(
     # satisfies its condition. This probe does not require group labels in
     # the naturalized candidate.
     conditional = re.search(
-        r"Let the (?P<group>\\w+) group consist of (?P<anchor>.+?) "
-        r"if it has an? (?P<attr>[\\w\\s]+?) of (?P<value>[\\w+.-]+)\\. "
-        r"Otherwise, this group is empty\\.",
+        r"Let the (?P<group>\w+) group consist of (?P<anchor>.+?) "
+        r"if it has an? (?P<attr>[\w\s]+?) of (?P<value>[\w+.-]+)\. "
+        r"Otherwise, this group is empty\.",
         reference, re.I,
     )
     if conditional:
@@ -348,10 +348,10 @@ def explicit_probe_contradictions(
         ordinal = probe["group"]
         kind = probe["kind"]
         if kind == "conditional_scope" and probe["expected"] == "CONDITIONAL":
-            if (re.search(r"\\bassuming\\b", candidate, re.I)
+            if (re.search(r"\bassuming\b", candidate, re.I)
                     and not re.search(
-                        r"\\b(?:otherwise|if not|unless|failing that|"
-                        r"if (?:it|the airport) does not)\\b",
+                        r"\b(?:otherwise|if not|unless|failing that|"
+                        r"if (?:it|the airport) does not)\b",
                         candidate, re.I,
                     )):
                 issues.append(f"{probe['id']}:conditional_replaced_by_assumption")
@@ -360,8 +360,8 @@ def explicit_probe_contradictions(
             # The exact v18 task-5 drift: a new population filter is used
             # *to form the first group* even though it belongs downstream.
             if re.search(
-                rf"\\bpopulation\\s+(?:number\\s+)?(?:of\\s+)?"
-                rf"{value}\\b[^.;!?]{{0,70}}\\bto form the first group\\b",
+                rf"\bpopulation\s+(?:number\s+)?(?:of\s+)?"
+                rf"{value}\b[^.;!?]{{0,70}}\bto form the first group\b",
                 candidate, re.I,
             ):
                 issues.append(f"{probe['id']}:derived_filter_moved_to_first_group")
