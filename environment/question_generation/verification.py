@@ -19,6 +19,7 @@ from environment.trajectory_simulation.compiler import compile_gold_solution
 from .question_review import passing_judgment
 from .semantic_probes import (
     compile_candidate_probes, validate_candidate_probe_records,
+    explicit_probe_contradictions,
 )
 from .semantic_checks import (
     validate_group_decisions, explicit_join_contradictions, naturalness_gate,
@@ -161,6 +162,8 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
     except CheckFormatError as exc:
         raise ValueError("stage2_final_judge_risk_decision_invalid") from exc
     expected_probes = compile_candidate_probes(plan, scoped, question)
+    if explicit_probe_contradictions(expected_probes, question):
+        raise ValueError("stage2_explicit_candidate_scope_contradiction")
     validate_candidate_probe_records(
         expected_probes, review.get("candidate_probes"),
     )
