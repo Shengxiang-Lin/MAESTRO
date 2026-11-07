@@ -336,6 +336,7 @@ def naturalize_fragment_goal(backend, outline, fragment, reference, *,
         packet["revision_feedback"] = {
             "previous_goal": feedback.get("previous_goal"),
             "issues": feedback.get("issues", []),
+            "must_change": bool(feedback.get("must_change")),
         }
     last_error = None
     for attempt in range(max_attempts):
@@ -346,6 +347,11 @@ def naturalize_fragment_goal(backend, outline, fragment, reference, *,
             # Each request has its own immutable local packet.
             answer = backend.complete_json(
                 _GOAL_SYSTEM + (
+                    "\nRevision: fix only the incorrect clause identified "
+                    "in revision_feedback. If must_change=true, repeating "
+                    "previous_goal verbatim is invalid."
+                    if feedback else ""
+                ) + (
                     "\nYour prior output was invalid. Correct the JSON "
                     "format and respect the exact local constraints."
                     if attempt else ""
