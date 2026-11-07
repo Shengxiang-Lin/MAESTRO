@@ -279,7 +279,7 @@ def explicit_join_contradictions(reference: str, candidate: str) -> list[str]:
 
 _NAMED_AFTER = re.compile(r"\\b(?:named after|named for|named in honou?r of|namesake of)\\b", re.I)
 _NAME_EQUALITY = re.compile(
-    r"\\b(?:names? match(?:es|ing|ed)?|matching names?|share(?:s|d)? "
+    r"\\b(?:names? (?:that |which )?match(?:es|ing|ed)?|matching names?|share(?:s|d)? "
     r"(?:the )?same name|(?:have|has|had) (?:the )?same name|"
     r"(?:their|whose) names? (?:are|is) (?:the )?same)\\b", re.I,
 )
