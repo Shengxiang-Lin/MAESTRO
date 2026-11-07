@@ -157,6 +157,11 @@ def _validate_goal(goal, task_id, payload=None, oracle_answer=None):
     # Do not let the LLM serialize teacher-private identifiers in the goal.
     if re.search(r"\b(?:fragment|node|step)[:_ -]?\d+\b", goal, re.I):
         raise ValueError("blueprint_internal_graph_id_in_goal")
+    if re.search(
+        r"\b(?:previous|preceding|last)\s+(?:task|subtask)(?:'s)?\b",
+        goal, re.I,
+    ):
+        raise ValueError("blueprint_ambiguous_positional_dependency")
     public_payload = {
         "task_design": {},
         "draft_question": "",
@@ -228,13 +233,6 @@ def naturalize_fragment_goal(backend, outline, fragment, reference, *,
                 answer["goal"], fragment["fragment_id"],
                 payload=payload, oracle_answer=oracle_answer,
             )
-            # There is no meaningful "previous" task when independent
-            # siblings occupy the same wave; topology is NOT model-authored.
-            if re.search(
-                r"\b(?:previous|preceding|last)\s+(?:task|subtask)"
-                r"(?:'s)?\b", goal, re.I,
-            ):
-                raise ValueError("blueprint_ambiguous_positional_dependency")
             return {"fragment_id": fragment["fragment_id"], "goal": goal}
         except (ValueError, KeyError, TypeError) as exc:
             last_error = exc
