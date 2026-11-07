@@ -150,6 +150,52 @@ class SplitPipelineTests(unittest.TestCase):
             event.get("author_calls") == 0 for event in audit
         ))
 
+    def test_stage2a_accepts_abstract_goals_and_stage2b_keeps_full_contract(self):
+        """Summary intents may omit values; Stage 2B still uses exact reference."""
+        payload, world, capability, rendered, outline = self.context()
+
+        class IntentWriter:
+            def __init__(self):
+                self.calls = []
+
+            def complete_json(self, system, user, **kwargs):
+                packet = json.loads(user)
+                self.calls.append(packet)
+                return {
+                    "goal": (
+                        "Identify the requested entities using the relevant "
+                        "public criteria and return the matching entity set."
+                    )
+                }
+
+        goal_author = IntentWriter()
+        ok, certified, audit = generate_goal_record(
+            payload, world, capability, goal_author, GoalCritic(),
+            max_goal_revisions=0, blueprint_workers=2,
+        )
+        self.assertTrue(ok, (certified, audit))
+        goals = certified["delegation_blueprint"]["goals"]
+        self.assertEqual(len(goals), len(outline["tasks"]))
+        self.assertTrue(all(
+            "Public values:" not in goal["goal"] for goal in goals
+        ))
+        question_author = QuestionOnlyWriter()
+        ok, question, audit = _realize_one(
+            payload, world, capability,
+            question_author, QuestionOnlyCritic(),
+            goal_record=certified, max_revisions=0,
+        )
+        self.assertTrue(ok, (question, audit))
+        self.assertEqual(len(question_author.calls), 1)
+        self.assertIn(
+            "reference_question", question_author.calls[0],
+            "Stage2B must retain the complete reference, not infer it from Goals",
+        )
+        self.assertIn(
+            "subtask_dependencies",
+            question_author.calls[0]["benchmark_task_brief"],
+        )
+
     def test_2a_rejects_ambiguous_local_semantics_without_question(self):
         payload, world, capability, rendered, outline = self.context()
         ok, rejected, audit = generate_goal_record(
