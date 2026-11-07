@@ -199,6 +199,35 @@ def _explicit_attribute_owner_issues(fragment, goal):
     return issues
 
 
+def _explicit_relation_owner_issues(fragment, goal):
+    """Only unambiguous place-hop/date shifts; leave vague prose to Critic."""
+    steps = fragment.get("public_steps", ())
+    for index, step in enumerate(steps):
+        if (step.get("operation") != "RELATE"
+                or step.get("direction") != "forward"
+                or step.get("relation") not in ("birth place", "death place")):
+            continue
+        # The immediately followed public steps still act on the PLACE
+        # reached by the relation, up to the next relation hop.
+        later = []
+        for current in steps[index + 1:]:
+            if current.get("operation") == "RELATE":
+                break
+            later.append(current)
+        if not any(
+            s.get("operation") in ("FILTER_DATE", "FILTER_YEAR")
+            and s.get("attribute") == "end date"
+            for s in later
+        ):
+            continue
+        if re.search(
+            r"\b(?:events?|competitions?|matches?)\b"
+            r"[^.;]{0,70}\b(?:ended|ending|end date)\b", goal, re.I,
+        ):
+            return ["place_end_date_attributed_to_event"]
+    return []
+
+
 def deterministic_goal_issues(outline, fragment, goal):
     """Catch only explicit local intent contradictions, never missing details.
 
@@ -264,6 +293,7 @@ def deterministic_goal_issues(outline, fragment, goal):
                     issues.append("not_equal_rewritten_as_ordered_comparison:" + str(value))
     issues.extend(_terminal_goal_issues(outline, fragment, goal))
     issues.extend(_explicit_attribute_owner_issues(fragment, goal))
+    issues.extend(_explicit_relation_owner_issues(fragment, goal))
     return list(dict.fromkeys(issues))
 
 
