@@ -55,15 +55,11 @@ class FakeAuthor:
 
 
 def supported_checks(data):
-    candidate = data["candidate_question"]
-    # The scripted judge uses real substrings; this tests the publisher's
-    # witness and checklist protocol, NOT the model's semantic accuracy.
-    witness = candidate[:min(60, len(candidate))]
+    # Simulates review verdict formatting; not a proof of semantic accuracy.
     return [{
-        "id": check["id"], "status": "preserved",
-        "candidate_quote": witness,
-        "explanation": "Scripted: condition retained.",
-    } for check in data["semantic_checks"]]
+        "id": group["id"], "status": "preserved",
+        "explanation": "Scripted: all requirements in this category are preserved.",
+    } for group in data["risk_groups"]]
 
 
 class FakeCritic:
@@ -119,7 +115,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         self.assertEqual(len(critic.calls), 2)
         self.assertEqual(critic.final_inputs[0].keys(),
                          {"reference_question", "candidate_question",
-                          "potential_literal_changes_to_check", "semantic_checks"})
+                          "potential_literal_changes_to_check", "risk_groups"})
         self.assertEqual(row["authoring"]["revision_rounds"], 0)
         self.assertNotEqual(row["question"], rendered.question)
         verified = validate_surface_certificate(
@@ -331,24 +327,56 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         )
         self.assertFalse(explicit_join_contradictions(ref, ref))
 
-    def test_missing_or_forged_grounding_blocks_final_certificate(self):
+    def test_missing_or_invalid_group_review_cannot_certify(self):
         from environment.question_generation.semantic_checks import (
-            check_evidence, CheckFormatError,
+            validate_group_decisions, CheckFormatError,
         )
-        sample = "Which people have a recorded spouse who died in this place?"
-        checks = [{"id": "C1", "kind": "relation_scope",
-                   "expected": "Preserve spouse direction",
-                   "reference_excerpt": "whose spouse died in this place"}]
-        for bad in (
+        groups = [{"id": "R1", "kind": "relation_scope",
+                   "requirements": [{"expected": "Preserve spouse direction"}]}]
+        for invalid in (
             [], [{"id": "wrong", "status": "preserved",
-                  "candidate_quote": "spouse", "explanation": "yes"}],
-            [{"id": "C1", "status": "preserved",
-              "candidate_quote": "invented relationship", "explanation": "yes"}],
-            [{"id": "C1", "status": "preserved",
-              "candidate_quote": "spouse", "explanation": ""}],
+                  "explanation": "Confirmed relation ownership."}],
+            [{"id": "R1", "status": "invalid",
+              "explanation": "Confirmed relation ownership."}],
+            [{"id": "R1", "status": "preserved",
+              "explanation": "yes"}],
+            [{"id": "R1", "status": "preserved",
+              "explanation": "Confirmed relation ownership."},
+             {"id": "R1", "status": "preserved",
+              "explanation": "Confirmed relation ownership."}],
         ):
-            with self.subTest(bad=bad), self.assertRaises(CheckFormatError):
-                check_evidence(checks, bad, sample)
+            with self.subTest(invalid=invalid), self.assertRaises(CheckFormatError):
+                validate_group_decisions(groups, invalid)
+
+    def test_grouped_output_is_bounded_but_keeps_detailed_risks_as_input(self):
+        from environment.question_generation.semantic_checks import (
+            semantic_checks, grouped_semantic_checks,
+        )
+        from environment.question_generation.scoped_surface import ScopedPlan
+        tree = {
+            "definition": "COUNT", "conditions": [], "inputs": [{
+                "definition": "INTERSECT", "conditions": [], "inputs": [
+                    {"definition": "FIND_ALL", "conditions": [
+                        {"attribute": "population", "comparison": "less than",
+                         "value": {"type": "number", "value": str(1000 + i)}}
+                        for i in range(12)
+                    ], "inputs": []},
+                    {"definition": "RELATE", "relation": "location",
+                     "direction": "forward", "conditions": [], "inputs": [
+                         {"definition": "FIND_ALL",
+                          "conditions": [], "inputs": []}]},
+                ]
+            }],
+        }
+        plan = ScopedPlan([("How many match?",)], [tree], tree)
+        atomic = semantic_checks(plan)
+        grouped = grouped_semantic_checks(plan)
+        self.assertGreater(len(atomic), 12)
+        self.assertLessEqual(len(grouped), 4)
+        self.assertEqual(
+            len([r for group in grouped if group["kind"] == "condition_owner"
+                 for r in group["requirements"]]), 12,
+        )
 
     def test_model_cannot_pass_a_known_changed_semantic_check(self):
         from environment.question_generation.question_review import (
@@ -362,8 +390,9 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
                 if "final independent" in system:
                     return {**PASS_FINAL, "checks": checks}
                 return {**PASS_CRITIQUE, "checks": checks}
-        c = [{"id": "C1", "kind": "set_logic",
-              "expected": "all branches", "reference_excerpt": "both groups"}]
+        c = [{"id": "R1", "kind": "set_logic",
+              "requirements": [{"expected": "all branches",
+                                "reference_excerpt": "both groups"}]}]
         draft = "Which entities belong to either group?"
         feedback = critique_question(ContradictoryReviewer(), "both groups", draft, c)
         self.assertEqual(feedback["verdict"], "revise")
