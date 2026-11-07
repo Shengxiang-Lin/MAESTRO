@@ -56,12 +56,24 @@ class DelegationBlueprintTests(unittest.TestCase):
                 blueprint, outline, payload=row, oracle_answer=rendered.answer,
             )
         )
-        self.assertIn("verified_public_outline", author.calls[0])
-        self.assertNotIn("final_answer", author.calls[0])
+        fragment_calls = [
+            call for call in author.calls if "current_fragment" in call
+        ]
+        self.assertEqual(len(fragment_calls), len(outline["tasks"]))
+        self.assertEqual(len(author.calls), len(outline["tasks"]) + 1)
         self.assertEqual(
-            len(author.calls),
-            2,  # one shared DAG goal request + one Question request
+            {call["current_fragment"]["fragment_id"] for call in fragment_calls},
+            {task["fragment_id"] for task in outline["tasks"]},
         )
+        for call in fragment_calls:
+            self.assertNotIn("final_answer", call)
+            self.assertNotIn("verified_public_outline", call)
+            self.assertNotIn("goals", call)
+            self.assertEqual(
+                {dep["input_slot"]["from_fragment"]
+                 for dep in call["dependency_contracts"]},
+                set(call["current_fragment"]["depends_on"]),
+            )
 
     def test_fragment_tampering_and_gold_answer_leak_are_rejected(self):
         row, payload, world, rendered, author = self.prepared()
