@@ -28,6 +28,7 @@ from .semantic_checks import (
 )
 from .semantic_probes import (
     compile_candidate_probes, probe_candidate_semantics,
+    explicit_probe_contradictions,
 )
 from .validators import postflight
 from .verification import certify_approved_question
@@ -207,6 +208,31 @@ def _realize_one(payload, world, capability, author, critic, *,
                 "summary": "Make a genuine natural-language rewrite, not a near-copy.",
             }
             continue
+        probes = compile_candidate_probes(plan, scoped, candidate)
+        entry["candidate_probe_specs"] = probes
+        scope_contradictions = explicit_probe_contradictions(probes, candidate)
+        entry["explicit_candidate_scope_contradictions"] = scope_contradictions
+        if scope_contradictions:
+            entry["failure"] = "explicit_candidate_scope_contradiction"
+            last_failure, last_detail = (
+                "rejected_semantic", ";".join(scope_contradictions)
+            )
+            feedback = {
+                "verdict": "revise",
+                "issues": [{
+                    "kind": "scope", "severity": "major",
+                    "explanation": reason,
+                    "suggestion": (
+                        "Restore the reference's set operation and the exact "
+                        "owner of every membership constraint; do not merge "
+                        "separate OR branches or move group membership inside "
+                        "a member-exists relation."
+                    ),
+                } for reason in scope_contradictions],
+                "summary": "A public set/quantifier scope was explicitly changed.",
+            }
+            continue
+
         contradictions = explicit_join_contradictions(scoped, candidate)
         entry["explicit_join_contradictions"] = contradictions
         if contradictions:
@@ -306,8 +332,6 @@ def _realize_one(payload, world, capability, author, critic, *,
         # Candidate-only probes are generated from PUBLIC ScopedPlan semantics.
         # Expected probe answers stay teacher-private; the reader receives
         # only the candidate and short contrast questions, never the reference.
-        probes = compile_candidate_probes(plan, scoped, candidate)
-        entry["candidate_probe_specs"] = probes
         probe_records = []
         if probes:
             probe_records = _review_attempt(
