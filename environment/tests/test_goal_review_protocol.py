@@ -62,6 +62,33 @@ class GoalReviewProtocolTests(unittest.TestCase):
                             for i in review["issues"]))
         self.assertEqual(critic.calls, [])
 
+    def test_invalid_critic_json_retries_same_goal_not_new_goal(self):
+        good = {
+            "verdict": "pass", "issues": [],
+            "summary": "The local output, number and comparison are preserved.",
+        }
+
+        class OnceMalformed(SmallCritic):
+            def complete_json(self, system, user, **kwargs):
+                packet = json.loads(user)
+                self.calls.append(packet)
+                if len(self.calls) == 1:
+                    return {**good, "coverage": []}
+                return good
+
+        critic = OnceMalformed(good)
+        audit = {}
+        result = review_fragment_goal(
+            critic, self.outline, self.fragment, "", self.goal, audit=audit,
+        )
+        self.assertEqual(result, good)
+        self.assertEqual(audit["critic_calls"], 2)
+        self.assertEqual(len(audit["protocol_failures"]), 1)
+        self.assertEqual(
+            critic.calls[0]["candidate_goal"],
+            critic.calls[1]["candidate_goal"],
+        )
+
     def test_revisions_still_need_specific_issues(self):
         with self.assertRaisesRegex(ValueError, "revision_without_issue"):
             validate_review({
