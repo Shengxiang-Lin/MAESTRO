@@ -89,7 +89,8 @@ def _stream_parallel(authoring,worlds,capabilities,author,critic,args,progress,
                         capabilities.get(str(payload.get("task_id")),{}),
                         author,critic,
                         max_revisions=args.max_revisions,
-                        goal_record=(goal_records or {}).get(str(payload.get("task_id"))))
+                        goal_record=(goal_records or {}).get(str(payload.get("task_id"))),
+                        question_brief_mode=args.question_brief_mode)
                     active[future]=index
                     next_submit+=1
 
@@ -173,7 +174,7 @@ def run(args):
             Path(__file__).with_name(name) for name in (
                 "pipeline.py", "realization.py", "question_review.py",
                 "verification.py", "semantic_checks.py", "scoped_surface.py",
-                "public_semantics.py", "goal_review.py",
+                "public_semantics.py", "goal_review.py", "question_brief.py",
                 "contracts.py", "validators.py", "backend.py", "boundary.py",
                 "streaming.py",
             )
@@ -257,6 +258,7 @@ def run(args):
                     accepted_after_revision += 1
         summary = {
             "pipeline": "stage2b_question_from_certified_stage2a_blueprints",
+            "question_brief_mode": args.question_brief_mode,
             "frozen_batch_validation": frozen,
             "model_roles": args._resolved_models,
             "input_candidates": candidate_count,
@@ -346,6 +348,10 @@ def build_parser():
     p.add_argument("--critic-max-tokens", type=int, default=3072)
     p.add_argument("--timeout", type=float, default=180.0)
     p.add_argument("--max-revisions", type=int, default=2)
+    p.add_argument("--question-brief-mode", choices=("branch", "full"),
+                   default="branch",
+                   help="Question Author input: compact DAG workstreams (default) "
+                        "or legacy full reference/semantic tree baseline")
     p.add_argument("--question-workers", type=int, default=4)
     p.add_argument("--blueprint-workers", type=int, default=2,
                    help="Concurrent independent Fragment-Goal requests per task")
