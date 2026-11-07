@@ -17,7 +17,7 @@ class ReviewFormatError(ValueError):
 
 _AUTHOR_SYSTEM = """Write ONE realistic, natural benchmark question for an
 autonomous information-seeking/multimodal agent. The immutable public task
-contract states what the question must mean. Delegation Blueprint Goals
+contract states what the question must mean. A delegation blueprint's Goals
 are deliberately SHORT INTENT SUMMARIES and may omit essential numeric
 thresholds, dates, filters and relation hops. Never treat those omissions
 as permission to drop constraints from the final Question. The immutable
