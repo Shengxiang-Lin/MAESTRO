@@ -114,6 +114,9 @@ def compile_question_brief(blueprint, world, canonical, gold):
         workstreams.append({
             "id": group_id,
             "goal": goals[chain[-1]],
+            # Preserve the entry intent when a serial path was collapsed:
+            # the final Goal may summarize only its last filtering action.
+            **({"entry_goal": goals[chain[0]]} if len(chain) > 1 else {}),
             "depends_on": upstream,
             "precise_public_steps": details,
             "output_kind": by_id[chain[-1]]["output_kind"],
