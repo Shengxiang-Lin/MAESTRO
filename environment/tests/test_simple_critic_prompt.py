@@ -45,7 +45,7 @@ class PromptRegressionTests(unittest.TestCase):
     def test_author_prompt_preserves_explicit_logic_and_allows_modest_edit(self):
         self.assertIn('"in both A and B"', _AUTHOR_SYSTEM)
         self.assertIn('"At least one of A or B"', _AUTHOR_SYSTEM)
-        self.assertIn("later to a subset", _AUTHOR_SYSTEM)
+        self.assertIn("later to a subset", " ".join(_AUTHOR_SYSTEM.split()))
         self.assertIn("Locations of taxa", _AUTHOR_SYSTEM)
         self.assertIn("A modest improvement is sufficient", _AUTHOR_SYSTEM)
         self.assertIn("PATCH ONLY", _AUTHOR_SYSTEM)
