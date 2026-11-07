@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 from environment.question_generation.pipeline import build_parser, run
 from environment.question_generation.streaming import (
-    QuestionCheckpointError, QuestionProgress, question_output_lock,
+    QuestionCheckpointError, QuestionProgress, GoalProgress,
+    question_output_lock,
 )
 
 
@@ -62,6 +63,36 @@ class QuestionProgressTests(unittest.TestCase):
                     with question_output_lock(directory):
                         pass
 
+
+class GoalProgressTests(unittest.TestCase):
+    def test_stage2a_checkpoint_is_independent_and_recoverable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)
+            ids = ["task0", "task1", "task2"]
+            with GoalProgress(path, "goal-signature", ids, flush_every=1) as p:
+                p.append(0, True, {
+                    "task_id": "task0", "publication_status": "goals_certified",
+                }, [{"stage": "fragment_goal", "accepted": True}])
+            with (path / "certified_blueprints.jsonl").open("ab") as handle:
+                handle.write(b'{"uncommitted": true}\n')
+            with GoalProgress(path, "goal-signature", ids, flush_every=1) as p:
+                self.assertEqual(p.completed, 1)
+                p.append(1, False, {
+                    "task_id": "task1", "reason": "rejected_goal_fidelity",
+                }, [])
+                p.append(2, True, {
+                    "task_id": "task2", "publication_status": "goals_certified",
+                }, [])
+            self.assertEqual(
+                [r["task_id"] for r in _rows(path/"certified_blueprints.jsonl")],
+                ["task0", "task2"],
+            )
+            self.assertEqual(
+                [r["task_id"] for r in _rows(path/"rejected_blueprints.jsonl")],
+                ["task1"],
+            )
+            with self.assertRaisesRegex(QuestionCheckpointError, "restart-goals"):
+                GoalProgress(path, "changed-goal-signature", ids)
 
 class QuestionPipelineTests(unittest.TestCase):
     def setUp(self):
