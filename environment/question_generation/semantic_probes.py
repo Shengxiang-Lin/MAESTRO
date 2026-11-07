@@ -388,7 +388,7 @@ def explicit_probe_contradictions(
             # Read the nearby numeric constraint as an additional anchor
             # so an unrelated 'in both' clause cannot trip this guard.
             value = str(probe.get("value", ""))
-            numeric = re.escape(value)
+            numeric = re.escape(value.replace(",", ""))
             label_free = re.search(
                 r"\b(?:entities\s+that\s+)?(?:exist|are\s+located)\s+in\s+"
                 r"(?:administrative\s+)?areas\s+(?:meeting|satisfying)\s+both\b"
@@ -397,7 +397,8 @@ def explicit_probe_contradictions(
             )
             misplaced_unlabelled = bool(
                 label_free and numeric and re.search(
-                    rf"\b{numeric}\b", label_free.group("body"),
+                    rf"\b{numeric}\b",
+                    label_free.group("body").replace(",", ""),
                     re.I,
                 )
             )
