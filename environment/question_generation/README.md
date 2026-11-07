@@ -398,7 +398,7 @@ python environment/generate_questions.py \
   --question-workers 4 --flush-every 1
 ```
 
-## v20 coverage-aware semantic certification (current; 50-task evaluation)
+## v20 coverage-aware semantic certification (historical; 50-task evaluation)
 
 v19 (real local Qwen3.5-9B on the same 10 frozen tasks) accepted 6/10.
 Five of its six accepted drafts had NO candidate-only probe call, and the
