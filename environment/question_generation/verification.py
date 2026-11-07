@@ -19,12 +19,13 @@ from environment.trajectory_simulation.compiler import compile_gold_solution
 from .question_review import passing_judgment
 from .semantic_checks import (
     validate_group_decisions, explicit_join_contradictions, naturalness_gate,
-    grouped_semantic_checks, missing_typed_literals, CheckFormatError,
+    grouped_semantic_checks, missing_typed_literals,
+    relation_semantic_contradictions, CheckFormatError,
 )
 
-SCHEMA = "maestro.stage2_surface_cert.v4"
-REVIEW_CONTRACT = 21
-METHOD = "llm_compact_semantic_risk_review_v3"
+SCHEMA = "maestro.stage2_surface_cert.v5"
+REVIEW_CONTRACT = 22
+METHOD = "llm_pinned_atomic_risk_review_v4"
 
 
 def _certificate(task_id, program, canonical, question, review):
@@ -53,7 +54,8 @@ def certify_approved_question(
             or revision_rounds < 0):
         raise ValueError("natural_question_not_approved")
     if (not naturalness_gate(scoped_reference, question)["improved_enough_to_review"]
-            or explicit_join_contradictions(scoped_reference, question)):
+            or explicit_join_contradictions(scoped_reference, question)
+            or relation_semantic_contradictions(scoped_reference, question)):
         raise ValueError("natural_question_failed_deterministic_risk_guards")
     validate_group_decisions(semantic_checklist, final_judgment.get("checks"))
     review = {
@@ -142,6 +144,7 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
     if (review.get("semantic_checklist_sha256") != digest(checks)
             or not naturalness_gate(scoped, question)["improved_enough_to_review"]
             or explicit_join_contradictions(scoped, question)
+            or relation_semantic_contradictions(scoped, question)
             or missing_typed_literals(plan, question)):
 
         raise ValueError("stage2_semantic_checklist_or_style_mismatch")
