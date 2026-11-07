@@ -17,6 +17,7 @@ from environment.trajectory_simulation.compiler import compile_gold_solution
 from environment.delegation_blueprint import (
     compile_delegation_outline, validate_delegation_blueprint,
 )
+from .goal_review import validate_goal_record
 from .question_review import passing_judgment
 from .semantic_checks import (
     explicit_join_contradictions, missing_typed_literals,
@@ -26,17 +27,23 @@ from .semantic_checks import (
 SCHEMA = "maestro.stage2_surface_cert.blueprint.v2"
 REVIEW_CONTRACT = 31
 METHOD = "fragment_blueprint_guided_author_critic_v2"
+CERTIFIED_SCHEMA = "maestro.stage2_surface_cert.certified_goals.v3"
+CERTIFIED_REVIEW_CONTRACT = 32
+CERTIFIED_METHOD = "stage2a_certified_goals_question_critic_v3"
 
 
 def _certificate(task_id, program, canonical, question, review):
+    certified = "goal_certificate_sha256" in review
     return {
-        "schema": SCHEMA,
-        "review_contract": REVIEW_CONTRACT,
+        "schema": CERTIFIED_SCHEMA if certified else SCHEMA,
+        "review_contract": (
+            CERTIFIED_REVIEW_CONTRACT if certified else REVIEW_CONTRACT
+        ),
         "task_id": task_id,
         "question_sha256": digest(question),
         "program_sha256": digest(program),
         "renderer_question_sha256": digest(canonical),
-        "method": METHOD,
+        "method": CERTIFIED_METHOD if certified else METHOD,
         "review_sha256": digest(review),
     }
 
@@ -73,6 +80,7 @@ def certify_approved_question(
     task_id: str, world: Mapping, canonical: str, question: str,
     scoped_reference: str, critic_review: Mapping, *,
     revision_rounds: int, plan, blueprint, gold, resources=(),
+    goal_record=None,
 ):
     """Issue a small certificate, only after Critic PASS and public checks."""
     if (not isinstance(critic_review, Mapping)
@@ -90,9 +98,17 @@ def certify_approved_question(
         payload={"resources": resources},
         oracle_answer=world.get("_display_answer"),
     )
+    if goal_record is not None:
+        validate_goal_record(
+            goal_record,
+            {"task_id": task_id, "resources": resources},
+            world, canonical, expected_outline,
+            oracle_answer=world.get("_display_answer"),
+        )
     review = {
         "eligible": True, "reviewed": True, "decision": "eligible",
-        "method": METHOD, "issues": [],
+        "method": CERTIFIED_METHOD if goal_record is not None else METHOD,
+        "issues": [],
         "question_sha256": digest(question),
         "program_sha256": digest(world["program"]),
         "scoped_reference_sha256": digest(scoped_reference),
@@ -100,6 +116,9 @@ def certify_approved_question(
         "revision_rounds": revision_rounds,
         "public_guards_sha256": digest(guards),
         "blueprint_sha256": blueprint_hash,
+        **({
+            "goal_certificate_sha256": digest(goal_record["goal_certificate"]),
+        } if goal_record is not None else {}),
     }
     return _certificate(
         task_id, world["program"], canonical, question, review,
@@ -146,16 +165,21 @@ def validate_surface_certificate(
     }
     if set(certificate) != required:
         raise ValueError("invalid_stage2_surface_certificate")
-    if (certificate.get("schema") != SCHEMA
-            or certificate.get("review_contract") != REVIEW_CONTRACT
-            or certificate.get("method") != METHOD):
+    certified = certificate.get("schema") == CERTIFIED_SCHEMA
+    if certified:
+        if (certificate.get("review_contract") != CERTIFIED_REVIEW_CONTRACT
+                or certificate.get("method") != CERTIFIED_METHOD):
+            raise ValueError("unsupported_stage2_review_contract")
+    elif (certificate.get("schema") != SCHEMA
+          or certificate.get("review_contract") != REVIEW_CONTRACT
+          or certificate.get("method") != METHOD):
         raise ValueError("unsupported_stage2_review_contract")
     expected = _certificate(
         realized.get("task_id"), world["program"], canonical, question, review,
     )
     if certificate != expected:
         raise ValueError("stage2_surface_certificate_input_mismatch")
-    if (review.get("method") != METHOD
+    if (review.get("method") != (CERTIFIED_METHOD if certified else METHOD)
             or review.get("eligible") is not True
             or review.get("reviewed") is not True
             or review.get("decision") != "eligible"
@@ -195,18 +219,39 @@ def validate_surface_certificate(
     )
     if review.get("blueprint_sha256") != valid_hash:
         raise ValueError("stage2_blueprint_binding_mismatch")
+    if certified:
+        record = {
+            "task_id": realized["task_id"],
+            "draft_question": canonical,
+            "delegation_blueprint": blueprint,
+            "goal_certificate": realized.get("goal_certificate"),
+            "goal_reviews": realized.get("goal_reviews"),
+            "publication_status": "goals_certified",
+        }
+        validate_goal_record(
+            record, realized, world, canonical, outline,
+            oracle_answer=world.get("_display_answer",
+                                    getattr(rendered, "answer", None)),
+        )
+        if review.get("goal_certificate_sha256") != digest(
+            record["goal_certificate"]
+        ):
+            raise ValueError("stage2_goal_certificate_binding_mismatch")
     return {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": "stage2_verified_editorial_certificate",
         "issues": [],
         "question_sha256": digest(question),
         "program_sha256": digest(world["program"]),
-        "stage2_method": METHOD,
-        "stage2_review_contract": REVIEW_CONTRACT,
+        "stage2_method": CERTIFIED_METHOD if certified else METHOD,
+        "stage2_review_contract": (
+            CERTIFIED_REVIEW_CONTRACT if certified else REVIEW_CONTRACT
+        ),
     }
 
 
 __all__ = [
     "SCHEMA", "REVIEW_CONTRACT", "METHOD",
+    "CERTIFIED_SCHEMA", "CERTIFIED_REVIEW_CONTRACT", "CERTIFIED_METHOD",
     "certify_approved_question", "validate_surface_certificate",
 ]
