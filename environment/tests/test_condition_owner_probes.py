@@ -154,7 +154,7 @@ class ConditionOwnerProbeTests(unittest.TestCase):
         self.assertIn("owning entity", issues[0]["suggestion"])
         self.assertEqual(issues[0]["severity"], "major")
 
-    def test_invalid_problem_id_diagnostics_include_offending_ids(self):
+    def test_invalid_problem_id_is_quarantined_without_losing_negative_vote(self):
         checks = [{
             "id": "R1", "kind": "condition_owner",
             "requirements": [{"id": "C4", "expected": "Owner fixed."}],
@@ -170,12 +170,14 @@ class ConditionOwnerProbeTests(unittest.TestCase):
                         "explanation": "Condition moved to a related entity.",
                     }],
                 }
-        with self.assertRaises(ReviewFormatError) as ctx:
-            critique_question(WrongId(), "Reference", "Candidate", checks)
-        detail = ctx.exception.diagnostic["group_details"][0]
-        self.assertEqual(detail["problem_ids"], ["C99"])
-        self.assertEqual(detail["unknown_problem_ids"], ["C99"])
-        self.assertEqual(detail["allowed_problem_ids"], ["C4"])
+        feedback = critique_question(WrongId(), "Reference", "Candidate", checks)
+        self.assertEqual(feedback["verdict"], "revise")
+        self.assertEqual(feedback["checks"][0]["status"], "changed")
+        self.assertEqual(feedback["checks"][0]["problem_ids"], [])
+        self.assertTrue(any(
+            "unverified_atomic_ids_cleared" in item
+            for item in feedback["protocol_notes"]
+        ))
 
 
 if __name__ == "__main__":
