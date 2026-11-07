@@ -154,8 +154,16 @@ def _terminal_goal_issues(outline, fragment, goal):
     target = str(output.get("target_entity_type", "")).lower()
     expected = _OUTPUT_ENTITY_ALIASES.get(target)
     if expected:
+        # Only examine the explicit output noun phrase: 'return the
+        # names of matching individuals'. A correctly written Goal may
+        # instead say 'count events linked to individuals', where 'people'
+        # describes an INPUT and is not the output entity type.
         clauses = re.findall(
-            r"\b(?:return|report|give|provide|list|count)\b[^.;]{0,115}",
+            r"\b(?:return|report|give|provide|list|count)\s+"
+            r"(?:the\s+)?(?:total\s+)?(?:number\s+of\s+)?"
+            r"(?:(?:names?|identities)\s+of\s+)?"
+            r"(?:(?:any|all|the|matching|distinct|relevant|identified)\s+){0,5}"
+            r"[\w-]+(?:\s+[\w-]+)?",
             goal, flags=re.I,
         )
         for clause in clauses:
