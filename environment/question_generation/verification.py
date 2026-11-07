@@ -17,9 +17,9 @@ from environment.trajectory_simulation.eligibility import (
 from environment.trajectory_simulation.compiler import compile_gold_solution
 
 from .question_review import passing_judgment
-from .semantic_probes import (
-    compile_candidate_probes, validate_candidate_probe_records,
-    explicit_probe_contradictions,
+from .semantic_probes import explicit_probe_contradictions
+from .coverage_review import (
+    compile_coverage_probes, validate_coverage_manifest,
 )
 from .semantic_checks import (
     validate_group_decisions, explicit_join_contradictions, naturalness_gate,
@@ -27,9 +27,9 @@ from .semantic_checks import (
     relation_semantic_contradictions, CheckFormatError,
 )
 
-SCHEMA = "maestro.stage2_surface_cert.v8"
-REVIEW_CONTRACT = 25
-METHOD = "candidate_scope_coverage_review_v7"
+SCHEMA = "maestro.stage2_surface_cert.v9"
+REVIEW_CONTRACT = 26
+METHOD = "coverage_aware_semantic_review_v8"
 
 
 def _certificate(task_id, program, canonical, question, review):
@@ -52,6 +52,7 @@ def certify_approved_question(
     semantic_checklist: list[dict],
     candidate_probes: list[dict] | None = None,
     candidate_probe_specs: list[dict] | None = None,
+    semantic_coverage: dict | None = None,
 ):
     """Mint a certificate only after the Critic and independent judge pass."""
     if (not question or question == canonical or question == scoped_reference
@@ -64,12 +65,15 @@ def certify_approved_question(
             or relation_semantic_contradictions(scoped_reference, question)):
         raise ValueError("natural_question_failed_deterministic_risk_guards")
     validate_group_decisions(semantic_checklist, final_judgment.get("checks"))
-    if candidate_probes is None or candidate_probe_specs is None:
-        raise ValueError("candidate_probe_records_required")
+    if (candidate_probes is None or candidate_probe_specs is None
+            or semantic_coverage is None):
+        raise ValueError("semantic_coverage_records_required")
     if explicit_probe_contradictions(candidate_probe_specs, question):
         raise ValueError("explicit_candidate_scope_contradiction")
-    validate_candidate_probe_records(candidate_probe_specs, candidate_probes)
-    # Stage 3 also rebuilds the plan and recomputes expected probes.
+    validate_coverage_manifest(
+        candidate_probe_specs, candidate_probes, semantic_coverage,
+    )
+    # Stage 3 independently reconstructs public ScopedPlan and probe set.
     review = {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": METHOD, "issues": [],
@@ -81,6 +85,8 @@ def certify_approved_question(
         "final_judgment": dict(final_judgment),
         "semantic_checklist_sha256": digest(semantic_checklist),
         "candidate_probes": list(candidate_probes),
+        "coverage_obligation_sha256": digest(candidate_probe_specs),
+        "semantic_coverage": dict(semantic_coverage),
     }
     return _certificate(task_id, world["program"], canonical, question, review), review
 
@@ -165,11 +171,13 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
         validate_group_decisions(checks, review["final_judgment"].get("checks"))
     except CheckFormatError as exc:
         raise ValueError("stage2_final_judge_risk_decision_invalid") from exc
-    expected_probes = compile_candidate_probes(plan, scoped, question)
-    if explicit_probe_contradictions(expected_probes, question):
-        raise ValueError("stage2_explicit_candidate_scope_contradiction")
-    validate_candidate_probe_records(
+    expected_probes = compile_coverage_probes(plan, scoped, question)
+    if (review.get("coverage_obligation_sha256") != digest(expected_probes)
+            or explicit_probe_contradictions(expected_probes, question)):
+        raise ValueError("stage2_semantic_coverage_obligations_changed")
+    validate_coverage_manifest(
         expected_probes, review.get("candidate_probes"),
+        review.get("semantic_coverage"),
     )
     return {
         "eligible": True, "reviewed": True, "decision": "eligible",

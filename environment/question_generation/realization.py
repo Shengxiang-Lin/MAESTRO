@@ -27,8 +27,11 @@ from .semantic_checks import (
     missing_typed_literals, CheckFormatError,
 )
 from .semantic_probes import (
-    compile_candidate_probes, probe_candidate_semantics,
-    explicit_probe_contradictions,
+    probe_candidate_semantics, explicit_probe_contradictions,
+)
+from .coverage_review import (
+    PROBE_BATCH_SIZE, UnverifiableCoverage,
+    compile_coverage_probes, coverage_manifest,
 )
 from .validators import postflight
 from .verification import certify_approved_question
@@ -209,8 +212,16 @@ def _realize_one(payload, world, capability, author, critic, *,
                 "summary": "Make a genuine natural-language rewrite, not a near-copy.",
             }
             continue
-        probes = compile_candidate_probes(plan, scoped, candidate)
+        try:
+            probes = compile_coverage_probes(plan, scoped, candidate)
+        except UnverifiableCoverage as exc:
+            entry["failure"] = "coverage_unverifiable"
+            return _reject(
+                payload, "rejected_coverage_unverifiable", audit,
+                detail=str(exc),
+            )
         entry["candidate_probe_specs"] = probes
+        entry["required_semantic_obligations"] = len(probes)
         scope_contradictions = explicit_probe_contradictions(probes, candidate)
         entry["explicit_candidate_scope_contradictions"] = scope_contradictions
         if scope_contradictions:
@@ -330,51 +341,63 @@ def _realize_one(payload, world, capability, author, critic, *,
             last_detail = critique["summary"]
             continue
 
-        # Candidate-only probes are generated from PUBLIC ScopedPlan semantics.
-        # Expected probe answers stay teacher-private; the reader receives
-        # only the candidate and short contrast questions, never the reference.
+        # Candidate-only probes cover the public semantic obligations,
+        # regardless of whether Author retained artificial group labels.
+        # The expected answer labels never enter the model request.
+        # A long question is checked in bounded chunks: no probe may be
+        # silently dropped merely because its semantic tree is deep.
         probe_records = []
-        if probes:
-            probe_records = _review_attempt(
+        probe_protocol_error = False
+        for begin in range(0, len(probes), PROBE_BATCH_SIZE):
+            chunk = probes[begin:begin + PROBE_BATCH_SIZE]
+            observed = _review_attempt(
                 probe_candidate_semantics, critic_backend, scoped, candidate,
-                probes, entry, "candidate_probe",
+                chunk, entry, "candidate_probe",
             )
-            if probe_records is None:
-                entry["failure"] = "candidate_probe_protocol_error"
-                return _reject(payload, "rejected_validation_error", audit,
-                               detail="candidate_probe_exhausted_same_candidate_retries")
-            entry["candidate_probe_answers"] = probe_records
+            if observed is None:
+                probe_protocol_error = True
+                break
+            probe_records.extend(observed)
+        entry["candidate_probe_answers"] = probe_records
+        entry["semantic_coverage"] = coverage_manifest(probes, probe_records)
+        if probe_protocol_error:
+            entry["failure"] = "candidate_probe_protocol_error"
+            return _reject(
+                payload, "rejected_validation_error", audit,
+                detail="coverage_probe_exhausted_same_candidate_retries",
+            )
+        if entry["semantic_coverage"]["status"] != "complete":
             mismatches = [
                 row for row in probe_records
                 if row["answer"] != row["expected"]
             ]
-            if mismatches:
-                entry["failure"] = "candidate_probe_mismatch"
-                is_uncertain = any(row["answer"] == "UNCLEAR" for row in mismatches)
-                last_failure = (
-                    "rejected_uncertain" if is_uncertain else "rejected_semantic"
-                )
-                last_detail = ";".join(
-                    f"{row['id']}:{row['kind']}:{row['answer']}!=expected_"
-                    f"{row['expected']}" for row in mismatches
-                )
-                feedback = {
-                    "verdict": "revise",
-                    "issues": [{
-                        "kind": row["kind"], "severity": "major",
-                        "explanation": (
-                            f"Candidate-only semantic reading for {row['id']} "
-                            f"returned {row['answer']}, but the public reference "
-                            f"requires {row['expected']}."
-                        ),
-                        "suggestion": (
-                            "Repair this group's exact set-membership or "
-                            "quantifier scope; do not merely change labels."
-                        ),
-                    } for row in mismatches],
-                    "summary": "Candidate-only reading disagreed with public task semantics.",
-                }
-                continue
+            entry["failure"] = "candidate_probe_mismatch"
+            is_uncertain = any(row["answer"] == "UNCLEAR" for row in mismatches)
+            last_failure = (
+                "rejected_uncertain" if is_uncertain else "rejected_semantic"
+            )
+            last_detail = ";".join(
+                f"{row['id']}:{row['kind']}:{row['answer']}!=expected_"
+                f"{row['expected']}" for row in mismatches
+            )[:240]
+            feedback = {
+                "verdict": "revise",
+                "issues": [{
+                    "kind": row["kind"], "severity": "major",
+                    "explanation": (
+                        f"Candidate-only semantic reading for {row['id']} "
+                        f"returned {row['answer']}, but public reference "
+                        f"requires {row['expected']}."
+                    ),
+                    "suggestion": (
+                        "Restore this exact reference relation direction, "
+                        "set scope or requested answer kind; keep correct "
+                        "clauses unchanged."
+                    ),
+                } for row in mismatches[:6]],
+                "summary": "A required public semantic obligation was not verified.",
+            }
+            continue
 
         # The final judge sees the reference, final text and *no previous*
         # review history or previous answers. It is a different prompt/role,
@@ -411,6 +434,7 @@ def _realize_one(payload, world, capability, author, critic, *,
                 semantic_checklist=checkpoints,
                 candidate_probes=probe_records,
                 candidate_probe_specs=probes,
+                semantic_coverage=entry["semantic_coverage"],
             )
         except (ValueError, TypeError, KeyError) as exc:
             entry["failure"] = "certificate_error"

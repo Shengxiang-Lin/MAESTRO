@@ -72,6 +72,29 @@ class FakeCritic:
     def complete_json(self, system, user, **kwargs):
         data = json.loads(user)
         self.calls.append((system, data))
+        if "candidate-only semantic reader" in system:
+            # This is a scripted output contract test, NOT semantic evidence.
+            # The renderer fixture contains two FORWARD relations, an AND
+            # result selection and a QUERY_NAME terminal.
+            answers = []
+            for spec in data["probes"]:
+                question = spec["question"]
+                if "Which structure" in question:
+                    answer = "FORWARD"
+                elif "set-building clause" in question:
+                    answer = "AND"
+                elif "final candidate question" in question:
+                    answer = "ENTITIES"
+                elif "FIRST group" in question:
+                    answer = "NOT_ALL"
+                elif "must satisfy" in question:
+                    answer = "SELECTED"
+                elif "EITHER branch" in question:
+                    answer = "AND"
+                else:
+                    answer = "UNCLEAR"
+                answers.append({"id": spec["id"], "answer": answer})
+            return {"answers": answers}
         if "independent final semantic and language judge" in system:
             self.final_inputs.append(data)
             response = copy.deepcopy(self.final)
@@ -112,7 +135,14 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         self.assertEqual(row["surface_certificate"]["review_contract"],
                          REVIEW_CONTRACT)
         self.assertEqual(len(author.calls), 1)
-        self.assertEqual(len(critic.calls), 2)
+        self.assertGreaterEqual(len(critic.calls), 3)
+        self.assertEqual(
+            row["authoring"]["surface_review"]["semantic_coverage"]["status"],
+            "complete",
+        )
+        self.assertGreater(
+            row["authoring"]["surface_review"]["semantic_coverage"]["required"], 0,
+        )
         self.assertEqual(critic.final_inputs[0].keys(),
                          {"reference_question", "candidate_question",
                           "potential_literal_changes_to_check", "risk_groups"})
@@ -213,6 +243,39 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_surface_certificate(
                         edited, copy_world, rendered.question,
+                    )
+
+    def test_stage3_rejects_missing_coverage_even_if_attacker_rehashes_certificate(self):
+        from environment.question_generation.verification import _certificate
+        payload, world, capability, rendered = self.data()
+        ok, row, audit = _realize_one(
+            payload, world, capability, FakeAuthor(),
+            FakeCritic(), max_revisions=0,
+        )
+        self.assertTrue(ok, repr((row, audit)))
+        self.assertTrue(
+            row["authoring"]["surface_review"]["candidate_probes"],
+        )
+        cases = [
+            ("missing_model_records", lambda review: review.update(
+                candidate_probes=[])),
+            ("false_complete_manifest", lambda review: review[
+                "semantic_coverage"].update(verified=0)),
+            ("fake_obligations", lambda review: review.update(
+                coverage_obligation_sha256="0" * 64)),
+        ]
+        for label, mutate in cases:
+            with self.subTest(case=label):
+                forged = copy.deepcopy(row)
+                review = forged["authoring"]["surface_review"]
+                mutate(review)
+                forged["surface_certificate"] = _certificate(
+                    forged["task_id"], world["program"], rendered.question,
+                    forged["question"], review,
+                )
+                with self.assertRaises(ValueError):
+                    validate_surface_certificate(
+                        forged, world, rendered.question,
                     )
 
     def test_json_schema_does_not_require_recursive_checks_in_child(self):

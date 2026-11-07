@@ -144,7 +144,8 @@ def run(args):
         *(
             Path(__file__).with_name(name) for name in (
                 "pipeline.py", "realization.py", "question_review.py",
-                "verification.py", "scoped_surface.py", "public_semantics.py",
+                "verification.py", "semantic_checks.py", "semantic_probes.py",
+                "coverage_review.py", "scoped_surface.py", "public_semantics.py",
                 "contracts.py", "validators.py", "backend.py", "boundary.py",
                 "streaming.py",
             )
@@ -178,15 +179,24 @@ def run(args):
         author_calls = critic_calls = candidate_probe_calls = final_judge_calls = 0
         review_outcomes = Counter()
         probe_kinds = Counter()
+        verified_probe_kinds = Counter()
         candidates_with_probes = accepted_without_probes = 0
+        accepted_with_complete_coverage = 0
         accepted_after_revision = 0
+        regression_10 = Counter()
+        expansion = Counter()
         with (output_dir / "question_review_audit.jsonl").open(
             encoding="utf-8",
         ) as handle:
-            for line in handle:
+            for event_index, line in enumerate(handle):
                 if not line.strip():
                     continue
                 event = json.loads(line)
+                slice_stats = regression_10 if event_index < 10 else expansion
+                slice_stats["tasks"] += 1
+                slice_stats[
+                    "accepted" if event.get("accepted") else "rejected"
+                ] += 1
                 for attempt in event.get("audit", ()):
                     author_calls += int(attempt.get("author_calls", 0))
                     critic_calls += int(attempt.get("critic_calls", 0))
@@ -201,6 +211,12 @@ def run(args):
                             )
                         if attempt.get("accepted") and not specs:
                             accepted_without_probes += 1
+                        coverage = attempt.get("semantic_coverage") or {}
+                        verified_probe_kinds.update(
+                            coverage.get("verified_by_kind") or {}
+                        )
+                        if attempt.get("accepted") and coverage.get("status") == "complete":
+                            accepted_with_complete_coverage += 1
                         review_outcomes[attempt.get(
                             "failure", "accepted" if attempt.get("accepted")
                             else "unclassified",
@@ -225,6 +241,10 @@ def run(args):
                 "rejected": rejected,
             },
             "rejection_reasons": dict(reasons),
+            "evaluation_slices": {
+                "previously_debugged_first_10": dict(regression_10),
+                "next_tasks_after_first_10": dict(expansion),
+            },
             "review_statistics": {
                 "max_revisions": args.max_revisions,
                 "author_calls": author_calls,
@@ -233,6 +253,8 @@ def run(args):
                 "candidates_with_probes": candidates_with_probes,
                 "accepted_without_probes": accepted_without_probes,
                 "compiled_probe_kinds": dict(probe_kinds),
+                "verified_probe_kinds": dict(verified_probe_kinds),
+                "accepted_with_complete_coverage": accepted_with_complete_coverage,
                 "final_judge_calls": final_judge_calls,
                 "accepted_after_revision": accepted_after_revision,
                 "candidate_decisions": dict(review_outcomes),

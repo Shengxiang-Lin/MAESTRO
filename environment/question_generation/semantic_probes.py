@@ -19,7 +19,10 @@ _ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth",
 _ORDINAL = "|".join(_ORDINALS)
 _ALLOWED = frozenset(("AND", "OR", "SELF", "MEMBER",
                       "ALL_MUST", "NOT_ALL", "SELECTED", "RELATED",
-                      "CONDITIONAL", "ASSUMED", "UNCLEAR"))
+                      "CONDITIONAL", "ASSUMED", "UNCLEAR",
+                      "FORWARD", "BACKWARD", "DIRECT", "OTHER",
+                      "COUNT", "ENTITIES", "ATTRIBUTE", "RELATIONS",
+                      "RANK", "VERIFY"))
 _PROBE_SYSTEM = """You are a candidate-only semantic reader.
 Read ONLY the candidate question below. You are NOT given the reference,
 gold answer, expected probe answers or private world. For each requested
@@ -30,7 +33,13 @@ question, distinguish a property of the SELECTED entity from a property
 of a RELATED entity reached by a named relation. Do not infer ownership
 from which entity type is most likely to have that attribute.
 'Either/or' permits either branch; 'both' on the SAME entity requires
-the intersection.
+the intersection. For relation-path questions, FORWARD means selected
+entities are TARGETS of a predicate from another entity, BACKWARD means
+selected entities have the predicate pointing TO another entity; DIRECT
+means an attribute/name filter with no directed predicate, OTHER means
+a weaker/different predicate. Infer from the candidate, not from the
+question's alternative wording. For answer-type questions, select
+COUNT, ENTITIES, ATTRIBUTE, RELATIONS, RANK, VERIFY or UNCLEAR.
 If the candidate does not clearly specify the requested distinction, use
 UNCLEAR instead of guessing. Return JSON only with exactly one answer
 per probe ID, as {"answers":[{"id":"P1","answer":"AND"}]}.
