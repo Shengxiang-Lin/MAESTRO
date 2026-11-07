@@ -23,7 +23,7 @@ thresholds, dates, filters and relation hops. Never treat those omissions
 as permission to drop constraints from the final Question. The immutable
 public_steps and precise reference have priority over Goal summaries.
 The blueprint describes how independent Sub-Agents could work, but must
-NOT be reproduced as a numbered list. The mechanical reference is a fallback for
+NOT be reproduced as a numbered list. The mechanical reference is ONLY a fallback for
 public names, exact values and ambiguous relation wording.
 
 Start with the user's final information need, then integrate the clues
