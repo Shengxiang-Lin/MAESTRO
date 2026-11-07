@@ -12,7 +12,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from .contracts import typed_values
-from .semantic_checks import validate_group_decisions, check_failures
+from .semantic_checks import (
+    validate_group_decisions, check_failures, CheckFormatError,
+)
 
 
 class ReviewFormatError(ValueError):
@@ -57,6 +59,8 @@ Choose pass only for equivalent and genuinely more natural text. For revise
 return actionable changes to the previous draft, naming the specific lost
 condition or changed relationship. Do NOT demand original phrasing or groups.
 Return a SHORT JSON object with verdict, issues, summary and checks.
+Return every requested group ID exactly once, even when uncertain; missing
+check IDs invalidate the entire review.
 """
 
 _FINAL_SYSTEM = """You are an independent final semantic and language judge.
@@ -78,7 +82,8 @@ Assess naturalness independently. Minor word replacements, copied group
 boilerplate, or a generic preamble around an unchanged reference do not
 count as improvement. Natural equivalents can reorder and merge clauses.
 Return a SHORT JSON object with verdict, semantic_equivalence,
-naturalness, issues, explanation and checks.
+naturalness, issues, explanation and checks. Return each requested
+risk group ID exactly once, including groups you are uncertain about.
 """
 
 _ISSUE_SCHEMA = {
@@ -167,6 +172,30 @@ def _invoke(backend: Any, system: str, data: dict,
     return response
 
 
+def _validate_review_with_diagnostics(groups: list[dict], response: dict) -> None:
+    """Explain a missing v16/v17 risk group without logging private data.
+
+    A model may produce syntactically valid JSON yet omit entire groups.
+    Report IDs/count/shape, not the candidate or any source/witness text.
+    """
+    try:
+        validate_group_decisions(groups, response.get("checks"))
+    except CheckFormatError as exc:
+        raw = response.get("checks")
+        received_ids = [
+            item.get("id") for item in raw
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ] if isinstance(raw, list) else []
+        error = ReviewFormatError(str(exc))
+        error.diagnostic = {
+            "expected_group_ids": [g["id"] for g in groups],
+            "received_group_ids": received_ids,
+            "received_count": len(raw) if isinstance(raw, list) else None,
+            "response_keys": sorted(response.keys()),
+        }
+        raise error from exc
+
+
 def author_question(backend: Any, reference: str, *,
                     previous: str | None = None,
                     feedback: dict | None = None) -> str:
@@ -184,13 +213,25 @@ def author_question(backend: Any, reference: str, *,
 
 def critique_question(backend: Any, reference: str, candidate: str,
                       checks: list[dict], *, use_schema: bool = True) -> dict:
-    response = _invoke(backend, _CRITIC_SYSTEM, {
+    payload = {
         "reference_question": reference,
         "candidate_question": candidate,
         "risk_groups": checks,
         "potential_literal_changes_to_check": literal_warnings(reference, candidate),
-    }, schema=_CRITIC_SCHEMA if use_schema else None)
-    validate_group_decisions(checks, response.get("checks"))
+    }
+    if not use_schema:
+        # A second chance after a schema/protocol error: pinpoint the missing
+        # output obligations, without revealing private answers or rerunning Author.
+        payload["required_review_group_ids"] = [g["id"] for g in checks]
+        payload["format_repair_instruction"] = (
+            "Return exactly one checks entry for EACH required_review_group_id "
+            "and no other IDs; status may be uncertain. Return short JSON."
+        )
+    response = _invoke(
+        backend, _CRITIC_SYSTEM, payload,
+        schema=_CRITIC_SCHEMA if use_schema else None,
+    )
+    _validate_review_with_diagnostics(checks, response)
     if response.get("verdict") not in ("pass", "revise", "uncertain"):
         raise ReviewFormatError("critic_verdict_invalid")
     issues = response.get("issues")
@@ -231,12 +272,22 @@ def critique_question(backend: Any, reference: str, candidate: str,
 def judge_question(backend: Any, reference: str, candidate: str,
                    checks: list[dict], *, use_schema: bool = True) -> dict:
     """Independent reference-and-candidate review, not a ProgramIR parser."""
-    response = _invoke(backend, _FINAL_SYSTEM, {
+    payload = {
         "reference_question": reference,
         "candidate_question": candidate,
         "risk_groups": checks,
         "potential_literal_changes_to_check": literal_warnings(reference, candidate),
-    }, schema=_FINAL_SCHEMA if use_schema else None)
+    }
+    if not use_schema:
+        payload["required_review_group_ids"] = [g["id"] for g in checks]
+        payload["format_repair_instruction"] = (
+            "Return one checks entry for EACH required_review_group_id, even "
+            "if uncertain. Do not omit or invent IDs."
+        )
+    response = _invoke(
+        backend, _FINAL_SYSTEM, payload,
+        schema=_FINAL_SCHEMA if use_schema else None,
+    )
     validate_group_decisions(checks, response.get("checks"))
     if (response.get("verdict") not in ("pass", "reject", "uncertain")
             or response.get("semantic_equivalence") not in (

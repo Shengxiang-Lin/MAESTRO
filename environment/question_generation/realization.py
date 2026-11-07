@@ -26,6 +26,10 @@ from .semantic_checks import (
     explicit_join_contradictions, relation_semantic_contradictions,
     missing_typed_literals, CheckFormatError,
 )
+from .semantic_probes import (
+    compile_candidate_probes, probe_candidate_semantics,
+    explicit_probe_contradictions,
+)
 from .validators import postflight
 from .verification import certify_approved_question
 
@@ -58,8 +62,15 @@ def _review_diagnostic(exc):
     result = {"reason": str(exc)[:220]}
     diagnostic = getattr(exc, "diagnostic", None)
     if isinstance(diagnostic, Mapping):
-        result["finish_reason"] = diagnostic.get("finish_reason")
-        result["usage"] = diagnostic.get("usage")
+        result.update({
+            key: diagnostic.get(key)
+            for key in (
+                "finish_reason", "usage", "expected_group_ids",
+                "received_group_ids", "received_count",
+                "response_keys", "expected_ids", "received_ids",
+            )
+            if key in diagnostic
+        })
         raw = diagnostic.get("content")
         result["model_content_tail"] = (
             raw[-400:] if isinstance(raw, str) else None
@@ -151,7 +162,8 @@ def _realize_one(payload, world, capability, author, critic, *,
     for attempt in range(max_revisions + 1):
         entry = {
             "stage": "candidate", "attempt": attempt + 1,
-            "author_calls": 0, "critic_calls": 0, "final_judge_calls": 0,
+            "author_calls": 0, "critic_calls": 0,
+            "candidate_probe_calls": 0, "final_judge_calls": 0,
         }
         audit.append(entry)
         try:
@@ -196,6 +208,31 @@ def _realize_one(payload, world, capability, author, critic, *,
                 "summary": "Make a genuine natural-language rewrite, not a near-copy.",
             }
             continue
+        probes = compile_candidate_probes(plan, scoped, candidate)
+        entry["candidate_probe_specs"] = probes
+        scope_contradictions = explicit_probe_contradictions(probes, candidate)
+        entry["explicit_candidate_scope_contradictions"] = scope_contradictions
+        if scope_contradictions:
+            entry["failure"] = "explicit_candidate_scope_contradiction"
+            last_failure, last_detail = (
+                "rejected_semantic", ";".join(scope_contradictions)
+            )
+            feedback = {
+                "verdict": "revise",
+                "issues": [{
+                    "kind": "scope", "severity": "major",
+                    "explanation": reason,
+                    "suggestion": (
+                        "Restore the reference's set operation and the exact "
+                        "owner of every membership constraint; do not merge "
+                        "separate OR branches or move group membership inside "
+                        "a member-exists relation."
+                    ),
+                } for reason in scope_contradictions],
+                "summary": "A public set/quantifier scope was explicitly changed.",
+            }
+            continue
+
         contradictions = explicit_join_contradictions(scoped, candidate)
         entry["explicit_join_contradictions"] = contradictions
         if contradictions:
@@ -292,6 +329,52 @@ def _realize_one(payload, world, capability, author, critic, *,
             last_detail = critique["summary"]
             continue
 
+        # Candidate-only probes are generated from PUBLIC ScopedPlan semantics.
+        # Expected probe answers stay teacher-private; the reader receives
+        # only the candidate and short contrast questions, never the reference.
+        probe_records = []
+        if probes:
+            probe_records = _review_attempt(
+                probe_candidate_semantics, critic_backend, scoped, candidate,
+                probes, entry, "candidate_probe",
+            )
+            if probe_records is None:
+                entry["failure"] = "candidate_probe_protocol_error"
+                return _reject(payload, "rejected_validation_error", audit,
+                               detail="candidate_probe_exhausted_same_candidate_retries")
+            entry["candidate_probe_answers"] = probe_records
+            mismatches = [
+                row for row in probe_records
+                if row["answer"] != row["expected"]
+            ]
+            if mismatches:
+                entry["failure"] = "candidate_probe_mismatch"
+                is_uncertain = any(row["answer"] == "UNCLEAR" for row in mismatches)
+                last_failure = (
+                    "rejected_uncertain" if is_uncertain else "rejected_semantic"
+                )
+                last_detail = ";".join(
+                    f"{row['id']}:{row['kind']}:{row['answer']}!=expected_"
+                    f"{row['expected']}" for row in mismatches
+                )
+                feedback = {
+                    "verdict": "revise",
+                    "issues": [{
+                        "kind": row["kind"], "severity": "major",
+                        "explanation": (
+                            f"Candidate-only semantic reading for {row['id']} "
+                            f"returned {row['answer']}, but the public reference "
+                            f"requires {row['expected']}."
+                        ),
+                        "suggestion": (
+                            "Repair this group's exact set-membership or "
+                            "quantifier scope; do not merely change labels."
+                        ),
+                    } for row in mismatches],
+                    "summary": "Candidate-only reading disagreed with public task semantics.",
+                }
+                continue
+
         # The final judge sees the reference, final text and *no previous*
         # review history or previous answers. It is a different prompt/role,
         # not necessarily a different checkpoint.
@@ -325,6 +408,7 @@ def _realize_one(payload, world, capability, author, critic, *,
                 payload["task_id"], world, canonical, candidate, scoped, final,
                 critic_verdict="pass", revision_rounds=attempt,
                 semantic_checklist=checkpoints,
+                candidate_probes=probe_records,
             )
         except (ValueError, TypeError, KeyError) as exc:
             entry["failure"] = "certificate_error"
