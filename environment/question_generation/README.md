@@ -1,147 +1,87 @@
-# Stage 2: Natural Question Editing
+# Stage 2 — Shared Delegation Blueprint → Natural Benchmark Question
 
-Stage 2 converts a **compiler-checked, mechanically worded** task question
-into readable natural language while trying to preserve its meaning. This is
-an **Author → Critic → local repair** pipeline, not a formal NLP semantic parser.
+Stage 2 prepares the **same Compact Gold DAG** that Stage 3 will execute,
+projects a public delegation outline, writes one short natural-language intent
+for each immutable fragment, and uses that shared blueprint to author a
+natural benchmark-style Main Question.
 
-## Current workflow
+## One common plan, three language surfaces
 
 ```text
-frozen Stage-1 ProgramIR + checked canonical question
-    │
-    ├─ compile/verify deterministic public Scoped Reference
-    │
-    ▼
-Author (local Qwen): conservative naturalization
-    │
-    ├─ cheap deterministic guards:
-    │  • nontrivial lexical edit (punctuation-only does not count)
-    │  • required public values, dates and codes retained
-    │  • clearly reversed AND/OR or "named after" → same-name change
-    │  • public boundary / hidden answer leak protection
-    │
-    ▼
-Critic (local Qwen): compare reference vs candidate
-    │
-    ├─ pass + readable → publish and certify
-    ├─ revise → at most 3 LOCAL text differences + minimal patch instructions
-    │              │
-    │              └── Author patches the PREVIOUS draft (up to N revisions)
-    └─ uncertain / invalid review → quarantine, never pretend it is equivalent
+Stage 1: frozen ProgramIR, sources, composition_links
+  │
+  ├─ compile_gold_solution(schedule="compact")   [deterministic]
+  │   └─ fixed fragment IDs, dependency edges, ready waves, outputs
+  │
+  ├─ compile_delegation_outline                  [PUBLIC projection]
+  │   └─ no answer, source IDs, operations' raw private inputs or witness facts
+  │
+  ├─ naturalize_delegation_blueprint             [one LLM call]
+  │   └─ one reusable 1–2 sentence goal per fixed fragment
+  │
+  ├─ Question Author                            [one LLM call per draft]
+  │   └─ goal-first, natural benchmark request; mechanical reference is
+  │      literal-spelling backup, not a template
+  │
+  ├─ cheap deterministic guards + one Critic    [one LLM call per draft]
+  │   └─ pass / localized revision / uncertain
+  │
+  └─ certificate v30
+      └─ binds question, original program, public reference and blueprint
+          │
+          ▼
+Stage 3 Phase 1: independently replay certificate and same compact DAG;
+                generate Sub-Agent summary/trace_summary from verified
+                public evidence, assisted by the fragment's BLUEPRINT goal.
+Stage 3 Phase 2: at EACH actual round, use only ready fragment goal(s) and
+                completed, public earlier findings to write Main delegations.
 ```
 
-**The model receives only public, checked English questions.** The reference
-is rebuilt from the frozen task with a verified public projection; private
-Gold answers and internal evidence are not sent to the Author or Critic.
-The deterministic checks catch only high-confidence errors; the Critic is
-responsible for contextual ownership and relation semantics.
+A **blueprint is teacher-private**. Main never receives the full plan, future
+fragment goals or Gold outputs as input. The blueprint's natural task goals
+are writing hints, *never ground-truth facts*. Gold answers, intermediate
+execution values, source/witness IDs, evidence statements and actual parallel
+scheduling all remain controlled by the original compiler and replay.
 
-This replaces the mandatory relation/owner A/B probe system, evidence
-extraction, coverage manifest and independent final judge from v17–v23.
-Those two old modules and their version-specific tests were **deleted**,
-not merely disabled. There is no per-node model interrogation anymore.
+The blueprint JSON contains `version`, `outline` and `goals`. Immutable
+`outline.tasks` include `fragment_id`, `wave`, `depends_on`,
+`input_slots`, `output_kind`, `public_steps` and `capabilities`. The
+LLM generates **only** the text inside `goals[].goal`; a mismatch in fragment
+count/order/ID or unsafe text fails closed. The Stage-2 certificate
+(`maestro.stage2_surface_cert.blueprint.v1`, review contract 30) binds
+the blueprint digest and the question. Stage 3 recompiles the outline from
+the canonical frozen ProgramIR and refuses mismatches or tampering.
 
-## How the revision feedback looks
+**No candidate-only semantic probes, A/B endpoint parser, extra final judge
+or artificial edit-distance requirement** is used. The Critic checks genuine
+relation, ownership, set-scope, output and user-facing language differences.
+This is a bounded model editorial process, not a formal equivalence proof.
 
-```json
-{
-  "verdict": "revise",
-  "naturalness": "acceptable",
-  "summary": "The population constraint moved to the neighboring place.",
-  "differences": [
-    {
-      "reference_excerpt": "entities with population below 1770",
-      "candidate_excerpt": "neighbors with population below 1770",
-      "problem": "Population originally describes the result entity.",
-      "minimal_fix": "Attach population below 1770 to the result entities; leave the neighbor clause unchanged."
-    }
-  ]
-}
-```
-
-The Critic must distinguish genuine semantic changes from different
-wording of the same AND/OR expression. It may pass modest improvements
-instead of demanding extreme shortening or restructuring. An
-`uncertain` review is kept separate from a confirmed semantic error.
-
-## Reproducible runs
-
-Update the checkout and run the previously debugged 50 tasks in a **new**
-directory for a comparable diagnostic run:
+## Run a small pilot
 
 ```bash
 git switch main && git pull origin main
 python environment/generate_questions.py \
-  --max-records 50 --max-revisions 2 \
-  --output-dir environment/data/questions_simple_50 \
+  --start-record 100 --max-records 50 --max-revisions 2 \
+  --output-dir environment/data/questions_blueprint_101_150 \
   --question-workers 4 --flush-every 1
 ```
 
-A separate second slice can use `--start-record 50 --max-records 50`
-and a different output directory. Do not reuse v23 checkpoint/certificate
-files: the review contract is now
-`maestro.stage2_surface_cert.simple.v1` (contract 29), method
-`simple_author_critic_local_repair_v1`.
+Use a **new** output directory; old v25 certs and streaming checkpoints
+are not compatible with the blueprint protocol. Generated artifacts include
+`realized_capability_worlds.jsonl` (question, blueprint, certificate),
+`question_rejected.jsonl`, `question_review_audit.jsonl`, and
+`question_generation_summary.json`. `review_statistics.author_calls`
+now includes **one extra Author call per blueprint attempt**.
 
-Output files:
-- `realized_capability_worlds.jsonl`: accepted natural questions only
-- `question_rejected.jsonl`: refused tasks and reasons
-- `question_review_audit.jsonl`: reference, attempted drafts and local feedback
-- `question_generation_summary.json`: acceptance, revisions, Author/Critic
-  calls, protocol failures and frozen evaluation slices
+## Quality and limitations
 
-## Interpretation and limitations
+Automatic tests check structure, public/private boundary, replay integrity
+and state isolation. They cannot prove that local Qwen naturalizes every
+question correctly. Evaluate semantic fidelity, task-style naturalness,
+resource reachability, stage-3 bank acceptance, and total model calls.
+The model may be more creative than v25 and therefore needs empirical
+evaluation on previously unoptimized frozen tasks before scaling to 1120.
 
-**No LLM Critic is a perfect equivalence checker.** This simplification
-removes a large number of false rejections caused by asking a small model
-to construct an artificial A/B semantic parse. It can also let some
-subtle scope errors slip past. Treat `naturalized_certified` as
-*accepted by a specific, reproducible editorial review protocol*, not as
-a mathematical guarantee.
-
-Assess **human-verified semantic precision**, **valid-naturalization yield**,
-false positives, false negatives, and total model calls. Keep reference
-generation failures (`rejected_reference`) separate from editing quality.
-Stage 3 verifies the bound publication certificate and performs its own
-evidence/public-executability checks; it does not re-run the Critic.
-
-## v25: conservative logic-first Author and contrastive Critic (current)
-
-On the first 50 frozen tasks, the simplified Author–Critic baseline accepted
-41/50 using just 95 model calls, but manual audit found at least 13 accepted
-rewrites with clear meaning drift. Frequent errors: a reference intersection
-(`in both`) was changed to `either` / `two types`, independent OR
-branches were incorrectly restricted to earlier groups, event/organization
-property owners were swapped, and an upstream organization date disappeared.
-The old Critic returned a generic `pass` for most of these.
-
-v25 **retains the simple pipeline**: no new model roles, coverage passes,
-candidate-only probes or final judge. Only the two existing model prompts
-were tightened. Author now explicitly preserves each group boundary,
-relation source/target and attribute owner while making modest local edits.
-Critic must inspect AND vs OR, owner, relation/path/type, candidate pool
-scope and output requirements **before passing**. A pass should cite a
-specific preserved constraint, rather than a generic assertion. A concrete
-change leads to at most three quoted local differences and minimal patches;
-genuinely ambiguous cases return `uncertain`. The JSON schema and
-`--max-revisions` contract are unchanged.
-
-The summary `pipeline` string now correctly reports
-`scoped_reference_author_critic_local_repair`, rather than its historical
-final-judge name.
-
-A no-network test fixture uses representative observed false-pass
-patterns to check prompt coverage and local-feedback data flow.
-**This does not establish that Qwen detects the errors in inference.**
-Measure real semantic precision, valid naturalization yield and calls on
-the original first-50 diagnostic slice and the untouched 51–100 slice.
-
-```bash
-python environment/generate_questions.py \
-  --max-records 50 --max-revisions 2 \
-  --output-dir environment/data/questions_simple_v25_50 \
-  --question-workers 4 --flush-every 1
-```
-
-Output to a **new** directory: the streaming signature fingerprints the
-prompt source, so old checkpoints should not be resumed after this change.
+Stage-3 commands and phase boundaries are documented in
+`../trajectory_simulation/README.md`.
