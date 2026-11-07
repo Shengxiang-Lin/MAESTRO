@@ -138,7 +138,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertEqual(row["reason"], "rejected_uncertain")
-        self.assertEqual(len(author.calls), 1)
+        self.assertEqual(len(author.calls), 2)  # blueprint + question
         self.assertEqual(len(critic.calls), 1)
 
     def test_nonsemantic_punctuation_changes_are_not_naturalization(self):
