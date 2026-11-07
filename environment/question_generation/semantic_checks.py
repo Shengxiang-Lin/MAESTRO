@@ -101,6 +101,67 @@ def semantic_checks(plan: ScopedPlan) -> list[dict[str, str]]:
     return checks
 
 
+
+_RISK_KINDS = ("set_logic", "condition_owner", "relation_scope", "final_answer")
+
+
+def grouped_semantic_checks(plan: ScopedPlan) -> list[dict]:
+    """Collapse 9-20 atomic facts into at most FOUR output judgments.
+
+    Retain every distinct public requirement in the INPUT; only the model's
+    output format is shorter. A category passes only if ALL its obligations
+    are preserved. This is not a formal semantic equivalence oracle.
+    """
+    atomic = semantic_checks(plan)
+    groups = []
+    for kind in _RISK_KINDS:
+        members = [c for c in atomic if c["kind"] == kind]
+        if not members:
+            continue
+        entries = []
+        seen = set()
+        for item in members:
+            requirement = {
+                "expected": item["expected"],
+                "reference_excerpt": item["reference_excerpt"][:190],
+            }
+            key = json.dumps(requirement, sort_keys=True, ensure_ascii=False)
+            if key not in seen:
+                seen.add(key)
+                entries.append(requirement)
+        groups.append({
+            "id": f"R{len(groups) + 1}",
+            "kind": kind,
+            "requirements": entries,
+        })
+    return groups
+
+
+def validate_group_decisions(groups: list[dict], outcomes: Any) -> None:
+    """Fail closed on missing groups, but never require byte-exact quotations.
+
+    v14 required a separate quote for up to 20 checks and failed in 14/26
+    Critic calls on text-witness formatting alone. Per-category explanations
+    preserve auditability without making surface quotation the task.
+    """
+    if not isinstance(outcomes, list) or len(outcomes) != len(groups):
+        raise CheckFormatError("review_group_results_incomplete")
+    expected = {group["id"] for group in groups}
+    seen = set()
+    for item in outcomes:
+        if not isinstance(item, dict):
+            raise CheckFormatError("review_group_not_object")
+        ident = item.get("id")
+        if ident not in expected or ident in seen:
+            raise CheckFormatError("review_group_id_invalid")
+        seen.add(ident)
+        if item.get("status") not in ("preserved", "changed", "uncertain"):
+            raise CheckFormatError("review_group_status_invalid")
+        explanation = item.get("explanation")
+        if not isinstance(explanation, str) or len(explanation.strip()) < 8:
+            raise CheckFormatError("review_group_reason_missing")
+
+
 def _compact(value: str) -> str:
     return " ".join(value.casefold().split())
 
@@ -282,4 +343,5 @@ __all__ = [
     "CheckFormatError", "semantic_checks", "check_evidence",
     "check_failures", "explicit_join_contradictions", "naturalness_gate",
     "missing_typed_literals",
+    "grouped_semantic_checks", "validate_group_decisions",
 ]
