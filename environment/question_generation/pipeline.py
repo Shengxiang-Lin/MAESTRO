@@ -183,13 +183,20 @@ def run(args):
         candidates_with_probes = accepted_without_probes = 0
         accepted_with_complete_coverage = 0
         accepted_after_revision = 0
+        regression_10 = Counter()
+        expansion = Counter()
         with (output_dir / "question_review_audit.jsonl").open(
             encoding="utf-8",
         ) as handle:
-            for line in handle:
+            for event_index, line in enumerate(handle):
                 if not line.strip():
                     continue
                 event = json.loads(line)
+                slice_stats = regression_10 if event_index < 10 else expansion
+                slice_stats["tasks"] += 1
+                slice_stats[
+                    "accepted" if event.get("accepted") else "rejected"
+                ] += 1
                 for attempt in event.get("audit", ()):
                     author_calls += int(attempt.get("author_calls", 0))
                     critic_calls += int(attempt.get("critic_calls", 0))
@@ -234,6 +241,10 @@ def run(args):
                 "rejected": rejected,
             },
             "rejection_reasons": dict(reasons),
+            "evaluation_slices": {
+                "previously_debugged_first_10": dict(regression_10),
+                "next_tasks_after_first_10": dict(expansion),
+            },
             "review_statistics": {
                 "max_revisions": args.max_revisions,
                 "author_calls": author_calls,
