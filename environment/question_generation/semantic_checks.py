@@ -20,14 +20,14 @@ _GROUP = re.compile(
     r"\s+group|group\s+([1-8]))\b", re.I,
 )
 _AND = re.compile(
-    r"^(?:\s*(?:consist of|as|is|comprises|includes|contains|"
+    r"^(?:\s*(?:consists? of|as|is|comprises|includes|contains|"
     r"is defined as|defined as)\s+)*(?:the\s+)?"
     r"(?:entities?\s+(?:in\s+)?both|intersection\b|intersect\b)", re.I,
 )
 _OR = re.compile(
-    r"^(?:\s*(?:consist of|as|is|comprises|includes|contains|"
+    r"^(?:\s*(?:consists? of|as|is|comprises|includes|contains|"
     r"is defined as|defined as)\s+)*(?:the\s+)?"
-    r"(?:entities?\s+in\s+at\s+least\s+one|union\b|either\b)", re.I,
+    r"(?:entities?\s+in\s+(?:at\s+least\s+one|either)|union\b|either\b)", re.I,
 )
 
 
