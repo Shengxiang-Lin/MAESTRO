@@ -17,9 +17,13 @@ class ReviewFormatError(ValueError):
 
 _AUTHOR_SYSTEM = """Write ONE realistic, natural benchmark question for an
 autonomous information-seeking/multimodal agent. The immutable public task
-contract states what the question must mean. A delegation blueprint describes
-how independent Sub-Agents could work on it, but must NOT be reproduced as a
-numbered list of tasks. The mechanical reference is ONLY a fallback for
+contract states what the question must mean. Delegation Blueprint Goals
+are deliberately SHORT INTENT SUMMARIES and may omit essential numeric
+thresholds, dates, filters and relation hops. Never treat those omissions
+as permission to drop constraints from the final Question. The immutable
+public_steps and precise reference have priority over Goal summaries.
+The blueprint describes how independent Sub-Agents could work, but must
+NOT be reproduced as a numbered list. The mechanical reference is a fallback for
 public names, exact values and ambiguous relation wording.
 
 Start with the user's final information need, then integrate the clues
@@ -51,8 +55,11 @@ any task semantics. Return JSON {"question":"..."} only.
 
 _CRITIC_SYSTEM = """Act as a semantic reviewer of a natural benchmark question.
 The public semantic contract is authoritative; the delegation blueprint
-explains which subtasks compute the answer. Review whether a user solving
-the candidate would seek EXACTLY the same answer under the same filters,
+contains only HIGH-LEVEL subtask intents that may deliberately omit values,
+comparisons, filters, relation hops and other exact constraints. Never
+use missing details from a Goal to justify omissions in the full Question.
+Review whether a user solving the candidate would seek EXACTLY the same
+answer under the same complete public contract and filters,
 not whether it resembles the mechanical reference.
 
 Before PASS, compare: (1) every required relation hop and its direction;
