@@ -25,8 +25,8 @@ from .question_review import (
 )
 from .scoped_surface import build_scoped_plan, render_scoped
 from .semantic_checks import (
-    explicit_join_contradictions, relation_semantic_contradictions,
-    missing_typed_literals,
+    explicit_join_contradictions, explicit_global_join_contradictions,
+    relation_semantic_contradictions, missing_typed_literals,
 )
 from .validators import postflight
 from .verification import certify_approved_question
@@ -243,7 +243,8 @@ def _realize_one(payload, world, capability, author, critic, *,
         # catch concrete omissions/explicit substitutions, not arbitrary
         # paraphrase syntax. Run before Critic to save model calls.
         missing = missing_typed_literals(plan, candidate)
-        joins = explicit_join_contradictions(scoped, candidate)
+        joins = (explicit_join_contradictions(scoped, candidate) +
+                 explicit_global_join_contradictions(plan, candidate))
         relations = relation_semantic_contradictions(scoped, candidate)
         entry["deterministic_guards"] = {
             "missing_typed_literals": missing,
