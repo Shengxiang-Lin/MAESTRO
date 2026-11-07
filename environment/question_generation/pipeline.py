@@ -148,6 +148,12 @@ def run(args):
             raise SystemExit("uncertified Stage 2A record in --blueprints: " + task_id)
         goal_records[task_id] = record
     candidate_count = len(authoring)
+    # Preserve original frozen input positions *before* Stage2A filtering.
+    # Otherwise filtered indices corrupt diagnostic/holdout slice stats.
+    original_position = {
+        str(row["task_id"]): start + i
+        for i, row in enumerate(authoring)
+    }
     authoring = [row for row in authoring
                  if str(row.get("task_id")) in goal_records]
     skipped_uncertified = candidate_count - len(authoring)
@@ -224,7 +230,7 @@ def run(args):
                 if not line.strip():
                     continue
                 event = json.loads(line)
-                original_index = start + event_index
+                original_index = original_position[event["task_id"]]
                 slice_stats = (
                     regression_10 if original_index < 10
                     else expansion if original_index < 50
