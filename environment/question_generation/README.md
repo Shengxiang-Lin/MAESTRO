@@ -1,9 +1,9 @@
 # Stage 2 — Shared Delegation Blueprint → Natural Benchmark Question
 
 Stage 2 prepares the **same Compact Gold DAG** that Stage 3 will execute,
-projects a public delegation outline, writes one short natural-language intent
-for each immutable fragment, and uses that shared blueprint to author a
-natural benchmark-style Main Question.
+projects a public delegation outline, **independently writes one short
+natural-language goal per fragment**, and deterministically binds the goals
+back to the original DAG before authoring the Main Question.
 
 ## One common plan, three language surfaces
 
@@ -16,8 +16,13 @@ Stage 1: frozen ProgramIR, sources, composition_links
   ├─ compile_delegation_outline                  [PUBLIC projection]
   │   └─ no answer, source IDs, operations' raw private inputs or witness facts
   │
-  ├─ naturalize_delegation_blueprint             [one LLM call]
-  │   └─ one reusable 1–2 sentence goal per fixed fragment
+  ├─ naturalize_fragment_goal                   [one LLM call per Fragment]
+  │   ├─ local semantic steps + explicit direct upstream input contracts
+  │   ├─ bounded per-fragment retry; no sibling-generated Goal text
+  │   └─ independent LLM calls (up to --blueprint-workers concurrently)
+  │
+  ├─ deterministic DAG assembly                 [no LLM]
+  │   └─ bind each Goal to compiler-fixed fragment ID / wave / depends_on
   │
   ├─ Question Author                            [one LLM call per draft]
   │   └─ goal-first, natural benchmark request; mechanical reference is
@@ -46,9 +51,12 @@ scheduling all remain controlled by the original compiler and replay.
 The blueprint JSON contains `version`, `outline` and `goals`. Immutable
 `outline.tasks` include `fragment_id`, `wave`, `depends_on`,
 `input_slots`, `output_kind`, `public_steps` and `capabilities`. The
-LLM generates **only** the text inside `goals[].goal`; a mismatch in fragment
-count/order/ID or unsafe text fails closed. The Stage-2 certificate
-(`maestro.stage2_surface_cert.blueprint.v1`, review contract 30) binds
+LLM returns only a `{"goal":"..."}` object for the **current** fragment.
+The program—not the model—binds `fragment_id`, preserving sibling
+independence and exact dependency order even when calls finish out of
+order. A malformed or unsafe goal gets up to one *local* retry. The
+Stage-2 certificate (`maestro.stage2_surface_cert.blueprint.v2`,
+review contract 31) binds
 the blueprint digest and the question. Stage 3 recompiles the outline from
 the canonical frozen ProgramIR and refuses mismatches or tampering.
 
@@ -64,15 +72,20 @@ git switch main && git pull origin main
 python environment/generate_questions.py \
   --start-record 100 --max-records 50 --max-revisions 2 \
   --output-dir environment/data/questions_blueprint_101_150 \
-  --question-workers 4 --flush-every 1
+  --question-workers 4 --blueprint-workers 2 --flush-every 1
 ```
 
-Use a **new** output directory; old v25 certs and streaming checkpoints
-are not compatible with the blueprint protocol. Generated artifacts include
+Use a **new** output directory (for example,
+`environment/data/questions_fragment_goals_50`); old v25 and v26
+one-shot Blueprint certificates or streaming checkpoints are not compatible
+with the per-fragment v2 protocol. Generated artifacts include
 `realized_capability_worlds.jsonl` (question, blueprint, certificate),
 `question_rejected.jsonl`, `question_review_audit.jsonl`, and
-`question_generation_summary.json`. `review_statistics.author_calls`
-now includes **one extra Author call per blueprint attempt**.
+`question_generation_summary.json`. `review_statistics.author_calls` now counts **each independently generated
+Fragment Goal**; `blueprint_goal_calls`, `blueprint_fragments_attempted`,
+and `blueprint_goal_retries` expose those costs separately. Using four
+`--question-workers` with two `--blueprint-workers` permits at most
+eight simultaneous Goal calls; reduce one of them for a busy local vLLM.
 
 ## Quality and limitations
 
