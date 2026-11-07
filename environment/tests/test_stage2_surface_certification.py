@@ -48,12 +48,11 @@ class FakeAuthor:
     def complete_json(self, system, user, **kwargs):
         data = json.loads(user)
         self.calls.append(data)
-        if "verified_public_outline" in data:
-            return {"goals": [{
-                "fragment_id": f["fragment_id"],
-                "goal": "Investigate the specified public evidence to identify "
-                        "the requested entities and return the relevant result.",
-            } for f in data["verified_public_outline"]["tasks"]]}
+        if "current_fragment" in data:
+            return {"goal":
+                "Investigate the specified public evidence to identify "
+                "the requested entities and return the relevant result."
+            }
         return {"question": natural_rephrase(data["reference_question"])}
 
 
@@ -94,7 +93,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         )
         return result, payload, world, rendered, author, critic
 
-    def test_blueprint_once_plus_question_once_and_no_probe_or_final_judge(self):
+    def test_one_goal_per_fragment_plus_question_and_no_extra_critic(self):
         (ok, row, audit), payload, world, rendered, author, critic = self.run_one()
         self.assertTrue(ok, str((row, audit)))
         self.assertEqual(row["publication_status"], "naturalized_certified")
@@ -105,7 +104,12 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         self.assertEqual(len(row["delegation_blueprint"]["goals"]),
                          len(row["delegation_blueprint"]["outline"]["tasks"]))
         self.assertTrue(any(a["stage"] == "delegation_blueprint" for a in audit))
-        self.assertEqual(len(author.calls), 2)
+        goal_count = len(row["delegation_blueprint"]["goals"])
+        self.assertEqual(len(author.calls), goal_count + 1)
+        self.assertEqual(
+            sum("current_fragment" in call for call in author.calls),
+            goal_count,
+        )
         self.assertEqual(len(critic.calls), 1)
         self.assertNotIn("risk_groups", critic.calls[0][1])
         self.assertNotIn("candidate_probes", row["authoring"]["surface_review"])
@@ -119,8 +123,10 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
             reviews=[MISSING_CRITIQUE, PASS_CRITIQUE], revisions=1,
         )
         self.assertTrue(ok, str((row, audit)))
-        self.assertEqual(len(author.calls), 3)
-        second = author.calls[2]
+        goal_count = len(row["delegation_blueprint"]["goals"])
+        self.assertEqual(len(author.calls), goal_count + 2)
+        second = next(call for call in reversed(author.calls)
+                      if "previous_draft" in call)
         self.assertEqual(second["previous_draft"], natural_rephrase(second["reference_question"]))
         diff = second["reviewer_feedback"]["differences"][0]
         self.assertIn("relation", diff["problem"])
@@ -138,7 +144,10 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertEqual(row["reason"], "rejected_uncertain")
-        self.assertEqual(len(author.calls), 2)  # blueprint + question
+        self.assertEqual(
+            len(author.calls),
+            len([call for call in author.calls if "current_fragment" in call]) + 1,
+        )  # one question plus independent fragment goals
         self.assertEqual(len(critic.calls), 1)
 
     def test_nonsemantic_punctuation_changes_are_not_naturalization(self):
