@@ -3,7 +3,7 @@
 The compiler derives expected answers from the frozen public ScopedPlan, but
 the probing model sees ONLY the natural candidate plus short questions.
 Probes are conservative targeted diagnostics, not an English equivalence proof.
-Unsupported/unlabelled natural phrasings fall back to the ordinary reviewer.
+High-risk owner and conditional probes survive paraphrases without group labels.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ _ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth",
 _ORDINAL = "|".join(_ORDINALS)
 _ALLOWED = frozenset(("AND", "OR", "SELF", "MEMBER",
                       "ALL_MUST", "NOT_ALL", "SELECTED", "RELATED",
-                      "UNCLEAR"))
+                      "CONDITIONAL", "ASSUMED", "UNCLEAR"))
 _PROBE_SYSTEM = """You are a candidate-only semantic reader.
 Read ONLY the candidate question below. You are NOT given the reference,
 gold answer, expected probe answers or private world. For each requested
@@ -174,12 +174,14 @@ def _owner_probes(
                 "comparison": cmp, "value": value,
                 "expected": "SELECTED",
                 "question": (
-                    f"In the candidate's definition of the {ordinal} group, "
-                    f"which entity must satisfy '{attribute} {cmp} {value}'? "
-                    f"Is it the entity SELECTED as a member of the {ordinal} "
-                    "group (SELECTED), or a different place/area reached "
-                    "through the selected entity's location relation (RELATED)? "
+                    f"In the candidate question, when determining entities "
+                    f"using the location relation and the condition "
+                    f"'{attribute} {cmp} {value}', which entity must satisfy "
+                    f"that condition? Is it the entity being SELECTED for "
+                    "the result set (SELECTED), or a different place/area "
+                    "reached via the location relation (RELATED)? "
                     "Reply SELECTED, RELATED or UNCLEAR."
+                
                 ),
             })
     return results[:2]
@@ -190,9 +192,9 @@ def compile_candidate_probes(
 ) -> list[dict[str, str]]:
     """Generate a bounded number of *public* contrast questions.
 
-    Probe questions refer only to named surface groups the draft still
-    defines. This avoids forcing free paraphrases to reproduce group labels.
-    Expected answers NEVER enter a model request.
+    Owner/conditional probes bind to PUBLIC attribute/relation anchors, not
+    fragile candidate group labels. Generic joins still require identifiable
+    group descriptions. Expected answers NEVER enter a model request.
     """
     if not isinstance(plan, ScopedPlan):
         raise TypeError("candidate_probes_need_public_scoped_plan")
@@ -207,12 +209,11 @@ def compile_candidate_probes(
         if not found:
             continue
         ordinal = found.group(1).lower()
+        # Owner checks must run even for natural "Second, define a set..."
+        # rewrites without the mechanical words "second group".
+        candidates.extend(_owner_probes(meaning, ordinal))
         if not _candidate_defines_group(candidate, ordinal):
             continue
-
-        # Ownership probes complement AND/OR probes. In v17 a candidate
-        # could preserve AND while attaching the numeric filter to a place.
-        candidates.extend(_owner_probes(meaning, ordinal))
 
         join = _surface_join(meaning)
         if join:
@@ -270,10 +271,67 @@ def compile_candidate_probes(
                 ),
             })
 
+    # Boundary check: a restriction taken from Group 1 to construct Group 2
+    # must NOT be attached to Group 1 itself. This is grounded in the PUBLIC
+    # reference wording, not any hidden entity or execution result.
+    first_and_second = re.search(
+        r"Let the first group consist of (?P<first>.*?)\\. "
+        r"Let the second group consist of (?P<second>.*?)\\.",
+        reference, re.I | re.S,
+    )
+    if first_and_second:
+        first_text = first_and_second.group("first")
+        second_text = first_and_second.group("second")
+        pop = re.search(
+            r"with a population number of (?P<value>[\\d,]+) drawn from "
+            r"the first group", second_text, re.I,
+        )
+        if (pop and not re.search(r"population number", first_text, re.I)
+                and re.search(r"\\bfirst group\\b", candidate, re.I)):
+            candidates.append({
+                "kind": "group_identity", "group": "first",
+                "expected": "NOT_ALL", "value": pop.group("value"),
+                "question": (
+                    "Does membership in the FIRST group itself require "
+                    f"population {pop.group('value')} (ALL_MUST), or is "
+                    "that population restriction applied later to a subset "
+                    "drawn FROM the first group (NOT_ALL)? "
+                    "Reply ALL_MUST, NOT_ALL or UNCLEAR."
+                ),
+            })
+
+    # An explicit branch that can be empty is NOT a promise that the anchor
+    # satisfies its condition. This probe does not require group labels in
+    # the naturalized candidate.
+    conditional = re.search(
+        r"Let the (?P<group>\\w+) group consist of (?P<anchor>.+?) "
+        r"if it has an? (?P<attr>[\\w\\s]+?) of (?P<value>[\\w+.-]+)\\. "
+        r"Otherwise, this group is empty\\.",
+        reference, re.I,
+    )
+    if conditional:
+        candidates.append({
+            "kind": "conditional_scope", "group": conditional.group("group"),
+            "expected": "CONDITIONAL",
+            "anchor": conditional.group("anchor"),
+            "attribute": conditional.group("attr"),
+            "value": conditional.group("value"),
+            "question": (
+                f"Regarding {conditional.group('anchor')} having "
+                f"{conditional.group('attr')} {conditional.group('value')}, "
+                "does the candidate retain a genuine IF check that allows "
+                "the eligible set to be empty when the condition fails "
+                "(CONDITIONAL), or does it assume the condition is true "
+                "without handling failure (ASSUMED)? "
+                "Reply CONDITIONAL, ASSUMED or UNCLEAR."
+            ),
+        })
+
     # Prefer scope-sensitive probes over generic join questions when bounded.
-    rank = {"condition_owner": 0, "member_owner": 1,
-            "final_union_scope": 2, "group_join": 3}
-    chosen = sorted(candidates, key=lambda item: (rank[item["kind"]], item["group"]))[:5]
+    rank = {"conditional_scope": 0, "condition_owner": 1,
+            "group_identity": 2, "member_owner": 3,
+            "final_union_scope": 4, "group_join": 5}
+    chosen = sorted(candidates, key=lambda item: (rank[item["kind"]], item["group"]))[:6]
     return [{"id": f"P{i}", **item} for i, item in enumerate(chosen, start=1)]
 
 
@@ -289,7 +347,25 @@ def explicit_probe_contradictions(
     for probe in probes:
         ordinal = probe["group"]
         kind = probe["kind"]
-        if kind == "condition_owner" and probe["expected"] == "SELECTED":
+        if kind == "conditional_scope" and probe["expected"] == "CONDITIONAL":
+            if (re.search(r"\\bassuming\\b", candidate, re.I)
+                    and not re.search(
+                        r"\\b(?:otherwise|if not|unless|failing that|"
+                        r"if (?:it|the airport) does not)\\b",
+                        candidate, re.I,
+                    )):
+                issues.append(f"{probe['id']}:conditional_replaced_by_assumption")
+        elif kind == "group_identity" and probe["expected"] == "NOT_ALL":
+            value = re.escape(str(probe["value"]))
+            # The exact v18 task-5 drift: a new population filter is used
+            # *to form the first group* even though it belongs downstream.
+            if re.search(
+                rf"\\bpopulation\\s+(?:number\\s+)?(?:of\\s+)?"
+                rf"{value}\\b[^.;!?]{{0,70}}\\bto form the first group\\b",
+                candidate, re.I,
+            ):
+                issues.append(f"{probe['id']}:derived_filter_moved_to_first_group")
+        elif kind == "condition_owner" and probe["expected"] == "SELECTED":
             # v17 #3: reference intersects (a) a location-relation result
             # with (b) an entity filter, while candidate says that entities
             # are LOCATED IN BOTH kinds of administrative areas. This moves
