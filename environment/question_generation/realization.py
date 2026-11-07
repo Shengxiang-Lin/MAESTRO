@@ -19,6 +19,7 @@ from environment.trajectory_simulation.eligibility import (
 from environment.delegation_blueprint import (
     compile_delegation_outline, naturalize_delegation_blueprint,
 )
+from .goal_review import validate_goal_record
 from .backend import BackendError
 from .question_review import (
     ReviewFormatError, author_question, critique_question, passing_judgment,
@@ -96,7 +97,7 @@ def _review_attempt(backend, reference, candidate, entry, *, blueprint=None):
 
 
 def _realize_one(payload, world, capability, author, critic, *,
-                 max_revisions=2, blueprint_workers=2):
+                 max_revisions=2, blueprint_workers=2, goal_record=None):
     """Generate up to 1+max_revisions drafts; Critic returns local patches."""
     canonical = str(payload.get("draft_question") or "")
     rendered = world.get("_rendered")
@@ -152,25 +153,45 @@ def _realize_one(payload, world, capability, author, critic, *,
         )
     except (KeyError, ValueError, TypeError) as exc:
         return _reject(payload, "rejected_reference", audit, detail=exc)
-    blueprint_audit = {"stage": "delegation_blueprint", "author_calls": 0}
-    audit.append(blueprint_audit)
-    try:
-        blueprint = naturalize_delegation_blueprint(
-            author_backend, outline, scoped, payload=payload,
-            oracle_answer=_oracle(world), max_workers=blueprint_workers,
-            audit=blueprint_audit,
-        )
-        blueprint_audit["goals"] = blueprint["goals"]
-    except (BackendError, ValueError, KeyError, TypeError) as exc:
-        blueprint_audit["failure"] = str(exc)[:240]
-        reason = (
-            "rejected_validation_error" if (
-                isinstance(exc, BackendError) or
-                "blueprint_fragment_goal_schema" in str(exc) or
-                str(exc) == "blueprint_author_backend_missing"
-            ) else "rejected_blueprint"
-        )
-        return _reject(payload, reason, audit, detail=exc)
+    if goal_record is not None:
+        # Production Stage 2B consumes a Stage-2A-certified row only.
+        # No Goal Author or Goal Critic requests can occur in this branch.
+        try:
+            validate_goal_record(
+                goal_record, payload, world, canonical, outline,
+                oracle_answer=_oracle(world),
+            )
+            blueprint = goal_record["delegation_blueprint"]
+        except (ValueError, KeyError, TypeError) as exc:
+            return _reject(payload, "rejected_goal_certificate", audit, detail=exc)
+        audit.append({
+            "stage": "certified_blueprint_reused", "author_calls": 0,
+            "critic_calls": 0,
+            "goal_certificate_sha256": digest(goal_record["goal_certificate"]),
+        })
+    else:
+        # Direct-call compatibility for existing offline fixtures. The
+        # generate_questions.py CLI now REQUIRES --blueprints and never enters
+        # this path. Only the certified branch signs the v3 surface contract.
+        blueprint_audit = {"stage": "delegation_blueprint", "author_calls": 0}
+        audit.append(blueprint_audit)
+        try:
+            blueprint = naturalize_delegation_blueprint(
+                author_backend, outline, scoped, payload=payload,
+                oracle_answer=_oracle(world), max_workers=blueprint_workers,
+                audit=blueprint_audit,
+            )
+            blueprint_audit["goals"] = blueprint["goals"]
+        except (BackendError, ValueError, KeyError, TypeError) as exc:
+            blueprint_audit["failure"] = str(exc)[:240]
+            reason = (
+                "rejected_validation_error" if (
+                    isinstance(exc, BackendError) or
+                    "blueprint_fragment_goal_schema" in str(exc) or
+                    str(exc) == "blueprint_author_backend_missing"
+                ) else "rejected_blueprint"
+            )
+            return _reject(payload, reason, audit, detail=exc)
 
     previous, feedback = None, None
     last_reason, last_detail = "rejected_quality", "not_naturalized"
@@ -300,6 +321,7 @@ def _realize_one(payload, world, capability, author, critic, *,
                 critique, revision_rounds=attempt, plan=plan,
                 blueprint=blueprint, gold=gold,
                 resources=payload.get("resources", ()),
+                goal_record=goal_record,
             )
         except (ValueError, TypeError, KeyError) as exc:
             entry["failure"] = "certificate_error"
@@ -316,9 +338,17 @@ def _realize_one(payload, world, capability, author, critic, *,
             "capability_world": capability,
             "surface_certificate": certificate,
             "delegation_blueprint": blueprint,
+            **({
+                "goal_certificate": goal_record["goal_certificate"],
+                "goal_reviews": goal_record["goal_reviews"],
+            } if goal_record is not None else {}),
             "publication_status": "naturalized_certified",
             "authoring": {
-                "strategy": "blueprint_guided_benchmark_author_critic",
+                "strategy": (
+                    "certified_goal_blueprint_question_author_critic"
+                    if goal_record is not None else
+                    "blueprint_guided_benchmark_author_critic"
+                ),
                 "revision_rounds": attempt,
                 "surface_review": review,
             },
