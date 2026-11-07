@@ -123,6 +123,14 @@ def generate_goal_record(payload, world, capability, author, critic, *,
                 return item, {"fragment_id": fragment["fragment_id"],
                               "review": review}, None
             if review["verdict"] == "uncertain":
+                if review["summary"].startswith("goal_review_protocol_error:"):
+                    # A serialization failure is NOT a semantic defect in
+                    # the Goal. The reviewer already retried this exact Goal;
+                    # do not regenerate it three times for the same error.
+                    last_reason = "rejected_goal_protocol"
+                    log["accepted"] = False
+                    log["failure"] = last_reason
+                    return None, None, last_reason
                 last_reason = "rejected_goal_uncertain"
             else:
                 last_reason = "rejected_goal_semantic"
