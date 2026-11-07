@@ -1,6 +1,13 @@
 """Stage 2A CLI: generate, review and persist certified Subtask Blueprints."""
 from __future__ import annotations
 
+# Support both: python -m environment.generate_goals
+# and:          python environment/generate_goals.py
+from pathlib import Path
+import sys
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import json
 
 from environment.config import EnvironmentConfigError, parse_with_config
