@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from hashlib import sha256
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from collections import Counter
@@ -252,8 +253,10 @@ def compile_coverage_probes(
             "grammar, not from the locator or an intended condition. "
         )
         edge_key = json.dumps(node, sort_keys=True)
+        edge_id = sha256(edge_key.encode("utf-8")).hexdigest()[:16]
         path_probe = {
             "kind": "relation_path",
+            "edge_id": edge_id,
             "group": group,
             "relation": relation,
             "direction": direction,
@@ -283,6 +286,7 @@ def compile_coverage_probes(
                 value = _prose_value(cond["value"])
                 obligations.append({
                     "kind": "condition_owner", "group": group,
+                    "edge_id": edge_id,
                     "relation": relation, "direction": direction,
                     "attribute": cond["attribute"],
                     "comparison": cond.get("comparison", ""),
@@ -349,6 +353,65 @@ def compile_coverage_probes(
     ]
 
 
+
+def _matches_endpoint(owner: str, phrase: str) -> bool:
+    """Conservative noun-phrase match, used ONLY to find explicit conflicts.
+
+    Generic/same-type endpoints remain ambiguous: the check never infers a
+    positive owner role from matching, and thus does not prove semantics.
+    """
+    if not isinstance(owner, str) or not isinstance(phrase, str):
+        return False
+    target = " ".join(owner.casefold().strip().split())
+    clause = " ".join(phrase.casefold().strip().split())
+    if len(target) < 4 or len(clause) < 4:
+        return False
+    return bool(re.search(r"(?<!\w)" + re.escape(target) + r"(?!\w)", clause))
+
+
+def conflicting_endpoint_evidence(
+    probes: list[dict], records: list[dict],
+) -> dict[str, str]:
+    """Catch a self-contradictory owner label without using model expectations.
+
+    For a RELATE edge, the independent path reader supplies candidate-local
+    subject/object quotes with A/B roles. An owner quote matching ONLY the
+    opposite role is evidence against its own label. If both endpoints use
+    the same noun or no quote is available, do not invent an inference.
+    """
+    by_probe = {p["id"]: p for p in probes}
+    paths = {}
+    for record in records:
+        p = by_probe.get(record.get("id"))
+        if (p and p["kind"] == "relation_path"
+                and p.get("edge_id") and record.get("answer") in ("A_TO_B", "B_TO_A")
+                and record.get("evidence_status", "verified") == "verified"):
+            paths[p["edge_id"]] = record
+    conflicts = {}
+    for record in records:
+        p = by_probe.get(record.get("id"))
+        if (not p or p["kind"] != "condition_owner"
+                or not p.get("edge_id") or record.get("answer") not in ("A", "B")
+                or record.get("evidence_status", "verified") != "verified"):
+            continue
+        path = paths.get(p["edge_id"])
+        if not path:
+            continue
+        owner = record.get("owner", "")
+        by_role = {
+            path.get("subject_role"): path.get("subject", ""),
+            path.get("object_role"): path.get("object", ""),
+        }
+        claimed = record["answer"]
+        other = "B" if claimed == "A" else "A"
+        # A lexical match to ONLY the other endpoint is a candidate-side
+        # contradiction; don't interpret one expected label as evidence.
+        if (_matches_endpoint(owner, by_role.get(other, ""))
+                and not _matches_endpoint(owner, by_role.get(claimed, ""))):
+            conflicts[record["id"]] = "owner_quote_matches_opposite_relation_endpoint"
+    return conflicts
+
+
 def coverage_manifest(probes: list[dict], records: list[dict]) -> dict:
     """A *reported model-check coverage* metric, not a correctness proof."""
     by_id = {row["id"]: row for row in records}
@@ -373,6 +436,8 @@ def validate_coverage_manifest(
 ) -> None:
     """Stage-3 replay of the full required set and exact model decisions."""
     validate_candidate_probe_records(probes, records, candidate=candidate)
+    if conflicting_endpoint_evidence(probes, records):
+        raise ValueError("stage2_owner_relation_evidence_conflict")
     if (not probes or not any(p["kind"] == "answer_type" for p in probes)
             or (any(p["kind"] == "relation_path" for p in probes)
                 and not any(r["kind"] == "relation_path" for r in records))):
@@ -385,5 +450,5 @@ def validate_coverage_manifest(
 __all__ = [
     "MAX_COVERAGE_PROBES", "PROBE_BATCH_SIZE", "UnverifiableCoverage",
     "compile_coverage_probes", "coverage_manifest",
-    "validate_coverage_manifest",
+    "validate_coverage_manifest", "conflicting_endpoint_evidence",
 ]
