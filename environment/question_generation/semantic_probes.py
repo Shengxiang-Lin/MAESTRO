@@ -173,6 +173,55 @@ def compile_candidate_probes(
     return [{"id": f"P{i}", **item} for i, item in enumerate(chosen, start=1)]
 
 
+def explicit_probe_contradictions(
+    probes: list[dict[str, str]], candidate: str,
+) -> list[str]:
+    """Catch only HIGH-CONFIDENCE scope flips in a labeled candidate.
+
+    These checks are intentionally narrower than a full semantic parser.
+    An unsupported paraphrase is left to the candidate-only probe reader.
+    """
+    issues = []
+    for probe in probes:
+        ordinal = probe["group"]
+        kind = probe["kind"]
+        if kind == "group_join" and probe["expected"] == "AND":
+            # v16 #3: "second group includes areas that are either ... or ...".
+            # Do not search outside the one local group-definition clause.
+            m = re.search(
+                rf"\b(?:the\s+)?{ordinal}\s+group\s+"
+                rf"(?:includes?|consists? of|to include)\b"
+                rf"(?P<body>[^.;!?]{{0,200}})",
+                candidate, flags=re.I,
+            )
+            if m and re.search(r"\beither\b[^.;!?]{0,130}\bor\b",
+                               m.group("body"), flags=re.I):
+                issues.append(f"{probe['id']}:explicit_intersection_to_either_or")
+        elif kind == "member_owner" and probe["expected"] == "SELF":
+            # v16 #8: "entity belongs to group 4" became "one member
+            # belongs to both group 3 and group 4".
+            group = rf"(?:the\s+)?{ordinal}\s+group"
+            start = re.search(
+                rf"\b{group}\s+(?:consists?|includes?|contains?)\b"
+                rf"(?P<body>[^.;!?]{{0,260}})", candidate, flags=re.I,
+            )
+            if start and re.search(
+                rf"\bmembers?\s+in\s+both\s+(?:the\s+)?(?:{_ORDINAL}) "
+                rf"group\s+and\s+(?:the\s+)?(?:{_ORDINAL}) group\b",
+                start.group("body"), flags=re.I,
+            ):
+                issues.append(f"{probe['id']}:member_scope_moved_into_intersection")
+        elif kind == "final_union_scope" and probe["expected"] == "NOT_ALL":
+            # v16 #5: a final OR over two branches became a selection
+            # exclusively among entities already in Group 2.
+            if re.search(
+                rf"\bAmong entities in (?:the\s+)?{ordinal}\s+group that\b",
+                candidate, flags=re.I,
+            ):
+                issues.append(f"{probe['id']}:union_branch_restricted_to_group")
+    return issues
+
+
 def validate_candidate_probe_records(probes: list[dict], records: Any) -> None:
     """Fail closed if the saved v17 probe certificate differs from public plan."""
     if not isinstance(records, list) or len(records) != len(probes):
@@ -232,4 +281,5 @@ def probe_candidate_semantics(
 __all__ = [
     "CandidateProbeFormatError", "compile_candidate_probes",
     "probe_candidate_semantics", "validate_candidate_probe_records",
+    "explicit_probe_contradictions",
 ]
