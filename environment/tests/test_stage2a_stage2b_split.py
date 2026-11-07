@@ -237,7 +237,10 @@ class SplitPipelineTests(unittest.TestCase):
             len(author.calls), len(outline["tasks"]),
             "A malformed Critic must never cause the Author to regenerate a Goal",
         )
-        self.assertEqual(len(critic.calls), 2 * len(outline["tasks"]))
+        self.assertEqual(
+            len(critic.calls), 3 * len(outline["tasks"]),
+            "The final JSON-object recovery also checks the same Goal",
+        )
         self.assertTrue(all(
             entry.get("failure") == "rejected_goal_protocol"
             for entry in audit if entry.get("stage") == "fragment_goal"
