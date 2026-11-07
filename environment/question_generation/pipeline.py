@@ -183,8 +183,12 @@ def run(args):
                 if line.strip():
                     reasons[json.loads(line).get("reason", "unknown")] += 1
         author_calls = critic_calls = candidate_probe_calls = final_judge_calls = 0
-        candidate_probe_recheck_calls = 0
+        candidate_probe_recheck_calls = candidate_probe_evidence_repair_calls = 0
         protocol_failures = Counter()
+        probe_grounding_statuses = Counter()
+        probe_grounding_reasons = Counter()
+        probe_initial_grounding_statuses = Counter()
+        endpoint_conflicts = 0
         observed_kinds = Counter()
         mismatch_kinds = Counter()
         review_outcomes = Counter()
@@ -217,8 +221,21 @@ def run(args):
                     critic_calls += int(attempt.get("critic_calls", 0))
                     candidate_probe_calls += int(attempt.get("candidate_probe_calls", 0))
                     candidate_probe_recheck_calls += int(attempt.get("candidate_probe_recheck_calls", 0))
+                    candidate_probe_evidence_repair_calls += int(
+                        attempt.get("candidate_probe_evidence_repair_calls", 0)
+                    )
+                    endpoint_conflicts += len(
+                        attempt.get("candidate_evidence_role_conflicts") or {}
+                    )
+                    for r in attempt.get("candidate_probe_initial_answers", ()):
+                        probe_initial_grounding_statuses[r.get("evidence_status", "unknown")] += 1
+                    for r in attempt.get("candidate_probe_answers", ()):
+                        probe_grounding_statuses[r.get("evidence_status", "unknown")] += 1
+                        if r.get("evidence_status") == "evidence_invalid":
+                            probe_grounding_reasons[r.get("evidence_reason", "unknown")] += 1
                     final_judge_calls += int(attempt.get("final_judge_calls", 0))
-                    for role in ("critic", "candidate_probe", "candidate_probe_recheck", "final_judge"):
+                    for role in ("critic", "candidate_probe", "candidate_probe_recheck",
+                                 "candidate_probe_evidence_repair", "final_judge"):
                         protocol_failures[role] += len(attempt.get(role + "_protocol_failures", ()))
                     for record in attempt.get("candidate_probe_answers", ()):
                         observed_kinds[record["kind"]] += 1
@@ -277,7 +294,16 @@ def run(args):
                 "critic_calls": critic_calls,
                 "candidate_probe_calls": candidate_probe_calls,
                 "candidate_probe_recheck_calls": candidate_probe_recheck_calls,
-                "total_model_calls": author_calls + critic_calls + candidate_probe_calls + candidate_probe_recheck_calls + final_judge_calls,
+                "candidate_probe_evidence_repair_calls": candidate_probe_evidence_repair_calls,
+                "total_model_calls": (
+                    author_calls + critic_calls + candidate_probe_calls
+                    + candidate_probe_recheck_calls
+                    + candidate_probe_evidence_repair_calls + final_judge_calls
+                ),
+                "probe_initial_grounding_statuses": dict(probe_initial_grounding_statuses),
+                "probe_final_grounding_statuses": dict(probe_grounding_statuses),
+                "probe_evidence_invalid_reasons": dict(probe_grounding_reasons),
+                "endpoint_evidence_conflicts": endpoint_conflicts,
                 "protocol_failures_by_role": dict(protocol_failures),
                 "observed_probe_answers_by_kind": dict(observed_kinds),
                 "probe_mismatches_by_kind": dict(mismatch_kinds),
