@@ -215,6 +215,61 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
                         edited, copy_world, rendered.question,
                     )
 
+    def test_json_schema_does_not_require_recursive_checks_in_child(self):
+        from environment.question_generation.question_review import (
+            _CHECK_SCHEMA, _FINAL_SCHEMA, _CRITIC_SCHEMA,
+        )
+        self.assertEqual(
+            set(_CHECK_SCHEMA["required"]),
+            {"id", "status", "explanation"},
+        )
+        self.assertIn("checks", _CRITIC_SCHEMA["required"])
+        self.assertIn("checks", _FINAL_SCHEMA["required"])
+        self.assertNotIn("checks", _CHECK_SCHEMA["properties"])
+
+    def test_protocol_retry_reviews_same_candidate_without_reauthoring(self):
+        from environment.question_generation.question_review import ReviewFormatError
+        class OneProtocolFailure(FakeCritic):
+            failed_once = False
+            def complete_json(self, system, user, **kwargs):
+                if ("constructive question editor" in system
+                        and not self.failed_once):
+                    self.failed_once = True
+                    raise ReviewFormatError("test_protocol_failure")
+                return super().complete_json(system, user, **kwargs)
+        payload, world, capability, _ = self.data()
+        author, critic = FakeAuthor(), OneProtocolFailure()
+        ok, row, audit = _realize_one(
+            payload, world, capability, author, critic, max_revisions=0,
+        )
+        self.assertTrue(ok, repr((row, audit)))
+        self.assertEqual(len(author.calls), 1)
+        self.assertEqual(audit[-1]["critic_calls"], 2)
+        self.assertEqual(len(audit[-1]["critic_protocol_failures"]), 1)
+        self.assertEqual(
+            audit[-1]["critic_protocol_failures"][0]["schema_mode"], True,
+        )
+
+    def test_failed_final_protocol_retries_do_not_rewrite_good_candidate(self):
+        from environment.question_generation.question_review import ReviewFormatError
+        class BrokenFinal(FakeCritic):
+            def complete_json(self, system, user, **kwargs):
+                if "independent final" in system:
+                    raise ReviewFormatError("final_model_json_invalid")
+                return super().complete_json(system, user, **kwargs)
+        payload, world, capability, _ = self.data()
+        author = FakeAuthor()
+        ok, rejected, audit = _realize_one(
+            payload, world, capability, author, BrokenFinal(),
+            max_revisions=2,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(rejected["reason"], "rejected_validation_error")
+        self.assertEqual(len(author.calls), 1)
+        self.assertEqual(audit[-1]["critic_calls"], 1)
+        self.assertEqual(audit[-1]["final_judge_calls"], 2)
+        self.assertEqual(len(audit[-1]["final_judge_protocol_failures"]), 2)
+
     def test_no_llm_rejects_instead_of_publishing_a_reference(self):
         payload, world, capability, rendered = self.data()
         ok, rejected, _ = _realize_one(
