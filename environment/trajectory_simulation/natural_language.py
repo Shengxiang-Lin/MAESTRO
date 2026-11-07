@@ -15,6 +15,7 @@ import re
 from typing import Any, Mapping
 
 from .contract import answer_string, validate_action, validate_feedback, mentions_exact_count
+from environment.delegation_blueprint import goal_for_fragment
 from .evidence import MARKER
 
 # This is the *wire-level* report contract. Bullet points belong inside the
@@ -172,6 +173,13 @@ def main_single_task_prompt(
     packet = {
         "main_question": payload["public_state"]["question"],
         "task_index": task_index,
+        "preplanned_goal": (
+            goal_for_fragment(
+                payload["delegation_blueprint"],
+                payload["gold_guidance"]["ready"][task_index]["fragment_id"],
+            ) if (payload.get("delegation_blueprint") is not None
+                  and "gold_guidance" in payload) else None
+        ),
         "total_parallel_tasks": len(tasks),
         "required_public_checks": task["task_instruction"],
         "assigned_tools": task["tools"],
@@ -188,6 +196,9 @@ def main_single_task_prompt(
         'with one string field: {"task_instruction":"..."}; no arrays, '
         "reasoning, context, explanation, or other keys. "
         "Use 1-4 focused sentences (about 40-110 words if needed). "
+        "The preplanned_goal, when present, is an intent hint, not a "
+        "completed result. Use ONLY published earlier findings for concrete "
+        "entities and numbers, never future subtask results. "
         "Start with a concrete goal (identify, verify, compare, retrieve, investigate), "
         "name the available source or modality and useful public clues, and finish "
         "with what evidence or value the Sub-Agent should return. "
@@ -498,6 +509,7 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
     reference = feedback_execution_reference(payload)
     public = {
         "assigned_subtask": payload["task_instruction"],
+        "shared_blueprint_goal": payload.get("delegation_goal"),
         "candidate_names_are_discovery_outputs": discovery_root,
         "fixed_result": fragment["expected_answer"],
         "source_evidence_guide": feedback_writer_sources(payload, reference),
@@ -509,6 +521,10 @@ def feedback_writer_prompt(payload: Mapping[str, Any], canonical: Mapping[str, A
         "You are an Orchestra-o1 Sub-Agent writing a report to the Main Agent "
         "on the ASSIGNED SUBTASK only. The exact answer and public source facts "
         "have already been verified; do not alter them. "
+        "shared_blueprint_goal, when present, states the same subtask's "
+        "preplanned intent. Use it for consistent terminology, but follow "
+        "the verified execution_reference and source facts as authority. "
+        "Do NOT treat the goal as evidence or a result. "
         "Rewrite the canonical_report using the explicit execution_reference, "
         "not a new solution to the task. Its step meanings, inputs and outputs "
         "fix the computation; source_evidence_guide fixes which tools and facts "

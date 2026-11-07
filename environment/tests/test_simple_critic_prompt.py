@@ -42,23 +42,21 @@ CASES = {
 
 
 class PromptRegressionTests(unittest.TestCase):
-    def test_author_prompt_preserves_explicit_logic_and_allows_modest_edit(self):
-        self.assertIn('"in both A and B"', _AUTHOR_SYSTEM)
-        self.assertIn('"At least one of A or B"', _AUTHOR_SYSTEM)
-        self.assertIn("later to a subset", " ".join(_AUTHOR_SYSTEM.split()))
-        self.assertIn("Locations of taxa", _AUTHOR_SYSTEM)
-        self.assertIn("A modest improvement is sufficient", _AUTHOR_SYSTEM)
-        self.assertIn("PATCH ONLY", _AUTHOR_SYSTEM)
+    def test_author_prompt_is_task_first_and_source_safe(self):
+        self.assertIn("benchmark question", _AUTHOR_SYSTEM)
+        self.assertIn("delegation blueprint", _AUTHOR_SYSTEM)
+        self.assertIn("mechanical reference is ONLY a fallback", _AUTHOR_SYSTEM)
+        self.assertIn("AND vs branch-wise OR", _AUTHOR_SYSTEM)
+        self.assertIn("discoverable", _AUTHOR_SYSTEM)
+        self.assertIn("intermediate results", _AUTHOR_SYSTEM)
+        self.assertNotIn("A modest improvement is sufficient", _AUTHOR_SYSTEM)
 
-    def test_critic_prompt_checks_owners_joins_and_independent_pools(self):
-        self.assertIn("SAME GROUPS / LOGIC", _CRITIC_SYSTEM)
-        self.assertIn("SAME FILTER OWNERS", _CRITIC_SYSTEM)
-        self.assertIn("SAME RELATION PATH AND ENTITY TYPE", _CRITIC_SYSTEM)
-        self.assertIn("SAME POOLS", _CRITIC_SYSTEM)
-        self.assertIn("SAME ANSWER", _CRITIC_SYSTEM)
-        self.assertIn("entities with EITHER height H OR width W", _CRITIC_SYSTEM)
-        self.assertIn("logo L", _CRITIC_SYSTEM)
-        self.assertNotIn("Prefer PASS", _CRITIC_SYSTEM)
+    def test_critic_prompt_checks_contract_and_independent_pools(self):
+        self.assertIn("semantic contract is authoritative", _CRITIC_SYSTEM)
+        self.assertIn("candidate pools", " ".join(_CRITIC_SYSTEM.split()))
+        self.assertIn("relation hop", _CRITIC_SYSTEM)
+        self.assertIn("group containing X", _CRITIC_SYSTEM)
+        self.assertIn("subtask", _CRITIC_SYSTEM)
         self.assertNotIn("risk_groups", _CRITIC_SYSTEM)
 
     def test_original_and_candidate_text_reach_one_simple_critic(self):

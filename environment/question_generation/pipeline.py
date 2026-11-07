@@ -156,6 +156,7 @@ def run(args):
                 "streaming.py",
             )
         ),
+        Path(__file__).parents[1] / "delegation_blueprint.py",
         Path("environment/trajectory_simulation/eligibility.py"),
         Path("environment/trajectory_simulation/compiler.py"),
         Path("environment/trajectory_simulation/skeleton.py"),
@@ -221,7 +222,7 @@ def run(args):
                 ) > 1:
                     accepted_after_revision += 1
         summary = {
-            "pipeline": "scoped_reference_author_critic_local_repair",
+            "pipeline": "gold_dag_shared_blueprint_question_subtask",
             "frozen_batch_validation": frozen,
             "model_roles": args._resolved_models,
             "requested": len(authoring),

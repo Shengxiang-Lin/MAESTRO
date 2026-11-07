@@ -1,9 +1,8 @@
-"""One task: checked reference → conservative Author → local-diff Critic → repair.
+"""Gold DAG → public delegation blueprint → benchmark Author → Critic → repair.
 
-No mandatory semantic-parser pipeline, candidate-only probes or final judge.
-The reference is compiler-checked; the candidate is NOT substituted with
-reference prose if the Author/Critic fails. Approval is a fallible model
-judgment backed by small deterministic guards, not proof of equivalence.
+The immutable graph controls future Sub-Agent tasks; only reusable PUBLIC
+task goals are authored before the natural user question. Stage 3 uses the
+same blueprint without leaking intermediate or final answers to the models.
 """
 from __future__ import annotations
 
@@ -17,6 +16,9 @@ from environment.trajectory_simulation.eligibility import (
     controlled_question_reference, digest,
 )
 
+from environment.delegation_blueprint import (
+    compile_delegation_outline, naturalize_delegation_blueprint,
+)
 from .backend import BackendError
 from .question_review import (
     ReviewFormatError, author_question, critique_question, passing_judgment,
@@ -76,13 +78,14 @@ def _feedback(problem, fix, *, reference_excerpt="", candidate_excerpt=""):
     }
 
 
-def _review_attempt(backend, reference, candidate, entry):
+def _review_attempt(backend, reference, candidate, entry, *, blueprint=None):
     """Only one schema-repair retry against the SAME draft."""
     for use_schema in (True, False):
         entry["critic_calls"] += 1
         try:
             return critique_question(
                 backend, reference, candidate, use_schema=use_schema,
+                blueprint=blueprint,
             )
         except (BackendError, ReviewFormatError, TypeError, ValueError) as exc:
             entry.setdefault("critic_protocol_failures", []).append({
@@ -139,6 +142,34 @@ def _realize_one(payload, world, capability, author, critic, *,
             detail="author_and_critic_backends_required",
         )
 
+    # The Gold fragment graph exists before language generation. Its public
+    # projection is the *one shared* planning intent used by Question,
+    # Sub-Agent reporting and later Main delegation. Gold answers and witness
+    # data are excluded from the LLM input.
+    try:
+        outline = compile_delegation_outline(
+            gold, world, canonical, plan, payload.get("resources", ()),
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        return _reject(payload, "rejected_reference", audit, detail=exc)
+    blueprint_audit = {"stage": "delegation_blueprint", "author_calls": 1}
+    audit.append(blueprint_audit)
+    try:
+        blueprint = naturalize_delegation_blueprint(
+            author_backend, outline, scoped, payload=payload,
+            oracle_answer=_oracle(world),
+        )
+        blueprint_audit["goals"] = blueprint["goals"]
+    except (BackendError, ValueError, KeyError, TypeError) as exc:
+        blueprint_audit["failure"] = str(exc)[:240]
+        reason = (
+            "rejected_validation_error" if (
+                isinstance(exc, BackendError) or
+                str(exc) in ("blueprint_response_schema", "blueprint_author_backend_missing")
+            ) else "rejected_blueprint"
+        )
+        return _reject(payload, reason, audit, detail=exc)
+
     previous, feedback = None, None
     last_reason, last_detail = "rejected_quality", "not_naturalized"
 
@@ -153,6 +184,7 @@ def _realize_one(payload, world, capability, author, critic, *,
         try:
             candidate = author_question(
                 author_backend, scoped, previous=previous, feedback=feedback,
+                blueprint=blueprint,
             )
         except (BackendError, ReviewFormatError, TypeError, ValueError) as exc:
             entry["failure"] = "author_model_error"
@@ -161,15 +193,30 @@ def _realize_one(payload, world, capability, author, critic, *,
 
         entry["question"] = candidate
         previous = candidate
-
         if not _meaningful_edit(scoped, candidate) or not _meaningful_edit(canonical, candidate):
             entry["failure"] = "not_naturalized"
             feedback = _feedback(
                 "The draft is essentially unchanged.",
-                "Improve readability with a small lexical edit; keep all "
-                "original conditions and grouping.",
+                "Make a user-facing lexical rewrite, not punctuation-only changes; "
+                "keep the original condition logic and entity scopes.",
             )
             last_reason, last_detail = "rejected_quality", "unchanged_question"
+            continue
+
+        # A literal operator-list reproduction is not a benchmark-style user
+        # question. This is a narrow surface check, not semantic parsing.
+        if re.search(
+            r"\b(?:let the (?:first|second|third|fourth|fifth) group consist "
+            r"of|define the (?:first|second|third|fourth|fifth) group as)\b",
+            candidate, re.I,
+        ):
+            entry["failure"] = "mechanical_group_template"
+            feedback = _feedback(
+                "The question still reads like a compiler's group definition.",
+                "Rewrite it as a coherent information-seeking request using "
+                "the same constraints; keep all branches and entity owners.",
+            )
+            last_reason, last_detail = "rejected_quality", "mechanical_group_template"
             continue
 
         # These guards are intentionally few and *high precision*. They
@@ -218,7 +265,9 @@ def _realize_one(payload, world, capability, author, critic, *,
             last_reason, last_detail = "rejected_validation_error", issue
             continue
 
-        critique = _review_attempt(critic_backend, scoped, candidate, entry)
+        critique = _review_attempt(
+            critic_backend, scoped, candidate, entry, blueprint=blueprint,
+        )
         if critique is None:
             entry["failure"] = "critic_protocol_error"
             return _reject(
@@ -247,6 +296,8 @@ def _realize_one(payload, world, capability, author, critic, *,
             certificate, review = certify_approved_question(
                 payload["task_id"], world, canonical, candidate, scoped,
                 critique, revision_rounds=attempt, plan=plan,
+                blueprint=blueprint, gold=gold,
+                resources=payload.get("resources", ()),
             )
         except (ValueError, TypeError, KeyError) as exc:
             entry["failure"] = "certificate_error"
@@ -262,9 +313,10 @@ def _realize_one(payload, world, capability, author, critic, *,
             "available_agents": payload.get("available_agents", ()),
             "capability_world": capability,
             "surface_certificate": certificate,
+            "delegation_blueprint": blueprint,
             "publication_status": "naturalized_certified",
             "authoring": {
-                "strategy": "simple_author_critic_local_repair",
+                "strategy": "blueprint_guided_benchmark_author_critic",
                 "revision_rounds": attempt,
                 "surface_review": review,
             },

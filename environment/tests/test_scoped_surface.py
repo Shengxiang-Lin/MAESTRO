@@ -48,6 +48,14 @@ class ScopedSurfaceTests(unittest.TestCase):
 
         class CopyingAuthor:
             def complete_json(self, system, user, **kwargs):
+                import json
+                data = json.loads(user)
+                if "verified_public_outline" in data:
+                    return {"goals": [{
+                        "fragment_id": fragment["fragment_id"],
+                        "goal": "Investigate the available public evidence and return "
+                                "the result of this assigned information request.",
+                    } for fragment in data["verified_public_outline"]["tasks"]]}
                 return {"question": scoped}
 
         class NoCritic:

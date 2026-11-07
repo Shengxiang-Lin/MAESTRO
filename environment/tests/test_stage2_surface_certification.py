@@ -48,6 +48,12 @@ class FakeAuthor:
     def complete_json(self, system, user, **kwargs):
         data = json.loads(user)
         self.calls.append(data)
+        if "verified_public_outline" in data:
+            return {"goals": [{
+                "fragment_id": f["fragment_id"],
+                "goal": "Investigate the specified public evidence to identify "
+                        "the requested entities and return the relevant result.",
+            } for f in data["verified_public_outline"]["tasks"]]}
         return {"question": natural_rephrase(data["reference_question"])}
 
 
@@ -88,15 +94,18 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         )
         return result, payload, world, rendered, author, critic
 
-    def test_simple_pass_has_one_author_one_critic_and_no_probe_or_final_judge(self):
+    def test_blueprint_once_plus_question_once_and_no_probe_or_final_judge(self):
         (ok, row, audit), payload, world, rendered, author, critic = self.run_one()
         self.assertTrue(ok, str((row, audit)))
         self.assertEqual(row["publication_status"], "naturalized_certified")
         self.assertEqual(row["surface_certificate"]["method"], METHOD)
         self.assertEqual(row["surface_certificate"]["schema"], SCHEMA)
         self.assertEqual(row["surface_certificate"]["review_contract"], REVIEW_CONTRACT)
-        self.assertEqual(row["authoring"]["strategy"], "simple_author_critic_local_repair")
-        self.assertEqual(len(author.calls), 1)
+        self.assertEqual(row["authoring"]["strategy"], "blueprint_guided_benchmark_author_critic")
+        self.assertEqual(len(row["delegation_blueprint"]["goals"]),
+                         len(row["delegation_blueprint"]["outline"]["tasks"]))
+        self.assertTrue(any(a["stage"] == "delegation_blueprint" for a in audit))
+        self.assertEqual(len(author.calls), 2)
         self.assertEqual(len(critic.calls), 1)
         self.assertNotIn("risk_groups", critic.calls[0][1])
         self.assertNotIn("candidate_probes", row["authoring"]["surface_review"])
@@ -110,8 +119,8 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
             reviews=[MISSING_CRITIQUE, PASS_CRITIQUE], revisions=1,
         )
         self.assertTrue(ok, str((row, audit)))
-        self.assertEqual(len(author.calls), 2)
-        second = author.calls[1]
+        self.assertEqual(len(author.calls), 3)
+        second = author.calls[2]
         self.assertEqual(second["previous_draft"], natural_rephrase(second["reference_question"]))
         diff = second["reviewer_feedback"]["differences"][0]
         self.assertIn("relation", diff["problem"])
@@ -129,7 +138,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertEqual(row["reason"], "rejected_uncertain")
-        self.assertEqual(len(author.calls), 1)
+        self.assertEqual(len(author.calls), 2)  # blueprint + question
         self.assertEqual(len(critic.calls), 1)
 
     def test_nonsemantic_punctuation_changes_are_not_naturalization(self):
@@ -180,7 +189,10 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         (ok, _, _), _, _, _, _, critic = self.run_one()
         self.assertTrue(ok)
         sent = critic.calls[0][1]
-        self.assertEqual(set(sent), {"reference_question", "candidate_question"})
+        self.assertEqual(set(sent), {
+            "reference_question", "candidate_question", "benchmark_task_brief",
+        })
+        self.assertIn("subtask_goals", sent["benchmark_task_brief"])
 
     def test_rehashed_certificate_cannot_authorize_changed_review(self):
         (ok, row, _), payload, world, rendered, _, _ = self.run_one()
@@ -193,6 +205,10 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
                 scoped_reference_sha256="0" * 64),
             lambda r: r["authoring"]["surface_review"].update(
                 public_guards_sha256="0" * 64),
+            lambda r: r["delegation_blueprint"]["goals"][0].update(
+                goal="Investigate a completely different unrelated topic.",
+            ),
+            lambda r: r["delegation_blueprint"]["outline"]["waves"].reverse(),
         )
         for edit in mutations:
             with self.subTest(edit=str(edit)):

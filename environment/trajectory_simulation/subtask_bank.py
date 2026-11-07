@@ -30,6 +30,7 @@ from .evidence import bind_ready, public_record, verify_known_packet
 from .pipeline import GoldTrajectoryError, _public_state
 from .public_preflight import audit_public_executability
 from .replay import replay_task
+from environment.delegation_blueprint import goal_for_fragment
 
 
 def _report_natural(executor, payload, template, fragment):
@@ -164,6 +165,14 @@ def build_subtask_bank(
             "program_sha256":digest(world_record["program"]),
         }
 
+    # A blueprint is only available to the offline teacher after Stage 2's
+    # certificate has been replayed. Never insert the full future graph or
+    # these goals into public Main state; release one goal at delegation time.
+    blueprint = (
+        realized.get("delegation_blueprint")
+        if realized.get("surface_certificate") and eligibility.get("eligible")
+        else None
+    )
     teacher_main=PassthroughPlanner()
     teacher_sub=PassthroughExecutor()
     history=[]
@@ -274,6 +283,9 @@ def build_subtask_bank(
                 "dependency_results":[known_results[dep]
                                       for dep in fragment["depends_on"]],
                 "fragment":fragment,
+                "delegation_goal":goal_for_fragment(
+                    blueprint, fragment["fragment_id"],
+                ),
                 "tool_provenance":tool_provenance,
             }
             base=teacher_sub.respond(report_payload,"")
@@ -432,6 +444,7 @@ def build_subtask_bank(
         "full_public_history":history,
         "final_answer":gold["final_answer"],  # PRIVATE: not Main-visible
         "gold_plan":gold,  # Teacher-private; never fed to Main
+        "delegation_blueprint": blueprint,  # Teacher-private shared language intent
         "question_record":dict(realized),
         "schema_version":2,
         "ready_order":[list(wave["fragment_ids"]) for wave in waves],
