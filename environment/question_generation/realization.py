@@ -166,7 +166,8 @@ def _realize_one(payload, world, capability, author, critic, *,
         reason = (
             "rejected_validation_error" if (
                 isinstance(exc, BackendError) or
-                str(exc) in ("blueprint_response_schema", "blueprint_author_backend_missing")
+                "blueprint_fragment_goal_schema" in str(exc) or
+                str(exc) == "blueprint_author_backend_missing"
             ) else "rejected_blueprint"
         )
         return _reject(payload, reason, audit, detail=exc)
