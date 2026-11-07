@@ -466,3 +466,61 @@ acceptable for the acceptance rate to fall if actual false positives are
 caught; a model saying `FORWARD` is NOT ground-truth proof of a relation.
 The 50 tasks are an evaluation slice, not held-out once they are used to
 tune future versions. No local Qwen inference was run in repository CI.
+
+## v23 Evidence–Semantics Decoupling (current)
+
+The v22 local Qwen3.5-9B 50-task audit (4 accepted, 421 calls) exposed
+two separate failure modes. In task 11, the reader repeatedly fabricated
+English evidence quotations not found in the natural candidate and the
+pipeline silently collapsed otherwise explicit semantic answers to
+`UNCLEAR`. In accepted task 29, a recheck changed a logo-owner label
+to the public expected A but the quoted owner was still "organizations",
+matching the B-side organization in the SAME directed relation.
+
+v23 preserves the candidate-only reader's **raw_answer** separately from
+the final normalized `answer`. Every evidence-backed probe stores
+`evidence_status` and `evidence_reason`. These distinguish
+`verified`, `semantic_mismatch`, `model_uncertain`, and
+`evidence_invalid` (e.g. `evidence_not_verbatim`,
+`owner_quote_invalid`). All are derived from public candidate text;
+no private World/Gold or teacher expected answer is sent to the model.
+
+For an initial raw label matching the teacher-side expected label whose
+quote fails mechanical grounding, Stage 2 performs **one evidence-only
+repair** (batched) supplying the model its **own previous answer** plus
+candidate text, but NOT the reference or expected label. Substantive
+mismatches and model uncertainty still get one independent focused
+semantic reread. If evidence remains ungrounded, the candidate is
+quarantined as `rejected_evidence_unverified`, not labelled a semantic
+failure or handed to Author for blind rewrite.
+
+A new stable `edge_id` connects each public relation-path obligation to
+its local condition-owner obligations. The cross-check catches an explicit
+contradiction when an owner noun phrase matches ONLY the opposite
+A/B endpoint in the same model-extracted relation quote. Conflicts are
+quarantined as `rejected_evidence_conflict`. This is a conservative
+negative check, **not** an automatic positive proof for same-type
+endpoints or ambiguous phrasings.
+
+The Stage-2 certificate advances to
+`maestro.stage2_surface_cert.v11` / review contract 28, requiring
+replayable raw-vs-normalized evidence diagnostics and endpoint coherence.
+Stage 3 independently checks them against the frozen public obligations
+and exact candidate text. Summary metrics now separate evidence-repair
+model calls, original/final grounding states, evidence failure reasons,
+and role conflicts.
+
+Do NOT overwrite v22 data. For a new **holdout 51–100** evaluation use:
+
+```bash
+cd ~/code/MAESTRO
+git switch main && git pull origin main
+python environment/generate_questions.py \
+  --start-record 50 --max-records 50 --max-revisions 2 \
+  --output-dir environment/data/questions_coverage_v23_51_100 \
+  --question-workers 4 --flush-every 1
+```
+
+Compare the frozen diagnostic first 50 separately if a before/after
+comparison is needed, without tuning on the holdout until analysis.
+Scripted CI tests do not measure real Qwen-level semantic precision.
