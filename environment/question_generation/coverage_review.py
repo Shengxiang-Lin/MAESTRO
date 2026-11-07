@@ -76,8 +76,10 @@ def _walk_public(plan: ScopedPlan):
     seen = set()
 
     def walk(node, group, level):
-        if not isinstance(node, Mapping) or level > 15:
-            return
+        if level > 15:
+            raise UnverifiableCoverage("public_semantic_tree_too_deep")
+        if not isinstance(node, Mapping):
+            raise UnverifiableCoverage("malformed_public_semantic_tree")
         key = json.dumps(node, ensure_ascii=False, sort_keys=True)
         if key in seen:
             return
