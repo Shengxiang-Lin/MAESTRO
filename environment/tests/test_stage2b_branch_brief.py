@@ -85,6 +85,63 @@ class BranchQuestionBriefTests(unittest.TestCase):
         self.assertIn("INTERSECT", brief["authoring_rules"])
         self.assertIn("UNION", brief["authoring_rules"])
 
+    def test_serial_chain_collapses_but_fork_join_and_inputs_remain(self):
+        from unittest.mock import patch
+        def fragment(fid, deps, step):
+            return {
+                "fragment_id": fid, "depends_on": deps,
+                "public_steps": [step], "output_kind": "entity_set",
+            }
+        tasks = [
+            fragment("F0", [], {
+                "id": "S0", "operation": "FIND_ALL", "inputs_from": [],
+            }),
+            fragment("F1", ["F0"], {
+                "id": "S1", "operation": "FILTER_NUMBER", "inputs_from": ["S0"],
+                "attribute": "population", "comparison": "greater than",
+                "public_value": "1205",
+            }),
+            fragment("F2", [], {
+                "id": "S2", "operation": "FIND_ALL", "inputs_from": [],
+            }),
+            fragment("F3", ["F1", "F2"], {
+                "id": "S3", "operation": "INTERSECT",
+                "inputs_from": ["S1", "S2"],
+            }),
+        ]
+        outline = {
+            "tasks": tasks, "public_modalities": [],
+            "task_semantics": {"definition": "INTERSECT",
+                               "conditions": [], "inputs": []},
+        }
+        bp = {
+            "outline": outline,
+            "goals": [{"fragment_id": f["fragment_id"],
+                       "goal": "Investigate the relevant public candidates."}
+                      for f in tasks],
+        }
+        with patch(
+            "environment.question_generation.question_brief._public_anchor_map",
+            return_value={},
+        ):
+            brief = compile_question_brief(bp, {}, "", {})
+        self.assertEqual(len(brief["workstreams"]), 3)
+        serial, independent, merged = brief["workstreams"]
+        self.assertEqual(serial["id"], "B1")
+        self.assertEqual(
+            [s["id"] for s in serial["precise_public_steps"]],
+            ["S0", "S1"],
+        )
+        self.assertEqual(
+            serial["precise_public_steps"][1]["inputs_from"], ["S0"],
+        )
+        self.assertEqual(
+            merged["precise_public_steps"][0]["inputs_from"],
+            ["S1", "S2"],
+        )
+        self.assertEqual(merged["depends_on"], ["B1", "B2"])
+        self.assertEqual(independent["depends_on"], [])
+
     def test_stage2b_branch_author_gets_brief_but_critic_gets_reference(self):
         payload, world, capability, rendered, gold, record = self.fixture()
         author = CaptureBriefAuthor(natural_rephrase(rendered.question))
