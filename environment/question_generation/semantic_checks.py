@@ -19,7 +19,7 @@ from .scoped_surface import ScopedPlan
 
 
 class CheckFormatError(ValueError):
-    """Review did not substantiate every requested public semantic check."""
+    """Reviewer omitted or malformed a requested semantic risk group."""
 
 
 def semantic_checks(plan: ScopedPlan) -> list[dict[str, str]]:
@@ -166,41 +166,6 @@ def _compact(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
-def check_evidence(checks: list[dict], outcomes: Any, candidate: str) -> None:
-    """Validate shape, check coverage and exact candidate evidence witnesses.
-
-    A quote is *necessary*, but not proof that the quoted text fully supports
-    the claimed requirement; semantic interpretation stays with the reviewer.
-    """
-    if not isinstance(outcomes, list):
-        raise CheckFormatError("review_check_results_missing")
-    required = {c["id"] for c in checks}
-    actual = set()
-    for item in outcomes:
-        if not isinstance(item, dict):
-            raise CheckFormatError("review_check_not_object")
-        ident = item.get("id")
-        if ident not in required or ident in actual:
-            raise CheckFormatError("review_check_id_invalid_or_duplicate")
-        actual.add(ident)
-        if item.get("status") not in ("preserved", "changed", "uncertain"):
-            raise CheckFormatError("review_check_status_invalid")
-        if not isinstance(item.get("explanation"), str) or not item["explanation"].strip():
-            raise CheckFormatError("review_check_explanation_missing")
-        evidence = item.get("candidate_quote")
-        if item["status"] == "preserved":
-            if (not isinstance(evidence, str)
-                    or not 3 <= len(evidence) <= 550
-                    or _compact(evidence) not in _compact(candidate)):
-                raise CheckFormatError("review_check_candidate_evidence_invalid")
-        elif evidence not in (None, ""):
-            if (not isinstance(evidence, str)
-                    or _compact(evidence) not in _compact(candidate)):
-                raise CheckFormatError("review_check_failure_quote_invalid")
-    if actual != required:
-        raise CheckFormatError("review_check_results_incomplete")
-
-
 def check_failures(outcomes: list[dict]) -> bool:
     return any(item["status"] != "preserved" for item in outcomes)
 
@@ -340,7 +305,7 @@ def naturalness_gate(reference: str, candidate: str) -> dict[str, Any]:
 
 
 __all__ = [
-    "CheckFormatError", "semantic_checks", "check_evidence",
+    "CheckFormatError", "semantic_checks",
     "check_failures", "explicit_join_contradictions", "naturalness_gate",
     "missing_typed_literals",
     "grouped_semantic_checks", "validate_group_decisions",
