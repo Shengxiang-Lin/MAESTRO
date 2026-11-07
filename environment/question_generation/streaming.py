@@ -263,6 +263,7 @@ def signature_for_question_run(
         "critic_max_tokens": args.critic_max_tokens,
         "timeout": args.timeout,
         "max_revisions": args.max_revisions,
+        "blueprint_workers": getattr(args, "blueprint_workers", 2),
         "no_json_mode": args.no_json_mode,
         "code_sha256": sources,
     }
