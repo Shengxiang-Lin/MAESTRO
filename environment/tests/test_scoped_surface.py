@@ -61,9 +61,12 @@ class ScopedSurfaceTests(unittest.TestCase):
             def complete_json(self, *args, **kwargs):
                 raise AssertionError("unchanged reference must not be reviewed")
 
+        certified = Stage2SurfaceCertificationTests().certified(
+            payload, world, capability,
+        )
         ok, rejected, audit = _realize_one(
             payload, world, capability, CopyingAuthor(), NoCritic(),
-            max_revisions=0,
+            max_revisions=0, goal_record=certified,
         )
         self.assertFalse(ok)
         self.assertEqual(rejected["reason"], "rejected_quality")
