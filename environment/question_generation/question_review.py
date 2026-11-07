@@ -243,7 +243,7 @@ def _guard_unverified_omission_feedback(
     present = set(typed_values(candidate, words=False))
     for issue in issues:
         explanation = issue.get("explanation", "")
-        if (not re.search(r"\b(?:omitt?ed?|miss(?:es|ing)?|dropped|absent)\b",
+        if (not re.search(r"\b(?:omit(?:ted|ting|s)?|miss(?:es|ing)?|dropped|absent)\b",
                           explanation, re.I)
                 or not isinstance(explanation, str)):
             continue
