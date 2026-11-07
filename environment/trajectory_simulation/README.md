@@ -9,6 +9,32 @@ natural-language rewrite is a distinct *surface* requiring independent
 certification before it may be shown to Main. Sub-Agent answers come from public
 source-replayed symbolic execution; the LLM writes only language.
 
+### Shared Delegation Blueprint (Stage 2 → Stage 3)
+
+Stage 2 now pre-compiles the **compact** Gold fragment DAG and writes a
+PUBLIC, answer-free delegation goal for each immutable fragment. These
+goals are stored in the Stage-2 `delegation_blueprint` with a v30 certificate.
+In Phase 1 (`subtask_bank.py`), certificate replay independently rebuilds
+the compact DAG and verifies the fragment topology and blueprint binding.
+Only the goal for the CURRENT subtask can assist the report writer; all
+`answer`, `summary` factual content, and `trace_summary` evidence must
+still come from the independently replayed source records.
+
+In Phase 2 (`rounds.py`), a goal is supplied only for each fragment
+currently listed by `private_guidance.ready`. A Main decision is generated
+**after** previous waves have completed; current goal hints can never
+pre-disclose sibling/future outputs. The actual `delegate_task` graph,
+model/tools/context transport and `complete` answer are still fixed and
+validated by the original execution contract.
+
+The blueprint is **teacher-only guidance**: it must not be included in
+O1 public state, exported prompts, or source retrieval catalogs. Existing
+legacy controlled-reference fixtures without Stage-2 certificates continue
+to work offline; new natural questions must carry the v30 certificate.
+For newly authored tasks, use `--schedule compact` in Phase 1 to match
+Stage 2's signed DAG. A deliberate `--schedule baseline` run cannot reuse
+the compact certificate as if it were the same plan.
+
 ### Answer-blind simulated Web Search (newly constructed tasks)
 
 New `web_search` and `hybrid` tasks opt into
