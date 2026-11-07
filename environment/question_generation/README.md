@@ -149,7 +149,7 @@ or regenerate questions in a new directory.
 
 There are no legacy graph or recursive semantic readback publication paths.
 
-## v15 compact risk review (local Qwen3.5-9B)
+## v15 compact risk review (historical)
 
 A frozen 10-task evaluation of v14 yielded 0 accepted questions, primarily
 because of REVIEW PROTOCOL errors, not confirmed semantic drift:
@@ -206,7 +206,7 @@ scope, and genuinely improved naturalness on approved examples and
 controlled negative pairs. The local CI runs mocked backends, not an
 actual Qwen inference experiment.
 
-## v16 pinned-atomic risk review (current)
+## v16 pinned-atomic risk review (previous)
 
 A local Qwen3.5-9B v15 run accepted 4/10 frozen questions; there were no
 observed review protocol errors. Audit nevertheless found an accepted
@@ -247,7 +247,7 @@ and general independent atomic re-review are **not implemented** in v16.
 
 A real local Qwen3.5-9B v16 10-task run accepted 7/10 questions but
 three rejected tasks failed Critic protocol validation; the audit only
-reported \`review_group_results_incomplete\`. Independent manual inspection of
+reported `review_group_results_incomplete`. Independent manual inspection of
 the accepted questions found candidate-side scope changes, including:
 - Group 2 defined with "either" when the public contract requires BOTH branches.
 - A final OR branch accidentally restricted to Group 2, although that branch
@@ -255,8 +255,10 @@ the accepted questions found candidate-side scope changes, including:
 - "The entity itself belongs to Group 4" replaced by "a member of the entity
   belongs to Group 4."
 
-v17 keeps the four-group Critic/Final-Judge contract but, on candidates that
-pass Critic, selectively adds **candidate-only semantic probes**. The
+v17 retains the four-group Critic/Final-Judge contract. Before review,
+conservative public-text guards reject explicit known scope reversals.
+For candidates that pass Critic, v17 additionally invokes selective
+**candidate-only semantic probes**. The
 probe model sees the candidate text and short multiple-choice questions,
 not the reference, expected answers, private World or Gold. The compiler
 constructs expected answers from the public ScopedPlan and asks about (a)
@@ -271,23 +273,23 @@ Probe mismatches or UNCLEAR readings request targeted Author revisions.
 Malformed/incomplete probe JSON gets one same-candidate retry and is rejected
 as validation error if still unusable. Stage 3 independently reconstructs
 which probes were required and compares the saved answer/expected pairs.
-This new publication record is \`maestro.stage2_surface_cert.v6\`, review
-contract \`23\`. **Do not reuse v16 certificate files.**
+This new publication record is `maestro.stage2_surface_cert.v6`, review
+contract `23`. **Do not reuse v16 certificate files.**
 
-\`question_review_audit.jsonl\` now retains expected/received risk-group IDs,
+`question_review_audit.jsonl` now retains expected/received risk-group IDs,
 received group count and response field names on malformed Critic or Judge
 output, without logging any private Gold or World facts. The final summary
-reports \`candidate_probe_calls\` separately from Critic/Final-Judge calls.
+reports `candidate_probe_calls` separately from Critic/Final-Judge calls.
 
 Run the SAME 10 frozen tasks in a new output directory:
 
-\`\`\`bash
+```bash
 python environment/generate_questions.py \
   --max-records 10 \
   --max-revisions 2 \
   --output-dir environment/data/questions_editorial_v17_10 \
   --question-workers 4 --flush-every 1
-\`\`\`
+```
 
 Do not scale up solely on acceptance percentage: manually compare final
 accepted questions against their Scoped references, check false positives
