@@ -12,7 +12,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from .contracts import typed_values
-from .semantic_checks import validate_group_decisions, check_failures
+from .semantic_checks import (
+    validate_group_decisions, check_failures, CheckFormatError,
+)
 
 
 class ReviewFormatError(ValueError):
@@ -167,6 +169,30 @@ def _invoke(backend: Any, system: str, data: dict,
     return response
 
 
+def _validate_review_with_diagnostics(groups: list[dict], response: dict) -> None:
+    """Explain a missing v16/v17 risk group without logging private data.
+
+    A model may produce syntactically valid JSON yet omit entire groups.
+    Report IDs/count/shape, not the candidate or any source/witness text.
+    """
+    try:
+        validate_group_decisions(groups, response.get("checks"))
+    except CheckFormatError as exc:
+        raw = response.get("checks")
+        received_ids = [
+            item.get("id") for item in raw
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ] if isinstance(raw, list) else []
+        error = ReviewFormatError(str(exc))
+        error.diagnostic = {
+            "expected_group_ids": [g["id"] for g in groups],
+            "received_group_ids": received_ids,
+            "received_count": len(raw) if isinstance(raw, list) else None,
+            "response_keys": sorted(response.keys()),
+        }
+        raise error from exc
+
+
 def author_question(backend: Any, reference: str, *,
                     previous: str | None = None,
                     feedback: dict | None = None) -> str:
@@ -190,7 +216,7 @@ def critique_question(backend: Any, reference: str, candidate: str,
         "risk_groups": checks,
         "potential_literal_changes_to_check": literal_warnings(reference, candidate),
     }, schema=_CRITIC_SCHEMA if use_schema else None)
-    validate_group_decisions(checks, response.get("checks"))
+    _validate_review_with_diagnostics(checks, response)
     if response.get("verdict") not in ("pass", "revise", "uncertain"):
         raise ReviewFormatError("critic_verdict_invalid")
     issues = response.get("issues")
