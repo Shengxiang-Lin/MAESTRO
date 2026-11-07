@@ -46,8 +46,8 @@ class GoalReviewProtocolTests(unittest.TestCase):
         self.assertEqual(len(critic.calls), 1)
         self.assertIn("candidate_goal", critic.calls[0])
         self.assertNotIn("reference_for_public_literal_spelling_only", critic.calls[0])
-        self.assertIn("v3", GOAL_CERT_SCHEMA)
-        self.assertIn("v3", GOAL_REVIEW_METHOD)
+        self.assertIn("v4", GOAL_CERT_SCHEMA)
+        self.assertIn("v4", GOAL_REVIEW_METHOD)
 
     def test_valid_deterministic_goal_error_skips_critic(self):
         critic = SmallCritic({
