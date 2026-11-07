@@ -104,3 +104,44 @@ false positives, false negatives, and total model calls. Keep reference
 generation failures (`rejected_reference`) separate from editing quality.
 Stage 3 verifies the bound publication certificate and performs its own
 evidence/public-executability checks; it does not re-run the Critic.
+
+## v25: conservative logic-first Author and contrastive Critic (current)
+
+On the first 50 frozen tasks, the simplified Author–Critic baseline accepted
+41/50 using just 95 model calls, but manual audit found at least 13 accepted
+rewrites with clear meaning drift. Frequent errors: a reference intersection
+(`in both`) was changed to `either` / `two types`, independent OR
+branches were incorrectly restricted to earlier groups, event/organization
+property owners were swapped, and an upstream organization date disappeared.
+The old Critic returned a generic `pass` for most of these.
+
+v25 **retains the simple pipeline**: no new model roles, coverage passes,
+candidate-only probes or final judge. Only the two existing model prompts
+were tightened. Author now explicitly preserves each group boundary,
+relation source/target and attribute owner while making modest local edits.
+Critic must inspect AND vs OR, owner, relation/path/type, candidate pool
+scope and output requirements **before passing**. A pass should cite a
+specific preserved constraint, rather than a generic assertion. A concrete
+change leads to at most three quoted local differences and minimal patches;
+genuinely ambiguous cases return `uncertain`. The JSON schema and
+`--max-revisions` contract are unchanged.
+
+The summary `pipeline` string now correctly reports
+`scoped_reference_author_critic_local_repair`, rather than its historical
+final-judge name.
+
+A no-network test fixture uses representative observed false-pass
+patterns to check prompt coverage and local-feedback data flow.
+**This does not establish that Qwen detects the errors in inference.**
+Measure real semantic precision, valid naturalization yield and calls on
+the original first-50 diagnostic slice and the untouched 51–100 slice.
+
+```bash
+python environment/generate_questions.py \
+  --max-records 50 --max-revisions 2 \
+  --output-dir environment/data/questions_simple_v25_50 \
+  --question-workers 4 --flush-every 1
+```
+
+Output to a **new** directory: the streaming signature fingerprints the
+prompt source, so old checkpoints should not be resumed after this change.
