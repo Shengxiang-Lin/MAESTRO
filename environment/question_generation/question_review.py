@@ -49,9 +49,11 @@ The input has at most FOUR risk groups (some containing many requirements).
 Give ONE status per GROUP: preserved only if ALL listed requirements are
 preserved, changed if ANY is changed, uncertain if meaning is ambiguous.
 Explain the most decisive discrepancy, not a full report per node.
-Each group's requirements have public atomic ids. Report problem_ids=[] for
-preserved; for changed/uncertain provide the exact ids whose meaning changed
-or cannot be verified. A relation such as "named after" is not equivalent
+Each group has a short ID (R1...R4). You MUST return one judgment
+per group. Atomic C-IDs are OPTIONAL: only provide problem_ids if you are
+certain each ID belongs to the SAME group. Otherwise use [] and explain
+the actual candidate-text discrepancy in plain language. An uncertain or
+changed group still vetoes publication even without atomic C-IDs. A relation such as "named after" is not equivalent
 to sharing the same name. A final ranked selection across TWO alternative
 candidate pools uses OR (a result may originate in EITHER pool), even when
 one pool itself uses AND (an intermediate intersection). Do not infer that
@@ -76,10 +78,10 @@ not see past Critic votes or revision history.
 For each of at most FOUR risk groups, assess ALL its requirements:
 intersection vs union, owner of each filter, relation direction/hop,
 and final requested answer. Treat any changed or uncertain requirement
-as a reason NOT to pass. For each check provide problem_ids:
-[] when preserved; otherwise the ids of specific altered/ambiguous public
-requirements. A negative group without a concrete problematic requirement
-is not justified. Do not label changed while explaining all requirements
+as a reason NOT to pass. Atomic problem_ids are OPTIONAL; if uncertain
+about group membership, leave the list empty rather than guessing IDs.
+Explain the concrete candidate-text discrepancy for each negative group.
+A negative group without a reason is not justified. Do not label changed while explaining all requirements
 are preserved. Do not rubber-stamp a fluent paraphrase. In particular, a group described as a union when the reference demands an
 intersection changes the answer; so does transferring a population/date
 filter from the answer entity to a related place.
@@ -113,7 +115,7 @@ _CHECK_SCHEMA = {
         "problem_ids": {"type": "array", "items": {"type": "string"},
                         "maxItems": 5},
     },
-    "required": ["id", "status", "explanation", "problem_ids"],
+    "required": ["id", "status", "explanation"],
     "additionalProperties": False,
 }
 _CRITIC_SCHEMA = {
@@ -178,12 +180,59 @@ def _invoke(backend: Any, system: str, data: dict,
     return response
 
 
+def _normalize_negative_group_ids(groups: list[dict], response: dict) -> list[str]:
+    """Treat wrong C-ID references as ungrounded, NEVER as valid evidence.
+
+    A negative group is already a veto, so incorrect optional C-ID mapping
+    must not turn the entire task into a protocol failure. All-preserved
+    reviews remain strict and cannot smuggle nonempty/unknown problem IDs.
+    Complete keyed-Rn maps can be read as lists without inferring any vote.
+    """
+    notes = []
+    raw = response.get("checks")
+    expected = [g["id"] for g in groups]
+    if (isinstance(raw, dict) and set(raw) == set(expected)
+            and all(isinstance(raw[g], dict) for g in expected)):
+        response["checks"] = [
+            {"id": group_id, **raw[group_id]}
+            for group_id in expected
+        ]
+        raw = response["checks"]
+        notes.append("checks_group_map_normalized")
+    if not isinstance(raw, list):
+        return notes
+    by_id = {
+        g["id"]: {str(r["id"]) for r in g["requirements"] if "id" in r}
+        for g in groups
+    }
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        status, group_id = item.get("status"), item.get("id")
+        if group_id not in by_id:
+            continue
+        ids = item.get("problem_ids", [])
+        if status in ("changed", "uncertain") and (
+                not isinstance(ids, list)
+                or any(not isinstance(v, str) or v not in by_id[group_id]
+                       for v in ids)
+                or len(ids) != len(set(ids))):
+            # No invented replacement IDs: retain the negative status and
+            # the explanation, discard the ungrounded atomic-ID claim.
+            item["problem_ids"] = []
+            notes.append(f"{group_id}:unverified_atomic_ids_cleared")
+    return notes
+
+
 def _validate_review_with_diagnostics(groups: list[dict], response: dict) -> None:
     """Explain a missing v16/v17 risk group without logging private data.
 
     A model may produce syntactically valid JSON yet omit entire groups.
     Report IDs/count/shape, not the candidate or any source/witness text.
     """
+    protocol_notes = _normalize_negative_group_ids(groups, response)
+    if protocol_notes:
+        response["_protocol_notes"] = protocol_notes
     try:
         validate_group_decisions(groups, response.get("checks"))
     except CheckFormatError as exc:
@@ -344,7 +393,8 @@ def critique_question(backend: Any, reference: str, candidate: str,
         if ungrounded_omission else response["summary"]
     )
     return {"verdict": verdict, "issues": issues,
-            "summary": summary, "checks": response["checks"]}
+            "summary": summary, "checks": response["checks"],
+            "protocol_notes": response.get("_protocol_notes", [])}
 
 
 def judge_question(backend: Any, reference: str, candidate: str,
@@ -366,7 +416,7 @@ def judge_question(backend: Any, reference: str, candidate: str,
         backend, _FINAL_SYSTEM, payload,
         schema=_FINAL_SCHEMA if use_schema else None,
     )
-    validate_group_decisions(checks, response.get("checks"))
+    _validate_review_with_diagnostics(checks, response)
     if (response.get("verdict") not in ("pass", "reject", "uncertain")
             or response.get("semantic_equivalence") not in (
                 "equivalent", "different", "uncertain")
@@ -382,6 +432,8 @@ def judge_question(backend: Any, reference: str, candidate: str,
         "issues", "explanation", "checks",
     )}
     result["issues"] = list(result["issues"])
+    if response.get("_protocol_notes"):
+        result["protocol_notes"] = response["_protocol_notes"]
     if check_failures(result["checks"]) and result["verdict"] == "pass":
         result["verdict"] = "uncertain"
         result["semantic_equivalence"] = "uncertain"

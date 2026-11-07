@@ -220,10 +220,10 @@ def validate_group_decisions(groups: list[dict], outcomes: Any) -> None:
         explanation = item.get("explanation")
         if not isinstance(explanation, str) or len(explanation.strip()) < 8:
             raise CheckFormatError("review_group_reason_missing")
-        # Changed/uncertain judgments must identify WHICH public atomic
-        # obligation failed. A generic group-level negative is not actionable
-        # and cannot be trusted as a semantic difference.
-        problem_ids = item.get("problem_ids")
+        # IDs are advisory for negative decisions, which can NEVER certify.
+        # Preserve strict identity checks for any supplied IDs; an unlabeled
+        # negative group remains a safe veto instead of a protocol failure.
+        problem_ids = item.get("problem_ids", [])
         allowed = {str(req["id"]) for req in by_id[ident]["requirements"]
                    if "id" in req}
         if (not isinstance(problem_ids, list)
@@ -233,8 +233,6 @@ def validate_group_decisions(groups: list[dict], outcomes: Any) -> None:
             raise CheckFormatError("review_problem_ids_invalid")
         if item["status"] == "preserved" and problem_ids:
             raise CheckFormatError("preserved_review_has_problem_ids")
-        if item["status"] != "preserved" and not problem_ids:
-            raise CheckFormatError("negative_review_missing_problem_ids")
         if (item["status"] != "preserved"
                 and _AFFIRMATIVE_EXPLANATION.search(explanation)
                 and not _CONTRAST_EXPLANATION.search(explanation)):

@@ -221,7 +221,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         )
         self.assertEqual(
             set(_CHECK_SCHEMA["required"]),
-            {"id", "status", "explanation", "problem_ids"},
+            {"id", "status", "explanation"},
         )
         self.assertIn("checks", _CRITIC_SCHEMA["required"])
         self.assertIn("checks", _FINAL_SCHEMA["required"])
@@ -458,7 +458,7 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
             "What cities share the same name?",
         ))
 
-    def test_v16_negative_review_requires_specific_public_obligation_id(self):
+    def test_v19_negative_review_without_atomic_ids_still_vetoes(self):
         from environment.question_generation.semantic_checks import (
             validate_group_decisions, CheckFormatError,
         )
@@ -471,8 +471,13 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
                  "problem_ids": ["C4"],
                  "explanation": "Name equality replaces a naming relationship."}]
         validate_group_decisions(groups, good)
+        # Negative groups remain vetoes even when the small model cannot
+        # ground specific C-IDs. This removes avoidable v18 protocol errors.
+        validate_group_decisions(groups, [{
+            "id": "R1", "status": "changed",
+            "explanation": "Relation was replaced with name equality.",
+        }])
         for bad in (
-            [{**good[0], "problem_ids": []}],
             [{**good[0], "problem_ids": ["C7"]}],
             [{**good[0], "problem_ids": ["C4", "C4"]}],
             [{**good[0], "status": "preserved"}],

@@ -177,6 +177,8 @@ def run(args):
                     reasons[json.loads(line).get("reason", "unknown")] += 1
         author_calls = critic_calls = candidate_probe_calls = final_judge_calls = 0
         review_outcomes = Counter()
+        probe_kinds = Counter()
+        candidates_with_probes = accepted_without_probes = 0
         accepted_after_revision = 0
         with (output_dir / "question_review_audit.jsonl").open(
             encoding="utf-8",
@@ -191,6 +193,14 @@ def run(args):
                     candidate_probe_calls += int(attempt.get("candidate_probe_calls", 0))
                     final_judge_calls += int(attempt.get("final_judge_calls", 0))
                     if attempt.get("stage") == "candidate":
+                        specs = attempt.get("candidate_probe_specs") or []
+                        if specs:
+                            candidates_with_probes += 1
+                            probe_kinds.update(
+                                p.get("kind", "unknown") for p in specs
+                            )
+                        if attempt.get("accepted") and not specs:
+                            accepted_without_probes += 1
                         review_outcomes[attempt.get(
                             "failure", "accepted" if attempt.get("accepted")
                             else "unclassified",
@@ -220,6 +230,9 @@ def run(args):
                 "author_calls": author_calls,
                 "critic_calls": critic_calls,
                 "candidate_probe_calls": candidate_probe_calls,
+                "candidates_with_probes": candidates_with_probes,
+                "accepted_without_probes": accepted_without_probes,
+                "compiled_probe_kinds": dict(probe_kinds),
                 "final_judge_calls": final_judge_calls,
                 "accepted_after_revision": accepted_after_revision,
                 "candidate_decisions": dict(review_outcomes),
