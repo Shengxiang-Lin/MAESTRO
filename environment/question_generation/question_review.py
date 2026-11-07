@@ -92,7 +92,7 @@ _CHECK_SCHEMA = {
         "status": {"enum": ["preserved", "changed", "uncertain"]},
         "explanation": {"type": "string"},
     },
-    "required": ["id", "status", "explanation", "checks"],
+    "required": ["id", "status", "explanation"],
     "additionalProperties": False,
 }
 _CRITIC_SCHEMA = {
@@ -117,7 +117,7 @@ _FINAL_SCHEMA = {
         "checks": {"type": "array", "items": _CHECK_SCHEMA},
     },
     "required": ["verdict", "semantic_equivalence", "naturalness", "issues",
-                 "explanation"],
+                 "explanation", "checks"],
     "additionalProperties": False,
 }
 # Enumerated clauses are not semantic numbers.
