@@ -53,7 +53,7 @@ class PromptRegressionTests(unittest.TestCase):
 
     def test_critic_prompt_checks_contract_and_independent_pools(self):
         self.assertIn("semantic contract is authoritative", _CRITIC_SYSTEM)
-        self.assertIn("candidate pools", _CRITIC_SYSTEM)
+        self.assertIn("candidate pools", " ".join(_CRITIC_SYSTEM.split()))
         self.assertIn("relation hop", _CRITIC_SYSTEM)
         self.assertIn("group containing X", _CRITIC_SYSTEM)
         self.assertIn("subtask", _CRITIC_SYSTEM)
