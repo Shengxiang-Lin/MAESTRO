@@ -52,8 +52,14 @@ Explain the most decisive discrepancy, not a full report per node.
 Each group's requirements have public atomic ids. Report problem_ids=[] for
 preserved; for changed/uncertain provide the exact ids whose meaning changed
 or cannot be verified. A relation such as "named after" is not equivalent
-to sharing the same name. Do not label a group changed while explaining
-that every requirement was preserved.
+to sharing the same name. A final ranked selection across TWO alternative
+candidate pools uses OR (a result may originate in EITHER pool), even when
+one pool itself uses AND (an intermediate intersection). Do not infer that
+the final pool is an intersection. Reordering group descriptions does not
+change semantics. Never claim an attribute value was omitted without
+verifying whether it appears in the actual candidate; if present, assess
+its owning entity or relation instead. Do not label a group changed while
+explaining that every requirement was preserved.
 
 Choose pass only for equivalent and genuinely more natural text. For revise
 return actionable changes to the previous draft, naming the specific lost
@@ -187,13 +193,74 @@ def _validate_review_with_diagnostics(groups: list[dict], response: dict) -> Non
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         ] if isinstance(raw, list) else []
         error = ReviewFormatError(str(exc))
+        expected_by_group = {
+            group["id"]: {
+                requirement["id"] for requirement in group["requirements"]
+                if "id" in requirement
+            }
+            for group in groups
+        }
+        group_details = []
+        for item in raw[:4] if isinstance(raw, list) else ():
+            if not isinstance(item, dict):
+                group_details.append({"item_type": type(item).__name__})
+                continue
+            group_id = str(item.get("id", ""))[:24]
+            problem_ids = item.get("problem_ids")
+            ids = ([str(value)[:40] for value in problem_ids[:8]]
+                   if isinstance(problem_ids, list) else None)
+            allowed = expected_by_group.get(group_id, set())
+            group_details.append({
+                "group_id": group_id,
+                "status": str(item.get("status", ""))[:20],
+                "problem_ids": ids,
+                "problem_ids_type": type(problem_ids).__name__,
+                "unknown_problem_ids": (
+                    [pid for pid in ids if pid not in allowed] if ids else []
+                ),
+                "allowed_problem_ids": sorted(allowed)[:30],
+            })
         error.diagnostic = {
             "expected_group_ids": [g["id"] for g in groups],
             "received_group_ids": received_ids,
             "received_count": len(raw) if isinstance(raw, list) else None,
+            "checks_value_type": type(raw).__name__,
+            "group_details": group_details,
             "response_keys": sorted(response.keys()),
         }
         raise error from exc
+
+
+def _guard_unverified_omission_feedback(
+    candidate: str, issues: list[dict],
+) -> None:
+    """Do not send an ungrounded numeric-omission instruction to Author.
+
+    The referenced value can still have a WRONG OWNER. This advisory only
+    neutralizes an unsupported claim of literal absence, never approves a
+    candidate or erases a failed risk-group judgment.
+    """
+    present = set(typed_values(candidate, words=False))
+    for issue in issues:
+        explanation = issue.get("explanation", "")
+        if (not re.search(r"\b(?:omitt?ed?|miss(?:es|ing)?|dropped|absent)\b",
+                          explanation, re.I)
+                or not isinstance(explanation, str)):
+            continue
+        cited = set(typed_values(explanation, words=False))
+        if not cited.intersection(present):
+            continue
+        issue["explanation"] = (
+            "Reviewer claimed that a value was omitted, but a cited numeric "
+            "value appears in the candidate. This is an unverified claim: "
+            "check whether the value belongs to the SAME entity/relation "
+            "as in the reference before editing."
+        )
+        issue["suggestion"] = (
+            "Compare the owning entity and relation path against the public "
+            "reference; do not add or remove a numeric condition merely "
+            "because the reviewer called it missing."
+        )
 
 
 def author_question(backend: Any, reference: str, *,
@@ -265,6 +332,7 @@ def critique_question(backend: Any, reference: str, candidate: str,
                     "requirements with their original owners and relations."
                 ),
             })
+    _guard_unverified_omission_feedback(candidate, issues)
     return {"verdict": verdict, "issues": issues,
             "summary": response["summary"], "checks": response["checks"]}
 
