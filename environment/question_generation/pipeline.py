@@ -150,8 +150,8 @@ def run(args):
         *(
             Path(__file__).with_name(name) for name in (
                 "pipeline.py", "realization.py", "question_review.py",
-                "verification.py", "semantic_checks.py", "semantic_probes.py",
-                "coverage_review.py", "scoped_surface.py", "public_semantics.py",
+                "verification.py", "semantic_checks.py", "scoped_surface.py",
+                "public_semantics.py",
                 "contracts.py", "validators.py", "backend.py", "boundary.py",
                 "streaming.py",
             )
@@ -182,25 +182,13 @@ def run(args):
             for line in handle:
                 if line.strip():
                     reasons[json.loads(line).get("reason", "unknown")] += 1
-        author_calls = critic_calls = candidate_probe_calls = final_judge_calls = 0
-        candidate_probe_recheck_calls = candidate_probe_evidence_repair_calls = 0
-        protocol_failures = Counter()
-        probe_grounding_statuses = Counter()
-        probe_grounding_reasons = Counter()
-        probe_initial_grounding_statuses = Counter()
-        endpoint_conflicts = 0
-        observed_kinds = Counter()
-        mismatch_kinds = Counter()
+        author_calls = critic_calls = 0
+        critic_protocol_failures = 0
         review_outcomes = Counter()
-        probe_kinds = Counter()
-        verified_probe_kinds = Counter()
-        candidates_with_probes = accepted_without_probes = 0
-        accepted_with_complete_coverage = 0
         accepted_after_revision = 0
-        regression_10 = Counter()
-        expansion = Counter()
-        holdout = Counter()
-        later = Counter()
+        regression_10, expansion, holdout, later = (
+            Counter(), Counter(), Counter(), Counter()
+        )
         with (output_dir / "question_review_audit.jsonl").open(
             encoding="utf-8",
         ) as handle:
@@ -209,53 +197,20 @@ def run(args):
                     continue
                 event = json.loads(line)
                 original_index = start + event_index
-                slice_stats = (regression_10 if original_index < 10 else
-                               expansion if original_index < 50 else
-                               holdout if original_index < 100 else later)
+                slice_stats = (
+                    regression_10 if original_index < 10
+                    else expansion if original_index < 50
+                    else holdout if original_index < 100 else later
+                )
                 slice_stats["tasks"] += 1
-                slice_stats[
-                    "accepted" if event.get("accepted") else "rejected"
-                ] += 1
+                slice_stats["accepted" if event.get("accepted") else "rejected"] += 1
                 for attempt in event.get("audit", ()):
                     author_calls += int(attempt.get("author_calls", 0))
                     critic_calls += int(attempt.get("critic_calls", 0))
-                    candidate_probe_calls += int(attempt.get("candidate_probe_calls", 0))
-                    candidate_probe_recheck_calls += int(attempt.get("candidate_probe_recheck_calls", 0))
-                    candidate_probe_evidence_repair_calls += int(
-                        attempt.get("candidate_probe_evidence_repair_calls", 0)
+                    critic_protocol_failures += len(
+                        attempt.get("critic_protocol_failures", ())
                     )
-                    endpoint_conflicts += len(
-                        attempt.get("candidate_evidence_role_conflicts") or {}
-                    )
-                    for r in attempt.get("candidate_probe_initial_answers", ()):
-                        probe_initial_grounding_statuses[r.get("evidence_status", "unknown")] += 1
-                    for r in attempt.get("candidate_probe_answers", ()):
-                        probe_grounding_statuses[r.get("evidence_status", "unknown")] += 1
-                        if r.get("evidence_status") == "evidence_invalid":
-                            probe_grounding_reasons[r.get("evidence_reason", "unknown")] += 1
-                    final_judge_calls += int(attempt.get("final_judge_calls", 0))
-                    for role in ("critic", "candidate_probe", "candidate_probe_recheck",
-                                 "candidate_probe_evidence_repair", "final_judge"):
-                        protocol_failures[role] += len(attempt.get(role + "_protocol_failures", ()))
-                    for record in attempt.get("candidate_probe_answers", ()):
-                        observed_kinds[record["kind"]] += 1
-                        if record["answer"] != record["expected"]:
-                            mismatch_kinds[record["kind"]] += 1
                     if attempt.get("stage") == "candidate":
-                        specs = attempt.get("candidate_probe_specs") or []
-                        if specs:
-                            candidates_with_probes += 1
-                            probe_kinds.update(
-                                p.get("kind", "unknown") for p in specs
-                            )
-                        if attempt.get("accepted") and not specs:
-                            accepted_without_probes += 1
-                        coverage = attempt.get("semantic_coverage") or {}
-                        verified_probe_kinds.update(
-                            coverage.get("verified_by_kind") or {}
-                        )
-                        if attempt.get("accepted") and coverage.get("status") == "complete":
-                            accepted_with_complete_coverage += 1
                         review_outcomes[attempt.get(
                             "failure", "accepted" if attempt.get("accepted")
                             else "unclassified",
@@ -292,27 +247,8 @@ def run(args):
                 "max_revisions": args.max_revisions,
                 "author_calls": author_calls,
                 "critic_calls": critic_calls,
-                "candidate_probe_calls": candidate_probe_calls,
-                "candidate_probe_recheck_calls": candidate_probe_recheck_calls,
-                "candidate_probe_evidence_repair_calls": candidate_probe_evidence_repair_calls,
-                "total_model_calls": (
-                    author_calls + critic_calls + candidate_probe_calls
-                    + candidate_probe_recheck_calls
-                    + candidate_probe_evidence_repair_calls + final_judge_calls
-                ),
-                "probe_initial_grounding_statuses": dict(probe_initial_grounding_statuses),
-                "probe_final_grounding_statuses": dict(probe_grounding_statuses),
-                "probe_evidence_invalid_reasons": dict(probe_grounding_reasons),
-                "endpoint_evidence_conflicts": endpoint_conflicts,
-                "protocol_failures_by_role": dict(protocol_failures),
-                "observed_probe_answers_by_kind": dict(observed_kinds),
-                "probe_mismatches_by_kind": dict(mismatch_kinds),
-                "candidates_with_probes": candidates_with_probes,
-                "accepted_without_probes": accepted_without_probes,
-                "compiled_probe_kinds": dict(probe_kinds),
-                "verified_probe_kinds": dict(verified_probe_kinds),
-                "accepted_with_complete_coverage": accepted_with_complete_coverage,
-                "final_judge_calls": final_judge_calls,
+                "total_model_calls": author_calls + critic_calls,
+                "critic_protocol_failures": critic_protocol_failures,
                 "accepted_after_revision": accepted_after_revision,
                 "candidate_decisions": dict(review_outcomes),
             },

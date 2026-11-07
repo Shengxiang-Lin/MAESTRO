@@ -1,13 +1,14 @@
-"""One task: checked Scoped reference → author/critic revisions → final judge.
+"""One task: checked reference → conservative Author → local-diff Critic → repair.
 
-The reference is a PRIVATE generation artifact, never published as a fallback.
-Only a genuinely natural final rewrite that passes both editorial reviews and
-public-boundary checks enters the accepted questions JSONL.
+No mandatory semantic-parser pipeline, candidate-only probes or final judge.
+The reference is compiler-checked; the candidate is NOT substituted with
+reference prose if the Author/Critic fails. Approval is a fallible model
+judgment backed by small deterministic guards, not proof of equivalence.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
-from functools import partial
 
 from environment.trajectory_simulation.compiler import (
     GoldCompilationError, compile_gold_solution,
@@ -18,22 +19,12 @@ from environment.trajectory_simulation.eligibility import (
 
 from .backend import BackendError
 from .question_review import (
-    ReviewFormatError, author_question, critique_question, judge_question,
-    passing_judgment, rejection_reason,
+    ReviewFormatError, author_question, critique_question, passing_judgment,
 )
 from .scoped_surface import build_scoped_plan, render_scoped
 from .semantic_checks import (
-    semantic_checks, grouped_semantic_checks, naturalness_gate,
     explicit_join_contradictions, relation_semantic_contradictions,
-    missing_typed_literals, CheckFormatError,
-)
-from .semantic_probes import (
-    probe_candidate_semantics, explicit_probe_contradictions,
-)
-from .coverage_review import (
-    PROBE_BATCH_SIZE, UnverifiableCoverage,
-    compile_coverage_probes, coverage_manifest,
-    conflicting_endpoint_evidence,
+    missing_typed_literals,
 )
 from .validators import postflight
 from .verification import certify_approved_question
@@ -49,98 +40,88 @@ def _model(value):
 
 
 def _reject(payload, reason, audit, *, detail=None):
-    result = {
+    row = {
         "task_id": payload.get("task_id"),
         "publication_status": "rejected",
         "reason": reason,
         "revision_attempts": sum(
-            item.get("stage") == "candidate" for item in audit
+            a.get("stage") == "candidate" for a in audit
         ),
     }
     if detail is not None:
-        result["detail"] = str(detail)[:240]
-    return False, result, audit
+        row["detail"] = str(detail)[:240]
+    return False, row, audit
 
 
-def _review_diagnostic(exc):
-    """Persist enough provider detail to diagnose empty/truncated JSON output."""
-    result = {"reason": str(exc)[:220]}
-    diagnostic = getattr(exc, "diagnostic", None)
-    if isinstance(diagnostic, Mapping):
-        result.update({
-            key: diagnostic.get(key)
-            for key in (
-                "finish_reason", "usage", "expected_group_ids",
-                "received_group_ids", "received_count",
-                "response_keys", "expected_ids", "received_ids",
-                "checks_value_type", "group_details",
-            )
-            if key in diagnostic
-        })
-        raw = diagnostic.get("content")
-        result["model_content_tail"] = (
-            raw[-400:] if isinstance(raw, str) else None
-        )
-    return result
+def _meaningful_edit(reference: str, candidate: str) -> bool:
+    """Require a real lexical edit, NOT a high edit-distance threshold.
 
-
-def _review_attempt(fn, backend, reference, candidate, checkpoints, entry, role):
-    """Retry a JSON/protocol failure against the SAME candidate, not Author.
-
-    Attempt #1 uses structured JSON schema, #2 uses simpler JSON-object mode.
-    A second failure is terminal for this candidate; do not resample it and
-    misclassify a reviewer formatting problem as semantic rejection.
+    A modest but clear multi-sentence rewrite is permitted. Cosmetic
+    changes in punctuation/spacing/case alone do not qualify.
     """
+    norm = lambda s: re.sub(r"[^a-z0-9]+", "", s.casefold())
+    return bool(candidate.strip() and norm(reference) != norm(candidate))
+
+
+def _feedback(problem, fix, *, reference_excerpt="", candidate_excerpt=""):
+    return {
+        "verdict": "revise", "naturalness": "acceptable",
+        "summary": problem,
+        "differences": [{
+            "reference_excerpt": reference_excerpt,
+            "candidate_excerpt": candidate_excerpt,
+            "problem": problem,
+            "minimal_fix": fix,
+        }],
+    }
+
+
+def _review_attempt(backend, reference, candidate, entry):
+    """Only one schema-repair retry against the SAME draft."""
     for use_schema in (True, False):
-        entry[role + "_calls"] += 1
+        entry["critic_calls"] += 1
         try:
-            return fn(backend, reference, candidate, checkpoints,
-                      use_schema=use_schema)
-        except (BackendError, ReviewFormatError, CheckFormatError,
-                ValueError, TypeError) as exc:
-            entry.setdefault(role + "_protocol_failures", []).append(
-                {"schema_mode": use_schema, **_review_diagnostic(exc)}
+            return critique_question(
+                backend, reference, candidate, use_schema=use_schema,
             )
+        except (BackendError, ReviewFormatError, TypeError, ValueError) as exc:
+            entry.setdefault("critic_protocol_failures", []).append({
+                "schema_mode": use_schema,
+                "reason": str(exc)[:200],
+            })
     return None
 
 
 def _realize_one(payload, world, capability, author, critic, *,
                  max_revisions=2):
-    """No legacy modes, no grammar-only publication and no fallback.
-
-    max_revisions=N permits one initial draft followed by at most N targeted
-    revisions, each based on a real candidate and critic/judge feedback.
-    """
+    """Generate up to 1+max_revisions drafts; Critic returns local patches."""
     canonical = str(payload.get("draft_question") or "")
     rendered = world.get("_rendered")
     if not canonical or getattr(rendered, "question", None) != canonical:
-        return _reject(payload, "rejected_reference",
-                       [], detail="frozen_canonical_draft_mismatch")
+        return _reject(
+            payload, "rejected_reference", [],
+            detail="frozen_canonical_draft_mismatch",
+        )
     audit = []
     try:
-        gold = compile_gold_solution(
-            {
-                "task_id": payload["task_id"],
-                "question": canonical,
-                "capability_world": capability,
-            }, world, rendered, schedule="compact",
-        )
+        gold = compile_gold_solution({
+            "task_id": payload["task_id"],
+            "question": canonical,
+            "capability_world": capability,
+        }, world, rendered, schedule="compact")
         controlled = controlled_question_reference(gold, world, rendered)
         if controlled is None or controlled.get("question") != canonical:
             raise ValueError("unverified_controlled_reference")
         plan = build_scoped_plan(world, canonical, gold, controlled)
         scoped = render_scoped(plan, [0] * len(plan))
-        atomic_checks = semantic_checks(plan)
-        checkpoints = grouped_semantic_checks(plan)
-        if not checkpoints:
-            raise ValueError("missing_public_semantic_checkpoints")
-        # No model is needed to select between nearly equivalent templates.
-        check = postflight(
+        reference_check = postflight(
             payload, scoped, oracle_answer=_oracle(world),
             check_contract=False,
         )
-        if not check.accepted:
-            raise ValueError("scoped_reference_invalid: " + ";".join(check.issues))
+        if not reference_check.accepted:
+            raise ValueError(
+                "scoped_reference_invalid: " + ";".join(reference_check.issues)
+            )
     except (GoldCompilationError, KeyError, ValueError, TypeError, IndexError) as exc:
         return _reject(payload, "rejected_reference", audit, detail=exc)
 
@@ -149,392 +130,127 @@ def _realize_one(payload, world, capability, author, critic, *,
         "kind": "deterministic_scoped",
         "scoped_question": scoped,
         "scoped_question_sha256": digest(scoped),
-        "semantic_risk_groups": checkpoints,
-        "atomic_semantic_check_count": len(atomic_checks),
     })
-
-    author_backend = _model(author)
-    critic_backend = _model(critic)
+    author_backend, critic_backend = _model(author), _model(critic)
     if (not callable(getattr(author_backend, "complete_json", None))
             or not callable(getattr(critic_backend, "complete_json", None))):
-        return _reject(payload, "rejected_validation_error",
-                       audit, detail="author_and_critic_backends_required")
+        return _reject(
+            payload, "rejected_validation_error", audit,
+            detail="author_and_critic_backends_required",
+        )
 
-    previous = None
-    feedback = None
-    last_failure = "rejected_validation_error"
-    last_detail = None
+    previous, feedback = None, None
+    last_reason, last_detail = "rejected_quality", "not_naturalized"
 
     for attempt in range(max_revisions + 1):
         entry = {
-            "stage": "candidate", "attempt": attempt + 1,
-            "author_calls": 0, "critic_calls": 0,
-            "candidate_probe_calls": 0, "final_judge_calls": 0,
-            "candidate_probe_recheck_calls": 0,
-            "candidate_probe_evidence_repair_calls": 0,
+            "stage": "candidate",
+            "attempt": attempt + 1,
+            "author_calls": 1,
+            "critic_calls": 0,
         }
         audit.append(entry)
         try:
-            entry["author_calls"] = 1
             candidate = author_question(
                 author_backend, scoped, previous=previous, feedback=feedback,
             )
-        except (BackendError, ReviewFormatError, CheckFormatError, ValueError, TypeError) as exc:
+        except (BackendError, ReviewFormatError, TypeError, ValueError) as exc:
             entry["failure"] = "author_model_error"
-            entry["detail"] = str(exc)[:240]
-            last_failure, last_detail = "rejected_validation_error", str(exc)
-            # A model/protocol failure does not license a surrogate reference.
+            last_reason, last_detail = "rejected_validation_error", str(exc)
             continue
 
         entry["question"] = candidate
         previous = candidate
-        if candidate in (canonical, scoped):
+
+        if not _meaningful_edit(scoped, candidate) or not _meaningful_edit(canonical, candidate):
             entry["failure"] = "not_naturalized"
-            feedback = {
-                "verdict": "revise",
-                "issues": [{
-                    "kind": "style", "severity": "minor",
-                    "explanation": "The draft still reproduces the mechanical reference.",
-                    "suggestion": "Express the same conditions as a real user question.",
-                }],
-                "summary": "Keep every necessary clue but change the actual phrasing.",
-            }
-            last_failure = "rejected_quality"
-            continue
-        style = naturalness_gate(scoped, candidate)
-        entry["naturalness_gate"] = style
-        if not style["improved_enough_to_review"]:
-            entry["failure"] = "cosmetic_rephrase"
-            last_failure, last_detail = "rejected_quality", "cosmetic_rephrase"
-            feedback = {
-                "verdict": "revise",
-                "issues": [{
-                    "kind": "naturalness", "severity": "minor",
-                    "explanation": "The draft only makes cosmetic word changes.",
-                    "suggestion": "Restructure the question substantially while preserving the exact information need; reduce mechanical group definitions.",
-                }],
-                "summary": "Make a genuine natural-language rewrite, not a near-copy.",
-            }
-            continue
-        try:
-            probes = compile_coverage_probes(plan, scoped, candidate)
-        except UnverifiableCoverage as exc:
-            entry["failure"] = "coverage_unverifiable"
-            return _reject(
-                payload, "rejected_coverage_unverifiable", audit,
-                detail=str(exc),
+            feedback = _feedback(
+                "The draft is essentially unchanged.",
+                "Improve readability with a small lexical edit; keep all "
+                "original conditions and grouping.",
             )
-        entry["candidate_probe_specs"] = probes
-        entry["required_semantic_obligations"] = len(probes)
-        scope_contradictions = explicit_probe_contradictions(probes, candidate)
-        entry["explicit_candidate_scope_contradictions"] = scope_contradictions
-        if scope_contradictions:
-            entry["failure"] = "explicit_candidate_scope_contradiction"
-            last_failure, last_detail = (
-                "rejected_semantic", ";".join(scope_contradictions)
-            )
-            feedback = {
-                "verdict": "revise",
-                "issues": [{
-                    "kind": "scope", "severity": "major",
-                    "explanation": reason,
-                    "suggestion": (
-                        "Restore the reference's set operation and the exact "
-                        "owner of every membership constraint; do not merge "
-                        "separate OR branches or move group membership inside "
-                        "a member-exists relation."
-                    ),
-                } for reason in scope_contradictions],
-                "summary": "A public set/quantifier scope was explicitly changed.",
-            }
+            last_reason, last_detail = "rejected_quality", "unchanged_question"
             continue
 
-        contradictions = explicit_join_contradictions(scoped, candidate)
-        entry["explicit_join_contradictions"] = contradictions
-        if contradictions:
-            entry["failure"] = "explicit_set_logic_contradiction"
-            last_failure, last_detail = "rejected_semantic", ";".join(contradictions)
-            feedback = {
-                "verdict": "revise",
-                "issues": [{
-                    "kind": "set_logic", "severity": "major",
-                    "explanation": reason,
-                    "suggestion": "Restore the original intersection (ALL) versus union (ANY) meaning for this exact group.",
-                } for reason in contradictions],
-                "summary": "Do not reverse set operations while rephrasing.",
-            }
+        # These guards are intentionally few and *high precision*. They
+        # catch concrete omissions/explicit substitutions, not arbitrary
+        # paraphrase syntax. Run before Critic to save model calls.
+        missing = missing_typed_literals(plan, candidate)
+        joins = explicit_join_contradictions(scoped, candidate)
+        relations = relation_semantic_contradictions(scoped, candidate)
+        entry["deterministic_guards"] = {
+            "missing_typed_literals": missing,
+            "explicit_join_contradictions": joins,
+            "relation_semantic_contradictions": relations,
+        }
+        if missing or joins or relations:
+            issue = (
+                f"Missing required public value(s): {', '.join(missing[:5])}"
+                if missing else
+                f"Explicit group operation changed: {', '.join(joins[:3])}"
+                if joins else
+                f"Explicit relation meaning changed: {', '.join(relations[:3])}"
+            )
+            fix = (
+                "Restore the listed exact values in their original entity "
+                "scope; do not change any other clause."
+                if missing else
+                "Correct only the changed AND/OR or relation wording so the "
+                "same entities qualify."
+            )
+            entry["failure"] = "deterministic_semantic_guard"
+            feedback = _feedback(issue, fix)
+            last_reason, last_detail = "rejected_semantic", issue
             continue
-        relation_changes = relation_semantic_contradictions(scoped, candidate)
-        entry["relation_semantic_contradictions"] = relation_changes
-        if relation_changes:
-            entry["failure"] = "relation_semantic_substitution"
-            last_failure, last_detail = "rejected_semantic", ";".join(relation_changes)
-            feedback = {
-                "verdict": "revise",
-                "issues": [{
-                    "kind": "relation_meaning", "severity": "major",
-                    "explanation": (
-                        "The draft replaces a naming relationship with name "
-                        "equality, which does not preserve the original relation."
-                    ),
-                    "suggestion": (
-                        "Restore the original 'named after' relationship, "
-                        "including its endpoints and direction; do not replace "
-                        "it with a claim that entity names match."
-                    ),
-                }],
-                "summary": "Preserve the actual directed relation, not a name comparison.",
-            }
-            continue
-        missing_literals = missing_typed_literals(plan, candidate)
-        entry["missing_public_typed_literals"] = missing_literals
-        if missing_literals:
-            entry["failure"] = "missing_public_typed_literal"
-            last_failure = "rejected_semantic"
-            last_detail = ", ".join(missing_literals)
-            feedback = {
-                "verdict": "revise",
-                "issues": [{
-                    "kind": "missing_public_value", "severity": "major",
-                    "explanation": "The draft omitted a public answer-defining value: " + token,
-                    "suggestion": "Restore the value in its original entity/relationship scope, not merely anywhere in the question.",
-                } for token in missing_literals[:8]],
-                "summary": "Restore the missing reference values with their original owners.",
-            }
-            continue
+
         boundary = postflight(
             payload, candidate, oracle_answer=_oracle(world),
             check_contract=False,
         )
         entry["public_boundary"] = boundary.to_dict()
         if not boundary.accepted:
+            issue = "; ".join(boundary.issues)
             entry["failure"] = "public_boundary"
-            feedback = {
-                "verdict": "revise", "issues": [{
-                    "kind": "public_boundary", "severity": "major",
-                    "explanation": "The draft violates a public question rule: " +
-                                   "; ".join(boundary.issues),
-                    "suggestion": "Restore public wording and remove any leaked answer or internal identifier.",
-                }],
-                "summary": "Repair the listed public-boundary problem without changing the reference meaning.",
-            }
-            last_failure = "rejected_validation_error"
-            last_detail = ";".join(boundary.issues)
+            feedback = _feedback(
+                "Public question boundary failure: " + issue,
+                "Fix only the reported public-boundary issue; preserve meaning.",
+            )
+            last_reason, last_detail = "rejected_validation_error", issue
             continue
 
-        critique = _review_attempt(
-            critique_question, critic_backend, scoped, candidate, checkpoints,
-            entry, "critic",
-        )
+        critique = _review_attempt(critic_backend, scoped, candidate, entry)
         if critique is None:
             entry["failure"] = "critic_protocol_error"
-            return _reject(payload, "rejected_validation_error", audit,
-                           detail="critic_exhausted_same_candidate_protocol_retries")
+            return _reject(
+                payload, "rejected_validation_error", audit,
+                detail="critic_exhausted_same_draft_format_retry",
+            )
 
         entry["critic_feedback"] = critique
-        if (critique["verdict"] != "pass"
-                or any(item["severity"] == "major" for item in critique["issues"])):
+        if critique["verdict"] == "uncertain":
+            entry["failure"] = "critic_uncertain"
+            return _reject(
+                payload, "rejected_uncertain", audit,
+                detail=critique["summary"],
+            )
+        if not passing_judgment(critique):
             entry["failure"] = "critic_requests_revision"
             feedback = critique
-            last_failure = (
-                "rejected_uncertain" if critique["verdict"] == "uncertain"
-                else "rejected_semantic"
-                if any(item["severity"] == "major" for item in critique["issues"])
-                else "rejected_quality"
+            last_reason = (
+                "rejected_quality" if critique["naturalness"] == "needs_polish"
+                and not critique["differences"] else "rejected_semantic"
             )
             last_detail = critique["summary"]
             continue
 
-        # Candidate-only probes cover the public semantic obligations,
-        # regardless of whether Author retained artificial group labels.
-        # The expected answer labels never enter the model request.
-        # A long question is checked in bounded chunks: no probe may be
-        # silently dropped merely because its semantic tree is deep.
-        probe_records = []
-        probe_protocol_error = False
-        for begin in range(0, len(probes), PROBE_BATCH_SIZE):
-            chunk = probes[begin:begin + PROBE_BATCH_SIZE]
-            observed = _review_attempt(
-                probe_candidate_semantics, critic_backend, scoped, candidate,
-                chunk, entry, "candidate_probe",
-            )
-            if observed is None:
-                probe_protocol_error = True
-                break
-            probe_records.extend(observed)
-        entry["candidate_probe_initial_answers"] = list(probe_records)
-        # Distinguish what the model actually SAID from whether its quoted
-        # evidence was valid. Do not feed a quote-formatting failure to Author
-        # as if the natural question had a semantic error.
-        entry["candidate_probe_initial_statuses"] = {
-            row["id"]: {
-                "raw_answer": row.get("raw_answer", row["answer"]),
-                "evidence_status": row.get("evidence_status", "legacy"),
-                "evidence_reason": row.get("evidence_reason", ""),
-            } for row in probe_records
-        }
-        replacements = {}
-        if not probe_protocol_error:
-            evidence_only = {
-                r["id"]: r["raw_answer"]
-                for r in probe_records
-                if (r.get("evidence_status") == "evidence_invalid"
-                    and r.get("raw_answer") == r["expected"])
-            }
-            evidence_probes = [p for p in probes if p["id"] in evidence_only]
-            for begin in range(0, len(evidence_probes), PROBE_BATCH_SIZE):
-                batch = evidence_probes[begin:begin + PROBE_BATCH_SIZE]
-                own_answers = {p["id"]: evidence_only[p["id"]] for p in batch}
-                observed = _review_attempt(
-                    partial(probe_candidate_semantics, focused=True,
-                            claimed_answers=own_answers),
-                    critic_backend, scoped, candidate, batch, entry,
-                    "candidate_probe_evidence_repair",
-                )
-                if observed is None:
-                    probe_protocol_error = True
-                    break
-                replacements.update((r["id"], r) for r in observed)
-        if not probe_protocol_error:
-            # Remaining disputes require a SEMANTIC rereading, not repair of
-            # an already correct label's invalid evidence.
-            semantic_ids = {
-                r["id"] for r in probe_records
-                if r["answer"] != r["expected"] and r["id"] not in replacements
-                and r["id"] not in evidence_only
-            }
-            focused_probes = [p for p in probes if p["id"] in semantic_ids]
-            for begin in range(0, len(focused_probes), PROBE_BATCH_SIZE):
-                observed = _review_attempt(
-                    partial(probe_candidate_semantics, focused=True),
-                    critic_backend, scoped, candidate,
-                    focused_probes[begin:begin + PROBE_BATCH_SIZE],
-                    entry, "candidate_probe_recheck",
-                )
-                if observed is None:
-                    probe_protocol_error = True
-                    break
-                replacements.update((r["id"], r) for r in observed)
-        entry["candidate_probe_recheck_answers"] = list(replacements.values())
-        probe_records = [replacements.get(r["id"], r) for r in probe_records]
-        entry["candidate_probe_answers"] = probe_records
-        entry["candidate_probe_final_statuses"] = {
-            row["id"]: {
-                "raw_answer": row.get("raw_answer", row["answer"]),
-                "evidence_status": row.get("evidence_status", "legacy"),
-                "evidence_reason": row.get("evidence_reason", ""),
-            } for row in probe_records
-        }
-        entry["semantic_coverage"] = coverage_manifest(probes, probe_records)
-        conflicts = conflicting_endpoint_evidence(probes, probe_records)
-        entry["candidate_evidence_role_conflicts"] = conflicts
-        if probe_protocol_error:
-            entry["failure"] = "candidate_probe_protocol_error"
-            return _reject(
-                payload, "rejected_validation_error", audit,
-                detail="coverage_probe_exhausted_same_candidate_retries",
-            )
-        if conflicts:
-            entry["failure"] = "candidate_evidence_role_conflict"
-            return _reject(
-                payload, "rejected_evidence_conflict", audit,
-                detail=";".join(
-                    f"{key}:{value}" for key, value in conflicts.items()
-                ),
-            )
-        if entry["semantic_coverage"]["status"] != "complete":
-            mismatches = [
-                row for row in probe_records
-                if row["answer"] != row["expected"]
-            ]
-            evidence_invalid = [
-                row for row in mismatches
-                if row.get("evidence_status") == "evidence_invalid"
-            ]
-            if evidence_invalid:
-                entry["failure"] = "candidate_evidence_unverified"
-                return _reject(
-                    payload, "rejected_evidence_unverified", audit,
-                    detail=";".join(
-                        f"{row['id']}:{row.get('evidence_reason', 'evidence_invalid')}"
-                        for row in evidence_invalid
-                    ),
-                )
-            if any(row.get("evidence_status") == "model_uncertain"
-                   for row in mismatches):
-                entry["failure"] = "candidate_semantics_uncertain"
-                return _reject(
-                    payload, "rejected_uncertain", audit,
-                    detail="candidate_reader_unresolved_semantics",
-                )
-            entry["failure"] = "candidate_probe_mismatch"
-            is_uncertain = any(row["answer"] == "UNCLEAR" for row in mismatches)
-            last_failure = (
-                "rejected_uncertain" if is_uncertain else "rejected_semantic"
-            )
-            last_detail = ";".join(
-                f"{row['id']}:{row['kind']}:{row['answer']}!=expected_"
-                f"{row['expected']}" for row in mismatches
-            )[:240]
-            feedback = {
-                "verdict": "revise",
-                "issues": [{
-                    "kind": row["kind"], "severity": "major",
-                    "explanation": (
-                        f"Candidate-only semantic reading for {row['id']} "
-                        f"returned {row['answer']}, but public reference "
-                        f"requires {row['expected']}."
-                    ),
-                    "suggestion": (
-                        "Restore this exact reference relation direction, "
-                        "set scope or requested answer kind; keep correct "
-                        "clauses unchanged."
-                    ),
-                } for row in mismatches[:6]],
-                "summary": "A required public semantic obligation was not verified.",
-            }
-            continue
-
-        # The final judge sees the reference, final text and *no previous*
-        # review history or previous answers. It is a different prompt/role,
-        # not necessarily a different checkpoint.
-        final = _review_attempt(
-            judge_question, critic_backend, scoped, candidate, checkpoints,
-            entry, "final_judge",
-        )
-        if final is None:
-            entry["failure"] = "final_judge_protocol_error"
-            return _reject(payload, "rejected_validation_error", audit,
-                           detail="final_judge_exhausted_same_candidate_protocol_retries")
-
-        entry["final_judgment"] = final
-        if not passing_judgment(final):
-            entry["failure"] = "final_judge_rejected"
-            last_failure = rejection_reason(final)
-            last_detail = final["explanation"]
-            feedback = {
-                "verdict": "revise",
-                "issues": [{
-                    "kind": "final_judge", "severity": "major",
-                    "explanation": issue,
-                    "suggestion": "Repair this specific issue while retaining correct phrasing.",
-                } for issue in final["issues"][:5]],
-                "summary": final["explanation"],
-            }
-            continue
-
         try:
             certificate, review = certify_approved_question(
-                payload["task_id"], world, canonical, candidate, scoped, final,
-                critic_verdict="pass", revision_rounds=attempt,
-                semantic_checklist=checkpoints,
-                candidate_probes=probe_records,
-                candidate_probe_specs=probes,
-                semantic_coverage=entry["semantic_coverage"],
+                payload["task_id"], world, canonical, candidate, scoped,
+                critique, revision_rounds=attempt, plan=plan,
             )
         except (ValueError, TypeError, KeyError) as exc:
             entry["failure"] = "certificate_error"
-            last_failure, last_detail = "rejected_validation_error", str(exc)
+            last_reason, last_detail = "rejected_validation_error", str(exc)
             continue
 
         row = {
@@ -548,7 +264,7 @@ def _realize_one(payload, world, capability, author, critic, *,
             "surface_certificate": certificate,
             "publication_status": "naturalized_certified",
             "authoring": {
-                "strategy": "iterative_author_critic_final_judge",
+                "strategy": "simple_author_critic_local_repair",
                 "revision_rounds": attempt,
                 "surface_review": review,
             },
@@ -556,7 +272,7 @@ def _realize_one(payload, world, capability, author, critic, *,
         entry["accepted"] = True
         return True, row, audit
 
-    return _reject(payload, last_failure, audit, detail=last_detail)
+    return _reject(payload, last_reason, audit, detail=last_detail)
 
 
-__all__ = ["_realize_one"]
+__all__ = ["_realize_one", "_meaningful_edit"]

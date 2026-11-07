@@ -1,14 +1,12 @@
-"""Publish only fully reviewed natural questions.
+"""Lightweight Stage-2 editorial certificate and Stage-3 deterministic replay.
 
-A certificate binds the actual Surface text, frozen ProgramIR and a
-separately reconstructed public Scoped reference to an independent final
-editorial judgment. The decision is an auditable LLM assessment, *not* a
-formal proof of semantic equivalence. Stage 3 verifies the exact record
-without another model call; it still performs its own public-executability
-and evidence checks.
+A checked reference and bounded public guards are independently rebuilt.
+The Critic's PASS is an auditable model assessment, NOT a formal proof.
+No final judge, evidence tree, or probe coverage is required.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from environment.trajectory_simulation.eligibility import (
@@ -17,19 +15,14 @@ from environment.trajectory_simulation.eligibility import (
 from environment.trajectory_simulation.compiler import compile_gold_solution
 
 from .question_review import passing_judgment
-from .semantic_probes import explicit_probe_contradictions
-from .coverage_review import (
-    compile_coverage_probes, validate_coverage_manifest,
-)
 from .semantic_checks import (
-    validate_group_decisions, explicit_join_contradictions, naturalness_gate,
-    grouped_semantic_checks, missing_typed_literals,
-    relation_semantic_contradictions, CheckFormatError,
+    explicit_join_contradictions, missing_typed_literals,
+    relation_semantic_contradictions,
 )
 
-SCHEMA = "maestro.stage2_surface_cert.v11"
-REVIEW_CONTRACT = 28
-METHOD = "grounded_endpoint_semantic_review_v21"
+SCHEMA = "maestro.stage2_surface_cert.simple.v1"
+REVIEW_CONTRACT = 29
+METHOD = "simple_author_critic_local_repair_v1"
 
 
 def _certificate(task_id, program, canonical, question, review):
@@ -45,75 +38,86 @@ def _certificate(task_id, program, canonical, question, review):
     }
 
 
+def _meaningful_edit(reference, candidate):
+    normalize = lambda s: re.sub(r"[^a-z0-9]+", "", s.casefold())
+    return (bool(candidate.strip())
+            and normalize(reference) != normalize(candidate))
+
+
+def _simple_guards(plan, scoped, candidate):
+    return {
+        "missing_typed_literals": missing_typed_literals(plan, candidate),
+        "explicit_join_contradictions": explicit_join_contradictions(
+            scoped, candidate,
+        ),
+        "relation_semantic_contradictions": relation_semantic_contradictions(
+            scoped, candidate,
+        ),
+    }
+
+
+def _check_public_candidate(plan, canonical, scoped, candidate):
+    if (not isinstance(candidate, str) or not _meaningful_edit(scoped, candidate)
+            or not _meaningful_edit(canonical, candidate)):
+        raise ValueError("natural_question_not_rewritten")
+    guards = _simple_guards(plan, scoped, candidate)
+    if any(guards.values()):
+        raise ValueError("natural_question_failed_public_guards")
+    return guards
+
+
 def certify_approved_question(
     task_id: str, world: Mapping, canonical: str, question: str,
-    scoped_reference: str, final_judgment: Mapping, *,
-    critic_verdict: str, revision_rounds: int,
-    semantic_checklist: list[dict],
-    candidate_probes: list[dict] | None = None,
-    candidate_probe_specs: list[dict] | None = None,
-    semantic_coverage: dict | None = None,
+    scoped_reference: str, critic_review: Mapping, *,
+    revision_rounds: int, plan,
 ):
-    """Mint a certificate only after the Critic and independent judge pass."""
-    if (not question or question == canonical or question == scoped_reference
-            or critic_verdict != "pass"
-            or not passing_judgment(final_judgment)
-            or revision_rounds < 0):
+    """Issue a small certificate, only after Critic PASS and public checks."""
+    if (not isinstance(critic_review, Mapping)
+            or not passing_judgment(critic_review)
+            or type(revision_rounds) is not int or revision_rounds < 0):
         raise ValueError("natural_question_not_approved")
-    if (not naturalness_gate(scoped_reference, question)["improved_enough_to_review"]
-            or explicit_join_contradictions(scoped_reference, question)
-            or relation_semantic_contradictions(scoped_reference, question)):
-        raise ValueError("natural_question_failed_deterministic_risk_guards")
-    validate_group_decisions(semantic_checklist, final_judgment.get("checks"))
-    if (candidate_probes is None or candidate_probe_specs is None
-            or semantic_coverage is None):
-        raise ValueError("semantic_coverage_records_required")
-    if explicit_probe_contradictions(candidate_probe_specs, question):
-        raise ValueError("explicit_candidate_scope_contradiction")
-    validate_coverage_manifest(
-        candidate_probe_specs, candidate_probes, semantic_coverage, candidate=question,
-        require_evidence_diagnostics=True,
+    guards = _check_public_candidate(
+        plan, canonical, scoped_reference, question,
     )
-    # Stage 3 independently reconstructs public ScopedPlan and probe set.
     review = {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": METHOD, "issues": [],
         "question_sha256": digest(question),
         "program_sha256": digest(world["program"]),
         "scoped_reference_sha256": digest(scoped_reference),
-        "critic_verdict": critic_verdict,
+        "critic_review": dict(critic_review),
         "revision_rounds": revision_rounds,
-        "final_judgment": dict(final_judgment),
-        "semantic_checklist_sha256": digest(semantic_checklist),
-        "candidate_probes": list(candidate_probes),
-        "coverage_obligation_sha256": digest(candidate_probe_specs),
-        "semantic_coverage": dict(semantic_coverage),
+        "public_guards_sha256": digest(guards),
     }
-    return _certificate(task_id, world["program"], canonical, question, review), review
+    return _certificate(
+        task_id, world["program"], canonical, question, review,
+    ), review
 
 
 def _rebuild_scoped_reference(realized, world, canonical, gold, rendered):
-    """Reconstruct the reference independently of Stage-2 saved prose."""
+    """Never trust the reference text stored by Stage 2."""
     from .scoped_surface import build_scoped_plan, render_scoped
     if rendered is None or rendered.question != canonical:
         raise ValueError("missing_matching_stage1_renderer")
     if gold is None:
         gold = compile_gold_solution(
-            {**realized, "question": canonical}, world, rendered,
-            schedule="compact",
+            {**realized, "question": canonical},
+            world, rendered, schedule="compact",
         )
-    verified = controlled_question_reference(gold, world, rendered)
-    if verified is None or verified.get("question") != canonical:
+    controlled = controlled_question_reference(gold, world, rendered)
+    if controlled is None or controlled.get("question") != canonical:
         raise ValueError("unverified_stage1_reference")
-    plan = build_scoped_plan(world, canonical, gold, verified)
+    plan = build_scoped_plan(world, canonical, gold, controlled)
     return render_scoped(plan, [0] * len(plan)), plan
 
 
-def validate_surface_certificate(realized, world, canonical, *, gold=None, rendered=None):
-    """Verify editorial certificate, bindings and reference; fail closed.
+def validate_surface_certificate(
+    realized, world, canonical, *, gold=None, rendered=None,
+):
+    """Replay the exact Stage-2 approval record without another model call.
 
-    No automatic acceptance of Canonical or Scoped fallback is supported.
-    An LLM's semantic judgment is not mechanically provable by this check.
+    This does not recheck an LLM's semantic correctness. Other Stage-3
+    public-evidence checks run independently as before.
     """
     certificate = realized.get("surface_certificate")
     authoring = realized.get("authoring") or {}
@@ -143,44 +147,27 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
             or review.get("reviewed") is not True
             or review.get("decision") != "eligible"
             or review.get("issues") != []
-            or review.get("critic_verdict") != "pass"
             or review.get("question_sha256") != digest(question)
             or review.get("program_sha256") != digest(world["program"])
             or type(review.get("revision_rounds")) is not int
             or review["revision_rounds"] < 0
-            or not isinstance(review.get("final_judgment"), dict)
-            or not passing_judgment(review["final_judgment"])):
+            or not isinstance(review.get("critic_review"), dict)
+            or not passing_judgment(review["critic_review"])):
         raise ValueError("stage2_review_not_approved")
     if realized.get("publication_status") != "naturalized_certified":
         raise ValueError("stage2_publication_status_mismatch")
+
     rendered = rendered or world.get("_rendered")
     scoped, plan = _rebuild_scoped_reference(
         realized, world, canonical, gold, rendered,
     )
-    if (question in (canonical, scoped)
-            or review.get("scoped_reference_sha256") != digest(scoped)):
-        raise ValueError("stage2_reference_or_naturalization_mismatch")
-    checks = grouped_semantic_checks(plan)
-    if (review.get("semantic_checklist_sha256") != digest(checks)
-            or not naturalness_gate(scoped, question)["improved_enough_to_review"]
-            or explicit_join_contradictions(scoped, question)
-            or relation_semantic_contradictions(scoped, question)
-            or missing_typed_literals(plan, question)):
-
-        raise ValueError("stage2_semantic_checklist_or_style_mismatch")
-    try:
-        validate_group_decisions(checks, review["final_judgment"].get("checks"))
-    except CheckFormatError as exc:
-        raise ValueError("stage2_final_judge_risk_decision_invalid") from exc
-    expected_probes = compile_coverage_probes(plan, scoped, question)
-    if (review.get("coverage_obligation_sha256") != digest(expected_probes)
-            or explicit_probe_contradictions(expected_probes, question)):
-        raise ValueError("stage2_semantic_coverage_obligations_changed")
-    validate_coverage_manifest(
-        expected_probes, review.get("candidate_probes"),
-        review.get("semantic_coverage"), candidate=question,
-        require_evidence_diagnostics=True,
+    if review.get("scoped_reference_sha256") != digest(scoped):
+        raise ValueError("stage2_scoped_reference_changed")
+    guards = _check_public_candidate(
+        plan, canonical, scoped, question,
     )
+    if review.get("public_guards_sha256") != digest(guards):
+        raise ValueError("stage2_public_guard_record_changed")
     return {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": "stage2_verified_editorial_certificate",
