@@ -27,17 +27,24 @@ KQA-Pro + YAGO + MultiModalQA priors
         -> frozen P1 manifest
 ```
 
-Question generation remains a wording-only operation over the frozen P1 contract:
+Question generation now shares an answer-free **Delegation Blueprint** with Stage 3,
+without changing the frozen P1 contract or the Gold fragment DAG:
 
 ```text
-frozen public projection
-        -> boundary validation
-        -> LLM author
-        -> deterministic preflight
-        -> semantic critic / repair
-        -> deterministic postflight
-        -> validated natural-language question
+frozen public projection + compact Gold DAG
+        -> public delegation outline (fixed IDs, waves, dependencies)
+        -> LLM natural goals per fragment (one request)
+        -> goal-first natural benchmark Question
+        -> semantic Critic / local repair + deterministic public guards
+        -> Stage-2 certificate binding Question + Blueprint + ProgramIR
+        -> Stage-3 Subtask Bank (replayed answers, grounded reports)
+        -> Stage-3 Main scheduling (only READY goals + visible prior results)
 ```
+
+Only the task-goal **language** is authored early. Source facts, Gold answers,
+actual `delegate_task` actions, previous-result context and training examples
+are generated or validated at their original execution phase. The entire
+blueprint remains offline teacher data, not public Main state.
 
 Trajectory simulation is separate from question generation. The **frozen ProgramIR,
 symbolic trace, minimal evidence proof and capability discovery dependencies**
