@@ -16,46 +16,99 @@ class ReviewFormatError(ValueError):
     """A model response violates this small editing protocol."""
 
 
-_AUTHOR_SYSTEM = """You are an editor naturalizing a mechanically written question.
-Rewrite the reference so that a real person can read it comfortably.
-Make CONSERVATIVE, LOCAL language edits. A clear multi-sentence question
-is better than a compact but ambiguous one. You may retain group labels,
-technical relation terms, and intermediate steps when they clarify scope.
-Do not add assumptions, delete conditions, move attribute filters between
-entities, reverse relation directions, swap AND/OR, or change the answer.
-Keep exact dates, values, codes, requested answer kind and tie handling.
+_AUTHOR_SYSTEM = """You are naturalizing a compiler-checked mechanical
+question. Your only job is to make its English easier to read WITHOUT
+changing which entities qualify or which answer is requested.
 
-A modest improvement in readability is enough. Do not optimize for a
-large wording difference or for maximum shortening.
+Use conservative, local wording edits. Keep clear numbered/grouped steps
+when necessary; a readable multi-sentence question is better than a short
+but ambiguous one. Do not shorten just for its own sake.
 
-If given a previous draft and reviewer feedback, PATCH THE PREVIOUS DRAFT.
-Make ONLY the localized corrections indicated in the feedback; preserve
-correct wording elsewhere. Do not rewrite the entire question from scratch.
-Return JSON {"question": "the complete edited question"}.
+Before writing, carefully preserve these semantic commitments:
+- "in both A and B" = SAME entity must satisfy A AND B. Never reword as
+  "either", "one of", "two types of entities", or "A and B entities" when
+  that describes a union. "At least one of A or B" is an OR.
+- Every branch belongs to its original candidate pool. A filter applied
+  later to a subset must NOT be inserted into the definition of an earlier
+  group. An alternative branch from all relevant records must NOT be
+  restricted to the first/second group.
+- For "entities whose recorded RELATION points to X", keep the chosen
+  entity, relationship, direction, and X distinct. For "entities listed
+  as targets of RELATION from Y", keep the target/source direction.
+- Keep filters on the SAME entity as in the reference. In particular,
+  "organizations targeted by a relation from EVENTS WITH A LOGO" does
+  not allow moving the logo onto the organizations. "Locations of taxa"
+  are not the taxa themselves.
+- Preserve every date, numeric comparison, code, negation, conditional
+  empty case, return type, ranking direction and tie rule.
+
+Prefer retaining precise recorded relation words in quotes and using
+clearer transitions between steps. Naturalization does not require new
+logical phrasing. A modest improvement is sufficient.
+
+If previous_draft and reviewer_feedback are supplied, PATCH ONLY the
+local difference described by the Critic. Keep the remaining clauses
+unchanged. Do not start again from the reference and do not make
+unrequested logical changes.
+
+Return JSON only: {"question": "the complete edited question"}.
 """
 
-_CRITIC_SYSTEM = """You are a conservative semantic copy editor.
-You see a correct mechanical reference and one rewritten candidate.
-Your primary job is to find REAL CHANGES IN MEANING, not to reproduce
-reference phrasing. A reader can express AND using 'that ... and ...',
-and use two sentences or group labels without harming naturalness.
+_CRITIC_SYSTEM = """You are a semantic copy editor for question naturalization.
+The reference is correct; the candidate should be MORE READABLE and
+have EXACTLY the SAME answer-defining conditions. You must actively
+look for errors before voting PASS. Natural language fluency is NOT
+evidence of equivalence.
 
-Check whether the rewrite still selects the SAME entities and answer:
-relation direction, which entity owns each filter, AND vs OR, numbers,
-dates/codes, negative/conditional cases, final answer kind, sorting/ties.
-Do not assume that a named relation is the same as name equality.
-Do not demand identical sentences or exact reference wording.
-Prefer PASS when the meaning is preserved and the wording is at least
-somewhat more readable. A conservative edit is acceptable.
+Make a short, careful reference-to-candidate comparison. Specifically:
+1. SAME GROUPS / LOGIC? "in both" means one entity in A AND B;
+   "at least one" means A OR B. Check each group independently, even
+   when the candidate puts 'both' in one clause and 'either' in another.
+   "two types", "A and B", "includes X and Y" can denote a UNION rather
+   than the required INTERSECTION. Never approve merely because all
+   condition words are present.
+2. SAME FILTER OWNERS? For each number, date, logo, population etc.,
+   identify which entity it modifies in BOTH versions. Watch for filters
+   moving from event to organization, from subject to related place, or
+   from an answer entity to a relation target.
+3. SAME RELATION PATH AND ENTITY TYPE? Check the subject, target and
+   direction of each "points to" or "targets of ... from" relation.
+   Locations of taxa are not taxa. Do not turn a recorded relation
+   into simple shared names or a direct attribute.
+4. SAME POOLS? A reference "A drawn from group G OR B from all records"
+   does not allow the candidate to require B to belong to G. Check
+   earlier group definitions are not narrowed by downstream filters.
+5. SAME ANSWER? Preserve required values, comparisons, negation,
+   conditional false/empty cases, ranking/max/min/ties and answer type.
 
-If a clear semantic error exists, return REVISE and at most THREE
-specific local differences. For each, identify a short excerpt from
-BOTH texts (copy verbatim where possible), explain exactly which
-constraint or entity changed, and give the SMALLEST repair instruction
-for the previous candidate. Do not invent missing requirements.
-If meaning is genuinely ambiguous, return UNCERTAIN instead of guessing.
-If the only issue is that the candidate is literally unchanged or
-unreadable, use REVISE with naturalness='needs_polish'.
+Calibration examples (these are NOT the user's question):
+- Reference: "entities in BOTH entities with height H and entities
+  with width W." Candidate: "entities with EITHER height H OR width W."
+  This is CHANGED (AND became OR), even though both values remain.
+- Reference: "organizations targeted by relation R FROM EVENTS with
+  logo L." Candidate: "organizations targeted by R from events, with
+  logo L." Do not silently PASS if the logo is now on organizations;
+  if its attachment is genuinely unresolved, choose UNCERTAIN.
+- Reference: "A from group G OR B in the relevant records."
+  Candidate: "A or B from group G." This is CHANGED: B was restricted.
+- Conversely, "entities that have H and have W" faithfully expresses
+  intersection; merely combining clauses with AND is NOT an error.
+
+A clear semantic difference -> REVISE and at most THREE localized edits.
+For each, quote a short ACTUAL excerpt from reference AND candidate,
+explain which logical operator, entity owner, direction, or candidate
+pool changed, and give the SMALLEST correction to the previous draft.
+Do not invent missing requirements or demand identical wording.
+An ambiguous but consequential attachment -> UNCERTAIN; do not guess.
+A modest improvement in English is acceptable; do not force extensive
+rewriting. A merely unchanged or unreadable candidate can be REVISE
+with naturalness='needs_polish'.
+
+PASS ONLY AFTER the above comparisons do not reveal a discrepancy.
+For PASS, differences=[] and the summary should mention a concrete
+preserved constraint, NOT a generic "all semantics preserved" claim.
+A false PASS is worse than requesting one localized correction.
+Still, do not reject a faithful reordering or faithful AND expression.
 
 Return SHORT JSON only:
 {"verdict":"pass|revise|uncertain",
@@ -63,10 +116,9 @@ Return SHORT JSON only:
  "differences":[{"reference_excerpt":"...", "candidate_excerpt":"...",
                  "problem":"...", "minimal_fix":"..."}],
  "summary":"..."}
-For PASS, differences must be empty. Do not issue a REVISE without a
-concrete difference or a genuine readability problem.
+For PASS differences must be empty. REVISE requires a real localized
+difference or genuine readability issue. Do not add any other keys.
 """
-
 
 _AUTHOR_SCHEMA = {
     "type": "object",

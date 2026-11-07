@@ -221,7 +221,7 @@ def run(args):
                 ) > 1:
                     accepted_after_revision += 1
         summary = {
-            "pipeline": "scoped_reference_iterative_author_critic_final_judge",
+            "pipeline": "scoped_reference_author_critic_local_repair",
             "frozen_batch_validation": frozen,
             "model_roles": args._resolved_models,
             "requested": len(authoring),
