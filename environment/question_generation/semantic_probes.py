@@ -376,9 +376,32 @@ def explicit_probe_contradictions(
                 rf"(?P<body>[^.;!?]{{0,260}})",
                 candidate, flags=re.I,
             )
-            if (matched and re.search(
+            misplaced_labelled = bool(
+                matched and re.search(
                     r"\bentities\s+located\s+in\s+both\b",
-                    matched.group("body"), re.I)):
+                    matched.group("body"), re.I,
+                )
+            )
+            # v18 real task 3: "Second, define a set of entities that
+            # exist in administrative areas meeting both ... population
+            # < 1,765." No artificial 'second group' label survives.
+            # Read the nearby numeric constraint as an additional anchor
+            # so an unrelated 'in both' clause cannot trip this guard.
+            value = str(probe.get("value", ""))
+            numeric = re.escape(value)
+            label_free = re.search(
+                r"\b(?:entities\s+that\s+)?(?:exist|are\s+located)\s+in\s+"
+                r"(?:administrative\s+)?areas\s+(?:meeting|satisfying)\s+both\b"
+                r"(?P<body>[^.!?]{0,300})",
+                candidate, re.I,
+            )
+            misplaced_unlabelled = bool(
+                label_free and numeric and re.search(
+                    rf"\b{numeric}\b", label_free.group("body"),
+                    re.I,
+                )
+            )
+            if misplaced_labelled or misplaced_unlabelled:
                 issues.append(
                     f"{probe['id']}:selected_filter_moved_to_related_location"
                 )
