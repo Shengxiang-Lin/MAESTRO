@@ -33,6 +33,7 @@ from .semantic_probes import (
 from .coverage_review import (
     PROBE_BATCH_SIZE, UnverifiableCoverage,
     compile_coverage_probes, coverage_manifest,
+    conflicting_endpoint_evidence,
 )
 from .validators import postflight
 from .verification import certify_approved_question
@@ -170,6 +171,7 @@ def _realize_one(payload, world, capability, author, critic, *,
             "author_calls": 0, "critic_calls": 0,
             "candidate_probe_calls": 0, "final_judge_calls": 0,
             "candidate_probe_recheck_calls": 0,
+            "candidate_probe_evidence_repair_calls": 0,
         }
         audit.append(entry)
         try:
@@ -361,12 +363,47 @@ def _realize_one(payload, world, capability, author, critic, *,
                 break
             probe_records.extend(observed)
         entry["candidate_probe_initial_answers"] = list(probe_records)
-        # One bounded focused rereading per disputed obligation, with no
-        # expected labels or reference text transmitted to the reader.
+        # Distinguish what the model actually SAID from whether its quoted
+        # evidence was valid. Do not feed a quote-formatting failure to Author
+        # as if the natural question had a semantic error.
+        entry["candidate_probe_initial_statuses"] = {
+            row["id"]: {
+                "raw_answer": row.get("raw_answer", row["answer"]),
+                "evidence_status": row.get("evidence_status", "legacy"),
+                "evidence_reason": row.get("evidence_reason", ""),
+            } for row in probe_records
+        }
+        replacements = {}
         if not probe_protocol_error:
-            disputed = {r["id"] for r in probe_records if r["answer"] != r["expected"]}
-            focused_probes = [p for p in probes if p["id"] in disputed]
-            replacements = {}
+            evidence_only = {
+                r["id"]: r["raw_answer"]
+                for r in probe_records
+                if (r.get("evidence_status") == "evidence_invalid"
+                    and r.get("raw_answer") == r["expected"])
+            }
+            evidence_probes = [p for p in probes if p["id"] in evidence_only]
+            for begin in range(0, len(evidence_probes), PROBE_BATCH_SIZE):
+                batch = evidence_probes[begin:begin + PROBE_BATCH_SIZE]
+                own_answers = {p["id"]: evidence_only[p["id"]] for p in batch}
+                observed = _review_attempt(
+                    partial(probe_candidate_semantics, focused=True,
+                            claimed_answers=own_answers),
+                    critic_backend, scoped, candidate, batch, entry,
+                    "candidate_probe_evidence_repair",
+                )
+                if observed is None:
+                    probe_protocol_error = True
+                    break
+                replacements.update((r["id"], r) for r in observed)
+        if not probe_protocol_error:
+            # Remaining disputes require a SEMANTIC rereading, not repair of
+            # an already correct label's invalid evidence.
+            semantic_ids = {
+                r["id"] for r in probe_records
+                if r["answer"] != r["expected"] and r["id"] not in replacements
+                and r["id"] not in evidence_only
+            }
+            focused_probes = [p for p in probes if p["id"] in semantic_ids]
             for begin in range(0, len(focused_probes), PROBE_BATCH_SIZE):
                 observed = _review_attempt(
                     partial(probe_candidate_semantics, focused=True),
@@ -378,21 +415,58 @@ def _realize_one(payload, world, capability, author, critic, *,
                     probe_protocol_error = True
                     break
                 replacements.update((r["id"], r) for r in observed)
-            entry["candidate_probe_recheck_answers"] = list(replacements.values())
-            probe_records = [replacements.get(r["id"], r) for r in probe_records]
+        entry["candidate_probe_recheck_answers"] = list(replacements.values())
+        probe_records = [replacements.get(r["id"], r) for r in probe_records]
         entry["candidate_probe_answers"] = probe_records
+        entry["candidate_probe_final_statuses"] = {
+            row["id"]: {
+                "raw_answer": row.get("raw_answer", row["answer"]),
+                "evidence_status": row.get("evidence_status", "legacy"),
+                "evidence_reason": row.get("evidence_reason", ""),
+            } for row in probe_records
+        }
         entry["semantic_coverage"] = coverage_manifest(probes, probe_records)
+        conflicts = conflicting_endpoint_evidence(probes, probe_records)
+        entry["candidate_evidence_role_conflicts"] = conflicts
         if probe_protocol_error:
             entry["failure"] = "candidate_probe_protocol_error"
             return _reject(
                 payload, "rejected_validation_error", audit,
                 detail="coverage_probe_exhausted_same_candidate_retries",
             )
+        if conflicts:
+            entry["failure"] = "candidate_evidence_role_conflict"
+            return _reject(
+                payload, "rejected_evidence_conflict", audit,
+                detail=";".join(
+                    f"{key}:{value}" for key, value in conflicts.items()
+                ),
+            )
         if entry["semantic_coverage"]["status"] != "complete":
             mismatches = [
                 row for row in probe_records
                 if row["answer"] != row["expected"]
             ]
+            evidence_invalid = [
+                row for row in mismatches
+                if row.get("evidence_status") == "evidence_invalid"
+            ]
+            if evidence_invalid:
+                entry["failure"] = "candidate_evidence_unverified"
+                return _reject(
+                    payload, "rejected_evidence_unverified", audit,
+                    detail=";".join(
+                        f"{row['id']}:{row.get('evidence_reason', 'evidence_invalid')}"
+                        for row in evidence_invalid
+                    ),
+                )
+            if any(row.get("evidence_status") == "model_uncertain"
+                   for row in mismatches):
+                entry["failure"] = "candidate_semantics_uncertain"
+                return _reject(
+                    payload, "rejected_uncertain", audit,
+                    detail="candidate_reader_unresolved_semantics",
+                )
             entry["failure"] = "candidate_probe_mismatch"
             is_uncertain = any(row["answer"] == "UNCLEAR" for row in mismatches)
             last_failure = (
