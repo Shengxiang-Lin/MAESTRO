@@ -15,7 +15,7 @@ from tqdm.auto import tqdm
 
 from environment.config import EnvironmentConfigError
 from environment.delegation_blueprint import (
-    compile_delegation_outline, naturalize_fragment_goal,
+    VERSION, compile_delegation_outline, naturalize_fragment_goal,
 )
 from environment.trajectory_simulation.compiler import (
     GoldCompilationError, compile_gold_solution,
@@ -150,10 +150,7 @@ def generate_goal_record(payload, world, capability, author, critic, *,
     goals = [triple[0] for triple in results]
     reviews = [triple[1] for triple in results]
     blueprint = {
-        "version": __import__(
-            "environment.delegation_blueprint",
-            fromlist=["VERSION"],
-        ).VERSION,
+        "version": VERSION,
         "outline": outline, "goals": goals,
     }
     try:
