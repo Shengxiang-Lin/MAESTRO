@@ -1,100 +1,141 @@
-# Stage 2 — Shared Delegation Blueprint → Natural Benchmark Question
+# Stage 2 — Certified Subtask Goals → Natural Main Questions
 
-Stage 2 prepares the **same Compact Gold DAG** that Stage 3 will execute,
-projects a public delegation outline, **independently writes one short
-natural-language goal per fragment**, and deterministically binds the goals
-back to the original DAG before authoring the Main Question.
+Stage 2 is now **two independently resumable jobs**. Stage 1 freezes
+ProgramIR, rendered resources, the canonical question and the Gold fragment
+DAG. Neither Stage 2 job edits task semantics or generates Gold answers.
 
-## One common plan, three language surfaces
+## Stage 2A — independently generate and verify Subtask Goals
 
-```text
-Stage 1: frozen ProgramIR, sources, composition_links
-  │
-  ├─ compile_gold_solution(schedule="compact")   [deterministic]
-  │   └─ fixed fragment IDs, dependency edges, ready waves, outputs
-  │
-  ├─ compile_delegation_outline                  [PUBLIC projection]
-  │   └─ no answer, source IDs, operations' raw private inputs or witness facts
-  │
-  ├─ naturalize_fragment_goal                   [one LLM call per Fragment]
-  │   ├─ local semantic steps + explicit direct upstream input contracts
-  │   ├─ bounded per-fragment retry; no sibling-generated Goal text
-  │   └─ independent LLM calls (up to --blueprint-workers concurrently)
-  │
-  ├─ deterministic DAG assembly                 [no LLM]
-  │   └─ bind each Goal to compiler-fixed fragment ID / wave / depends_on
-  │
-  ├─ Question Author                            [one LLM call per draft]
-  │   └─ goal-first, natural benchmark request; mechanical reference is
-  │      literal-spelling backup, not a template
-  │
-  ├─ cheap deterministic guards + one Critic    [one LLM call per draft]
-  │   └─ pass / localized revision / uncertain
-  │
-  └─ certificate v30
-      └─ binds question, original program, public reference and blueprint
-          │
-          ▼
-Stage 3 Phase 1: independently replay certificate and same compact DAG;
-                generate Sub-Agent summary/trace_summary from verified
-                public evidence, assisted by the fragment's BLUEPRINT goal.
-Stage 3 Phase 2: at EACH actual round, use only ready fragment goal(s) and
-                completed, public earlier findings to write Main delegations.
-```
+\`\`\`text
+Frozen ProgramIR + compact Gold DAG
+    └─ compile_delegation_outline (deterministic PUBLIC projection)
+        └─ each fragment concurrently/independently:
+            ├─ Local Goal Author (current public steps + direct dependencies)
+            ├─ deterministic checks (numbers, comparisons, foreign branch literals)
+            ├─ Local Goal Critic (step coverage, relation direction, owners, AND/OR)
+            └─ bounded local repair, max --max-goal-revisions
+        └─ require ALL fragments PASS; otherwise quarantine whole task
+            └─ deterministic DAG assembly + goal_certificate
+\`\`\`
 
-A **blueprint is teacher-private**. Main never receives the full plan, future
-fragment goals or Gold outputs as input. The blueprint's natural task goals
-are writing hints, *never ground-truth facts*. Gold answers, intermediate
-execution values, source/witness IDs, evidence statements and actual parallel
-scheduling all remain controlled by the original compiler and replay.
+The writer and Critic **do not** see the full mechanical reference,
+other siblings' authored Goals, private world facts, Gold answers or
+future observed results. The LLM returns only \`{"goal": "..."}\`;
+fragment IDs, \`depends_on\` and \`waves\` are determined by the compiler.
+The separate reviewer records each substantive step's short verbatim
+supporting quote in the Goal. The server validates every quote; it never
+trusts a bare LLM "pass". Deterministic guards reject obvious missing
+public numeric constraints, incompatible comparison language and
+explicit numeric values taken from unrelated branches.
 
-The blueprint JSON contains `version`, `outline` and `goals`. Immutable
-`outline.tasks` include `fragment_id`, `wave`, `depends_on`,
-`input_slots`, `output_kind`, `public_steps` and `capabilities`. The
-LLM returns only a `{"goal":"..."}` object for the **current** fragment.
-The program—not the model—binds `fragment_id`, preserving sibling
-independence and exact dependency order even when calls finish out of
-order. A malformed or unsafe goal gets up to one *local* retry. The
-Stage-2 certificate (`maestro.stage2_surface_cert.blueprint.v2`,
-review contract 31) binds
-the blueprint digest and the question. Stage 3 recompiles the outline from
-the canonical frozen ProgramIR and refuses mismatches or tampering.
+This is a bounded **automatic fidelity review**, not a formal mathematical
+proof of natural-language equivalence. A reviewer may miss semantic
+changes; ambiguous or repeatedly failed tasks are quarantined, not promoted.
 
-**No candidate-only semantic probes, A/B endpoint parser, extra final judge
-or artificial edit-distance requirement** is used. The Critic checks genuine
-relation, ownership, set-scope, output and user-facing language differences.
-This is a bounded model editorial process, not a formal equivalence proof.
+Run from the MAESTRO root with the existing configured local vLLM:
 
-## Run a small pilot
+\`\`\`bash
+python environment/generate_goals.py \
+  --max-records 50 \
+  --max-goal-revisions 2 \
+  --output-dir environment/data/stage2a_goals_50 \
+  --question-workers 4 \
+  --blueprint-workers 2 \
+  --flush-every 1
+\`\`\`
 
-```bash
-git switch main && git pull origin main
+Stage 2A outputs are separate and checkpointed:
+
+| File | Purpose |
+| --- | --- |
+| \`certified_blueprints.jsonl\` | Only tasks whose **every** Goal passed, with Blueprint, per-fragment reviews and \`goal_certificate\` |
+| \`rejected_blueprints.jsonl\` | Failed tasks and isolation reason; never forwarded |
+| \`goal_review_audit.jsonl\` | Every writer/reviewer attempt, local feedback and per-task provenance |
+| \`goal_generation_summary.json\` | Task yield, reviewer and author calls, failure reasons |
+| \`goal_progress_state.json\` | Crash-safe ordered checkpoint; resumable with identical inputs/code/model settings |
+
+To intentionally overwrite an earlier Stage-2A run, add
+\`--restart-goals\`. To preserve previous experiments, prefer a new
+output directory. A failed Question in Stage 2B does **not** invalidate
+the completed Stage-2A Goal dataset.
+
+## Stage 2B — author and review only certified Questions
+
+\`\`\`text
+Stage 2A certified_blueprints.jsonl
+    └─ join frozen task IDs / discard non-certified originals
+        └─ independently rebuild compact Gold DAG and replay 2A certificate
+            └─ benchmark Question Author (Goal Blueprint + original contract)
+                └─ existing deterministic guards + Question Critic / local repair
+                    └─ Stage 2B certified Question, including signed 2A review
+                        └─ Stage 3: verified source-based Sub-Agent reports
+                                      → just-in-time Main delegations
+\`\`\`
+
+\`\`\`bash
 python environment/generate_questions.py \
-  --start-record 100 --max-records 50 --max-revisions 2 \
-  --output-dir environment/data/questions_blueprint_101_150 \
-  --question-workers 4 --blueprint-workers 2 --flush-every 1
-```
+  --max-records 50 \
+  --blueprints environment/data/stage2a_goals_50/certified_blueprints.jsonl \
+  --max-revisions 2 \
+  --output-dir environment/data/stage2b_questions_50 \
+  --question-workers 4 \
+  --flush-every 1
+\`\`\`
 
-Use a **new** output directory (for example,
-`environment/data/questions_fragment_goals_50`); old v25 and v26
-one-shot Blueprint certificates or streaming checkpoints are not compatible
-with the per-fragment v2 protocol. Generated artifacts include
-`realized_capability_worlds.jsonl` (question, blueprint, certificate),
-`question_rejected.jsonl`, `question_review_audit.jsonl`, and
-`question_generation_summary.json`. `review_statistics.author_calls` now counts **each independently generated
-Fragment Goal**; `blueprint_goal_calls`, `blueprint_fragments_attempted`,
-and `blueprint_goal_retries` expose those costs separately. Using four
-`--question-workers` with two `--blueprint-workers` permits at most
-eight simultaneous Goal calls; reduce one of them for a busy local vLLM.
+**Stage 2B requires \`--blueprints\`.** Of the selected 50 originals, only
+the Stage-2A certified task IDs are submitted; the summary includes
+\`input_candidates\`, \`skipped_uncertified\`, and
+\`certified_input_count\`. A tampered or stale Goal certificate is checked
+against the frozen ProgramIR **before any Question Author call**. Each
+accepted Question carries the source \`delegation_blueprint\`,
+\`goal_reviews\`, \`goal_certificate\` and its own Stage-2B
+\`surface_certificate\`. Stage 2B has **zero Goal Author/Goal Critic calls**;
+it can be rerun against the same frozen certified Goal dataset to improve
+Question prompts without regenerating Goals.
 
-## Quality and limitations
+Stage-2B outputs and checkpoints retain the existing names:
+\`realized_capability_worlds.jsonl\`,
+\`question_rejected.jsonl\`,
+\`question_review_audit.jsonl\`,
+\`question_generation_summary.json\`,
+and \`question_progress_state.json\`.
 
-Automatic tests check structure, public/private boundary, replay integrity
-and state isolation. They cannot prove that local Qwen naturalizes every
-question correctly. Evaluate semantic fidelity, task-style naturalness,
-resource reachability, stage-3 bank acceptance, and total model calls.
-The model may be more creative than v25 and therefore needs empirical
-evaluation on previously unoptimized frozen tasks before scaling to 1120.
+### Contract versions and Stage 3
 
-Stage-3 commands and phase boundaries are documented in
-`../trajectory_simulation/README.md`.
+- Goal Blueprint: \`maestro.delegation_blueprint.v2\`.
+- Stage-2A Goal certificate: \`maestro.stage2a.certified_blueprint.v1\`.
+- Stage-2B Question certificate for these Goals:
+  \`maestro.stage2_surface_cert.certified_goals.v3\` (review contract 32).
+- Existing earlier v2 Question certificates continue to replay for
+  compatibility. **New Stage-2B CLI tasks can only publish v3** certificates.
+- Stage 3 recompiles the original compact DAG and verifies both
+  certificates; its Gold answers, public source replay and Main state
+  visibility boundaries are unchanged.
+
+A Goal review certificate represents an audited model judgement, not a
+guarantee of perfect semantic fidelity. Continue measuring Stage-2A
+fidelity and Stage-2B false-pass/false-reject rates independently on
+unseen frozen tasks. No one-to-one natural-language operator mirroring
+is required of the final Question; it should remain a coherent user request.
+
+## Performance and troubleshooting
+
+The two stages intentionally have distinct model-call budgets. Stage 2A
+uses one Goal writer and up to one local Critic per attempt per Fragment;
+\`--max-goal-revisions 2\` allows up to three local attempts for a failed
+Fragment. Stage 2B uses Author and Question Critic only.
+
+\`--question-workers\` is task-level parallelism; in Stage 2A,
+\`--blueprint-workers\` is additional Fragment-level parallelism. Their
+product bounds in-flight Goal requests; use smaller values if local vLLM
+is memory constrained. Keep separate output directories for both stages
+and use the **same frozen input files and seed** throughout Stage 2A/2B.
+
+The existing Stage-3 commands are documented in
+\`../trajectory_simulation/README.md\`.
+
+Run all no-network tests:
+
+\`\`\`bash
+python -m unittest discover -s environment/tests -v
+\`\`\`
