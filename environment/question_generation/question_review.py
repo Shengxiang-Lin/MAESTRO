@@ -53,6 +53,36 @@ If only the style is weak, make a more user-facing rephrase WITHOUT changing
 any task semantics. Return JSON {"question":"..."} only.
 """
 
+_AUTHOR_BRANCH_SYSTEM = """Write ONE natural, answer-preserving user Question
+from the provided PUBLIC branch-level Question Brief.
+
+The workstream goals are concise Subtask INTENTS, not complete instructions.
+Use them to understand the main evidence paths and compose one coherent
+question. Their precise_public_steps are the authoritative, complete local
+conditions; never omit a numeric/date/string comparison merely because a
+Goal summarizes it as 'specified criteria'.
+
+Each workstream depends_on identifies upstream sets, not an invitation to
+narrate internal steps. Follow explicit AND/OR semantics: INTERSECT requires
+the SAME entity to satisfy ALL input branches, while UNION permits ANY
+input branch. Different candidates may have different owners; a filter on
+a Person must not be moved to an Event/Organization, nor may a directed
+RELATE hop be reversed. Respect every source anchor and final_result,
+including COUNT vs entity names, verification, rank/ties and attributes.
+
+Natural phrasing can combine multiple filters that apply to the same
+entity, and can simplify repeated conjunctions without changing meaning.
+Do NOT label workstreams B1/B2, narrate the execution DAG, name agents/tools,
+or use 'the previous task'. If an exact public literal is unspecified,
+do not invent it or claim an unprovided source has already been seen.
+
+When given previous_draft and reviewer_feedback, make only the requested
+localized semantic correction. If the prior issue was style-only, improve
+the phrasing without altering any condition or candidate pool.
+Return exactly one JSON object: {"question":"..."}.
+"""
+
+
 _CRITIC_SYSTEM = """Act as a semantic reviewer of a natural benchmark question.
 The public semantic contract is authoritative; the delegation blueprint
 contains only HIGH-LEVEL subtask intents that may deliberately omit values,
@@ -158,21 +188,29 @@ def _brief(blueprint: Mapping | None):
 def author_question(
     backend: Any, reference: str, *, previous: str | None = None,
     feedback: dict | None = None, blueprint: Mapping | None = None,
+    question_brief: Mapping | None = None,
 ) -> str:
-    payload = {"reference_question": reference}
-    if blueprint is not None:
-        payload["benchmark_task_brief"] = _brief(blueprint)
-        payload["instruction"] = (
-            "Write the final user question; do not reproduce the subtask plan."
-        )
+    # Branch mode must NOT accidentally reintroduce the full reference or
+    # nested AST to the Author. The independent Critic still receives those.
+    if question_brief is not None:
+        payload = {"question_brief": dict(question_brief)}
+        system = _AUTHOR_BRANCH_SYSTEM
+    else:
+        payload = {"reference_question": reference}
+        system = _AUTHOR_SYSTEM
+        if blueprint is not None:
+            payload["benchmark_task_brief"] = _brief(blueprint)
+            payload["instruction"] = (
+                "Write the final user question; do not reproduce the subtask plan."
+            )
     if previous is not None:
         payload["previous_draft"] = previous
         payload["reviewer_feedback"] = feedback or {}
         payload["instruction"] = (
-            "Patch the previous draft's local semantic issues or improve its "
-            "naturalness, while keeping the full task semantics."
+            "Patch only verified semantic issues or improve naturalness, "
+            "while keeping every exact public constraint."
         )
-    response = _invoke(backend, _AUTHOR_SYSTEM, payload, schema=_AUTHOR_SCHEMA)
+    response = _invoke(backend, system, payload, schema=_AUTHOR_SCHEMA)
     question = response.get("question")
     if not isinstance(question, str) or not question.strip():
         raise ReviewFormatError("author_question_missing")
