@@ -50,9 +50,10 @@ Do not invent missing media content, exact answer values, source titles,
 candidate rosters or historical facts. Media described as discoverable
 must first be located, not falsely claimed user-provided.
 
-The full reference is supplied ONLY to resolve public literal spelling
-where a local step has null or ambiguous labels; never copy the whole
-reference or its other branches into the current goal.
+Only public fields in the LOCAL contract are authoritative. A null
+label means it was not public in the corresponding step; describe the
+operation generically instead of guessing an identifier or copying a
+condition from another task branch.
 
 Return exactly one JSON object with one string key:
 {"goal":"One faithful natural-language goal for this fragment."}
@@ -195,22 +196,25 @@ def _fragment_goal_packet(outline, fragment, reference):
         "dependency_contracts": dependencies,
         "global_output": {
             "kind": outline["tasks"][-1]["output_kind"],
-            "task_goal": outline["task_semantics"],
         },
         "public_modalities": outline["public_modalities"],
-        "reference_for_public_literal_spelling_only": reference,
     }
 
 
 def naturalize_fragment_goal(backend, outline, fragment, reference, *,
                              payload=None, oracle_answer=None,
-                             max_attempts=2, call_log=None):
+                             max_attempts=2, call_log=None, feedback=None):
     """Naturalize ONE fragment; caller binds ID and DAG properties itself."""
     if not callable(getattr(backend, "complete_json", None)):
         raise ValueError("blueprint_author_backend_missing")
     if not 1 <= max_attempts <= 2:
         raise ValueError("invalid_blueprint_goal_attempts")
     packet = _fragment_goal_packet(outline, fragment, reference)
+    if feedback:
+        packet["revision_feedback"] = {
+            "previous_goal": feedback.get("previous_goal"),
+            "issues": feedback.get("issues", []),
+        }
     last_error = None
     for attempt in range(max_attempts):
         if call_log is not None:
