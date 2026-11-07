@@ -433,9 +433,20 @@ def coverage_manifest(probes: list[dict], records: list[dict]) -> dict:
 
 def validate_coverage_manifest(
     probes: list[dict], records: list[dict], manifest: Any, *, candidate: str | None = None,
+    require_evidence_diagnostics: bool = False,
 ) -> None:
     """Stage-3 replay of the full required set and exact model decisions."""
     validate_candidate_probe_records(probes, records, candidate=candidate)
+    if require_evidence_diagnostics:
+        # v23 certificates require separately replayable raw model labels and
+        # evidence-format judgments; prior v22 simulated fixtures can opt out.
+        if (not all(p.get("evidence_required") for p in probes)
+                or any(
+                    not {"raw_answer", "evidence_status", "evidence_reason"}.issubset(r)
+                    or r.get("evidence_status") != "verified"
+                    for r in records
+                )):
+            raise ValueError("stage2_evidence_diagnostics_missing_or_unverified")
     if conflicting_endpoint_evidence(probes, records):
         raise ValueError("stage2_owner_relation_evidence_conflict")
     if (not probes or not any(p["kind"] == "answer_type" for p in probes)
