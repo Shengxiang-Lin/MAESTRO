@@ -8,7 +8,8 @@ environment/
 ├── question_generation/        # LLM question authoring over frozen task semantics
 ├── trajectory_simulation/      # first-stage fragment DAG + O1-format gold Main/Sub-Agent trajectories
 ├── construct_tasks.py
-├── generate_questions.py
+├── generate_goals.py            # Stage 2A: certified Subtask Goals
+├── generate_questions.py        # Stage 2B: Questions from certified Goals
 └── simulate_trajectories.py
 ```
 
@@ -32,13 +33,16 @@ without changing the frozen P1 contract or the Gold fragment DAG:
 
 ```text
 frozen public projection + compact Gold DAG
-        -> public delegation outline (fixed IDs, waves, dependencies)
-        -> LLM natural goals per fragment (one request)
-        -> goal-first natural benchmark Question
-        -> semantic Critic / local repair + deterministic public guards
-        -> Stage-2 certificate binding Question + Blueprint + ProgramIR
-        -> Stage-3 Subtask Bank (replayed answers, grounded reports)
-        -> Stage-3 Main scheduling (only READY goals + visible prior results)
+        -> Stage 2A: independent Goal per Fragment
+           -> deterministic local guards + local semantic Critic / repair
+           -> quarantine on ANY failed Fragment
+           -> certified_blueprints.jsonl (independent reusable Goal dataset)
+        -> Stage 2B: ONLY certified tasks
+           -> Goal/DAG certificate replay (no Goal model calls)
+           -> natural benchmark Question Author / Critic
+           -> Question certificate binding original 2A reviews
+        -> Stage 3 Subtask Bank (replayed answers, grounded reports)
+        -> Stage 3 Main scheduling (READY Goals + visible prior results only)
 ```
 
 Only the task-goal **language** is authored early. Source facts, Gold answers,
@@ -59,7 +63,7 @@ Generated artifacts live under `environment/data/`. Source datasets are expected
 
 ## Configuration: environment/config.yaml
 
-All three entrypoints read `environment/config.yaml` by default. It
+All environment entrypoints read `environment/config.yaml` by default. It
 contains task-construction parameters, frozen question-generation inputs,
 trajectory outputs, generation settings, and model profiles. Repository-relative
 paths resolve from MAESTRO's root. `{pool_size}` in paths is expanded from
