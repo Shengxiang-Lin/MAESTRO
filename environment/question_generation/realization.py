@@ -18,6 +18,7 @@ from environment.trajectory_simulation.eligibility import (
 
 from environment.delegation_blueprint import compile_delegation_outline
 from .goal_review import validate_goal_record
+from .question_brief import compile_question_brief
 from .backend import BackendError
 from .question_review import (
     ReviewFormatError, author_question, critique_question, passing_judgment,
@@ -95,7 +96,7 @@ def _review_attempt(backend, reference, candidate, entry, *, blueprint=None):
 
 
 def _realize_one(payload, world, capability, author, critic, *,
-                 max_revisions=2, goal_record=None):
+                 max_revisions=2, goal_record=None, question_brief_mode="full"):
     """Generate up to 1+max_revisions drafts; Critic returns local patches."""
     canonical = str(payload.get("draft_question") or "")
     rendered = world.get("_rendered")
@@ -170,6 +171,24 @@ def _realize_one(payload, world, capability, author, critic, *,
         "goal_certificate_sha256": digest(goal_record["goal_certificate"]),
     })
 
+    if question_brief_mode not in ("full", "branch"):
+        return _reject(payload, "rejected_validation_error", audit,
+                       detail="unsupported_question_brief_mode")
+    question_brief = None
+    if question_brief_mode == "branch":
+        try:
+            question_brief = compile_question_brief(
+                blueprint, world, canonical, gold,
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            return _reject(payload, "rejected_validation_error", audit,
+                           detail="question_brief_compile_failed:" + str(exc))
+        audit.append({
+            "stage": "question_brief",
+            "mode": "branch",
+            "brief_sha256": digest(question_brief),
+            "workstreams": len(question_brief["workstreams"]),
+        })
     previous, feedback = None, None
     last_reason, last_detail = "rejected_quality", "not_naturalized"
 
@@ -184,7 +203,8 @@ def _realize_one(payload, world, capability, author, critic, *,
         try:
             candidate = author_question(
                 author_backend, scoped, previous=previous, feedback=feedback,
-                blueprint=blueprint,
+                blueprint=blueprint if question_brief is None else None,
+                question_brief=question_brief,
             )
         except (BackendError, ReviewFormatError, TypeError, ValueError) as exc:
             entry["failure"] = "author_model_error"
@@ -299,6 +319,7 @@ def _realize_one(payload, world, capability, author, critic, *,
                 blueprint=blueprint, gold=gold,
                 resources=payload.get("resources", ()),
                 goal_record=goal_record,
+                question_brief=question_brief,
             )
         except (ValueError, TypeError, KeyError) as exc:
             entry["failure"] = "certificate_error"
@@ -320,6 +341,7 @@ def _realize_one(payload, world, capability, author, critic, *,
             "publication_status": "naturalized_certified",
             "authoring": {
                 "strategy": "certified_goal_blueprint_question_author_critic",
+                "question_brief_mode": question_brief_mode,
                 "revision_rounds": attempt,
                 "surface_review": review,
             },
