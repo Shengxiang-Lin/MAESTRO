@@ -89,6 +89,20 @@ def semantic_checks(plan: ScopedPlan) -> list[dict[str, str]]:
             # attribute/value restriction on two DIFFERENT related entity
             # sets must remain two separately checked obligations.
             append("condition_owner", text, excerpt, (node, condition))
+        if op == "SELECT_BETWEEN":
+            # Ranking candidates from either alternative branch is a UNION;
+            # the two branch filters themselves may contain intersections.
+            # This requirement was missing in v17 and led the Critic to
+            # falsely assert that the FINAL pool used AND.
+            append(
+                "set_logic",
+                "FINAL RANKING POOL UNION (OR): entities from EITHER of the "
+                "two independent candidate pools may be ranked. Do NOT "
+                "require each entity to satisfy both pools. A nested "
+                "INTERSECTION inside one pool remains an AND there.",
+                excerpt,
+                ("final_ranking_pool_union", node),
+            )
         if op in ("INTERSECT", "UNION"):
             text = (
                 "INTERSECTION: the same result entity must satisfy ALL branches; "
@@ -115,7 +129,11 @@ def semantic_checks(plan: ScopedPlan) -> list[dict[str, str]]:
                 "QUERY_ATTR": "Return recorded attribute values.",
                 "QUERY_RELATION": "Return relation names connecting the source and target groups.",
                 "SELECT_AMONG": "Select ranked entities and retain ties.",
-                "SELECT_BETWEEN": "Select ranked entities across BOTH candidate pools and retain ties.",
+                "SELECT_BETWEEN": (
+                    "Rank the UNION of the two independent candidate pools "
+                    "(EITHER branch qualifies, not necessarily BOTH), "
+                    "and retain ties."
+                ),
             }.get(op, "Verify whether ANY recorded value satisfies the specified comparison.")
             append("final_answer", meaning, excerpt, node.get("definition"))
         for child in node.get("inputs", ()):

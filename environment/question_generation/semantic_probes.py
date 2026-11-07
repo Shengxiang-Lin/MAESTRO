@@ -18,14 +18,19 @@ _ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth",
              "seventh", "eighth")
 _ORDINAL = "|".join(_ORDINALS)
 _ALLOWED = frozenset(("AND", "OR", "SELF", "MEMBER",
-                      "ALL_MUST", "NOT_ALL", "UNCLEAR"))
+                      "ALL_MUST", "NOT_ALL", "SELECTED", "RELATED",
+                      "UNCLEAR"))
 _PROBE_SYSTEM = """You are a candidate-only semantic reader.
 Read ONLY the candidate question below. You are NOT given the reference,
 gold answer, expected probe answers or private world. For each requested
 probe, determine what the CANDIDATE really says, regardless of what seems
 logical or likely to have been intended. Distinguish membership of the
-result entity from membership of one of its members. 'Either/or' permits
-either branch; 'both' on the SAME entity requires the intersection.
+result entity from membership of one of its members. For an attribute-owner
+question, distinguish a property of the SELECTED entity from a property
+of a RELATED entity reached by a named relation. Do not infer ownership
+from which entity type is most likely to have that attribute.
+'Either/or' permits either branch; 'both' on the SAME entity requires
+the intersection.
 If the candidate does not clearly specify the requested distinction, use
 UNCLEAR instead of guessing. Return JSON only with exactly one answer
 per probe ID, as {"answers":[{"id":"P1","answer":"AND"}]}.
@@ -86,6 +91,100 @@ def _surface_join(node: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _has_relation(node: Mapping[str, Any], relation: str, *, depth=4) -> bool:
+    """Search a bounded public-meaning subtree; never inspect World/Gold."""
+    if depth < 0 or not isinstance(node, Mapping):
+        return False
+    if (node.get("definition") == "RELATE"
+            and str(node.get("relation", "")).casefold() == relation.casefold()):
+        return True
+    return any(
+        _has_relation(child, relation, depth=depth - 1)
+        for child in node.get("inputs", ())
+        if isinstance(child, Mapping)
+    )
+
+
+def _condition_at_selected_branch(node: Mapping[str, Any]) -> list[dict]:
+    """Top-level filter restrictions on a branch's returned entity set.
+
+    Never walk through RELATE to infer a child's owner: relation endpoints
+    would then be conflated. A unary FILTER chain retains the same owner.
+    """
+    found = []
+    current = node
+    for _ in range(5):
+        if current.get("definition") == "RELATE":
+            break
+        for cond in current.get("conditions", ()):
+            if (isinstance(cond, Mapping)
+                    and cond.get("attribute")
+                    and isinstance(cond.get("value"), Mapping)
+                    and cond["value"].get("type") in ("number", "year", "date")):
+                found.append(cond)
+        op = str(current.get("definition", ""))
+        if not op.startswith("FILTER_"):
+            break
+        children = current.get("inputs") or []
+        if len(children) != 1 or not isinstance(children[0], Mapping):
+            break
+        current = children[0]
+    return found
+
+
+def _owner_probes(
+    meaning: Mapping[str, Any], ordinal: str,
+) -> list[dict[str, str]]:
+    """Public-plan owner probes for a joined result and a related location.
+
+    Only assert SELECTED when the condition is on the top level of an
+    intersected branch and an alternative branch has a location relation.
+    This is deliberately narrower than general semantic readback.
+    """
+    current = meaning
+    for _ in range(4):
+        if current.get("definition") == "INTERSECT":
+            break
+        if not str(current.get("definition", "")).startswith("FILTER_"):
+            return []
+        children = current.get("inputs") or []
+        if len(children) != 1 or not isinstance(children[0], Mapping):
+            return []
+        current = children[0]
+    if current.get("definition") != "INTERSECT":
+        return []
+    branches = [b for b in current.get("inputs", ())
+                if isinstance(b, Mapping)]
+    if len(branches) < 2 or not any(_has_relation(b, "location") for b in branches):
+        return []
+    results = []
+    seen = set()
+    for branch in branches:
+        for cond in _condition_at_selected_branch(branch):
+            attribute = str(cond["attribute"])
+            cmp = str(cond.get("comparison", "equal to"))
+            value = str(cond["value"].get("value", ""))
+            identifier = (attribute.casefold(), cmp.casefold(), value)
+            if identifier in seen or not value:
+                continue
+            seen.add(identifier)
+            results.append({
+                "kind": "condition_owner", "group": ordinal,
+                "attribute": attribute,
+                "comparison": cmp, "value": value,
+                "expected": "SELECTED",
+                "question": (
+                    f"In the candidate's definition of the {ordinal} group, "
+                    f"which entity must satisfy '{attribute} {cmp} {value}'? "
+                    f"Is it the entity SELECTED as a member of the {ordinal} "
+                    "group (SELECTED), or a different place/area reached "
+                    "through the selected entity's location relation (RELATED)? "
+                    "Reply SELECTED, RELATED or UNCLEAR."
+                ),
+            })
+    return results[:2]
+
+
 def compile_candidate_probes(
     plan: ScopedPlan, reference: str, candidate: str,
 ) -> list[dict[str, str]]:
@@ -110,6 +209,10 @@ def compile_candidate_probes(
         ordinal = found.group(1).lower()
         if not _candidate_defines_group(candidate, ordinal):
             continue
+
+        # Ownership probes complement AND/OR probes. In v17 a candidate
+        # could preserve AND while attaching the numeric filter to a place.
+        candidates.extend(_owner_probes(meaning, ordinal))
 
         join = _surface_join(meaning)
         if join:
@@ -168,7 +271,8 @@ def compile_candidate_probes(
             })
 
     # Prefer scope-sensitive probes over generic join questions when bounded.
-    rank = {"member_owner": 0, "final_union_scope": 1, "group_join": 2}
+    rank = {"condition_owner": 0, "member_owner": 1,
+            "final_union_scope": 2, "group_join": 3}
     chosen = sorted(candidates, key=lambda item: (rank[item["kind"]], item["group"]))[:5]
     return [{"id": f"P{i}", **item} for i, item in enumerate(chosen, start=1)]
 
@@ -185,7 +289,24 @@ def explicit_probe_contradictions(
     for probe in probes:
         ordinal = probe["group"]
         kind = probe["kind"]
-        if kind == "group_join" and probe["expected"] == "AND":
+        if kind == "condition_owner" and probe["expected"] == "SELECTED":
+            # v17 #3: reference intersects (a) a location-relation result
+            # with (b) an entity filter, while candidate says that entities
+            # are LOCATED IN BOTH kinds of administrative areas. This moves
+            # the second filter from result entities to locations.
+            matched = re.search(
+                rf"\b(?:the\s+)?{ordinal}\s+group\s+"
+                rf"(?:consists?|includes?|contains?)\b"
+                rf"(?P<body>[^.;!?]{{0,260}})",
+                candidate, flags=re.I,
+            )
+            if (matched and re.search(
+                    r"\bentities\s+located\s+in\s+both\b",
+                    matched.group("body"), re.I)):
+                issues.append(
+                    f"{probe['id']}:selected_filter_moved_to_related_location"
+                )
+        elif kind == "group_join" and probe["expected"] == "AND":
             # v16 #3: "second group includes areas that are either ... or ...".
             # Do not search outside the one local group-definition clause.
             m = re.search(

@@ -68,6 +68,7 @@ def _review_diagnostic(exc):
                 "finish_reason", "usage", "expected_group_ids",
                 "received_group_ids", "received_count",
                 "response_keys", "expected_ids", "received_ids",
+                "checks_value_type", "group_details",
             )
             if key in diagnostic
         })
@@ -409,6 +410,7 @@ def _realize_one(payload, world, capability, author, critic, *,
                 critic_verdict="pass", revision_rounds=attempt,
                 semantic_checklist=checkpoints,
                 candidate_probes=probe_records,
+                candidate_probe_specs=probes,
             )
         except (ValueError, TypeError, KeyError) as exc:
             entry["failure"] = "certificate_error"

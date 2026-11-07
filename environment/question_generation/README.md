@@ -243,7 +243,7 @@ accepted questions and compare real-model acceptance, semantic precision,
 false rejects and call counts before scaling. Counterfactual-world execution
 and general independent atomic re-review are **not implemented** in v16.
 
-## v17 candidate-centric semantic probes (current)
+## v17 candidate-centric semantic probes (previous)
 
 A real local Qwen3.5-9B v16 10-task run accepted 7/10 questions but
 three rejected tasks failed Critic protocol validation; the audit only
@@ -295,3 +295,51 @@ Do not scale up solely on acceptance percentage: manually compare final
 accepted questions against their Scoped references, check false positives
 and false negatives, and inspect protocol diagnostics. Automated unit tests
 use scripted probe readers, not an actual local Qwen checkpoint.
+
+## v18 candidate-side condition ownership and final-pool OR (current)
+
+Manual inspection of the real local-Qwen v17 10-task run found one clear
+accepted semantic error: in the second group of task 3 the condition
+population < 1,765 was moved from the SELECTED entity to a related
+administrative area, while the AND/OR probe still said AND. The reviewer
+also confused SELECT_BETWEEN's final OR with intermediate AND joins in
+task 5. Task 8 had review_problem_ids_invalid without logging which IDs
+were invalid.
+
+v18 adds **public-plan condition-owner probes** for conservative cases:
+an INTERSECT has a branch containing a top-level numeric/date filter on
+the selected entity and another branch with a location relation. The
+candidate-only reader is asked whether the specified filter belongs to
+SELECTED or RELATED. Expected labels come only from the public ScopedPlan,
+not from World answers. An explicit 'entities located in both' rewrite
+of such a set is additionally detected as a narrow deterministic owner
+scope contradiction. Ambiguous/unrecognized paraphrases still require
+independent manual audit; this is not a complete English parser.
+
+SELECT_BETWEEN now has a separate set_logic requirement explicitly
+declaring the FINAL ranking pool a UNION of independent branches, even
+when one branch contains an INTERSECTION. Reviewer instructions warn
+against conflating the two. Critic feedback that claims a numeric value
+was omitted when that value is visibly present is marked unverified and
+redirected to checking its true owner; no failed check is silently passed.
+On malformed reviewer output, the audit now includes a bounded per-group
+record of invalid or unknown public C-IDs and the type of checks.
+
+The current certificate is maestro.stage2_surface_cert.v7, review
+contract 24, method candidate_owner_semantic_probe_review_v6. Issuance
+and Stage-3 replay validate the probe answers against public expectations.
+Previous v17 certified data must be regenerated with matching code.
+
+Run the first ten frozen tasks in a **new** output directory:
+
+```bash
+python environment/generate_questions.py \
+  --max-records 10 --max-revisions 2 \
+  --output-dir environment/data/questions_editorial_v18_10 \
+  --question-workers 4 --flush-every 1
+```
+
+The repository CI tests use scripted reviewer responses, not actual
+Qwen3.5-9B. Check every accepted output and the 3/5/8 task regressions
+before increasing to 50 questions, and do not use 70% reviewer
+acceptance as a proxy for semantic precision.
