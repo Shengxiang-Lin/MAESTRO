@@ -16,18 +16,17 @@ from .public_semantics import public_question_contract
 
 
 _STEP_FIELDS = (
-    "operation", "attribute", "comparison", "public_value",
-    "relation", "direction", "entity_type", "output_attribute",
-    "ranking", "rank_attribute", "inputs_from",
+    "id", "inputs_from", "operation", "attribute", "comparison",
+    "public_value", "relation", "direction", "entity_type",
+    "output_attribute", "ranking", "rank_attribute",
 )
 
 
 def _compact_step(step):
-    """Do not repeat synthetic prose/LLM hints or tool metadata."""
+    """Keep exact step IDs/input bindings; omit repeated prose/tool metadata."""
     return {
         key: step[key] for key in _STEP_FIELDS
         if key in step and step[key] is not None
-        and (key != "inputs_from" or len(step[key]) != 1)
     }
 
 
