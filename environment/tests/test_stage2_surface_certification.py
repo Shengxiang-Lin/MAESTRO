@@ -72,6 +72,29 @@ class FakeCritic:
     def complete_json(self, system, user, **kwargs):
         data = json.loads(user)
         self.calls.append((system, data))
+        if "candidate-only semantic reader" in system:
+            # This is a scripted output contract test, NOT semantic evidence.
+            # The renderer fixture contains two FORWARD relations, an AND
+            # result selection and a QUERY_NAME terminal.
+            answers = []
+            for spec in data["probes"]:
+                question = spec["question"]
+                if "Which structure" in question:
+                    answer = "FORWARD"
+                elif "set-building clause" in question:
+                    answer = "AND"
+                elif "final candidate question" in question:
+                    answer = "ENTITIES"
+                elif "FIRST group" in question:
+                    answer = "NOT_ALL"
+                elif "must satisfy" in question:
+                    answer = "SELECTED"
+                elif "EITHER branch" in question:
+                    answer = "AND"
+                else:
+                    answer = "UNCLEAR"
+                answers.append({"id": spec["id"], "answer": answer})
+            return {"answers": answers}
         if "independent final semantic and language judge" in system:
             self.final_inputs.append(data)
             response = copy.deepcopy(self.final)
@@ -112,7 +135,14 @@ class Stage2SurfaceCertificationTests(unittest.TestCase):
         self.assertEqual(row["surface_certificate"]["review_contract"],
                          REVIEW_CONTRACT)
         self.assertEqual(len(author.calls), 1)
-        self.assertEqual(len(critic.calls), 2)
+        self.assertGreaterEqual(len(critic.calls), 3)
+        self.assertEqual(
+            row["authoring"]["surface_review"]["semantic_coverage"]["status"],
+            "complete",
+        )
+        self.assertGreater(
+            row["authoring"]["surface_review"]["semantic_coverage"]["required"], 0,
+        )
         self.assertEqual(critic.final_inputs[0].keys(),
                          {"reference_question", "candidate_question",
                           "potential_literal_changes_to_check", "risk_groups"})
