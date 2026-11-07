@@ -296,7 +296,7 @@ accepted questions against their Scoped references, check false positives
 and false negatives, and inspect protocol diagnostics. Automated unit tests
 use scripted probe readers, not an actual local Qwen checkpoint.
 
-## v18 candidate-side condition ownership and final-pool OR (current)
+## v18 candidate-side condition ownership and final-pool OR (previous)
 
 Manual inspection of the real local-Qwen v17 10-task run found one clear
 accepted semantic error: in the second group of task 3 the condition
@@ -343,3 +343,57 @@ The repository CI tests use scripted reviewer responses, not actual
 Qwen3.5-9B. Check every accepted output and the 3/5/8 task regressions
 before increasing to 50 questions, and do not use 70% reviewer
 acceptance as a proxy for semantic precision.
+
+## v19 label-free coverage, group identity and conditional semantics (current)
+
+On the real ten-question v18 Qwen3.5-9B run (8/10 accepted), audits showed
+three material gaps: task 3 removed the literal "second group" label, so
+the condition-owner probe did not run; task 5 moved population 1,203 from
+a derived subset into the definition of Group 1, and task 9 replaced
+"if IATA code BQG, otherwise empty" with "assuming IATA code BQG".
+
+v19 compiles **condition-owner** probes from public relation/attribute
+semantics whether or not the candidate retains explicit "Nth group"
+labels. These are candidate-only reading questions; the reference and
+expected answer never enter the model call. For the high-confidence
+"entities exist in administrative areas meeting both" construction, a
+public numeric-filter anchor enables a conservative deterministic guard
+against moving the selected entity's population condition to a related
+administrative area.
+
+Two new targeted probe families are **group_identity**, which asks
+whether a downstream population filter has been moved into the broader
+first group's definition, and **conditional_scope**, which distinguishes
+a live IF/empty-set branch from merely assuming its condition true.
+Narrow high-confidence deterministic guards cover the exact v18 forms.
+All probes and answers are bound to the Stage-2 publication certificate;
+Stage 3 recomputes the public probes and rejects altered records.
+
+The Critic and Final Judge still return up to four grouped risk votes.
+Their output C-IDs are now **optional on changed/uncertain votes**: a
+negative group without accurately mapped atom IDs still vetoes the draft,
+instead of dropping the whole task as a protocol error. Malformed C-IDs
+on negative votes are removed (not reinterpreted or treated as evidence)
+and noted in the audit. A complete dictionary keyed by R1/R2/... can
+be normalized safely to a list; missing groups still fail closed.
+All-preserved votes retain their strict pass conditions.
+
+The summary additionally reports `candidates_with_probes`,
+`accepted_without_probes`, and `compiled_probe_kinds`; zero probes
+are **not** evidence of semantic equivalence. Probe matching is
+conservative and does not guarantee full coverage of arbitrary natural
+paraphrases. Manually audit certified outputs, especially those without
+any candidate-side probes. Local unit tests do not establish model-level
+precision.
+
+Certificate: `maestro.stage2_surface_cert.v8`, review contract `25`,
+method `candidate_scope_coverage_review_v7`. Existing v18 outputs
+cannot be replayed with v19's Stage-3 verifier: regenerate into a
+NEW output directory.
+
+```bash
+python environment/generate_questions.py \
+  --max-records 10 --max-revisions 2 \
+  --output-dir environment/data/questions_editorial_v19_10 \
+  --question-workers 4 --flush-every 1
+```
