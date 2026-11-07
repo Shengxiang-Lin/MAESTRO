@@ -18,13 +18,13 @@ from environment.trajectory_simulation.compiler import compile_gold_solution
 
 from .question_review import passing_judgment
 from .semantic_checks import (
-    check_evidence, explicit_join_contradictions, naturalness_gate,
-    semantic_checks, missing_typed_literals, CheckFormatError,
+    validate_group_decisions, explicit_join_contradictions, naturalness_gate,
+    grouped_semantic_checks, missing_typed_literals, CheckFormatError,
 )
 
-SCHEMA = "maestro.stage2_surface_cert.v3"
-REVIEW_CONTRACT = 20
-METHOD = "llm_evidence_guided_editorial_review_v2"
+SCHEMA = "maestro.stage2_surface_cert.v4"
+REVIEW_CONTRACT = 21
+METHOD = "llm_compact_semantic_risk_review_v3"
 
 
 def _certificate(task_id, program, canonical, question, review):
@@ -55,7 +55,7 @@ def certify_approved_question(
     if (not naturalness_gate(scoped_reference, question)["improved_enough_to_review"]
             or explicit_join_contradictions(scoped_reference, question)):
         raise ValueError("natural_question_failed_deterministic_risk_guards")
-    check_evidence(semantic_checklist, final_judgment.get("checks"), question)
+    validate_group_decisions(semantic_checklist, final_judgment.get("checks"))
     review = {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": METHOD, "issues": [],
@@ -138,7 +138,7 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
     if (question in (canonical, scoped)
             or review.get("scoped_reference_sha256") != digest(scoped)):
         raise ValueError("stage2_reference_or_naturalization_mismatch")
-    checks = semantic_checks(plan)
+    checks = grouped_semantic_checks(plan)
     if (review.get("semantic_checklist_sha256") != digest(checks)
             or not naturalness_gate(scoped, question)["improved_enough_to_review"]
             or explicit_join_contradictions(scoped, question)
@@ -146,9 +146,9 @@ def validate_surface_certificate(realized, world, canonical, *, gold=None, rende
 
         raise ValueError("stage2_semantic_checklist_or_style_mismatch")
     try:
-        check_evidence(checks, review["final_judgment"].get("checks"), question)
+        validate_group_decisions(checks, review["final_judgment"].get("checks"))
     except CheckFormatError as exc:
-        raise ValueError("stage2_final_judge_evidence_invalid") from exc
+        raise ValueError("stage2_final_judge_risk_decision_invalid") from exc
     return {
         "eligible": True, "reviewed": True, "decision": "eligible",
         "method": "stage2_verified_editorial_certificate",

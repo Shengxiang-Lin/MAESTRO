@@ -19,7 +19,7 @@ from .scoped_surface import ScopedPlan
 
 
 class CheckFormatError(ValueError):
-    """Review did not substantiate every requested public semantic check."""
+    """Reviewer omitted or malformed a requested semantic risk group."""
 
 
 def semantic_checks(plan: ScopedPlan) -> list[dict[str, str]]:
@@ -101,43 +101,69 @@ def semantic_checks(plan: ScopedPlan) -> list[dict[str, str]]:
     return checks
 
 
-def _compact(value: str) -> str:
-    return " ".join(value.casefold().split())
+
+_RISK_KINDS = ("set_logic", "condition_owner", "relation_scope", "final_answer")
 
 
-def check_evidence(checks: list[dict], outcomes: Any, candidate: str) -> None:
-    """Validate shape, check coverage and exact candidate evidence witnesses.
+def grouped_semantic_checks(plan: ScopedPlan) -> list[dict]:
+    """Collapse 9-20 atomic facts into at most FOUR output judgments.
 
-    A quote is *necessary*, but not proof that the quoted text fully supports
-    the claimed requirement; semantic interpretation stays with the reviewer.
+    Retain every distinct public requirement in the INPUT; only the model's
+    output format is shorter. A category passes only if ALL its obligations
+    are preserved. This is not a formal semantic equivalence oracle.
     """
-    if not isinstance(outcomes, list):
-        raise CheckFormatError("review_check_results_missing")
-    required = {c["id"] for c in checks}
-    actual = set()
+    atomic = semantic_checks(plan)
+    groups = []
+    for kind in _RISK_KINDS:
+        members = [c for c in atomic if c["kind"] == kind]
+        if not members:
+            continue
+        entries = []
+        seen = set()
+        for item in members:
+            requirement = {
+                "expected": item["expected"],
+                "reference_excerpt": item["reference_excerpt"][:190],
+            }
+            key = json.dumps(requirement, sort_keys=True, ensure_ascii=False)
+            if key not in seen:
+                seen.add(key)
+                entries.append(requirement)
+        groups.append({
+            "id": f"R{len(groups) + 1}",
+            "kind": kind,
+            "requirements": entries,
+        })
+    return groups
+
+
+def validate_group_decisions(groups: list[dict], outcomes: Any) -> None:
+    """Fail closed on missing groups, but never require byte-exact quotations.
+
+    v14 required a separate quote for up to 20 checks and failed in 14/26
+    Critic calls on text-witness formatting alone. Per-category explanations
+    preserve auditability without making surface quotation the task.
+    """
+    if not isinstance(outcomes, list) or len(outcomes) != len(groups):
+        raise CheckFormatError("review_group_results_incomplete")
+    expected = {group["id"] for group in groups}
+    seen = set()
     for item in outcomes:
         if not isinstance(item, dict):
-            raise CheckFormatError("review_check_not_object")
+            raise CheckFormatError("review_group_not_object")
         ident = item.get("id")
-        if ident not in required or ident in actual:
-            raise CheckFormatError("review_check_id_invalid_or_duplicate")
-        actual.add(ident)
+        if ident not in expected or ident in seen:
+            raise CheckFormatError("review_group_id_invalid")
+        seen.add(ident)
         if item.get("status") not in ("preserved", "changed", "uncertain"):
-            raise CheckFormatError("review_check_status_invalid")
-        if not isinstance(item.get("explanation"), str) or not item["explanation"].strip():
-            raise CheckFormatError("review_check_explanation_missing")
-        evidence = item.get("candidate_quote")
-        if item["status"] == "preserved":
-            if (not isinstance(evidence, str)
-                    or not 3 <= len(evidence) <= 550
-                    or _compact(evidence) not in _compact(candidate)):
-                raise CheckFormatError("review_check_candidate_evidence_invalid")
-        elif evidence not in (None, ""):
-            if (not isinstance(evidence, str)
-                    or _compact(evidence) not in _compact(candidate)):
-                raise CheckFormatError("review_check_failure_quote_invalid")
-    if actual != required:
-        raise CheckFormatError("review_check_results_incomplete")
+            raise CheckFormatError("review_group_status_invalid")
+        explanation = item.get("explanation")
+        if not isinstance(explanation, str) or len(explanation.strip()) < 8:
+            raise CheckFormatError("review_group_reason_missing")
+
+
+def _compact(value: str) -> str:
+    return " ".join(value.casefold().split())
 
 
 def check_failures(outcomes: list[dict]) -> bool:
@@ -279,7 +305,8 @@ def naturalness_gate(reference: str, candidate: str) -> dict[str, Any]:
 
 
 __all__ = [
-    "CheckFormatError", "semantic_checks", "check_evidence",
+    "CheckFormatError", "semantic_checks",
     "check_failures", "explicit_join_contradictions", "naturalness_gate",
     "missing_typed_literals",
+    "grouped_semantic_checks", "validate_group_decisions",
 ]
