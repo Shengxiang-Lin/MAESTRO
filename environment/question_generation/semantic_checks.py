@@ -164,6 +164,20 @@ def grouped_semantic_checks(plan: ScopedPlan) -> list[dict]:
     return groups
 
 
+_AFFIRMATIVE_EXPLANATION = re.compile(
+    r"\\b(?:is|are|was|were|remain|remains)\\s+(?:fully\\s+|correctly\\s+)?"
+    r"(?:preserved|retained|correct|unchanged)\\b|"
+    r"\\bcorrectly\\s+(?:assigned|maps|mapped|preserves|preserved|retains|"
+    r"represents|matches|reflects)\\b|"
+    r"\\bmatching the reference (?:logic|meaning)\\b", re.I,
+)
+_CONTRAST_EXPLANATION = re.compile(
+    r"\\b(?:not|never|except|but|however|although|instead|incorrectly|"
+    r"different|differs|changed|missing|omitted|lost|ambiguous|unclear|"
+    r"mismatch|unverifiable|cannot|doesn't|fails?)\\b", re.I,
+)
+
+
 def validate_group_decisions(groups: list[dict], outcomes: Any) -> None:
     """Fail closed on missing groups, but never require byte-exact quotations.
 
@@ -203,6 +217,10 @@ def validate_group_decisions(groups: list[dict], outcomes: Any) -> None:
             raise CheckFormatError("preserved_review_has_problem_ids")
         if item["status"] != "preserved" and not problem_ids:
             raise CheckFormatError("negative_review_missing_problem_ids")
+        if (item["status"] != "preserved"
+                and _AFFIRMATIVE_EXPLANATION.search(explanation)
+                and not _CONTRAST_EXPLANATION.search(explanation)):
+            raise CheckFormatError("negative_review_explanation_affirms_preservation")
 
 
 def _compact(value: str) -> str:
@@ -274,7 +292,7 @@ def relation_semantic_contradictions(reference: str, candidate: str) -> list[str
     demand the original wording, and it is NOT an exhaustive relation parser.
     """
     if (_NAMED_AFTER.search(reference) and _NAME_EQUALITY.search(candidate)
-            and not _NAMED_AFTER.search(candidate)):
+            and not _NAME_EQUALITY.search(reference)):
         return ["named_after_replaced_by_name_equality"]
     return []
 
