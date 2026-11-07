@@ -165,6 +165,38 @@ class SplitPipelineTests(unittest.TestCase):
             and event.get("author_calls") == 2 for event in audit
         ))
 
+    def test_persistent_goal_critic_protocol_error_does_not_rewrite_goal(self):
+        payload, world, capability, rendered, outline = self.context()
+
+        class BadJsonCritic:
+            def __init__(self):
+                self.calls = []
+
+            def complete_json(self, system, user, **kwargs):
+                self.calls.append(json.loads(user))
+                return {
+                    "verdict": "pass", "issues": [],
+                    "summary": "Valid semantics",
+                    "coverage": [{"step_id": "made-up", "goal_quote": "fake"}],
+                }
+
+        author, critic = GoalWriter(), BadJsonCritic()
+        ok, rejected, audit = generate_goal_record(
+            payload, world, capability, author, critic,
+            max_goal_revisions=2, blueprint_workers=2,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(rejected["reason"], "rejected_goal_fidelity")
+        self.assertEqual(
+            len(author.calls), len(outline["tasks"]),
+            "A malformed Critic must never cause the Author to regenerate a Goal",
+        )
+        self.assertEqual(len(critic.calls), 2 * len(outline["tasks"]))
+        self.assertTrue(all(
+            entry.get("failure") == "rejected_goal_protocol"
+            for entry in audit if entry.get("stage") == "fragment_goal"
+        ))
+
     def test_2b_rejects_tampering_before_question_author(self):
         payload, world, capability, rendered, outline = self.context()
         ok, certified, audit = generate_goal_record(
