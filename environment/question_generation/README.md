@@ -28,11 +28,19 @@ roughly 15–45 words. Exact numeric thresholds, dates, intermediate filters and
 other details may be omitted because the full public semantic contract is
 saved separately. The Local Critic checks only: (1) main-task relevance,
 (2) expected output alignment, and (3) no *explicit* contradictions.
+For TERMINAL tasks, the writer/reviewer receives a NARROW public result
+hint (COUNT vs QUERY_NAME vs QUERY_ATTR, output kind, and unambiguous
+entity type where available). A COUNT goal must describe counting, and an
+Event-name result cannot become names of Individuals. Explicitly written
+attribute owners are also checked (e.g. `male population` is not a person's
+sex, and a Place end date must not become an Event end date).
+This remains a lightweight intent check; numeric thresholds and intermediate
+steps can still be omitted.
 A model summary that says "matching the specified date conditions" may
 PASS; one that explicitly changes "not equal to 1160" into "after 1160"
 must REVISE. Deterministic guards no longer require any local number to
-appear in the Goal. They only check explicit, conflicting comparisons and
-numeric values introduced from unrelated branches. An invalid Critic JSON
+appear in the Goal. They check explicit comparison contradictions, foreign-branch
+numerals, and narrowly defined output / attribute-owner errors. An invalid Critic JSON
 is retried on the SAME Goal at most once, without rewriting it.
 A PASS remains an auditable model judgment, not semantic proof.
 
@@ -46,7 +54,7 @@ Run from the MAESTRO root with the existing configured local vLLM:
 python environment/generate_goals.py \
   --max-records 50 \
   --max-goal-revisions 2 \
-  --output-dir environment/data/stage2a_intents_v3_50 \
+  --output-dir environment/data/stage2a_intents_v4_50 \
   --question-workers 4 \
   --blueprint-workers 2 \
   --flush-every 1
@@ -62,9 +70,9 @@ Stage 2A outputs are separate and checkpointed:
 | \`goal_generation_summary.json\` | Task yield, reviewer and author calls, failure reasons |
 | \`goal_progress_state.json\` | Crash-safe ordered checkpoint; resumable with identical inputs/code/model settings |
 
-The earlier 50-task Stage-2A pilot used an incompatible v1 reviewer
-protocol. Keep its artifacts for analysis and use a new output directory
-for this v3 intent-level experiment.
+Older v1-v3 Stage-2A data does not carry this version's terminal
+output and attribute-owner review. Preserve those files for comparison.
+Generate a new v4 Goal dataset before running Stage 2B on the v4 code.
 
 To intentionally overwrite an earlier Stage-2A run, add
 \`--restart-goals\`. To preserve previous experiments, prefer a new
@@ -87,9 +95,9 @@ Stage 2A certified_blueprints.jsonl
 \`\`\`bash
 python environment/generate_questions.py \
   --max-records 50 \
-  --blueprints environment/data/stage2a_intents_v3_50/certified_blueprints.jsonl \
+  --blueprints environment/data/stage2a_intents_v4_50/certified_blueprints.jsonl \
   --max-revisions 2 \
-  --output-dir environment/data/stage2b_questions_50 \
+  --output-dir environment/data/stage2b_intents_v4_50 \
   --question-workers 4 \
   --flush-every 1
 \`\`\`
@@ -115,7 +123,7 @@ and \`question_progress_state.json\`.
 ### Contract versions and Stage 3
 
 - Goal Blueprint: \`maestro.delegation_blueprint.v2\`.
-- Stage-2A Goal certificate: \`maestro.stage2a.certified_blueprint.v3\`.
+- Stage-2A Goal certificate: \`maestro.stage2a.certified_blueprint.v4\`.
 - Stage-2B Question certificate for these Goals:
   \`maestro.stage2_surface_cert.certified_goals.v3\` (review contract 32).
 - Existing earlier v2 Question certificates continue to replay for
