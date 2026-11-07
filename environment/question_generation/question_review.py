@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .contracts import typed_values
-from .semantic_checks import check_evidence, check_failures
+from .semantic_checks import validate_group_decisions, check_failures
 
 
 class ReviewFormatError(ValueError):
@@ -37,76 +37,41 @@ Return valid JSON only: {"question": "<the complete revised question>"}.
 """
 
 
-_CRITIC_SYSTEM = """You are a constructive question editor, not a formal query-tree
-parser. Compare the correct reference question to the candidate's actual
-English meaning. Find REAL differences in what counts as a correct answer:
-missing or extra clues, different comparison values, attribute ownership,
-relationship direction and hop count, intersections/unions, quantifiers,
-output type, or assumptions that input sources were pre-supplied.
+_CRITIC_SYSTEM = """You are a constructive question editor. Compare the
+public reference to the candidate as a real reader, not as a program parser.
+Check whether the SAME answer would be correct under every stated condition.
+Critically examine: AND vs OR, filter OWNER, relation subject/object/direction,
+intermediate referents, numbers/dates/codes, and answer type.
 
-Do not insist on the reference's group names, word order, intermediate
-execution order or exact surface literals if the candidate expresses the
-SAME condition naturally. A date written as 'August 1, 1997' is the same
-as '1997-08-01'. 'Which people' can request names; 'How many' can mean COUNT.
-When a reference clause is paraphrased correctly, do not suggest reverting it.
+The input has at most FOUR risk groups (some containing many requirements).
+Give ONE status per GROUP: preserved only if ALL listed requirements are
+preserved, changed if ANY is changed, uncertain if meaning is ambiguous.
+Explain the most decisive discrepancy, not a full report per node.
 
-The user has also supplied a short PUBLIC checklist of high-risk semantic
-requirements. Review EACH check against the candidate's actual wording:
-set union vs intersection, who owns a numerical filter, exact relation
-direction/hops, and final output. For each check, return its id, whether
-it is preserved/changed/uncertain, a SHORT EXACT candidate substring that
-supports your decision, and a specific explanation. Preserve every id.
-Do not say 'preserved' merely because a value appears somewhere: verify
-its OWNER, branch and scope. Never substitute an execution-tree description
-for the candidate's own meaning.
-
-An example of a REAL failure: reference says the SAME entity belongs to
-BOTH groups, candidate defines the group as their UNION. Another example:
-a population filter on the returned administrative area becomes a
-population filter on the *related* area. Flag these as changed even if
-the candidate's overall prose sounds fluent.
-
-If the candidate is faithful and already reads naturally, choose pass.
-If there is a fixable issue, choose revise and provide 1-5 concise,
-ACTIONABLE, phrase-level changes. Distinguish meaning-changing issues
-(major) from style/clarity issues (minor).
-If you genuinely cannot determine a necessary referent or constraint,
-choose uncertain and explain EXACTLY what would resolve the uncertainty.
-Do not speculate about external evidence or hidden answers.
-Every suggestion must preserve the intended reference meaning. JSON only.
+Choose pass only for equivalent and genuinely more natural text. For revise
+return actionable changes to the previous draft, naming the specific lost
+condition or changed relationship. Do NOT demand original phrasing or groups.
+Return a SHORT JSON object with verdict, issues, summary and checks.
 """
 
+_FINAL_SYSTEM = """You are an independent final semantic and language judge.
+Compare only the correct public reference with the final candidate. You do
+not see past Critic votes or revision history.
 
-_FINAL_SYSTEM = """You are the final independent language and semantic judge.
-You see only a correct public reference and ONE final candidate; do not
-assume that any previous reviewer approved or rejected it.
+For each of at most FOUR risk groups, assess ALL its requirements:
+intersection vs union, owner of each filter, relation direction/hop,
+and final requested answer. Treat any changed or uncertain requirement
+as a reason NOT to pass. Do not rubber-stamp a fluent paraphrase. In
+particular, a group described as a union when the reference demands an
+intersection changes the answer; so does transferring a population/date
+filter from the answer entity to a related place.
 
-Decide whether the two questions request exactly the same answer under
-the same publicly stated constraints. Preserve relationship DIRECTION,
-multi-hop references, condition OWNERS, numerical/date/code comparisons,
-AND/OR, existential/count/name/ranking output and evidence scope.
-Do not compare internal execution trees, group numbering, sentence
-ordering or word-for-word phrasing. Natural paraphrases are welcome.
-
-You must fill ALL public high-risk checks with preserved/changed/uncertain,
-the smallest EXACT supporting candidate substring, and an explanation.
-A filter value appearing in the candidate does NOT suffice if its
-owning entity changed. Distinguish 'both' (intersection) from 'either'
-(union), and track each intermediate scope across references.
-If even ONE check is changed or uncertain, the final verdict CANNOT pass.
-Do not claim meaningful naturalness improvement for a near-verbatim
-replacement such as 'consist of' → 'be'; group-definition boilerplate
-alone is not good natural prose.
-
-Also decide whether the candidate is a genuinely clearer, more natural
-question than the mechanical reference. Minor cosmetic changes are
-insufficient. If any material semantic difference exists, reject and
-name it. If the meaning cannot be verified confidently, return uncertain.
-Return pass ONLY when semantics are equivalent, naturalness improved,
-and there are NO remaining issues. Never infer hidden facts/answers.
-Return the required JSON object and no additional text.
+Assess naturalness independently. Minor word replacements, copied group
+boilerplate, or a generic preamble around an unchanged reference do not
+count as improvement. Natural equivalents can reorder and merge clauses.
+Return a SHORT JSON object with verdict, semantic_equivalence,
+naturalness, issues, explanation and checks.
 """
-
 
 _ISSUE_SCHEMA = {
     "type": "object",
@@ -125,10 +90,9 @@ _CHECK_SCHEMA = {
     "properties": {
         "id": {"type": "string"},
         "status": {"enum": ["preserved", "changed", "uncertain"]},
-        "candidate_quote": {"type": "string"},
         "explanation": {"type": "string"},
     },
-    "required": ["id", "status", "candidate_quote", "explanation", "checks"],
+    "required": ["id", "status", "explanation", "checks"],
     "additionalProperties": False,
 }
 _CRITIC_SCHEMA = {
@@ -209,14 +173,14 @@ def author_question(backend: Any, reference: str, *,
 
 
 def critique_question(backend: Any, reference: str, candidate: str,
-                      checks: list[dict]) -> dict:
+                      checks: list[dict], *, use_schema: bool = True) -> dict:
     response = _invoke(backend, _CRITIC_SYSTEM, {
         "reference_question": reference,
         "candidate_question": candidate,
-        "semantic_checks": checks,
+        "risk_groups": checks,
         "potential_literal_changes_to_check": literal_warnings(reference, candidate),
-    }, schema=_CRITIC_SCHEMA)
-    check_evidence(checks, response.get("checks"), candidate)
+    }, schema=_CRITIC_SCHEMA if use_schema else None)
+    validate_group_decisions(checks, response.get("checks"))
     if response.get("verdict") not in ("pass", "revise", "uncertain"):
         raise ReviewFormatError("critic_verdict_invalid")
     issues = response.get("issues")
@@ -230,42 +194,40 @@ def critique_question(backend: Any, reference: str, candidate: str,
             raise ReviewFormatError("critic_issue_schema_invalid")
     if not isinstance(response.get("summary"), str):
         raise ReviewFormatError("critic_summary_invalid")
-    if response["verdict"] != "pass" and not issues and not response["summary"]:
-        raise ReviewFormatError("critic_revision_has_no_feedback")
-    # Never mutate the model response's nested list: some scripted backends
-    # or replay fixtures reuse dictionaries across separate review calls.
     issues = [dict(item) for item in issues]
     failures = [item for item in response["checks"]
                 if item["status"] != "preserved"]
-    if failures and response["verdict"] == "pass":
-        # Explicit checklist disagreements override an optimistic overall vote.
-        response["verdict"] = "revise"
+    verdict = response["verdict"]
+    if failures and verdict == "pass":
+        verdict = "revise"
     for item in failures:
-        if not any(issue.get("kind") == f"semantic_check_{item['id']}"
+        group = next(c for c in checks if c["id"] == item["id"])
+        if not any(issue.get("kind") == f"risk_group_{item['id']}"
                    for issue in issues):
             issues.append({
-                "kind": f"semantic_check_{item['id']}",
+                "kind": f"risk_group_{item['id']}",
                 "severity": "major",
                 "explanation": item["explanation"],
                 "suggestion": (
-                    f"Restore the requirement '{next(c['expected'] for c in checks if c['id']==item['id'])}' "
-                    "with its original owner and relation direction."
+                    "Repair the " + group["kind"] +
+                    " discrepancy; preserve ALL of the group's reference "
+                    "requirements with their original owners and relations."
                 ),
             })
-    return {"verdict": response["verdict"], "issues": issues,
+    return {"verdict": verdict, "issues": issues,
             "summary": response["summary"], "checks": response["checks"]}
 
 
 def judge_question(backend: Any, reference: str, candidate: str,
-                   checks: list[dict]) -> dict:
-    """Independent context; candidate phrase evidence for every risk check."""
+                   checks: list[dict], *, use_schema: bool = True) -> dict:
+    """Independent reference-and-candidate review, not a ProgramIR parser."""
     response = _invoke(backend, _FINAL_SYSTEM, {
         "reference_question": reference,
         "candidate_question": candidate,
-        "semantic_checks": checks,
+        "risk_groups": checks,
         "potential_literal_changes_to_check": literal_warnings(reference, candidate),
-    }, schema=_FINAL_SCHEMA)
-    check_evidence(checks, response.get("checks"), candidate)
+    }, schema=_FINAL_SCHEMA if use_schema else None)
+    validate_group_decisions(checks, response.get("checks"))
     if (response.get("verdict") not in ("pass", "reject", "uncertain")
             or response.get("semantic_equivalence") not in (
                 "equivalent", "different", "uncertain")
@@ -280,12 +242,11 @@ def judge_question(backend: Any, reference: str, candidate: str,
         "verdict", "semantic_equivalence", "naturalness",
         "issues", "explanation", "checks",
     )}
-    # Avoid mutating a shared model/fixture response across calls.
     result["issues"] = list(result["issues"])
     if check_failures(result["checks"]) and result["verdict"] == "pass":
         result["verdict"] = "uncertain"
         result["semantic_equivalence"] = "uncertain"
-        result["issues"].append("One or more required semantic checks did not pass.")
+        result["issues"].append("At least one risk group was not preserved.")
     return result
 
 
