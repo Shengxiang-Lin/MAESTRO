@@ -144,7 +144,8 @@ def run(args):
         *(
             Path(__file__).with_name(name) for name in (
                 "pipeline.py", "realization.py", "question_review.py",
-                "verification.py", "scoped_surface.py", "public_semantics.py",
+                "verification.py", "semantic_checks.py", "semantic_probes.py",
+                "coverage_review.py", "scoped_surface.py", "public_semantics.py",
                 "contracts.py", "validators.py", "backend.py", "boundary.py",
                 "streaming.py",
             )
@@ -178,7 +179,9 @@ def run(args):
         author_calls = critic_calls = candidate_probe_calls = final_judge_calls = 0
         review_outcomes = Counter()
         probe_kinds = Counter()
+        verified_probe_kinds = Counter()
         candidates_with_probes = accepted_without_probes = 0
+        accepted_with_complete_coverage = 0
         accepted_after_revision = 0
         with (output_dir / "question_review_audit.jsonl").open(
             encoding="utf-8",
@@ -201,6 +204,12 @@ def run(args):
                             )
                         if attempt.get("accepted") and not specs:
                             accepted_without_probes += 1
+                        coverage = attempt.get("semantic_coverage") or {}
+                        verified_probe_kinds.update(
+                            coverage.get("verified_by_kind") or {}
+                        )
+                        if attempt.get("accepted") and coverage.get("status") == "complete":
+                            accepted_with_complete_coverage += 1
                         review_outcomes[attempt.get(
                             "failure", "accepted" if attempt.get("accepted")
                             else "unclassified",
@@ -233,6 +242,8 @@ def run(args):
                 "candidates_with_probes": candidates_with_probes,
                 "accepted_without_probes": accepted_without_probes,
                 "compiled_probe_kinds": dict(probe_kinds),
+                "verified_probe_kinds": dict(verified_probe_kinds),
+                "accepted_with_complete_coverage": accepted_with_complete_coverage,
                 "final_judge_calls": final_judge_calls,
                 "accepted_after_revision": accepted_after_revision,
                 "candidate_decisions": dict(review_outcomes),
