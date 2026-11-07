@@ -37,10 +37,21 @@ specified biographical and physical criteria' to a full list of thresholds.
 The full contract remains available separately to Question and Sub-Agent
 writers; DO NOT try to encode every step in this short Goal.
 
+When terminal_result_contract is present, its action/output is mandatory
+even in a short intent: COUNT must ask for a NUMBER or total count (not
+one matching entity), QUERY_NAME must ask for matching entity names or
+identities (not a count), and QUERY_ATTR must ask for attribute values.
+If a target_entity_type is supplied, it is the PUBLIC type of the final
+result: do not ask to return People when the task returns Events. This
+compact hint is NOT the complete task reference.
+
 Nevertheless, a summary must NOT contradict the fragment. Do not change
 which entity is returned, turn a count into a list, invent a requirement,
 reverse an explicitly mentioned relation, swap AND for OR, or borrow filters
-from another branch. For a multi-input operation, describe its role
+from another branch. A numerical attribute like 'male population' or
+'female population' describes a COUNT owned by an entity; never rewrite
+it as the entity's sex/gender. A place's end date must not become the
+end date of a later event reached by a relation hop. For a multi-input operation, describe its role
 (e.g. reconcile or combine the upstream candidate groups) without falsely
 imposing a dependency on a parallel sibling. Describe prerequisite outputs
 by their public meaning; do not call them 'the previous task'.
@@ -174,6 +185,63 @@ def _validate_goal(goal, task_id, payload=None, oracle_answer=None):
     return goal.rstrip(". ") + "."
 
 
+def _terminal_result_contract(outline, fragment):
+    """Public, minimal final-output hint; never import sibling filter chains.
+
+    The full plan.query is already in the public Question-author contract,
+    but sending it to a local Goal writer caused cross-branch contamination.
+    Only the final action and an unambiguous, publicly declared target
+    entity type may be exposed for the *terminal* fragment.
+    """
+    if not outline.get("tasks") or fragment["fragment_id"] != (
+        outline["tasks"][-1]["fragment_id"]
+    ):
+        return None
+    operations = [step.get("operation") for step in fragment["public_steps"]]
+    if not operations:
+        return None
+    final_action = operations[-1]
+    result = {"action": final_action}
+    if fragment.get("output_kind") is not None:
+        result["output_kind"] = fragment["output_kind"]
+    if final_action == "QUERY_ATTR":
+        last = fragment["public_steps"][-1]
+        if last.get("output_attribute"):
+            result["output_attribute"] = last["output_attribute"]
+
+    def entity_type(node):
+        if not isinstance(node, Mapping):
+            return None
+        for condition in node.get("conditions") or ():
+            if (isinstance(condition, Mapping)
+                    and isinstance(condition.get("entity_type"), str)
+                    and condition["entity_type"].strip()):
+                return condition["entity_type"]
+        # The outer filtering node can inherit its input entity type. A
+        # RELATE node cannot: its output type may differ from the subject.
+        if node.get("definition") not in (
+            "INTERSECT", "UNION", "FILTER_TYPE", "FILTER_NUMBER",
+            "FILTER_YEAR", "FILTER_DATE", "FILTER_STRING",
+            "SELECT_BETWEEN", "SELECT_AMONG",
+        ):
+            return None
+        children = node.get("inputs") or ()
+        types = [entity_type(child) for child in children]
+        types = [name for name in types if name]
+        return types[0] if types and len(set(types)) == 1 else None
+
+    # Root semantic inputs represent the entities to count/name/inspect.
+    query = outline.get("task_semantics")
+    if (isinstance(query, Mapping) and query.get("definition") == final_action
+            and final_action in ("COUNT", "QUERY_NAME", "QUERY_ATTR")):
+        subjects = query.get("inputs") or ()
+        if len(subjects) == 1:
+            known_type = entity_type(subjects[0])
+            if known_type:
+                result["target_entity_type"] = known_type
+    return result
+
+
 def _fragment_goal_packet(outline, fragment, reference):
     """Only this fragment, immutable direct prerequisites and final goal.
 
@@ -193,6 +261,7 @@ def _fragment_goal_packet(outline, fragment, reference):
         "global_output": {
             "kind": outline["tasks"][-1]["output_kind"],
         },
+        "terminal_result_contract": _terminal_result_contract(outline, fragment),
         "public_modalities": outline["public_modalities"],
     }
 
