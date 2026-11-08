@@ -65,11 +65,11 @@ def _generate_candidate_pool(
     """Build a fixed number of *validated* semantic candidates, with checkpoints."""
     if pool_size<1:
         raise ValueError("pool_size must be positive")
-    if construction_mode not in {"program_composition","semantic_anchored"}:
+    if construction_mode not in {"program_composition","semantic_anchored","semantic_anchored_v2"}:
         raise ValueError("unknown construction mode: "+str(construction_mode))
     if anchor_tries<1:
         raise ValueError("anchor_tries must be positive")
-    if construction_mode=="semantic_anchored" and (
+    if construction_mode in ("semantic_anchored","semantic_anchored_v2") and (
         anchor_profiles_path is None or not Path(anchor_profiles_path).is_file()
     ):
         raise ValueError("semantic_anchored requires an existing YAGO entity profile index")
@@ -95,14 +95,14 @@ def _generate_candidate_pool(
         min_fragment_depth=min_fragment_depth,max_fragment_depth=max_fragment_depth,
         min_orchestration_depth=min_orchestration_depth,max_orchestration_depth=max_orchestration_depth,
         min_latent_anchors=min_latent_anchors,min_parallel_width=min_parallel_width)
-    if construction_mode=='semantic_anchored':
+    if construction_mode in ('semantic_anchored','semantic_anchored_v2'):
         settings.update(construction_mode=construction_mode,anchor_tries=anchor_tries)
     signature_paths=[*kqa_paths,yago_catalog_path,taxonomy_path]
-    if construction_mode=='semantic_anchored':
+    if construction_mode in ('semantic_anchored','semantic_anchored_v2'):
         signature_paths.append(anchor_profiles_path)
     signature=input_signature(signature_paths,settings)
     prepare_worker_context(catalog,taxonomy,seed,
-        anchor_profiles_path if construction_mode=='semantic_anchored' else None)
+        anchor_profiles_path if construction_mode in ('semantic_anchored','semantic_anchored_v2') else None)
 
     def make_proposal(attempt,rng,predicate_usage):
         try:
@@ -117,7 +117,7 @@ def _generate_candidate_pool(
                 return {'attempt':attempt,'error':'hardness'}
             proposal={'attempt':attempt,'program':composed.to_dict(),'binding_seed':rng.randrange(1<<31),
                 'predicate_usage':predicate_usage,'reasoning_motif':profile.label,'hardness':profile.to_dict()}
-            if construction_mode=='semantic_anchored':
+            if construction_mode in ('semantic_anchored','semantic_anchored_v2'):
                 proposal.update(construction_mode=construction_mode,anchor_tries=anchor_tries)
             return proposal
         except (BindingError,ValueError,RuntimeError) as exc:
@@ -128,7 +128,7 @@ def _generate_candidate_pool(
         attempts_limit=attempts_limit,seed=seed,workers=workers,batch_size=batch_size,
         make_proposal=make_proposal,progress=progress,restart=restart_candidates,
         initializer=_worker_init,initargs=(str(yago_catalog_path),str(taxonomy_path),seed,
-            str(anchor_profiles_path) if construction_mode=='semantic_anchored' else None))
+            str(anchor_profiles_path) if construction_mode in ('semantic_anchored','semantic_anchored_v2') else None))
     output=Path(output_path)
     output.parent.mkdir(parents=True,exist_ok=True)
     with output.open("w",encoding="utf-8") as writer:
