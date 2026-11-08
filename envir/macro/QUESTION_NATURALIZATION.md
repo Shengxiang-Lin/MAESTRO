@@ -46,3 +46,46 @@ python -m envir.macro.v4_cli replay \
 Critic approval is a model judgment, not a formal proof of semantic
 equivalence. The source-world simulation and the clean-task assumptions
 remain unchanged; no evidence conflict or replanning is introduced.
+
+## Live progress, incremental writes, and automatic resume
+
+V4 question naturalization now shows a live `tqdm` progress bar (total
+questions, accepted, fallback, accepted after revision), including the
+already completed prefix when resuming. LLM-enabled `build` uses the same
+writer; deterministic `build` remains a batch operation.
+
+Every completed Question is committed in original Task order to three
+JSONL files: `private_clean_scenes_v4.jsonl`,
+`public_questions_v4.jsonl`, and `question_review_audit_v4.jsonl`.
+The default `--flush-every 1` flushes and fsyncs every completed record,
+then atomically updates `question_progress_state_v4.json`. You can raise
+`--flush-every` to reduce disk sync overhead, at the risk of repeating
+at most the last uncommitted group after an abrupt process crash.
+
+If interrupted, **run the same command again, with the same output
+directory and no `--overwrite`**. The process verifies the committed
+input/model/code signature, byte offsets and hashes, discards any
+uncommitted tails, and continues from the first incomplete Question.
+Already committed Questions are not sent to the model again. The
+summary JSON is published after the entire stream completes.
+
+Example:
+
+```bash
+python -m envir.macro.v4_cli naturalize \
+  --scenes envir/data/macro_v4/private_clean_scenes_v4.jsonl \
+  --output-dir envir/data/macro_v4_naturalized_100 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 4 --max-revisions 2 --flush-every 1
+```
+
+To resume, rerun exactly that command; the progress bar starts at the
+committed count. `--no-progress` hides only the display. Use
+`--overwrite` **only** when you intentionally want to discard existing
+Question outputs and regenerate them from the beginning.
+
+A changed input source, model setting or reviewer code will deliberately
+block resume; use a new output directory or explicitly restart. The
+writer uses a single-writer lock to prevent overlapping runs against the
+same output directory.
