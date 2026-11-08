@@ -355,6 +355,20 @@ class MMQATaskFirstTests(unittest.TestCase):
             ]
             self.assertEqual(len(manifest), 3)
             self.assertEqual(len({row["mmqa_record_id"] for row in manifest}), 3)
+            self.assertTrue(all(
+                row["question"] != row["original_mmqa_question_audit_only"]
+                for row in manifest
+            ))
+            self.assertTrue((output / "scene_bank_v4.jsonl").exists())
+            bank = [
+                json.loads(line) for line in
+                (output / "scene_bank_v4.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(len(bank), 4)
+            self.assertTrue(all("question" not in item for item in bank))
+            patterns = json.loads((output / "goal_pattern_bank_v4.json").read_text())
+            self.assertEqual(patterns["total_patterns"], 8)
+            self.assertEqual(summary["statistics"]["original_mmqa_question_copies"], 0)
             with self.assertRaises(FileExistsError):
                 with contextlib.redirect_stdout(io.StringIO()):
                     main(args)
