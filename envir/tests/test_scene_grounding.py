@@ -130,7 +130,10 @@ class WorldConcretizationTests(unittest.TestCase):
         for key in ("entry", "score", "positive_mark", "relative_order", "group"):
             self.assertIn("fact_ref", first["fields"][key])
             self.assertIn("value", first["fields"][key])
-        self.assertNotIn("gold_answer", json.dumps(request))
+        # A simulation status may legitimately say "not_gold_answer";
+        # it is the private Gold ANSWER KEY itself that must be excluded.
+        self.assertNotIn("gold_answer", request)
+        self.assertNotIn("gold_answer_key", request)
 
     def test_world_concretization_preserves_frozen_graph_evidence_and_values(self):
         author, critic = Author(), Critic()
