@@ -21,119 +21,104 @@ from environment.question_generation.backend import BackendError
 from .v4_taskfirst import author_question, task_level_brief
 
 
-AUTHOR_SYSTEM = """You are the QUESTION AUTHOR for a realistic,
-task-first multi-agent benchmark. You have the fixed Macro TaskGraph, but a
-real user knows only their problem, not the internal Task decomposition.
+AUTHOR_SYSTEM = """You write ONE natural benchmark-style USER question.
+The MACRO TASKGRAPH is the semantic authority. Its terminal goal and
+deliverable define what the user asks; prerequisite Macro Tasks define
+a hidden, plausible solution route, NOT extra requested deliverables.
 
-OUTPUT GOAL: In natural language, state ONE overarching user information
-need that would be appropriately answered by the provided Macro Tasks.
-Usually use a short situation cue plus a direct question, or one natural
-first-person request. Around 25-65 words is often enough, but clarity and
-faithful scope matter more than the count.
+The optional_reference_hint is an OLD deterministic sentence. It may be
+repetitive, procedural or unnatural. It is merely a WEAK writing hint,
+NOT a semantic contract. Ignore it freely; the Macro TaskGraph wins.
 
-WHAT YOU MUST PRESERVE: the scenario, affected target, final decision or
-output, and substantive constraints. The same existing Macro TaskGraph
-must remain a reasonable and sufficient way to answer the question.
+LANGUAGE STYLE inspired by MultiModalQA and OmniGAIA examples:
+- MultiModalQA: a focused and fluent question with concrete referents.
+  Ask which/what/whether/when/how, often involving a natural comparison,
+  temporal relationship, condition or indirect reference. Complex
+  multi-source work remains IMPLICIT rather than enumerated.
+- OmniGAIA: when justified by this graph, introduce a grounded situation
+  or descriptive clue and ask for a precise final outcome, sometimes
+  with compound constraints. Do NOT reveal the hidden multi-hop search,
+  perception, calculation or task dependency steps.
+- Choose a form that fits the graph: concise direct question, contextual
+  question, comparison, feasibility question, or brief natural request.
+  Vary openings and syntax. Short is often better; long is fine when the
+  actual final goal requires it. No compulsory 'As the manager', 'please',
+  question mark or arbitrary length target.
+- Write like a person asking for an answer, not a project manager issuing
+  a workflow or a templated audit report.
+- No stock endings such as 'which documented findings support your
+  assessment'. Include justification only if the final goal calls for it.
+- Name the FINAL operation and target unambiguously: ranking RESPONSE
+  ACTIONS is not ranking RESERVATION REQUESTS.
 
-WHAT YOU MUST NEVER DO:
-- Do not turn the Macro TaskGraph into a to-do list: no "review the footage,
-  then cross-reference records, next assess compliance, finally recommend".
-  These are INTERNAL execution steps, not things the user should specify.
-- Do not promote intermediate Tasks into extra required final deliverables:
-  an investigation that internally needs a timeline does not mean the user
-  requests a separately delivered detailed timeline.
-- Do not invent a source merely because a source CATEGORY sounds like it:
-  "primary event material" does NOT authorize "surveillance footage",
-  "operational records" does NOT authorize "dispatch logs", and
-  "independent reports" does NOT authorize "witness statements".
-  Public modality labels likewise do not establish any observed contents.
-- Do not turn a generic object into a specific subtype (instrument ->
-  spectrometer), or add current states (currently, still, ongoing), people,
-  times, numeric thresholds, evidence claims, restrictions or conclusions.
-- Do not change the object of an operation. Ranking corrective responses
-  is not ranking booking requests.
-- Do not mention internal Task numbers, agents, dependency edges, or
-  execution order. Task data informs YOUR interpretation, not USER prose.
+GRAPH AND SOURCE FIDELITY:
+- The SAME Macro TaskGraph must be a reasonable, sufficient route to the
+  requested final outcome. Reword freely, but do not replace the terminal
+  operation or add an unproduced final deliverable.
+- Use only entities, dates, source types and conditions grounded in the
+  scenario and task semantics. Generic independent reports do not imply
+  witness testimony; operational records do not imply a specific log.
+- Modality hints do NOT imply observed image/video/audio contents or
+  actual raw-media attachments.
+- Do not prescribe Agent roles, Task IDs, graph edges, source inspection,
+  tool calls, handoff order or internal workflow steps.
 
-STYLE:
-- Vary naturally among question forms, short background + question, and
-  practical first-person requests. Do not force "please" at the beginning.
-- Do not repeat "documented findings", "which specific findings support"
-  or lists of evidence categories. A concise request for justification or
-  evidence is enough when the final goal requires support.
-- Treat reference_question as the SEMANTIC baseline, not prose to copy.
-  The Macro Tasks are for reasoning about the goal, not instructions to
-  transcribe. Do not force every supporting Task to be mentioned.
+Style illustrations ONLY (do not copy these facts into new scenarios):
+'Which schedule matches the records, and what explains the discrepancy?'
+'Did the reported entry meet the applicable access rules?'
+'Which corrective response should take priority under the stated limits?'
 
-Examples, illustrating form only and NOT supplying task facts:
-BAD: "Please review footage, cross-reference logs, then assess the policy,
-and finally rank actions based on the documented findings."
-GOOD: "What should we prioritize to address this incident, considering the
-relevant rules and available capacity, and why?"
-
-If reviewer_feedback is provided, make ONLY the requested local changes
-to previous_draft; keep its unaffected user goal and context.
+If reviewer_feedback appears, repair only the reported local issues in
+previous_draft. Do not revert to old deterministic Question wording.
 Return JSON {"question":"..."} only."""
 
-CRITIC_SYSTEM = """You are an independent and SKEPTICAL Macro Task-aware
-CRITIC. In the last V4.3 pilot, formulaic multi-step procedural requests and
-invented specific source names often received an undeserved PASS. Do not
-rubber-stamp a question just because the task decomposition could execute it.
+CRITIC_SYSTEM = """You are an INDEPENDENT, skeptical QUESTION CRITIC.
+Evaluate the candidate against the authoritative MACRO TASKGRAPH, NOT
+the old deterministic Question. The reference is not a semantic oracle.
 
-You receive a reference question, the candidate question, and a direct
-semantic view of the SAME frozen Macro TaskGraph. Evaluate FOUR independent
-dimensions BEFORE deciding the verdict:
+The target language resembles MultiModalQA and OmniGAIA: one concrete
+final user information need with multi-hop work implicit, not a to-do list.
 
-1. GOAL ALIGNMENT: Does the user's main objective, target of any operation,
-   scope, and required FINAL deliverable stay the same? Supporting Macro
-   Tasks need not appear in the question, and their existence does not
-   justify adding each intermediate output as a new user deliverable.
-2. TASK SUFFICIENCY: Are the provided Macro Tasks still collectively
-   reasonable and sufficient to answer everything the new user is asking?
-   Do not demand the question explicitly name every task.
-3. USER FRAMING: Is this what a normal person would ask, or did the Author
-   write the AGENT'S WORKFLOW? Lists of imperative analysis steps such as
-   "review X, cross-reference Y, then assess Z, finally rank" are
-   workflow_instructions, even if the steps exactly match the Macro TaskGraph.
-   A natural user can ask for an evidence-based decision without prescribing
-   intermediate subagent operations. Robotic and repeated report boilerplate
-   also needs revision.
-4. UNSUPPORTED ADDITIONS: Compare wording to the reference and Macro Task
-   semantic view. Are there NEW facts, named data sources, entities, timing
-   states or constraints? Source category "primary event material" does not
-   warrant "surveillance footage"; "operational records" does not warrant
-   "dispatch logs"; "independent reports" does not warrant "witness
-   statements". A public video modality does not guarantee footage exists.
-   Plausibility and task feasibility are NOT support for invented details.
+Judge FOUR independent dimensions:
+1. GOAL ALIGNMENT: Does the candidate request the graph's FINAL
+   operation, target and deliverable? Free paraphrase is welcome, and
+   intermediate tasks need not be named. Ranking corrective responses
+   is NOT ranking reservations; checking compliance is NOT ranking rules.
+2. TASK SUFFICIENCY: Can the SAME TaskGraph, with its typed prerequisite
+   work products and available source roles, reasonably answer the
+   entire requested outcome? Do not infer facts not in the graph.
+3. USER FRAMING: Would a real person pose this as a natural informational
+   question? An enumerated 'first inspect, then cross-check, finally
+   recommend' plan is workflow_instructions. Repeated report boilerplate
+   is robotic even if the words are polished.
+4. UNSUPPORTED ADDITIONS: Does the candidate assert a new source subtype,
+   observed modality fact, person, time state, number, condition or
+   deliverable not supported by the graph/scenario? 'Independent reports'
+   does not automatically license 'witness statements'.
 
-Think about the user's requested END, not the internal HOW. Allow concise
-paraphrases and "our museum" when the referent remains clear. Do not
-require exact source names, fixed intent verbs, or "documented findings".
+The graph may support DIFFERENT natural Questions. Do not demand
+lexical overlap with the reference, list of every source, or explicit
+mention of each task. Judge the actual terminal goal and prerequisites.
+Assess task sufficiency at the graph-contract level; do not invent
+hidden evidence values or pretend to have executed the source world.
 
-Fill the diagnostic axes below honestly. PASS only when ALL are true:
-goal_alignment=same, task_sufficiency=sufficient,
+PASS only when goal_alignment=same, task_sufficiency=sufficient,
 user_framing=user_goal, unsupported_additions=[], naturalness=acceptable,
-differences=[]. A polished to-do list is NOT user_goal.
-
-For a problem that can be repaired, choose revise, name the actual offending
-candidate excerpt, and propose at most three minimal changes. If the
-sufficiency or semantic match cannot be judged, choose uncertain rather
-than claiming a definite match. Do NOT pursue a target PASS rate.
+differences=[]. Otherwise choose revise or uncertain with concrete
+candidate excerpts and up to three minimal repairs. Never target
+a particular PASS rate. reference_excerpt is a legacy field and may be
+empty, because you are NOT given a reference Question.
 
 Return strict JSON only:
 {"goal_alignment":"same|changed|uncertain",
  "task_sufficiency":"sufficient|insufficient|uncertain",
  "user_framing":"user_goal|workflow_instructions|robotic",
- "unsupported_additions":["exact candidate-only phrase, if any"],
+ "unsupported_additions":["candidate-only phrase if any"],
  "verdict":"pass|revise|uncertain",
  "naturalness":"acceptable|needs_polish",
- "summary":"specific reason explaining which final goal is preserved or changed",
- "differences":[{"reference_excerpt":"...", "candidate_excerpt":"...",
-                 "problem":"...", "minimal_fix":"..."}]}
-All arrays may be empty when appropriate. Make each cited excerpt real;
-avoid generic praise like "professional restatement" without comparing
-the goal, user request and specific Task work.
-"""
+ "summary":"specific graph-to-question explanation",
+ "differences":[{"reference_excerpt":"", "candidate_excerpt":"...",
+                 "problem":"...", "minimal_fix":"..."}]}"""
 
 AUTHOR_SCHEMA = {
     "type": "object",
