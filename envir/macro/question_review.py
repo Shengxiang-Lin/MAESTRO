@@ -19,105 +19,101 @@ from concurrent.futures import ThreadPoolExecutor
 
 from environment.question_generation.backend import BackendError
 from .question import author_question, task_level_brief
+from .semantic_contract import semantic_contract, semantic_surface_issues
 
 
-AUTHOR_SYSTEM = """You write ONE natural benchmark-style USER question.
-The MACRO TASKGRAPH is the semantic authority. Its terminal goal and
-deliverable define what the user asks; prerequisite Macro Tasks define
-a hidden, plausible solution route, NOT extra requested deliverables.
+AUTHOR_SYSTEM = """You are a QUESTION REALIZER, not a problem designer.
 
-The optional_reference_hint is an OLD deterministic sentence. It may be
-repetitive, procedural or unnatural. It is merely a WEAK writing hint,
-NOT a semantic contract. Ignore it freely; the Macro TaskGraph wins.
+Turn the FROZEN TaskGraph-defined information need into ONE fluent,
+natural user question. The supplied semantic_contract is authoritative.
+Do not create a new task, scene, evidence source, or solution strategy.
 
-LANGUAGE STYLE inspired by MultiModalQA and OmniGAIA examples:
-- MultiModalQA: a focused and fluent question with concrete referents.
-  Ask which/what/whether/when/how, often involving a natural comparison,
-  temporal relationship, condition or indirect reference. Complex
-  multi-source work remains IMPLICIT rather than enumerated.
-- OmniGAIA: when justified by this graph, introduce a grounded situation
-  or descriptive clue and ask for a precise final outcome, sometimes
-  with compound constraints. Do NOT reveal the hidden multi-hop search,
-  perception, calculation or task dependency steps.
-- Choose a form that fits the graph: concise direct question, contextual
-  question, comparison, feasibility question, or brief natural request.
-  Vary openings and syntax. Short is often better; long is fine when the
-  actual final goal requires it. No compulsory 'As the manager', 'please',
-  question mark or arbitrary length target.
-- Write like a person asking for an answer, not a project manager issuing
-  a workflow or a templated audit report.
-- No stock endings such as 'which documented findings support your
-  assessment'. Include justification only if the final goal calls for it.
-- Name the FINAL operation and target unambiguously: ranking RESPONSE
-  ACTIONS is not ranking RESERVATION REQUESTS.
+HARD INVARIANTS (higher priority than fluent writing):
+1. EXACT OBJECTIVE: preserve the candidate universe, operator, comparison
+   attribute, conditions, threshold, scope and required output specified
+   in the semantic_contract. Do not turn synthetic scores into fame,
+   prestige, importance or quality, nor time indices into calendar dates.
+2. SAME SOLUTION: the existing Macro TaskGraph must remain an adequate
+   solution route without any new prerequisite, operator, field, source or
+   WorkProduct. Do not change the meaning so that required work is bypassed.
+   You are NOT tasked with repairing or redesigning the original graph.
+3. SOURCE CLOSED WORLD: use only authorized entities and source roles.
+   Do not invent a specific account, user, report, website, observation,
+   media content, source subtype, real-world event, name, date or number.
+   An 'image' label does NOT tell you what an image depicts.
+4. ANSWER EQUIVALENCE: the result requested by the rewritten Question must
+   be the same result defined by the terminal WorkProduct, not a new,
+   easier, narrower, broader, or more interesting deliverable.
+5. NO PRIVATE ORCHESTRATION: do not describe agents, Task IDs, graph
+   structure, individual delegations, the sequence of handoffs, or tools.
 
-GRAPH AND SOURCE FIDELITY:
-- The SAME Macro TaskGraph must be a reasonable, sufficient route to the
-  requested final outcome. Reword freely, but do not replace the terminal
-  operation or add an unproduced final deliverable.
-- Use only entities, dates, source types and conditions grounded in the
-  scenario and task semantics. Generic independent reports do not imply
-  witness testimony; operational records do not imply a specific log.
-- Modality hints do NOT imply observed image/video/audio contents or
-  actual raw-media attachments.
-- Do not prescribe Agent roles, Task IDs, graph edges, source inspection,
-  tool calls, handoff order or internal workflow steps.
+NATURAL EXPRESSION:
+- You MAY change syntax, shorten boilerplate, vary question openings, use
+  already licensed entity references, and keep multi-step work implicit.
+- You MAY NOT make the request 'realistic' by inventing story details or
+  substituting a synthetic measurement with a real-world fact.
+- The deterministic reference is an optional writing hint only; the
+  semantic_contract and TaskGraph are the authority.
+- If fidelity and fluency conflict, choose a simpler faithful question.
 
-Style illustrations ONLY (do not copy these facts into new scenarios):
-'Which schedule matches the records, and what explains the discrepancy?'
-'Did the reported entry meet the applicable access rules?'
-'Which corrective response should take priority under the stated limits?'
+Examples are not new facts; do not transfer their content to the scene.
+Before returning, check the objective, source boundary, numerical conditions,
+and whether the SAME TaskGraph can answer exactly this question.
 
-If reviewer_feedback appears, repair only the reported local issues in
-previous_draft. Do not revert to old deterministic Question wording.
-Return JSON {"question":"..."} only."""
+Return strict JSON only: {"question":"..."}"""
 
-CRITIC_SYSTEM = """You are an INDEPENDENT, skeptical QUESTION CRITIC.
-Evaluate the candidate against the authoritative MACRO TASKGRAPH, NOT
-the old deterministic Question. The reference is not a semantic oracle.
+CRITIC_SYSTEM = """You are a STRICT, independent SEMANTIC EQUIVALENCE CRITIC,
+not a reviewer optimizing naturalness or approval rate.
 
-The target language resembles MultiModalQA and OmniGAIA: one concrete
-final user information need with multi-hop work implicit, not a to-do list.
+Compare candidate_question against the frozen semantic_contract AND existing
+macro_task_graph. The contract is the specification; graph is the existing
+solution route. Do not infer unseen source content or reward creativity.
 
-Judge FOUR independent dimensions:
-1. GOAL ALIGNMENT: Does the candidate request the graph's FINAL
-   operation, target and deliverable? Free paraphrase is welcome, and
-   intermediate tasks need not be named. Ranking corrective responses
-   is NOT ranking reservations; checking compliance is NOT ranking rules.
-2. TASK SUFFICIENCY: Can the SAME TaskGraph, with its typed prerequisite
-   work products and available source roles, reasonably answer the
-   entire requested outcome? Do not infer facts not in the graph.
-3. USER FRAMING: Would a real person pose this as a natural informational
-   question? An enumerated 'first inspect, then cross-check, finally
-   recommend' plan is workflow_instructions. Repeated report boilerplate
-   is robotic even if the words are polished.
-4. UNSUPPORTED ADDITIONS: Does the candidate assert a new source subtype,
-   observed modality fact, person, time state, number, condition or
-   deliverable not supported by the graph/scenario? 'Independent reports'
-   does not automatically license 'witness statements'.
+CHECK ALL FIVE independent invariants:
+1. objective_equivalent: exactly the same operation, target universe,
+   criterion, constraints, scope and requested output?
+2. solution_preserved: does the same typed Macro TaskGraph remain an
+   adequate route without any NEW Task, field, observation, source,
+   inference, operation or output? Do not repair the graph.
+3. required_work_preserved: does the rewrite avoid simplifying away
+   the intended necessary input and reasoning requirements? Assess at
+   the graph-contract level, not by claiming execution ablation proof.
+4. source_faithful: no unsupported entity, source type, personal account,
+   source subtype, image/video/audio content, event, date, threshold,
+   relationship, social significance, claim or external source?
+5. answer_equivalent: the terminal result required by the contract would
+   fully answer this Question, and vice versa?
 
-The graph may support DIFFERENT natural Questions. Do not demand
-lexical overlap with the reference, list of every source, or explicit
-mention of each task. Judge the actual terminal goal and prerequisites.
-Assess task sufficiency at the graph-contract level; do not invent
-hidden evidence values or pretend to have executed the source world.
+Also judge naturalness: one focused user information need, no workflow
+instructions, no robotic report boilerplate.
 
-PASS only when goal_alignment=same, task_sufficiency=sufficient,
-user_framing=user_goal, unsupported_additions=[], naturalness=acceptable,
-differences=[]. Otherwise choose revise or uncertain with concrete
-candidate excerpts and up to three minimal repairs. Never target
-a particular PASS rate. reference_excerpt is a legacy field and may be
-empty, because you are NOT given a reference Question.
+Reject an invented context even if it sounds harmless (e.g. 'my account
+summary' is not licensed by generic image+table metadata).
+Reject substitutions like 'most prestigious' for 'highest recorded score'.
+Do NOT assume pixels were read, actual dates were established, or
+additional sources exist. If evidence is missing or uncertain, return
+'uncertain', not an unjustified PASS.
 
-Return strict JSON only:
-{"goal_alignment":"same|changed|uncertain",
- "task_sufficiency":"sufficient|insufficient|uncertain",
+DECISION: 'pass' is legal ONLY when all five checks = 'yes',
+user_framing='user_goal', naturalness='acceptable',
+unsupported_additions=[], and differences=[].
+For a clear, minimally repairable issue return 'revise' and quote the
+candidate-only phrase with a minimal correction. For any unverifiable
+semantic relation return 'uncertain'. Never target a PASS rate.
+Do not claim formal equivalence or that each node is provably indispensable.
+
+Return JSON with EXACT fields:
+{"objective_equivalent":"yes|no|uncertain",
+ "solution_preserved":"yes|no|uncertain",
+ "required_work_preserved":"yes|no|uncertain",
+ "source_faithful":"yes|no|uncertain",
+ "answer_equivalent":"yes|no|uncertain",
  "user_framing":"user_goal|workflow_instructions|robotic",
- "unsupported_additions":["candidate-only phrase if any"],
+ "unsupported_additions":["exact unsupported phrase, if any"],
  "verdict":"pass|revise|uncertain",
  "naturalness":"acceptable|needs_polish",
- "summary":"specific graph-to-question explanation",
- "differences":[{"reference_excerpt":"", "candidate_excerpt":"...",
+ "summary":"specific contract-based rationale",
+ "differences":[{"reference_excerpt":"","candidate_excerpt":"...",
                  "problem":"...", "minimal_fix":"..."}]}"""
 
 AUTHOR_SCHEMA = {
@@ -169,6 +165,39 @@ CRITIC_SCHEMA_V44 = {
     ],
     "additionalProperties": False,
 }
+
+
+# Strict, versioned Question-only semantic review. Legacy audits keep their
+# original schema; this does not modify downstream Task/Trace/Answer work.
+SEMANTIC_REVIEW_POLICY = "taskfirst_semantic_contract_v1"
+SEMANTIC_REVIEW_PIPELINE = "taskfirst_question_semantic_author_critic_v1"
+SEMANTIC_AXES = (
+    "objective_equivalent",
+    "solution_preserved",
+    "required_work_preserved",
+    "source_faithful",
+    "answer_equivalent",
+)
+CRITIC_SCHEMA_SEMANTIC = {
+    "type": "object",
+    "properties": {
+        **{name: {"enum": ["yes", "no", "uncertain"]}
+           for name in SEMANTIC_AXES},
+        "user_framing": {"enum": [
+            "user_goal", "workflow_instructions", "robotic",
+        ]},
+        "unsupported_additions": {
+            "type": "array", "items": {"type": "string"},
+        },
+        **CRITIC_SCHEMA["properties"],
+    },
+    "required": [
+        *SEMANTIC_AXES, "user_framing", "unsupported_additions",
+        "verdict", "naturalness", "summary", "differences",
+    ],
+    "additionalProperties": False,
+}
+
 
 STOP = {
     "with", "this", "that", "their", "have", "been", "which", "about", "from",
@@ -349,8 +378,8 @@ def minimal_question_guards(candidate: str) -> list[str]:
 
 
 def style_hint(scene: dict) -> str:
-    comp = scene["source_priors"]["MultiModalQA"].get("composition_family", "lookup")
-    choices = STYLE_HINTS.get(comp, STYLE_HINTS["lookup"])
+    intent = scene["goal"]["intent"]
+    choices = STYLE_HINTS.get(intent, STYLE_HINTS["lookup"])
     seed = int(_fingerprint([scene["task_id"], "question_style"])[:12], 16)
     return choices[seed % len(choices)]
 
@@ -538,6 +567,33 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
             )} for diff in differences
         ],
     }
+    if policy == SEMANTIC_REVIEW_POLICY:
+        axes = {key: value.get(key) for key in SEMANTIC_AXES}
+        framing = value.get("user_framing")
+        additions = value.get("unsupported_additions")
+        if (any(val not in {"yes", "no", "uncertain"} for val in axes.values())
+                or framing not in {"user_goal", "workflow_instructions", "robotic"}
+                or not isinstance(additions, list) or len(additions) > 5
+                or any(not isinstance(item, str) or not item.strip()
+                       for item in additions)):
+            raise ValueError("semantic_review_axes_invalid")
+        all_yes = all(val == "yes" for val in axes.values())
+        if verdict == "pass" and (
+            not all_yes or framing != "user_goal" or additions
+            or naturalness != "acceptable" or differences
+        ):
+            raise ValueError("semantic_pass_contradicts_contract_checks")
+        if verdict == "revise" and any(val == "uncertain" for val in axes.values()):
+            raise ValueError("uncertainty_cannot_be_relabelled_revision")
+        if verdict == "uncertain" and all_yes and framing == "user_goal" and (
+            not additions and naturalness == "acceptable" and not differences
+        ):
+            raise ValueError("unexplained_semantic_uncertainty")
+        output.update({
+            **axes,
+            "user_framing": framing,
+            "unsupported_additions": list(additions),
+        })
     if policy in {"v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}:
         alignment = value.get("goal_alignment")
         sufficiency = value.get("task_sufficiency")
@@ -598,6 +654,7 @@ def naturalize_one(scene: dict, *, author, critic,
     if not 0 <= max_revisions <= 8:
         raise ValueError("max_revisions must be between 0 and 8")
     task_view = macro_task_view(scene)
+    contract = semantic_contract(scene)
     initial = reference_question(scene)
     attempts = []
     latest = None
@@ -611,13 +668,14 @@ def naturalize_one(scene: dict, *, author, critic,
         author_calls += 1
         payload = {
             "macro_task_graph": task_view,
+            "semantic_contract": contract,
             "optional_reference_hint": initial,
-            "semantic_authority": "macro_task_graph",
+            "semantic_authority": "frozen_semantic_contract_and_macro_task_graph",
             "style_hint": style_hint(scene),
             "instruction": (
-                "Write an MMQA/OmniGAIA-style final question supported by "
-                "the Macro TaskGraph. The old reference is only optional "
-                "writing guidance; hide intermediate work and tool order."
+                "Realize exactly the frozen semantic_contract as one natural "
+                "user Question, with the same TaskGraph solution path and no "
+                "new facts or sources. Hide the internal workflow."
             ),
         }
         if latest is not None:
@@ -642,6 +700,7 @@ def naturalize_one(scene: dict, *, author, critic,
         latest = candidate
         row["candidate"] = candidate
         issues = minimal_question_guards(candidate)
+        issues.extend(semantic_surface_issues(candidate, contract))
         from envir.schema import normalize_label
         source_original = scene.get("source_priors", {}).get(
             "MultiModalQA", {}).get("original_question", "")
@@ -657,10 +716,12 @@ def naturalize_one(scene: dict, *, author, critic,
         review_payload = {
             "candidate_question": candidate,
             "macro_task_graph": task_view,
+            "semantic_contract": contract,
             "review_focus": (
-                "Evaluate the candidate ONLY against the graph's terminal "
-                "goal and prerequisite work, including style, scope and "
-                "unsupported specificity. Ignore old reference wording."
+                "Five-way bidirectional problem equivalence: exact operation, "
+                "same existing solution path, no loss of required work, "
+                "closed source inventory, same final result. Strictly reject "
+                "new contextual claims or unsupported source content."
             ),
         }
         try:
@@ -669,8 +730,8 @@ def naturalize_one(scene: dict, *, author, critic,
             judgment = _validate_review(critic.complete_json(
                 CRITIC_SYSTEM,
                 json.dumps(review_payload, ensure_ascii=False),
-                response_schema=CRITIC_SCHEMA_V44,
-            ), policy="v4.5_graph_primary_benchmark_style")
+                response_schema=CRITIC_SCHEMA_SEMANTIC,
+            ), policy=SEMANTIC_REVIEW_POLICY)
         except (BackendError, ValueError, KeyError, TypeError) as exc:
             last_failure = "critic_protocol_error"
             row["failure"] = last_failure
@@ -685,7 +746,7 @@ def naturalize_one(scene: dict, *, author, critic,
                 judgment = _validate_review(critic.complete_json(
                     CRITIC_SYSTEM, json.dumps(review_payload, ensure_ascii=False),
                     response_schema=None,
-                ), policy="v4.5_graph_primary_benchmark_style")
+                ), policy=SEMANTIC_REVIEW_POLICY)
             except (BackendError, ValueError, KeyError, TypeError) as fix_exc:
                 row["protocol_retry_failure"] = str(fix_exc)[:180]
                 attempts.append(row)
@@ -711,11 +772,12 @@ def naturalize_one(scene: dict, *, author, critic,
     result = accepted if accepted is not None else safe_reference
     status = "accepted" if accepted is not None else "fallback"
     metadata = {
-        "review_policy_version": "v4.5_graph_primary_benchmark_style",
+        "review_policy_version": SEMANTIC_REVIEW_POLICY,
+        "semantic_contract_sha256": _fingerprint(contract),
         "safe_reference_polish_applied": (
             accepted is None and result != initial
         ),
-        "pipeline": "v4_benchmark_style_graph_primary_author_critic_repair",
+        "pipeline": SEMANTIC_REVIEW_PIPELINE,
         "status": status,
         "reason": "independent_critic_pass" if accepted is not None else last_failure,
         "reference_question": initial,
@@ -811,7 +873,17 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         errors.append("review_reference_drift")
     if meta.get("reference_sha256") != _fingerprint(original):
         errors.append("review_reference_fingerprint_mismatch")
-    if policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}:
+    if policy == SEMANTIC_REVIEW_POLICY:
+        try:
+            if meta.get("semantic_contract_sha256") != _fingerprint(semantic_contract(scene)):
+                errors.append("semantic_contract_fingerprint_mismatch")
+        except (ValueError, KeyError, TypeError):
+            errors.append("semantic_contract_unavailable")
+        if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
+            errors.append("review_macro_task_view_changed")
+        if meta.get("pipeline") != SEMANTIC_REVIEW_PIPELINE:
+            errors.append("review_wrong_pipeline")
+    elif policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}:
         if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
             errors.append("review_macro_task_view_changed")
         expected_pipeline = {
@@ -850,7 +922,14 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         if (policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic"}
                 and minimal_question_guards(scene["question"])):
             errors.append("review_surface_mismatch")
-        if scene["question"] == original and policy != "v4.5_graph_primary_benchmark_style":
+        if policy == SEMANTIC_REVIEW_POLICY and (
+            minimal_question_guards(scene["question"]) or
+            semantic_surface_issues(scene["question"], semantic_contract(scene))
+        ):
+            errors.append("review_semantic_surface_guard_failed")
+        if scene["question"] == original and policy not in {
+            "v4.5_graph_primary_benchmark_style", SEMANTIC_REVIEW_POLICY,
+        }:
             errors.append("review_not_naturalized")
         if not any(
             a.get("accepted") and a.get("candidate") == scene["question"]
@@ -861,7 +940,7 @@ def validate_naturalized_question(scene: dict) -> list[str]:
     elif status == "fallback":
         expected = (
             polished_reference_question(original)
-            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}
+            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style", SEMANTIC_REVIEW_POLICY}
             else original
         )
         if scene["question"] != expected or meta.get("accepted_review") is not None:
