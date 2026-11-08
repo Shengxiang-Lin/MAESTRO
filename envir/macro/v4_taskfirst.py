@@ -11,11 +11,15 @@ not V3's fixed numeric-answer templates or Gold Answer compiler.
 from __future__ import annotations
 
 import random
-from collections import Counter
+from dataclasses import replace
 
 from envir.schema import digest
-from .patterns import BY_DOMAIN
-from .v2_planner import build_v2_plan
+from .patterns import BY_DOMAIN, CASES, CASE_VARIANTS
+from .priors import choose_kqa, choose_mmqa
+from .v2_workbank import GOAL_TYPES
+from .graph import (build_atomic_draft, coarsen, compile_contracts,
+                    compile_waves, complexity)
+from .v2_planner import _build_work_graph, _topology_metrics, _classify_topology
 
 
 QUESTION_REQUESTS = {
@@ -143,20 +147,99 @@ def author_question(brief: dict, *, ordinal: int, seed: int) -> str:
 
 def compose_taskfirst(*, ordinal: int, seed: int,
                       kqa: list[dict], mmqa: list[dict]) -> dict:
-    """Compose Task plan FIRST. Explicitly discard V2's preauthored question."""
-    base = build_v2_plan(ordinal=ordinal, seed=seed, kqa=kqa, mmqa=mmqa)
-    graph = base["macro_graph"]
-    brief = task_level_brief(base)
-    question = author_question(brief, ordinal=ordinal, seed=seed)
-    uid = "macro-v4-" + digest(seed, ordinal, base["task_id"])
-    return {
+    """The Question is authored ONLY after all macro work packages exist.
+
+    The goal/result-type is a design constraint on task composition. It is
+    not a prewritten user Question or a final-answer oracle.
+    """
+    if ordinal < 0:
+        raise ValueError("ordinal must be nonnegative")
+    rng = random.Random(ordinal * 99017 + seed * 1000003)
+    index = ordinal % len(CASES)
+    iteration = ordinal // len(CASES)
+    original = CASES[index]
+    issues = CASE_VARIANTS[original.domain]
+    case = replace(original, issue=issues[(iteration * 3 + seed) % len(issues)])
+    intents = tuple(GOAL_TYPES)
+    intent = intents[(iteration + index * 3 + seed) % len(intents)]
+    source_hint = rng.choice(
+        ("chain", "parallel_join", "fork_join", "mixed", "staged")
+    )
+    mmqa_prior, mmqa_policy = choose_mmqa(
+        mmqa, domain=case.domain, motif=source_hint, rng=rng,
+        ordinal=ordinal,
+    )
+    structural_preference = ("serial", "branch", "balanced")[
+        (iteration + index * 5 + seed) % 3
+    ]
+    candidate = None
+    for attempt in range(60):
+        work_rng = random.Random(rng.randrange(1 << 40) + attempt)
+        packages, edges, terminal, recipes = _build_work_graph(
+            case, intent, mmqa_prior["logical_pattern"], work_rng,
+            attempt, structural_preference,
+        )
+        if not 3 <= len(packages) <= 9:
+            continue
+        draft = build_atomic_draft(packages, edges)
+        tasks, coarsening = coarsen(draft)
+        compile_contracts(tasks, edges)
+        waves = compile_waves(tasks)
+        comp = complexity(tasks, waves, coarsening)
+        if comp["macro_dependency_depth"] < 2:
+            continue
+        stats = _topology_metrics(tasks, edges, waves)
+        candidate = (tasks, coarsening, edges, terminal, recipes, waves,
+                     comp, stats)
+        break
+    if candidate is None:
+        raise ValueError("could not compose a complete macro work graph")
+    tasks, coarsening, edges, terminal, recipes, waves, comp, stats = candidate
+    kqa_prior, kqa_policy = choose_kqa(kqa, source_hint, rng, ordinal)
+    graph = {
+        "motif": _classify_topology(stats, comp["macro_dependency_depth"]),
+        "tasks": tasks,
+        "edges": edges,
+        "terminal_handoffs": [terminal],
+        "reference_waves": waves,
+        "provenance_recipe_routes": recipes,
+        "complexity": {**comp, **stats},
+        "coarsening": coarsening,
+    }
+    task_uid = "macro-v4-" + digest(
+        seed, ordinal, case.domain, intent, case.issue, recipes,
+        mmqa_prior["motif_id"],
+    )
+    plan = {
         "schema": "maestro.clean_taskfirst.v4",
-        "task_id": uid,
-        "scenario": dict(base["scenario"]),
+        "task_id": task_uid,
+        "scenario": {
+            "domain": case.domain,
+            "setting": case.setting,
+            "issue": case.issue,
+            "user_role": case.decision_owner,
+        },
+        "goal": {
+            "intent": intent,
+            "desired_artifact_type": terminal["type"],
+        },
         "macro_graph": graph,
-        "question_brief": brief,
-        "question": question,
-        "source_priors": base["source_priors"],
+        "source_priors": {
+            "KQA": {
+                "policy": kqa_policy,
+                "signature": kqa_prior["signature"],
+                "program": kqa_prior["program"],
+                "usage": "internal_reasoning_prior_not_one_subtask_per_operator",
+            },
+            "MultiModalQA": {
+                "policy": mmqa_policy,
+                "motif_id": mmqa_prior["motif_id"],
+                "official_question_type": mmqa_prior["question_type"],
+                "composition_family": mmqa_prior["logical_pattern"],
+                "source_modalities": mmqa_prior["source_modalities"],
+                "usage": "macro_work_source_pattern_prior_not_actual_media",
+            },
+        },
         "task_plan_provenance": {
             "parent": "v2_macro_work_grammar",
             "question_generated_after_macro_graph": True,
@@ -168,3 +251,7 @@ def compose_taskfirst(*, ordinal: int, seed: int,
             "runtime_variants_generated": False,
         },
     }
+    brief = task_level_brief(plan)
+    plan["question_brief"] = brief
+    plan["question"] = author_question(brief, ordinal=ordinal, seed=seed)
+    return plan
