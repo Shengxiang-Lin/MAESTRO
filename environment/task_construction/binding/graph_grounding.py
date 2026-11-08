@@ -121,8 +121,8 @@ def validate_program_structure(program):
             )
 
 class GraphGroundedProgramBinder:
-    def __init__(self,catalog,taxonomy,*,seed=17,min_predicate_count=25,candidate_limit=32,max_states=4096,predicate_usage=None,predicate_binder=None,preferred_predicates=None):
-        self.predicate_binder=predicate_binder;self.predicate_usage=predicate_usage if predicate_usage is not None else {};self.preferred_predicates=frozenset(preferred_predicates or ());self.catalog=catalog;self.taxonomy=taxonomy;self.seed=int(seed);self.min_predicate_count=int(min_predicate_count);self.candidate_limit=max(1,int(candidate_limit));self.max_states=max(1,int(max_states));self.index=GraphWitnessIndex(catalog,taxonomy);self.validator=TypedProgramBinder(catalog,taxonomy,seed=seed,max_attempts=1);self.states=0;self.rejections=defaultdict(int)
+    def __init__(self,catalog,taxonomy,*,seed=17,min_predicate_count=25,candidate_limit=32,max_states=4096,predicate_usage=None,predicate_binder=None,preferred_predicates=None,anchor_validator=None):
+        self.predicate_binder=predicate_binder;self.predicate_usage=predicate_usage if predicate_usage is not None else {};self.preferred_predicates=frozenset(preferred_predicates or ());self.anchor_validator=anchor_validator;self.catalog=catalog;self.taxonomy=taxonomy;self.seed=int(seed);self.min_predicate_count=int(min_predicate_count);self.candidate_limit=max(1,int(candidate_limit));self.max_states=max(1,int(max_states));self.index=GraphWitnessIndex(catalog,taxonomy);self.validator=TypedProgramBinder(catalog,taxonomy,seed=seed,max_attempts=1);self.states=0;self.rejections=defaultdict(int)
     def _stable_key(self,*parts):return sha1("|".join([str(self.seed),*(str(x) for x in parts)]).encode()).hexdigest()
     def _bundle_check(self,program,solver,roots,rels,attrs):
         failure=_binding_realizability_failure(program,roots,rels,attrs,self.catalog)
@@ -186,6 +186,11 @@ class GraphGroundedProgramBinder:
             if index==len(slots):
                 try:self.validator._check_final_consistency(program,solver.materialize(nodes),rels,attrs)
                 except BindingError:return None
+                if self.anchor_validator is not None:
+                    candidate=BindingPlan(program,solver.materialize(nodes),rels,attrs)
+                    if not self.anchor_validator(candidate):
+                        self.rejections['semantic_anchor_joint_support_missing']+=1
+                        return None
                 return solver,rels,attrs
             self.states+=1;kind,node,value_kind,entity_node=slots[index];candidates=rel_candidates(solver,rels,attrs,node) if kind=="relation" else attr_candidates(solver,rels,attrs,node,value_kind,entity_node)
             for _,_,_,trial,binding in candidates:
