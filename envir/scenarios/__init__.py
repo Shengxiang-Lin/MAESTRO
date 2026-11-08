@@ -1,1 +1,1 @@
-"""MMQA-guided synthetic scenes for Main Agent orchestration, not perception benchmarking."""
+"""MultiModalQA question, modality and composition motif extraction."""
