@@ -98,6 +98,12 @@ class SemanticAnchoredCandidateTests(unittest.TestCase):
                  "observed_predicates": ["schema:datePublished"]},
             ]}, self.catalog, self.taxonomy)
 
+    def test_fast_preflight_rejects_nonjoint_scopes(self):
+        self.assertTrue(self.bank.can_anchor(self._plan().program))
+        self.assertFalse(self.bank.can_anchor(
+            self._plan(filter_after_relation=True).program
+        ))
+
     def test_sample_is_seed_stable(self):
         program = self._plan().program
         a = self.bank.sample(program, rng=random.Random(123))
