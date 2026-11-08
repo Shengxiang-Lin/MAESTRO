@@ -49,6 +49,22 @@ def build(args):
         omni_styles, omni_stats = load_omni_styles(args.omnigaia)
     scenes, stats = build_many(kqa=kqa, mmqa=mmqa, target=args.target,
                                seed=args.seed, omni_styles=omni_styles)
+    authoring = {"mode": "deterministic", "accepted": 0,
+                 "rejected": 0, "backend_error": 0}
+    if args.question_model or args.question_api_base:
+        if not args.question_model or not args.question_api_base:
+            raise ValueError("both --question-model and --question-api-base are required")
+        from .author import OpenAICompatibleQuestionAuthor
+        from .v3_author import rewrite_public_questions
+        agent = OpenAICompatibleQuestionAuthor(
+            api_base=args.question_api_base, model=args.question_model,
+            timeout=args.question_timeout,
+        )
+        authoring = {"mode": "optional_local_llm_surface",
+                     **rewrite_public_questions(scenes, author=agent,
+                                                workers=args.question_workers)}
+    stats["unique_question_texts"] = len({s["question"] for s in scenes})
+    stats["question_authoring"] = authoring
     _write_jsonl(paths["teacher"], scenes)
     _write_jsonl(paths["public"], [s["public"] for s in scenes])
     summary = {
@@ -117,6 +133,11 @@ def parser():
     build_parser.add_argument("--max-mmqa-records", type=int, default=3000)
     build_parser.add_argument("--seed", type=int, default=17)
     build_parser.add_argument("--overwrite", action="store_true")
+    build_parser.add_argument("--question-api-base", default=None,
+                              help="Optional local OpenAI-compatible endpoint for Question text only")
+    build_parser.add_argument("--question-model", default=None)
+    build_parser.add_argument("--question-workers", type=int, default=4)
+    build_parser.add_argument("--question-timeout", type=int, default=90)
     check = sub.add_parser("replay")
     check.add_argument("--scenes", type=Path, required=True)
     return ap
