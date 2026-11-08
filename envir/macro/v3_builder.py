@@ -69,9 +69,10 @@ def counterfactual_sensitivity(scene: dict) -> dict:
 
 
 def build_one(*, ordinal: int, seed: int, kqa: list[dict],
-              mmqa: list[dict]) -> dict:
+              mmqa: list[dict], omni_styles=None) -> dict:
     need = choose_question_seed(
-        ordinal=ordinal, seed=seed, kqa=kqa, mmqa=mmqa)
+        ordinal=ordinal, seed=seed, kqa=kqa, mmqa=mmqa,
+        omni_styles=omni_styles)
     world = make_world(need, seed=seed)
     graph = build_graph(need, world)
     question = public_question(need)
@@ -119,10 +120,11 @@ def build_one(*, ordinal: int, seed: int, kqa: list[dict],
 
 
 def build_many(*, kqa: list[dict], mmqa: list[dict],
-               target: int = 100, seed: int = 17):
+               target: int = 100, seed: int = 17, omni_styles=None):
     if target <= 0 or not kqa or not mmqa:
         raise ValueError("target must be positive and KQA/MMQA priors nonempty")
-    scenes = [build_one(ordinal=i, seed=seed, kqa=kqa, mmqa=mmqa)
+    scenes = [build_one(ordinal=i, seed=seed, kqa=kqa, mmqa=mmqa,
+                        omni_styles=omni_styles)
               for i in range(target)]
     intents = Counter(s["information_need"]["intent"] for s in scenes)
     domain = Counter(s["information_need"]["domain"] for s in scenes)
