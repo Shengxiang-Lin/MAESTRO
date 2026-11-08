@@ -14,7 +14,7 @@ from .quality.p1_audit import audit_plausibility_jsonl
 from .rendering import render_jsonl
 from .rendering.modality import audit_modality_jsonl
 from .scenario import audit_scenarios_jsonl
-from .source_preparation import SourcePreparationPaths,prepare_source_priors
+from .source_preparation import SourcePreparationPaths,prepare_source_priors,compact_source_summary
 from .task_design.io import plan_task_designs_jsonl
 from .utils.io import write_json as _write_json
 ENVIRONMENT_DIR=Path(__file__).resolve().parents[1];REPOSITORY_DIR=ENVIRONMENT_DIR.parent;WORLD_SOURCE_DIR=REPOSITORY_DIR/"data"/"world-source";OUTPUT_DIR=ENVIRONMENT_DIR/"data"
@@ -140,7 +140,7 @@ def main():
     else:
         if args.reuse_source_priors:
             _require_prepared_sources()
-            summary["source_preparation"]=_read_json(SOURCE_PATHS.summary)
+            summary["source_preparation"]=compact_source_summary(_read_json(SOURCE_PATHS.summary))
         else:
             _require_inputs([args.kqa_train,args.kqa_val,args.yago_facts,args.yago_schema,
                              args.yago_taxonomy,args.mmqa_train,args.mmqa_dev])
