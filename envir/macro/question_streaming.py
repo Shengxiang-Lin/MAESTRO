@@ -89,6 +89,7 @@ def signature_for_scenes(scenes: list[dict], args) -> str:
         Path(__file__),
         Path(__file__).with_name("question_review.py"),
         Path(__file__).with_name("semantic_contract.py"),
+        Path(__file__).with_name("realization_brief.py"),
         Path(__file__).with_name("question.py"),
         Path(__file__).with_name("validation.py"),
         Path(__file__).with_name("cli.py"),
