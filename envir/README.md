@@ -540,3 +540,6 @@ or Summary Traces, broken typed handoffs, evidence leakage into public
 questions, and incorrect terminal proof coverage. It cannot yet certify
 naturalness of every Question, authenticity of real video/image/audio
 evidence, or behavior under untrusted Sub-Agent feedback.
+
+For the optional V4 Author-Critic Question naturalization pipeline, see
+[macro/QUESTION_NATURALIZATION.md](macro/QUESTION_NATURALIZATION.md).
