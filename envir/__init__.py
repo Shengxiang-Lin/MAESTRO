@@ -1,3 +1,3 @@
-"""Subtask-first MAESTRO environment (independent from legacy environment/)."""
+"""Dataset-driven Task-First MAESTRO environment."""
 
-__version__ = "0.1.0"
+__version__ = "0.5.0"
