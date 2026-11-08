@@ -41,9 +41,9 @@ DOMAIN = {
 # Final request families can share a macro topology; topology does not
 # determine intent. Their operation requirements constrain task construction.
 INTENT_FAMILIES = {
-    "composition": ("compliance", "impact", "timeline", "feasibility"),
-    "intersection": ("compliance", "impact", "feasibility", "prioritization"),
-    "comparison": ("comparison", "timeline", "prioritization", "reconciliation"),
+    "composition": ("compliance", "impact", "timeline", "feasibility", "mitigation"),
+    "intersection": ("compliance", "impact", "feasibility", "prioritization", "mitigation"),
+    "comparison": ("comparison", "timeline", "prioritization", "reconciliation", "mitigation"),
     "aggregation": ("impact", "reconciliation", "prioritization", "comparison"),
     "lookup": ("compliance", "timeline", "reconciliation", "mitigation",
                "feasibility", "comparison"),
@@ -127,6 +127,8 @@ def choose_question_seed(*, ordinal, seed, kqa, mmqa):
         "case_ids": ids,
         "as_of": as_of,
         "record_scope": "event_scoped" if scoped_records else "independent",
+        "capacity_scope": "case_scoped" if rng.randrange(2) else "independent",
+        "independent_scope": "event_scoped" if rng.randrange(2) else "independent",
         "required_source_roles": list(REQUIRED_SOURCE_ROLES[intent]),
         "question_operation": (
             "pairwise_comparison" if intent == "comparison" else
@@ -182,9 +184,11 @@ def make_world(need: dict, seed: int) -> dict:
     minutes = [opening + 45 + j * 80 + rng.randrange(0, 25)
                for j in range(n)]
     statuses = ["valid", "expired", "valid", "suspended"][:n]
-    units = [2 + j * 3 for j in range(n)]
-    urgency = [3, 2, 5, 4][:n]
-    capacity = [3, 2, 7, 1][:n]
+    units = [max(1, 2 + j * 3 + rng.choice((-1, 0, 1)))
+             for j in range(n)]
+    urgency = [max(1, x + rng.choice((-1, 0, 1)))
+               for x in [3, 2, 5, 4][:n]]
+    capacity = [max(3, units[0] + 1), 2, 7, 1][:n]
     rng.shuffle(statuses)
     # Witness conditions: a valid early case, an invalid in-window case,
     # and a late nonvalid case. This makes rule/record counterfactuals real.
@@ -218,11 +222,20 @@ def make_world(need: dict, seed: int) -> dict:
     }
     capacities = [{"case_id": cid, "available_units": capacity[j]}
                   for j, cid in enumerate(ids)]
+    # Unrelated rows make an upstream case-ID handoff meaningful for scoped
+    # investigators. Source documents are not pre-filtered to the answer.
+    capacities.append({"case_id": f"UNRELATED-{need['seed_id'][-5:]}",
+                       "available_units": 9})
     independent = [
         {"case_id": cid, "reported_minute": minutes[j] + deltas[j],
          "report_day": need["as_of"]}
         for j, cid in enumerate(ids)
     ]
+    independent.append({
+        "case_id": f"UNRELATED-{need['seed_id'][-5:]}",
+        "reported_minute": opening + 29,
+        "report_day": need["as_of"],
+    })
     payloads = {
         "event": {"events": event, "day": need["as_of"]},
         "records": {"records": records, "day": need["as_of"]},
