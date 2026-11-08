@@ -250,6 +250,16 @@ class BackwardRecipePlannerTests(unittest.TestCase):
                          "taskfirst_semantic_contract_v1")
         self.assertNotIn("world", calls[0][1])
         self.assertNotIn("source_priors", json.dumps(calls[0][1]))
+        # An accepted rewrite is replay-valid without touching frozen Task,
+        # EvidenceGraph, Feedback or summary_trace.
+        naturalized = copy.deepcopy(result)
+        naturalized["question"] = natural
+        naturalized["public"]["question"] = natural
+        naturalized["question_authoring"] = meta
+        self.assertEqual([], validate_clean_scene(naturalized))
+        self.assertEqual(naturalized["macro_graph"], result["macro_graph"])
+        self.assertEqual(naturalized["feedback_bank"], result["feedback_bank"])
+        self.assertEqual(naturalized["task_evidence_graphs"], result["task_evidence_graphs"])
 
     def test_semantic_contract_is_derived_without_original_mmqa_question(self):
         from envir.macro.semantic_contract import (
