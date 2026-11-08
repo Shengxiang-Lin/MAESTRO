@@ -1,11 +1,5 @@
-"""Compile a compact Stage-2B Question Brief from PUBLIC Stage-2A Blueprints.
+"""Compile public Question Author briefs and replay prior Brief versions."""
 
-A Question Author receives one goal per linear workstream, the public
-constraints on that workstream, exact input dependencies and a final result
-contract. It does NOT receive the full mechanical reference, the recursive
-semantic tree, tools, original private ProgramIR, or each redundant fragment
-goal. The independent Critic still reviews the full scoped reference.
-"""
 from __future__ import annotations
 
 from collections import defaultdict
@@ -157,4 +151,97 @@ def compile_question_brief(blueprint, world, canonical, gold):
     }
 
 
-__all__ = ["compile_question_brief"]
+SCOPED_BRIEF_SCHEMA = "maestro.question_brief.branch_v2"
+
+
+def compile_scoped_question_brief(blueprint, plan):
+    """Project the checked public scopes without copying renderer or private facts."""
+    contract = plan.public_contract
+    obligations = {item["id"]: item for item in contract["obligations"]}
+    scopes = []
+    scope_for_step = {}
+    for scope in contract["scopes"]:
+        operation = scope["definition"]
+        item = {
+            "id": scope["id"], "operation": operation, "inputs": scope["inputs"],
+        }
+        for node_id in scope["program_steps"]:
+            step_id = f"S{node_id}"
+            scope_for_step[step_id] = scope["id"]
+        if operation == "FIND":
+            clue_type = plan.clue_types.get(scope["program_steps"][0])
+            if clue_type:
+                item["identify_one_by_its_conditions"] = clue_type
+            elif scope.get("type_anchor"):
+                item["candidate_type"] = scope["type_anchor"]
+            elif scope.get("public_anchor"):
+                item["public_anchor"] = scope["public_anchor"]
+            else:
+                raise ValueError("question_brief_missing_public_anchor")
+        elif operation == "FIND_ALL":
+            item["candidate_range"] = "bounded task evidence"
+        elif operation == "RELATE":
+            item.update(
+                relation=scope["relation"], subject=scope["subject_set"],
+                object=scope["object_set"],
+            )
+        elif operation == "QUERY_RELATION":
+            item["subject"], item["object"] = scope["inputs"]
+        elif operation == "QUERY_ATTR":
+            item["output_attribute"] = scope["output_attribute"]
+        elif operation in ("SELECT_AMONG", "SELECT_BETWEEN"):
+            item.update(
+                ranking=scope["ranking"], rank_attribute=scope["rank_attribute"],
+                include_ties=True,
+            )
+            if operation == "SELECT_BETWEEN":
+                item["candidate_pool"] = "union of inputs"
+        elif operation == "COUNT":
+            item["distinct"] = True
+        elif operation.startswith("VERIFY_"):
+            item.update(
+                comparison=scope["comparison"], public_value=scope["public_value"],
+                quantifier="any recorded value",
+            )
+
+        conditions = []
+        for condition in scope["conditions"]:
+            step_id = f"S{condition['step']}"
+            op = obligations[step_id]["operation"]
+            fields = ("entity_type",) if op == "FILTER_TYPE" else (
+                "attribute", "comparison", "public_value",
+            )
+            if any(not condition.get(field) for field in fields):
+                raise ValueError(f"question_brief_missing_public_condition:{step_id}")
+            conditions.append({
+                "id": step_id, "operation": op,
+                **{field: condition[field] for field in fields},
+            })
+        if conditions:
+            item["conditions"] = conditions
+        scopes.append(item)
+    if scope_for_step.keys() != obligations.keys():
+        raise ValueError("question_brief_public_scope_coverage")
+
+    outline = blueprint["outline"]
+    goals = {item["fragment_id"]: item["goal"] for item in blueprint["goals"]}
+    intents = []
+    for task in outline["tasks"]:
+        scope_ids = list(dict.fromkeys(
+            scope_for_step[step["id"]] for step in task["public_steps"]
+            if step["id"] in scope_for_step
+        ))
+        if scope_ids:
+            intents.append({"scopes": scope_ids, "goal": goals[task["fragment_id"]]})
+    return {
+        "schema": SCOPED_BRIEF_SCHEMA,
+        "answer_scope": contract["output"],
+        "scopes": scopes,
+        "public_modalities": outline["public_modalities"],
+        "subtask_intents": intents,
+    }
+
+
+__all__ = [
+    "SCOPED_BRIEF_SCHEMA", "compile_question_brief", "compile_scoped_question_brief",
+]

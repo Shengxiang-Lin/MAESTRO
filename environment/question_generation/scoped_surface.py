@@ -15,10 +15,12 @@ class UnsupportedSurface(ValueError):
 class ScopedPlan(list):
     """English productions paired with their compiler-derived semantic trees."""
 
-    def __init__(self, groups, meanings, query):
+    def __init__(self, groups, meanings, query, *, public_contract, clue_types):
         super().__init__(groups)
         self.meanings = meanings
         self.query = query
+        self.public_contract = public_contract
+        self.clue_types = clue_types
 
 
 def _required(value):
@@ -346,8 +348,15 @@ def build_scoped_plan(world, canonical, gold, reference):
     contract = public_question_contract(world, canonical, gold)
     raw_nodes = {int(n['node_id']): n for n in world['program']['nodes']}
     # These labels are already public through the controlled renderer's lexical forms.
-    relation_aliases = {('spouse','forward'):'spouses of', ('spouse','backward'):'married to',
-                        ('member of','forward'):'belongs to', ('member of','backward'):'members of'}
+    relation_aliases = {
+        ('spouse', 'forward'): 'spouses of',
+        ('spouse', 'backward'): 'married to',
+        ('member of', 'forward'): 'belongs to',
+        ('member of', 'backward'): 'members of',
+        ('sponsor', 'forward'): 'sponsors recorded for',
+        ('award', 'backward'): 'entities that received',
+        ('alumni of', 'forward'): 'is an alum of',
+    }
     clues = {nid: clue for clue in reference['verified_identity_clues']
              for nid in clue['find_node_ids']}
     for scope in contract['scopes']:
@@ -370,8 +379,11 @@ def build_scoped_plan(world, canonical, gold, reference):
         raise UnsupportedSurface('scoped question exceeds supported length')
     operations = {int(op['id'][1:]): op['operation'] for op in contract['obligations']}
     meanings = [_semantic_tree(contract, sid, operations, clues) for sid in sentence_scopes]
-    return ScopedPlan(groups, meanings,
-                      _semantic_tree(contract, contract['output'], operations, clues))
+    return ScopedPlan(
+        groups, meanings, _semantic_tree(contract, contract['output'], operations, clues),
+        public_contract=contract,
+        clue_types={nid: type_label(clue['entity_type']) for nid, clue in clues.items()},
+    )
 
 def render_scoped(groups, choices):
     if (not isinstance(choices, list) or len(choices) != len(groups)

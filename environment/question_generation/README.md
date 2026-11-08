@@ -89,10 +89,10 @@ the completed Stage-2A Goal dataset.
 Stage 2A certified_blueprints.jsonl
     └─ join frozen task IDs / discard non-certified originals
         └─ independently rebuild compact Gold DAG and replay 2A certificate
-            └─ deterministic Branch-Level Question Brief
-                ├─ collapse only serial Fragment chains (never forks/joins)
-                ├─ one Stage2A Goal per workstream plus exact PUBLIC constraints
-                ├─ preserve anchors, relations, ownership and AND/OR joins
+            └─ deterministic public scope Brief
+                ├─ group filters by their owning scope
+                ├─ preserve directed relation endpoints, anchors and set joins
+                ├─ attach Stage 2A Goals as context for the Author
                 └─ Question Author (Brief only; no mechanical reference)
                     └─ deterministic guards + Critic (FULL public contract)
                     └─ Stage 2B certified Question, including signed 2A review
@@ -105,7 +105,7 @@ python environment/generate_questions.py \
   --max-records 50 \
   --blueprints environment/data/stage2a_intents_v5_50/certified_blueprints.jsonl \
   --max-revisions 2 \
-  --output-dir environment/data/stage2b_branch_v5_50 \
+  --output-dir environment/data/stage2b_scoped_v5_50 \
   --question-brief-mode branch \
   --question-workers 4 \
   --flush-every 1
@@ -122,17 +122,18 @@ accepted Question carries the source \`delegation_blueprint\`,
 it can be rerun against the same frozen certified Goal dataset to improve
 Question prompts without regenerating Goals.
 
-Stage 2B Author now defaults to **--question-brief-mode branch**, which
-uses a compact topology-preserving workstream Brief instead of sending
-the entire Reference + recursive semantic tree + every raw Fragment Goal.
-The independent Critic still sees the complete scoped reference and
-semantic contract. The final Question must preserve exact details that
-the brief's high-level Goals can omit. The signed Stage-2B review stores
-the compact Brief hash and Stage 3 recomputes it at replay.
+Stage 2B Author defaults to `--question-brief-mode full`. To try the
+compact input shown above, pass `--question-brief-mode branch`. The v2 Brief
+projects the public scopes already checked by the scoped reference builder.
+Each scope identifies its inputs and owns its filters. Directed relations
+carry their subject and object, and identification clues expose the public
+type and conditions. The Critic receives the full scoped reference and
+semantic contract. Stage 3 recomputes the Brief using the version recorded
+in the review. Earlier Branch Brief hashes replay with the v1 compiler.
 
 For a paired A/B baseline on the SAME v5 certified Goals, run
-`--question-brief-mode full` in a separate output directory to restore
-the legacy all-input Question Author, keeping the independent Critic fixed.
+`--question-brief-mode full` in a separate output directory to use
+the full-reference Question Author with the same Critic.
 
 Stage-2B outputs and checkpoints retain the existing names:
 \`realized_capability_worlds.jsonl\`,

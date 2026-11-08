@@ -26,8 +26,7 @@ class CaptureBriefAuthor:
     def complete_json(self, system, user, **kwargs):
         payload = json.loads(user)
         self.calls.append((system, payload))
-        self_type = payload["question_brief"]
-        assert self_type["workstreams"]
+        assert payload["question_brief"]["scopes"]
         return {"question": self.question}
 
 
@@ -156,6 +155,14 @@ class BranchQuestionBriefTests(unittest.TestCase):
         self.assertEqual(len(author.calls), 1)
         system, packet = author.calls[0]
         self.assertEqual(set(packet), {"question_brief"})
+        brief = packet["question_brief"]
+        self.assertEqual(brief["schema"], "maestro.question_brief.branch_v2")
+        by_id = {scope["id"]: scope for scope in brief["scopes"]}
+        self.assertEqual(by_id[brief["answer_scope"]]["operation"], "QUERY_NAME")
+        for edge in (scope for scope in by_id.values()
+                     if scope["operation"] == "RELATE"):
+            self.assertEqual(by_id[edge["subject"]]["public_anchor"], "Noah Yarrow")
+            self.assertEqual(edge["object"], edge["id"])
         self.assertIn("PUBLIC branch-level Question Brief", system)
         self.assertEqual(len(critic.calls), 1)
         self.assertIn("reference_question", critic.calls[0])
@@ -168,6 +175,10 @@ class BranchQuestionBriefTests(unittest.TestCase):
         )
         self.assertIn(
             "question_brief_sha256", row["authoring"]["surface_review"],
+        )
+        self.assertEqual(
+            row["authoring"]["surface_review"]["question_brief_schema"],
+            brief["schema"],
         )
         replay = validate_surface_certificate(
             row, world, rendered.question,

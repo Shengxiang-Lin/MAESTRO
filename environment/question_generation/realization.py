@@ -18,7 +18,7 @@ from environment.trajectory_simulation.eligibility import (
 
 from environment.delegation_blueprint import compile_delegation_outline
 from .goal_review import validate_goal_record
-from .question_brief import compile_question_brief
+from .question_brief import compile_scoped_question_brief
 from .backend import BackendError
 from .question_review import (
     ReviewFormatError, author_question, critique_question, passing_judgment,
@@ -177,9 +177,7 @@ def _realize_one(payload, world, capability, author, critic, *,
     question_brief = None
     if question_brief_mode == "branch":
         try:
-            question_brief = compile_question_brief(
-                blueprint, world, canonical, gold,
-            )
+            question_brief = compile_scoped_question_brief(blueprint, plan)
         except (ValueError, TypeError, KeyError) as exc:
             return _reject(payload, "rejected_validation_error", audit,
                            detail="question_brief_compile_failed:" + str(exc))
@@ -187,7 +185,8 @@ def _realize_one(payload, world, capability, author, critic, *,
             "stage": "question_brief",
             "mode": "branch",
             "brief_sha256": digest(question_brief),
-            "workstreams": len(question_brief["workstreams"]),
+            "brief_schema": question_brief["schema"],
+            "scopes": len(question_brief["scopes"]),
         })
     previous, feedback = None, None
     last_reason, last_detail = "rejected_quality", "not_naturalized"

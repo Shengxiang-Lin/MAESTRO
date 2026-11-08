@@ -355,9 +355,9 @@ def build_parser():
     p.add_argument("--timeout", type=float, default=180.0)
     p.add_argument("--max-revisions", type=int, default=2)
     p.add_argument("--question-brief-mode", choices=("branch", "full"),
-                   default="branch",
-                   help="Question Author input: compact DAG workstreams (default) "
-                        "or legacy full reference/semantic tree baseline")
+                   default="full",
+                   help="Question Author input: full public reference (default) "
+                        "or compact public scopes")
     p.add_argument("--question-workers", type=int, default=4)
     p.add_argument("--blueprint-workers", type=int, default=2,
                    help="Concurrent independent Fragment-Goal requests per task")

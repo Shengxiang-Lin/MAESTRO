@@ -18,6 +18,9 @@ from environment.delegation_blueprint import (
     compile_delegation_outline, validate_delegation_blueprint,
 )
 from .goal_review import validate_goal_record
+from .question_brief import (
+    SCOPED_BRIEF_SCHEMA, compile_question_brief, compile_scoped_question_brief,
+)
 from .question_review import passing_judgment
 from .semantic_checks import (
     explicit_join_contradictions, explicit_global_join_contradictions,
@@ -119,6 +122,8 @@ def certify_approved_question(
         "blueprint_sha256": blueprint_hash,
         **({
             "question_brief_sha256": digest(question_brief),
+            **({"question_brief_schema": SCOPED_BRIEF_SCHEMA}
+               if question_brief.get("schema") == SCOPED_BRIEF_SCHEMA else {}),
         } if question_brief is not None else {}),
         **({
             "goal_certificate_sha256": digest(goal_record["goal_certificate"]),
@@ -223,12 +228,15 @@ def validate_surface_certificate(
     )
     if review.get("blueprint_sha256") != valid_hash:
         raise ValueError("stage2_blueprint_binding_mismatch")
-    if "question_brief_sha256" in review:
-        from .question_brief import compile_question_brief
-        expected_brief = compile_question_brief(
-            blueprint, world, canonical, gold,
-        )
-        if review["question_brief_sha256"] != digest(expected_brief):
+    if "question_brief_sha256" in review or "question_brief_schema" in review:
+        brief_schema = review.get("question_brief_schema")
+        if brief_schema is None:
+            expected_brief = compile_question_brief(blueprint, world, canonical, gold)
+        elif brief_schema == SCOPED_BRIEF_SCHEMA:
+            expected_brief = compile_scoped_question_brief(blueprint, plan)
+        else:
+            raise ValueError("unsupported_stage2_question_brief_schema")
+        if review.get("question_brief_sha256") != digest(expected_brief):
             raise ValueError("stage2_question_brief_binding_mismatch")
     if certified:
         record = {

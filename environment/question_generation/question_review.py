@@ -56,29 +56,25 @@ any task semantics. Return JSON {"question":"..."} only.
 _AUTHOR_BRANCH_SYSTEM = """Write ONE natural, answer-preserving user Question
 from the provided PUBLIC branch-level Question Brief.
 
-The workstream goals are concise Subtask INTENTS, not complete instructions.
-Use them to understand the main evidence paths and compose one coherent
-question. Their precise_public_steps are the authoritative, complete local
-conditions; never omit a numeric/date/string comparison merely because a
-Goal summarizes it as 'specified criteria'.
+Start from answer_scope and follow its inputs. Each scope owns its own
+conditions. A RELATE edge reads subject --relation--> object, regardless
+of which endpoint is an input. Express every required edge, including
+intermediate links. An identity clue identifies one entity by its
+conditions. Keep all exact public values and their comparisons.
 
-Each workstream depends_on identifies upstream sets, not an invitation to
-narrate internal steps. Follow explicit AND/OR semantics: INTERSECT requires
-the SAME entity to satisfy ALL input branches, while UNION permits ANY
-input branch. Different candidates may have different owners; a filter on
-a Person must not be moved to an Event/Organization, nor may a directed
-RELATE hop be reversed. Respect every source anchor and final_result,
-including COUNT vs entity names, verification, rank/ties and attributes.
+INTERSECT requires the SAME entity to satisfy ALL input branches. UNION
+includes entities in ANY branch. SELECT_BETWEEN ranks over the union of
+its inputs. Keep answer type, ranking direction, ties, and distinct counts.
+The subtask intents are optional context. The scopes define the question.
 
-Natural phrasing can combine multiple filters that apply to the same
-entity, and can simplify repeated conjunctions without changing meaning.
-Do NOT label workstreams B1/B2, narrate the execution DAG, name agents/tools,
-or use 'the previous task'. If an exact public literal is unspecified,
-do not invent it or claim an unprovided source has already been seen.
+Combine conditions on the same entity in one clause when this preserves
+the meaning. Use clear antecedents or multiple sentences for longer paths.
+Do not expose scope IDs, the execution graph, internal groups, or tools.
+Use the supplied public modalities to distinguish attached evidence from
+discoverable evidence. Never invent a source or a concealed identity.
 
-When given previous_draft and reviewer_feedback, make only the requested
-localized semantic correction. If the prior issue was style-only, improve
-the phrasing without altering any condition or candidate pool.
+When given previous_draft and reviewer_feedback, make the smallest
+correction that preserves every required constraint.
 Return exactly one JSON object: {"question":"..."}.
 """
 
