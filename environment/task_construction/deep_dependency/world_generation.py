@@ -11,6 +11,7 @@ from ..evidence import EvidenceAllocationError,ScenarioEvidencePrior,allocate_ev
 from ..executor import SymbolicExecutor
 from ..ir import ProgramIR,ProgramNode
 from ..quality.difficulty import candidate_elimination_profile
+from ..quality.degeneracy import find_degenerate_verification
 from ..quality.observed_support import ObservedSupport
 from ..quality.semantic_policy import normalize_program_world
 from ..validation import normalize_answer,validate_task
@@ -71,6 +72,10 @@ def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_
                 sampler=WorldSampler(seed=run_seed,catalog=catalog,taxonomy=taxonomy)
                 world=sampler.synthesize(plan)
                 program=sampler.concrete_program
+                if (row.get('semantic_anchor') or {}).get('policy')=='yago_subject_cohesion_v2':
+                    degeneracy=find_degenerate_verification(program)
+                    if degeneracy:
+                        raise ValueError('degenerate_task:'+degeneracy)
                 world,mutations=harden_world(program,world,seed=run_seed+211,
                     near_miss_count=3,background_fact_count=4)
                 world,critical_sources,critical_facts=allocate_evidence_sources(program,world,
