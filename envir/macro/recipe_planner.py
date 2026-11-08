@@ -324,7 +324,7 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int,
         run_seed, ordinal, seed_record["record_id"], goal_id
     )
     plan = {
-        "schema": "maestro.clean_taskfirst.v4",
+        "schema": "maestro.taskfirst.v1",
         "task_id": task_id,
         "scenario": {
             "domain": seed_record["domain_hint"],
