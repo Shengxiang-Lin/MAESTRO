@@ -83,7 +83,7 @@ def _result(intent: str, inputs: dict) -> dict:
     if intent in {"compliance", "impact", "feasibility"} and rules is None:
         raise MissingEvidence("missing_rules")
     if intent in {"prioritization", "mitigation", "feasibility"} and (
-        set(capacity) != {c["case_id"] for c in cases}
+        not {c["case_id"] for c in cases} <= set(capacity)
     ):
         raise MissingEvidence("missing_capacity_for_cases")
     if intent == "compliance":
@@ -209,9 +209,17 @@ def evaluate(plan: dict, world: dict, *,
             elif kind == "rules_review":
                 body = {"rule": obs["rule"]}
             elif kind == "capacity_review":
-                body = {"capacities": obs["capacities"]}
+                items = obs["capacities"]
+                if "matched_cases" in inputs:
+                    scopes = {c["case_id"] for c in inputs["matched_cases"]["cases"]}
+                    items = [r for r in items if r["case_id"] in scopes]
+                body = {"capacities": items}
             elif kind == "independent_review":
-                body = {"observations": obs["observations"]}
+                items = obs["observations"]
+                if "event" in inputs:
+                    scopes = {e["case_id"] for e in inputs["event"]["events"]}
+                    items = [r for r in items if r["case_id"] in scopes]
+                body = {"observations": items}
             elif kind == "case_matching":
                 body = {
                     "cases": _join(inputs["event"]["events"],
