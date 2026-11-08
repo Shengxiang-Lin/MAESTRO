@@ -203,6 +203,12 @@ def build_scene(motif: dict, ordinal: int, *, seed: int, domain: str | None = No
             if pattern != "chain" else [media_id, registry_id],
         "optional_source_ids": [decoy_id],
     }
+    scene["source_motif"]["logical_pattern_alignment"] = motif.get(
+        "logical_pattern") in {
+            "chain": ("composition", "lookup"),
+            "fork_join": ("lookup", "aggregation", "intersection"),
+            "cross_check": ("comparison", "intersection"),
+        }[pattern]
     sim_graph = materialize_graph(scene, pack)
     scene.update(sim_graph)
     return scene
@@ -282,6 +288,10 @@ def materialize_graph(scene: dict, pack: ScenePack) -> dict:
             "from": media_node_id, "to": table_node_id, "binding": "reference"
         })
 
+    reference_phrase = (
+        "mentioned in the supplied audio" if scene["primary_modality"] == "audio"
+        else f"shown in the supplied {scene['primary_modality']}"
+    )
     if scene["graph_pattern"] == "chain":
         question = (f"For the {pack.asset} identified in the supplied "
                     f"{scene['primary_modality']} from the {pack.setting}, "
@@ -294,14 +304,14 @@ def materialize_graph(scene: dict, pack: ScenePack) -> dict:
                     "schedule": assignment, "registry": registry_location}
             question = (
                 f"Do the {pack.schedule} and {pack.registry} give the same "
-                f"{pack.location} for the {pack.asset} in the supplied "
-                f"{scene['primary_modality']}? Report both recorded locations."
+                f"{pack.location} for the {pack.asset} {reference_phrase}? "
+                f"Report both recorded locations."
             )
         else:
             gold = {"assignment": assignment, "registration": state}
             question = (
-                f"For the {pack.asset} shown in the supplied "
-                f"{scene['primary_modality']} from the {pack.setting}, "
+                f"For the {pack.asset} {reference_phrase} "
+                f"from the {pack.setting}, "
                 f"what {pack.location} is it assigned to, and what is "
                 f"its current {pack.registry} status?"
             )
@@ -383,14 +393,23 @@ def generate_scenes(motifs: list[dict], *, target: int = 100,
         # Balanced domains regardless of skew in the first MMQA data prefix.
         pack = PACKS[ordinal % len(PACKS)]
         source_pool = buckets.get(pack.domain) or motifs
-        motif = source_pool[(ordinal // len(PACKS)) % len(source_pool)]
+        desired_pattern = ("fork_join", "chain", "cross_check")[ordinal % 3]
+        compatible = {
+            "chain": {"composition", "lookup"},
+            "fork_join": {"lookup", "aggregation", "intersection"},
+            "cross_check": {"comparison", "intersection"},
+        }[desired_pattern]
+        aligned_pool = [m for m in source_pool
+                        if m.get("logical_pattern") in compatible]
+        candidates = aligned_pool or source_pool
+        motif = candidates[(ordinal // len(PACKS)) % len(candidates)]
         # Image remains the dominant visual mode. Video/audio are explicitly
         # synthetic extensions, not represented as official MMQA modalities.
         media = ("audio" if ordinal % 11 == 7 else
                  "video" if extensions and ordinal % 7 == 4 else "image")
         if not extensions:
             media = "image"
-        pattern = ("fork_join", "chain", "cross_check")[ordinal % 3]
+        pattern = desired_pattern
         scene = build_scene(
             motif, ordinal, seed=seed, domain=pack.domain,
             modality=media, pattern=pattern,
@@ -401,6 +420,7 @@ def generate_scenes(motifs: list[dict], *, target: int = 100,
             raise ValueError(f"{scene['scene_id']}: {errors}")
         scenes.append(scene)
         usage.update([
+            "aligned:" + str(scene["source_motif"]["logical_pattern_alignment"]),
             "domain:" + scene["domain"], "type:" + scene["scene_type"],
             "media:" + media, "graph:" + pattern,
             "motif_pattern:" + motif.get("logical_pattern", ""),
@@ -413,5 +433,8 @@ def generate_scenes(motifs: list[dict], *, target: int = 100,
         "graph_patterns": {key[6:]: value for key, value in usage.items() if key.startswith("graph:")},
         "mmqa_motif_patterns": {key[14:]: value for key, value in usage.items()
                                 if key.startswith("motif_pattern:")},
+        "mmqa_pattern_alignment": {
+            key[8:]: value for key, value in usage.items() if key.startswith("aligned:")
+        },
         "policy": "MMQA-pattern-guided_fully_synthetic_media_and_facts",
     }
