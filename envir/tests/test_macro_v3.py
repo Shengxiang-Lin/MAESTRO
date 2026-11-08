@@ -91,7 +91,7 @@ class TestMacroV3(unittest.TestCase):
                                    target=100, seed=17)
         self.assertEqual(len(scenes), 100)
         self.assertEqual(stats["value_counterfactuals_changed_answer"], 100)
-        self.assertGreaterEqual(len(stats["intents"]), 5)
+        self.assertEqual(len(stats["intents"]), 8)
         self.assertGreaterEqual(len(stats["domains"]), 9)
         self.assertEqual(stats["unique_question_texts"], 100)
         self.assertEqual(stats["max_concurrent_subagents"], 10)
@@ -164,6 +164,44 @@ class TestMacroV3(unittest.TestCase):
         public = scene["public"]
         self.assertTrue(all("observations" not in source
                             for source in public["provided_sources"]))
+
+    def test_optional_question_styles_and_scoped_local_author(self):
+        from envir.macro.v3_author import rewrite_public_questions, assess_surface
+        omni = self.tmp / "omnigaia.json"
+        omni.write_text(json.dumps([
+            {"id": "o1", "question": "I'm checking two research reports. Compare their results.",
+             "answer": "DO-NOT-COPY", "level": "Hard"},
+            {"id": "o2", "question": "Calculate the number of months from the video.",
+             "answer": "PRIVATE", "annotated_solution": "SECRET"},
+        ]), encoding="utf-8")
+        from envir.macro.v2_omni import load_omni_styles
+        styles, _ = load_omni_styles(omni)
+        scenes, _ = build_many(kqa=self.kqa, mmqa=self.mmqa,
+                               target=8, seed=17, omni_styles=styles)
+
+        class Stub:
+            prompts = []
+            def complete(self, packet):
+                self.prompts.append(packet)
+                return packet["reference_question"]
+
+        agent = Stub()
+        stats = rewrite_public_questions(scenes, author=agent, workers=2)
+        self.assertEqual(stats["accepted"], 8)
+        self.assertEqual(len(agent.prompts), 8)
+        for prompt in agent.prompts:
+            self.assertEqual(set(prompt), {
+                "situation", "reference_question", "resource_descriptions", "task",
+            })
+            self.assertNotIn("macro_graph", json.dumps(prompt))
+            self.assertNotIn("gold_answer", json.dumps(prompt))
+            self.assertNotIn("DO-NOT-COPY", json.dumps(prompt))
+            self.assertNotIn("SECRET", json.dumps(prompt))
+        for scene in scenes:
+            self.assertEqual(validate_grounded(scene), [])
+            self.assertFalse(scene["question_authoring"]["semantic_equivalence_certified"])
+            bad = scene["question"] + " Next, delegate to S1."
+            self.assertIn("orchestration_leak", assess_surface(scene, bad))
 
     def test_cli_build_replay_no_overwrite(self):
         out = self.tmp / "out"
