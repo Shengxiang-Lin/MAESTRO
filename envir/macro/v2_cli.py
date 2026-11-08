@@ -70,6 +70,28 @@ def build(args) -> dict:
         "YAGO_bank": str(args.bank) if args.bank else None,
         "policy": "original_question_shapes_and_knowledge_schema_as_priors_only",
     }
+    question_authoring = {"mode": "deterministic", "accepted": 0,
+                          "rejected": 0, "backend_error": 0}
+    if args.question_model or args.question_api_base:
+        if not args.question_model or not args.question_api_base:
+            raise ValueError("Both --question-model and --question-api-base are required")
+        from .author import OpenAICompatibleQuestionAuthor
+        from .v2_author import naturalize_v2
+        author = OpenAICompatibleQuestionAuthor(
+            api_base=args.question_api_base, model=args.question_model,
+            timeout=args.question_timeout,
+        )
+        question_authoring = {
+            "mode": "optional_local_llm_surface",
+            **naturalize_v2(plans, author=author, workers=args.question_workers),
+        }
+        for item in plans:
+            issues = validate_v2(item)
+            if issues:
+                raise ValueError("LLM Question rewrite invalid: " + str(issues))
+    stats["unique_question_texts"] = len({p["question"] for p in plans})
+    stats["duplicate_question_texts"] = len(plans) - stats["unique_question_texts"]
+    stats["question_authoring"] = question_authoring
     _jsonl(targets["private"], plans)
     _jsonl(targets["public"], [p["public"] for p in plans])
     _dump(targets["priors"], source_priors)
@@ -131,6 +153,12 @@ def parser() -> argparse.ArgumentParser:
     b.add_argument("--max-mmqa-records", type=int, default=3000)
     b.add_argument("--seed", type=int, default=17)
     b.add_argument("--overwrite", action="store_true")
+    b.add_argument("--question-api-base", default=None,
+                   help="Optional local OpenAI-compatible vLLM base URL")
+    b.add_argument("--question-model", default=None,
+                   help="Local LLM model name for public Question only")
+    b.add_argument("--question-workers", type=int, default=4)
+    b.add_argument("--question-timeout", type=int, default=90)
     r = subs.add_parser("replay", help="Validate previously generated private macro plans")
     r.add_argument("--plans", type=Path, required=True)
     return ap
