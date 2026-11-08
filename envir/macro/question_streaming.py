@@ -25,9 +25,12 @@ from tqdm.auto import tqdm
 from environment.question_generation.streaming import question_output_lock
 from .question_review import (
     _fingerprint, naturalize_one, macro_task_view, reference_question,
-    polished_reference_question,
+    polished_reference_question, SEMANTIC_REVIEW_POLICY,
+    SEMANTIC_REVIEW_PIPELINE,
+
 )
 from .validation import validate_clean_scene
+from .semantic_contract import semantic_contract
 
 
 SCHEMA = "maestro.question_stream.v2"
@@ -85,6 +88,7 @@ def signature_for_scenes(scenes: list[dict], args) -> str:
     source_files = (
         Path(__file__),
         Path(__file__).with_name("question_review.py"),
+        Path(__file__).with_name("semantic_contract.py"),
         Path(__file__).with_name("question.py"),
         Path(__file__).with_name("validation.py"),
         Path(__file__).with_name("cli.py"),
@@ -382,8 +386,9 @@ def _fallback(scene, reason: str, *, detail: str = "") -> tuple[str, dict]:
     original = reference_question(scene)
     question = polished_reference_question(original)
     return question, {
-        "pipeline": "v4_benchmark_style_graph_primary_author_critic_repair",
-        "review_policy_version": "v4.5_graph_primary_benchmark_style",
+        "pipeline": SEMANTIC_REVIEW_PIPELINE,
+        "review_policy_version": SEMANTIC_REVIEW_POLICY,
+        "semantic_contract_sha256": _fingerprint(semantic_contract(scene)),
         "safe_reference_polish_applied": question != original,
         "status": "fallback",
         "reason": reason,
