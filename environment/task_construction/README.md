@@ -183,3 +183,77 @@ same `*_30` filenames). Compare candidate/world yields, signed question
 rates, human-audited naturalness and semantic correctness, and the resulting
 orchestration DAGs. This experimental mode is not a claim of true raw-media
 perception: MultiModalQA currently informs *evidence source patterns*.
+
+
+### Semantic-cohesion v2: paired 30-task pilot (opt-in)
+
+The existing `semantic_anchored` mode remains available. Experimental
+`semantic_anchored_v2` addresses four concrete failures in the first
+30-task pilot:
+
+- Subject anchors are selected using *previous accepted* anchor-type and
+  predicate frequencies, avoiding the v1 concentration on administrative
+  areas, `schema:geo` and `schema:location`.
+- A real YAGO subject profile must explain **at least 45% of the distinct
+  predicates in the bound ProgramIR**, in addition to sharing at least two
+  predicates on one correctly owned logical entity scope. Each candidate
+  records `semantic_anchor.global_coverage` and the matched predicates.
+  This is a local **cohesion proxy**, not a proof that the whole reasoning
+  chain is present in one connected real-world YAGO subgraph.
+- Self-entailed `FILTER_YEAR startDate = 1915 -> QUERY_ATTR startDate ->
+  VERIFY_YEAR != 1915` tasks are quarantined in World Generation
+  (`degenerate_task`) rather than offered to Stage 2.
+- A narrow Stage-2/Stage-3 replayable deterministic guard rejects a clear
+  `INTERSECT -> at least one of these conditions ... OR` rewrite
+  (e.g., mass / height filters). The fallible LLM Critic remains in use.
+
+A `--run-tag` is required for v2: this preserves the previous v1 `*_30`
+inputs, outputs, resume state and frozen manifest. The same original KQA
+files, seed and candidate capacity can be compared in v1/v2.
+
+```bash
+python environment/construct_tasks.py \
+  --candidate-pool-size 30 \
+  --run-tag v2 \
+  --construction-mode semantic_anchored_v2 \
+  --anchor-tries 10 \
+  --reuse-source-priors \
+  --candidate-workers 4 \
+  --candidate-max-attempts 3000
+```
+
+Read `environment/data/build_summary_semantic_anchored_v2_30_v2.json`
+for candidate binding yield, anchor coverage, v2 rejections, World yield,
+and Diversity rejections. New source summaries only retain statistics
+and file paths, never the huge embedded YAGO predicate catalog.
+
+After Stage 1 reports `accepted_worlds > 0`, run:
+
+```bash
+python environment/generate_goals.py \
+  --manifest environment/data/frozen_manifest_30_v2.json \
+  --authoring-inputs environment/data/authoring_inputs_30_v2.jsonl \
+  --worlds environment/data/typed_worlds_30_v2.jsonl \
+  --capabilities environment/data/capability_worlds_30_v2.jsonl \
+  --max-records 30 --max-goal-revisions 2 \
+  --output-dir environment/data/stage2a_anchor_v2_30 \
+  --question-workers 4 --blueprint-workers 2 --flush-every 1
+
+python environment/generate_questions.py \
+  --manifest environment/data/frozen_manifest_30_v2.json \
+  --authoring-inputs environment/data/authoring_inputs_30_v2.jsonl \
+  --worlds environment/data/typed_worlds_30_v2.jsonl \
+  --capabilities environment/data/capability_worlds_30_v2.jsonl \
+  --blueprints environment/data/stage2a_anchor_v2_30/certified_blueprints.jsonl \
+  --question-brief-mode full --max-records 30 --max-revisions 2 \
+  --output-dir environment/data/stage2b_anchor_v2_full_30 \
+  --question-workers 4 --flush-every 1
+```
+
+The real goal is *paired, human-checked* Question fidelity and thematic
+coherence at similar KQA complexity, not just a higher automatic acceptance
+rate. v2 still synthesizes its own World from bound ProgramIR and uses MMQA
+for source-layout priors; **it does not yet extract or compose full
+YAGO-connected entity subgraphs or use raw MMQA media**. Those require a
+separate verified source-graph construction path rather than claiming a
+prompt-only improvement.
