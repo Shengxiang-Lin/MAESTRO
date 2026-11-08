@@ -1,159 +1,111 @@
-"""Materialize clean, deterministic, multi-fact sources for Macro Task evidence.
+"""Deterministic synthetic source observations for MMQA-derived Macro Tasks.
 
-Every source is a textual synthetic record surrogate. A modality hint (image,
-video, audio) does not imply any actual media perception. Facts are generated
-consistently for a single shared case reference and are never contradictory.
+This is a *simulator*, not a media decoder. Each observed original MMQA source
+handle receives distinct, question-scoped candidate/attribute fields that can
+be consumed by the internal work-product evaluator. Never call synthetic
+attributes facts about the original photographs, tables or text documents.
 """
 from __future__ import annotations
 
-import random
-
+import re
 from envir.schema import digest
 
 
-# Domain-specific evidence descriptors are synthetic operational semantics,
-# never copied truth from an original KQA/MMQA record.
-DOMAIN_FIELDS = {
-    "logistics": ("vehicle movement", "dispatch log", "gate access", "carrier"),
-    "culture": ("museum event", "exhibition booking", "gallery schedule", "visitor"),
-    "sports": ("competition event", "results register", "eligibility", "participant"),
-    "education": ("conference session", "program entry", "venue assignment", "speaker"),
-    "science": ("experimental run", "instrument log", "calibration", "researcher"),
-    "commerce": ("product batch", "shipment record", "recall handling", "customer"),
-    "environment": ("field observation", "survey register", "habitat protection", "ranger"),
-    "civic": ("maintenance incident", "service order", "safety procedure", "technician"),
-    "general": ("venue event", "booking record", "access requirement", "attendee"),
-}
+def _focus(question: str) -> str:
+    """Compact label for the attribute being tested, without inventing facts."""
+    text = " ".join(str(question).split())
+    for regex in (
+        r"\b(?:have|has|wearing|showing|contains?|depicts?)\s+(.{4,90}?)(?:\?|$)",
+        r"\b(?:which|what)\s+(.{4,90}?)(?:\?|$)",
+    ):
+        match = re.search(regex, text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip(" .?!")[:90]
+    return text.rstrip("?")[-90:]
 
 
-def _synthetic_facts(*, role: str, domain: str, case_id: str, date: str,
-                     issue: str, setting: str, user_role: str,
-                     rng: random.Random) -> list[dict]:
-    event_label, record_label, rule_label, stakeholder_label = DOMAIN_FIELDS.get(
-        domain, DOMAIN_FIELDS["general"])
-    capacity = rng.randint(6, 13)
-    requested = rng.randint(2, capacity)
-    # Each source has its own independent facts and an explicit case and
-    # date scope. Extra observations are meaningful source fields, not
-    # hallucinated OCR or claims that a real media model ran.
-    details = {
-        "material": [
-            ("observation_type", event_label,
-             f"The primary observation concerns a {event_label}."),
-            ("observed_issue", issue,
-             f"The observed {event_label} concerns {issue}."),
-            ("observation_location", setting,
-             f"The primary account places the incident at the {setting}."),
-        ],
-        "records": [
-            ("register_type", record_label,
-             f"The relevant entries are recorded in the {record_label}."),
-            ("indexed_subject", case_id,
-             f"The {record_label} includes the case reference {case_id}."),
-            ("record_scope", issue,
-             f"The indexed entry relates to {issue}."),
-        ],
-        "rule_source": [
-            ("requirement_type", rule_label,
-             f"The applicable requirement area is {rule_label}."),
-            ("rule_scope", setting,
-             f"The guidance applies to activities at the {setting}."),
-            ("review_condition", "review_case_before_action",
-             f"Activities under {rule_label} require case-scoped review before action."),
-        ],
-        "independent_reports": [
-            ("independent_type", event_label,
-             f"A separately recorded account concerns the {event_label}."),
-            ("independent_case", case_id,
-             f"The separate report references the same case {case_id}."),
-            ("independent_issue", issue,
-             f"The separate report describes {issue}."),
-        ],
-        "context": [
-            ("context_type", event_label,
-             f"Background documents describe the {event_label} process."),
-            ("context_location", setting,
-             f"Those documents apply to the {setting}."),
-            ("context_relevance", issue,
-             f"The contextual material is relevant to {issue}."),
-        ],
-        "capacity": [
-            ("available_units", capacity,
-             f"The synthetic capacity register lists {capacity} available units."),
-            ("requested_units", requested,
-             f"The case requests {requested} units from the same register."),
-            ("capacity_scope", case_id,
-             f"Both capacity entries are scoped to {case_id}."),
-        ],
-        "stakeholders": [
-            ("decision_owner", user_role,
-             f"The coordinating role is the {user_role}."),
-            ("stakeholder_group", stakeholder_label,
-             f"The relevant stakeholder group is the {stakeholder_label}."),
-            ("stakeholder_requirement", "documented_resolution",
-             f"The stakeholder requires a documented resolution of {issue}."),
-        ],
-    }
-    if role not in details:
-        raise ValueError("unsupported source role: " + role)
-    pairs = [
-        ("case_reference", case_id,
-         f"The source is indexed under case {case_id}."),
-        ("review_date", date,
-         f"The evidence in this source is scoped to {date}."),
-        *details[role],
+def _synthetic_facts(*, case_ref: str, source: dict, question: str,
+                     domain: str, topic: str) -> list[dict]:
+    doc_id = str(source.get("original_doc_id") or source["source_id"])
+    modality = source["modality_hint"]
+    # Scores, feature flags and candidate labels below are synthetic test
+    # observations. They are NOT predictions about the real MMQA media.
+    score = int(digest(case_ref, doc_id, "attribute_score")[:8], 16) % 100
+    time_index = 1 + int(digest(case_ref, doc_id, "relative_time")[:8], 16) % 40
+    group = int(digest(topic, doc_id, "group")[:8], 16) % 3
+    candidate_id = "candidate-" + digest(doc_id, topic)[:10]
+    criterion = _focus(question)
+    source_key = f"{modality}:{doc_id}"
+    attributes = [
+        ("case_reference", case_ref,
+         f"The simulated source is assigned to evidence scope {case_ref}."),
+        ("original_source_handle", source_key,
+         f"The original MMQA support handle is {source_key}."),
+        ("source_modality", modality,
+         f"This role represents {modality} evidence; its actual media content was not decoded."),
+        ("candidate_key", candidate_id,
+         f"Simulated candidate {candidate_id} was extracted from reference {source_key}."),
+        ("question_criterion", criterion,
+         f"The candidate is checked against the question criterion '{criterion}'."),
+        ("synthetic_attribute_score", score,
+         f"Simulation assigns candidate {candidate_id} attribute score {score}."),
+        ("synthetic_attribute_flag", score % 3 != 0,
+         f"Simulation marks the requested attribute for {candidate_id} as "
+         f"{'present' if score % 3 != 0 else 'absent'}."),
+        ("synthetic_time_index", time_index,
+         f"Simulation assigns candidate {candidate_id} relative time index {time_index}."),
+        ("synthetic_group_key", f"group-{group}",
+         f"Simulation associates {candidate_id} with matching group {group}."),
+        ("observation_provenance", "simulated_not_raw_perception",
+         "All candidate attributes are deterministic synthetic observations, not original MMQA annotations."),
     ]
     return [
-        {
-            "fact_id": f"F{i+1}",
-            "field": key,
-            "value": value,
-            "statement": claim,
-            "verification": "consistent_synthetic_record",
-        }
-        for i, (key, value, claim) in enumerate(pairs)
+        {"fact_id": f"F{i+1}", "field": key, "value": value,
+         "statement": sentence, "verification": "consistent_synthetic_record"}
+        for i, (key, value, sentence) in enumerate(attributes)
     ]
 
 
 def build_clean_world(plan: dict, *, seed: int) -> dict:
-    rng = random.Random(int(digest(seed, plan["task_id"])[:14], 16))
     domain = plan["scenario"]["domain"]
     case_ref = f"{domain[:3].upper()}-{seed % 100:02d}-{plan['task_id'][-7:]}"
-    day = 11 + rng.randrange(17)
-    as_of = f"2026-10-{day:02d}"
-    sources = {}
-    grants = {}
+    question = plan["source_priors"]["MultiModalQA"]["original_question"]
+    topic = plan["scenario"]["topic"]
+    sources, grants = {}, {}
     for task in plan["macro_graph"]["tasks"]:
-        ids = []
+        granted = []
         for requirement in task.get("source_requirements", []):
+            modality = requirement["candidate_modalities"][0]
+            doc_id = requirement.get("original_doc_id")
             role = requirement["role"]
             description = requirement["description"]
             source_id = "src-" + digest(plan["task_id"], role, description)
             if source_id not in sources:
-                sources[source_id] = {
+                source = {
                     "source_id": source_id,
                     "role": role,
                     "title": description,
-                    "modality_hint": requirement["candidate_modalities"][0],
+                    "modality_hint": modality,
                     "representation": "synthetic_text_record_not_raw_media",
-                    "facts": _synthetic_facts(
-                        role=role, domain=domain, case_id=case_ref, date=as_of,
-                        issue=plan["scenario"]["issue"],
-                        setting=plan["scenario"]["setting"],
-                        user_role=plan["scenario"]["user_role"],
-                        rng=rng,
-                    ),
+                    "original_doc_id": doc_id,
+                    "source_origin": requirement.get("source_origin"),
                 }
-            ids.append(source_id)
-        grants[task["task_id"]] = sorted(ids)
+                source["facts"] = _synthetic_facts(
+                    case_ref=case_ref, source=source, question=question,
+                    domain=domain, topic=topic,
+                )
+                sources[source_id] = source
+            granted.append(source_id)
+        grants[task["task_id"]] = sorted(set(granted))
     if not sources:
-        raise ValueError("no root source requirements available")
+        raise ValueError("no supporting MMQA source handles")
     return {
-        "world_id": "world-" + digest(plan["task_id"], "clean_v4"),
+        "world_id": "world-" + digest(plan["task_id"], "synthetic_v46"),
         "case_reference": case_ref,
-        "as_of": as_of,
+        "as_of": "synthetic_not_timestamped",
         "sources": sources,
         "source_grants": grants,
         "source_truth": "deterministic_simulated_only",
         "real_multimodal_files": False,
+        "observation_policy": "synthetic_question_scoped_not_original_mmqa_facts",
     }
