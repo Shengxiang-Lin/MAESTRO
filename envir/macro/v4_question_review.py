@@ -473,9 +473,16 @@ def naturalize_one(scene: dict, *, author, critic,
         author_calls += 1
         payload = {
             "reference_question": initial,
+            # The reference remains immutable; this style-only seed removes
+            # the legacy duplicate evidence request where present.
+            "style_seed_question": polished_reference_question(initial),
             "immutable_task_contract": contract,
             "style_hint": style_hint(scene),
-            "instruction": "Write one natural user question, not a subtask schedule.",
+            "instruction": (
+                "Rewrite the public user need, not the subtask schedule. "
+                "Avoid copied 'documented findings' boilerplate. "
+                "Never invent specific sources or turn generic objects into named subtypes."
+            ),
         }
         if latest is not None:
             payload["previous_draft"] = latest
@@ -518,6 +525,12 @@ def naturalize_one(scene: dict, *, author, critic,
             "reference_question": initial,
             "candidate_question": candidate,
             "immutable_task_contract": contract,
+            "semantic_delta_checklist": [
+                "Any novel specific entity, instrument, event state or source name?",
+                "Any changed target of rank, compare, assess or other action?",
+                "Any explicit private subtask execution order?",
+                "Any new constraints, data assertions, or omitted work products?",
+            ],
         }
         try:
             row["critic_calls"] += 1
@@ -563,9 +576,14 @@ def naturalize_one(scene: dict, *, author, critic,
         if judgment["verdict"] == "uncertain":
             break
 
-    result = accepted if accepted is not None else initial
+    safe_reference = polished_reference_question(initial)
+    result = accepted if accepted is not None else safe_reference
     status = "accepted" if accepted is not None else "fallback"
     metadata = {
+        "review_policy_version": "v4.2_fidelity_naturalness",
+        "safe_reference_polish_applied": (
+            accepted is None and result != initial
+        ),
         "pipeline": "v4_task_contract_author_local_critic_repair",
         "status": status,
         "reason": "independent_critic_pass" if accepted is not None else last_failure,
@@ -608,7 +626,10 @@ def naturalize_scenes(scenes: list[dict], *, author, critic,
     for scene, (question, info) in zip(scenes, produced):
         normalized = re.sub(r"\W+", " ", question.casefold()).strip()
         if info["status"] == "accepted" and normalized in previously_seen:
-            question = info["reference_question"]
+            question = polished_reference_question(info["reference_question"])
+            info["safe_reference_polish_applied"] = (
+                question != info["reference_question"]
+            )
             info["status"] = "fallback"
             info["reason"] = "duplicate_naturalized_question"
             info["final_question"] = question
@@ -671,7 +692,11 @@ def validate_naturalized_question(scene: dict) -> list[str]:
                 errors.append("review_not_passed")
         except (ValueError, TypeError):
             errors.append("review_invalid_pass_record")
-        if surface_issues(scene, scene["question"], baseline=original):
+        # Previously published (pre-v4.2) records retain their old schema
+        # and cannot retroactively claim stronger semantic screening. New
+        # naturalizations are checked against the current stricter guard.
+        if (meta.get("review_policy_version") == "v4.2_fidelity_naturalness"
+                and surface_issues(scene, scene["question"], baseline=original)):
             errors.append("review_surface_mismatch")
         if scene["question"] == original:
             errors.append("review_not_naturalized")
@@ -682,8 +707,16 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         ):
             errors.append("review_audit_missing_approved_candidate")
     elif status == "fallback":
-        if scene["question"] != original or meta.get("accepted_review") is not None:
+        expected = (
+            polished_reference_question(original)
+            if meta.get("review_policy_version") == "v4.2_fidelity_naturalness"
+            else original
+        )
+        if scene["question"] != expected or meta.get("accepted_review") is not None:
             errors.append("review_fallback_changed_question")
+        if meta.get("review_policy_version") == "v4.2_fidelity_naturalness":
+            if meta.get("safe_reference_polish_applied") is not (expected != original):
+                errors.append("review_fallback_polish_metadata_mismatch")
     else:
         errors.append("review_unknown_status")
     return errors
