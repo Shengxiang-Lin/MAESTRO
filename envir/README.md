@@ -270,3 +270,108 @@ lightweight rules. Invalid outputs and model-call failures revert to the
 deterministic question. This is surface-level **heuristic** validation, not
 a semantic proof; downstream task authoring must still certify meaning
 against the grounded world before using any candidate for training.
+
+
+## Macro TaskPlan V2 — work-deliverable composition (2026-11)
+
+V1 uses five manually authored DAGs and couples an Intent to a
+single graph. V2 introduces a **backward work-product grammar** and is
+invoked from a separate CLI; old macro V1, envir.scenarios, and the
+legacy environment/ remain unchanged.
+
+Key distinction:
+
+- **Question**: an end-user information need, contextual resources,
+  conditions and required final result. No agent/tool plan revealed.
+- **Macro TaskPlan**: a directed graph of substantial, independently
+  delegable *work products* such as investigations, record audits,
+  timelines, requirements reviews, compliance assessments, response
+  options or rankings. Edges name the exact producer output slot,
+  consumer input slot, typed artifact and **why the handoff is needed**.
+- **Subtask execution** (FUTURE stage): analysis of images/videos/audio,
+  original KoPL operators, individual searches, calculations, internal
+  tool observations, Answer, Summary and Summary Trace. These are not
+  individual macro nodes.
+
+The planner first selects a user intent and desired output artifact
+(e.g., ImpactReport), then recursively chooses from multiple
+semantically specified recipes that produce this artifact. Reused work
+products are memoized; branching and joins follow from actual
+input/output requirements. It does not choose one of five fixed DAGs.
+A mild, independent structural sampling preference explores both serial
+and parallel routes without creating artificial edges. Internal
+micro-actions are coarsened to their work package's private outline.
+
+The original data have distinct roles:
+
+- KQA-Pro: full dependency-preserving KoPL ProgramIR saved as a
+  **private internal reasoning prior**. No micro-node is automatically
+  delegated as a macro task.
+- MultiModalQA: official question/composition type, source modalities
+  and original question hint are kept as *source-pattern priors*.
+  The corresponding source contents are not claimed to exist.
+- YAGO: optionally contributes observed relation-name hints from the
+  existing **read-only** EvidenceStore. These are not synthetic truths.
+- OmniGAIA: optional local official question metadata file contributes
+  ONLY rhetorical question-style categories; neither original
+  examples/answers nor annotated reasoning/media is copied into tasks.
+  Without a local OmniGAIA file, the generated question grammars are
+  simply benchmark-inspired patterns.
+
+All scheduling uses ONE fixed maximum of **10 concurrent Sub-Agents**.
+No varying limits, costs, latencies, fault scenarios or deceptive
+Sub-Agent feedback are generated.
+
+Build 100 structural plans from the original input files:
+
+    python -m envir.macro.v2_cli build \
+      --kqa data/world-source/KQA-Pro/train.json \
+      --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+      --bank envir/data/pilot/bank.sqlite \
+      --output-dir envir/data/macro_v2 \
+      --target 100 \
+      --max-kqa-records 10000 \
+      --max-mmqa-records 3000 --seed 17
+
+Optional: add --omnigaia /path/to/official/test_metadata.json to
+sample original OmniGAIA QUESTION style only. Omit --bank if the
+envir SQLite YAGO bank is not available. Neither is required to run.
+
+Optionally use a LOCAL OpenAI-compatible model (only public Question
+naturalization, not TaskPlan authoring):
+
+    python -m envir.macro.v2_cli build \
+      --kqa data/world-source/KQA-Pro/train.json \
+      --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+      --output-dir envir/data/macro_v2_llm --target 100 \
+      --question-api-base http://localhost:8000/v1 \
+      --question-model YOUR_LOCAL_MODEL_NAME \
+      --question-workers 4
+
+The optional Question Author receives only the public Question Brief.
+Its rewritten question passes conservative topic/intent/no-leak checks
+or falls back to the deterministic wording. This does **not** certify
+semantic equivalence; meaningful approval awaits source-grounded
+semantic review.
+
+Replay saved plans:
+
+    python -m envir.macro.v2_cli replay \
+      --plans envir/data/macro_v2/private_taskplans_v2.jsonl
+
+Output files:
+- private_taskplans_v2.jsonl — PRIVATE teacher *structural* TaskPlans,
+  work recipes, dependency reasons, internal action outlines, KQA/MMQA
+  priors, coarsening and reference waves. NO grounded Gold or feedback.
+- public_questions_v2.jsonl — questions and prospective resource roles
+  only. These source descriptions are NOT yet instantiated files.
+- macro_v2_summary.json — graph/intent/work/query diversity statistics.
+- macro_v2_source_priors.json — source prior coverage and policies.
+
+V2 validates dependency types, their explicit work requirements,
+contribution of each work to the terminal output, DAG acyclicity,
+no fine-grained internal steps in public questions, and fixed
+concurrency 10. Validation does NOT establish correct factual answers,
+the necessity of every source in a realized world, or reliable
+Sub-Agent traces. The next stage must ground source material, produce
+source-scoped Feedback and certify question-answer/evidence equivalence.
