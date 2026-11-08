@@ -184,11 +184,21 @@ def build_graph(need: dict, world: dict) -> dict:
     def rules():
         return add("rules_review", source_role="rules")
 
-    def capacity():
-        return add("capacity_review", source_role="capacity")
+    def capacity(matched_task):
+        required = (
+            (("matched_cases", matched_task, "matched_cases", "CaseSet"),)
+            if need["capacity_scope"] == "case_scoped" else ()
+        )
+        return add("capacity_review", source_role="capacity",
+                   dependencies=required)
 
-    def independent():
-        return add("independent_review", source_role="independent")
+    def independent(event_task):
+        required = (
+            (("event", event_task, "event_brief", "EventBundle"),)
+            if need["independent_scope"] == "event_scoped" else ()
+        )
+        return add("independent_review", source_role="independent",
+                   dependencies=required)
 
     intent = need["intent"]
     links = []
@@ -201,7 +211,7 @@ def build_graph(need: dict, world: dict) -> dict:
                  ("case_b", b, "matched_cases", "CaseSet")]
     elif intent in {"timeline", "reconciliation"}:
         a = event("all")
-        b = independent()
+        b = independent(a)
         links = [("event", a, "event_brief", "EventBundle"),
                  ("independent", b, "independent_brief", "IndependentBundle")]
     else:
@@ -210,7 +220,7 @@ def build_graph(need: dict, world: dict) -> dict:
         if intent in {"compliance", "impact", "feasibility"}:
             links.append(("rules", rules(), "rules_brief", "RuleBrief"))
         if intent in {"prioritization", "mitigation", "feasibility"}:
-            links.append(("capacity", capacity(), "capacity_brief", "CapacityBundle"))
+            links.append(("capacity", capacity(m), "capacity_brief", "CapacityBundle"))
     final_id = add("final_assessment", dependencies=tuple(links))
     # A genuine coarsening opportunity: if record auditing is event-scoped,
     # its only consumer is matching, and both actions form one work product,
