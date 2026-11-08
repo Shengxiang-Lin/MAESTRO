@@ -67,11 +67,14 @@ class MacroV2Tests(unittest.TestCase):
         plans, stats = build_v2_batch(
             kqa=self.kqa, mmqa=self.mmqa, target=100, seed=17)
         self.assertEqual(len(plans), 100)
-        self.assertGreaterEqual(stats["unique_macro_work_types"], 13)
-        self.assertGreaterEqual(stats["unique_macro_recipe_graphs"], 15)
-        self.assertGreaterEqual(stats["unique_intent_topology_pairs"], 12)
-        self.assertGreaterEqual(stats["unique_question_texts"], 90)
+        self.assertGreaterEqual(stats["unique_macro_work_types"], 35)
+        self.assertGreaterEqual(stats["unique_macro_recipe_graphs"], 50)
+        self.assertGreaterEqual(stats["unique_intent_topology_pairs"], 20)
+        self.assertGreaterEqual(stats["unique_question_texts"], 95)
         self.assertEqual(stats["fixed_max_concurrency"], 10)
+        self.assertGreaterEqual(stats["macro_graph_patterns"].get("chain", 0), 10)
+        self.assertGreaterEqual(len(stats["macro_graph_patterns"]), 5)
+        self.assertGreaterEqual(min(stats["intent_topology_diversity"].values()), 2)
         self.assertEqual(len(stats["domains"]), 9)
         self.assertEqual(len(stats["intents"]), 8)
         print("MACRO_V2_STATS", json.dumps({
@@ -131,6 +134,34 @@ class MacroV2Tests(unittest.TestCase):
         self.assertNotIn("private reference step", json.dumps(p))
         self.assertEqual(p["source_priors"]["OmniGAIA"]["policy"],
                          "real_dataset_question_style_only")
+
+    def test_local_question_author_scoped_and_rejects_leaks(self):
+        from envir.macro.v2_author import naturalize_v2, check_question
+        plans, _ = build_v2_batch(kqa=self.kqa, mmqa=self.mmqa,
+                                  target=8, seed=17)
+
+        class Stub:
+            requests = []
+            def complete(self, request):
+                self.requests.append(request)
+                return request["reference_question"]
+
+        stub = Stub()
+        stats = naturalize_v2(plans, author=stub, workers=2)
+        self.assertEqual(stats["accepted"], 8)
+        for req in stub.requests:
+            self.assertEqual(set(req), {
+                "situation", "user_role", "reference_question",
+                "expected_deliverable", "resource_descriptions",
+            })
+            self.assertNotIn("macro_graph", json.dumps(req))
+            self.assertNotIn("full_internal_logical_program", json.dumps(req))
+        for plan in plans:
+            self.assertEqual(validate_v2(plan), [])
+            self.assertFalse(plan["question_authoring"]["semantic_equivalence_certified"])
+            leaking = plan["question"] + " First subtask S1 must run before S2."
+            self.assertIn("leaks_orchestration_details",
+                          check_question(plan, leaking))
 
     def test_cli_build_replay_without_touching_v1(self):
         out = self.tmp / "out"
