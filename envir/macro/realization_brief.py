@@ -16,38 +16,38 @@ from .semantic_contract import semantic_contract
 INTENT_BRIEFS = {
     "lookup": (
         "Find entries with a positive recorded mark.",
-        "Identify the matching entries and where the marks are documented.",
+        "Identify all entries that are marked positive.",
     ),
     "composition": (
         "Determine how entries mentioned in different materials refer to or "
         "connect with one another.",
-        "Describe the traceable connections and the supporting records.",
+        "Identify the traceable connections among the entries.",
     ),
     "comparison": (
         "Compare the scores actually recorded for the entries.",
-        "Identify the highest-scoring entry, give the complete score ordering, "
-        "and indicate which records support it.",
+        "Identify the highest-scoring entry and the complete score ordering. "
+        "",
     ),
     "intersection": (
         "Find which recorded groups recur across independent materials.",
-        "Name the recurring groups and the records establishing each overlap.",
+        "Name the recurring groups and their overlaps.",
     ),
     "aggregation": (
         "Count entries with a positive recorded mark.",
-        "Give the count and identify the records contributing to it.",
+        "Determine the complete count.",
     ),
     "temporal": (
         "Arrange entries by their recorded relative sequence.",
-        "Give the ordering, indicate which appears earliest, and support the "
-        "sequence using the records. Do not invent calendar dates.",
+        "Give the ordering and identify which appears earliest. "
+        "Do not invent calendar dates.",
     ),
     "prioritization": (
         "Place the entries in descending order of their recorded scores.",
-        "Give the full priority order and the sources supporting it.",
+        "Give the complete score-based priority order.",
     ),
     "feasibility": (
         "Find entries marked positive and with a recorded score of at least 50.",
-        "Identify all qualifying entries and the records supporting the choice.",
+        "Identify all qualifying entries under both stated conditions.",
     ),
 }
 
@@ -80,6 +80,12 @@ def question_realization_brief(scene: dict) -> dict:
             "or backend task labels with natural equivalents. "
             "Keep the *meaning* of positive marks, recorded scores and "
             "relative ordering, without turning them into new real-world facts."
+        ),
+        "solver_provenance_obligation": (
+            "The frozen solution still verifies evidence and preserves "
+            "source references. These are internal answer standards; the "
+            "user's Question need not explicitly demand citations, "
+            "source enumeration or verification steps."
         ),
         "evidence_boundary": (
             "Do not invent any event, account, person, source, observed image "
