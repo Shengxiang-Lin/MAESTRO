@@ -176,7 +176,10 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
             raise EvidenceExecutionError("missing_granted_clean_source:" + source_id)
         source = world["sources"][source_id]
         for fact in source["facts"]:
-            if fact["verification"] != "consistent_synthetic_record":
+            if fact["verification"] not in {
+                "consistent_synthetic_record",
+                "original_mmqa_text_excerpt_not_pixels",
+            }:
                 raise EvidenceExecutionError("nonclean_fact")
             ref = f"{source_id}:{fact['fact_id']}"
             source_support.add(ref)
