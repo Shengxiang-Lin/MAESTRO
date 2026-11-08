@@ -572,7 +572,12 @@ class CleanTaskFirstTests(unittest.TestCase):
         second = copy.deepcopy(first)
         class Author:
             def complete_json(self, system, user, *, response_schema=None):
-                return {"question": json.loads(user)["reference_question"].replace(
+                ref = json.loads(user)["reference_question"]
+                # A genuinely natural rephrase must also remove the
+                # repeated boilerplate inside the terminal Task goal.
+                return {"question": ref.replace(
+                    "; explain which documented findings support the conclusion", ""
+                ).replace(
                     " Explain which documented findings support your assessment.",
                     " What evidence supports the conclusion?",
                 )}
@@ -653,9 +658,12 @@ class CleanTaskFirstTests(unittest.TestCase):
         class Author:
             def __init__(self):
                 self.calls = 0
+                self.reference_requests = []
             def complete_json(self, system, user, *, response_schema=None):
                 self.calls += 1
-                return {"question": json.loads(user)["reference_question"].replace(
+                ref = json.loads(user)["reference_question"]
+                self.reference_requests.append(ref)
+                return {"question": ref.replace(
                     " Explain which documented findings support your assessment.",
                     " What evidence supports the conclusion?",
                 )}
@@ -695,7 +703,14 @@ class CleanTaskFirstTests(unittest.TestCase):
         self.assertEqual(stats["resumed_records"], 2)
         self.assertEqual(stats["streaming"]["completed"], 6)
         self.assertEqual(stats["streaming"]["total"], 6)
-        self.assertEqual(author.calls, 4)  # no model calls for committed records
+        # A remaining record may legitimately require multiple LLM
+        # revisions. Check prompt identity rather than number of calls.
+        from envir.macro.v4_question_review import reference_question
+        committed = {reference_question(scene) for scene in originals[:2]}
+        remaining = {reference_question(scene) for scene in originals[2:]}
+        self.assertGreaterEqual(author.calls, 4)
+        self.assertTrue(set(author.reference_requests) <= remaining)
+        self.assertFalse(set(author.reference_requests) & committed)
         self.assertGreaterEqual(unique, 1)
         for file in (
             "private_clean_scenes_v4.jsonl",
