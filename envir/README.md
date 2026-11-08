@@ -90,6 +90,118 @@ python -m envir naturalize
   --question-workers 4 --max-revisions 2
 ```
 
+### Post-TaskGraph World concretization (optional LLM stage)
+
+After `build` and **before** `naturalize`, run `ground-scenes`.
+This stage is a source-bound **synthetic interpretation** of the existing
+World, not original MMQA gold annotation, real visual understanding, or
+a reconstruction of the actual historical event.
+
+The Scene Constructor receives the deterministic reference Question,
+the original MMQA Question as a weak inspiration cue, the existing source
+facts (all source IDs, candidate IDs, simulated scores, boolean flags,
+relative time indices and grouping keys), and compact **per-Task EvidenceGraph
+operations, input dependencies and computed operation results**. The LLM
+proposes a concrete hypothetical `scene_context`, a domain-appropriate
+`candidate_kind`, field meanings and an exactly source-matched list of
+fictional display labels and source roles. It is not asked to invent or
+recompute facts.
+
+Python independently materializes `scene_grounding` as a fact-bound
+overlay on `scenes.jsonl`:
+
+```json
+{
+  "scene_grounding": {
+    "mode": "synthetic_interpretation_not_original_media_annotation",
+    "scene_context": "A hypothetical editor compares ...",
+    "candidate_kind": "fictional evaluation entries",
+    "field_meanings": {
+      "score": "evaluation points",
+      "positive_flag": "positive review indicator",
+      "relative_time_index": "entry sequence",
+      "group_key": "evaluation group"
+    },
+    "source_cards": [
+      {
+        "source_id": "EXISTING_SOURCE_ID",
+        "candidate_key": "EXISTING_CANDIDATE_ID",
+        "candidate_label": "Entry A",
+        "source_role": "fictional table reference record",
+        "fact_bindings": {
+          "score": {
+            "value": 42,
+            "fact_ref": "EXISTING_SOURCE_ID:F6",
+            "verification": "consistent_synthetic_record"
+          }
+        }
+      }
+    ],
+    "frozen_solution_fingerprint": "..."
+  }
+}
+```
+
+The `fact_bindings` object above is **abridged**: the actual record also
+contains entry ID, positive mark, relative sequence, group and their exact
+original fact references and values. No fake values or extra sources are
+invented. `grounding_audit.jsonl` stores the model's original proposal,
+Critic verdict, rejection reasons and revision attempts.
+
+**What counts as acceptable:** Every source appears once; every referenced
+fact points to its exact original `source_id:fact_id`, and its value equals
+the original World; all TaskGraph, original World, Feedback, EvidenceGraph
+and complete replay stay unchanged; field meanings and context must be
+hypothetical but plausible; there can be no new operation, source, media
+content claim or historical assertion. The independent Critic must return
+five `yes` judgments (domain plausibility, frozen facts, source roles,
+solution compatibility and reference-Question alignment). Failing proposals
+are rejected and the original scene is preserved with an audit record.
+This is a screening decision, **not a proof** of real-world correctness or
+multi-source necessity. Each overlay also includes a leave-one-source-out
+goal-level influence diagnostic (source IDs that change / do not change the
+Goal-pattern result when omitted). This helps identify mostly cosmetic
+multi-source questions, but does NOT prove any Task is redundant or
+repair source-linkage computation. The current simulator's operation
+semantics may still be abstract; the next Task/Trace/Answer stage must
+address those independently.
+
+Pilot command using the **original, non-naturalized** 1000-scene bank:
+
+```bash
+python -m envir ground-scenes \
+  --scenes envir/data/taskfirst_recursive_1000/scenes.jsonl \
+  --output-dir envir/data/taskfirst_recursive_ground50 \
+  --max-records 50 \
+  --grounding-api-base http://127.0.0.1:8807/v1 \
+  --grounding-model local-qwen3.5-9b \
+  --grounding-workers 2 \
+  --max-revisions 2 \
+  --flush-every 1
+
+python -m envir replay \
+  --scenes envir/data/taskfirst_recursive_ground50/scenes.jsonl
+
+python -m envir naturalize \
+  --scenes envir/data/taskfirst_recursive_ground50/scenes.jsonl \
+  --output-dir envir/data/taskfirst_recursive_ground_natural50 \
+  --max-records 50 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 2 \
+  --max-revisions 2 \
+  --flush-every 1
+
+python -m envir replay \
+  --scenes envir/data/taskfirst_recursive_ground_natural50/scenes.jsonl
+```
+
+`ground-scenes` writes ordered, resumable `scenes.jsonl`,
+`questions.jsonl`, `grounding_audit.jsonl`, `summary.json`, and
+`grounding_checkpoint.json`. Use a fresh output directory for a new
+model/prompt version, or `--overwrite` only when discarding a previous run.
+No re-execution or modification of the original Macro TaskGraph is needed.
+
 ### Question-only natural language realization (v2)
 
 Question Author and Critic have deliberately **different views**:

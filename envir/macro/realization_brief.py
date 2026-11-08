@@ -59,7 +59,7 @@ def question_realization_brief(scene: dict) -> dict:
     if intent not in INTENT_BRIEFS:
         raise ValueError("unknown author intent")
     need, output = INTENT_BRIEFS[intent]
-    return {
+    brief = {
         "topic": spec["authorized_topic"],
         "information_need": need,
         "complete_answer": output,
@@ -94,3 +94,35 @@ def question_realization_brief(scene: dict) -> dict:
             "allowed; claiming a new account or document is not."
         ),
     }
+    grounding = scene.get("scene_grounding")
+    if grounding and grounding.get("status") == "accepted":
+        brief["hypothetical_scene"] = {
+            "context": grounding["scene_context"],
+            "candidate_kind": grounding["candidate_kind"],
+            "field_meanings": grounding["field_meanings"],
+            "goal_need": grounding["user_need"],
+            "sample_entries": [
+                {
+                    "display_label": card["candidate_label"],
+                    "record_role": card["source_role"],
+                }
+                for card in grounding["source_cards"]
+            ],
+            "provenance": (
+                "These are validated fictional interpretation labels for "
+                "existing simulated source values, NOT original MMQA facts. "
+                "You may use these labels, but do not add new events, "
+                "corrections, measurements, dates or source claims."
+            ),
+        }
+        brief["language_guide"] += (
+            " Use the domain-appropriate labels and hypothetical context "
+            "when it improves clarity; do not revert to generic entries "
+            "and marks unless the scenario lacks a clearer equivalent."
+        )
+        brief["evidence_boundary"] = (
+            "The approved hypothetical_scene is allowed as fictional "
+            "scenario wording, but no claims about actual historical "
+            "events, images or external original documents are permitted."
+        )
+    return brief

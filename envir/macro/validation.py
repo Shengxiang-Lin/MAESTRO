@@ -15,6 +15,7 @@ from .graph import compile_contracts, compile_waves, MacroPlanError
 from .question import author_question, task_level_brief
 from .question_review import validate_naturalized_question
 from .evidence import run_clean_tasks, EvidenceExecutionError
+from .scene_grounding import validate_grounding
 
 
 def validate_clean_scene(scene: dict) -> list[str]:
@@ -250,4 +251,7 @@ def validate_clean_scene(scene: dict) -> list[str]:
                     errors.append("evidence_graph_unknown_dependency")
     except (EvidenceExecutionError, KeyError, ValueError, TypeError, IndexError) as exc:
         errors.append("clean_replay_failed:" + type(exc).__name__ + ":" + str(exc)[:130])
+    # An optional post-graph interpretation may label existing facts but must
+    # not alter any World, operation, source grant, EvidenceGraph or Feedback.
+    errors.extend(validate_grounding(scene))
     return sorted(set(errors))
