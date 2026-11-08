@@ -7,6 +7,7 @@ from collections import Counter
 from .recipe_planner import UnsuitableSeed, compose_seed_taskfirst
 from .evidence import run_clean_tasks
 from .world import build_clean_world
+from .graph import canonical_topology
 
 
 def build_one(*, ordinal: int, seed: int, kqa: list[dict],
@@ -128,6 +129,21 @@ def build_batch(*, kqa: list[dict], scenario_seeds: list[dict],
         "unique_macro_work_types": len(kinds),
         "macro_work_types": dict(kinds),
         "macro_graph_signatures": len({graph_sig(s) for s in scenes}),
+        "unlabeled_dag_topologies": len({
+            canonical_topology(
+                s["macro_graph"]["tasks"],
+                s["macro_graph"]["edges"],
+                s["macro_graph"]["reference_waves"],
+            ) for s in scenes
+        }),
+        "unique_recipe_sequences": len({
+            tuple(t["recipe_id"] for t in s["macro_graph"]["tasks"])
+            for s in scenes
+        }),
+        "unique_recipe_ids": len({
+            t["recipe_id"] for s in scenes for t in s["macro_graph"]["tasks"]
+        }),
+        "recipe_selection": "backward_recursive_typed_workproduct_grammar",
         "intents": dict(intents),
         "macro_tasks_per_question": dict(Counter(
             len(s["macro_graph"]["tasks"]) for s in scenes)),
