@@ -247,3 +247,26 @@ executability, YAGO fact correctness or reliable sub-agent feedback.
 Next stage will ground every work package in a simulated evidence world and
 derive verified Answer / Summary / Summary Trace using scoped executors,
 with no private future-results leaking to an earlier delegated work unit.
+
+
+For more varied natural-language **public question surfaces**, you may
+optionally connect an OpenAI-compatible LOCAL vLLM server (the deterministic
+Macro TaskPlan itself is unchanged):
+
+    python -m envir.macro.cli build \
+      --kqa data/world-source/KQA-Pro/train.json \
+      --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+      --output-dir envir/data/macro_v1_llm \
+      --target 100 --seed 17 \
+      --question-api-base http://localhost:8000/v1 \
+      --question-model YOUR_LOCAL_MODEL_NAME \
+      --question-workers 4
+
+The Question Author sees only the public situation, user need, requested
+deliverable and resource descriptions. It NEVER receives teacher-private
+macro topology, fine-grained KoPL operations, execution traces or answers.
+The rewritten question is checked for subject/intent preservation using
+lightweight rules. Invalid outputs and model-call failures revert to the
+deterministic question. This is surface-level **heuristic** validation, not
+a semantic proof; downstream task authoring must still certify meaning
+against the grounded world before using any candidate for training.
