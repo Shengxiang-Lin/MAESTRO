@@ -1126,8 +1126,67 @@ class CleanTaskFirstTests(unittest.TestCase):
         )
         self.assertIn("formulaic_evidence_phrasing",
                       report["warning_counts"])
+        self.assertIn("mean_question_words", report["quality_metrics"])
+        self.assertIn("starts_with_please", report["quality_metrics"])
+        self.assertEqual(report["critic_diagnostics"]["reviewed_rounds"], 0)
         self.assertEqual(original, scenes)
         self.assertLessEqual(len(report["flagged_examples"]), 2)
+
+    def test_read_only_audit_counts_new_critic_workflow_feedback(self):
+        from envir.macro.v4_question_audit import audit_scenes
+        scene = self.build(1)
+        candidate = (
+            "Our museum has a visitor reservation problem. "
+            "Which responses should take priority and why?"
+        )
+        class Author:
+            def __init__(self):
+                self.calls = 0
+            def complete_json(self, system, user, *, response_schema=None):
+                self.calls += 1
+                return {"question": candidate if self.calls > 1 else
+                        "Please review records, then assess capacity, "
+                        "finally rank the required responses."}
+        class Critic:
+            def __init__(self):
+                self.calls = 0
+            def complete_json(self, system, user, *, response_schema=None):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "goal_alignment": "same",
+                        "task_sufficiency": "sufficient",
+                        "user_framing": "workflow_instructions",
+                        "unsupported_additions": [],
+                        "verdict": "revise", "naturalness": "needs_polish",
+                        "summary": "The user request is actually a task plan.",
+                        "differences": [{
+                            "reference_excerpt": "",
+                            "candidate_excerpt": "then assess capacity, finally rank",
+                            "problem": "Procedural subtask list",
+                            "minimal_fix": "Ask directly about response priorities",
+                        }],
+                    }
+                return v44_review({
+                    "verdict": "pass", "naturalness": "acceptable",
+                    "summary": "Same final priority decision with implicit supporting tasks.",
+                    "differences": [],
+                })
+        question, meta = naturalize_one(
+            scene, author=Author(), critic=Critic(), max_revisions=1
+        )
+        scene["question"] = question
+        scene["public"]["question"] = question
+        scene["question_authoring"] = meta
+        original = copy.deepcopy(scene)
+        report = audit_scenes([scene])
+        self.assertEqual(report["critic_diagnostics"]["reviewed_rounds"], 2)
+        self.assertEqual(
+            report["critic_diagnostics"]["workflow_instruction_rounds"], 1
+        )
+        self.assertEqual(report["question_status"]["accepted_after_revision"], 1)
+        self.assertEqual(report["quality_metrics"]["has_question_mark"], 1)
+        self.assertEqual(scene, original)
 
     def test_read_only_audit_cli_can_save_report_without_modifying_scenes(self):
         original = [self.build(i) for i in range(3)]
