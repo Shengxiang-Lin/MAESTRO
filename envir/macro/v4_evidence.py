@@ -253,7 +253,7 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
         "evidence_id": synthesis_id,
         "kind": "work_synthesis",
         "statement": resulting_statement,
-        "depends_on": base_ids,
+        "depends_on": [operator_id],
         "source_fact_refs": sorted(source_support),
         "status": "complete",
     })
@@ -270,11 +270,14 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
         if e["kind"] == "upstream_finding"
     ]
     primary_statements = (local_statements + inherited_statements)[:3]
+    result_brief = {
+        k: v for k, v in computed.items()
+        if k not in {"source_ids", "operation", "question_operation"}
+    }
     finding_statement = (
         f"{computed['operation']} evaluated {computed['candidate_count']} "
         f"distinct simulated source candidates; "
-        f"result={str({k: v for k, v in computed.items() if k not in "
-        f"{'source_ids', 'operation', 'question_operation'}})[:280]}. "
+        f"result={str(result_brief)[:280]}. "
         f"No original MMQA answer is asserted."
     )
     artifact_slot, artifact_type = next(iter(task["outputs"].items()))
