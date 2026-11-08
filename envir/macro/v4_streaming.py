@@ -382,8 +382,8 @@ def _fallback(scene, reason: str, *, detail: str = "") -> tuple[str, dict]:
     original = reference_question(scene)
     question = polished_reference_question(original)
     return question, {
-        "pipeline": "v4_goal_first_author_diagnostic_critic_repair",
-        "review_policy_version": "v4.4_goal_first_critic",
+        "pipeline": "v4_benchmark_style_graph_primary_author_critic_repair",
+        "review_policy_version": "v4.5_graph_primary_benchmark_style",
         "safe_reference_polish_applied": question != original,
         "status": "fallback",
         "reason": reason,

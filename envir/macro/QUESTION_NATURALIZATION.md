@@ -244,3 +244,65 @@ and unsupported-addition rounds:
 These diagnostic axes and review rates are fallible LLM judgments,
 not independent proof of semantic equivalence. Inspect actual text
 alongside the frozen TaskGraph when evaluating research quality.
+
+
+## V4.5 — MMQA / OmniGAIA question style, Macro TaskGraph as semantic authority
+
+**Authority:** the FINAL Macro Task goal and deliverable plus typed prerequisite
+work define an acceptable question. The old deterministic Question is an
+optional, sometimes unnatural writing hint, NOT an equivalence target.
+The Author can freely change wording, rhetorical structure, and presentation
+so long as the same graph remains a reasonable way to answer the final
+information need. The Critic sees the Macro TaskGraph and the candidate,
+**not** the old deterministic Question.
+
+The Prompt's style priors come from official examples of:
+
+- [MultiModalQA](https://github.com/allenai/multimodalqa) (Talmor et al.,
+  ICLR 2021): concise, referential/relational questions; comparisons and
+  cross-source dependencies are implicit rather than procedural task lists.
+  Original questions were human-rephrased after symbolic composition.
+- [OmniGAIA](https://huggingface.co/datasets/RUC-NLPIR/OmniGAIA)
+  (Li et al., 2026): situational and descriptive clues, precise information
+  requests, sometimes linked conditions/compound outputs requiring several
+  hidden reasoning/tool-use steps. Do not copy dataset question contents
+  or claim the simulated world contains real video/audio observations.
+
+The Author's *optional_reference_hint* remains available for a weak wording
+cue but may be ignored. It has no binding semantic authority. The Critic
+evaluates the final target, graph sufficiency, user-style phrasing and
+unsupported additions, without comparing against the reference text. This
+removes the old rule that an unchanged deterministic sentence must be rejected
+before Critic review: a good final question is judged on its merits.
+
+The 4-axis V4.4 review schema stays the same, but V4.5 records carry
+`v4.5_graph_primary_benchmark_style` and preserve replay compatibility
+with older V4.1–V4.4 data. The reference remains in **teacher-only audit**
+metadata for provenance and safe fallback, not as user-visible content.
+This does **not** prove actual evidence sufficiency: V4 clean source worlds,
+Sub-Agent Feedback and TaskGraph are frozen, and whether a task truly
+computes the intended answer remains a separate execution-level question.
+
+To run a paired question-only comparison on the same 100 fixed graphs:
+
+```bash
+python -m envir.macro.v4_cli naturalize \
+  --scenes envir/data/macro_v4/private_clean_scenes_v4.jsonl \
+  --output-dir envir/data/macro_v4_naturalized_v45_100 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 4 --max-revisions 2 --flush-every 1
+
+python -m envir.macro.v4_cli replay \
+  --scenes envir/data/macro_v4_naturalized_v45_100/private_clean_scenes_v4.jsonl
+
+python -m envir.macro.v4_cli audit-questions \
+  --scenes envir/data/macro_v4_naturalized_v45_100/private_clean_scenes_v4.jsonl \
+  --output envir/data/macro_v4_naturalized_v45_100/quality_audit.json
+```
+
+`audit-questions` still includes older **reference-relative lexical warnings**
+(e.g. changed setting words); these are diagnostic signals, not V4.5 graph-
+semantic rejection criteria. Manual comparison should inspect the candidate
+against the terminal Macro Task work product and its typed dependencies,
+especially operations such as 'rank responses' vs 'rank reservations'.

@@ -316,8 +316,8 @@ class CleanTaskFirstTests(unittest.TestCase):
         from envir.macro.v4_question_review import (
             AUTHOR_SYSTEM, CRITIC_SYSTEM, CRITIC_SCHEMA_V44,
         )
-        self.assertIn("to-do list", AUTHOR_SYSTEM)
-        self.assertIn("AGENT'S WORKFLOW", CRITIC_SYSTEM)
+        self.assertIn("NOT extra requested deliverables", AUTHOR_SYSTEM)
+        self.assertIn("workflow_instructions", CRITIC_SYSTEM)
         scene = self.build(1)
         reference = scene["question"]
         bad = (
@@ -380,7 +380,7 @@ class CleanTaskFirstTests(unittest.TestCase):
         )
         self.assertEqual(question, fixed)
         self.assertEqual(meta["status"], "accepted")
-        self.assertEqual(meta["review_policy_version"], "v4.4_goal_first_critic")
+        self.assertEqual(meta["review_policy_version"], "v4.5_graph_primary_benchmark_style")
         self.assertEqual(meta["author_calls"], 2)
         self.assertEqual(meta["critic_calls"], 2)
         self.assertEqual(meta["audit"][0]["critic_review"]["user_framing"],
@@ -489,7 +489,7 @@ class CleanTaskFirstTests(unittest.TestCase):
             def complete_json(self, system, user, *, response_schema=None):
                 self_test.assertIn("macro_task_graph", json.loads(user))
                 self_test.assertNotIn("immutable_task_contract", json.loads(user))
-                return {"question": json.loads(user)["reference_question"].replace(
+                return {"question": json.loads(user)["optional_reference_hint"].replace(
                     "laboratory instrument", "spectrometer",
                 )}
 
@@ -522,7 +522,7 @@ class CleanTaskFirstTests(unittest.TestCase):
         self.assertEqual(metadata["status"], "fallback")
         self.assertEqual(metadata["critic_calls"], 1)
         self.assertEqual(metadata["review_policy_version"],
-                         "v4.4_goal_first_critic")
+                         "v4.5_graph_primary_benchmark_style")
         self.assertEqual(metadata["audit"][0]["deterministic_guards"], [])
         self.assertEqual(metadata["audit"][0]["critic_review"]["verdict"], "revise")
         self.assertEqual(reviewer.calls, 1)
@@ -531,6 +531,45 @@ class CleanTaskFirstTests(unittest.TestCase):
         science["public"]["question"] = question
         science["question_authoring"] = metadata
         self.assertEqual(validate_clean_scene(science), [])
+
+    def test_v45_author_uses_graph_and_critic_ignores_old_reference(self):
+        """New review is graph-anchored, old Question is just a weak hint."""
+        from envir.macro.v4_question_review import AUTHOR_SYSTEM, CRITIC_SYSTEM
+        self.assertIn("MultiModalQA", AUTHOR_SYSTEM)
+        self.assertIn("OmniGAIA", AUTHOR_SYSTEM)
+        self.assertIn("MACRO TASKGRAPH", CRITIC_SYSTEM)
+        scene = self.build(1)
+        candidate = (
+            "Which corrective responses should our museum prioritize "
+            "to address its reservation issue within capacity limits?"
+        )
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                data = json.loads(user)
+                self_test.assertEqual(data["semantic_authority"], "macro_task_graph")
+                self_test.assertIn("macro_tasks", data["macro_task_graph"])
+                self_test.assertIn("optional_reference_hint", data)
+                self_test.assertNotIn("style_seed_question", data)
+                return {"question": candidate}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                data = json.loads(user)
+                self_test.assertNotIn("reference_question", data)
+                self_test.assertNotIn("optional_reference_hint", data)
+                self_test.assertIn("macro_task_graph", data)
+                return v44_review({
+                    "verdict": "pass", "naturalness": "acceptable",
+                    "summary": "Asks for a response-priority outcome.",
+                    "differences": [],
+                })
+        self_test = self
+        question, meta = naturalize_one(scene, author=Author(), critic=Critic())
+        self.assertEqual(question, candidate)
+        self.assertEqual(meta["review_policy_version"], "v4.5_graph_primary_benchmark_style")
+        scene["question"] = question
+        scene["public"]["question"] = question
+        scene["question_authoring"] = meta
+        self.assertEqual(validate_clean_scene(scene), [])
 
     def test_legacy_accepted_records_keep_original_review_policy(self):
         scene = self.build(4)
@@ -621,7 +660,7 @@ class CleanTaskFirstTests(unittest.TestCase):
         )
         self.assertEqual(result, text)
         self.assertEqual(meta["status"], "accepted")
-        self.assertEqual(meta["review_policy_version"], "v4.4_goal_first_critic")
+        self.assertEqual(meta["review_policy_version"], "v4.5_graph_primary_benchmark_style")
         self.assertNotIn("contract_sha256", meta)
         self.assertIn("macro_task_view_sha256", meta)
         scene["question"] = result
@@ -643,7 +682,7 @@ class CleanTaskFirstTests(unittest.TestCase):
             def complete_json(self, system, user, *, response_schema=None):
                 p = json.loads(user)
                 self.requests.append(p)
-                return {"question": p["reference_question"].replace(
+                return {"question": p["optional_reference_hint"].replace(
                     " Explain which documented findings support your assessment.",
                     " What evidence supports your conclusion?",
                 )}
@@ -696,12 +735,12 @@ class CleanTaskFirstTests(unittest.TestCase):
                         p["reviewer_feedback"]["differences"][0]["problem"],
                         "The phrase is awkward and repetitive",
                     )
-                    question = p["reference_question"].replace(
+                    question = p["optional_reference_hint"].replace(
                         " Explain which documented findings support your assessment.",
                         " Please cite the relevant evidence.",
                     )
                 else:
-                    question = p["reference_question"].replace(
+                    question = p["optional_reference_hint"].replace(
                         " Explain which documented findings support your assessment.",
                         " What evidence supports your assessment?",
                     )
@@ -760,7 +799,7 @@ class CleanTaskFirstTests(unittest.TestCase):
                 self.calls = 0
             def complete_json(self, system, user, *, response_schema=None):
                 self.calls += 1
-                return {"question": json.loads(user)["reference_question"]
+                return {"question": json.loads(user)["optional_reference_hint"]
                         + " Use the 98765 threshold."}
 
         class Critic:
@@ -794,7 +833,7 @@ class CleanTaskFirstTests(unittest.TestCase):
         scene = self.build(6)
         class Author:
             def complete_json(self, system, user, *, response_schema=None):
-                return {"question": json.loads(user)["reference_question"].replace(
+                return {"question": json.loads(user)["optional_reference_hint"].replace(
                     " Explain which documented findings support your assessment.",
                     " What evidence supports your conclusion?",
                 )}
@@ -830,7 +869,7 @@ class CleanTaskFirstTests(unittest.TestCase):
         )
         class Author:
             def complete_json(self, system, user, *, response_schema=None):
-                return {"question": json.loads(user)["reference_question"].replace(
+                return {"question": json.loads(user)["optional_reference_hint"].replace(
                     " Explain which documented findings support your assessment.",
                     " What evidence supports the assessment?",
                 )}
@@ -879,7 +918,7 @@ class CleanTaskFirstTests(unittest.TestCase):
         second = copy.deepcopy(first)
         class Author:
             def complete_json(self, system, user, *, response_schema=None):
-                ref = json.loads(user)["reference_question"]
+                ref = json.loads(user)["optional_reference_hint"]
                 # A genuinely natural rephrase must also remove the
                 # repeated boilerplate inside the terminal Task goal.
                 return {"question": ref.replace(
@@ -913,7 +952,7 @@ class CleanTaskFirstTests(unittest.TestCase):
                 self.calls = 0
             def complete_json(self, system, user, *, response_schema=None):
                 self.calls += 1
-                return {"question": json.loads(user)["reference_question"].replace(
+                return {"question": json.loads(user)["optional_reference_hint"].replace(
                     " Explain which documented findings support your assessment.",
                     " What evidence supports your conclusion?",
                 )}
@@ -968,7 +1007,7 @@ class CleanTaskFirstTests(unittest.TestCase):
                 self.reference_requests = []
             def complete_json(self, system, user, *, response_schema=None):
                 self.calls += 1
-                ref = json.loads(user)["reference_question"]
+                ref = json.loads(user)["optional_reference_hint"]
                 self.reference_requests.append(ref)
                 return {"question": ref.replace(
                     " Explain which documented findings support your assessment.",
@@ -1049,7 +1088,7 @@ class CleanTaskFirstTests(unittest.TestCase):
         args = self.stream_args()
         class Author:
             def complete_json(self, system, user, *, response_schema=None):
-                return {"question": json.loads(user)["reference_question"].replace(
+                return {"question": json.loads(user)["optional_reference_hint"].replace(
                     " Explain which documented findings support your assessment.",
                     " What evidence supports the conclusion?",
                 )}
@@ -1096,7 +1135,7 @@ class CleanTaskFirstTests(unittest.TestCase):
                 calls.append(("close",))
         class Author:
             def complete_json(self, system, user, *, response_schema=None):
-                return {"question": json.loads(user)["reference_question"].replace(
+                return {"question": json.loads(user)["optional_reference_hint"].replace(
                     " Explain which documented findings support your assessment.",
                     " What evidence supports the conclusion?",
                 )}
