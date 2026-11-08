@@ -118,7 +118,16 @@ def author_question(brief: dict, *, ordinal: int, seed: int) -> str:
     intent = brief["intent"]
     case = BY_DOMAIN[brief["domain"]]
     rng = random.Random(seed * 314159 + ordinal * 271828)
-    ask = rng.choice(QUESTION_REQUESTS[intent]).format(affected=case.affected)
+    # The requested action comes from the TERMINAL MACRO WORK PRODUCT,
+    # not from a separate question-intent template. Different legitimate
+    # work routes therefore yield genuinely different final asks.
+    task_goal = brief["final_work_goal"].rstrip(". ")
+    task_goal = task_goal.replace(brief["issue"], "the reported situation")
+    ask = task_goal[0].lower() + task_goal[1:]
+    # The intent-specific clause is only an optional delivery constraint,
+    # never the main source of user-question semantics.
+    if rng.randrange(3) == 0:
+        ask += "; explain which documented findings support the conclusion"
     resources = brief["public_resource_categories"]
     if len(resources) >= 3:
         described = ", ".join(resources[:-1]) + " and " + resources[-1]
@@ -242,6 +251,8 @@ def compose_taskfirst(*, ordinal: int, seed: int,
         },
         "task_plan_provenance": {
             "parent": "v2_macro_work_grammar",
+            "ordinal": ordinal,
+            "seed": seed,
             "question_generated_after_macro_graph": True,
             "question_inputs": "task_goals_deliverables_source_roles_only",
             "v3_final_gold_answer_not_used": True,
