@@ -158,9 +158,13 @@ five `yes` judgments (domain plausibility, frozen facts, source roles,
 solution compatibility and reference-Question alignment). Failing proposals
 are rejected and the original scene is preserved with an audit record.
 This is a screening decision, **not a proof** of real-world correctness or
-multi-source necessity. The current simulator's operation semantics may
-still be abstract; the next Task/Trace/Answer stage must address those
-independently.
+multi-source necessity. Each overlay also includes a leave-one-source-out
+goal-level influence diagnostic (source IDs that change / do not change the
+Goal-pattern result when omitted). This helps identify mostly cosmetic
+multi-source questions, but does NOT prove any Task is redundant or
+repair source-linkage computation. The current simulator's operation
+semantics may still be abstract; the next Task/Trace/Answer stage must
+address those independently.
 
 Pilot command using the **original, non-naturalized** 1000-scene bank:
 
