@@ -36,6 +36,10 @@ task_construction:
   # Collect up to 2000 validated semantic candidates, evaluate each one,
   # and freeze every world that passes the unchanged quality checks.
   candidate_pool_size: 2000
+  # Original construction stays the default. Pilot: semantic_anchored.
+  construction_mode: program_composition
+  # Alternate YAGO subject-profile bindings attempted per KQA proposal.
+  anchor_tries: 6
   seed: 17
   # Scenarios are chosen BEFORE source modalities. These are proposal weights,
   # not guaranteed acceptance ratios after the strict World/P0/P1 gates.
