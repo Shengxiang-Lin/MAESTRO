@@ -25,6 +25,7 @@ from .priors import load_kqa, load_mmqa
 from .v4_builder import build_batch
 from .v4_streaming import stream_naturalize_scenes
 from .v4_validation import validate_clean_scene
+from .v4_question_audit import audit_file
 
 
 def _json(path: Path, value) -> None:
@@ -276,6 +277,17 @@ def replay(args):
     }
 
 
+def audit_questions(args):
+    """Read-only diagnostics; no LLM calls or scene modifications."""
+    summary = audit_file(
+        args.scenes, max_records=args.max_records,
+        max_examples=args.max_examples,
+    )
+    if args.output is not None:
+        _json(args.output, summary)
+    return {"status": "done", **summary}
+
+
 def _question_flags(parser):
     parser.add_argument("--question-api-base", default=None,
                         help="Local OpenAI-compatible endpoint, e.g. http://127.0.0.1:8807/v1")
@@ -331,6 +343,12 @@ def parser():
     _question_flags(n)
     r = sub.add_parser("replay")
     r.add_argument("--scenes", type=Path, required=True)
+    a = sub.add_parser("audit-questions",
+        help="Read-only fidelity/style audit of existing naturalized V4 Questions")
+    a.add_argument("--scenes", type=Path, required=True)
+    a.add_argument("--max-records", type=int, default=None)
+    a.add_argument("--max-examples", type=int, default=12)
+    a.add_argument("--output", type=Path, default=None)
     return p
 
 
@@ -340,6 +358,7 @@ def main(argv=None):
         "build": build,
         "naturalize": naturalize,
         "replay": replay,
+        "audit-questions": audit_questions,
     }[args.command](args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["status"] in {"done", "valid"} else 2
