@@ -30,6 +30,7 @@ from .builder import build_batch
 from .question_streaming import stream_naturalize_scenes
 from .validation import validate_clean_scene
 from .question_audit import audit_file
+from .scene_grounding_cli import ground_scenes
 
 
 def _json(path: Path, value) -> None:
@@ -429,6 +430,31 @@ def parser():
     n.add_argument("--max-records", type=int, default=None)
     n.add_argument("--overwrite", action="store_true")
     _question_flags(n)
+    g = sub.add_parser(
+        "ground-scenes",
+        help="Concretize an existing synthetic World after Macro TaskGraph "
+             "build, before Question naturalization; never change facts/graph",
+    )
+    g.add_argument("--scenes", type=Path, required=True)
+    g.add_argument("--output-dir", type=Path, required=True)
+    g.add_argument("--max-records", type=int, default=None)
+    g.add_argument("--overwrite", action="store_true")
+    g.add_argument("--grounding-api-base", required=True)
+    g.add_argument("--grounding-model", required=True)
+    g.add_argument("--grounding-critic-api-base", default=None)
+    g.add_argument("--grounding-critic-model", default=None)
+    g.add_argument("--grounding-api-key-env", default="OPENAI_API_KEY")
+    g.add_argument("--grounding-critic-api-key-env", default=None)
+    g.add_argument("--grounding-workers", type=int, default=2)
+    g.add_argument("--grounding-temperature", type=float, default=0.7)
+    g.add_argument("--grounding-critic-temperature", type=float, default=0.0)
+    g.add_argument("--grounding-max-tokens", type=int, default=2200)
+    g.add_argument("--grounding-critic-max-tokens", type=int, default=1400)
+    g.add_argument("--grounding-timeout", type=int, default=180)
+    g.add_argument("--grounding-no-json-mode", action="store_true")
+    g.add_argument("--max-revisions", type=int, default=2)
+    g.add_argument("--flush-every", type=int, default=1)
+    g.add_argument("--no-progress", action="store_true")
     r = sub.add_parser("replay")
     r.add_argument("--scenes", type=Path, required=True)
     a = sub.add_parser("audit-questions",
@@ -445,6 +471,7 @@ def main(argv=None):
     result = {
         "build": build,
         "naturalize": naturalize,
+        "ground-scenes": ground_scenes,
         "replay": replay,
         "audit-questions": audit_questions,
     }[args.command](args)
