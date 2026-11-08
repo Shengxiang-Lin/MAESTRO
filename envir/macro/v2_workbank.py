@@ -415,7 +415,7 @@ RECIPES = RECIPES + (
       ("identify the case record keys", "locate the matching files",
        "check identity and date fields", "deliver a record match report"),
       "records"),
-    R("timeline_from_case", "Timeline", "case_chronology_investigation",
+    R("timeline_from_event_only", "Timeline", "case_chronology_investigation",
       (("case_context", "EventBrief",
         "The case brief provides the events and scope needing chronological analysis."),),
       "Reconstruct the chronology of the incident, including relevant administrative records.",
