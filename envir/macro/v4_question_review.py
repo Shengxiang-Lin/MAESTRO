@@ -553,7 +553,7 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
             )} for diff in differences
         ],
     }
-    if policy == "v4.4_goal_first_critic":
+    if policy in {"v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}:
         alignment = value.get("goal_alignment")
         sufficiency = value.get("task_sufficiency")
         framing = value.get("user_framing")
@@ -625,17 +625,14 @@ def naturalize_one(scene: dict, *, author, critic,
         row = {"round": revision + 1, "author_calls": 1, "critic_calls": 0}
         author_calls += 1
         payload = {
-            "reference_question": initial,
-            # The reference remains immutable; this style-only seed removes
-            # the legacy duplicate evidence request where present.
-            "style_seed_question": polished_reference_question(initial),
             "macro_task_graph": task_view,
+            "optional_reference_hint": initial,
+            "semantic_authority": "macro_task_graph",
             "style_hint": style_hint(scene),
             "instruction": (
-                "State only the real user's final need in one compact natural "
-                "question or request. The Macro Tasks are an implicit work "
-                "plan, NOT steps to enumerate. Never invent specific sources, "
-                "new intermediate deliverables, or ongoing time states."
+                "Write an MMQA/OmniGAIA-style final question supported by "
+                "the Macro TaskGraph. The old reference is only optional "
+                "writing guidance; hide intermediate work and tool order."
             ),
         }
         if latest is not None:
@@ -659,14 +656,6 @@ def naturalize_one(scene: dict, *, author, critic,
             break
         latest = candidate
         row["candidate"] = candidate
-        if re.sub(r"\W+", "", candidate.casefold()) == re.sub(
-            r"\W+", "", initial.casefold()
-        ):
-            last_failure = "not_naturalized"
-            row["failure"] = last_failure
-            feedback = _simple_feedback([last_failure])
-            attempts.append(row)
-            continue
         issues = minimal_question_guards(candidate)
         row["deterministic_guards"] = issues
         if issues:
@@ -676,13 +665,12 @@ def naturalize_one(scene: dict, *, author, critic,
             attempts.append(row)
             continue
         review_payload = {
-            "reference_question": initial,
             "candidate_question": candidate,
             "macro_task_graph": task_view,
             "review_focus": (
-                "Evaluate goal alignment, sufficiency of these SAME Macro "
-                "Tasks, user-goal phrasing versus prescribed workflow, and "
-                "unsupported new claims independently BEFORE deciding Pass."
+                "Evaluate the candidate ONLY against the graph's terminal "
+                "goal and prerequisite work, including style, scope and "
+                "unsupported specificity. Ignore old reference wording."
             ),
         }
         try:
@@ -692,7 +680,7 @@ def naturalize_one(scene: dict, *, author, critic,
                 CRITIC_SYSTEM,
                 json.dumps(review_payload, ensure_ascii=False),
                 response_schema=CRITIC_SCHEMA_V44,
-            ), policy="v4.4_goal_first_critic")
+            ), policy="v4.5_graph_primary_benchmark_style")
         except (BackendError, ValueError, KeyError, TypeError) as exc:
             last_failure = "critic_protocol_error"
             row["failure"] = last_failure
@@ -707,7 +695,7 @@ def naturalize_one(scene: dict, *, author, critic,
                 judgment = _validate_review(critic.complete_json(
                     CRITIC_SYSTEM, json.dumps(review_payload, ensure_ascii=False),
                     response_schema=None,
-                ), policy="v4.4_goal_first_critic")
+                ), policy="v4.5_graph_primary_benchmark_style")
             except (BackendError, ValueError, KeyError, TypeError) as fix_exc:
                 row["protocol_retry_failure"] = str(fix_exc)[:180]
                 attempts.append(row)
@@ -733,11 +721,11 @@ def naturalize_one(scene: dict, *, author, critic,
     result = accepted if accepted is not None else safe_reference
     status = "accepted" if accepted is not None else "fallback"
     metadata = {
-        "review_policy_version": "v4.4_goal_first_critic",
+        "review_policy_version": "v4.5_graph_primary_benchmark_style",
         "safe_reference_polish_applied": (
             accepted is None and result != initial
         ),
-        "pipeline": "v4_goal_first_author_diagnostic_critic_repair",
+        "pipeline": "v4_benchmark_style_graph_primary_author_critic_repair",
         "status": status,
         "reason": "independent_critic_pass" if accepted is not None else last_failure,
         "reference_question": initial,
@@ -828,14 +816,14 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         errors.append("review_reference_drift")
     if meta.get("reference_sha256") != _fingerprint(original):
         errors.append("review_reference_fingerprint_mismatch")
-    if policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic"}:
+    if policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}:
         if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
             errors.append("review_macro_task_view_changed")
-        expected_pipeline = (
-            "v4_goal_first_author_diagnostic_critic_repair"
-            if policy == "v4.4_goal_first_critic"
-            else "v4_macro_task_aware_author_critic_repair"
-        )
+        expected_pipeline = {
+            "v4.3_macro_task_critic": "v4_macro_task_aware_author_critic_repair",
+            "v4.4_goal_first_critic": "v4_goal_first_author_diagnostic_critic_repair",
+            "v4.5_graph_primary_benchmark_style": "v4_benchmark_style_graph_primary_author_critic_repair",
+        }[policy]
         if meta.get("pipeline") != expected_pipeline:
             errors.append("review_wrong_pipeline")
     else:
@@ -867,7 +855,7 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         if (policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic"}
                 and minimal_question_guards(scene["question"])):
             errors.append("review_surface_mismatch")
-        if scene["question"] == original:
+        if scene["question"] == original and policy != "v4.5_graph_primary_benchmark_style":
             errors.append("review_not_naturalized")
         if not any(
             a.get("accepted") and a.get("candidate") == scene["question"]
@@ -878,7 +866,7 @@ def validate_naturalized_question(scene: dict) -> list[str]:
     elif status == "fallback":
         expected = (
             polished_reference_question(original)
-            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic", "v4.4_goal_first_critic"}
+            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}
             else original
         )
         if scene["question"] != expected or meta.get("accepted_review") is not None:
