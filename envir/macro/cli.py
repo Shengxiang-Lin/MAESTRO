@@ -36,7 +36,7 @@ def build(args) -> dict:
         if not path.is_file():
             raise FileNotFoundError(f"dataset not found: {path}")
     out = args.output_dir
-    names = ("macro_gold_plans.jsonl", "public_questions.jsonl",
+    names = ("private_taskplans.jsonl", "public_questions.jsonl",
              "macro_summary.json", "prior_statistics.json")
     outputs = {name: out / name for name in names}
     if not args.overwrite and any(path.exists() for path in outputs.values()):
@@ -57,7 +57,7 @@ def build(args) -> dict:
     else:
         plans, stats = build_batch(kqa=kqa, mmqa=mmqa,
                                    target=args.target, seed=args.seed)
-    _jsonl(outputs["macro_gold_plans.jsonl"], plans)
+    _jsonl(outputs["private_taskplans.jsonl"], plans)
     _jsonl(outputs["public_questions.jsonl"], [p["public"] for p in plans])
     priors = {
         "KQA": kqa_stats,
@@ -121,7 +121,7 @@ def parser() -> argparse.ArgumentParser:
     b.add_argument("--seed", type=int, default=17)
     b.add_argument("--overwrite", action="store_true")
     r = sub.add_parser("replay", help="Recheck macro DAG contracts from saved teacher plans")
-    r.add_argument("--gold", type=Path, required=True)
+    r.add_argument("--plans", "--gold", dest="gold", type=Path, required=True)
     return p
 
 
