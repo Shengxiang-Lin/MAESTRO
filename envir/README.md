@@ -109,3 +109,9 @@ selector is an approximate pattern prior.
 
 Maintain strict entity/evidence/task-family splits during training/evaluation,
 not just random question splits. Gold graphs are never public prompts.
+
+Optional candidate Subtasks are selected only from already cached,
+independently replayed and structurally disconnected facts. They are recorded
+in PRIVATE Gold metadata, never forced into required dependencies or injected
+into the Question. The current prototype does not yet expose them as
+interactive Main-Agent choices; that belongs to the next simulator stage.

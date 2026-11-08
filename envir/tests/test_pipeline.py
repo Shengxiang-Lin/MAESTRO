@@ -110,6 +110,8 @@ class EnvirIntegrationTests(unittest.TestCase):
                 graph = getattr(composer, pattern)()
                 self.assertIsNotNone(graph, f"missing {pattern}: {composer.rejections}")
                 self.assertEqual(check_graph(graph, db), [])
+                required = {node["subtask_id"] for node in graph["nodes"]}
+                self.assertFalse(set(graph["optional_candidate_ids"]) & required)
                 self.assertEqual(
                     graph["validation"]["status"],
                     "mixed_provenance" if pattern == "media_to_search" else "verified",

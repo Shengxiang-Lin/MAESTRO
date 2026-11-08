@@ -28,8 +28,44 @@ class TaskGraphComposer:
         self.rejections = Counter()
         self._candidate_cache = {}
 
+    def _optional_candidates(self, nodes: list[dict], *, limit: int = 2
+                             ) -> tuple[str, ...]:
+        """Select cached, replayed subtasks disconnected from required facts.
+
+        Optional candidates are NEVER required Gold dependencies. They can
+        later be surfaced as choices/distractors in a Main Agent runtime.
+        """
+        used_ids = {n["subtask_id"] for n in nodes}
+        used_sources = {s for n in nodes for s in n.get("evidence_ids", ())}
+        used_entities = {
+            v for n in nodes
+            for v in (n.get("inputs", {}).get("subject_id"),
+                      n.get("answer", {}).get("entity_id")) if v
+        }
+        options = []
+        for row in self.store.db.execute(
+            "SELECT data FROM subtasks WHERE kind IN "
+            "('search_relation','search_attribute') ORDER BY subtask_id LIMIT 150"
+        ):
+            candidate = json.loads(row["data"])
+            if candidate["subtask_id"] in used_ids:
+                continue
+            if set(candidate["evidence_ids"]) & used_sources:
+                continue
+            if (candidate.get("inputs", {}).get("subject_id") in used_entities
+                    or candidate.get("answer", {}).get("entity_id") in used_entities):
+                continue
+            if not self.factory.replay(candidate):
+                continue
+            options.append(candidate["subtask_id"])
+            if len(options) >= limit:
+                break
+        return tuple(options)
+
     def _pack(self, pattern: str, nodes: list[dict], edges: list[dict],
               question: str, brief: dict, optional_ids: tuple[str, ...] = ()):
+        if not optional_ids:
+            optional_ids = self._optional_candidates(nodes)
         final = nodes[-1]
         graph = TaskGraph(
             task_id="envir-" + digest(pattern, [n["subtask_id"] for n in nodes], question),
