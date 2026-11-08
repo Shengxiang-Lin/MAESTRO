@@ -19,7 +19,7 @@ from .evidence import run_clean_tasks, EvidenceExecutionError
 
 def validate_clean_scene(scene: dict) -> list[str]:
     errors = []
-    if scene.get("schema") != "maestro.clean_taskfirst.v4":
+    if scene.get("schema") != "maestro.taskfirst.v1":
         errors.append("invalid_schema")
     if scene.get("construction_status") != "clean_task_evidence_replayed":
         errors.append("incorrect_construction_status")
