@@ -10,10 +10,10 @@ from .v4_world import build_clean_world
 
 
 def build_one(*, ordinal: int, seed: int, kqa: list[dict],
-              seed_record: dict) -> dict:
+              seed_record: dict, contexts: dict | None = None) -> dict:
     plan = compose_seed_taskfirst(
         seed_record=seed_record, ordinal=ordinal, run_seed=seed, kqa=kqa)
-    world = build_clean_world(plan, seed=seed)
+    world = build_clean_world(plan, seed=seed, contexts=contexts)
     execution = run_clean_tasks(plan, world)
     public_sources = [
         {"source_id": sid, "title": source["title"],
@@ -49,7 +49,8 @@ def build_one(*, ordinal: int, seed: int, kqa: list[dict],
 
 
 def build_batch(*, kqa: list[dict], scenario_seeds: list[dict],
-                target: int = 100, seed: int = 17) -> tuple[list[dict], dict]:
+                target: int = 100, seed: int = 17,
+                contexts: dict | None = None) -> tuple[list[dict], dict]:
     if target < 1 or not kqa or not scenario_seeds:
         raise ValueError("positive target and nonempty KQA/MMQA seed pools required")
     order = list(scenario_seeds)
@@ -61,7 +62,8 @@ def build_batch(*, kqa: list[dict], scenario_seeds: list[dict],
             break
         try:
             scene = build_one(
-                ordinal=ordinal, seed=seed, kqa=kqa, seed_record=seed_record)
+                ordinal=ordinal, seed=seed, kqa=kqa,
+                seed_record=seed_record, contexts=contexts)
         except UnsuitableSeed as exc:
             rejected[str(exc)] += 1
             continue
@@ -71,6 +73,28 @@ def build_batch(*, kqa: list[dict], scenario_seeds: list[dict],
             f"Only {len(scenes)} of {len(order)} MMQA seeds yielded a valid "
             f"3-9-task graph; target={target}; rejections={dict(rejected)}")
     n_tasks = sum(len(s["macro_graph"]["tasks"]) for s in scenes)
+    depths = [s["macro_graph"]["complexity"]["macro_dependency_depth"]
+              for s in scenes]
+    topologies = Counter(s["macro_graph"]["motif"] for s in scenes)
+    context_count = sum(
+        "original_context_excerpt" in {
+            fact["field"] for fact in source["facts"]
+        }
+        for scene in scenes for source in scene["world"]["sources"].values()
+    )
+    missing = 0
+    for scene in scenes:
+        expected = {
+            (item["modality"], item.get("doc_id"))
+            for item in scene["source_priors"]["MultiModalQA"]["supporting_sources"]
+            if item.get("provenance") == "mmqa_supporting_context"
+        }
+        present = {
+            (src["modality_hint"], src.get("original_doc_id"))
+            for src in scene["world"]["sources"].values()
+            if src.get("source_origin") == "mmqa_supporting_context"
+        }
+        missing += len(expected - present)
     n_evidence = sum(
         len(g["nodes"]) for s in scenes
         for g in s["task_evidence_graphs"].values())
@@ -86,6 +110,12 @@ def build_batch(*, kqa: list[dict], scenario_seeds: list[dict],
         "generated": len(scenes),
         "unique_question_texts": len({s["question"] for s in scenes}),
         "macro_task_count": n_tasks,
+        "mean_macro_tasks_per_question": round(n_tasks / len(scenes), 3),
+        "mean_dependency_depth": round(sum(depths) / len(depths), 3),
+        "dependency_depth_distribution": dict(Counter(depths)),
+        "topology_distribution": dict(topologies),
+        "missing_original_supporting_sources": missing,
+        "original_mmqa_context_excerpts_used": context_count,
         "evidence_node_count": n_evidence,
         "mean_evidence_nodes_per_task": round(n_evidence / n_tasks, 2),
         "unique_macro_work_types": len(kinds),

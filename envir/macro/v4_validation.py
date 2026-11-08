@@ -57,8 +57,17 @@ def validate_clean_scene(scene: dict) -> list[str]:
             errors.append("missing_source_facts")
         keys = set()
         for fact in source.get("facts", []):
-            if fact.get("verification") != "consistent_synthetic_record":
+            if fact.get("verification") not in {
+                "consistent_synthetic_record",
+                "original_mmqa_text_excerpt_not_pixels",
+            }:
                 errors.append("unclean_source_record")
+            if fact.get("verification") == "original_mmqa_text_excerpt_not_pixels":
+                if source.get("context_provenance") not in {
+                    "original_mmqa_table_text", "original_mmqa_text_text",
+                    "original_mmqa_caption_proxy",
+                }:
+                    errors.append("unverified_original_excerpt_provenance")
             if fact.get("field") in keys:
                 errors.append("duplicated_fact_field")
             keys.add(fact.get("field"))
@@ -87,12 +96,20 @@ def validate_clean_scene(scene: dict) -> list[str]:
         expected_sources = {
             (src.get("modality"), src.get("doc_id"))
             for src in prior.get("supporting_sources", [])
+            if src.get("provenance") == "mmqa_supporting_context"
         }
+        expected_source_roles = {
+            (src.get("modality"), src.get("doc_id"))
+            for src in prior.get("supporting_sources", [])
+        }
+        bound_original_sources = set()
         for task in tasks:
             for requirement in task.get("source_requirements", []):
                 modality = (requirement.get("candidate_modalities") or [None])[0]
                 provenance = requirement.get("source_origin")
                 docid = requirement.get("original_doc_id")
+                if provenance == "mmqa_supporting_context":
+                    bound_original_sources.add((modality, docid))
                 if provenance == "mmqa_supporting_context":
                     if (modality, docid) not in expected_sources:
                         errors.append("mmqa_original_source_binding_drift")
@@ -101,6 +118,36 @@ def validate_clean_scene(scene: dict) -> list[str]:
                         errors.append("mmqa_unapproved_synthetic_source_role")
                 else:
                     errors.append("mmqa_source_provenance_missing")
+        # A subset is not enough. Every original supporting source handle
+        # must be represented by a reachable macro-source investigation.
+        if bound_original_sources != expected_sources:
+            errors.append("mmqa_supporting_source_coverage_incomplete")
+        declared = plan.get("source_coverage") or {}
+        if (declared.get("expected") != len(expected_sources)
+                or declared.get("assigned") != len(expected_sources)):
+            # The count also includes synthetic modality-only roles, which
+            # are not part of the original supporting-context set.
+            declared_keys = {
+                (item.get("modality"), item.get("doc_id"))
+                for item in declared.get("source_keys", [])
+            }
+            if not expected_source_roles <= declared_keys or (
+                declared.get("expected") != len(declared_keys)
+                or declared.get("assigned") != len(declared_keys)
+            ):
+                errors.append("mmqa_declared_source_coverage_drift")
+        world_original_sources = {
+            (value.get("modality_hint"), value.get("original_doc_id"))
+            for value in sources.values()
+            if value.get("source_origin") == "mmqa_supporting_context"
+        }
+        if world_original_sources != expected_sources:
+            errors.append("mmqa_world_supporting_source_coverage_incomplete")
+        for source in sources.values():
+            if source.get("source_origin") not in {
+                "mmqa_supporting_context", "mmqa_modality_role_only"
+            }:
+                errors.append("mmqa_world_source_origin_invalid")
     brief = task_level_brief(scene)
     if brief != scene.get("question_brief"):
         errors.append("question_brief_not_task_derived")

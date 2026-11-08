@@ -83,8 +83,8 @@ class MMQATaskFirstTests(unittest.TestCase):
         plan = compose_seed_taskfirst(
             seed_record=record, ordinal=0, run_seed=17, kqa=KQA)
         tasks = plan["macro_graph"]["tasks"]
-        self.assertEqual(len(tasks), 5)
-        self.assertEqual(len(plan["macro_graph"]["edges"]), 4)
+        self.assertEqual(len(tasks), 7)
+        self.assertEqual(len(plan["macro_graph"]["edges"]), 7)
         self.assertEqual(plan["question"], record["question"])
         self.assertEqual(plan["goal"]["intent"], "comparison")
         self.assertEqual(plan["macro_graph"]["terminal_handoffs"][0]["type"],
@@ -101,17 +101,80 @@ class MMQATaskFirstTests(unittest.TestCase):
         self.assertEqual(scene["public"]["question"], scene["question"])
         self.assertEqual(scene["question"], seed()["question"])
         self.assertEqual(scene["goal_evidence_coverage"]["can_finish_cleanly"], True)
-        self.assertEqual(len(scene["macro_graph"]["tasks"]), 5)
+        self.assertEqual(len(scene["macro_graph"]["tasks"]), 7)
         self.assertEqual(scene["world"]["real_multimodal_files"], False)
 
-    def test_two_independent_sources_yield_three_tasks(self):
+    def test_two_independent_sources_yield_real_work_products(self):
         record = seed("TextQ")
         record["supporting_sources"] = record["supporting_sources"][:2]
         record["source_modalities"] = ["table", "image"]
         plan = compose_seed_taskfirst(
             seed_record=record, ordinal=1, run_seed=17, kqa=KQA)
-        self.assertEqual(len(plan["macro_graph"]["tasks"]), 3)
-        self.assertEqual(len(plan["macro_graph"]["edges"]), 2)
+        self.assertEqual(len(plan["macro_graph"]["tasks"]), 5)
+        self.assertEqual(len(plan["macro_graph"]["edges"]), 6)
+        self.assertIn("entity_reference_alignment",
+                      {task["work_type"] for task in plan["macro_graph"]["tasks"]})
+
+    def test_every_mmqa_supporting_source_is_assigned_to_reachable_work(self):
+        import copy
+        record = seed("Compose(TableQ,ImageListQ)")
+        record["supporting_sources"].extend([
+            {"modality": "image", "doc_id": "i2",
+             "provenance": "mmqa_supporting_context"},
+            {"modality": "image", "doc_id": "i3",
+             "provenance": "mmqa_supporting_context"},
+        ])
+        scene = build_one(ordinal=8, seed=17, kqa=KQA, seed_record=record)
+        expected = {(s["modality"], s["doc_id"])
+                    for s in record["supporting_sources"]}
+        actual = {
+            (src["modality_hint"], src["original_doc_id"])
+            for src in scene["world"]["sources"].values()
+        }
+        self.assertEqual(actual, expected)
+        self.assertEqual(scene["macro_graph"]["source_coverage"]["assigned"], 5)
+        self.assertEqual([], validate_clean_scene(scene))
+        changed = copy.deepcopy(scene)
+        changed["macro_graph"]["tasks"][1]["source_requirements"].pop()
+        self.assertIn("mmqa_supporting_source_coverage_incomplete",
+                      validate_clean_scene(changed))
+
+    def test_source_observations_and_typed_traces_are_computational(self):
+        scene = build_one(ordinal=5, seed=17, kqa=KQA, seed_record=seed())
+        sources = scene["world"]["sources"]
+        rows = [{
+            fact["field"]: fact["value"]
+            for fact in source["facts"]
+        } for source in sources.values()]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len({item["candidate_key"] for item in rows}), 3)
+        self.assertEqual(len({item["original_source_handle"] for item in rows}), 3)
+        self.assertEqual(len({item["synthetic_attribute_score"] for item in rows}) >= 2, True)
+        self.assertTrue(all(item["observation_provenance"] ==
+                            "simulated_not_raw_perception" for item in rows))
+        for feedback in scene["feedback_bank"].values():
+            operations = [
+                item for item in feedback["summary_trace"]
+                if item["action"] == "ExecuteTypedEvidenceOperation"
+            ]
+            self.assertEqual(len(operations), 1)
+            self.assertTrue(operations[0]["result"]["simulation_only"])
+            work = next(iter(feedback["answer"].values()))
+            self.assertEqual(work["operation_result"], operations[0]["result"])
+        self.assertEqual([], validate_clean_scene(scene))
+
+    def test_nested_macro_graph_has_stages_and_typed_handoffs(self):
+        plan = compose_seed_taskfirst(
+            seed_record=seed(), ordinal=0, run_seed=17, kqa=KQA)
+        tasks = plan["macro_graph"]["tasks"]
+        work_types = [task["work_type"] for task in tasks]
+        self.assertIn("reference_chain_resolution", work_types)
+        self.assertIn("comparative_assessment", work_types)
+        self.assertIn("evidence_consistency_review", work_types)
+        self.assertIn("answer_evidence_synthesis", work_types)
+        self.assertGreaterEqual(
+            plan["macro_graph"]["complexity"]["macro_dependency_depth"], 4)
+        self.assertEqual(len(plan["macro_graph"]["edges"]), 7)
 
     def test_single_source_is_not_inflated_into_fake_macro_dag(self):
         record = seed("TextQ")

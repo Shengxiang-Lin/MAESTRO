@@ -11,12 +11,132 @@ states are constructed. Feedback is a work product, not a final Gold answer.
 from __future__ import annotations
 
 import copy
+import re
 
 from .graph import compile_waves
 
 
 class EvidenceExecutionError(ValueError):
     pass
+
+
+def _candidate_rows(inputs: dict, permitted: set, world: dict) -> list[dict]:
+    """Propagate deduplicated, explicitly synthetic observations downstream."""
+    rows, seen = [], set()
+    for product in inputs.values():
+        for item in product.get("candidate_observations", []):
+            if item["source_id"] not in seen:
+                rows.append(copy.deepcopy(item))
+                seen.add(item["source_id"])
+    for sid in sorted(permitted):
+        facts = {row["field"]: row["value"] for row in world["sources"][sid]["facts"]}
+        if sid in seen:
+            continue
+        excerpt = facts.get("original_context_excerpt")
+        criterion_terms = {
+            word for word in re.findall(r"[a-z]{4,}", facts["question_criterion"].lower())
+            if word not in {"which", "where", "when", "what", "from",
+                            "with", "that", "have", "their", "were", "would"}
+        }
+        matched_terms = (
+            sorted(criterion_terms & set(re.findall(r"[a-z]{4,}", excerpt.lower())))
+            if isinstance(excerpt, str) else []
+        )
+        rows.append({
+            "source_id": sid,
+            "original_doc_id": world["sources"][sid].get("original_doc_id"),
+            "original_context_matched_terms": matched_terms,
+            "original_context_available": isinstance(excerpt, str),
+            "modality": facts["source_modality"],
+            "candidate_key": facts["candidate_key"],
+            "criterion": facts["question_criterion"],
+            "score": int(facts["synthetic_attribute_score"]),
+            "attribute_present": bool(facts["synthetic_attribute_flag"]),
+            "time_index": int(facts["synthetic_time_index"]),
+            "group": facts["synthetic_group_key"],
+            "provenance": "deterministic_synthetic_observation",
+        })
+        seen.add(sid)
+    return sorted(rows, key=lambda row: row["source_id"])
+
+
+def _execute_operation(task: dict, rows: list[dict]) -> dict:
+    """A small executable typed work semantics over *synthetic* observations.
+
+    These computations are useful for trace inspection and corruption tests,
+    but are NOT original KQA KoPL execution or an official MMQA Gold answer.
+    """
+    if not rows:
+        raise EvidenceExecutionError("operation_has_no_candidate_observations")
+    spec = task.get("operation_spec", {})
+    op = spec.get("op", task["work_type"]).lower()
+    family = spec.get("question_operation", "lookup")
+    groups = {}
+    for row in rows:
+        groups.setdefault(row["group"], []).append(row["candidate_key"])
+    selected = [row["candidate_key"] for row in rows if row["attribute_present"]]
+    ranked = sorted(rows, key=lambda row: (-row["score"], row["candidate_key"]))
+    by_time = sorted(rows, key=lambda row: (row["time_index"], row["candidate_key"]))
+    result = {
+        "operation": op,
+        "candidate_count": len(rows),
+        "source_count": len({row["source_id"] for row in rows}),
+        "source_ids": [row["source_id"] for row in rows],
+        "simulation_only": True,
+        "question_operation": family,
+        "original_context_source_count": sum(
+            bool(row.get("original_context_available")) for row in rows
+        ),
+        "original_context_matched_terms": {
+            row["source_id"]: list(row.get("original_context_matched_terms", []))
+            for row in rows if row.get("original_context_available")
+        },
+    }
+    if op.startswith("source_extract_"):
+        result["extracted"] = [
+            {"candidate": row["candidate_key"], "score": row["score"],
+             "attribute_present": row["attribute_present"]}
+            for row in rows
+        ]
+    elif op in {"align_candidates", "compose", "reference_chain_resolution",
+                "cross_source_evidence_alignment"}:
+        result["synthetic_groups"] = {
+            key: list(value) for key, value in sorted(groups.items())}
+    elif op in {"intersection", "intersect", "record_matching"}:
+        result["matched_groups"] = {
+            key: value for key, value in sorted(groups.items())
+            if len(value) >= 2
+        }
+    elif op in {"compare", "comparison", "comparative_assessment"}:
+        result["top_candidate"] = ranked[0]["candidate_key"]
+        result["ranked_candidates"] = [row["candidate_key"] for row in ranked]
+    elif op in {"temporal", "timeline_reconstruction"}:
+        result["ordered_candidates"] = [
+            row["candidate_key"] for row in by_time
+        ]
+        result["earliest_time_index"] = by_time[0]["time_index"]
+    elif op in {"aggregation", "candidate_aggregation", "count"}:
+        result["selected_count"] = len(selected)
+        result["total_count"] = len(rows)
+    elif op in {"verify_evidence"}:
+        result["source_handle_unique"] = (
+            len({row["source_id"] for row in rows}) == len(rows))
+        result["all_observations_simulated"] = all(
+            row["provenance"] == "deterministic_synthetic_observation"
+            for row in rows)
+    elif op in {"answer_synthesis"}:
+        # A structured *demonstration* result, not a Gold answer claim.
+        result["candidate_selection"] = (
+            [row["candidate_key"] for row in by_time[:1]]
+            if family == "temporal" else
+            [ranked[0]["candidate_key"]]
+            if family == "comparison" else
+            list(selected)
+        )
+        result["answer_status"] = "synthetic_evidence_only_not_gold_answer"
+    else:
+        result["selected_candidates"] = list(selected)
+    return result
 
 
 def _task_feedback(task: dict, *, world: dict, completed: dict,
@@ -76,7 +196,10 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
             raise EvidenceExecutionError("missing_granted_clean_source:" + source_id)
         source = world["sources"][source_id]
         for fact in source["facts"]:
-            if fact["verification"] != "consistent_synthetic_record":
+            if fact["verification"] not in {
+                "consistent_synthetic_record",
+                "original_mmqa_text_excerpt_not_pixels",
+            }:
                 raise EvidenceExecutionError("nonclean_fact")
             ref = f"{source_id}:{fact['fact_id']}"
             source_support.add(ref)
@@ -113,6 +236,23 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
             "status": "complete",
         })
     base_ids = [e["evidence_id"] for e in evidence]
+    candidates = _candidate_rows(inputs, permitted, world)
+    computed = _execute_operation(task, candidates)
+    operator_id = f"{tid}.E{len(evidence)+1}"
+    evidence.append({
+        "evidence_id": operator_id,
+        "kind": "typed_operation_evaluation",
+        "operation": computed["operation"],
+        "result": copy.deepcopy(computed),
+        "statement": (
+            f"Executed {computed['operation']} over "
+            f"{computed['candidate_count']} synthetic candidate observation(s) "
+            f"from {computed['source_count']} original source handle(s)."
+        ),
+        "depends_on": base_ids,
+        "source_fact_refs": sorted(source_support),
+        "status": "complete",
+    })
     if any(item["status"] != "complete" for item in evidence):
         raise EvidenceExecutionError("incomplete_clean_evidence")
     if not source_support:
@@ -127,15 +267,16 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
     ]
     inputs_text = ", ".join(input_descriptions + local_descriptions)
     resulting_statement = (
-        f"{task['work_type']} for {case_reference} synthesized the documented "
-        f"findings from {inputs_text}."
+        f"{task['work_type']} for {case_reference} produced a typed synthetic "
+        f"work product from {inputs_text}; operation={computed['operation']}; "
+        f"candidate_count={computed['candidate_count']}."
     )
     synthesis_id = f"{tid}.E{len(evidence)+1}"
     evidence.append({
         "evidence_id": synthesis_id,
         "kind": "work_synthesis",
         "statement": resulting_statement,
-        "depends_on": base_ids,
+        "depends_on": [operator_id],
         "source_fact_refs": sorted(source_support),
         "status": "complete",
     })
@@ -152,13 +293,24 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
         if e["kind"] == "upstream_finding"
     ]
     primary_statements = (local_statements + inherited_statements)[:3]
-    finding_statement = " ".join(primary_statements) or resulting_statement
+    result_brief = {
+        k: v for k, v in computed.items()
+        if k not in {"source_ids", "operation", "question_operation"}
+    }
+    finding_statement = (
+        f"{computed['operation']} evaluated {computed['candidate_count']} "
+        f"distinct simulated source candidates; "
+        f"result={str(result_brief)[:280]}. "
+        f"No original MMQA answer is asserted."
+    )
     artifact_slot, artifact_type = next(iter(task["outputs"].items()))
     work_product = {
         "artifact_type": artifact_type,
         "work_type": task["work_type"],
         "case_reference": case_reference,
         "finding_statement": finding_statement,
+        "operation_result": copy.deepcopy(computed),
+        "candidate_observations": candidates,
         "evidence_refs": [e["evidence_id"] for e in evidence],
         "source_fact_refs": sorted(source_support),
         "synthesis_evidence_id": synthesis_id,
@@ -178,6 +330,9 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
         elif item["kind"] == "verified_scope_alignment":
             origin = "verified_upstream_work_product_keys"
             action = "CheckWorkProductAlignment"
+        elif item["kind"] == "typed_operation_evaluation":
+            origin = "synthetic_candidate_observations_and_completed_work"
+            action = "ExecuteTypedEvidenceOperation"
         else:
             origin = "internal_evidence_combination"
             action = "SynthesizeWorkProduct"
@@ -186,6 +341,10 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
             "action": action,
             "origin": origin,
             "finding": item["statement"],
+            **({
+                "operation": item["operation"],
+                "result": copy.deepcopy(item["result"]),
+            } if item["kind"] == "typed_operation_evaluation" else {}),
         })
     feedback = {
         "task_id": tid,
