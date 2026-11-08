@@ -174,3 +174,99 @@ LLM could expand noncritical narrative surface content under consistency
 checking. This pilot is **parallel to** the original source-backed envir
 prepare/compose and does not claim to have integrated full KQA or YAGO
 semantic grounding into the new synthetic worlds.
+
+
+## Macro TaskPlan pilot: independent work packages, fixed concurrency 10
+
+The coarse-grained planner is **independent of both** the source-backed
+YAGO Subtask-First composer and the synthetic MMQA Scene Bank. It does NOT
+alter the legacy environment. It is a first-stage **TaskPlan generator**,
+not a complete Feedback/trajectory simulator.
+
+Design boundaries:
+
+1. **Question Level**: one practical user need and final deliverable.
+2. **Macro-Orchestration Level**: several independently delegable work
+   packages (e.g., investigate a situation, audit records, review rules,
+   assess consequences, research feasible responses). Each package exposes
+   typed input/output handoffs; graph edges are real data requirements.
+3. **Sub-Agent Execution Level**: any media inspection, KoPL relation
+   traversal, OCR, search or calculation stays in PRIVATE per-package
+   internal_execution_outline, where later reliable Feedback Construction
+   can turn it into source-backed tool events and summary_trace.
+
+The planner samples 9 scenario domains, 4 issue variants per domain,
+5 question intents and 5 macro DAG shapes (chain, parallel_join,
+fork_join, mixed, staged). Domain and topology are crossed; no domain has
+a fixed DAG. No simulated errors, runtime variants, token budgets or
+latency/cost distributions are generated. All tasks use the **single fixed
+concurrency maximum of 10**. reference_waves is only a valid dependency
+schedule, never the Main Agent's required action order.
+
+KQA-Pro: Parse complete KoPL ProgramIR and retain structural/operator
+priors. These are NOT treated as one agent per KoPL node.
+MultiModalQA: Sample official question/composition roles and modality
+contexts to select relevant work/evidence patterns; no real media files
+are needed. Video/audio roles are marked synthetic extensions.
+YAGO: Optionally read existing envir bank.sqlite in read-only mode to
+extract observed *predicate name* hints. This does NOT ground the
+synthetic scenario with real YAGO facts.
+
+Generate a 100-plan pilot from the real source files:
+
+    python -m envir.macro.cli build \
+      --kqa data/world-source/KQA-Pro/train.json \
+      --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+      --bank envir/data/pilot/bank.sqlite \
+      --output-dir envir/data/macro_v1 \
+      --target 100 --max-kqa-records 10000 \
+      --max-mmqa-records 3000 --seed 17
+
+Omit --bank if the YAGO SQLite bank is not prepared. The planner then
+uses KQA + MMQA structural priors without a YAGO semantic hint.
+
+Replay structural validation:
+
+    python -m envir.macro.cli replay \
+      --plans envir/data/macro_v1/private_taskplans.jsonl
+
+Output files:
+
+* private_taskplans.jsonl: PRIVATE teacher structural TaskPlans with
+  source-program priors, macro DAG, typed contracts, internal execution
+  outlines, coarsening stats and reference scheduling waves. **There are NO grounded Gold answers yet**.
+* public_questions.jsonl: only public question, situation/resource
+  descriptions and an explicit unrealized-resource notice.
+* macro_summary.json: graph, intent/domain and question diversity counters.
+* prior_statistics.json: dataset coverage and whether YAGO prior was supplied.
+
+The validator proves type-connected DAG structure and public/private
+separation, **not** natural-language question validity, end-to-end
+executability, YAGO fact correctness or reliable sub-agent feedback.
+
+Next stage will ground every work package in a simulated evidence world and
+derive verified Answer / Summary / Summary Trace using scoped executors,
+with no private future-results leaking to an earlier delegated work unit.
+
+
+For more varied natural-language **public question surfaces**, you may
+optionally connect an OpenAI-compatible LOCAL vLLM server (the deterministic
+Macro TaskPlan itself is unchanged):
+
+    python -m envir.macro.cli build \
+      --kqa data/world-source/KQA-Pro/train.json \
+      --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+      --output-dir envir/data/macro_v1_llm \
+      --target 100 --seed 17 \
+      --question-api-base http://localhost:8000/v1 \
+      --question-model YOUR_LOCAL_MODEL_NAME \
+      --question-workers 4
+
+The Question Author sees only the public situation, user need, requested
+deliverable and resource descriptions. It NEVER receives teacher-private
+macro topology, fine-grained KoPL operations, execution traces or answers.
+The rewritten question is checked for subject/intent preservation using
+lightweight rules. Invalid outputs and model-call failures revert to the
+deterministic question. This is surface-level **heuristic** validation, not
+a semantic proof; downstream task authoring must still certify meaning
+against the grounded world before using any candidate for training.
