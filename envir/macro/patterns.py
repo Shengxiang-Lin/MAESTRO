@@ -211,3 +211,79 @@ NODE_SETS = {
     "mixed": ("A", "B", "C", "D"),
     "staged": ("A", "B", "C", "D", "E"),
 }
+
+
+# Within-domain issue variation changes the concrete information need; it
+# does not rewrite evidence into a supposedly factual answer.
+CASE_VARIANTS = {
+    "logistics": (
+        "a disputed restricted-zone vehicle entry",
+        "a carrier entering outside its assigned delivery window",
+        "a gate movement whose recorded carrier does not match dispatch paperwork",
+        "a service vehicle operating inside a temporarily closed loading area",
+    ),
+    "culture": (
+        "a late change to the exhibition opening schedule",
+        "a curator talk with conflicting publicity times",
+        "an artwork loan postponing a scheduled display",
+        "a gallery closure that affects published visitor bookings",
+    ),
+    "sports": (
+        "an eligibility concern affecting the final standings",
+        "a disputed athlete registration in a qualifying event",
+        "a corrected results announcement after a timing discrepancy",
+        "a match schedule amendment affecting eligible participants",
+    ),
+    "education": (
+        "conflicting information about an invited lecture",
+        "a symposium session moved after a venue conflict",
+        "a workshop registration list inconsistent with the published program",
+        "a last-minute change to an examination briefing",
+    ),
+    "science": (
+        "a calibration discrepancy during an experiment",
+        "a laboratory instrument operating outside its approved range",
+        "a mismatch between experimental logs and calibration records",
+        "an unexpected change in a shared laboratory booking",
+    ),
+    "commerce": (
+        "a product-batch recall notice",
+        "a packing-label discrepancy affecting shipped orders",
+        "a stock-hold instruction issued after a supplier alert",
+        "a delivery exception involving a temperature-sensitive batch",
+    ),
+    "environment": (
+        "a newly reported wildlife disturbance",
+        "an unexpected observation near a protected nesting area",
+        "a survey finding that conflicts with the seasonal habitat inventory",
+        "a maintenance activity close to a restricted conservation zone",
+    ),
+    "civic": (
+        "a service interruption following equipment damage",
+        "a repair backlog affecting an accessible transport route",
+        "a street-safety inspection that conflicts with the maintenance log",
+        "an urgent maintenance request for a public facility",
+    ),
+    "general": (
+        "a disruption to a scheduled public event",
+        "a venue change affecting registered attendees",
+        "an access notice inconsistent with the booking schedule",
+        "a revised event plan after an equipment failure",
+    ),
+}
+
+ASSESSMENT_VARIANTS = {
+    "impact": "Assess which {affected} are affected and identify the practical implications.",
+    "compliance": "Assess the applicable requirements against the case and records and determine conformity.",
+    "reconciliation": "Reconcile disagreements across the gathered observations and records.",
+    "mitigation": "Assess operational constraints, consequences and options for resolving the situation.",
+    "prioritization": "Prioritize affected cases by urgency and explain the criteria.",
+}
+
+RESPONSE_VARIANTS = {
+    "impact": "Investigate actions that reduce the established impact and identify immediate next steps.",
+    "compliance": "Investigate corrective actions that meet the relevant requirements.",
+    "reconciliation": "Prepare options to resolve outstanding discrepancies and communicate a defensible account.",
+    "mitigation": "Develop and compare practical mitigation options for the responsible coordinator.",
+    "prioritization": "Develop a workable response sequence for the highest-priority affected cases.",
+}
