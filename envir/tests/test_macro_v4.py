@@ -28,6 +28,7 @@ from envir.macro.v4_question_review import (
     naturalize_one, naturalize_scenes, public_task_contract, surface_issues,
     polished_reference_question,
 )
+from envir.macro.v4_question_audit import audit_scenes
 
 
 class CleanTaskFirstTests(unittest.TestCase):
@@ -807,6 +808,40 @@ class CleanTaskFirstTests(unittest.TestCase):
         self.assertEqual(calls.count(("update", 1)), 4)
         self.assertIn(("close",), calls)
         self.assertEqual(stats["streaming"]["flush_every"], 1)
+
+    def test_read_only_quality_audit_flags_stock_templates(self):
+        scenes = [self.build(i) for i in range(3)]
+        original = copy.deepcopy(scenes)
+        report = audit_scenes(scenes, max_examples=2)
+        self.assertEqual(report["checked"], 3)
+        self.assertEqual(report["question_status"]["deterministic"], 3)
+        self.assertGreater(
+            report["quality_metrics"]["stock_documented_findings"], 0,
+        )
+        self.assertIn("formulaic_evidence_phrasing",
+                      report["warning_counts"])
+        self.assertEqual(original, scenes)
+        self.assertLessEqual(len(report["flagged_examples"]), 2)
+
+    def test_read_only_audit_cli_can_save_report_without_modifying_scenes(self):
+        original = [self.build(i) for i in range(3)]
+        src = self.temp / "original.jsonl"
+        src.write_text(
+            "\n".join(json.dumps(scene) for scene in original) + "\n",
+            encoding="utf-8",
+        )
+        report = self.temp / "question_quality_audit.json"
+        before = src.read_bytes()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main([
+                "audit-questions", "--scenes", str(src),
+                "--max-records", "2", "--max-examples", "1",
+                "--output", str(report),
+            ]), 0)
+        quality = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(quality["checked"], 2)
+        self.assertEqual(len(quality["flagged_examples"]), 1)
+        self.assertEqual(src.read_bytes(), before)
 
     def test_cli_build_replay_and_no_overwrite(self):
         path = self.temp / "out"
