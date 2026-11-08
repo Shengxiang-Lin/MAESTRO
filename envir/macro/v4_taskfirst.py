@@ -48,7 +48,7 @@ def task_level_brief(plan: dict) -> dict:
             label = SOURCE_LABELS.get(role, "supporting documentation")
             if label not in sources:
                 sources.append(label)
-    return {
+    result = {
         "domain": plan["scenario"]["domain"],
         "setting": plan["scenario"]["setting"],
         "issue": plan["scenario"]["issue"],
@@ -60,10 +60,20 @@ def task_level_brief(plan: dict) -> dict:
         "supporting_work_types": sorted({t["work_type"] for t in tasks}),
         "public_resource_categories": sources,
     }
+    if plan["scenario"].get("source_kind") == "MultiModalQA":
+        result["source_kind"] = "MultiModalQA"
+    return result
 
 
 def author_question(brief: dict, *, ordinal: int, seed: int) -> str:
     """Public wording is a function of macro work contracts, never Evidence."""
+    # Data-derived reference wording follows the immutable terminal work goal.
+    if brief.get("source_kind") == "MultiModalQA":
+        from .data_taskfirst import FINAL_PREFIX
+        goal = brief["final_work_goal"]
+        if not goal.startswith(FINAL_PREFIX):
+            raise ValueError("MMQA question requires a terminal question goal")
+        return goal[len(FINAL_PREFIX):].strip()
     intent = brief["intent"]
     rng = random.Random(seed * 314159 + ordinal * 271828)
     # The requested action comes from the TERMINAL MACRO WORK PRODUCT,
