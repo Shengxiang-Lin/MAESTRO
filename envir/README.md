@@ -375,3 +375,91 @@ concurrency 10. Validation does NOT establish correct factual answers,
 the necessity of every source in a realized world, or reliable
 Sub-Agent traces. The next stage must ground source material, produce
 source-scoped Feedback and certify question-answer/evidence equivalence.
+
+
+## Macro V3 — concrete QuestionNeed → macro handoffs → reliable feedback
+
+V3 is a separate experiment; V1/V2, envir.scenarios and the legacy
+environment/ remain unchanged. The major change from V2 is that **the
+specific information need is sampled before planning the DAG**.
+
+It builds each controlled scenario in this order:
+
+1. Read complete KQA-Pro KoPL programs and MMQA question/composition
+   annotations. They are **abstract structural/answer-operator priors**,
+   not copied benchmark factual content. Optional OmniGAIA JSON/JSONL
+   contributes question STYLE only, not reference solutions or media.
+2. Create a concrete InformationNeed: user goal, scope case IDs, date,
+   comparison/filter/timing/aggregation conditions, required source roles.
+3. Create a controlled simulated evidence world: observations, record
+   status/quantities, effective conditions, capacity and independent
+   timestamp reports. The scenario is SYNTHETIC, with simulated textual
+   media observations and no actual images/videos/audio or external truth.
+4. Compile independently delegable macro work packages with *exact*
+   input/output handoffs. The graph is derived from the required evidence;
+   it is not selected from a fixed set of DAG templates. Scopes include
+   object identity, so two CaseSet operands are NOT collapsed to one.
+5. Dynamically merge adjacent scoped records-audit + record-matching work
+   when it has only one consumer and represents the same deliverable.
+   Internal source inspection actions remain inside the task, not Main
+   delegations.
+6. Derive reliable Answer / Summary / Summary Trace from source-scoped
+   deterministic execution. A Sub-Agent sees only its authorized sources
+   plus completed upstream outputs; it cannot see private future tasks
+   or Gold answers.
+7. Recompute every subtask, ablate every required source, and execute
+   one actual fact-value counterfactual per question. These checks prove
+   consistency in the controlled world; they do NOT establish real-world
+   truth or the uniqueness/necessity of every source across all worlds.
+
+The maximum concurrency is FIXED to 10. No dynamic scheduler profiles,
+deceptive feedback or attack variants are generated.
+
+Command (uses original KQA + MMQA; no existing YAGO bank required):
+
+    python -m envir.macro.v3_cli build \
+      --kqa data/world-source/KQA-Pro/train.json \
+      --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+      --output-dir envir/data/macro_v3 \
+      --target 100 \
+      --max-kqa-records 10000 \
+      --max-mmqa-records 3000 --seed 17
+
+Optional: append --omnigaia /path/to/official/omnigaia.json to use
+rhetorical question-style priors ONLY. The script never imports the
+dataset's answer, annotated solution, real media or knowledge facts.
+
+Optional local vLLM rewriting of the already GROUNDED user question:
+
+    python -m envir.macro.v3_cli build \
+      --kqa data/world-source/KQA-Pro/train.json \
+      --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+      --output-dir envir/data/macro_v3_llm \
+      --target 100 --seed 17 \
+      --question-api-base http://localhost:8000/v1 \
+      --question-model YOUR_LOCAL_MODEL_NAME \
+      --question-workers 4
+
+The optional author receives only the public question and source
+descriptions. Case IDs, dates, source names, intent and numerical
+conditions are checked. Bad rewrites fall back to the original.
+These are *heuristic surface checks*, not proof of semantic equivalence.
+
+Replay generated private scenarios:
+
+    python -m envir.macro.v3_cli replay \
+      --scenes envir/data/macro_v3/private_grounded_scenes_v3.jsonl
+
+Generated files:
+
+- private_grounded_scenes_v3.jsonl — TEACHER ONLY: controlled synthetic
+  sources, InformationNeed, macro graph, Gold result, all reliable
+  feedback and counterfactual witness.
+- public_questions_v3.jsonl — PUBLIC: concrete question and available
+  simulated source handles, WITHOUT observations, graph, feedback or Gold.
+- macro_v3_summary.json — distribution and evidence replay statistics.
+
+YAGO's real fact-level relation binding is NOT included in V3's
+synthetic-world generator yet. The older V1/V2 source-bank path remains
+available. Thus V3 is a verified *simulated* compositional task pilot,
+not a claim of preserving original KQA/MMQA/YAGO data semantics.
