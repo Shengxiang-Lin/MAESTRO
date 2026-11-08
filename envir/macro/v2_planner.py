@@ -35,34 +35,42 @@ INTENT_REQUESTS = {
     "impact": (
         "which {affected} are actually affected by {issue}, and what consequences can be supported?",
         "separate the affected from unaffected {affected}, and explain the practical implications of {issue}.",
+        "identify the affected {affected} and explain which observations make those impacts credible.",
     ),
     "compliance": (
         "does the situation surrounding {issue} meet the relevant requirements, including scope and timing?",
         "which aspects of {issue} comply with the applicable requirements and which do not?",
+        "give a requirements-based determination for {issue}, distinguishing applicable conditions and exceptions.",
     ),
     "reconciliation": (
         "which claims about {issue} are corroborated, and which discrepancies remain?",
         "establish the most defensible account of {issue}, distinguishing agreement from unresolved differences.",
+        "identify the facts about {issue} that can be jointly supported and isolate the disputed details.",
     ),
     "mitigation": (
         "which practical responses to {issue} should be considered, and what limits each option?",
         "develop feasible options to address {issue}, explaining their main trade-offs.",
+        "recommend practical responses to {issue} while distinguishing immediate measures from longer-term choices.",
     ),
     "prioritization": (
         "which {affected} or corrective actions should be handled first following {issue}, and on what basis?",
         "rank the cases requiring attention after {issue}, accounting for urgency and operational constraints.",
+        "explain the ordering of the most urgent {affected} in the response to {issue}.",
     ),
     "comparison": (
         "how do the competing interpretations or responses to {issue} compare, and which is better supported?",
         "compare the relevant findings about {issue} and explain the decisive differences.",
+        "explain which interpretation of {issue} is strongest after comparing the relevant evidence and constraints.",
     ),
     "feasibility": (
         "which proposed actions for {issue} can realistically be implemented under applicable constraints?",
         "evaluate whether the potential responses to {issue} are feasible and what restrictions matter.",
+        "identify feasible next actions for {issue}, and state which constraints rule out other options.",
     ),
     "timeline": (
         "what happened in what order during {issue}, and where do the available timelines differ?",
         "reconstruct the chronology of {issue} and identify any timing discrepancies.",
+        "establish the order of events during {issue}, including dates that materially change the conclusion.",
     ),
 }
 
@@ -73,6 +81,8 @@ FINAL_RECIPE_QUESTIONS = {
     "feasibility_options_capacity": "determine which proposed responses are feasible within the available operational capacity.",
     "feasibility_options_rules": "determine which proposed responses comply with the applicable requirements and therefore remain feasible.",
     "feasibility_priorities_rules": "determine whether the proposed priority order can be executed under the applicable requirements.",
+    "comparison_from_timeline": "compare the recorded sequence with the time-based rules and explain any important differences.",
+    "feasibility_from_options": "evaluate which proposed responses could be implemented under the documented resource constraints.",
 }
 
 
