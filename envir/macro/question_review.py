@@ -43,6 +43,10 @@ WRITE THE QUESTION AFRESH:
 - You MAY say 'the records', 'the available materials', or 'the information
   about [topic]' without listing every source modality. Source descriptions
   will be shown to the user separately; do not ask how to find new sources.
+- Source citations, evidence checks and internal verification may remain
+  SOLVER-SIDE obligations. The Question need NOT explicitly demand them.
+  Keep all substantive answer components (e.g. a full ranking, not merely
+  its first entry), but do not turn every request into 'which records prove it'.
 - You MAY frame a neutral user need in conversational language, but do not
   pretend a specific report, account, event or media observation exists.
 - Keep intermediate research, matching and verification steps implicit.
@@ -82,9 +86,11 @@ Five evidence-based decisions, each yes/no/uncertain:
   media contents, contextual facts or undocumented real-world properties.
   Generic 'records', 'sources', 'materials' and neutral 'I'm reviewing' are
   permitted, not invented evidence.
-- answer_equivalent: the requested answer includes the required substantive
-  result AND all required scope/coverage/citation components, whether stated
-  explicitly or by a genuinely equivalent natural expression.
+- answer_equivalent: the requested answer has the same substantive result,
+  full ranking/sequence/count/filters, and candidate scope. Source citations
+  and verification still belong to the frozen solver contract, but need NOT
+  be explicitly requested in a natural user Question; omitting those words
+  is not a task change. Do not infer missing substantive result components.
 
 Naturalness matters: reject robotic workflow instructions, internal schema
 names (synthetic_attribute_flag, WorkProduct etc.), awkward repeated source
