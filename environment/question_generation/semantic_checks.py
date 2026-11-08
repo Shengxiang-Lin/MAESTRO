@@ -82,6 +82,17 @@ def explicit_global_join_contradictions(plan, candidate: str) -> list[str]:
     # into an alternative. A plain "or" is too broad to reject safely.
     if re.search(r"\beither\b[^.!?;]{0,160}\bor\b", candidate, re.I):
         return ["all_branch_intersection_rewritten_as_either_or"]
+    # In the 30-task anchored pilot a critic approved "at least one of the
+    # following criteria ... mass != X OR height > Y" even though the only
+    # join was INTERSECT. This is an explicit substitution, not a mere OR
+    # appearing in a source title or a legitimate alternative in a mixed DAG.
+    if re.search(
+        r"\b(?:at least one|any one|one or more)\s+of\s+"
+        r"(?:the\s+)?(?:following\s+)?"
+        r"(?:criteria|conditions|requirements|filters)\b"
+        r"[^.!?;]{0,200}\bor\b", candidate, re.I,
+    ):
+        return ["all_branch_intersection_rewritten_as_any_criterion"]
     return []
 
 
