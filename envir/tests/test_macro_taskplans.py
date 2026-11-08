@@ -164,7 +164,7 @@ class TestMacroTaskPlans(unittest.TestCase):
             self.assertEqual(validate_plan(plan), [])
             self.assertFalse(plan["question_authoring"]["semantic_equivalence_certified"])
             self.assertIn("orchestration_instructions",
-                          check_rewrite(plan, "First subtask S1: inspect the media."))
+                          check_rewrite(plan, "First subtask S1: inspect the media and report the internal outcome."))
 
     def test_cli_build_replay_and_nonoverwrite(self):
         out = self.base / "out"
