@@ -70,7 +70,7 @@ def build_clean_world(plan: dict, *, seed: int,
                       contexts: dict | None = None) -> dict:
     domain = plan["scenario"]["domain"]
     case_ref = f"{domain[:3].upper()}-{seed % 100:02d}-{plan['task_id'][-7:]}"
-    question = plan["source_priors"]["MultiModalQA"]["original_question"]
+    question = plan["question"]  # ONLY the newly composed TaskGraph-derived question
     topic = plan["scenario"]["topic"]
     sources, grants = {}, {}
     for task in plan["macro_graph"]["tasks"]:
