@@ -26,6 +26,7 @@ from envir.macro.v4_streaming import (
 )
 from envir.macro.v4_question_review import (
     naturalize_one, naturalize_scenes, public_task_contract, surface_issues,
+    polished_reference_question,
 )
 
 
@@ -209,6 +210,138 @@ class CleanTaskFirstTests(unittest.TestCase):
         modified["public"]["macro_graph"] = scene["macro_graph"]
         self.assertIn("public_projection_keys",
                       validate_clean_scene(modified))
+
+    def test_strict_semantics_without_brittle_surface_match(self):
+        science = self.build(4)
+        original = science["question"]
+        self.assertIn("unsupported_concrete_detail", surface_issues(
+            science, original.replace("laboratory instrument", "spectrometer"),
+        ))
+        self.assertIn("invented_current_state", surface_issues(
+            science, original.replace(
+                "laboratory instrument operating",
+                "laboratory instrument currently operating",
+            ),
+        ))
+        museum = self.build(1)
+        museum_ref = museum["question"]
+        natural_place = museum_ref.replace(
+            "municipal museum", "our museum"
+        ).replace(
+            "Explain which documented findings support your assessment.",
+            "What evidence supports your recommendation?",
+        )
+        site_errors = surface_issues(museum, natural_place)
+        self.assertNotIn("changed_or_missing_setting", site_errors)
+        self.assertNotIn("basis_for_assessment_missing", site_errors)
+        self.assertNotIn("formulaic_evidence_phrasing", site_errors)
+        target_drift = museum_ref.replace(
+            "rank response priorities", "rank visitor reservation requests",
+        )
+        self.assertIn(
+            "ranking_target_changed", surface_issues(museum, target_drift),
+        )
+        schedule = museum_ref + (
+            " First investigate the records, then rank the affected requests."
+        )
+        self.assertIn(
+            "internal_workflow_order_exposed",
+            surface_issues(museum, schedule),
+        )
+        self.assertIn(
+            "formulaic_evidence_phrasing",
+            surface_issues(museum, museum_ref),
+        )
+        # The user can ask for a report based on public records without
+        # writing the literal stock evidence sentence.
+        no_stock = museum_ref.replace(
+            " Explain which documented findings support your assessment.", ""
+        )
+        self.assertNotIn(
+            "basis_for_assessment_missing", surface_issues(museum, no_stock),
+        )
+
+    def test_safe_fallback_removes_duplicate_evidence_request(self):
+        base = (
+            "At the municipal museum, please reconcile the available accounts;"
+            " explain which documented findings support the conclusion."
+            " Explain which documented findings support your assessment."
+        )
+        result = polished_reference_question(base)
+        self.assertNotEqual(result, base)
+        self.assertEqual(result.count("Explain which documented findings"), 1)
+        self.assertIn("please reconcile the available accounts.", result)
+        self.assertEqual(polished_reference_question(result), result)
+        self.assertEqual(
+            polished_reference_question("Please compare the cases."), 
+            "Please compare the cases.",
+        )
+
+    def test_no_approval_for_candidate_only_specifics_even_with_critic_pass(self):
+        science = self.build(4)
+        class BadAuthor:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"question": json.loads(user)["reference_question"].replace(
+                    "laboratory instrument", "spectrometer",
+                )}
+        class OverconfidentCritic:
+            def complete_json(self, *args, **kwargs):
+                raise AssertionError("Unsafe candidate must not reach Critic")
+        question, metadata = naturalize_one(
+            science, author=BadAuthor(), critic=OverconfidentCritic(),
+            max_revisions=1,
+        )
+        self.assertEqual(metadata["status"], "fallback")
+        self.assertEqual(metadata["critic_calls"], 0)
+        self.assertEqual(metadata["review_policy_version"],
+                         "v4.2_fidelity_naturalness")
+        self.assertIn(
+            "unsupported_concrete_detail",
+            metadata["audit"][0]["deterministic_guards"],
+        )
+        self.assertEqual(question, polished_reference_question(science["question"]))
+        science["question"] = question
+        science["public"]["question"] = question
+        science["question_authoring"] = metadata
+        self.assertEqual(validate_clean_scene(science), [])
+
+    def test_legacy_accepted_records_keep_original_review_policy(self):
+        scene = self.build(4)
+        original = scene["question"]
+        from envir.macro.v4_question_review import _fingerprint
+        contract = public_task_contract(scene)
+        # Simulate a V4.1 publication produced before the new P0 guards.
+        accepted = original.replace(
+            "laboratory instrument", "spectrometer",
+        ).replace(
+            " Explain which documented findings support your assessment.",
+            " What evidence supports the conclusion?",
+        )
+        self.assertIn("unsupported_concrete_detail",
+                      surface_issues(scene, accepted))
+        review = {
+            "verdict": "pass", "naturalness": "acceptable",
+            "summary": "Old reviewer approved", "differences": [],
+        }
+        scene["question"] = accepted
+        scene["public"]["question"] = accepted
+        scene["question_authoring"] = {
+            "pipeline": "v4_task_contract_author_local_critic_repair",
+            "status": "accepted", "reason": "independent_critic_pass",
+            "reference_question": original,
+            "final_question": accepted,
+            "contract_sha256": _fingerprint(contract),
+            "macro_graph_sha256": _fingerprint(scene["macro_graph"]),
+            "reference_sha256": _fingerprint(original),
+            "accepted_review": review,
+            "audit": [{"candidate": accepted, "accepted": True,
+                       "critic_review": review}],
+            "revision_rounds": 0, "author_calls": 1, "critic_calls": 1,
+            "semantic_equivalence_certified": False,
+        }
+        # Legacy replay checks integrity, but does NOT retrospectively label
+        # old proposals as having passed a stronger v4.2 review policy.
+        self.assertEqual(validate_clean_scene(scene), [])
 
     def test_llm_author_critic_accepts_natural_question_without_changing_tasks(self):
         scene = self.build(2)
