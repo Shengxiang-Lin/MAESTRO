@@ -1,4 +1,4 @@
-"""Independent Macro work goals for genuinely new TaskGraph-first user questions.
+"""Reusable Goal/Problem-Pattern Bank for TaskGraph-first synthesis.
 
 No MultiModalQA original question or original answer is an input to goal
 selection. MMQA contributes scene entities, source handles/modalities and
@@ -6,6 +6,8 @@ a composition-structure prior only. These goals are designed for the typed
 synthetic observations that the clean environment can actually evaluate.
 """
 from __future__ import annotations
+
+import random
 
 GOALS = {
     "lookup": {
@@ -80,21 +82,62 @@ GOALS = {
             "is earliest, and which records establish the sequence?"
         ),
     },
+    "prioritization": {
+        "artifact": "PriorityReport",
+        "assessment": "candidate_prioritization",
+        "focus": "attribute_scores",
+        "goal": "Prioritize candidate observations by descending recorded attribute score and preserve each source reference.",
+        "deliverable": "A ranked priority register with the criteria and supporting records.",
+        "question": (
+            "How should the candidates in the available {sources} observation "
+            "summaries for {topic} be prioritized by their recorded attribute "
+            "scores, and which records justify the order?"
+        ),
+    },
+    "feasibility": {
+        "artifact": "FeasibilityReport",
+        "assessment": "candidate_feasibility",
+        "focus": "attribute_flags_and_scores",
+        "goal": "Determine which source-linked candidate observations satisfy a specified simulated eligibility rule.",
+        "deliverable": "A source-linked feasibility assessment of candidates meeting the explicit rule.",
+        "question": (
+            "Which candidates in the available {sources} observation summaries "
+            "for {topic} meet both conditions—attribute flag set and recorded "
+            "score of at least 50—and which source records support the result?"
+        ),
+    },
 }
 
 ORDER = tuple(GOALS)
 
 
-def select_goal(*, ordinal: int, run_seed: int, source_count: int) -> tuple[str, dict]:
-    """Balanced design selection, independent of MMQA original question/intent.
+def select_goal(*, ordinal: int, run_seed: int, source_count: int,
+                scene_key: str = "") -> tuple[str, dict]:
+    """Select from the independently curated Goal Bank, not MMQA QA labels.
 
-    The ordinal/seed determine the design target; source count only serves as
-    an eligibility constraint. A single source is never a multi-work case.
+    Scene + source availability decide eligibility; task goal choice is
+    independently seeded and randomized for reproducible combinations.
     """
     if source_count < 2:
         raise ValueError("typed multi-source goals need at least two sources")
-    key = ORDER[(ordinal + run_seed) % len(ORDER)]
+    from envir.schema import digest
+    rng = random.Random(int(digest(run_seed, ordinal, scene_key, "goal_bank")[:14], 16))
+    key = rng.choice(ORDER)
     return key, dict(GOALS[key])
+
+
+def goal_bank_manifest() -> list[dict]:
+    """Structured reusable problem-solving patterns before scene sampling."""
+    return [
+        {"pattern_id": key,
+         "target_workproduct": item["artifact"],
+         "assessment_recipe": item["assessment"],
+         "focus": item["focus"],
+         "goal": item["goal"],
+         "question_template": item["question"],
+         "provenance": "curated_macro_workproduct_grammar_not_mmqa_questions"}
+        for key, item in GOALS.items()
+    ]
 
 
 def source_phrase(modalities: list[str]) -> str:
