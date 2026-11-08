@@ -139,6 +139,33 @@ class TestMacroTaskPlans(unittest.TestCase):
         self.assertNotIn("reference_waves", public_str)
         self.assertNotIn("answer", plan["public"])
 
+    def test_optional_question_author_sees_only_public_question_brief(self):
+        from envir.macro.author import naturalize_questions, check_rewrite
+        plans, _ = build_batch(kqa=self.kqa, mmqa=self.mmqa,
+                               target=6, seed=17)
+
+        class StubAuthor:
+            packets = []
+            def complete(self, packet):
+                self.packets.append(packet)
+                return packet["reference_question"]
+
+        author = StubAuthor()
+        stats = naturalize_questions(plans, author=author, workers=2)
+        self.assertEqual(stats["accepted"], 6)
+        for packet in author.packets:
+            self.assertEqual(set(packet), {
+                "situation", "user_role", "reference_question",
+                "expected_deliverable", "resource_descriptions",
+            })
+            self.assertNotIn("source_priors", json.dumps(packet))
+            self.assertNotIn("internal_execution_outline", json.dumps(packet))
+        for plan in plans:
+            self.assertEqual(validate_plan(plan), [])
+            self.assertFalse(plan["question_authoring"]["semantic_equivalence_certified"])
+            self.assertIn("orchestration_instructions",
+                          check_rewrite(plan, "First subtask S1: inspect the media."))
+
     def test_cli_build_replay_and_nonoverwrite(self):
         out = self.base / "out"
         with contextlib.redirect_stdout(io.StringIO()):
