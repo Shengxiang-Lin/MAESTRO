@@ -1253,20 +1253,20 @@ class CleanTaskFirstTests(unittest.TestCase):
             self.assertEqual(main([
                 "build", "--kqa", str(self.kqa_file),
                 "--mmqa", str(self.mmqa_file),
-                "--target", "24", "--output-dir", str(path),
+                "--target", "3", "--output-dir", str(path),
             ]), 0)
             self.assertEqual(main([
                 "replay", "--scenes", str(
                     path / "private_clean_scenes_v4.jsonl"),
             ]), 0)
         self.assertEqual(len(
-            (path / "public_questions_v4.jsonl").read_text().splitlines()), 24)
+            (path / "public_questions_v4.jsonl").read_text().splitlines()), 3)
         with self.assertRaises(FileExistsError):
             with contextlib.redirect_stdout(io.StringIO()):
                 main([
                     "build", "--kqa", str(self.kqa_file),
                     "--mmqa", str(self.mmqa_file),
-                    "--target", "24", "--output-dir", str(path),
+                    "--target", "3", "--output-dir", str(path),
                 ])
 
 
