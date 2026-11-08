@@ -139,6 +139,11 @@ class BackwardRecipePlannerTests(unittest.TestCase):
         self.assertGreater(len(summary["macro_work_types"]), 8)
         self.assertGreaterEqual(summary["macro_graph_signatures"], 12)
         self.assertGreaterEqual(len(summary["topology_distribution"]), 2)
+        self.assertGreaterEqual(summary["unlabeled_dag_topologies"], 7)
+        self.assertGreaterEqual(summary["unique_recipe_sequences"], 12)
+        self.assertGreaterEqual(summary["unique_recipe_ids"], 8)
+        self.assertEqual(summary["recipe_selection"],
+                         "backward_recursive_typed_workproduct_grammar")
         self.assertTrue(all(
             3 <= len(x["macro_graph"]["tasks"]) <= 9 for x in results
         ))
