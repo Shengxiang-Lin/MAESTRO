@@ -1,1 +1,1 @@
-"""Adapters from public dataset files to envir's source/evidence store."""
+"""Read-only original corpus adapters for the current Task-First pipeline."""
