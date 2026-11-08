@@ -1,9 +1,13 @@
-"""Task-derived Question brief and deterministic reference for V4.5.
+"""Derive initial questions AFTER composition of the complete Macro TaskGraph.
 
-The MMQA question is embedded in the terminal typed WorkProduct goal. No
-unrelated domain-specific incident template or separate Intent is sampled.
+The original MultiModalQA question is a source provenance item, not a writing
+prompt, a work-product goal or a terminal Question. Scene Bank and Goal Bank
+are combined before graph construction; the terminal task carries the
+structured blueprint required to render a fresh user-facing information need.
 """
 from __future__ import annotations
+
+from .goal_grammar import GOALS, source_phrase
 
 SOURCE_LABELS = {
     "material": "source media",
@@ -29,6 +33,11 @@ def task_level_brief(plan: dict) -> dict:
             label = SOURCE_LABELS.get(role, "supporting documentation")
             if label not in sources:
                 sources.append(label)
+    blueprint = final.get("question_blueprint")
+    if not isinstance(blueprint, dict):
+        raise ValueError("terminal Macro Task is missing its question blueprint")
+    if final["outputs"][terminal["output_slot"]] != blueprint["goal_artifact"]:
+        raise ValueError("terminal WorkProduct and question blueprint disagree")
     return {
         "domain": plan["scenario"]["domain"],
         "setting": plan["scenario"]["setting"],
@@ -41,15 +50,25 @@ def task_level_brief(plan: dict) -> dict:
         "root_work_goals": [t["goal"] for t in roots],
         "supporting_work_types": sorted({t["work_type"] for t in tasks}),
         "public_resource_categories": sources,
+        "question_blueprint": dict(blueprint),
     }
 
 
 def author_question(brief: dict, *, ordinal: int, seed: int) -> str:
-    """Reference wording is only the source question carried by terminal goal."""
+    """Create a new Question from the TERMINAL task, not any MMQA question."""
     if brief["source_kind"] != "MultiModalQA":
-        raise ValueError("V4.5 Task-First expects an MMQA-backed information need")
-    from .data_taskfirst import FINAL_PREFIX
-    goal = brief["final_work_goal"]
-    if not goal.startswith(FINAL_PREFIX):
-        raise ValueError("missing immutable terminal MMQA information need")
-    return goal[len(FINAL_PREFIX):].strip()
+        raise ValueError("Task-First generation expects an MMQA-backed scene")
+    blueprint = brief["question_blueprint"]
+    pattern_id = blueprint["pattern_id"]
+    spec = GOALS.get(pattern_id)
+    if not spec:
+        raise ValueError("unknown goal-pattern bank identifier")
+    if blueprint["goal_artifact"] != spec["artifact"]:
+        raise ValueError("goal-pattern artifact does not match terminal work")
+    if blueprint["source_phrase"] != source_phrase(blueprint["modalities"]):
+        raise ValueError("source phrase does not match visible graph modalities")
+    if blueprint["origin"] != "taskgraph_terminal_workproduct":
+        raise ValueError("question blueprint lacks terminal-task provenance")
+    return spec["question"].format(
+        topic=blueprint["topic"], sources=blueprint["source_phrase"],
+    )
