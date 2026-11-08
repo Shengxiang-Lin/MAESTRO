@@ -70,6 +70,37 @@ def validate_clean_scene(scene: dict) -> list[str]:
             errors.append("duplicated_task_source_grants")
         if not set(grants.get(t["task_id"], [])) <= set(sources):
             errors.append("unauthorized_source_grant")
+    # Dataset-derived questions must preserve the original MMQA information
+    # need in the terminal work goal, with every source handle traceable to
+    # the original supporting context or an explicitly marked modality role.
+    if scene.get("scenario", {}).get("source_kind") == "MultiModalQA":
+        from .data_taskfirst import FINAL_PREFIX
+        prior = scene.get("source_priors", {}).get("MultiModalQA", {})
+        original = prior.get("original_question")
+        terminal = (plan.get("terminal_handoffs") or [{}])[0]
+        terminal_task = next(
+            (task for task in tasks if task["task_id"] == terminal.get("from_task")),
+            None)
+        if (not original or terminal_task is None
+                or terminal_task.get("goal") != FINAL_PREFIX + original):
+            errors.append("mmqa_question_terminal_goal_drift")
+        expected_sources = {
+            (src.get("modality"), src.get("doc_id"))
+            for src in prior.get("supporting_sources", [])
+        }
+        for task in tasks:
+            for requirement in task.get("source_requirements", []):
+                modality = (requirement.get("candidate_modalities") or [None])[0]
+                provenance = requirement.get("source_origin")
+                docid = requirement.get("original_doc_id")
+                if provenance == "mmqa_supporting_context":
+                    if (modality, docid) not in expected_sources:
+                        errors.append("mmqa_original_source_binding_drift")
+                elif provenance == "mmqa_modality_role_only":
+                    if docid is not None or modality not in prior.get("source_modalities", []):
+                        errors.append("mmqa_unapproved_synthetic_source_role")
+                else:
+                    errors.append("mmqa_source_provenance_missing")
     brief = task_level_brief(scene)
     if brief != scene.get("question_brief"):
         errors.append("question_brief_not_task_derived")
