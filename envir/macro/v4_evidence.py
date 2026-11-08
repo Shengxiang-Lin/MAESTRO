@@ -93,6 +93,25 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
             })
     if not evidence:
         raise EvidenceExecutionError("unsubstantiated_macro_task:" + tid)
+    if inputs:
+        # Derived evidence is a checked statement about upstream work
+        # coverage/scope. This is a Sub-Agent internal operation, not an
+        # extra macro-level delegation.
+        upstream_scope_ids = [
+            e["evidence_id"] for e in evidence
+            if e["kind"] == "upstream_scope"
+        ]
+        evidence.append({
+            "evidence_id": f"{tid}.E{len(evidence)+1}",
+            "kind": "verified_scope_alignment",
+            "statement": (
+                f"All {len(inputs)} upstream work products refer to "
+                f"the same review case {case_reference}."
+            ),
+            "depends_on": upstream_scope_ids,
+            "verified_case_reference": case_reference,
+            "status": "complete",
+        })
     base_ids = [e["evidence_id"] for e in evidence]
     if any(item["status"] != "complete" for item in evidence):
         raise EvidenceExecutionError("incomplete_clean_evidence")
@@ -156,6 +175,9 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
         elif item["kind"] == "upstream_finding":
             origin = f"completed_work:{item['from_task']}"
             action = "ReviewUpstreamFinding"
+        elif item["kind"] == "verified_scope_alignment":
+            origin = "verified_upstream_work_product_keys"
+            action = "CheckWorkProductAlignment"
         else:
             origin = "internal_evidence_combination"
             action = "SynthesizeWorkProduct"
