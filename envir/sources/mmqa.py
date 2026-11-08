@@ -63,6 +63,25 @@ def _answer(value: object) -> str | None:
     return None
 
 
+def _answer_record(record: dict) -> str | None:
+    """Decode official MultiModalQA answers=[{answer,type,...}] records.
+
+    Multiple alternative annotations are not silently reduced to one answer.
+    A list is accepted only when the normalized answers agree.
+    """
+    if "answers" not in record:
+        return _answer(record.get("answer"))  # backward-compatible test fixture
+    raw = record["answers"]
+    if not isinstance(raw, list) or not raw:
+        return None
+    answers = [_answer(item) for item in raw]
+    if any(not value for value in answers):
+        return None
+    if len({value.casefold().strip() for value in answers}) != 1:
+        return None
+    return answers[0]
+
+
 def _bank_indexes(parent: Path, needed: dict[str, set[str]]) -> dict[tuple[str, str], dict]:
     index = {}
     for mod, names in _BANK_FILES.items():
@@ -113,7 +132,7 @@ def ingest_mmqa(store: EvidenceStore, path: str | Path, *,
             break
         scanned += 1
         question = str(record.get("question") or "").strip()
-        answer = _answer(record.get("answer"))
+        answer = _answer_record(record)
         context = _contexts(record)
         if not question or not answer or not context:
             continue
