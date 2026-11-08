@@ -148,7 +148,7 @@ class TestMacroTaskPlans(unittest.TestCase):
                 "--output-dir", str(out),
             ]), 0)
             self.assertEqual(main([
-                "replay", "--gold", str(out / "macro_gold_plans.jsonl")
+                "replay", "--plans", str(out / "private_taskplans.jsonl")
             ]), 0)
         self.assertEqual(len((out / "public_questions.jsonl").read_text().splitlines()), 18)
         with self.assertRaises(FileExistsError):
