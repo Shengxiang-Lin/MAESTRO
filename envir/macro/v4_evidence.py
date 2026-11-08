@@ -11,6 +11,7 @@ states are constructed. Feedback is a work product, not a final Gold answer.
 from __future__ import annotations
 
 import copy
+import re
 
 from .graph import compile_waves
 
@@ -31,9 +32,21 @@ def _candidate_rows(inputs: dict, permitted: set, world: dict) -> list[dict]:
         facts = {row["field"]: row["value"] for row in world["sources"][sid]["facts"]}
         if sid in seen:
             continue
+        excerpt = facts.get("original_context_excerpt")
+        criterion_terms = {
+            word for word in re.findall(r"[a-z]{4,}", facts["question_criterion"].lower())
+            if word not in {"which", "where", "when", "what", "from",
+                            "with", "that", "have", "their", "were", "would"}
+        }
+        matched_terms = (
+            sorted(criterion_terms & set(re.findall(r"[a-z]{4,}", excerpt.lower())))
+            if isinstance(excerpt, str) else []
+        )
         rows.append({
             "source_id": sid,
             "original_doc_id": world["sources"][sid].get("original_doc_id"),
+            "original_context_matched_terms": matched_terms,
+            "original_context_available": isinstance(excerpt, str),
             "modality": facts["source_modality"],
             "candidate_key": facts["candidate_key"],
             "criterion": facts["question_criterion"],
@@ -71,6 +84,13 @@ def _execute_operation(task: dict, rows: list[dict]) -> dict:
         "source_ids": [row["source_id"] for row in rows],
         "simulation_only": True,
         "question_operation": family,
+        "original_context_source_count": sum(
+            bool(row.get("original_context_available")) for row in rows
+        ),
+        "original_context_matched_terms": {
+            row["source_id"]: list(row.get("original_context_matched_terms", []))
+            for row in rows if row.get("original_context_available")
+        },
     }
     if op.startswith("source_extract_"):
         result["extracted"] = [
