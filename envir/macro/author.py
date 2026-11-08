@@ -22,7 +22,7 @@ class QuestionAuthorError(ValueError):
 _WORDS = {"after", "there", "their", "about", "which", "those", "following",
           "during", "current", "event", "scheduled", "situation", "recent",
           "relevant", "updated", "following", "newly", "reported", "with",
-          "affected", "under", "before", "another", "from", "this", "that"}
+          "under", "before", "another", "from", "this", "that"}
 
 
 def _keywords(text: str) -> set[str]:
@@ -48,7 +48,7 @@ def check_rewrite(plan: dict, question: str) -> list[str]:
     # Keep prompt's central question speech act and output obligation.
     intent = plan["goal"]["intent"]
     required = {
-        "impact": ("affect", "impact", "consequence"),
+        "impact": ("affect", "impact", "consequence", "implicat"),
         "compliance": ("requirement", "compliance", "satisf", "rule", "policy"),
         "reconciliation": ("discrepan", "reconcil", "inconsisten", "conflict"),
         "mitigation": ("respond", "mitigat", "action", "step", "recommend"),
