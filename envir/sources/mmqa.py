@@ -70,11 +70,13 @@ def _bank_indexes(parent: Path, needed: dict[str, set[str]]) -> dict[tuple[str, 
         if not path:
             continue
         wanted = needed[mod]
+        found = 0
         for row in _rows(path):
             key = row.get("id") or row.get("doc_id") or row.get("source_id")
             if key is not None and str(key) in wanted:
                 index[(mod, str(key))] = row
-                if len([x for x in index if x[0] == mod]) >= len(wanted):
+                found += 1
+                if found >= len(wanted):
                     break
     return index
 
@@ -104,10 +106,12 @@ def ingest_mmqa(store: EvidenceStore, path: str | Path, *,
                 max_records: int = 2000) -> dict:
     path = Path(path)
     records = []
+    scanned = 0
     needed: dict[str, set[str]] = defaultdict(set)
     for ix, record in enumerate(_rows(path)):
         if ix >= max_records:
             break
+        scanned += 1
         question = str(record.get("question") or "").strip()
         answer = _answer(record.get("answer"))
         context = _contexts(record)
@@ -189,5 +193,5 @@ def ingest_mmqa(store: EvidenceStore, path: str | Path, *,
         if media:
             counters["containing_images"] += 1
     store.db.commit()
-    return {"dataset": "MultiModalQA", "records_sampled": max_records,
+    return {"dataset": "MultiModalQA", "records_sampled": scanned,
             "context_documents_found": len(index), **dict(counters)}

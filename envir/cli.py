@@ -25,7 +25,16 @@ def prepare(args) -> dict:
     for value in (args.kqa, args.yago, args.mmqa):
         if not Path(value).is_file():
             raise FileNotFoundError(f"required dataset file not found: {value}")
-    with EvidenceStore(out / "bank.sqlite") as store:
+    bank_path = out / "bank.sqlite"
+    if bank_path.is_file():
+        if not args.restart_bank:
+            raise FileExistsError(
+                "source bank already exists; use a new --output-dir or "
+                "--restart-bank explicitly"
+            )
+        for suffix in ("", "-wal", "-shm"):
+            (out / ("bank.sqlite" + suffix)).unlink(missing_ok=True)
+    with EvidenceStore(bank_path) as store:
         yago = ingest_yago(
             store, args.yago, max_triples=args.max_yago_triples,
             max_subjects=args.max_yago_subjects,
@@ -124,6 +133,8 @@ def build_parser() -> argparse.ArgumentParser:
     prep.add_argument("--max-yago-subjects", type=int, default=100000)
     prep.add_argument("--max-kqa-records", type=int, default=10000)
     prep.add_argument("--max-mmqa-records", type=int, default=2000)
+    prep.add_argument("--restart-bank", action="store_true",
+                      help="Deliberately discard the previous envir bank")
 
     comp = sub.add_parser("compose", help="Ground and replay task graphs lazily")
     comp.add_argument("--bank", type=Path, default=Path("envir/data/pilot/bank.sqlite"))
@@ -134,6 +145,13 @@ def build_parser() -> argparse.ArgumentParser:
     comp.add_argument("--patterns", type=str,
                       default="chain,parallel,media_to_search")
 
+    inst = sub.add_parser("instantiate",
+                          help="Lazily verify a specific real YAGO subtask")
+    inst.add_argument("--bank", type=Path, required=True)
+    inst.add_argument("--subject", required=True,
+                      help="Exact YAGO subject URI/QName from the source facts")
+    inst.add_argument("--predicate", required=True,
+                      help="Exact YAGO predicate URI/QName")
     inspect = sub.add_parser("inspect", help="Inspect pool without generation")
     inspect.add_argument("--bank", type=Path, required=True)
     search = sub.add_parser("search", help="Inspect the public local-search behavior")
@@ -152,13 +170,20 @@ def main(argv: list[str] | None = None) -> int:
         result = prepare(args)
     elif args.command == "compose":
         result = compose(args)
+    elif args.command == "instantiate":
+        from .subtasks import SubtaskFactory
+        with EvidenceStore(args.bank) as store:
+            subtask = SubtaskFactory(store).yago(args.subject, args.predicate)
+            store.db.commit()
+            result = {"status": "verified" if subtask else "unavailable",
+                      "subtask": subtask}
     else:
         with EvidenceStore(args.bank) as store:
             result = store.stats() if args.command == "inspect" else store.search(
                 args.query, limit=args.limit,
             )
     print(json.dumps(result, indent=2, ensure_ascii=False))
-    return 0 if not isinstance(result, dict) or result.get("status") != "no_graphs" else 2
+    return 2 if isinstance(result, dict) and result.get("status") in {"no_graphs","unavailable"} else 0
 
 
 if __name__ == "__main__":

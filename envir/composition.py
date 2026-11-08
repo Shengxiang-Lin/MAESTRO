@@ -48,9 +48,14 @@ class TaskGraphComposer:
             self.rejections.update(issues)
             return None
         result = graph.to_dict()
+        has_labeled_input = any(
+            node.get("verification") == "dataset_labeled" for node in nodes
+        )
         result["validation"] = {
-            "status": "verified", "checks": ["source_replay", "dependency_binding",
-                                             "acyclic", "answer_composition"],
+            "status": "mixed_provenance" if has_labeled_input else "verified",
+            "all_answers_source_replay_verified": not has_labeled_input,
+            "checks": ["source_replay_where_available", "dependency_binding",
+                       "acyclic", "answer_composition"],
         }
         return result
 

@@ -5,7 +5,7 @@ from collections import defaultdict, deque
 
 from envir.schema import display, normalize_label
 from envir.store import EvidenceStore
-from envir.subtasks import SubtaskFactory
+from envir.subtasks import SubtaskFactory, unique_entity_labels
 
 
 def check_graph(graph: dict, store: EvidenceStore) -> list[str]:
@@ -92,10 +92,14 @@ def check_graph(graph: dict, store: EvidenceStore) -> list[str]:
                 issues.append("entity_binding_mismatch")
         elif binding == "unique_exact_label":
             subject = down["inputs"].get(field)
+            if not hasattr(store, "_checked_unique_entity_labels"):
+                store._checked_unique_entity_labels = unique_entity_labels(store)
+            unique = store._checked_unique_entity_labels
             if (field != "subject_id" or not subject
                     or normalize_label(up["answer"].get("value"))
                     != normalize_label(display(subject))
-                    or subject != edge.get("resolved_entity_id")):
+                    or subject != edge.get("resolved_entity_id")
+                    or unique.get(normalize_label(up["answer"].get("value"))) != subject):
                 issues.append("cross_dataset_entity_alignment_mismatch")
         elif binding == "answer":
             if down.get("kind") != "combine":

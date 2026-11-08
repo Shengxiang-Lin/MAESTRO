@@ -106,7 +106,10 @@ class EnvirIntegrationTests(unittest.TestCase):
                 graph = getattr(composer, pattern)()
                 self.assertIsNotNone(graph, f"missing {pattern}: {composer.rejections}")
                 self.assertEqual(check_graph(graph, db), [])
-                self.assertEqual(graph["validation"]["status"], "verified")
+                self.assertEqual(
+                    graph["validation"]["status"],
+                    "mixed_provenance" if pattern == "media_to_search" else "verified",
+                )
             self.assertEqual(graph["nodes"][0]["verification"], "dataset_labeled")
             self.assertEqual(graph["dependencies"][0]["binding"], "unique_exact_label")
 
@@ -142,6 +145,24 @@ class EnvirIntegrationTests(unittest.TestCase):
                             and "dependencies" not in q for q in public))
         self.assertEqual({q["task_id"] for q in public},
                          {g["task_id"] for g in private})
+
+    def test_explicit_lazy_instantiation_and_no_silent_bank_overwrite(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main([
+                "instantiate", "--bank", str(self.bank),
+                "--subject", "yago:Film_A", "--predicate", "schema:director",
+            ]), 0)
+            self.assertEqual(main([
+                "instantiate", "--bank", str(self.bank),
+                "--subject", "yago:Film_A", "--predicate", "schema:unknown",
+            ]), 2)
+        with self.assertRaises(FileExistsError):
+            with contextlib.redirect_stdout(io.StringIO()):
+                main([
+                    "prepare", "--kqa", str(self.kqa), "--yago", str(self.yago),
+                    "--mmqa", str(self.mmqa),
+                    "--output-dir", str(self.bank.parent),
+                ])
 
     def test_type_only_mmqa_yago_joins_not_accepted(self):
         with EvidenceStore(self.bank) as db:
