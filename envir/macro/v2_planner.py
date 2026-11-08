@@ -86,7 +86,8 @@ def _render(template: str, case) -> str:
 
 
 def _weighted_order(recipes: tuple[Recipe, ...], rng: random.Random,
-                    mmqa_pattern: str, attempt: int) -> list[Recipe]:
+                    mmqa_pattern: str, attempt: int,
+                    structural_preference: str) -> list[Recipe]:
     candidates = []
     for r in recipes:
         weight = 1.0
@@ -102,6 +103,13 @@ def _weighted_order(recipes: tuple[Recipe, ...], rng: random.Random,
             "compare" in r.name or "compliance" in r.name
         ):
             weight *= 1.6
+        # A soft structural preference varies the macro-scheduling
+        # opportunities independently of domain and answer intent.
+        # Actual graph edges ALWAYS come from required work products.
+        if structural_preference == "serial" and len(r.inputs) == 1:
+            weight *= 18.0
+        elif structural_preference == "branch" and len(r.inputs) >= 2:
+            weight *= 5.0
         # Draw a random priority; sorting yields a weighted permutation,
         # not a deterministic mapping from MMQA label to a macro graph.
         key = rng.random() ** (1.0 / weight)
@@ -116,7 +124,8 @@ def _weighted_order(recipes: tuple[Recipe, ...], rng: random.Random,
 
 
 def _build_work_graph(case, intent: str, mmqa_pattern: str,
-                      rng: random.Random, attempt: int) -> tuple[list[dict], list[dict], dict, dict]:
+                      rng: random.Random, attempt: int,
+                      structural_preference: str) -> tuple[list[dict], list[dict], dict, dict]:
     selected: dict[str, dict] = {}
     by_type: dict[str, str] = {}
     edges: list[dict] = []
@@ -126,7 +135,7 @@ def _build_work_graph(case, intent: str, mmqa_pattern: str,
         if result_type in by_type:
             return by_type[result_type]
         options = BY_OUTPUT[result_type]
-        recipe = _weighted_order(options, rng, mmqa_pattern, attempt)[0]
+        recipe = _weighted_order(options, rng, mmqa_pattern, attempt, structural_preference)[0]
         links = []
         for slot, required_type, rationale in recipe.inputs:
             parent_id = produce(required_type)
@@ -284,13 +293,19 @@ def build_v2_plan(*, ordinal: int, seed: int, kqa: list[dict],
         ordinal=ordinal,
     )
     mmqa_pattern = mmqa_prior["logical_pattern"]
+    # Preference controls the availability of sequential vs join work
+    # routes, but never injects dependency edges or fixes a DAG template.
+    structural_preference = ("serial", "branch", "balanced")[
+        (iteration + index * 5 + seed) % 3
+    ]
     candidate = None
     for attempt in range(60):
         # Fresh local randomness explores alternate producers and shared
         # prerequisite structure; no fixed DAG is selected or forced.
         options_rng = random.Random(rng.randrange(1 << 40) + attempt)
         packages, edges, terminal, provenance = _build_work_graph(
-            case, intent, mmqa_pattern, options_rng, attempt)
+            case, intent, mmqa_pattern, options_rng, attempt,
+            structural_preference)
         count = len(packages)
         if not 3 <= count <= 9:
             continue
@@ -300,8 +315,10 @@ def build_v2_plan(*, ordinal: int, seed: int, kqa: list[dict],
         waves = compile_waves(tasks)
         cm = complexity(tasks, waves, coarsening)
         metrics = _topology_metrics(tasks, edges, waves)
-        if (cm["macro_dependency_depth"] < 2 or
-            metrics["width"] < 2 or metrics["roots"] < 2):
+        # Real one-root serial chains are valuable orchestration cases.
+        # Unlike the v1 fork-join bias, do not reject them merely because
+        # they lack parallelism; include a diversified mixture.
+        if cm["macro_dependency_depth"] < 2:
             continue
         candidate = (tasks, edges, terminal, provenance, coarsening, waves, cm, metrics)
         break
@@ -330,8 +347,12 @@ def build_v2_plan(*, ordinal: int, seed: int, kqa: list[dict],
         s for task in tasks for s in task.get("source_requirements", ())
     ]
     descriptions = [s["description"] for s in root_sources]
+    # Case issues repeat across an 11-cycle pilot; avoid repeating the
+    # exact same wording for the same issue/intent by rotating the speech
+    # act across repeated occurrences, not by appending meaningless IDs.
+    wording_variant = (iteration // len(issues) + iteration + index) % 3
     question = _question(case, intent, recipe_choices[terminal["type"]],
-                         descriptions, chosen_style, iteration)
+                         descriptions, chosen_style, wording_variant)
     plan_id = "macro-v2-" + digest(
         seed, ordinal, case.domain, intent, case.issue,
         sorted(recipe_choices.items()), mmqa_prior["motif_id"])
@@ -356,6 +377,7 @@ def build_v2_plan(*, ordinal: int, seed: int, kqa: list[dict],
             "required_context": case.focus,
             "target_deliverable": tasks[-1]["deliverable"],
             "question_style": chosen_style,
+            "structural_preference": structural_preference,
         },
         "macro_graph": {
             "motif": topology,
@@ -462,6 +484,8 @@ def build_v2_batch(*, kqa: list[dict], mmqa: list[dict], target: int = 100,
             p["complexity"]["macro_dependency_depth"] for p in plans)),
         "mmqa_composition_families": dict(mmqa_families),
         "question_styles": dict(Counter(p["goal"]["question_style"] for p in plans)),
+        "structural_preferences": dict(Counter(
+            p["goal"]["structural_preference"] for p in plans)),
         "fixed_max_concurrency": 10,
         "runtime_variants_generated": False,
         "world_and_feedback_generated": False,
