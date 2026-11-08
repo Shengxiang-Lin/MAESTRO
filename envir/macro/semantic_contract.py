@@ -69,7 +69,7 @@ def semantic_contract(scene: dict) -> dict:
         for row in sources
     ]
     topic = scene["scenario"]["topic"]
-    return {
+    contract = {
         "contract_version": "question_semantics_v1",
         "authorized_topic": topic,
         "authorized_entities": [topic],
@@ -111,6 +111,25 @@ def semantic_contract(scene: dict) -> dict:
             ],
         },
     }
+    grounding = scene.get("scene_grounding")
+    if grounding and grounding.get("status") == "accepted":
+        # LLM interpretation is *hypothetical synthetic* context. The
+        # Critic may permit these labels, but it must not assert original
+        # media/real-world verification or change the core operation.
+        contract["synthetic_scene_interpretation"] = {
+            "status": "accepted_hypothetical_labels_only",
+            "scene_context": grounding["scene_context"],
+            "candidate_kind": grounding["candidate_kind"],
+            "field_meanings": grounding["field_meanings"],
+            "user_need": grounding["user_need"],
+            "source_cards": [{
+                "source_id": card["source_id"],
+                "candidate_label": card["candidate_label"],
+                "source_role": card["source_role"],
+                "candidate_key": card["candidate_key"],
+            } for card in grounding["source_cards"]],
+        }
+    return contract
 
 
 def semantic_surface_issues(question: str, contract: dict) -> list[str]:
