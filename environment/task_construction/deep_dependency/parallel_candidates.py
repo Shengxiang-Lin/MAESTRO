@@ -79,6 +79,8 @@ def bind_proposal(proposal):
     anchored=proposal.get('construction_mode')=='semantic_anchored'
     if anchored and anchor_bank is None:
         return {'attempt':proposal['attempt'],'error':'semantic_anchor_bank_missing'}
+    if anchored and not anchor_bank.can_anchor(program):
+        return {'attempt':proposal['attempt'],'error':'semantic_anchor_no_joint_scope'}
     attempts=proposal.get('anchor_tries',6) if anchored else 1
     last_error='semantic_anchor_joint_support_missing'
     for index in range(attempts):
@@ -86,10 +88,13 @@ def bind_proposal(proposal):
         predicates.rng=random.Random(binding_seed)
         anchor=anchor_bank.sample(program,rng=random.Random(binding_seed)) if anchored else None
         try:
+            validator=(lambda candidate: anchor_bank.evaluate(candidate,anchor) is not None) if anchor else None
             binder=GraphGroundedProgramBinder(catalog,taxonomy,seed=binding_seed,
-                candidate_limit=16,max_states=128,predicate_usage=proposal['predicate_usage'],
+                candidate_limit=16,max_states=256 if anchored else 128,
+                predicate_usage=proposal['predicate_usage'],
                 predicate_binder=predicates,
-                preferred_predicates=anchor['predicates'] if anchor else None)
+                preferred_predicates=anchor['predicates'] if anchor else None,
+                anchor_validator=validator)
             plan=binder.bind(program)
             evidence=anchor_bank.evaluate(plan,anchor) if anchored else None
             if anchored and evidence is None:
