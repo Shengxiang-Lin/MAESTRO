@@ -463,3 +463,80 @@ YAGO's real fact-level relation binding is NOT included in V3's
 synthetic-world generator yet. The older V1/V2 source-bank path remains
 available. Thus V3 is a verified *simulated* compositional task pilot,
 not a claim of preserving original KQA/MMQA/YAGO data semantics.
+
+
+## Macro V4: Clean Task-first / Evidence-within-Task
+
+V4 is an isolated CLEAN pilot. V1, V2, V3 and environment/ are unchanged.
+The design deliberately separates **macro delegation (Main Agent)** from
+**evidence collection and reasoning (Sub-Agent)**:
+
+1. Compose complete, independently delegable Macro Tasks and typed
+   result handoffs from the V2 semantic work-product grammar. The graph
+   follows substantive work dependencies, not one KoPL step per agent.
+2. **Only after Task composition**, derive a PUBLIC Question from the
+   scenario, final Task goal/deliverable and public source categories.
+   The Question Author does NOT see any concrete evidence value, private
+   proof graph, feedback, hidden orchestration order or final answer.
+3. Build a deterministic synthetic source world with multiple domain-aware
+   case-scoped observations per source. Each source is a TEXTUAL surrogate:
+   video/image/audio modality hints DO NOT indicate actual perception.
+4. Execute every Macro Task with an INTERNAL EvidenceGraph:
+   source_observation nodes can only access its granted sources;
+   upstream_scope and upstream_finding nodes can only use COMPLETED
+   predecessor WorkProducts; verified_scope_alignment checks shared case
+   references; work_synthesis combines the supported evidence.
+5. Generate clean Sub-Agent feedback with Answer (a *work product*),
+   Summary, structured Summary Trace (one entry per evidence node),
+   evidence_refs and transitive source_fact_refs.
+6. Teacher-side termination checking verifies the terminal work-product's
+   complete EVIDENCE SUPPORT CLOSURE. It does NOT match a Gold Answer,
+   force a final answer as a separate agent Task, or require Main to
+   individually orchestrate internal evidence nodes.
+
+All required Evidence is complete and consistent. The current environment
+does NOT introduce missing/conflicting evidence, retries, verification,
+backend switching or new tasks created by recovery. Those are possible
+future extensions, intentionally outside the clean phase.
+
+KQA-Pro is only an INTERNAL REASONING/complexity prior and MMQA is
+only a composition/source-modality prior. V4 does not import original
+dataset facts or perform actual multimodal perception. No YAGO factual
+grounding is claimed. The synthetic case evidence ensures deterministic
+feedback replay, **not** an external correctness guarantee.
+
+The maximum concurrent Sub-Agents remains FIXED at 10. A reference
+execution schedule is retained only in the teacher-private plan.
+
+Build from the original KQA and MMQA priors:
+
+    python -m envir.macro.v4_cli build \
+      --kqa data/world-source/KQA-Pro/train.json \
+      --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+      --output-dir envir/data/macro_v4 \
+      --target 100 \
+      --max-kqa-records 10000 \
+      --max-mmqa-records 3000 \
+      --seed 17
+
+Replay all task-level evidence and feedback:
+
+    python -m envir.macro.v4_cli replay \
+      --scenes envir/data/macro_v4/private_clean_scenes_v4.jsonl
+
+Outputs:
+
+- private_clean_scenes_v4.jsonl: TEACHER ONLY. Macro TaskGraph,
+  Task-level Question Brief, source observations, per-Task EvidenceGraphs,
+  clean Answers/Summaries/Summary Traces, and evidence-level goal coverage.
+  There is NO final Gold Answer.
+- public_questions_v4.jsonl: PUBLIC questions plus source descriptions
+  and modality hints ONLY. There are no private DAGs, evidence facts or
+  Feedback snippets.
+- macro_v4_summary.json: diversity and clean evidence-coverage statistics.
+
+V4 replay detects changed/removed synthetic evidence, tampered Feedback
+or Summary Traces, broken typed handoffs, evidence leakage into public
+questions, and incorrect terminal proof coverage. It cannot yet certify
+naturalness of every Question, authenticity of real video/image/audio
+evidence, or behavior under untrusted Sub-Agent feedback.
