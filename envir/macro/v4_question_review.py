@@ -43,6 +43,24 @@ entity owners, reverse comparisons, invent dates/numbers, claim evidence was
 already observed, invent source contents, or claim media is attached. Mention
 media only if the public resource modality supports it.
 
+CRITICAL: Generic types must remain generic. If the case says "laboratory
+instrument", never choose "spectrometer", "microscope" or another subtype.
+If it says "vehicle" do not invent a truck, forklift or driver. If it says
+"records" do not invent surveillance cameras, gate logs, staff testimony,
+experiment logs or individual witnesses. If the case is not explicitly
+ongoing, do not say "currently", "still", "now" or "ongoing". Do not turn
+ranking RESPONSES TO reservations into ranking the reservations themselves.
+Do not prescribe "first investigate ... then rank"; express the overall
+information need, NOT the internal agent workflow.
+
+Avoid copied boilerplate, particularly "documented findings", "Explain
+which documented findings support your assessment", and repetitious
+"Based on X, Y and Z". The user may ask for evidence but should sound
+like a person, not a report specification. Preserve support requirements
+naturally ("What supports the recommendation?", "Why?", "using the relevant
+records", etc.). Prefer the supplied style_seed_question for readable
+phrasing, treating the original reference as the semantic authority.
+
 If given a previous_draft and reviewer_feedback, make the smallest necessary
 changes to fix the specific flaws, preserving all unaffected meaning.
 Return JSON {"question":"..."} and no other text."""
@@ -62,11 +80,27 @@ Question; implicit necessity is fine. Do NOT require the original sentence
 order or exact words. Do not demand meaningless extra details. Do not invent
 hidden evidence or infer facts not in the contract.
 
-Check especially for changed target, unsupported assumptions, invented
-temporal/numeric constraints or source contents, wrong deliverable, explicit
-ordering of hidden work, and weak or awkward language. When problems exist,
-report up to THREE local differences with an exact minimal fix. If unable to
-determine equivalence, choose uncertain; do not rubber-stamp.
+Before any PASS, perform a candidate-only SEMANTIC DELTA REVIEW:
+(a) list any NEW specific entity, instrument, source or record type. If a
+generic "laboratory instrument" becomes "spectrometer", that is unsupported
+specificity even when plausible; it must be REVISED, not celebrated as clarity.
+(b) identify temporal/ongoing-state additions ("currently", "still", "now").
+(c) compare the OBJECT receiving each action. Ranking response priorities
+is not ranking reservation requests. (d) detect instructions that expose
+internal work ordering ("first investigate, then rank"). (e) compare data
+sources, deliverables, negative conditions and constraints.
+Every candidate-only factual detail needs clear textual support from the
+original reference or the immutable public contract; don't treat common
+domain knowledge, guesses, or possible evidence as authorization.
+
+Reject forced template phrases, duplicated evidence requests and robotic
+operator lists as poor naturalness. Do not reject harmless paraphrases,
+pronoun-based location references ("our museum"), or requests that rely on
+named records without literally saying "documented findings".
+
+When problems exist, report up to THREE local differences with an exact
+minimal fix. If unable to determine equivalence, choose uncertain; do not
+rubber-stamp. Cite the exact unsupported candidate phrase in candidate_excerpt.
 
 Return strict JSON:
 {"verdict":"pass|revise|uncertain",
@@ -218,6 +252,93 @@ def style_hint(scene: dict) -> str:
     return choices[seed % len(choices)]
 
 
+
+# High-precision additions that materially narrow otherwise generic
+# synthetic cases. These are NOT a replacement for the semantic Critic.
+# Only unsupported *candidate-only* terms are rejected.
+CONCRETE_DETAILS = {
+    "spectrometer", "spectrophotometer", "oscilloscope", "microscope",
+    "centrifuge", "chromatograph", "thermometer", "mass-spectrometer",
+    "forklift", "semi-truck", "tanker", "van", "lorry",
+    "gate log", "gate logs", "maintenance log", "maintenance logs",
+    "experiment log", "experiment logs", "surveillance camera",
+    "surveillance cameras", "witness accounts", "witness statements",
+    "inspection photographs", "event posters", "session recordings",
+}
+CURRENT_STATE_TERMS = (
+    "currently", "presently", "right now", "still", "ongoing",
+    "at the moment", "now occupying", "now operating",
+)
+SETTING_ALIASES = {
+    "freight terminal": ("terminal",),
+    "municipal museum": ("museum",),
+    "regional tournament": ("tournament", "competition"),
+    "academic symposium": ("symposium", "conference"),
+    "research laboratory": ("laboratory", "lab"),
+    "retail distribution network": ("distribution", "retail", "network"),
+    "protected wetland": ("wetland", "habitat"),
+    "city maintenance department": ("maintenance", "department"),
+    "community event center": ("community", "event center", "venue"),
+}
+
+
+def polished_reference_question(reference: str) -> str:
+    """One narrow, provably non-substantive cleanup for old V4 baselines.
+
+    V4's old terminal work goal sometimes already asked to explain supporting
+    findings, and the fixed suffix asked the SAME thing again. Remove only
+    the exact duplicate clause, leaving the final support requirement.
+    Never paraphrase arbitrary facts or remove the primary task request.
+    """
+    return re.sub(
+        r";\s*explain which documented findings support the conclusion"
+        r"(?=\.\s*Explain which documented findings support your assessment\.)",
+        "", reference, flags=re.I,
+    )
+
+
+def _term_present(text: str, term: str) -> bool:
+    return re.search(r"(?<![a-z])" + re.escape(term) + r"(?![a-z])",
+                     text, re.I) is not None
+
+
+def _semantic_safety_issues(scene: dict, question: str, reference: str) -> list[str]:
+    errors = []
+    contract_text = json.dumps(public_task_contract(scene), ensure_ascii=False)
+    allowed = contract_text + " " + reference
+    # Inference from generic source roles is not a citation for an invented
+    # specific source or instrument. This catches concrete regressions such
+    # as "spectrometer" and "gate logs" not named in the Task contract.
+    for term in CONCRETE_DETAILS:
+        if _term_present(question, term) and not _term_present(allowed, term):
+            errors.append("unsupported_concrete_detail")
+            break
+    if (any(_term_present(question, word) for word in CURRENT_STATE_TERMS)
+            and not any(_term_present(allowed, word)
+                        for word in CURRENT_STATE_TERMS)):
+        errors.append("invented_current_state")
+    # Require two explicit DELEGATION verbs, not mere event chronology.
+    # "Which incident happened first and what happened then?" is valid.
+    if re.search(
+        r"\b(?:first|initially|start by)\b.{0,100}?"
+        r"\b(?:investigat\w*|analy[sz]\w*|examin\w*|collect\w*|"
+        r"gather\w*|check\w*|review\w*|verify\w*|retriev\w*)\b"
+        r".{0,170}?\b(?:then|next|afterwards|finally)\b",
+        question, re.I,
+    ):
+        errors.append("internal_workflow_order_exposed")
+    # Response prioritization is not prioritization of the reservations.
+    goal = scene["question_brief"]["final_work_goal"].lower()
+    if "rank response priorities" in goal:
+        if (re.search(r"\brank\s+(?:the\s+)?(?:visitor\s+)?"
+                      r"(?:reservation\s+)?requests\b", question, re.I)
+                and not re.search(
+                    r"\b(?:response|handling|action|measure|intervention|"
+                    r"follow.up)\w*\b", question, re.I)):
+            errors.append("ranking_target_changed")
+    return sorted(set(errors))
+
+
 def surface_issues(scene: dict, candidate: str, *, baseline: str | None = None) -> list[str]:
     """Only high-precision public-surface checks; Critic handles semantics."""
     question = " ".join(str(candidate or "").split())
@@ -239,34 +360,33 @@ def surface_issues(scene: dict, candidate: str, *, baseline: str | None = None) 
         cand_numbers = set(re.findall(r"\b\d+(?:\.\d+)?%?\b", question))
         if cand_numbers - ref_numbers:
             errors.append("invented_numeric_constraint")
-    if brief["setting"].casefold() not in question.casefold():
+    # Allow semantic aliases such as "our museum" in place of "municipal
+    # museum"; the Critic judges whether the same site is implied. Reject
+    # absent site anchors and explicit moves to a DIFFERENT site.
+    setting = brief["setting"].casefold()
+    anchors = SETTING_ALIASES.get(setting, (setting.split()[-1],))
+    if not any(_term_present(question, label) for label in anchors):
         errors.append("changed_or_missing_setting")
+    if any(re.search(
+        r"\b(?:another|different|other)\s+(?:\w+\s+){0,2}?" +
+        re.escape(label) + r"\b", question, re.I
+    ) for label in anchors):
+        errors.append("changed_setting")
     subject_words = {
         word for word in re.findall(r"[a-z]{4,}", brief["issue"].lower())
         if word not in STOP
     }
     used_words = set(re.findall(r"[a-z]{4,}", question.lower()))
-    if len(subject_words & used_words) < min(2, len(subject_words)):
+    # Exact overlap of two content words was over-rejecting legitimate
+    # paraphrases (e.g. "time discrepancy" for "conflicting times").
+    if subject_words and not (subject_words & used_words):
         errors.append("missing_case_subject")
-    intent_stems = STEMS.get(brief["intent"], ())
-    # Only demand an explicit intent keyword when the frozen ORIGINAL
-    # wording contained one. A Task goal may legitimately express
-    # "feasibility" as "evaluate which options satisfy requirements".
-    # A fixed intent vocabulary must not reject a faithful paraphrase
-    # that preserves the full reference but uses another natural phrase.
-    reference_words = set(re.findall(r"[a-z]{4,}", ref.lower()))
-    reference_explicit = any(
-        w.startswith(stem) for w in reference_words for stem in intent_stems
-    )
-    candidate_explicit = any(
-        w.startswith(stem) for w in used_words for stem in intent_stems
-    )
-    if reference_explicit and not candidate_explicit:
-        errors.append("requested_work_intent_missing")
-    evidence_terms = ("explain", "justify", "support", "based",
-                      "evidence", "reason", "document", "findings", "why")
-    if not any(term in question.lower() for term in evidence_terms):
-        errors.append("basis_for_assessment_missing")
+    # Lexical intent keywords and the phrase "documented findings" are NOT
+    # a sufficient semantic validator. The Critic inspects the full goal
+    # contract; these checks formerly rejected natural but faithful wording.
+    errors.extend(_semantic_safety_issues(scene, question, ref))
+    if "documented findings" in question.casefold():
+        errors.append("formulaic_evidence_phrasing")
     declared = set(public_task_contract(scene)["public_modalities"])
     for word, permitted in (
         ("video", {"video"}), ("footage", {"video"}), ("audio", {"audio"}),
