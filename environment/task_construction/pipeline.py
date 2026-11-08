@@ -48,7 +48,7 @@ def _run_downstream(worlds_path,rendered_path,*,accepted,pool_size,seed,progress
 def build_parser():
     p=argparse.ArgumentParser(description="Build all valid MAESTRO worlds from a fixed semantic candidate pool")
     p.add_argument("--candidate-pool-size",type=int,default=2000,help="number of validated semantic candidates to collect and evaluate")
-    p.add_argument("--construction-mode",choices=("program_composition","semantic_anchored"),
+    p.add_argument("--construction-mode",choices=("program_composition","semantic_anchored","semantic_anchored_v2"),
                    default="program_composition",
                    help="Original KQA/YAGO composition or YAGO subject-profile-anchored binding")
     p.add_argument("--anchor-tries",type=int,default=6,
@@ -113,8 +113,8 @@ def main():
     worlds=OUTPUT_DIR/f"typed_worlds_{pool_size}.jsonl"
     rendered=OUTPUT_DIR/f"rendered_worlds_{pool_size}.jsonl"
     summary_path=OUTPUT_DIR/(
-        f"build_summary_semantic_anchored_{pool_size}.json"
-        if args.construction_mode=="semantic_anchored" else "build_summary.json"
+        f"build_summary_{args.construction_mode}_{pool_size}.json"
+        if args.construction_mode in ("semantic_anchored","semantic_anchored_v2") else "build_summary.json"
     )
     summary={"pipeline":{
         "mode":"fixed_candidate_pool",
@@ -172,7 +172,7 @@ def main():
             if (settings.get("seed") != args.seed
                     or settings.get("pool_size") != pool_size
                     or settings.get("construction_mode","program_composition") != args.construction_mode
-                    or (args.construction_mode=="semantic_anchored" and settings.get("anchor_tries") != args.anchor_tries)
+                    or (args.construction_mode in ("semantic_anchored","semantic_anchored_v2") and settings.get("anchor_tries") != args.anchor_tries)
                     or state.get("status") not in {"complete","budget_exhausted"}):
                 raise SystemExit(
                     "Reusable candidate checkpoint has incompatible seed, "
@@ -207,7 +207,7 @@ def main():
                 candidate_proposal_batch_size=args.candidate_proposal_batch_size,
                     restart_candidates=args.restart_candidates,
                 construction_mode=args.construction_mode,
-                anchor_profiles_path=YAGO_ENTITY_PROFILES if args.construction_mode=="semantic_anchored" else None,
+                anchor_profiles_path=YAGO_ENTITY_PROFILES if args.construction_mode in ("semantic_anchored","semantic_anchored_v2") else None,
                 anchor_tries=args.anchor_tries)
             except CandidateCheckpointError as exc:
                 raise SystemExit(f"Candidate checkpoint error: {exc}") from exc
