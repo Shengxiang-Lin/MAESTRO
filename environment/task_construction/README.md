@@ -99,3 +99,87 @@ Override the three proposal weights with `--web-search-weight`,
 nonnegative and have a positive total. Frozen task quality checks remain
 strict; the zero-attachment exception is permitted **only for web_search
 with a configured independent public query/retrieval policy**.
+
+## Experimental YAGO subject-anchored candidate pilot
+
+The legacy default `--construction-mode program_composition` is unchanged.
+The opt-in `semantic_anchored` mode still composes KQA-Pro reasoning
+fragments and uses the existing YAGO graph-witness binder and MultiModalQA
+source-layout priors. Unlike the legacy binder, it:
+
+1. Samples a REAL YAGO subject profile from the already prepared
+   `yago_entity_profiles.json` bank. Only YAGO-observed predicates with
+   sufficient catalog support qualify.
+2. Prioritizes those predicates during graph-grounded type / relation /
+   attribute binding, then requires at least **two** chosen predicates to
+   originate from that same real profile **on one logical entity scope**.
+   The original YAGO subject ID and facts are *not* copied into the
+   synthetic user-visible task.
+3. Tries alternative typed bindings per KQA proposal
+   (`--anchor-tries`, default 6) and quarantines candidates that do not
+   demonstrate this local joint support.
+4. Retains the current executable synthetic World, MMQA evidence allocation,
+   quality audits, Gold DAG, Stage 2A / 2B, and Stage 3 unchanged.
+
+This v1 is **local semantic anchoring**, not an extraction of a complete
+real YAGO subgraph, and it does **not** guarantee global topical coherence,
+raw-media grounding, natural question wording, or higher end-to-end yield.
+Those must be measured empirically.
+
+Use a NEW candidate pool capacity, distinct from the existing 2000-world
+run, so the latter is not overwritten. The following assumes that
+`environment/data/yago_entity_profiles.json` and other source priors
+already exist:
+
+```bash
+# First run a small pilot. Does not overwrite *_2000 files.
+python environment/construct_tasks.py \
+  --candidate-pool-size 30 \
+  --construction-mode semantic_anchored \
+  --anchor-tries 6 \
+  --reuse-source-priors \
+  --candidate-workers 4 \
+  --candidate-max-attempts 2400
+```
+
+The run uses `environment/data/semantic_candidates_pool_30.jsonl`,
+`typed_worlds_30.jsonl`, `frozen_manifest_30.json`,
+`capability_worlds_30.jsonl` and `authoring_inputs_30.jsonl`.
+If *any* of these `*_30` files already belong to another experiment,
+back them up first. Check `environment/data/build_summary.json` for
+`candidate_selection.semantic_anchor_count`,
+`candidate_selection.rejection_reasons`,
+`worlds.semantic_anchor_worlds`, and `worlds.rejection_reasons`.
+The checkpoint signature includes the YAGO profile content, mode and
+anchor-tries setting. Changing these requires `--restart-candidates`
+and a fresh output workspace.
+
+Stage 2A / 2B can use the new frozen pool without editing
+`environment/config.yaml` by overriding all input paths:
+
+```bash
+python environment/generate_goals.py \
+  --manifest environment/data/frozen_manifest_30.json \
+  --authoring-inputs environment/data/authoring_inputs_30.jsonl \
+  --worlds environment/data/typed_worlds_30.jsonl \
+  --capabilities environment/data/capability_worlds_30.jsonl \
+  --output-dir environment/data/stage2a_anchor_30 \
+  --max-records 30 --question-workers 4 --blueprint-workers 2 --flush-every 1
+
+python environment/generate_questions.py \
+  --manifest environment/data/frozen_manifest_30.json \
+  --authoring-inputs environment/data/authoring_inputs_30.jsonl \
+  --worlds environment/data/typed_worlds_30.jsonl \
+  --capabilities environment/data/capability_worlds_30.jsonl \
+  --blueprints environment/data/stage2a_anchor_30/certified_blueprints.jsonl \
+  --question-brief-mode full \
+  --output-dir environment/data/stage2b_anchor_full_30 \
+  --max-records 30 --question-workers 4 --flush-every 1
+```
+
+For a controlled comparison, keep the same KQA files and seed, and run
+`program_composition` in a **separate workspace** (do not reuse the
+same `*_30` filenames). Compare candidate/world yields, signed question
+rates, human-audited naturalness and semantic correctness, and the resulting
+orchestration DAGs. This experimental mode is not a claim of true raw-media
+perception: MultiModalQA currently informs *evidence source patterns*.
