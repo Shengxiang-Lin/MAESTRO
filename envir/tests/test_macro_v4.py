@@ -484,7 +484,7 @@ class CleanTaskFirstTests(unittest.TestCase):
         question, info = naturalize_one(
             scene, author=author, critic=critic, max_revisions=2,
         )
-        self.assertEqual(info["status"], "accepted")
+        self.assertEqual(info["status"], "accepted", info)
         self.assertEqual(info["author_calls"], 1)
         self.assertEqual(info["critic_calls"], 2)
         self.assertEqual(critic.drafts, [question, question])
