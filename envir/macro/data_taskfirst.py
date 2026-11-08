@@ -13,8 +13,9 @@ from collections import Counter
 from envir.schema import digest
 from .graph import build_atomic_draft, coarsen, compile_contracts, compile_waves, complexity
 from .priors import choose_kqa
+from .goal_grammar import select_goal, source_phrase, GOALS
 
-FINAL_PREFIX = "Resolve the following source-scoped information need: "
+FINAL_PREFIX = "Deliver the following source-grounded work product: "
 MODALITY_TYPES = {
     "table": ("TableEvidence", "TabularEvidenceInvestigation", "TableAnalysis"),
     "image": ("VisualEvidence", "VisualEvidenceInvestigation", "ImageAnalysis"),
@@ -201,10 +202,20 @@ def _topology(stats: dict, depth: int) -> str:
 def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
                            kqa: list[dict]) -> dict:
     rng = random.Random(run_seed * 1000003 + ordinal * 99017)
-    question = seed_record["question"].strip()
-    if not question:
-        raise UnsuitableSeed("empty original information need")
+    # Independent random combination of a pre-extracted Scene Bank entry
+    # with a reusable, curated Goal/Problem-Pattern Bank entry. The original
+    # MMQA question is strictly teacher-side provenance, never a generator input.
+    topic = seed_record["topic"].strip()
+    if not topic:
+        raise UnsuitableSeed("scene lacks a usable topic")
     buckets, source_coverage = _allocate_sources(seed_record)
+    goal_id, goal_pattern = select_goal(
+        ordinal=ordinal, run_seed=run_seed,
+        source_count=source_coverage["assigned"],
+        scene_key=seed_record["record_id"],
+    )
+    modalities = sorted({part["modality"] for bucket in buckets for part in bucket})
+    work_request = goal_pattern["goal"] + " Context: " + topic + "."
     tree = seed_record["composition"]
     tasks, edges, recipes = [], [], {}
     root_outputs = []
@@ -248,9 +259,9 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
                 "deliver the typed result with references",
             ],
             "operation_spec": {"op": op or work_type,
-                               "question_operation": seed_record["operation"],
-                               "question": question,
-                               "topic": seed_record["topic"]},
+                               "question_operation": goal_id,
+                               "work_goal": work_request,
+                               "topic": topic},
             "grounding_status": "pending_synthetic_evidence",
         }
         tasks.append(task)
@@ -298,14 +309,19 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
             leaf_index += 1
             return root_outputs[idx]
         upstream = [walk(child, level + 1) for child in children]
-        op = str(node.get("op", "Compose")).lower()
+        original_op = str(node.get("op", "Compose")).lower()
+        # MMQA supplies a SOURCE COMPOSITION HINT, not the final question
+        # operator. Compare/Intersect in the source is normalized to a
+        # generic evidence-linking stage; the independently chosen Goal Bank
+        # pattern alone decides the final assessment operation.
+        op = "compose" if original_op == "compose" else "align_sources"
         recipe, result_type, description = OPERATORS.get(op, (
             "cross_source_evidence_alignment", "AlignedEvidence",
             "Align the entities and requested attributes across the source branches."
         ))
         return add(
             recipe, result_type,
-            description + f" Target information need: {question}",
+            description + f" Scene: {topic}.",
             f"{result_type} with explicit upstream and original-source lineage.",
             inputs=upstream, op=op,
         )
@@ -318,11 +334,17 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
         verification_inputs = [main] + root_outputs[len(_leaves(tree)):]
         check = add(
             "evidence_consistency_review", "VerifiedEvidence",
-            "Verify the source bindings and candidate relationships supporting " + question,
+            "Verify source bindings and candidate links across the scene " + topic,
             "A checked evidence chain with explicit limitations and provenance.",
             inputs=verification_inputs, op="verify_evidence",
         )
-        final_inputs = [main, check]
+        assess = add(
+            goal_pattern["assessment"], goal_pattern["artifact"],
+            goal_pattern["goal"] + " Scene: " + topic,
+            goal_pattern["deliverable"],
+            inputs=[main, check], op=goal_id,
+        )
+        final_inputs = [assess, check]
     else:
         # The work types correspond to distinct useful operations: map source
         # candidates across records; independently evaluate the asked property
@@ -334,22 +356,31 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
             "A candidate alignment with a source-to-entity lookup index.",
             inputs=root_outputs, op="align_candidates",
         )
-        family, assessment_type, operation = ASSESSMENTS.get(
-            seed_record["operation"], ASSESSMENTS["lookup"])
         assessment = add(
-            family, assessment_type,
-            operation + f" Target information need: {question}",
-            f"{assessment_type} recording evaluated candidates and evidence links.",
-            inputs=root_outputs, op=seed_record["operation"],
+            goal_pattern["assessment"], goal_pattern["artifact"],
+            goal_pattern["goal"] + " Scene: " + topic,
+            goal_pattern["deliverable"],
+            inputs=[align] + root_outputs[:1], op=goal_id,
         )
         final_inputs = [align, assessment]
     final = add(
-        "answer_evidence_synthesis", "AnswerReport",
-        FINAL_PREFIX + question,
-        "An evidence-backed response to the original information need, "
-        "explicitly scoped to the available synthetic observations.",
+        "answer_evidence_synthesis", goal_pattern["artifact"],
+        FINAL_PREFIX + goal_pattern["goal"] + " Scene: " + topic + ".",
+        "A new source-grounded work product fulfilling the independently "
+        "chosen goal and citing each contributing observation.",
         inputs=final_inputs, op="answer_synthesis",
     )
+    # The sole question blueprint is stored INSIDE the terminal Macro Task.
+    # This is the producer of the deterministic reference question, and it
+    # is independent of all original MMQA questions and their answer labels.
+    tasks[-1]["question_blueprint"] = {
+        "pattern_id": goal_id,
+        "topic": topic,
+        "modalities": modalities,
+        "source_phrase": source_phrase(modalities),
+        "goal_artifact": goal_pattern["artifact"],
+        "origin": "taskgraph_terminal_workproduct",
+    }
     if not 3 <= len(tasks) <= 9:
         raise UnsuitableSeed("macro task count outside 3..9")
     draft = build_atomic_draft(tasks, edges)
@@ -377,8 +408,10 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
             "source_record_id": seed_record["record_id"],
         },
         "goal": {
-            "intent": seed_record["operation"],
-            "desired_artifact_type": "AnswerReport",
+            "intent": goal_id,
+            "desired_artifact_type": goal_pattern["artifact"],
+            "pattern_origin": "curated_goal_bank_independently_sampled",
+            "scene_record_id": seed_record["record_id"],
         },
         "macro_graph": {
             "motif": _topology(metrics, comp["macro_dependency_depth"]),
@@ -400,15 +433,15 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
                 "usage": "unexecuted_internal_reasoning_prior",
             },
             "MultiModalQA": {
-                "policy": "original_question_and_all_supporting_sources",
+                "policy": "original_question_audit_only_all_supporting_sources",
                 "record_id": seed_record["record_id"],
                 "official_question_type": seed_record["question_type"],
                 "composition_family": seed_record["logical_pattern"],
                 "composition_tree": seed_record["composition"],
                 "source_modalities": seed_record["source_modalities"],
                 "supporting_sources": seed_record["supporting_sources"],
-                "original_question": question,
-                "usage": "scenario_need_and_macro_evidence_dependency_authority",
+                "original_question": seed_record.get("question", ""),
+                "usage": "scene_entity_and_source_structure_only_no_original_question_as_goal",
             },
             "YAGO": {
                 "matches": seed_record.get("yago_matches", []),
@@ -416,10 +449,12 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
             },
         },
         "task_plan_provenance": {
-            "parent": "mmqa_data_driven_typed_workproduct_grammar_v46",
+            "parent": "scene_bank_plus_independent_goal_bank_to_macro_taskgraph",
             "ordinal": ordinal, "seed": run_seed,
             "question_generated_after_macro_graph": True,
-            "question_inputs": "terminal_goal_and_task_contracts",
+            "question_inputs": "terminal_task_question_blueprint_not_original_mmqa_question",
+            "goal_bank_pattern": goal_id,
+            "selection_policy": "reproducible_independent_scene_goal_random_combination",
             "v3_final_gold_answer_not_used": True,
         },
         "scheduler": {
