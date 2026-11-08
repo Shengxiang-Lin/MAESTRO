@@ -17,7 +17,7 @@ from envir.macro.builder import build_one
 from envir.macro.scene_grounding import (
     constructor_input, ground_one, materialize_grounding,
     source_records, validate_grounding, validate_proposal, validate_review,
-    frozen_fingerprint,
+    frozen_fingerprint, source_ablation_signal,
 )
 from envir.macro.scene_grounding_cli import ground_scenes
 from envir.macro.semantic_contract import semantic_contract
@@ -168,6 +168,24 @@ class WorldConcretizationTests(unittest.TestCase):
         self.assertIn("synthetic_scene_interpretation", enriched_contract)
         self.assertIn("hypothetical_scene", enriched_brief)
         self.assertNotIn("macro_task_graph", enriched_brief)
+
+    def test_source_ablation_is_diagnostic_not_rejection_rule(self):
+        diagnostic = source_ablation_signal(self.original)
+        self.assertEqual(diagnostic["goal_id"], "aggregation")
+        self.assertEqual(diagnostic["source_count"], 3)
+        # In this fixture one positive mark contributes to the aggregate;
+        # two negative records do not change the count if omitted.
+        self.assertEqual(len(diagnostic["influential_sources"]), 1)
+        self.assertEqual(len(diagnostic["non_influential_sources"]), 2)
+        proposal = proposal_for(self.original)
+        overlay = materialize_grounding(
+            self.original, proposal, pass_review())
+        self.assertEqual(
+            overlay["validation"]["goal_level_source_ablation"], diagnostic)
+        self.assertEqual(
+            [], validate_grounding({
+                **self.original, "scene_grounding": overlay
+            }))
 
     def test_tampered_value_or_source_id_is_rejected(self):
         overlay = materialize_grounding(
