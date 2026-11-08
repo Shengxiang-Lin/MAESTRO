@@ -90,7 +90,7 @@ def explicit_global_join_contradictions(plan, candidate: str) -> list[str]:
         r"\b(?:at least one|any one|one or more)\s+of\s+"
         r"(?:the\s+)?(?:following\s+)?"
         r"(?:criteria|conditions|requirements|filters)\b"
-        r"[^.!?;]{0,200}\bor\b", candidate, re.I,
+        r"[^?;]{0,220}\bor\b", candidate, re.I,
     ):
         return ["all_branch_intersection_rewritten_as_any_criterion"]
     return []
