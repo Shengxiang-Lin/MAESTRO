@@ -1,4 +1,4 @@
-# MAESTRO \`envir/\`: V4.5 Dataset-driven Task-First
+# MAESTRO `envir/`: V4.5 Dataset-driven Task-First
 
 This directory builds **multi-domain, multi-source orchestration questions** from
 the three existing corpora only: **MultiModalQA**, **KQA-Pro**, and optionally
@@ -7,8 +7,8 @@ the three existing corpora only: **MultiModalQA**, **KQA-Pro**, and optionally
 ## What is generated, and by whom?
 
 1. **Scenario/need catalog (MultiModalQA):** read official question, original
-   question type (e.g. \`Compare(Compose(TableQ,ImageQ),TextQ)\`), source roles,
-   \`supporting_context\` IDs, entity hints, and topic. Do not use the annotated
+   question type (e.g. `Compare(Compose(TableQ,ImageQ),TextQ)`), source roles,
+   `supporting_context` IDs, entity hints, and topic. Do not use the annotated
    factual answer as the model-facing Question or as a fake perception result.
    Questions with duplicate wording are deduplicated.
 2. **Optional YAGO enrichment:** bounded scan of the local YAGO TTL file;
@@ -47,7 +47,7 @@ the original MMQA question or perform an independent raw-media inference.
 
 Prepare 1,000 candidates using full MMQA training data and the local KQA file:
 
-\`\`\`bash
+```bash
 python -m envir.macro.v4_cli build \
   --kqa data/world-source/KQA-Pro/train.json \
   --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
@@ -58,9 +58,9 @@ python -m envir.macro.v4_cli build \
   --target 1000 \
   --seed 17 \
   --output-dir envir/data/macro_v45_data_1000
-\`\`\`
+```
 
-\`--yago\` is optional. Skip it when no usable local YAGO fact file is
+`--yago` is optional. Skip it when no usable local YAGO fact file is
 available. A bounded prefix scan may match few MMQA entities; the result
 reports actual coverage. The number of eligible multi-source compositions
 depends on the loaded MMQA sample. If the requested target cannot be
@@ -69,41 +69,41 @@ than duplicating questions.
 
 Question-only naturalization of the saved, structurally validated scenes:
 
-\`\`\`bash
+```bash
 python -m envir.macro.v4_cli naturalize \
   --scenes envir/data/macro_v45_data_1000/private_clean_scenes_v4.jsonl \
   --output-dir envir/data/macro_v45_data_1000_natural \
   --question-api-base http://127.0.0.1:8807/v1 \
   --question-model local-qwen3.5-9b \
   --question-workers 4 --max-revisions 2 --flush-every 1
-\`\`\`
+```
 
-Or supply the Author–Critic options directly to \`build\`.
+Or supply the Author–Critic options directly to `build`.
 To replay the clean evidence and graph/question contracts:
 
-\`\`\`bash
+```bash
 python -m envir.macro.v4_cli replay \
   --scenes envir/data/macro_v45_data_1000/private_clean_scenes_v4.jsonl
 
 python -m unittest discover -s envir/tests -p 'test_*.py' -v
-\`\`\`
+```
 
 ## Output contracts
 
-- \`scenario_seed_manifest.jsonl\`: only the **selected** MMQA record IDs,
+- `scenario_seed_manifest.jsonl`: only the **selected** MMQA record IDs,
   original question, source IDs/modalities, composition type and optional
   YAGO provenance. It is teacher-side metadata.
-- \`private_clean_scenes_v4.jsonl\`: complete TaskGraph, actual source
+- `private_clean_scenes_v4.jsonl`: complete TaskGraph, actual source
   *surrogates*, per-Task EvidenceGraph, clean work-product feedback, KQA
   ProgramIR and original MMQA source provenance.
-- \`public_questions_v4.jsonl\`: user Question and publicly described,
+- `public_questions_v4.jsonl`: user Question and publicly described,
   simulated source handles; no hidden DAG, KoPL program, evidence values,
   teacher answers or feedback.
-- \`question_review_audit_v4.jsonl\`: only when Author–Critic is enabled,
+- `question_review_audit_v4.jsonl`: only when Author–Critic is enabled,
   candidate/revision/verdict metadata.
-- \`macro_v4_summary.json\`: corpus coverage, rejected compositions,
+- `macro_v4_summary.json`: corpus coverage, rejected compositions,
   MacroGraph statistics and data policies.
-- \`question_progress_state_v4.json\`: when naturalizing with the incremental
+- `question_progress_state_v4.json`: when naturalizing with the incremental
   checkpoint writer, for safe deterministic resume.
 
 ## Why this differs from the previous pilot
