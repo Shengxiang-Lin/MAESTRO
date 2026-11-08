@@ -30,12 +30,12 @@ from .question_review import (
 from .validation import validate_clean_scene
 
 
-SCHEMA = "maestro.v4.question_stream.v1"
-STATE_FILE = "question_progress_state_v4.json"
+SCHEMA = "maestro.question_stream.v2"
+STATE_FILE = "question_checkpoint.json"
 OUTPUT_FILES = {
-    "private": "private_clean_scenes_v4.jsonl",
-    "public": "public_questions_v4.jsonl",
-    "audit": "question_review_audit_v4.jsonl",
+    "private": "scenes.jsonl",
+    "public": "questions.jsonl",
+    "audit": "question_audit.jsonl",
 }
 
 
@@ -124,7 +124,7 @@ class V4QuestionProgress:
             name: self.directory / value for name, value in OUTPUT_FILES.items()
         }
         self.checkpoint_path = self.directory / STATE_FILE
-        self.summary_path = self.directory / "macro_v4_summary.json"
+        self.summary_path = self.directory / "summary.json"
         self.signature = signature
         self.task_ids = task_ids
         self.flush_every = flush_every
