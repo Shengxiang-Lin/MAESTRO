@@ -361,6 +361,74 @@ def validate_review(review: dict) -> tuple[dict, list[str]]:
     return review, issues
 
 
+def _goal_signature(goal_id: str, records: list[dict]):
+    """Goal-level *proxy* outcome, NOT a re-execution of WorkProduct logic."""
+    rows = [{
+        "candidate": row["fields"]["entry"]["value"],
+        "score": row["fields"]["score"]["value"],
+        "positive": row["fields"]["positive_mark"]["value"],
+        "time": row["fields"]["relative_order"]["value"],
+        "group": row["fields"]["group"]["value"],
+    } for row in records]
+    ordered = sorted(rows, key=lambda x: (-x["score"], x["candidate"]))
+    groups = {}
+    for row in rows:
+        groups.setdefault(row["group"], []).append(row["candidate"])
+    links = tuple(sorted(
+        (key, tuple(sorted(members)))
+        for key, members in groups.items()
+        if len(members) >= 2
+    ))
+    if goal_id == "lookup":
+        return tuple(sorted(r["candidate"] for r in rows if r["positive"]))
+    if goal_id == "aggregation":
+        return sum(r["positive"] for r in rows)
+    if goal_id == "feasibility":
+        return tuple(sorted(
+            r["candidate"] for r in rows
+            if r["positive"] and r["score"] >= 50))
+    if goal_id in {"comparison", "prioritization"}:
+        return tuple(r["candidate"] for r in ordered)
+    if goal_id == "temporal":
+        return tuple(r["candidate"] for r in sorted(
+            rows, key=lambda r: (r["time"], r["candidate"])))
+    if goal_id in {"composition", "intersection"}:
+        return links
+    raise ValueError("unsupported_goal_for_source_ablation:" + goal_id)
+
+
+def source_ablation_signal(scene: dict) -> dict:
+    """Check whether omitting each existing source changes *goal-level data*.
+
+    This is a diagnostic, not a validity criterion. A SourceEvidence root
+    may still be necessary for full traceability even when removing it does
+    not change the short final answer (e.g. a negative flag in a count).
+    """
+    records = source_records(scene)
+    goal_id = scene["goal"]["intent"]
+    signature = _goal_signature(goal_id, records)
+    changed, unchanged = [], []
+    for record in records:
+        subset = [
+            value for value in records
+            if value["source_id"] != record["source_id"]
+        ]
+        (changed if _goal_signature(goal_id, subset) != signature
+         else unchanged).append(record["source_id"])
+    return {
+        "method": "leave_one_source_out_goal_proxy_not_taskgraph_proof",
+        "goal_id": goal_id,
+        "source_count": len(records),
+        "influential_sources": changed,
+        "non_influential_sources": unchanged,
+        "note": (
+            "Non-influential means no change to this goal-level proxy "
+            "result, NOT that the source's evidence is irrelevant or "
+            "that any Macro Task can be removed."
+        ),
+    }
+
+
 def materialize_grounding(scene: dict, proposal: dict, review: dict) -> dict:
     """LLM writes labels; Python binds immutable values + fact references."""
     errors = validate_proposal(scene, proposal)
@@ -401,6 +469,7 @@ def materialize_grounding(scene: dict, proposal: dict, review: dict) -> dict:
             "operation_replay": "original_unchanged",
             "source_grounding": "synthetic_hypothesis_not_real_media",
             "llm_review_not_formal_proof": True,
+            "goal_level_source_ablation": source_ablation_signal(scene),
         },
     }
 
