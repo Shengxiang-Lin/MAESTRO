@@ -20,100 +20,108 @@ from concurrent.futures import ThreadPoolExecutor
 from environment.question_generation.backend import BackendError
 from .question import author_question, task_level_brief
 from .semantic_contract import semantic_contract, semantic_surface_issues
+from .realization_brief import question_realization_brief
 
 
-AUTHOR_SYSTEM = """You are a QUESTION REALIZER, not a problem designer.
+AUTHOR_SYSTEM = """You are an experienced benchmark QUESTION WRITER.
 
-Turn the FROZEN TaskGraph-defined information need into ONE fluent,
-natural user question. The supplied semantic_contract is authoritative.
-Do not create a new task, scene, evidence source, or solution strategy.
+Your job is to write ONE natural question a person would ask about the
+available records. The provided question_brief states an existing information
+need and the answer it requires. You are NOT being asked to create a new
+problem or design a solution. The original solver's TaskGraph is frozen.
 
-HARD INVARIANTS (higher priority than fluent writing):
-1. EXACT OBJECTIVE: preserve the candidate universe, operator, comparison
-   attribute, conditions, threshold, scope and required output specified
-   in the semantic_contract. Do not turn synthetic scores into fame,
-   prestige, importance or quality, nor time indices into calendar dates.
-2. SAME SOLUTION: the existing Macro TaskGraph must remain an adequate
-   solution route without any new prerequisite, operator, field, source or
-   WorkProduct. Do not change the meaning so that required work is bypassed.
-   You are NOT tasked with repairing or redesigning the original graph.
-3. SOURCE CLOSED WORLD: use only authorized entities and source roles.
-   Do not invent a specific account, user, report, website, observation,
-   media content, source subtype, real-world event, name, date or number.
-   An 'image' label does NOT tell you what an image depicts.
-4. ANSWER EQUIVALENCE: the result requested by the rewritten Question must
-   be the same result defined by the terminal WorkProduct, not a new,
-   easier, narrower, broader, or more interesting deliverable.
-5. NO PRIVATE ORCHESTRATION: do not describe agents, Task IDs, graph
-   structure, individual delegations, the sequence of handoffs, or tools.
+WRITE THE QUESTION AFRESH:
+- Write directly from question_brief, not by editing or imitating an old
+  question template. No old question will be given.
+- Prefer short, ordinary English. Vary the natural sentence structure
+  according to what is being asked, not according to a prescribed template.
+- Use the provided topic and the actual information need, not a formula
+  such as 'candidate observations in the available image-source records'.
+- Replace technical field names with plain language: e.g. an entry is
+  'marked positive', an item has 'a recorded score', a sequence has an
+  'earliest entry'. Keep these as recorded values, not real-world judgments.
+- You MAY say 'the records', 'the available materials', or 'the information
+  about [topic]' without listing every source modality. Source descriptions
+  will be shown to the user separately; do not ask how to find new sources.
+- Source citations, evidence checks and internal verification may remain
+  SOLVER-SIDE obligations. The Question need NOT explicitly demand them.
+  Keep all substantive answer components (e.g. a full ranking, not merely
+  its first entry), but do not turn every request into 'which records prove it'.
+- You MAY frame a neutral user need in conversational language, but do not
+  pretend a specific report, account, event or media observation exists.
+- Keep intermediate research, matching and verification steps implicit.
 
-NATURAL EXPRESSION:
-- You MAY change syntax, shorten boilerplate, vary question openings, use
-  already licensed entity references, and keep multi-step work implicit.
-- You MAY NOT make the request 'realistic' by inventing story details or
-  substituting a synthetic measurement with a real-world fact.
-- The deterministic reference is an optional writing hint only; the
-  semantic_contract and TaskGraph are the authority.
-- If fidelity and fluency conflict, choose a simpler faithful question.
+PRESERVE ONLY THESE HARD SEMANTICS:
+1. Same topic, candidate universe, comparison/count/matching operation,
+   specified rule (including a threshold, if any), and complete answer.
+2. The same existing source material and task solution remain sufficient.
+   Do not demand a new observation, property, source or output.
+3. No invented facts: an image-source role is NOT an assertion about what
+   the image depicts; a synthetic score is NOT real-world popularity,
+   prestige, performance or quality; a relative time index is NOT a date.
 
-Examples are not new facts; do not transfer their content to the scene.
-Before returning, check the objective, source boundary, numerical conditions,
-and whether the SAME TaskGraph can answer exactly this question.
+Do NOT expose backend field names, machine identifiers, agent labels,
+internal work products, task IDs, or an explicit task checklist.
+If the records only support an abstract comparison, ask an ordinary question
+about that comparison instead of inventing a richer real-world problem.
 
-Return strict JSON only: {"question":"..."}"""
+Return ONLY {"question":"..."}."""
 
-CRITIC_SYSTEM = """You are a STRICT, independent SEMANTIC EQUIVALENCE CRITIC,
-not a reviewer optimizing naturalness or approval rate.
+CRITIC_SYSTEM = """You are an independent QUESTION MEANING REVIEWER.
 
-Compare candidate_question against the frozen semantic_contract AND existing
-macro_task_graph. The contract is the specification; graph is the existing
-solution route. Do not infer unseen source content or reward creativity.
+The Author was allowed to write freely in natural language. Compare the
+candidate_question to the frozen semantic_contract and the original
+macro_task_graph. Check meaning, NOT overlap of words or sentence structure.
+The deterministic template is deliberately withheld: do not expect its style.
 
-CHECK ALL FIVE independent invariants:
-1. objective_equivalent: exactly the same operation, target universe,
-   criterion, constraints, scope and requested output?
-2. solution_preserved: does the same typed Macro TaskGraph remain an
-   adequate route without any NEW Task, field, observation, source,
-   inference, operation or output? Do not repair the graph.
-3. required_work_preserved: does the rewrite avoid simplifying away
-   the intended necessary input and reasoning requirements? Assess at
-   the graph-contract level, not by claiming execution ablation proof.
-4. source_faithful: no unsupported entity, source type, personal account,
-   source subtype, image/video/audio content, event, date, threshold,
-   relationship, social significance, claim or external source?
-5. answer_equivalent: the terminal result required by the contract would
-   fully answer this Question, and vice versa?
+Five evidence-based decisions, each yes/no/uncertain:
+- objective_equivalent: same entities, candidate universe, requested
+  operation and criteria; colloquial descriptions are allowed.
+- solution_preserved: no new source, measurement, reasoning operation or
+  data requirement beyond what the original TaskGraph can handle.
+- required_work_preserved: no material reduction or switch of the core
+  multi-source information need. The question need NOT list any hidden task
+  or source modality, and that omission is NOT a failure.
+- source_faithful: no invented concrete entity, source subtype, observed
+  media contents, contextual facts or undocumented real-world properties.
+  Generic 'records', 'sources', 'materials' and neutral 'I'm reviewing' are
+  permitted, not invented evidence.
+- answer_equivalent: the requested answer has the same substantive result,
+  full ranking/sequence/count/filters, and candidate scope. Source citations
+  and verification still belong to the frozen solver contract, but need NOT
+  be explicitly requested in a natural user Question; omitting those words
+  is not a task change. Do not infer missing substantive result components.
 
-Also judge naturalness: one focused user information need, no workflow
-instructions, no robotic report boilerplate.
+Naturalness matters: reject robotic workflow instructions, internal schema
+names (synthetic_attribute_flag, WorkProduct etc.), awkward repeated source
+types and prose that merely restates program instructions. A question can
+be concise and does not have to name every source.
 
-Reject an invented context even if it sounds harmless (e.g. 'my account
-summary' is not licensed by generic image+table metadata).
-Reject substitutions like 'most prestigious' for 'highest recorded score'.
-Do NOT assume pixels were read, actual dates were established, or
-additional sources exist. If evidence is missing or uncertain, return
-'uncertain', not an unjustified PASS.
+CITATION DISCIPLINE: A claimed unsupported addition or semantic change
+must quote an EXACT NONEMPTY SUBSTRING from candidate_question in
+unsupported_additions or differences[].candidate_excerpt. NEVER attribute
+examples from your instructions to the candidate. If a problem cannot be
+located in the candidate, do not allege it. Do not invent a criticism merely
+to force revision.
 
-DECISION: 'pass' is legal ONLY when all five checks = 'yes',
-user_framing='user_goal', naturalness='acceptable',
-unsupported_additions=[], and differences=[].
-For a clear, minimally repairable issue return 'revise' and quote the
-candidate-only phrase with a minimal correction. For any unverifiable
-semantic relation return 'uncertain'. Never target a PASS rate.
-Do not claim formal equivalence or that each node is provably indispensable.
+PASS only when all five values are 'yes', naturalness='acceptable',
+user_framing='user_goal', unsupported_additions=[], differences=[].
+Use 'revise' for a specific repairable problem and quote its exact span.
+Use 'uncertain' when meaning cannot be established; do not make guesses.
+Do not claim formal proof of task necessity or source-truth verification.
 
-Return JSON with EXACT fields:
+Return EXACT JSON keys:
 {"objective_equivalent":"yes|no|uncertain",
  "solution_preserved":"yes|no|uncertain",
  "required_work_preserved":"yes|no|uncertain",
  "source_faithful":"yes|no|uncertain",
  "answer_equivalent":"yes|no|uncertain",
  "user_framing":"user_goal|workflow_instructions|robotic",
- "unsupported_additions":["exact unsupported phrase, if any"],
+ "unsupported_additions":["EXACT quote in candidate, if any"],
  "verdict":"pass|revise|uncertain",
  "naturalness":"acceptable|needs_polish",
- "summary":"specific contract-based rationale",
- "differences":[{"reference_excerpt":"","candidate_excerpt":"...",
+ "summary":"concise judgment grounded in the candidate",
+ "differences":[{"reference_excerpt":"","candidate_excerpt":"EXACT quote in candidate",
                  "problem":"...", "minimal_fix":"..."}]}"""
 
 AUTHOR_SCHEMA = {
@@ -169,8 +177,10 @@ CRITIC_SCHEMA_V44 = {
 
 # Strict, versioned Question-only semantic review. Legacy audits keep their
 # original schema; this does not modify downstream Task/Trace/Answer work.
-SEMANTIC_REVIEW_POLICY = "taskfirst_semantic_contract_v1"
-SEMANTIC_REVIEW_PIPELINE = "taskfirst_question_semantic_author_critic_v1"
+SEMANTIC_REVIEW_POLICY = "taskfirst_natural_question_v2"
+LEGACY_SEMANTIC_REVIEW_POLICY = "taskfirst_semantic_contract_v1"
+SEMANTIC_REVIEW_PIPELINE = "taskfirst_natural_question_author_critic_v2"
+LEGACY_SEMANTIC_REVIEW_PIPELINE = "taskfirst_question_semantic_author_critic_v1"
 SEMANTIC_AXES = (
     "objective_equivalent",
     "solution_preserved",
@@ -553,6 +563,26 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
                 )) or not diff["problem"].strip() or
                 not diff["minimal_fix"].strip()):
             raise ValueError("critic_difference_invalid")
+    # The model occasionally reports PASS with a contradictory diagnostic.
+    # Treat that as a repair request (or uncertainty), not a transport/protocol
+    # failure. Never accept the internally contradictory PASS.
+    if policy == SEMANTIC_REVIEW_POLICY and verdict == "pass":
+        axes = [value.get(key) for key in SEMANTIC_AXES]
+        flawed = (naturalness != "acceptable" or bool(differences)
+                  or any(v != "yes" for v in axes)
+                  or value.get("user_framing") != "user_goal"
+                  or bool(value.get("unsupported_additions")))
+        if flawed:
+            verdict = "uncertain" if "uncertain" in axes else "revise"
+            if not differences and naturalness == "acceptable":
+                differences = [{
+                    "reference_excerpt": "", "candidate_excerpt": "",
+                    "problem": "Critic verdict contradicts its own semantic checks",
+                    "minimal_fix": (
+                        "Keep the same information need and resolve the "
+                        "reported non-yes semantic axis."
+                    ),
+                }]
     if verdict == "pass" and (naturalness != "acceptable" or differences):
         raise ValueError("critic_pass_inconsistent")
     if verdict == "revise" and not differences and naturalness != "needs_polish":
@@ -567,7 +597,7 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
             )} for diff in differences
         ],
     }
-    if policy == SEMANTIC_REVIEW_POLICY:
+    if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}:
         axes = {key: value.get(key) for key in SEMANTIC_AXES}
         framing = value.get("user_framing")
         additions = value.get("unsupported_additions")
@@ -630,6 +660,26 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
     return output
 
 
+def _critic_quote_issues(judgment: dict, candidate: str) -> list[str]:
+    """Critic-specific factual claims must be grounded in actual candidate text.
+
+    This guard prevents the independent reviewer from hallucinating that a
+    candidate contains a phrase seen in its own prompt examples.
+    """
+    text = " ".join(candidate.casefold().split())
+    missing = []
+    for addition in judgment.get("unsupported_additions", []):
+        if " ".join(addition.casefold().split()) not in text:
+            missing.append("unsupported_addition_not_in_candidate")
+    for change in judgment.get("differences", []):
+        span = " ".join(change.get("candidate_excerpt", "").casefold().split())
+        # General naturalness repairs may omit a quote, but source/goal
+        # violations should have a concrete cited candidate phrase.
+        if span and span not in text:
+            missing.append("critic_excerpt_not_in_candidate")
+    return sorted(set(missing))
+
+
 def _simple_feedback(issues: list[str]) -> dict:
     return {
         "verdict": "revise",
@@ -667,21 +717,22 @@ def naturalize_one(scene: dict, *, author, critic,
         row = {"round": revision + 1, "author_calls": 1, "critic_calls": 0}
         author_calls += 1
         payload = {
-            "macro_task_graph": task_view,
-            "semantic_contract": contract,
-            "optional_reference_hint": initial,
-            "semantic_authority": "frozen_semantic_contract_and_macro_task_graph",
-            "style_hint": style_hint(scene),
+            "question_brief": question_realization_brief(scene),
+            "semantic_authority": "frozen_question_brief_and_solution_contract",
             "instruction": (
-                "Realize exactly the frozen semantic_contract as one natural "
-                "user Question, with the same TaskGraph solution path and no "
-                "new facts or sources. Hide the internal workflow."
+                "Write a fresh, concise, fluent user Question from the brief. "
+                "Do not copy template language or add evidence. Preserve the "
+                "underlying information need and complete answer."
             ),
         }
         if latest is not None:
             payload["previous_draft"] = latest
             payload["reviewer_feedback"] = feedback
-            payload["instruction"] = "Fix only the reported local differences."
+            payload["instruction"] = (
+                "Repair the exact cited issue while keeping the original "
+                "information need. You may freely rewrite other wording to "
+                "make the result natural; do not mimic the old template."
+            )
         try:
             reply = author.complete_json(
                 AUTHOR_SYSTEM, json.dumps(payload, ensure_ascii=False),
@@ -706,6 +757,8 @@ def naturalize_one(scene: dict, *, author, critic,
             "MultiModalQA", {}).get("original_question", "")
         if source_original and normalize_label(candidate) == normalize_label(source_original):
             issues.append("candidate_copies_original_mmqa_question")
+        if not issues and normalize_label(candidate) == normalize_label(initial):
+            issues.append("question_unchanged_from_template")
         row["deterministic_guards"] = issues
         if issues:
             last_failure = "surface_guard"
@@ -718,10 +771,10 @@ def naturalize_one(scene: dict, *, author, critic,
             "macro_task_graph": task_view,
             "semantic_contract": contract,
             "review_focus": (
-                "Five-way bidirectional problem equivalence: exact operation, "
-                "same existing solution path, no loss of required work, "
-                "closed source inventory, same final result. Strictly reject "
-                "new contextual claims or unsupported source content."
+                "Check semantic preservation, not lexical similarity. A natural "
+                "Question may omit source modalities and internal steps, while "
+                "retaining the same requested result, evidence boundary and "
+                "existing solution. Cite exact candidate spans for problems."
             ),
         }
         try:
@@ -732,6 +785,9 @@ def naturalize_one(scene: dict, *, author, critic,
                 json.dumps(review_payload, ensure_ascii=False),
                 response_schema=CRITIC_SCHEMA_SEMANTIC,
             ), policy=SEMANTIC_REVIEW_POLICY)
+            citation_issues = _critic_quote_issues(judgment, candidate)
+            if citation_issues:
+                raise ValueError("unverified_critic_quote:" + ",".join(citation_issues))
         except (BackendError, ValueError, KeyError, TypeError) as exc:
             last_failure = "critic_protocol_error"
             row["failure"] = last_failure
@@ -741,12 +797,18 @@ def naturalize_one(scene: dict, *, author, critic,
                 row["critic_calls"] += 1
                 critic_calls += 1
                 review_payload["format_repair_instruction"] = (
-                    "Return the required fields exactly; if unsure choose uncertain."
+                    "Keep the SAME candidate. Return consistent fields: if "
+                    "any axis is no, use revise; if uncertain, use uncertain; "
+                    "quote only exact excerpts present in candidate_question. "
+                    "Do not mention examples from these instructions."
                 )
                 judgment = _validate_review(critic.complete_json(
                     CRITIC_SYSTEM, json.dumps(review_payload, ensure_ascii=False),
                     response_schema=None,
                 ), policy=SEMANTIC_REVIEW_POLICY)
+                citation_issues = _critic_quote_issues(judgment, candidate)
+                if citation_issues:
+                    raise ValueError("unverified_critic_quote:" + ",".join(citation_issues))
             except (BackendError, ValueError, KeyError, TypeError) as fix_exc:
                 row["protocol_retry_failure"] = str(fix_exc)[:180]
                 attempts.append(row)
@@ -873,7 +935,7 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         errors.append("review_reference_drift")
     if meta.get("reference_sha256") != _fingerprint(original):
         errors.append("review_reference_fingerprint_mismatch")
-    if policy == SEMANTIC_REVIEW_POLICY:
+    if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}:
         try:
             if meta.get("semantic_contract_sha256") != _fingerprint(semantic_contract(scene)):
                 errors.append("semantic_contract_fingerprint_mismatch")
@@ -881,7 +943,12 @@ def validate_naturalized_question(scene: dict) -> list[str]:
             errors.append("semantic_contract_unavailable")
         if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
             errors.append("review_macro_task_view_changed")
-        if meta.get("pipeline") != SEMANTIC_REVIEW_PIPELINE:
+        expected_pipeline = (
+            LEGACY_SEMANTIC_REVIEW_PIPELINE
+            if policy == LEGACY_SEMANTIC_REVIEW_POLICY
+            else SEMANTIC_REVIEW_PIPELINE
+        )
+        if meta.get("pipeline") != expected_pipeline:
             errors.append("review_wrong_pipeline")
     elif policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}:
         if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
@@ -922,13 +989,14 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         if (policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic"}
                 and minimal_question_guards(scene["question"])):
             errors.append("review_surface_mismatch")
-        if policy == SEMANTIC_REVIEW_POLICY and (
+        if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY} and (
             minimal_question_guards(scene["question"]) or
             semantic_surface_issues(scene["question"], semantic_contract(scene))
         ):
             errors.append("review_semantic_surface_guard_failed")
         if scene["question"] == original and policy not in {
             "v4.5_graph_primary_benchmark_style", SEMANTIC_REVIEW_POLICY,
+            LEGACY_SEMANTIC_REVIEW_POLICY,
         }:
             errors.append("review_not_naturalized")
         if not any(
@@ -940,7 +1008,7 @@ def validate_naturalized_question(scene: dict) -> list[str]:
     elif status == "fallback":
         expected = (
             polished_reference_question(original)
-            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style", SEMANTIC_REVIEW_POLICY}
+            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style", SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}
             else original
         )
         if scene["question"] != expected or meta.get("accepted_review") is not None:

@@ -208,13 +208,14 @@ class BackwardRecipePlannerTests(unittest.TestCase):
         result = build_one(
             ordinal=12, seed=17, kqa=KQA, seed_record=payload)
         initial = result["question"]
+        rewritten = "For Subject 12, how many entries are marked positive in the available records, and which records contribute to the count?"
         calls = []
 
         class Author:
             def complete_json(self, system, user, *, response_schema=None):
                 request = json.loads(user)
                 calls.append(("author", request))
-                return {"question": initial}
+                return {"question": rewritten}
 
         class Critic:
             def complete_json(self, system, user, *, response_schema=None):
@@ -236,18 +237,23 @@ class BackwardRecipePlannerTests(unittest.TestCase):
 
         natural, meta = naturalize_one(
             result, author=Author(), critic=Critic(), max_revisions=0)
-        self.assertEqual(natural, initial)
+        self.assertEqual(natural, rewritten)
+        self.assertNotEqual(natural, initial)
         self.assertEqual(meta["status"], "accepted")
         self.assertNotEqual(initial, payload["question"])
         self.assertEqual(
             calls[0][1]["semantic_authority"],
-            "frozen_semantic_contract_and_macro_task_graph",
+            "frozen_question_brief_and_solution_contract",
         )
-        self.assertIn("macro_task_graph", calls[0][1])
-        self.assertIn("semantic_contract", calls[0][1])
+        self.assertIn("question_brief", calls[0][1])
+        self.assertNotIn("macro_task_graph", calls[0][1])
+        self.assertNotIn("semantic_contract", calls[0][1])
+        self.assertNotIn("optional_reference_hint", calls[0][1])
+        self.assertIn("macro_task_graph", calls[1][1])
+        self.assertIn("semantic_contract", calls[1][1])
         self.assertIn("semantic_contract_sha256", meta)
         self.assertEqual(meta["review_policy_version"],
-                         "taskfirst_semantic_contract_v1")
+                         "taskfirst_natural_question_v2")
         self.assertNotIn("world", calls[0][1])
         self.assertNotIn("source_priors", json.dumps(calls[0][1]))
         # An accepted rewrite is replay-valid without touching frozen Task,
@@ -333,8 +339,14 @@ class BackwardRecipePlannerTests(unittest.TestCase):
         rejected = dict(valid)
         rejected["source_faithful"] = "no"
         rejected["unsupported_additions"] = ["my account"]
+        self.assertEqual(
+            _validate_review(rejected, policy=SEMANTIC_REVIEW_POLICY)["verdict"],
+            "revise",
+        )
+        # The existing strict-v1 policy remains independently replayable.
+        from envir.macro.question_review import LEGACY_SEMANTIC_REVIEW_POLICY
         with self.assertRaisesRegex(ValueError, "semantic_pass_contradicts"):
-            _validate_review(rejected, policy=SEMANTIC_REVIEW_POLICY)
+            _validate_review(rejected, policy=LEGACY_SEMANTIC_REVIEW_POLICY)
         uncertain = dict(valid)
         uncertain["objective_equivalent"] = "uncertain"
         uncertain["verdict"] = "revise"
@@ -375,6 +387,90 @@ class BackwardRecipePlannerTests(unittest.TestCase):
             "invented_personal_or_attached_source",
             metadata["audit"][0]["deterministic_guards"],
         )
+
+    def test_author_can_repair_unchanged_template_without_extra_sources(self):
+        from envir.macro.question_review import naturalize_one
+        original = build_one(
+            ordinal=12, seed=17, kqa=KQA, seed_record=scene(12))
+        rewritten = (
+            "How many entries related to Subject 12 are marked positive, "
+            "and which of the available records contribute to that count?"
+        )
+        calls = []
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                calls.append("author")
+                return {"question": original["question"]
+                        if calls.count("author") == 1 else rewritten}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                calls.append("critic")
+                return {
+                    "objective_equivalent": "yes",
+                    "solution_preserved": "yes",
+                    "required_work_preserved": "yes",
+                    "source_faithful": "yes",
+                    "answer_equivalent": "yes",
+                    "user_framing": "user_goal",
+                    "unsupported_additions": [], "verdict": "pass",
+                    "naturalness": "acceptable", "summary": "Same count and sources",
+                    "differences": [],
+                }
+        text, meta = naturalize_one(
+            original, author=Author(), critic=Critic(), max_revisions=1)
+        self.assertEqual(text, rewritten)
+        self.assertEqual(calls, ["author", "author", "critic"])
+        self.assertIn("question_unchanged_from_template",
+                      meta["audit"][0]["deterministic_guards"])
+
+    def test_critic_cannot_allege_nonexistent_candidate_excerpt(self):
+        from envir.macro.question_review import _critic_quote_issues
+        response = {
+            "unsupported_additions": ["my account summary"],
+            "differences": [{
+                "candidate_excerpt": "my account summary",
+                "problem": "Invented account", "minimal_fix": "Omit it",
+            }],
+        }
+        self.assertTrue(_critic_quote_issues(
+            response,
+            "Which records about Subject 12 are marked positive?"
+        ))
+        self.assertFalse(_critic_quote_issues(
+            response,
+            "Which entries from my account summary are marked positive?"
+        ))
+
+    def test_audit_identifies_template_copy_without_internal_setting_warning(self):
+        from envir.macro.question_audit import audit_scenes
+        from envir.macro.question_review import (
+            semantic_contract, _fingerprint, macro_task_view,
+            SEMANTIC_REVIEW_POLICY, SEMANTIC_REVIEW_PIPELINE,
+        )
+        payload = build_one(
+            ordinal=12, seed=17, kqa=KQA, seed_record=scene(12))
+        # The deterministic, mechanical question is still a valid clean
+        # baseline, but it should be flagged as overly template-like.
+        report = audit_scenes([payload])
+        self.assertEqual(report["quality_metrics"]["near_template_questions"], 1)
+        self.assertGreaterEqual(report["quality_metrics"]["mean_template_similarity"], 0.99)
+        meta = {
+            "review_policy_version": SEMANTIC_REVIEW_POLICY,
+            "pipeline": SEMANTIC_REVIEW_PIPELINE,
+            "semantic_contract_sha256": _fingerprint(semantic_contract(payload)),
+            "macro_task_view_sha256": _fingerprint(macro_task_view(payload)),
+            "macro_graph_sha256": _fingerprint(payload["macro_graph"]),
+            "reference_sha256": _fingerprint(payload["question"]),
+            "reference_question": payload["question"],
+            "final_question": payload["question"],
+            "status": "fallback", "reason": "author_error",
+            "accepted_review": None, "audit": [],
+            "semantic_equivalence_certified": False,
+        }
+        payload["question_authoring"] = meta
+        report = audit_scenes([payload])
+        self.assertNotIn("changed_or_missing_setting", report["warning_counts"])
+        self.assertNotIn("missing_case_subject", report["warning_counts"])
 
     def test_frozen_semantics_fingerprint_catches_contract_drift(self):
         from envir.macro.question_review import naturalize_one
