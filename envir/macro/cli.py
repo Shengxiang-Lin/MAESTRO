@@ -5,7 +5,7 @@ Deterministic pilot:
 
 Naturalize an EXISTING immutable Task/Evidence bank (no KQA/MMQA reload):
   python -m envir.macro.cli naturalize \
-    --scenes envir/data/macro_v4/private_clean_scenes_v4.jsonl \
+    --scenes envir/data/macro_v4/scenes.jsonl \
     --output-dir envir/data/macro_v4_naturalized \
     --question-api-base http://127.0.0.1:8807/v1 \
     --question-model local-qwen3.5-9b --max-revisions 2
@@ -44,12 +44,12 @@ def _jsonl(path: Path, entries: list[dict]) -> None:
 
 def _paths(output: Path, *, include_audit: bool):
     paths = {
-        "private": output / "private_clean_scenes_v4.jsonl",
-        "public": output / "public_questions_v4.jsonl",
-        "summary": output / "macro_v4_summary.json",
+        "private": output / "scenes.jsonl",
+        "public": output / "questions.jsonl",
+        "summary": output / "summary.json",
     }
     if include_audit:
-        paths["question_review_audit"] = output / "question_review_audit_v4.jsonl"
+        paths["question_review_audit"] = output / "question_audit.jsonl"
     return paths
 
 
@@ -151,8 +151,8 @@ def build(args):
     # Offline preparation: materialize an independently reusable Scene Bank
     # and a curated Goal/Pattern Bank BEFORE selecting any question.
     # Original MMQA questions are intentionally excluded from the scene bank.
-    scene_bank_file = args.output_dir / "scene_bank_v4.jsonl"
-    pattern_bank_file = args.output_dir / "goal_pattern_bank_v4.json"
+    scene_bank_file = args.output_dir / "scene_bank.jsonl"
+    pattern_bank_file = args.output_dir / "goal_bank.json"
     _jsonl(scene_bank_file, [{
         "scene_id": row["record_id"],
         "topic": row["topic"],
@@ -184,7 +184,7 @@ def build(args):
         target=args.target, seed=args.seed, contexts=contexts,
     )
     # Only selected, successfully compiled source records are exported.
-    manifest = args.output_dir / "scenario_seed_manifest.jsonl"
+    manifest = args.output_dir / "source_manifest.jsonl"
     _jsonl(manifest, [{
         "task_id": sc["task_id"],
         "mmqa_record_id": sc["source_priors"]["MultiModalQA"]["record_id"],
@@ -225,13 +225,13 @@ def build(args):
         },
         "files": {key: str(path) for key, path in paths.items()},
         "stage_order": [
-            "prepare_mmqa_scene_bank_without_original_question_goals",
+            "extract_scene_bank_from_mmqa_metadata",
             "enrich_exact_yago_entities_when_available",
             "prepare_independent_goal_and_problem_pattern_bank",
             "randomly_combine_compatible_scenes_with_work_goals",
-            "compile_typed_macro_taskgraph_from_combined_scene_and_goal",
+            "backchain_recursive_workproduct_recipes_from_final_goal",
             "bind_all_supporting_sources_and_optional_original_context",
-            "derive_new_question_from_terminal_macro_task_question_blueprint",
+            "derive_new_question_from_terminal_workproduct_blueprint",
             "optional_question_author_critic_revision",
             "execute_per_task_synthetic_typed_operations",
             "derive_clean_feedback_and_summary_trace",
@@ -298,7 +298,7 @@ def naturalize(args):
     question_stats, unique_questions = _stream_questions(scenes, args)
     summary = {
         "status": "done",
-        "pipeline": "v4_question_only_author_critic_revision",
+        "pipeline": "taskgraph_question_only_author_critic_revision",
         "source_scenes": str(args.scenes),
         "requested": len(scenes),
         "statistics": {
@@ -392,7 +392,7 @@ def parser():
     b.add_argument("--mmqa", type=Path,
                    default=Path("data/world-source/MultiModalQA/MMQA_train.jsonl.gz"))
     b.add_argument("--output-dir", type=Path,
-                   default=Path("envir/data/macro_v4"))
+                   default=Path("envir/data/taskfirst"))
     b.add_argument("--target", type=int, default=100)
     b.add_argument("--yago", type=Path, default=None,
                    help="Optional YAGO-4.6 TTL for bounded exact entity enrichment")
