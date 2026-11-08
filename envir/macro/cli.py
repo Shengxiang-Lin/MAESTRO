@@ -298,7 +298,7 @@ def naturalize(args):
                 )
             if "question_authoring" in scene:
                 raise ValueError(
-                    "Input already naturalized. Use the original V4 bank, "
+                    "Input already naturalized. Use the initial Task-First bank, "
                     "not an accepted/rejected LLM revision bank."
                 )
             scenes.append(scene)
@@ -422,7 +422,7 @@ def parser():
     _question_flags(b)
     n = sub.add_parser(
         "naturalize",
-        help="Refine existing V4 questions only; NEVER regenerate TaskGraph or Evidence",
+        help="Refine existing questions only; NEVER regenerate TaskGraph or Evidence",
     )
     n.add_argument("--scenes", type=Path, required=True)
     n.add_argument("--output-dir", type=Path, required=True)
@@ -432,7 +432,7 @@ def parser():
     r = sub.add_parser("replay")
     r.add_argument("--scenes", type=Path, required=True)
     a = sub.add_parser("audit-questions",
-        help="Read-only fidelity/style audit of existing naturalized V4 Questions")
+        help="Read-only fidelity/style audit of naturalized Task-First questions")
     a.add_argument("--scenes", type=Path, required=True)
     a.add_argument("--max-records", type=int, default=None)
     a.add_argument("--max-examples", type=int, default=12)
