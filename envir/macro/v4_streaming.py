@@ -484,7 +484,8 @@ def stream_naturalize_scenes(
                     def fill():
                         nonlocal next_submit
                         while (
-                            len(active) < max(1, 2 * args.question_workers)
+                            (len(active) + len(pending))
+                            < max(1, 2 * args.question_workers)
                             and next_submit < len(scenes)
                         ):
                             index = next_submit
