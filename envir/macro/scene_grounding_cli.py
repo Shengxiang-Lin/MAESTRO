@@ -171,6 +171,15 @@ def ground_scenes(args):
             item["status"] == "accepted" and item["revision_rounds"] > 0)
         if item["status"] != "accepted":
             counts["reason:" + item["reason"]] += 1
+    for committed in _read_jsonl(private):
+        overlay = committed.get("scene_grounding")
+        if overlay is not None:
+            ablation = overlay["validation"]["goal_level_source_ablation"]
+            ignored = len(ablation["non_influential_sources"])
+            counts["goal_proxy_non_influential_sources"] += ignored
+            counts["scenes_with_goal_proxy_non_influential_sources"] += int(
+                ignored > 0
+            )
 
     def one(scene):
         overlay, review = ground_one(
@@ -220,6 +229,14 @@ def ground_scenes(args):
                     review["revision_rounds"] > 0)
                 if review["status"] != "accepted":
                     counts["reason:" + review["reason"]] += 1
+                else:
+                    ablation = result["scene_grounding"]["validation"][
+                        "goal_level_source_ablation"]
+                    ignored = len(ablation["non_influential_sources"])
+                    counts["goal_proxy_non_influential_sources"] += ignored
+                    counts["scenes_with_goal_proxy_non_influential_sources"] += int(
+                        ignored > 0
+                    )
                 progress.update(1)
                 # Flush and fsync BEFORE publishing checkpoint, so a resumed
                 # process never assumes uncommitted output bytes are durable.
@@ -249,6 +266,10 @@ def ground_scenes(args):
             "frozen_world_and_graph_preserved": True,
             "source_fact_binding": "exact_source_id_fact_id_values",
             "critic_not_formal_semantic_proof": True,
+            "goal_proxy_scenes_with_non_influential_sources": counts[
+                "scenes_with_goal_proxy_non_influential_sources"],
+            "goal_proxy_total_non_influential_sources": counts[
+                "goal_proxy_non_influential_sources"],
         },
         "files": {
             "private": str(private), "public": str(public),
