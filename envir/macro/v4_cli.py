@@ -21,7 +21,8 @@ import json
 import os
 from pathlib import Path
 
-from .priors import load_kqa, load_mmqa
+from .priors import load_kqa
+from .scene_catalog import load_scenario_seeds, enrich_with_yago
 from .v4_builder import build_batch
 from .v4_streaming import stream_naturalize_scenes
 from .v4_validation import validate_clean_scene
@@ -141,10 +142,26 @@ def build(args):
         _check_output(paths, args.overwrite)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     kqa, ks = load_kqa(args.kqa, limit=args.max_kqa_records)
-    mmqa, ms = load_mmqa(args.mmqa, limit=args.max_mmqa_records)
+    scenario_seeds, ms = load_scenario_seeds(
+        args.mmqa, limit=args.max_mmqa_records)
+    yago_stats = enrich_with_yago(
+        scenario_seeds, args.yago, max_triples=args.max_yago_triples)
     scenes, stats = build_batch(
-        kqa=kqa, mmqa=mmqa, target=args.target, seed=args.seed,
+        kqa=kqa, scenario_seeds=scenario_seeds,
+        target=args.target, seed=args.seed,
     )
+    # Only selected, successfully compiled source records are exported.
+    manifest = args.output_dir / "scenario_seed_manifest.jsonl"
+    _jsonl(manifest, [{
+        "task_id": sc["task_id"],
+        "mmqa_record_id": sc["source_priors"]["MultiModalQA"]["record_id"],
+        "question": sc["source_priors"]["MultiModalQA"]["original_question"],
+        "domain_hint": sc["scenario"]["domain"],
+        "operation": sc["goal"]["intent"],
+        "composition_type": sc["source_priors"]["MultiModalQA"]["official_question_type"],
+        "supporting_sources": sc["source_priors"]["MultiModalQA"]["supporting_sources"],
+        "yago_matches": sc["source_priors"]["YAGO"]["matches"],
+    } for sc in scenes])
     if llm_mode:
         # Writes private/public/audit one record at a time, with a checkpoint.
         review_stats, unique_questions = _stream_questions(scenes, args)
@@ -161,10 +178,14 @@ def build(args):
         "requested": args.target,
         "statistics": stats,
         "original_pattern_coverage": {"KQA": ks, "MultiModalQA": ms},
+        "yago_enrichment": yago_stats,
+        "scenario_seed_manifest": str(manifest),
         "files": {key: str(path) for key, path in paths.items()},
         "stage_order": [
-            "compose_macro_tasks",
-            "derive_reference_question_from_macro_work",
+            "extract_mmqa_scenario_and_need_seeds",
+            "enrich_exact_yago_entities_when_available",
+            "compile_mmqa_composition_into_macro_tasks",
+            "derive_reference_question_from_terminal_work_goal",
             "optional_question_author_critic_revision",
             "construct_per_task_synthetic_evidence",
             "derive_clean_feedback_and_summary_trace",
@@ -327,9 +348,12 @@ def parser():
     b.add_argument("--output-dir", type=Path,
                    default=Path("envir/data/macro_v4"))
     b.add_argument("--target", type=int, default=100)
+    b.add_argument("--yago", type=Path, default=None,
+                   help="Optional YAGO-4.6 TTL for bounded exact entity enrichment")
+    b.add_argument("--max-yago-triples", type=int, default=500000)
     b.add_argument("--seed", type=int, default=17)
     b.add_argument("--max-kqa-records", type=int, default=10000)
-    b.add_argument("--max-mmqa-records", type=int, default=3000)
+    b.add_argument("--max-mmqa-records", type=int, default=30000)
     b.add_argument("--overwrite", action="store_true")
     _question_flags(b)
     n = sub.add_parser(

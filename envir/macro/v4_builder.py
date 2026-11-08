@@ -1,32 +1,25 @@
-"""Task-first -> public Question -> per-task EvidenceGraph -> clean Feedback.
-
-Only macro work goals and dependency contracts are used to author Question.
-Evidence facts and summary traces are generated *after* question authoring.
-No final Gold answer, evidence conflicts, missing sources or recovery action.
-"""
+"""Dataset-driven Macro TaskGraph -> Question -> simulated clean evidence."""
 from __future__ import annotations
 
+import random
 from collections import Counter
 
-from .v4_taskfirst import compose_taskfirst
-from .v4_world import build_clean_world
+from .data_taskfirst import UnsuitableSeed, compose_seed_taskfirst
 from .v4_evidence import run_clean_tasks
+from .v4_world import build_clean_world
 
 
 def build_one(*, ordinal: int, seed: int, kqa: list[dict],
-              mmqa: list[dict]) -> dict:
-    # Stage A: compose a meaningful set of Macro Tasks and typed handoffs.
-    plan = compose_taskfirst(ordinal=ordinal, seed=seed, kqa=kqa, mmqa=mmqa)
-    # Stage B: the public Question already exists, informed only by task-level
-    # goals, deliverables, and source-role descriptions.
+              seed_record: dict) -> dict:
+    plan = compose_seed_taskfirst(
+        seed_record=seed_record, ordinal=ordinal, run_seed=seed, kqa=kqa)
     world = build_clean_world(plan, seed=seed)
-    # Stage C/D: evidence and feedback are internal to each delegated Task.
     execution = run_clean_tasks(plan, world)
     public_sources = [
-        {"source_id": sid, "title": s["title"],
-         "modality_hint": s["modality_hint"],
-         "representation": s["representation"]}
-        for sid, s in sorted(world["sources"].items())
+        {"source_id": sid, "title": source["title"],
+         "modality_hint": source["modality_hint"],
+         "representation": source["representation"]}
+        for sid, source in sorted(world["sources"].items())
     ]
     scene = {
         **plan,
@@ -49,25 +42,40 @@ def build_one(*, ordinal: int, seed: int, kqa: list[dict],
         },
     }
     from .v4_validation import validate_clean_scene
-    errors = validate_clean_scene(scene)
-    if errors:
-        raise ValueError("invalid V4 clean scene: " + "; ".join(errors))
+    issues = validate_clean_scene(scene)
+    if issues:
+        raise ValueError("invalid data-derived clean scene: " + "; ".join(issues))
     return scene
 
 
-def build_batch(*, kqa: list[dict], mmqa: list[dict],
+def build_batch(*, kqa: list[dict], scenario_seeds: list[dict],
                 target: int = 100, seed: int = 17) -> tuple[list[dict], dict]:
-    if target < 1 or not kqa or not mmqa:
-        raise ValueError("positive target and KQA/MMQA prior banks required")
-    scenes = [build_one(ordinal=i, seed=seed, kqa=kqa, mmqa=mmqa)
-              for i in range(target)]
+    if target < 1 or not kqa or not scenario_seeds:
+        raise ValueError("positive target and nonempty KQA/MMQA seed pools required")
+    order = list(scenario_seeds)
+    random.Random(seed * 271828).shuffle(order)
+    scenes = []
+    rejected = Counter()
+    for ordinal, seed_record in enumerate(order):
+        if len(scenes) >= target:
+            break
+        try:
+            scene = build_one(
+                ordinal=ordinal, seed=seed, kqa=kqa, seed_record=seed_record)
+        except UnsuitableSeed as exc:
+            rejected[str(exc)] += 1
+            continue
+        scenes.append(scene)
+    if len(scenes) < target:
+        raise ValueError(
+            f"Only {len(scenes)} of {len(order)} MMQA seeds yielded a valid "
+            f"3-9-task graph; target={target}; rejections={dict(rejected)}")
     n_tasks = sum(len(s["macro_graph"]["tasks"]) for s in scenes)
     n_evidence = sum(
-        len(g["nodes"]) for s in scenes for g in s["task_evidence_graphs"].values()
-    )
-    kinds = Counter(
-        t["work_type"] for s in scenes for t in s["macro_graph"]["tasks"]
-    )
+        len(g["nodes"]) for s in scenes
+        for g in s["task_evidence_graphs"].values())
+    kinds = Counter(t["work_type"] for s in scenes
+                    for t in s["macro_graph"]["tasks"])
     intents = Counter(s["question_brief"]["intent"] for s in scenes)
     graph_sig = lambda s: (
         tuple(t["work_type"] for t in s["macro_graph"]["tasks"]),
@@ -95,4 +103,6 @@ def build_batch(*, kqa: list[dict], mmqa: list[dict],
         "final_gold_answer_generated": False,
         "untrusted_scenarios_generated": False,
         "media_policy": "synthetic_text_records_only",
+        "scenario_seed_rejections": dict(rejected),
+        "question_provenance": "MMQA question embedded in terminal work goal",
     }

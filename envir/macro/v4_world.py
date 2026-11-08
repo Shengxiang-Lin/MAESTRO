@@ -29,7 +29,8 @@ DOMAIN_FIELDS = {
 def _synthetic_facts(*, role: str, domain: str, case_id: str, date: str,
                      issue: str, setting: str, user_role: str,
                      rng: random.Random) -> list[dict]:
-    event_label, record_label, rule_label, stakeholder_label = DOMAIN_FIELDS[domain]
+    event_label, record_label, rule_label, stakeholder_label = DOMAIN_FIELDS.get(
+        domain, DOMAIN_FIELDS["general"])
     capacity = rng.randint(6, 13)
     requested = rng.randint(2, capacity)
     # Each source has its own independent facts and an explicit case and
