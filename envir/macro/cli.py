@@ -1,4 +1,4 @@
-"""V4 clean Task-first Question generation and optional LLM review.
+"""MAESTRO Task-First dataset generation and optional LLM Question review.
 
 Deterministic pilot:
   python -m envir.macro.cli build --kqa ... --mmqa ... --target 100
@@ -25,6 +25,7 @@ from .priors import load_kqa
 from .scene_catalog import load_scenario_seeds, enrich_with_yago
 from .source_contexts import load_supporting_contexts
 from .goal_grammar import goal_bank_manifest
+from .recipes import recipe_manifest, RECIPES_BY_OUTPUT
 from .builder import build_batch
 from .question_streaming import stream_naturalize_scenes
 from .validation import validate_clean_scene
@@ -55,7 +56,7 @@ def _paths(output: Path, *, include_audit: bool):
 
 def _check_output(paths: dict, overwrite: bool):
     if not overwrite and any(p.exists() for p in paths.values()):
-        raise FileExistsError("V4 output exists; choose a new directory or --overwrite")
+        raise FileExistsError("Task-First output exists; use a new directory or --overwrite")
 
 
 def _write_outputs(paths: dict, scenes: list[dict], summary: dict):
@@ -153,6 +154,7 @@ def build(args):
     # Original MMQA questions are intentionally excluded from the scene bank.
     scene_bank_file = args.output_dir / "scene_bank.jsonl"
     pattern_bank_file = args.output_dir / "goal_bank.json"
+    recipe_bank_file = args.output_dir / "recipe_bank.json"
     _jsonl(scene_bank_file, [{
         "scene_id": row["record_id"],
         "topic": row["topic"],
@@ -171,6 +173,14 @@ def build(args):
         "patterns": pattern_bank,
         "total_patterns": len(pattern_bank),
         "combination_policy": "seeded_random_scene_pattern_pairing_with_source_compatibility",
+    })
+    _json(recipe_bank_file, {
+        "policy": "recursive_backwards_typed_workproduct_grammar",
+        "recipes": recipe_manifest(),
+        "producer_alternatives": {
+            key: [recipe.id for recipe in alternatives]
+            for key, alternatives in RECIPES_BY_OUTPUT.items()
+        },
     })
     context_dir = args.mmqa_context_dir or args.mmqa.parent
     contexts, context_stats = (
@@ -217,6 +227,7 @@ def build(args):
         "scenario_seed_manifest": str(manifest),
         "scene_bank": str(scene_bank_file),
         "goal_pattern_bank": str(pattern_bank_file),
+        "recipe_bank": str(recipe_bank_file),
         "scene_pattern_bank": {
             "scene_count": len(scenario_seeds),
             "pattern_count": len(pattern_bank),
@@ -228,6 +239,7 @@ def build(args):
             "extract_scene_bank_from_mmqa_metadata",
             "enrich_exact_yago_entities_when_available",
             "prepare_independent_goal_and_problem_pattern_bank",
+            "prepare_typed_workproduct_recipe_bank",
             "randomly_combine_compatible_scenes_with_work_goals",
             "backchain_recursive_workproduct_recipes_from_final_goal",
             "bind_all_supporting_sources_and_optional_original_context",
@@ -383,7 +395,7 @@ def _question_flags(parser):
 
 def parser():
     p = argparse.ArgumentParser(
-        description="MAESTRO V4 Clean Task-first with optional Author/Critic Question naturalization"
+        description="MAESTRO recursive Work-Product Task-First generator"
     )
     sub = p.add_subparsers(dest="command", required=True)
     b = sub.add_parser("build")
