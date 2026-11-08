@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from .priors import load_kqa, load_mmqa
+from .v2_omni import load_omni_styles
 from .v3_builder import build_many, counterfactual_sensitivity
 from .v3_runtime import validate_grounded
 
@@ -41,14 +42,21 @@ def build(args):
     out.mkdir(parents=True, exist_ok=True)
     kqa, kqa_stats = load_kqa(args.kqa, limit=args.max_kqa_records)
     mmqa, mmqa_stats = load_mmqa(args.mmqa, limit=args.max_mmqa_records)
+    omni_styles, omni_stats = None, None
+    if args.omnigaia:
+        if not args.omnigaia.is_file():
+            raise FileNotFoundError(args.omnigaia)
+        omni_styles, omni_stats = load_omni_styles(args.omnigaia)
     scenes, stats = build_many(kqa=kqa, mmqa=mmqa, target=args.target,
-                               seed=args.seed)
+                               seed=args.seed, omni_styles=omni_styles)
     _write_jsonl(paths["teacher"], scenes)
     _write_jsonl(paths["public"], [s["public"] for s in scenes])
     summary = {
         "status": "done", "requested": args.target,
         "statistics": stats,
-        "prior_coverage": {"KQA": kqa_stats, "MultiModalQA": mmqa_stats},
+        "prior_coverage": {
+            "KQA": kqa_stats, "MultiModalQA": mmqa_stats, "OmniGAIA": omni_stats
+        },
         "files": {k: str(v) for k, v in paths.items()},
         "certification": {
             "graph_contract": "typed_source_scoped_handoffs",
@@ -100,6 +108,8 @@ def parser():
                               default=Path("data/world-source/KQA-Pro/train.json"))
     build_parser.add_argument("--mmqa", type=Path,
                               default=Path("data/world-source/MultiModalQA/MMQA_train.jsonl.gz"))
+    build_parser.add_argument("--omnigaia", type=Path, default=None,
+                              help="Optional OmniGAIA JSON/JSONL for question style only")
     build_parser.add_argument("--output-dir", type=Path,
                               default=Path("envir/data/macro_v3"))
     build_parser.add_argument("--target", type=int, default=100)
