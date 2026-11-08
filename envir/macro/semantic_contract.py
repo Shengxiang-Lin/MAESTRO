@@ -137,6 +137,31 @@ def semantic_surface_issues(question: str, contract: dict) -> list[str]:
     candidate_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", text))
     if candidate_numbers - allowed_numbers:
         errors.append("unsupported_number_or_threshold")
+    # A source handle with modality=image does not license a user-facing
+    # claim about the image's observed content or type. A genuine, explicitly
+    # named source subtype must appear in authorized metadata.
+    licensed_source_text = " ".join(
+        [contract["authorized_topic"]] +
+        [row["description"] for row in contract["source_inventory"]]
+    ).lower()
+    named_unlicensed_source_types = (
+        "poster", "screenshot", "surveillance footage", "news article",
+        "bank statement", "account summary", "medical record",
+    )
+    if any(
+        re.search(r"\b" + re.escape(kind) + r"s?\b", lowered)
+        and not re.search(r"\b" + re.escape(kind) + r"s?\b", licensed_source_text)
+        for kind in named_unlicensed_source_types
+    ):
+        errors.append("unsupported_specific_source_type")
+    if re.search(
+        r"\b(?:image|photo|photograph|poster|video|screenshot|footage)\b"
+        r".{0,60}\b(?:shows?|depicts?|features?|contains?|reveals?)\b"
+        r"|\b(?:shows?|depicts?)\b.{0,60}"
+        r"\b(?:image|photo|photograph|poster|video|screenshot)\b",
+        lowered,
+    ):
+        errors.append("unverified_media_content_claim")
     # This is an explicit high-precision forbidden semantic substitution.
     # Never translate a synthetic score to an unrelated real-world criterion.
     if contract["operation"] in {"rank_by_recorded_score",
