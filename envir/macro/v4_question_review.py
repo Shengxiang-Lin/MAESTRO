@@ -21,94 +21,80 @@ from environment.question_generation.backend import BackendError
 from .v4_taskfirst import author_question, task_level_brief
 
 
-AUTHOR_SYSTEM = """You are the Author for a realistic multi-source, potentially
-multimodal benchmark question, in the style of a natural request from a
-person, not a compiler trace or an instruction to an agent scheduler.
+AUTHOR_SYSTEM = """You write realistic user questions for a multi-agent
+orchestration benchmark. A complete Macro TaskGraph has already been built.
+Your job is to express its OVERALL USER NEED naturally, not to translate the
+Task list into a workflow.
 
-The immutable TASK CONTRACT was composed before this Question. Preserve its
-whole situation, scope, main user intent, required final deliverable, and
-enough clues so that the SAME underlying independent/dependent macro work
-goals remain relevant and sufficient to address the user request.
+SEMANTIC DISCIPLINE:
+- The given setting, situation, affected objects, intended decision and
+  final deliverable must retain their meanings. The existing Macro Tasks
+  should still be an appropriate and sufficient way to answer the question.
+- Never introduce specific people, dates, numbers, documents, instruments,
+  sources, temporal states, constraints or conclusions not supported by the
+  scenario or the Macro Tasks. A generic instrument remains generic.
+- Do not add, remove or swap the target of an operation: ranking possible
+  responses is different from ranking reservations themselves.
+- Never expose Task IDs, agent roles, parallel branches or execution order.
+  Internal Task dependencies inform YOUR understanding, not the user's words.
 
-Write a genuinely natural, self-contained user Question. Vary its rhetorical
-shape with the supplied style hint (direct question, brief scenario-based
-request, comparison or investigation). Do not use the same canned opening
-across records. Questions may be one or two coherent sentences; do not force
-an enumerated source checklist. A user does NOT name planned subtasks, specify
-their dependency order or tell an assistant how to delegate.
+LANGUAGE FREEDOM:
+- Write as a real user asking for help, like a natural MMQA/OmniGAIA-style
+  inquiry. Vary the opening, voice, sentence structure and context.
+- A natural question may state just the overarching goal. It does NOT
+  need to name each prerequisite Task, enumerate every source or reproduce
+  phrases from the reference question.
+- Avoid rigid report boilerplate such as "documented findings" or repeatedly
+  asking to "explain which findings support the assessment".
+- Prefer short, clear phrasing while retaining genuinely needed scope and
+  evidence-based reasoning requirements.
+- Treat reference_question as a semantic baseline, NOT a template to copy.
+  A style_seed_question, if supplied, is only a readability hint.
 
-The macro work descriptions are SEMANTIC DESIGN INPUTS, not passages to copy
-and not additional goals to invent. Do not add or remove requirements, change
-entity owners, reverse comparisons, invent dates/numbers, claim evidence was
-already observed, invent source contents, or claim media is attached. Mention
-media only if the public resource modality supports it.
+If reviewer_feedback is given, revise the previous_draft locally to fix
+the specified semantic or language issue; do not start a different question.
 
-CRITICAL: Generic types must remain generic. If the case says "laboratory
-instrument", never choose "spectrometer", "microscope" or another subtype.
-If it says "vehicle" do not invent a truck, forklift or driver. If it says
-"records" do not invent surveillance cameras, gate logs, staff testimony,
-experiment logs or individual witnesses. If the case is not explicitly
-ongoing, do not say "currently", "still", "now" or "ongoing". Do not turn
-ranking RESPONSES TO reservations into ranking the reservations themselves.
-Do not prescribe "first investigate ... then rank"; express the overall
-information need, NOT the internal agent workflow.
+Return JSON {"question":"..."} only."""
 
-Avoid copied boilerplate, particularly "documented findings", "Explain
-which documented findings support your assessment", and repetitious
-"Based on X, Y and Z". The user may ask for evidence but should sound
-like a person, not a report specification. Preserve support requirements
-naturally ("What supports the recommendation?", "Why?", "using the relevant
-records", etc.). Prefer the supplied style_seed_question for readable
-phrasing, treating the original reference as the semantic authority.
+CRITIC_SYSTEM = """You are a Macro-Task-Aware Question Critic. You see the
+original reference Question, the proposed natural-language Question, and the
+SAME Macro TaskGraph goals, deliverables and dependency relationships that
+were used to construct the scene.
 
-If given a previous_draft and reviewer_feedback, make the smallest necessary
-changes to fix the specific flaws, preserving all unaffected meaning.
-Return JSON {"question":"..."} and no other text."""
+Judge the following in a holistic way:
+1. If this proposed Question were the user's real request, would these SAME
+   Macro Tasks still constitute a reasonable and SUFFICIENT plan to satisfy
+   the requested final outcome? Supporting tasks may be implicit; the
+   Question need not list them or describe the order in which to do them.
+2. Is the user asking for the same target, scope and final deliverable, or
+   has the author added unsupported specifics, temporal states, data/source
+   assumptions, constraints, new work, or changed the object of an action?
+3. Is the Question understandable, natural and varied, or is it robotic,
+   needlessly repetitive, or merely a list of internal Tasks?
 
-CRITIC_SYSTEM = """You are an independent local Question Critic for a
-Task-first multi-agent orchestration dataset.
+Assess SEMANTICS, not exact wording. "Our museum" can refer to the same
+museum; absence of the phrase "documented findings" is not a defect.
+Do not insist that the user mention the Task structure, input slots or every
+source. Do not reject genuine concise questions just for not looking like
+the original reference. Conversely, plausible domain guesses are not
+evidence: "instrument" becoming "spectrometer", an incident becoming
+"currently ongoing", or response priorities becoming reservation rankings
+are material semantic changes.
 
-Compare the proposed natural Question with the reference AND immutable
-task-level semantic contract. PASS only if: (1) the same overall situation,
-scope, answer/work-product obligation, constraints and permissible sources are
-preserved; (2) it still naturally motivates the SAME macro work goals and
-their semantic handoffs, without adding or eliminating essential work; and
-(3) it reads like a real user's request rather than a templated plan.
+Choose pass only if the original Macro TaskGraph still addresses the full
+new question, with no important new demands, and the language is natural.
+If a substantial meaning/coverage mismatch or a fixable language issue
+exists, choose revise and explain up to THREE specific problems with
+minimal edits. If sufficiency cannot be decided, choose uncertain.
+Do not invent hidden evidence to justify a candidate.
 
-The contract's supporting work goals need not be explicitly enumerated in the
-Question; implicit necessity is fine. Do NOT require the original sentence
-order or exact words. Do not demand meaningless extra details. Do not invent
-hidden evidence or infer facts not in the contract.
-
-Before any PASS, perform a candidate-only SEMANTIC DELTA REVIEW:
-(a) list any NEW specific entity, instrument, source or record type. If a
-generic "laboratory instrument" becomes "spectrometer", that is unsupported
-specificity even when plausible; it must be REVISED, not celebrated as clarity.
-(b) identify temporal/ongoing-state additions ("currently", "still", "now").
-(c) compare the OBJECT receiving each action. Ranking response priorities
-is not ranking reservation requests. (d) detect instructions that expose
-internal work ordering ("first investigate, then rank"). (e) compare data
-sources, deliverables, negative conditions and constraints.
-Every candidate-only factual detail needs clear textual support from the
-original reference or the immutable public contract; don't treat common
-domain knowledge, guesses, or possible evidence as authorization.
-
-Reject forced template phrases, duplicated evidence requests and robotic
-operator lists as poor naturalness. Do not reject harmless paraphrases,
-pronoun-based location references ("our museum"), or requests that rely on
-named records without literally saying "documented findings".
-
-When problems exist, report up to THREE local differences with an exact
-minimal fix. If unable to determine equivalence, choose uncertain; do not
-rubber-stamp. Cite the exact unsupported candidate phrase in candidate_excerpt.
-
-Return strict JSON:
+Return JSON only:
 {"verdict":"pass|revise|uncertain",
  "naturalness":"acceptable|needs_polish",
  "summary":"...",
  "differences":[{"reference_excerpt":"...", "candidate_excerpt":"...",
                  "problem":"...", "minimal_fix":"..."}]}
-PASS must have naturalness=acceptable and differences=[]."""
+PASS requires naturalness=acceptable and differences=[]."""
 
 AUTHOR_SCHEMA = {
     "type": "object",
@@ -243,6 +229,77 @@ def public_task_contract(scene: dict) -> dict:
             scene.get("public", {}).get("available_source_descriptions", [])
         }),
     }
+
+
+def macro_task_view(scene: dict) -> dict:
+    """Direct SEMANTIC view of the Macro TaskGraph for Author and Critic.
+
+    This is not an immutable word-by-word writing contract. It contains all
+    legitimate Macro Task goals, typed deliverables, and the prerequisite
+    structure. Internal evidence, source values, private trace and scheduling
+    waves are intentionally absent. Position numbers are local to this
+    model-facing view, not user-facing Task IDs.
+    """
+    brief = task_level_brief(scene)
+    tasks = scene["macro_graph"]["tasks"]
+    order = {task["task_id"]: index + 1 for index, task in enumerate(tasks)}
+    return {
+        "scenario": {
+            "domain": brief["domain"],
+            "setting": brief["setting"],
+            "issue": brief["issue"],
+            "user_role": brief["user_role"],
+        },
+        "overall_user_need": {
+            "intent": brief["intent"],
+            "final_work_goal": brief["final_work_goal"],
+            "final_deliverable": brief["final_deliverable"],
+        },
+        "macro_tasks": [
+            {
+                "number": order[task["task_id"]],
+                "goal": task["goal"],
+                "work_type": task["work_type"],
+                "deliverable": task["deliverable"],
+                "prerequisite_task_numbers": [
+                    order[previous] for previous in task["depends_on"]
+                ],
+            }
+            for task in tasks
+        ],
+        "public_resource_categories": brief["public_resource_categories"],
+        "public_modalities": sorted({
+            source["modality_hint"] for source in
+            scene["public"]["available_source_descriptions"]
+        }),
+    }
+
+
+def minimal_question_guards(candidate: str) -> list[str]:
+    """Only basic format/privacy invariants, NEVER lexical equivalence.
+
+    Factual, entity, target and scope changes are assessed by the LLM Critic
+    from the full semantic Macro Task view. This checker intentionally does
+    not require fixed setting words, intent stems, 'documented findings',
+    source names or special operation verbs.
+    """
+    raw = str(candidate or "")
+    question = raw.strip()
+    errors = []
+    if not 20 <= len(question) <= 1200:
+        errors.append("question_length")
+    if "\n" in raw or "\r" in raw:
+        errors.append("multiline_question")
+    if re.search(
+        r"\b(?:S\d+|T\d+|E\d+|subtasks?|sub.agents?|main.agent|"
+        r"KoPL|DAG|task\s+graph)\b", question, re.I,
+    ):
+        errors.append("private_task_structure_leak")
+    if re.match(r"^\s*[\{\[]", raw) or re.search(
+        r"(?i)\b(?:system|assistant|developer)\s*:\s*", raw
+    ):
+        errors.append("non_user_question_format")
+    return sorted(set(errors))
 
 
 def style_hint(scene: dict) -> str:
@@ -459,7 +516,7 @@ def naturalize_one(scene: dict, *, author, critic,
     """
     if not 0 <= max_revisions <= 8:
         raise ValueError("max_revisions must be between 0 and 8")
-    contract = public_task_contract(scene)
+    task_view = macro_task_view(scene)
     initial = reference_question(scene)
     attempts = []
     latest = None
@@ -476,12 +533,11 @@ def naturalize_one(scene: dict, *, author, critic,
             # The reference remains immutable; this style-only seed removes
             # the legacy duplicate evidence request where present.
             "style_seed_question": polished_reference_question(initial),
-            "immutable_task_contract": contract,
+            "macro_task_graph": task_view,
             "style_hint": style_hint(scene),
             "instruction": (
-                "Rewrite the public user need, not the subtask schedule. "
-                "Avoid copied 'documented findings' boilerplate. "
-                "Never invent specific sources or turn generic objects into named subtypes."
+                "Express the same overall user need naturally, retaining "
+                "the original Macro Task goals and final outcome."
             ),
         }
         if latest is not None:
@@ -513,7 +569,7 @@ def naturalize_one(scene: dict, *, author, critic,
             feedback = _simple_feedback([last_failure])
             attempts.append(row)
             continue
-        issues = surface_issues(scene, candidate, baseline=initial)
+        issues = minimal_question_guards(candidate)
         row["deterministic_guards"] = issues
         if issues:
             last_failure = "surface_guard"
@@ -524,13 +580,12 @@ def naturalize_one(scene: dict, *, author, critic,
         review_payload = {
             "reference_question": initial,
             "candidate_question": candidate,
-            "immutable_task_contract": contract,
-            "semantic_delta_checklist": [
-                "Any novel specific entity, instrument, event state or source name?",
-                "Any changed target of rank, compare, assess or other action?",
-                "Any explicit private subtask execution order?",
-                "Any new constraints, data assertions, or omitted work products?",
-            ],
+            "macro_task_graph": task_view,
+            "review_focus": (
+                "Would the SAME macro tasks still be a sufficient, reasonable "
+                "plan for this user's question? Identify only substantive "
+                "semantic changes or unnatural phrasing."
+            ),
         }
         try:
             row["critic_calls"] += 1
@@ -580,16 +635,16 @@ def naturalize_one(scene: dict, *, author, critic,
     result = accepted if accepted is not None else safe_reference
     status = "accepted" if accepted is not None else "fallback"
     metadata = {
-        "review_policy_version": "v4.2_fidelity_naturalness",
+        "review_policy_version": "v4.3_macro_task_critic",
         "safe_reference_polish_applied": (
             accepted is None and result != initial
         ),
-        "pipeline": "v4_task_contract_author_local_critic_repair",
+        "pipeline": "v4_macro_task_aware_author_critic_repair",
         "status": status,
         "reason": "independent_critic_pass" if accepted is not None else last_failure,
         "reference_question": initial,
         "final_question": result,
-        "contract_sha256": _fingerprint(contract),
+        "macro_task_view_sha256": _fingerprint(task_view),
         "macro_graph_sha256": _fingerprint(scene["macro_graph"]),
         "reference_sha256": _fingerprint(initial),
         "accepted_review": accepted_review,
@@ -670,13 +725,21 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         return []
     errors = []
     original = reference_question(scene)
-    contract = public_task_contract(scene)
+    policy = meta.get("review_policy_version")
     if meta.get("reference_question") != original:
         errors.append("review_reference_drift")
     if meta.get("reference_sha256") != _fingerprint(original):
         errors.append("review_reference_fingerprint_mismatch")
-    if meta.get("contract_sha256") != _fingerprint(contract):
-        errors.append("review_task_contract_changed")
+    if policy == "v4.3_macro_task_critic":
+        if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
+            errors.append("review_macro_task_view_changed")
+        if meta.get("pipeline") != "v4_macro_task_aware_author_critic_repair":
+            errors.append("review_wrong_pipeline")
+    else:
+        # Backward compatibility: V4.1/V4.2 metadata was originally bound
+        # to the old task contract. Don't re-certify it under V4.3.
+        if meta.get("contract_sha256") != _fingerprint(public_task_contract(scene)):
+            errors.append("review_task_contract_changed")
     if meta.get("macro_graph_sha256") != _fingerprint(scene["macro_graph"]):
         errors.append("review_macro_graph_changed")
     if meta.get("final_question") != scene["question"]:
@@ -695,8 +758,11 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         # Previously published (pre-v4.2) records retain their old schema
         # and cannot retroactively claim stronger semantic screening. New
         # naturalizations are checked against the current stricter guard.
-        if (meta.get("review_policy_version") == "v4.2_fidelity_naturalness"
+        if (policy == "v4.2_fidelity_naturalness"
                 and surface_issues(scene, scene["question"], baseline=original)):
+            errors.append("review_surface_mismatch")
+        if (policy == "v4.3_macro_task_critic"
+                and minimal_question_guards(scene["question"])):
             errors.append("review_surface_mismatch")
         if scene["question"] == original:
             errors.append("review_not_naturalized")
@@ -709,12 +775,12 @@ def validate_naturalized_question(scene: dict) -> list[str]:
     elif status == "fallback":
         expected = (
             polished_reference_question(original)
-            if meta.get("review_policy_version") == "v4.2_fidelity_naturalness"
+            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic"}
             else original
         )
         if scene["question"] != expected or meta.get("accepted_review") is not None:
             errors.append("review_fallback_changed_question")
-        if meta.get("review_policy_version") == "v4.2_fidelity_naturalness":
+        if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic"}:
             if meta.get("safe_reference_polish_applied") is not (expected != original):
                 errors.append("review_fallback_polish_metadata_mismatch")
     else:
