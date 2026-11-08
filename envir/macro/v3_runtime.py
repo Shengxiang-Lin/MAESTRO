@@ -154,6 +154,30 @@ def _read_source(task: dict, source_map: dict, events: list) -> tuple[str, dict]
     return source_id, copy.deepcopy(record["observations"])
 
 
+
+def _summary(kind: str, body: dict, task: dict) -> str:
+    """Describe *actual produced data*, never just restate a work goal."""
+    if kind == "event_investigation":
+        return f"Established {len(body['events'])} scoped event observations."
+    if kind == "records_audit":
+        return f"Audited {len(body['records'])} registered case entries."
+    if kind == "rules_review":
+        rule = body["rule"]
+        return (f"Confirmed accepted status '{rule['valid_status']}', "
+                f"closing minute {rule['closing_minute']}, and minimum "
+                f"affected workload {rule['min_affected_units']}.")
+    if kind == "capacity_review":
+        return f"Established available capacity for {len(body['capacities'])} entries."
+    if kind == "independent_review":
+        return f"Collected {len(body['observations'])} independent time observations."
+    if kind in {"case_matching", "integrated_case_audit"}:
+        return f"Matched {len(body['cases'])} observed cases to registered records."
+    if kind == "final_assessment":
+        return "Completed the requested assessment: " + json.dumps(
+            body, ensure_ascii=False, sort_keys=True)
+    raise ValueError("unknown summary work kind")
+
+
 def evaluate(plan: dict, world: dict, *,
              hidden_sources: frozenset[str] = frozenset()) -> dict:
     graph = plan["macro_graph"]
@@ -264,7 +288,7 @@ def evaluate(plan: dict, world: dict, *,
             packet = {
                 "subtask_id": tid,
                 "answer": answer,
-                "summary": task["goal"] + " Completed and returned " + field + ".",
+                "summary": _summary(kind, body, task),
                 "summary_trace": trace,
                 "tool_events": events,
                 "evidence_ids": sorted(proof),
