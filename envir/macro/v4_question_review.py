@@ -476,7 +476,7 @@ def naturalize_scenes(scenes: list[dict], *, author, critic,
     # deterministic reference, preserving the original Task semantics.
     previously_seen = set()
     for scene, (question, info) in zip(scenes, produced):
-        normalized = re.sub(r"\\W+", " ", question.casefold()).strip()
+        normalized = re.sub(r"\W+", " ", question.casefold()).strip()
         if info["status"] == "accepted" and normalized in previously_seen:
             question = info["reference_question"]
             info["status"] = "fallback"
@@ -487,7 +487,7 @@ def naturalize_scenes(scenes: list[dict], *, author, critic,
                 if row.get("accepted"):
                     row["accepted"] = False
                     row["failure"] = "duplicate_naturalized_question"
-        previously_seen.add(re.sub(r"\\W+", " ", question.casefold()).strip())
+        previously_seen.add(re.sub(r"\W+", " ", question.casefold()).strip())
         scene["question"] = question
         scene["public"]["question"] = question
         scene["question_authoring"] = info
