@@ -4,9 +4,9 @@ from __future__ import annotations
 import random
 from collections import Counter
 
-from .data_taskfirst import UnsuitableSeed, compose_seed_taskfirst
-from .v4_evidence import run_clean_tasks
-from .v4_world import build_clean_world
+from .recipe_planner import UnsuitableSeed, compose_seed_taskfirst
+from .evidence import run_clean_tasks
+from .world import build_clean_world
 
 
 def build_one(*, ordinal: int, seed: int, kqa: list[dict],
@@ -41,7 +41,7 @@ def build_one(*, ordinal: int, seed: int, kqa: list[dict],
             "real_multimodal_perception_performed": False,
         },
     }
-    from .v4_validation import validate_clean_scene
+    from .validation import validate_clean_scene
     issues = validate_clean_scene(scene)
     if issues:
         raise ValueError("invalid data-derived clean scene: " + "; ".join(issues))
