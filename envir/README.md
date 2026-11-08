@@ -90,52 +90,58 @@ python -m envir naturalize
   --question-workers 4 --max-revisions 2
 ```
 
-### Question-only semantic naturalization policy
+### Question-only natural language realization (v2)
 
-The Author receives the **frozen Macro TaskGraph** and an explicit
-`semantic_contract` derived from the selected Goal, its operation and typed
-final WorkProduct, and the already authorized source inventory. This contract
-is **independent of the original MMQA question** and does not expose private
-source observations, answers or Sub-Agent Feedback. The Prompt allows a
-natural user expression, but not any new entity, fact, source, media content,
-operation, threshold or deliverable. In particular, synthetic scores cannot
-be treated as real-world importance or prestige.
+Question Author and Critic have deliberately **different views**:
 
-The independent Critic returns five explicit checks:
-`objective_equivalent`, `solution_preserved`,
-`required_work_preserved`, `source_faithful`, and
-`answer_equivalent`. **All five must be `yes`** with acceptable
-naturalness, user framing and no unsupported addition before an LLM question
-is accepted. Uncertainty, protocol failures, or uncorrected violations
-return the pre-existing deterministic Question without changing the DAG.
+- **Author:** `realization_brief.py` produces a short, user-facing description
+  of the topic, actual information need and complete result. It does NOT
+  contain the frozen deterministic Question template, raw schema field
+  names, Task IDs, verbose Macro Task text, private EvidenceGraph or feedback.
+  The Author may choose completely different natural wording, including
+  'the records' instead of listing every text/table/image source.
+- **Critic:** receives the complete frozen `semantic_contract` and semantic
+  Macro TaskGraph, then checks objective, solution, necessary work, source
+  boundary and answer completeness. It must **not** demand wording overlap,
+  source-type enumeration or explicit workflow steps. A quoted claimed
+  violation must actually occur in the candidate Question. Contradictory
+  'pass' judgments trigger repair instead of being mistaken for a successful
+  semantic review.
+- **Audit:** reports reference-question similarity, near-template wording
+  and leftover machine-like schema jargon. It does NOT flag omission of
+  internal setting labels such as 'MultiModalQA reference collection' as a
+  naturalization defect.
 
-The review is an LLM-based screening decision, **not a formal proof** that
-each subtask is necessary or that original media has been understood.
-The semantic contract is fingerprinted and replay-checked. Previous
-naturalization results remain auditable under their original review policy.
+Strictly immutable: source scope, Goal operation, conditions, final result
+and the already compiled TaskGraph. No new accounts, source subtypes, media
+contents, dates, real-world significance or additional facts are allowed.
+Ordinary conversational framing **without new evidence claims** is permitted.
 
-**Stage boundary:** Question naturalization does **not** rewrite formal
-Macro Tasks or regenerate any `summary_trace` or `answer` field. A later
-stage will take the accepted Question and frozen contracts to jointly
-realize Task descriptions and build/check the associated trace and answer.
+The new review policy is `taskfirst_natural_question_v2`; previously
+naturalized Question files remain replayable under their original policy.
+Review still involves model judgment and is **not** a formal proof.
+Question naturalization never changes Tasks, `summary_trace` or `answer`.
+Those will be realized together in a separate future stage.
 
-A fresh 50-question comparison after updating the code (use the ORIGINAL
-`taskfirst_1000/scenes.jsonl`, not already naturalized output):
+Run a **new** 50-question comparison against the ORIGINAL deterministic
+scene bank (not the previous naturalized 50):
 
 ```bash
-python -m envir naturalize 
-  --scenes envir/data/taskfirst_recursive_1000/scenes.jsonl 
-  --output-dir envir/data/taskfirst_recursive_strict50 
-  --max-records 50 
-  --question-api-base http://127.0.0.1:8807/v1 
-  --question-model local-qwen3.5-9b 
+python -m envir naturalize \
+  --scenes envir/data/taskfirst_recursive_1000/scenes.jsonl \
+  --output-dir envir/data/taskfirst_recursive_flexible50 \
+  --max-records 50 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
   --question-workers 2 --max-revisions 2 --flush-every 1
 
-python -m envir replay 
-  --scenes envir/data/taskfirst_recursive_strict50/scenes.jsonl
-python -m envir audit-questions 
-  --scenes envir/data/taskfirst_recursive_strict50/scenes.jsonl 
-  --output envir/data/taskfirst_recursive_strict50/audit.json
+python -m envir replay \
+  --scenes envir/data/taskfirst_recursive_flexible50/scenes.jsonl
+
+python -m envir audit-questions \
+  --scenes envir/data/taskfirst_recursive_flexible50/scenes.jsonl \
+  --max-examples 50 \
+  --output envir/data/taskfirst_recursive_flexible50/audit.json
 ```
 
 To replay and check internal evidence:
