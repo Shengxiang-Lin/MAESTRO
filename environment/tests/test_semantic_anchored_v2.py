@@ -122,5 +122,21 @@ class V2SourceSummaryTests(unittest.TestCase):
                          "environment/data/yago_predicate_catalog.json")
 
 
+
+class V2ArtifactIsolationTests(unittest.TestCase):
+    def test_run_tag_does_not_touch_old_30_artifacts(self):
+        from environment.task_construction.pipeline import _artifact_paths
+        old = _artifact_paths(30)
+        new = _artifact_paths(30, "v2")
+        self.assertEqual(old["manifest"].name, "frozen_manifest_30.json")
+        self.assertEqual(new["manifest"].name, "frozen_manifest_30_v2.json")
+        self.assertEqual(new["authoring"].name, "authoring_inputs_30_v2.jsonl")
+        self.assertEqual(new["capability"].name, "capability_worlds_30_v2.jsonl")
+        self.assertNotEqual(set(map(str, old.values())),
+                            set(map(str, new.values())))
+
+
+
+
 if __name__ == "__main__":
     unittest.main()
