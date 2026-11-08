@@ -65,7 +65,10 @@ class SubtaskFactory:
                 r["fact_id"] for r in rows),
                 "replay_policy": "observed_fact_and_public_search_v1"},
         )
-        item = task.to_dict()
+        # Normalize tuple fields through JSON once so a newly generated
+        # row and a subsequently cached row have identical public contracts.
+        import json
+        item = json.loads(json.dumps(task.to_dict(), ensure_ascii=False))
         self.store.cache_subtask(
             item, subject_key=subject,
             answer_key=obj if kind == "entity" else value,
