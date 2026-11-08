@@ -248,10 +248,20 @@ def surface_issues(scene: dict, candidate: str, *, baseline: str | None = None) 
     used_words = set(re.findall(r"[a-z]{4,}", question.lower()))
     if len(subject_words & used_words) < min(2, len(subject_words)):
         errors.append("missing_case_subject")
-    if not any(
-        word.startswith(prefix) for word in used_words
-        for prefix in STEMS.get(brief["intent"], ())
-    ):
+    intent_stems = STEMS.get(brief["intent"], ())
+    # Only demand an explicit intent keyword when the frozen ORIGINAL
+    # wording contained one. A Task goal may legitimately express
+    # "feasibility" as "evaluate which options satisfy requirements".
+    # A fixed intent vocabulary must not reject a faithful paraphrase
+    # that preserves the full reference but uses another natural phrase.
+    reference_words = set(re.findall(r"[a-z]{4,}", ref.lower()))
+    reference_explicit = any(
+        w.startswith(stem) for w in reference_words for stem in intent_stems
+    )
+    candidate_explicit = any(
+        w.startswith(stem) for w in used_words for stem in intent_stems
+    )
+    if reference_explicit and not candidate_explicit:
         errors.append("requested_work_intent_missing")
     evidence_terms = ("explain", "justify", "support", "based",
                       "evidence", "reason", "document", "findings", "why")
