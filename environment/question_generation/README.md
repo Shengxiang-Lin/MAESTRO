@@ -160,6 +160,42 @@ fidelity and Stage-2B false-pass/false-reject rates independently on
 unseen frozen tasks. No one-to-one natural-language operator mirroring
 is required of the final Question; it should remain a coherent user request.
 
+## Offline Stage 2B shadow audit
+
+The shadow audit uses saved first and final drafts, with optional labeled
+cases. It rebuilds the public graph from the matching frozen inputs and
+verified blueprints. The parser sees the candidate wording alone. The
+structural comparison keeps directed edges, condition scope, set operations,
+typed comparisons, and the answer operation. Same-range AND and consecutive
+filters can normalize to the same expression. Each filter still quantifies
+over its own matching recorded value.
+
+Run from the repository root with the usual Stage 2 model configuration:
+
+```bash
+python -m environment.question_generation.shadow_audit \
+  --audit environment/data/stage2b_full_v5_50/question_review_audit.jsonl \
+  --audit environment/data/stage2b_scoped_v5_50/question_review_audit.jsonl \
+  --cases environment/tests/fixtures/stage2_shadow_v5_cases.jsonl \
+  --blueprints environment/data/stage2a_intents_v5_50/certified_blueprints.jsonl \
+  --output environment/data/stage2b_shadow_v1/paired.jsonl
+```
+
+For a small labeled run, supply only `--cases` with the same blueprints.
+`--recheck-legacy` runs the existing Critic for drafts without a stored
+semantic decision. The included cases use three tasks from the v5 development
+batch. For a new benchmark, use JSONL rows with `task_id`, `question`,
+`label` (`equivalent`, `different`, or `ambiguous`), and `category`.
+
+Each result keeps historical acceptance and naturalness observations
+separately from the shadow semantic status. `match` means the supported
+normalized expressions agreed given the parser output. `mismatch` is a
+structural discrepancy for review, including possible parser errors.
+`unresolved` covers ambiguity, unsupported constructs, or invalid parser
+output. The summary compares those statuses with the labeled cases, broken
+down by category. The command creates a new diagnostics file and has no
+effect on publication, candidate revisions, or certificate replay.
+
 ## Performance and troubleshooting
 
 The two stages intentionally have distinct model-call budgets. Stage 2A
