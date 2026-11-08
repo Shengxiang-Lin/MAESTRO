@@ -470,7 +470,24 @@ def naturalize_scenes(scenes: list[dict], *, author, critic,
         produced = list(pool.map(process, scenes))
     counts = Counter()
     failure_reasons = Counter()
+    # Accepting 100 independently natural-looking questions can still
+    # collapse distinct records into identical prose. Keep the earliest
+    # accepted candidate and revert later duplicates to the frozen
+    # deterministic reference, preserving the original Task semantics.
+    previously_seen = set()
     for scene, (question, info) in zip(scenes, produced):
+        normalized = re.sub(r"\\W+", " ", question.casefold()).strip()
+        if info["status"] == "accepted" and normalized in previously_seen:
+            question = info["reference_question"]
+            info["status"] = "fallback"
+            info["reason"] = "duplicate_naturalized_question"
+            info["final_question"] = question
+            info["accepted_review"] = None
+            for row in info["audit"]:
+                if row.get("accepted"):
+                    row["accepted"] = False
+                    row["failure"] = "duplicate_naturalized_question"
+        previously_seen.add(re.sub(r"\\W+", " ", question.casefold()).strip())
         scene["question"] = question
         scene["public"]["question"] = question
         scene["question_authoring"] = info
