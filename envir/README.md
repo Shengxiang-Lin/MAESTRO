@@ -115,3 +115,62 @@ independently replayed and structurally disconnected facts. They are recorded
 in PRIVATE Gold metadata, never forced into required dependencies or injected
 into the Question. The current prototype does not yet expose them as
 interactive Main-Agent choices; that belongs to the next simulator stage.
+
+
+## v0.2: MMQA-guided simulated Scene Bank
+
+This independent pilot explicitly targets Main Agent **orchestration**, not
+image/video/audio recognition accuracy. No actual media files are needed.
+
+The new scenarios package extracts MultiModalQA question types, pseudolanguage
+questions, topic hints, intermediate evidence patterns and supporting-context
+modalities. These are SOURCE MOTIFS, never claims about the new world's facts.
+MMQA does not natively supply video or audio: those are deliberately synthetic
+extensions of cross-source task motifs.
+
+The generator creates 9 balanced scenario domains, 20+ scene settings and
+controlled observations of images, timed videos and multi-speaker audio.
+For every scene it adds a reference-bearing media source, a complementary
+table/text record, a simulated searchable registry record and a distracting
+search result. The same source observations deterministically generate
+Subtask goals, answers, event-based summary traces and the final question.
+
+Three patterns are generated: media->search chains, media->parallel lookups->
+join, and table-vs-registry cross-checks. Removing any required source makes
+the complete Gold response unresolvable. Clean, partial and deliberately
+misleading sub-agent variants are included to build orchestration episodes;
+none is an unconditional optimal-action label.
+
+Build 100 scenes from the installed MMQA training QA file:
+
+    python -m envir.scenarios.cli build \
+      --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+      --output-dir envir/data/sim_scenarios_v1 \
+      --max-records 3000 --target 100 --seed 17
+
+Replay-check all answers/feedback and required-source ablation:
+
+    python -m envir.scenarios.cli replay \
+      --gold envir/data/sim_scenarios_v1/scenes_gold.jsonl
+
+The outputs include: mmqa_motifs.jsonl (source priors); scenes_gold.jsonl
+(PRIVATE teacher-side source observations, Subtasks, trace and answers);
+public_tasks.jsonl (answer-blind questions, visible media IDs, tools);
+simulation_summary.json (domain/mode/pattern and MMQA pattern alignment);
+scenario_index.json (stable identifiers and replay status).
+
+An optional simulated tool call reveals one source to the Main Agent only
+after the Agent requests it. The PRIVATE Gold record must not be supplied as
+an Agent prompt. Example:
+
+    python -m envir.scenarios.cli tool \
+      --gold envir/data/sim_scenarios_v1/scenes_gold.jsonl \
+      --scene-id SCENE_ID \
+      --action InspectSimulatedMedia \
+      --source-id MEDIA_ID
+
+The initial author uses deterministic, varied templates; a future optional
+LLM could expand noncritical narrative surface content under consistency
+checking. This pilot is **parallel to** the original source-backed envir
+prepare/compose and does not claim to have integrated full KQA or YAGO
+semantic grounding into the new synthetic worlds.
