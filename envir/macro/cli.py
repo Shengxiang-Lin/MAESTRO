@@ -1,10 +1,10 @@
 """V4 clean Task-first Question generation and optional LLM review.
 
 Deterministic pilot:
-  python -m envir.macro.v4_cli build --kqa ... --mmqa ... --target 100
+  python -m envir.macro.cli build --kqa ... --mmqa ... --target 100
 
 Naturalize an EXISTING immutable Task/Evidence bank (no KQA/MMQA reload):
-  python -m envir.macro.v4_cli naturalize \
+  python -m envir.macro.cli naturalize \
     --scenes envir/data/macro_v4/private_clean_scenes_v4.jsonl \
     --output-dir envir/data/macro_v4_naturalized \
     --question-api-base http://127.0.0.1:8807/v1 \
@@ -25,10 +25,10 @@ from .priors import load_kqa
 from .scene_catalog import load_scenario_seeds, enrich_with_yago
 from .source_contexts import load_supporting_contexts
 from .goal_grammar import goal_bank_manifest
-from .v4_builder import build_batch
-from .v4_streaming import stream_naturalize_scenes
-from .v4_validation import validate_clean_scene
-from .v4_question_audit import audit_file
+from .builder import build_batch
+from .question_streaming import stream_naturalize_scenes
+from .validation import validate_clean_scene
+from .question_audit import audit_file
 
 
 def _json(path: Path, value) -> None:
