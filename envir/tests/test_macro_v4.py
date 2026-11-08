@@ -430,6 +430,65 @@ class CleanTaskFirstTests(unittest.TestCase):
             for key in ("macro_graph", "world", "task_evidence_graphs", "feedback_bank"):
                 self.assertEqual(original[key], rewritten[key])
 
+    def test_duplicate_accepted_surface_reverts_later_scene(self):
+        first = self.build(8)
+        second = copy.deepcopy(first)
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"question": json.loads(user)["reference_question"].replace(
+                    " Explain which documented findings support your assessment.",
+                    " What evidence supports the conclusion?",
+                )}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {
+                    "verdict": "pass", "naturalness": "acceptable",
+                    "summary": "Equivalent user request", "differences": [],
+                }
+        stats = naturalize_scenes(
+            [first, second], author=Author(), critic=Critic(),
+        )
+        self.assertEqual(stats["accepted"], 1)
+        self.assertEqual(stats["fallback"], 1)
+        self.assertEqual(
+            stats["failure_reasons"]["duplicate_naturalized_question"], 1,
+        )
+        self.assertNotEqual(first["question"], second["question"])
+        self.assertEqual(validate_clean_scene(first), [])
+        self.assertEqual(validate_clean_scene(second), [])
+
+    def test_critic_format_retry_uses_same_draft(self):
+        scene = self.build(7)
+        class Author:
+            def __init__(self):
+                self.calls = 0
+            def complete_json(self, system, user, *, response_schema=None):
+                self.calls += 1
+                return {"question": json.loads(user)["reference_question"].replace(
+                    " Explain which documented findings support your assessment.",
+                    " What evidence supports your conclusion?",
+                )}
+        class Critic:
+            def __init__(self):
+                self.drafts = []
+            def complete_json(self, system, user, *, response_schema=None):
+                request = json.loads(user)
+                self.drafts.append(request["candidate_question"])
+                if len(self.drafts) == 1:
+                    return {"verdict": "pass"}  # Malformed response.
+                return {
+                    "verdict": "pass", "naturalness": "acceptable",
+                    "summary": "Equivalent", "differences": [],
+                }
+        author, critic = Author(), Critic()
+        question, info = naturalize_one(
+            scene, author=author, critic=critic, max_revisions=2,
+        )
+        self.assertEqual(info["status"], "accepted")
+        self.assertEqual(info["author_calls"], 1)
+        self.assertEqual(info["critic_calls"], 2)
+        self.assertEqual(critic.drafts, [question, question])
+
     def test_cli_build_replay_and_no_overwrite(self):
         path = self.temp / "out"
         with contextlib.redirect_stdout(io.StringIO()):
