@@ -12,7 +12,33 @@ from envir.schema import digest
 from .graph import (build_atomic_draft, coarsen, compile_contracts,
                     compile_waves, complexity)
 from .priors import choose_kqa
-from .v2_planner import _classify_topology, _topology_metrics
+from collections import Counter
+
+
+def _topology_metrics(tasks: list[dict], edges: list[dict],
+                      waves: list[list[str]]) -> dict:
+    outdegree = Counter(e["from"] for e in edges)
+    roots = sum(not task["depends_on"] for task in tasks)
+    joins = sum(len(task["depends_on"]) > 1 for task in tasks)
+    fanouts = sum(outdegree[task["task_id"]] > 1 for task in tasks)
+    return {
+        "roots": roots, "joins": joins, "fanouts": fanouts,
+        "width": max(map(len, waves), default=0),
+    }
+
+
+def _classify_topology(stats: dict, depth: int) -> str:
+    if stats["roots"] == 1 and stats["joins"] == 0:
+        return "chain"
+    if depth == 2 and stats["roots"] >= 2:
+        return "parallel_join"
+    if stats["fanouts"] and stats["joins"]:
+        return "fork_join"
+    if stats["joins"] and depth >= 4:
+        return "staged_join"
+    if stats["joins"]:
+        return "mixed_join"
+    return "progressive"
 
 
 LEAF_MODALITIES = {
