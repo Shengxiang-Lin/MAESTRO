@@ -6,11 +6,21 @@ the three existing corpora only: **MultiModalQA**, **KQA-Pro**, and optionally
 
 ## What is generated, and by whom?
 
-1. **Scenario/need catalog (MultiModalQA):** read official question, original
-   question type (e.g. `Compare(Compose(TableQ,ImageQ),TextQ)`), source roles,
-   `supporting_context` IDs, entity hints, and topic. Do not use the annotated
-   factual answer as the model-facing Question or as a fake perception result.
-   Questions with duplicate wording are deduplicated.
+1. **Offline Scene Bank (MultiModalQA + optional YAGO):** pre-extract topic,
+   entities, domains, real supporting-context IDs, source modalities, and
+   composition-structure hints. An original MMQA question may identify a
+   scene's named entities, but its interrogative wording, target property,
+   original answer, and inferred question intent are **not** used to choose
+   a new goal or form a new Question. The exported `scene_bank_v4.jsonl`
+   contains no original MMQA question text.
+   **Offline Goal/Pattern Bank:** `goal_pattern_bank_v4.json` has eight
+   domain-neutral typed work-product goals (lookup audit, source linkage,
+   comparison, reconciliation, aggregation, chronology, prioritization,
+   feasibility). These are reusable orchestration design constraints, not
+   labels copied from a selected MMQA question.
+   **Random compatible combination:** shuffle the Scene Bank, independently
+   sample a Goal Bank entry with a recorded seed, and compile an executable
+   typed Macro TaskGraph before authoring any final Question.
 2. **Optional YAGO enrichment:** bounded scan of the local YAGO TTL file;
    attach only *unique exact normalized entity-label* matches, with RDF
    subject IDs and observed facts. An unmatched entity stays unmatched.
@@ -27,10 +37,12 @@ the three existing corpora only: **MultiModalQA**, **KQA-Pro**, and optionally
    consistency review and answer synthesis. Shared source leaves are reused;
    repeated documents are never silently dropped. Accept only 3–9
    meaningful Macro Tasks per question.
-5. **Initial Question:** deterministically derive the original MMQA user
-   information need from the **terminal Macro Task goal**. It cannot silently
-   drift away from the graph, but graph/Question semantic equivalence still
-   requires independent review.
+5. **NEW initial Question:** construct an independent, structured goal
+   inside the terminal Macro Task and generate its Question from that task's
+   `question_blueprint` only **after** the complete graph has been compiled.
+   No selected MMQA original Question is a Question template or paraphrase
+   seed. The optional V4.5 Author–Critic refines this newly generated
+   graph-derived reference.
 6. **Optional V4.5 Author–Critic:** rewrite the public Question with a local
    OpenAI-compatible model. Author and Critic see sanitized semantic Macro
    goals/inputs, not private evidence, Gold answers or the actual KoPL program.
@@ -100,6 +112,11 @@ python -m unittest discover -s envir/tests -p 'test_*.py' -v
 
 ## Output contracts
 
+- `scene_bank_v4.jsonl`: pre-extracted multi-domain scenes and all
+  original source IDs/modality/composition hints, **without original MMQA questions**.
+- `goal_pattern_bank_v4.json`: reusable independent problem-solving patterns
+  and their required typed work-product semantics, materialized before
+  pairing or TaskGraph generation.
 - `scenario_seed_manifest.jsonl`: only the **selected** MMQA record IDs,
   original question, source IDs/modalities, composition type and optional
   YAGO provenance. It is teacher-side metadata.
@@ -122,8 +139,8 @@ python -m unittest discover -s envir/tests -p 'test_*.py' -v
 
 Previous V4.5 used a closed set of 9 domains, 36 predefined incident
 descriptions and 8 handcrafted business intents; MMQA was only a weak
-recipe-selection weight. The new build path is **MMQA need first, Macro DAG
-second, initial Question third**. It preserves the original Task-First
+recipe-selection weight. The new build path is **Scene Bank + Goal Bank first, random
+compatible pairing second, Macro DAG third, NEW Question fourth**. It preserves the original Task-First
 principle: no LLM invents the TaskGraph topology, and all Macro edges are
 typed work-product dependencies. The original fixed-scene generator is
 not used by the default CLI path.
@@ -133,6 +150,13 @@ dataset-level micro QA operation deserves one Sub-Agent. Source investigation
 is one bounded, independently meaningful work package. KoPL retrieval,
 filtering, and arithmetic belong to a later verified **internal** execution
 layer.
+
+**Interpretation:** these are NEW graph-derived questions about available
+structured *synthetic* observations in real MMQA subject areas. The question
+templates refer to synthetic attribute scores, flags and time indices whose
+behavior is replay-verifiable; they do not claim to reproduce real MMQA
+answers. Subsequent Author–Critic naturalization can improve readability,
+but cannot make fabricated media observations into real facts.
 
 ## Validation scope and future boundary
 
