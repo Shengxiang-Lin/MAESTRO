@@ -202,6 +202,45 @@ class BackwardRecipePlannerTests(unittest.TestCase):
         self.assertEqual(contexts[("table", "2-doc-0")]["provenance"],
                          "original_mmqa_table_text")
 
+    def test_author_critic_preserves_graph_and_uses_new_reference(self):
+        from envir.macro.question_review import naturalize_one
+        payload = scene(12)
+        result = build_one(
+            ordinal=12, seed=17, kqa=KQA, seed_record=payload)
+        initial = result["question"]
+        calls = []
+
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                request = json.loads(user)
+                calls.append(("author", request))
+                return {"question": initial}
+
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                request = json.loads(user)
+                calls.append(("critic", request))
+                return {
+                    "goal_alignment": "same",
+                    "task_sufficiency": "sufficient",
+                    "user_framing": "user_goal",
+                    "unsupported_additions": [],
+                    "verdict": "pass",
+                    "naturalness": "acceptable",
+                    "summary": "The question is supported by the terminal goal.",
+                    "differences": [],
+                }
+
+        natural, meta = naturalize_one(
+            result, author=Author(), critic=Critic(), max_revisions=0)
+        self.assertEqual(natural, initial)
+        self.assertEqual(meta["status"], "accepted")
+        self.assertNotEqual(initial, payload["question"])
+        self.assertEqual(calls[0][1]["semantic_authority"], "macro_task_graph")
+        self.assertIn("macro_task_graph", calls[0][1])
+        self.assertNotIn("world", json.dumps(calls[0][1]))
+        self.assertNotIn("source_priors", json.dumps(calls[0][1]))
+
     def test_cli_build_and_replay(self):
         from envir.macro.cli import main
         kqa_record = {
