@@ -186,6 +186,13 @@ def make_world(need: dict, seed: int) -> dict:
     urgency = [3, 2, 5, 4][:n]
     capacity = [3, 2, 7, 1][:n]
     rng.shuffle(statuses)
+    # Witness conditions: a valid early case, an invalid in-window case,
+    # and a late nonvalid case. This makes rule/record counterfactuals real.
+    statuses[0] = "valid"
+    statuses[1] = "expired"
+    if n >= 4:
+        statuses[2] = "valid"
+        statuses[3] = "suspended"
     deltas = [0, 17, -4, 24][:n]
     sources = {}
     source_titles = need["source_names"]
