@@ -557,6 +557,26 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
                 )) or not diff["problem"].strip() or
                 not diff["minimal_fix"].strip()):
             raise ValueError("critic_difference_invalid")
+    # The model occasionally reports PASS with a contradictory diagnostic.
+    # Treat that as a repair request (or uncertainty), not a transport/protocol
+    # failure. Never accept the internally contradictory PASS.
+    if policy == SEMANTIC_REVIEW_POLICY and verdict == "pass":
+        axes = [value.get(key) for key in SEMANTIC_AXES]
+        flawed = (naturalness != "acceptable" or bool(differences)
+                  or any(v != "yes" for v in axes)
+                  or value.get("user_framing") != "user_goal"
+                  or bool(value.get("unsupported_additions")))
+        if flawed:
+            verdict = "uncertain" if "uncertain" in axes else "revise"
+            if not differences and naturalness == "acceptable":
+                differences = [{
+                    "reference_excerpt": "", "candidate_excerpt": "",
+                    "problem": "Critic verdict contradicts its own semantic checks",
+                    "minimal_fix": (
+                        "Keep the same information need and resolve the "
+                        "reported non-yes semantic axis."
+                    ),
+                }]
     if verdict == "pass" and (naturalness != "acceptable" or differences):
         raise ValueError("critic_pass_inconsistent")
     if verdict == "revise" and not differences and naturalness != "needs_polish":
@@ -632,6 +652,26 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
             "unsupported_additions": additions[:5],
         })
     return output
+
+
+def _critic_quote_issues(judgment: dict, candidate: str) -> list[str]:
+    """Critic-specific factual claims must be grounded in actual candidate text.
+
+    This guard prevents the independent reviewer from hallucinating that a
+    candidate contains a phrase seen in its own prompt examples.
+    """
+    text = " ".join(candidate.casefold().split())
+    missing = []
+    for addition in judgment.get("unsupported_additions", []):
+        if " ".join(addition.casefold().split()) not in text:
+            missing.append("unsupported_addition_not_in_candidate")
+    for change in judgment.get("differences", []):
+        span = " ".join(change.get("candidate_excerpt", "").casefold().split())
+        # General naturalness repairs may omit a quote, but source/goal
+        # violations should have a concrete cited candidate phrase.
+        if span and span not in text:
+            missing.append("critic_excerpt_not_in_candidate")
+    return sorted(set(missing))
 
 
 def _simple_feedback(issues: list[str]) -> dict:
@@ -739,6 +779,9 @@ def naturalize_one(scene: dict, *, author, critic,
                 json.dumps(review_payload, ensure_ascii=False),
                 response_schema=CRITIC_SCHEMA_SEMANTIC,
             ), policy=SEMANTIC_REVIEW_POLICY)
+            citation_issues = _critic_quote_issues(judgment, candidate)
+            if citation_issues:
+                raise ValueError("unverified_critic_quote:" + ",".join(citation_issues))
         except (BackendError, ValueError, KeyError, TypeError) as exc:
             last_failure = "critic_protocol_error"
             row["failure"] = last_failure
@@ -748,12 +791,18 @@ def naturalize_one(scene: dict, *, author, critic,
                 row["critic_calls"] += 1
                 critic_calls += 1
                 review_payload["format_repair_instruction"] = (
-                    "Return the required fields exactly; if unsure choose uncertain."
+                    "Keep the SAME candidate. Return consistent fields: if "
+                    "any axis is no, use revise; if uncertain, use uncertain; "
+                    "quote only exact excerpts present in candidate_question. "
+                    "Do not mention examples from these instructions."
                 )
                 judgment = _validate_review(critic.complete_json(
                     CRITIC_SYSTEM, json.dumps(review_payload, ensure_ascii=False),
                     response_schema=None,
                 ), policy=SEMANTIC_REVIEW_POLICY)
+                citation_issues = _critic_quote_issues(judgment, candidate)
+                if citation_issues:
+                    raise ValueError("unverified_critic_quote:" + ",".join(citation_issues))
             except (BackendError, ValueError, KeyError, TypeError) as fix_exc:
                 row["protocol_retry_failure"] = str(fix_exc)[:180]
                 attempts.append(row)
@@ -880,7 +929,7 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         errors.append("review_reference_drift")
     if meta.get("reference_sha256") != _fingerprint(original):
         errors.append("review_reference_fingerprint_mismatch")
-    if policy == SEMANTIC_REVIEW_POLICY:
+    if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}:
         try:
             if meta.get("semantic_contract_sha256") != _fingerprint(semantic_contract(scene)):
                 errors.append("semantic_contract_fingerprint_mismatch")
