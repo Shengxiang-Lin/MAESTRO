@@ -248,6 +248,7 @@ def _question(case, intent, recipe_name, source_desc, style, variant):
     if ask is None:
         ask = INTENT_REQUESTS[intent][variant % len(INTENT_REQUESTS[intent])]
     ask = _render(ask, case)
+    ask = ask.replace(case.issue, "this situation")
     resources = list(dict.fromkeys(source_desc))
     if len(resources) > 3:
         evidence = ", ".join(resources[:2]) + ", and other relevant supporting records"
