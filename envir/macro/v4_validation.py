@@ -57,8 +57,17 @@ def validate_clean_scene(scene: dict) -> list[str]:
             errors.append("missing_source_facts")
         keys = set()
         for fact in source.get("facts", []):
-            if fact.get("verification") != "consistent_synthetic_record":
+            if fact.get("verification") not in {
+                "consistent_synthetic_record",
+                "original_mmqa_text_excerpt_not_pixels",
+            }:
                 errors.append("unclean_source_record")
+            if fact.get("verification") == "original_mmqa_text_excerpt_not_pixels":
+                if source.get("context_provenance") not in {
+                    "original_mmqa_table_text", "original_mmqa_text_text",
+                    "original_mmqa_caption_proxy",
+                }:
+                    errors.append("unverified_original_excerpt_provenance")
             if fact.get("field") in keys:
                 errors.append("duplicated_fact_field")
             keys.add(fact.get("field"))
