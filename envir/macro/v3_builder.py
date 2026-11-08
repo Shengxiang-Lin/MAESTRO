@@ -53,7 +53,8 @@ def counterfactual_sensitivity(scene: dict) -> dict:
         events = sources[ids["event"]]["observations"]["events"]
         minute_map = {row["case_id"]: row["event_minute"] for row in events}
         for item in sources[chosen]["observations"]["observations"]:
-            item["reported_minute"] = minute_map[item["case_id"]]
+            if item["case_id"] in minute_map:
+                item["reported_minute"] = minute_map[item["case_id"]]
     else:
         raise ValueError("unsupported counterfactual intent: " + intent)
     changed = evaluate(scene, altered)["gold_answer"]
