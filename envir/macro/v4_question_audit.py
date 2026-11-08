@@ -66,6 +66,31 @@ def audit_scenes(scenes: list[dict], *, max_examples: int = 12) -> dict:
             counts["deterministic"] += 1
         counts["policy:" + policy] += 1
         counts["total"] += 1
+        # Descriptive metrics for evaluating naturalness in a paired pilot.
+        # Neither a question mark nor short length is mandatory.
+        counts["total_word_count"] += len(question.split())
+        if question.strip().casefold().startswith("please "):
+            counts["starts_with_please"] += 1
+        if "?" in question:
+            counts["has_question_mark"] += 1
+        if re.search(r"\b(?:then|next|finally|once)\b", question, re.I):
+            counts["procedural_connector_cues"] += 1
+        # Count ALL critic attempts, not just the ultimately accepted one.
+        for attempt in meta.get("audit", []):
+            review = attempt.get("critic_review") or {}
+            if not review:
+                continue
+            counts["critic_review_rounds"] += 1
+            if review.get("user_framing") == "workflow_instructions":
+                counts["critic_flagged_workflow_rounds"] += 1
+            if review.get("user_framing") == "robotic":
+                counts["critic_flagged_robotic_rounds"] += 1
+            if review.get("goal_alignment") == "changed":
+                counts["critic_flagged_goal_shift_rounds"] += 1
+            if review.get("task_sufficiency") == "insufficient":
+                counts["critic_flagged_insufficiency_rounds"] += 1
+            if review.get("unsupported_additions"):
+                counts["critic_flagged_unsupported_additions_rounds"] += 1
         if "documented findings" in question.casefold():
             counts["stock_documented_findings"] += 1
         if question == polished_reference_question(ref) and question != ref:
@@ -112,6 +137,27 @@ def audit_scenes(scenes: list[dict], *, max_examples: int = 12) -> dict:
             "questions_with_style_warnings":
                 counts["questions_with_style_warnings"],
             "safe_fallback_polished": counts["safe_fallback_polished"],
+            "mean_question_words": round(
+                counts["total_word_count"] / counts["total"], 2
+            ),
+            "starts_with_please": counts["starts_with_please"],
+            "has_question_mark": counts["has_question_mark"],
+            "procedural_connector_cues": counts["procedural_connector_cues"],
+        },
+        "critic_diagnostics": {
+            "reviewed_rounds": counts["critic_review_rounds"],
+            "workflow_instruction_rounds":
+                counts["critic_flagged_workflow_rounds"],
+            "robotic_wording_rounds": counts["critic_flagged_robotic_rounds"],
+            "goal_shift_rounds": counts["critic_flagged_goal_shift_rounds"],
+            "task_insufficiency_rounds":
+                counts["critic_flagged_insufficiency_rounds"],
+            "unsupported_additions_rounds":
+                counts["critic_flagged_unsupported_additions_rounds"],
+            "notes": (
+                "Counts are model judgments per review attempt, not "
+                "independent semantic ground truth."
+            ),
         },
         "warning_counts": dict(flagged),
         "status_warning_counts": {

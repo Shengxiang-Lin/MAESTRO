@@ -184,3 +184,63 @@ Use a NEW output directory for the same 100 fixed Macro TaskGraphs:
 Checkpoint resume, live progress, ordered writes and read-only quality
 audits continue to work. A changed review policy prevents resuming old
 checkpoints; it does not invalidate completed old data.
+
+## V4.4: goal-first Author and diagnostic skeptical Critic
+
+The earlier 100-record V4.3 local Qwen3.5-9B run accepted all 100
+Questions with only one revision, but manual inspection found procedural
+subtask checklists and invented specific source names. V4.4 is intended
+to improve actual user-question quality, NOT to optimize a passing rate.
+
+Author still sees all semantic Macro Tasks, prerequisites, and final
+deliverable. Author must describe the USER'S END GOAL rather than the
+Agent's internal workflow; intermediate Tasks are not new deliverables.
+Crucially, generic resource categories do not authorize invented named
+source types, even if the specific type is plausible in that domain.
+
+The Critic must separately return four diagnostic axes:
+- goal_alignment: same / changed / uncertain
+- task_sufficiency: sufficient / insufficient / uncertain
+- user_framing: user_goal / workflow_instructions / robotic
+- unsupported_additions: candidate-only phrases, or an empty list
+
+A PASS is accepted only when goal_alignment=same,
+task_sufficiency=sufficient, user_framing=user_goal,
+unsupported_additions=[], naturalness=acceptable and differences=[].
+Contradictory PASS results are treated as invalid Critic protocol and
+retried once on the same candidate, then safely fall back if still invalid.
+Critic issues can be locally fixed by Author, up to --max-revisions.
+No arbitrary target acceptance rate or mandatory question mark exists.
+
+Question generation remains semantic, not keyword-contract based:
+only simple format and internal-structure leakage checks are deterministic.
+V4.1/V4.2/V4.3 records retain backward-compatible replay validation;
+new V4.4 accepts only its own diagnostic Critic review records. The
+clean Macro TaskGraphs, Evidence, Feedback and summary traces do not change.
+
+Use a NEW output directory for the same original 100 TaskGraph scenes:
+
+    python -m envir.macro.v4_cli naturalize \
+      --scenes envir/data/macro_v4/private_clean_scenes_v4.jsonl \
+      --output-dir envir/data/macro_v4_naturalized_v44_100 \
+      --question-api-base http://127.0.0.1:8807/v1 \
+      --question-model local-qwen3.5-9b \
+      --question-workers 4 --max-revisions 2 --flush-every 1
+
+Verify the output:
+
+    python -m envir.macro.v4_cli replay \
+      --scenes envir/data/macro_v4_naturalized_v44_100/private_clean_scenes_v4.jsonl
+
+Use the read-only paired quality report for naturalness and model review
+diagnostics, including mean word count, procedural connectors, question
+marks, leading 'please', workflow-review rounds, goal-shift rounds,
+and unsupported-addition rounds:
+
+    python -m envir.macro.v4_cli audit-questions \
+      --scenes envir/data/macro_v4_naturalized_v44_100/private_clean_scenes_v4.jsonl \
+      --output envir/data/macro_v4_naturalized_v44_100/quality_audit.json
+
+These diagnostic axes and review rates are fallible LLM judgments,
+not independent proof of semantic equivalence. Inspect actual text
+alongside the frozen TaskGraph when evaluating research quality.

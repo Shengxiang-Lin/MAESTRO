@@ -21,80 +21,119 @@ from environment.question_generation.backend import BackendError
 from .v4_taskfirst import author_question, task_level_brief
 
 
-AUTHOR_SYSTEM = """You write realistic user questions for a multi-agent
-orchestration benchmark. A complete Macro TaskGraph has already been built.
-Your job is to express its OVERALL USER NEED naturally, not to translate the
-Task list into a workflow.
+AUTHOR_SYSTEM = """You are the QUESTION AUTHOR for a realistic,
+task-first multi-agent benchmark. You have the fixed Macro TaskGraph, but a
+real user knows only their problem, not the internal Task decomposition.
 
-SEMANTIC DISCIPLINE:
-- The given setting, situation, affected objects, intended decision and
-  final deliverable must retain their meanings. The existing Macro Tasks
-  should still be an appropriate and sufficient way to answer the question.
-- Never introduce specific people, dates, numbers, documents, instruments,
-  sources, temporal states, constraints or conclusions not supported by the
-  scenario or the Macro Tasks. A generic instrument remains generic.
-- Do not add, remove or swap the target of an operation: ranking possible
-  responses is different from ranking reservations themselves.
-- Never expose Task IDs, agent roles, parallel branches or execution order.
-  Internal Task dependencies inform YOUR understanding, not the user's words.
+OUTPUT GOAL: In natural language, state ONE overarching user information
+need that would be appropriately answered by the provided Macro Tasks.
+Usually use a short situation cue plus a direct question, or one natural
+first-person request. Around 25-65 words is often enough, but clarity and
+faithful scope matter more than the count.
 
-LANGUAGE FREEDOM:
-- Write as a real user asking for help, like a natural MMQA/OmniGAIA-style
-  inquiry. Vary the opening, voice, sentence structure and context.
-- A natural question may state just the overarching goal. It does NOT
-  need to name each prerequisite Task, enumerate every source or reproduce
-  phrases from the reference question.
-- Avoid rigid report boilerplate such as "documented findings" or repeatedly
-  asking to "explain which findings support the assessment".
-- Prefer short, clear phrasing while retaining genuinely needed scope and
-  evidence-based reasoning requirements.
-- Treat reference_question as a semantic baseline, NOT a template to copy.
-  A style_seed_question, if supplied, is only a readability hint.
+WHAT YOU MUST PRESERVE: the scenario, affected target, final decision or
+output, and substantive constraints. The same existing Macro TaskGraph
+must remain a reasonable and sufficient way to answer the question.
 
-If reviewer_feedback is given, revise the previous_draft locally to fix
-the specified semantic or language issue; do not start a different question.
+WHAT YOU MUST NEVER DO:
+- Do not turn the Macro TaskGraph into a to-do list: no "review the footage,
+  then cross-reference records, next assess compliance, finally recommend".
+  These are INTERNAL execution steps, not things the user should specify.
+- Do not promote intermediate Tasks into extra required final deliverables:
+  an investigation that internally needs a timeline does not mean the user
+  requests a separately delivered detailed timeline.
+- Do not invent a source merely because a source CATEGORY sounds like it:
+  "primary event material" does NOT authorize "surveillance footage",
+  "operational records" does NOT authorize "dispatch logs", and
+  "independent reports" does NOT authorize "witness statements".
+  Public modality labels likewise do not establish any observed contents.
+- Do not turn a generic object into a specific subtype (instrument ->
+  spectrometer), or add current states (currently, still, ongoing), people,
+  times, numeric thresholds, evidence claims, restrictions or conclusions.
+- Do not change the object of an operation. Ranking corrective responses
+  is not ranking booking requests.
+- Do not mention internal Task numbers, agents, dependency edges, or
+  execution order. Task data informs YOUR interpretation, not USER prose.
 
+STYLE:
+- Vary naturally among question forms, short background + question, and
+  practical first-person requests. Do not force "please" at the beginning.
+- Do not repeat "documented findings", "which specific findings support"
+  or lists of evidence categories. A concise request for justification or
+  evidence is enough when the final goal requires support.
+- Treat reference_question as the SEMANTIC baseline, not prose to copy.
+  The Macro Tasks are for reasoning about the goal, not instructions to
+  transcribe. Do not force every supporting Task to be mentioned.
+
+Examples, illustrating form only and NOT supplying task facts:
+BAD: "Please review footage, cross-reference logs, then assess the policy,
+and finally rank actions based on the documented findings."
+GOOD: "What should we prioritize to address this incident, considering the
+relevant rules and available capacity, and why?"
+
+If reviewer_feedback is provided, make ONLY the requested local changes
+to previous_draft; keep its unaffected user goal and context.
 Return JSON {"question":"..."} only."""
 
-CRITIC_SYSTEM = """You are a Macro-Task-Aware Question Critic. You see the
-original reference Question, the proposed natural-language Question, and the
-SAME Macro TaskGraph goals, deliverables and dependency relationships that
-were used to construct the scene.
+CRITIC_SYSTEM = """You are an independent and SKEPTICAL Macro Task-aware
+CRITIC. In the last V4.3 pilot, formulaic multi-step procedural requests and
+invented specific source names often received an undeserved PASS. Do not
+rubber-stamp a question just because the task decomposition could execute it.
 
-Judge the following in a holistic way:
-1. If this proposed Question were the user's real request, would these SAME
-   Macro Tasks still constitute a reasonable and SUFFICIENT plan to satisfy
-   the requested final outcome? Supporting tasks may be implicit; the
-   Question need not list them or describe the order in which to do them.
-2. Is the user asking for the same target, scope and final deliverable, or
-   has the author added unsupported specifics, temporal states, data/source
-   assumptions, constraints, new work, or changed the object of an action?
-3. Is the Question understandable, natural and varied, or is it robotic,
-   needlessly repetitive, or merely a list of internal Tasks?
+You receive a reference question, the candidate question, and a direct
+semantic view of the SAME frozen Macro TaskGraph. Evaluate FOUR independent
+dimensions BEFORE deciding the verdict:
 
-Assess SEMANTICS, not exact wording. "Our museum" can refer to the same
-museum; absence of the phrase "documented findings" is not a defect.
-Do not insist that the user mention the Task structure, input slots or every
-source. Do not reject genuine concise questions just for not looking like
-the original reference. Conversely, plausible domain guesses are not
-evidence: "instrument" becoming "spectrometer", an incident becoming
-"currently ongoing", or response priorities becoming reservation rankings
-are material semantic changes.
+1. GOAL ALIGNMENT: Does the user's main objective, target of any operation,
+   scope, and required FINAL deliverable stay the same? Supporting Macro
+   Tasks need not appear in the question, and their existence does not
+   justify adding each intermediate output as a new user deliverable.
+2. TASK SUFFICIENCY: Are the provided Macro Tasks still collectively
+   reasonable and sufficient to answer everything the new user is asking?
+   Do not demand the question explicitly name every task.
+3. USER FRAMING: Is this what a normal person would ask, or did the Author
+   write the AGENT'S WORKFLOW? Lists of imperative analysis steps such as
+   "review X, cross-reference Y, then assess Z, finally rank" are
+   workflow_instructions, even if the steps exactly match the Macro TaskGraph.
+   A natural user can ask for an evidence-based decision without prescribing
+   intermediate subagent operations. Robotic and repeated report boilerplate
+   also needs revision.
+4. UNSUPPORTED ADDITIONS: Compare wording to the reference and Macro Task
+   semantic view. Are there NEW facts, named data sources, entities, timing
+   states or constraints? Source category "primary event material" does not
+   warrant "surveillance footage"; "operational records" does not warrant
+   "dispatch logs"; "independent reports" does not warrant "witness
+   statements". A public video modality does not guarantee footage exists.
+   Plausibility and task feasibility are NOT support for invented details.
 
-Choose pass only if the original Macro TaskGraph still addresses the full
-new question, with no important new demands, and the language is natural.
-If a substantial meaning/coverage mismatch or a fixable language issue
-exists, choose revise and explain up to THREE specific problems with
-minimal edits. If sufficiency cannot be decided, choose uncertain.
-Do not invent hidden evidence to justify a candidate.
+Think about the user's requested END, not the internal HOW. Allow concise
+paraphrases and "our museum" when the referent remains clear. Do not
+require exact source names, fixed intent verbs, or "documented findings".
 
-Return JSON only:
-{"verdict":"pass|revise|uncertain",
+Fill the diagnostic axes below honestly. PASS only when ALL are true:
+goal_alignment=same, task_sufficiency=sufficient,
+user_framing=user_goal, unsupported_additions=[], naturalness=acceptable,
+differences=[]. A polished to-do list is NOT user_goal.
+
+For a problem that can be repaired, choose revise, name the actual offending
+candidate excerpt, and propose at most three minimal changes. If the
+sufficiency or semantic match cannot be judged, choose uncertain rather
+than claiming a definite match. Do NOT pursue a target PASS rate.
+
+Return strict JSON only:
+{"goal_alignment":"same|changed|uncertain",
+ "task_sufficiency":"sufficient|insufficient|uncertain",
+ "user_framing":"user_goal|workflow_instructions|robotic",
+ "unsupported_additions":["exact candidate-only phrase, if any"],
+ "verdict":"pass|revise|uncertain",
  "naturalness":"acceptable|needs_polish",
- "summary":"...",
+ "summary":"specific reason explaining which final goal is preserved or changed",
  "differences":[{"reference_excerpt":"...", "candidate_excerpt":"...",
                  "problem":"...", "minimal_fix":"..."}]}
-PASS requires naturalness=acceptable and differences=[]."""
+All arrays may be empty when appropriate. Make each cited excerpt real;
+avoid generic praise like "professional restatement" without comparing
+the goal, user request and specific Task work.
+"""
 
 AUTHOR_SCHEMA = {
     "type": "object",
@@ -124,6 +163,28 @@ CRITIC_SCHEMA = {
     "additionalProperties": False,
 }
 
+# V4.4 uses structured critical axes so "natural professional restatement"
+# cannot quietly count as PASS when the same model detects extra workflow
+# instructions, unsupported source claims, or a new final deliverable.
+CRITIC_SCHEMA_V44 = {
+    "type": "object",
+    "properties": {
+        "goal_alignment": {"enum": ["same", "changed", "uncertain"]},
+        "task_sufficiency": {"enum": ["sufficient", "insufficient", "uncertain"]},
+        "user_framing": {"enum": ["user_goal", "workflow_instructions", "robotic"]},
+        "unsupported_additions": {
+            "type": "array", "items": {"type": "string"},
+        },
+        **CRITIC_SCHEMA["properties"],
+    },
+    "required": [
+        "goal_alignment", "task_sufficiency", "user_framing",
+        "unsupported_additions", "verdict", "naturalness",
+        "summary", "differences",
+    ],
+    "additionalProperties": False,
+}
+
 STOP = {
     "with", "this", "that", "their", "have", "been", "which", "about", "from",
     "some", "given", "reported", "issue", "around", "after", "before",
@@ -149,27 +210,27 @@ STEMS = {
 }
 STYLE_HINTS = {
     "composition": [
-        "A compact cross-source question whose final goal emerges from several clues",
-        "An authentic contextual request with a natural reason to consult several sources",
-        "A direct investigation request; all relationships are implicit, not an enumerated workflow",
+        "A concise direct question with just enough real-world context",
+        "A short first-person user concern followed by the key decision question",
+        "An applied question about the overall outcome, with no procedural checklist",
     ],
     "intersection": [
-        "A natural request to reconcile overlapping conditions and narrow the relevant cases",
-        "A short context plus a focused question about qualifying cases and supporting evidence",
-        "A fact-finding request that relies on multiple records without listing each agent's steps",
+        "A straightforward user question about the issue to resolve",
+        "A compact situation description plus a focused question",
+        "A first-person concern with an implicit need to reconcile several facts",
     ],
     "comparison": [
-        "A practical comparative decision question framed around the same alternatives",
-        "A natural contrast-oriented question with a defensible evidence requirement",
-        "An applied assessment asking which interpretation or course is better supported",
+        "A direct comparison question without listing the steps of analysis",
+        "A practical choice framed as a short natural question",
+        "A user decision request emphasizing the outcome, not investigation steps",
     ],
     "aggregation": [
-        "A concise synthesis question about the scope or cumulative effects of the situation",
-        "A contextual request that asks for a consolidated assessment from several sources",
+        "A succinct synthesis request, expressed as a real user need",
+        "A single compact question about the overall result",
     ],
     "lookup": [
-        "A direct real-world information request with precise scope and final deliverable",
-        "A two-sentence investigation context followed by one focused request",
+        "A direct fact-finding question with a clear target",
+        "A natural context sentence followed by one focused question",
     ],
 }
 
@@ -457,7 +518,8 @@ def surface_issues(scene: dict, candidate: str, *, baseline: str | None = None) 
     return sorted(set(errors))
 
 
-def _validate_review(value: dict) -> dict:
+def _validate_review(value: dict, *, policy: str | None = None) -> dict:
+    """Validate critic protocol. V4.1-V4.3 audits keep their original format."""
     if not isinstance(value, dict):
         raise ValueError("critic_review_not_object")
     verdict = value.get("verdict")
@@ -481,7 +543,7 @@ def _validate_review(value: dict) -> dict:
         raise ValueError("critic_pass_inconsistent")
     if verdict == "revise" and not differences and naturalness != "needs_polish":
         raise ValueError("critic_revision_without_issue")
-    return {
+    output = {
         "verdict": verdict,
         "naturalness": naturalness,
         "summary": summary[:600],
@@ -491,6 +553,40 @@ def _validate_review(value: dict) -> dict:
             )} for diff in differences
         ],
     }
+    if policy == "v4.4_goal_first_critic":
+        alignment = value.get("goal_alignment")
+        sufficiency = value.get("task_sufficiency")
+        framing = value.get("user_framing")
+        additions = value.get("unsupported_additions")
+        if (alignment not in {"same", "changed", "uncertain"}
+                or sufficiency not in {"sufficient", "insufficient", "uncertain"}
+                or framing not in {"user_goal", "workflow_instructions", "robotic"}
+                or not isinstance(additions, list) or len(additions) > 5
+                or any(not isinstance(x, str) or not x.strip()
+                       for x in additions)):
+            raise ValueError("critic_v44_diagnostic_axes_invalid")
+        if verdict == "pass" and (
+            alignment != "same" or sufficiency != "sufficient"
+            or framing != "user_goal" or additions
+        ):
+            raise ValueError("critic_v44_pass_contradicts_diagnostics")
+        if verdict == "revise" and (alignment == "uncertain" or
+                                    sufficiency == "uncertain"):
+            # Doubt must not be transformed into a confident repair decision.
+            raise ValueError("critic_v44_uncertain_as_revision")
+        if verdict == "uncertain" and alignment == "same" and (
+            sufficiency == "sufficient" and framing == "user_goal"
+            and not additions and naturalness == "acceptable"
+            and not differences
+        ):
+            raise ValueError("critic_v44_uncertain_without_issue")
+        output.update({
+            "goal_alignment": alignment,
+            "task_sufficiency": sufficiency,
+            "user_framing": framing,
+            "unsupported_additions": additions[:5],
+        })
+    return output
 
 
 def _simple_feedback(issues: list[str]) -> dict:
@@ -502,7 +598,7 @@ def _simple_feedback(issues: list[str]) -> dict:
         "differences": [
             {"reference_excerpt": "", "candidate_excerpt": "",
              "problem": issue,
-             "minimal_fix": "Repair only this mismatch using the immutable task contract."}
+             "minimal_fix": "Repair only this mismatch, preserving the original Macro Task goals."}
             for issue in issues[:3]
         ],
     }
@@ -536,8 +632,10 @@ def naturalize_one(scene: dict, *, author, critic,
             "macro_task_graph": task_view,
             "style_hint": style_hint(scene),
             "instruction": (
-                "Express the same overall user need naturally, retaining "
-                "the original Macro Task goals and final outcome."
+                "State only the real user's final need in one compact natural "
+                "question or request. The Macro Tasks are an implicit work "
+                "plan, NOT steps to enumerate. Never invent specific sources, "
+                "new intermediate deliverables, or ongoing time states."
             ),
         }
         if latest is not None:
@@ -582,9 +680,9 @@ def naturalize_one(scene: dict, *, author, critic,
             "candidate_question": candidate,
             "macro_task_graph": task_view,
             "review_focus": (
-                "Would the SAME macro tasks still be a sufficient, reasonable "
-                "plan for this user's question? Identify only substantive "
-                "semantic changes or unnatural phrasing."
+                "Evaluate goal alignment, sufficiency of these SAME Macro "
+                "Tasks, user-goal phrasing versus prescribed workflow, and "
+                "unsupported new claims independently BEFORE deciding Pass."
             ),
         }
         try:
@@ -593,8 +691,8 @@ def naturalize_one(scene: dict, *, author, critic,
             judgment = _validate_review(critic.complete_json(
                 CRITIC_SYSTEM,
                 json.dumps(review_payload, ensure_ascii=False),
-                response_schema=CRITIC_SCHEMA,
-            ))
+                response_schema=CRITIC_SCHEMA_V44,
+            ), policy="v4.4_goal_first_critic")
         except (BackendError, ValueError, KeyError, TypeError) as exc:
             last_failure = "critic_protocol_error"
             row["failure"] = last_failure
@@ -609,7 +707,7 @@ def naturalize_one(scene: dict, *, author, critic,
                 judgment = _validate_review(critic.complete_json(
                     CRITIC_SYSTEM, json.dumps(review_payload, ensure_ascii=False),
                     response_schema=None,
-                ))
+                ), policy="v4.4_goal_first_critic")
             except (BackendError, ValueError, KeyError, TypeError) as fix_exc:
                 row["protocol_retry_failure"] = str(fix_exc)[:180]
                 attempts.append(row)
@@ -635,11 +733,11 @@ def naturalize_one(scene: dict, *, author, critic,
     result = accepted if accepted is not None else safe_reference
     status = "accepted" if accepted is not None else "fallback"
     metadata = {
-        "review_policy_version": "v4.3_macro_task_critic",
+        "review_policy_version": "v4.4_goal_first_critic",
         "safe_reference_polish_applied": (
             accepted is None and result != initial
         ),
-        "pipeline": "v4_macro_task_aware_author_critic_repair",
+        "pipeline": "v4_goal_first_author_diagnostic_critic_repair",
         "status": status,
         "reason": "independent_critic_pass" if accepted is not None else last_failure,
         "reference_question": initial,
@@ -730,10 +828,15 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         errors.append("review_reference_drift")
     if meta.get("reference_sha256") != _fingerprint(original):
         errors.append("review_reference_fingerprint_mismatch")
-    if policy == "v4.3_macro_task_critic":
+    if policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic"}:
         if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
             errors.append("review_macro_task_view_changed")
-        if meta.get("pipeline") != "v4_macro_task_aware_author_critic_repair":
+        expected_pipeline = (
+            "v4_goal_first_author_diagnostic_critic_repair"
+            if policy == "v4.4_goal_first_critic"
+            else "v4_macro_task_aware_author_critic_repair"
+        )
+        if meta.get("pipeline") != expected_pipeline:
             errors.append("review_wrong_pipeline")
     else:
         # Backward compatibility: V4.1/V4.2 metadata was originally bound
@@ -750,7 +853,7 @@ def validate_naturalized_question(scene: dict) -> list[str]:
     if status == "accepted":
         review = meta.get("accepted_review")
         try:
-            validated = _validate_review(review)
+            validated = _validate_review(review, policy=policy)
             if validated["verdict"] != "pass":
                 errors.append("review_not_passed")
         except (ValueError, TypeError):
@@ -761,7 +864,7 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         if (policy == "v4.2_fidelity_naturalness"
                 and surface_issues(scene, scene["question"], baseline=original)):
             errors.append("review_surface_mismatch")
-        if (policy == "v4.3_macro_task_critic"
+        if (policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic"}
                 and minimal_question_guards(scene["question"])):
             errors.append("review_surface_mismatch")
         if scene["question"] == original:
@@ -775,7 +878,7 @@ def validate_naturalized_question(scene: dict) -> list[str]:
     elif status == "fallback":
         expected = (
             polished_reference_question(original)
-            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic"}
+            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic", "v4.4_goal_first_critic"}
             else original
         )
         if scene["question"] != expected or meta.get("accepted_review") is not None:
