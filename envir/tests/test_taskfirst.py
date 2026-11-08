@@ -221,13 +221,16 @@ class BackwardRecipePlannerTests(unittest.TestCase):
                 request = json.loads(user)
                 calls.append(("critic", request))
                 return {
-                    "goal_alignment": "same",
-                    "task_sufficiency": "sufficient",
+                    "objective_equivalent": "yes",
+                    "solution_preserved": "yes",
+                    "required_work_preserved": "yes",
+                    "source_faithful": "yes",
+                    "answer_equivalent": "yes",
                     "user_framing": "user_goal",
                     "unsupported_additions": [],
                     "verdict": "pass",
                     "naturalness": "acceptable",
-                    "summary": "The question is supported by the terminal goal.",
+                    "summary": "The question preserves the frozen contract.",
                     "differences": [],
                 }
 
@@ -236,10 +239,140 @@ class BackwardRecipePlannerTests(unittest.TestCase):
         self.assertEqual(natural, initial)
         self.assertEqual(meta["status"], "accepted")
         self.assertNotEqual(initial, payload["question"])
-        self.assertEqual(calls[0][1]["semantic_authority"], "macro_task_graph")
+        self.assertEqual(
+            calls[0][1]["semantic_authority"],
+            "frozen_semantic_contract_and_macro_task_graph",
+        )
         self.assertIn("macro_task_graph", calls[0][1])
+        self.assertIn("semantic_contract", calls[0][1])
+        self.assertIn("semantic_contract_sha256", meta)
+        self.assertEqual(meta["review_policy_version"],
+                         "taskfirst_semantic_contract_v1")
         self.assertNotIn("world", json.dumps(calls[0][1]))
         self.assertNotIn("source_priors", json.dumps(calls[0][1]))
+
+    def test_semantic_contract_is_derived_without_original_mmqa_question(self):
+        from envir.macro.semantic_contract import (
+            semantic_contract, semantic_surface_issues,
+        )
+        original = build_one(
+            ordinal=13, seed=17, kqa=KQA, seed_record=scene(13))
+        changed = copy.deepcopy(original)
+        changed["source_priors"]["MultiModalQA"]["original_question"] = (
+            "Which entirely different historical answer is correct?"
+        )
+        self.assertEqual(semantic_contract(original), semantic_contract(changed))
+        contract = semantic_contract(original)
+        self.assertEqual(contract["contract_version"], "question_semantics_v1")
+        self.assertNotIn("original_question", json.dumps(contract))
+        self.assertNotIn("world", json.dumps(contract))
+        self.assertEqual(
+            len(contract["source_inventory"]),
+            len(original["public"]["available_source_descriptions"]),
+        )
+        self.assertIn(
+            "invented_personal_or_attached_source",
+            semantic_surface_issues(
+                "Which records from my account summary indicate the highest score?",
+                contract,
+            ),
+        )
+
+    def test_strict_critic_rejects_false_positive_and_uncertainty(self):
+        from envir.macro.question_review import (
+            _validate_review, CRITIC_SCHEMA_SEMANTIC, SEMANTIC_REVIEW_POLICY,
+        )
+        valid = {
+            "objective_equivalent": "yes",
+            "solution_preserved": "yes",
+            "required_work_preserved": "yes",
+            "source_faithful": "yes",
+            "answer_equivalent": "yes",
+            "user_framing": "user_goal",
+            "unsupported_additions": [],
+            "verdict": "pass",
+            "naturalness": "acceptable",
+            "summary": "Identical operation and answer under the same evidence.",
+            "differences": [],
+        }
+        self.assertIn("source_faithful", CRITIC_SCHEMA_SEMANTIC["required"])
+        self.assertEqual(
+            _validate_review(valid, policy=SEMANTIC_REVIEW_POLICY)["verdict"],
+            "pass",
+        )
+        rejected = dict(valid)
+        rejected["source_faithful"] = "no"
+        rejected["unsupported_additions"] = ["my account"]
+        with self.assertRaisesRegex(ValueError, "semantic_pass_contradicts"):
+            _validate_review(rejected, policy=SEMANTIC_REVIEW_POLICY)
+        uncertain = dict(valid)
+        uncertain["objective_equivalent"] = "uncertain"
+        uncertain["verdict"] = "revise"
+        uncertain["differences"] = [{
+            "reference_excerpt": "",
+            "candidate_excerpt": "perhaps",
+            "problem": "Operation cannot be established",
+            "minimal_fix": "Use the contract operation",
+        }]
+        with self.assertRaisesRegex(ValueError, "uncertainty_cannot"):
+            _validate_review(uncertain, policy=SEMANTIC_REVIEW_POLICY)
+
+    def test_surface_guard_rejects_invented_account_without_critic_call(self):
+        from envir.macro.question_review import naturalize_one
+        original = build_one(
+            ordinal=19, seed=17, kqa=KQA, seed_record=scene(19))
+        attempts = []
+
+        class BadAuthor:
+            def complete_json(self, system, user, *, response_schema=None):
+                attempts.append("author")
+                return {"question": (
+                    "Using my account summary for Subject 19, which "
+                    "candidate should be selected according to the records?"
+                )}
+
+        class CriticNever:
+            def complete_json(self, *args, **kwargs):
+                attempts.append("critic")
+                raise AssertionError("the semantic guard should reject first")
+
+        question, metadata = naturalize_one(
+            original, author=BadAuthor(), critic=CriticNever(), max_revisions=0)
+        self.assertEqual(question, original["question"])
+        self.assertEqual(metadata["status"], "fallback")
+        self.assertEqual(attempts, ["author"])
+        self.assertIn(
+            "invented_personal_or_attached_source",
+            metadata["audit"][0]["deterministic_guards"],
+        )
+
+    def test_frozen_semantics_fingerprint_catches_contract_drift(self):
+        from envir.macro.question_review import naturalize_one
+        from envir.macro.validation import validate_clean_scene
+        from envir.macro.question_review import _fingerprint, semantic_contract
+        original = build_one(
+            ordinal=17, seed=17, kqa=KQA, seed_record=scene(17))
+        natural = copy.deepcopy(original)
+        reference = natural["question"]
+        semantic = semantic_contract(natural)
+        natural["question_authoring"] = {
+            "review_policy_version": "taskfirst_semantic_contract_v1",
+            "pipeline": "taskfirst_question_semantic_author_critic_v1",
+            "semantic_contract_sha256": "wrong-hash",
+            "macro_task_view_sha256": "dummy",
+            "macro_graph_sha256": _fingerprint(natural["macro_graph"]),
+            "reference_sha256": _fingerprint(reference),
+            "reference_question": reference,
+            "final_question": reference,
+            "status": "fallback", "reason": "author_error",
+            "accepted_review": None, "audit": [],
+            "semantic_equivalence_certified": False,
+        }
+        self.assertIn(
+            "semantic_contract_fingerprint_mismatch",
+            validate_clean_scene(natural),
+        )
+        self.assertEqual(semantic["authorized_topic"], "Subject 17")
 
     def test_cli_build_and_replay(self):
         from envir.macro.cli import main
