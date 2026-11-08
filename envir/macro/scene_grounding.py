@@ -357,8 +357,7 @@ def validate_review(review: dict) -> tuple[dict, list[str]]:
             else "pass"
         )
         if review["verdict"] != expected:
-            review = {**review, "verdict": expected,
-                      "decision_normalized": True}
+            review = {**review, "verdict": expected}
     return review, issues
 
 
