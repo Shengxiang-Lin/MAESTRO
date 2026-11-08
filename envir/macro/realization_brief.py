@@ -70,13 +70,14 @@ def question_realization_brief(scene: dict) -> dict:
             "The user will see source descriptions separately. "
             "You are not required to name each source modality in the Question."
         ),
-        "allowed_source_modalities": spec["allowed_modalities"],
-        "explicit_conditions": spec["hard_constraints"],
+        "numerical_condition": (
+            "A recorded score of at least 50."
+            if intent == "feasibility" else None
+        ),
         "language_guide": (
             "Use ordinary English and one focused question. Replace internal "
-            "terms such as candidate_key, synthetic_attribute_flag, "
-            "synthetic_attribute_score, candidate observations, source-linked, "
-            "WorkProduct, Recipe or GoalAssessment with natural equivalents. "
+            "technical identifiers, source-linked candidate jargon, "
+            "or backend task labels with natural equivalents. "
             "Keep the *meaning* of positive marks, recorded scores and "
             "relative ordering, without turning them into new real-world facts."
         ),
