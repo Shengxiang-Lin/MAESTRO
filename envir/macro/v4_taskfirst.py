@@ -14,64 +14,13 @@ import random
 from dataclasses import replace
 
 from envir.schema import digest
-from .patterns import BY_DOMAIN, CASES, CASE_VARIANTS
+from .patterns import CASES, CASE_VARIANTS
 from .priors import choose_kqa, choose_mmqa
 from .v2_workbank import GOAL_TYPES
 from .graph import (build_atomic_draft, coarsen, compile_contracts,
                     compile_waves, complexity)
 from .v2_planner import _build_work_graph, _topology_metrics, _classify_topology
 
-
-QUESTION_REQUESTS = {
-    "impact": (
-        "identify which {affected} are materially affected, and explain what "
-        "the available findings imply for their handling",
-        "establish the scope and consequences for {affected}, distinguishing "
-        "supported effects from matters outside the reported case",
-    ),
-    "compliance": (
-        "assess whether the relevant conduct and records satisfy the applicable "
-        "requirements, stating the basis for each conclusion",
-        "determine which aspects of the documented situation meet the applicable "
-        "rules and which warrant attention",
-    ),
-    "reconciliation": (
-        "reconcile the different accounts of what occurred and explain which "
-        "claims are supported by the available records",
-        "establish a coherent account of the reported situation, noting any "
-        "material differences between the available sources",
-    ),
-    "mitigation": (
-        "identify practical responses and compare their feasibility and likely "
-        "consequences for the responsible coordinator",
-        "recommend a workable response, considering both documented impacts "
-        "and the available operational constraints",
-    ),
-    "prioritization": (
-        "determine which affected cases or follow-up activities deserve priority "
-        "and justify the proposed order",
-        "recommend a defensible order of action, considering the relevant "
-        "evidence and operational obligations",
-    ),
-    "comparison": (
-        "compare the available findings and explain which interpretation or "
-        "response is better supported",
-        "evaluate the differences between the relevant findings or proposed "
-        "responses and state what they mean for the decision",
-    ),
-    "feasibility": (
-        "evaluate which available response options can be implemented under "
-        "the relevant practical and policy constraints",
-        "assess the feasibility of possible next steps, including the conditions "
-        "that limit their implementation",
-    ),
-    "timeline": (
-        "reconstruct the relevant sequence of events and explain which timing "
-        "details matter for resolving the reported situation",
-        "establish the event chronology using the available documentation and "
-        "identify any material difference in the recorded sequence",
-    ),
-}
 
 # Non-agent-friendly public resource labels (not instructions or planned steps).
 SOURCE_LABELS = {
@@ -116,7 +65,6 @@ def task_level_brief(plan: dict) -> dict:
 def author_question(brief: dict, *, ordinal: int, seed: int) -> str:
     """Public wording is a function of macro work contracts, never Evidence."""
     intent = brief["intent"]
-    case = BY_DOMAIN[brief["domain"]]
     rng = random.Random(seed * 314159 + ordinal * 271828)
     # The requested action comes from the TERMINAL MACRO WORK PRODUCT,
     # not from a separate question-intent template. Different legitimate
