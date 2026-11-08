@@ -391,8 +391,8 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
     if comp["macro_dependency_depth"] < 2:
         raise UnsuitableSeed("insufficient multi-stage dependency depth")
     metrics = _topology_metrics(macro_tasks, edges, waves)
-    task_uid = "macro-v46-data-" + digest(
-        run_seed, ordinal, seed_record["record_id"], question)
+    task_uid = "macro-taskfirst-composed-" + digest(
+        run_seed, ordinal, seed_record["record_id"], goal_id)
     kqa_prior, kqa_policy = choose_kqa(
         kqa, "mixed" if metrics["joins"] else "chain", rng, ordinal)
     plan = {
