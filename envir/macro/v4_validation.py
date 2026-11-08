@@ -13,6 +13,7 @@ import re
 
 from .graph import compile_contracts, compile_waves, MacroPlanError
 from .v4_taskfirst import author_question, task_level_brief
+from .v4_question_review import validate_naturalized_question
 from .v4_evidence import run_clean_tasks, EvidenceExecutionError
 
 
@@ -76,7 +77,12 @@ def validate_clean_scene(scene: dict) -> list[str]:
         meta = scene["task_plan_provenance"]
         recomputed = author_question(
             brief, ordinal=meta["ordinal"], seed=meta["seed"])
-        if scene["question"] != recomputed:
+        if "question_authoring" in scene:
+            # The deterministic Question is the immutable semantic reference.
+            # A model-accepted naturalized Question is allowed only with
+            # approved review/audit tied to this SAME TaskGraph contract.
+            errors.extend(validate_naturalized_question(scene))
+        elif scene["question"] != recomputed:
             errors.append("question_not_derived_from_tasks")
     except (KeyError, TypeError, ValueError):
         errors.append("question_provenance_unavailable")

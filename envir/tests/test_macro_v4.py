@@ -12,6 +12,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from envir.macro.priors import load_kqa, load_mmqa
 from envir.macro.v4_builder import build_batch, build_one
@@ -19,6 +20,9 @@ from envir.macro.v4_cli import main
 from envir.macro.v4_evidence import run_clean_tasks, EvidenceExecutionError
 from envir.macro.v4_taskfirst import author_question, task_level_brief
 from envir.macro.v4_validation import validate_clean_scene
+from envir.macro.v4_question_review import (
+    naturalize_one, naturalize_scenes, public_task_contract, surface_issues,
+)
 
 
 class CleanTaskFirstTests(unittest.TestCase):
@@ -201,6 +205,289 @@ class CleanTaskFirstTests(unittest.TestCase):
         modified["public"]["macro_graph"] = scene["macro_graph"]
         self.assertIn("public_projection_keys",
                       validate_clean_scene(modified))
+
+    def test_llm_author_critic_accepts_natural_question_without_changing_tasks(self):
+        scene = self.build(2)
+        before = copy.deepcopy(scene)
+        class Author:
+            def __init__(self):
+                self.requests = []
+            def complete_json(self, system, user, *, response_schema=None):
+                p = json.loads(user)
+                self.requests.append(p)
+                return {"question": p["reference_question"].replace(
+                    " Explain which documented findings support your assessment.",
+                    " What evidence supports your conclusion?",
+                )}
+        class Critic:
+            def __init__(self):
+                self.requests = []
+            def complete_json(self, system, user, *, response_schema=None):
+                p = json.loads(user)
+                self.requests.append(p)
+                return {"verdict": "pass", "naturalness": "acceptable",
+                        "summary": "Same task goal and natural wording.",
+                        "differences": []}
+        author, critic = Author(), Critic()
+        stats = naturalize_scenes([scene], author=author, critic=critic)
+        self.assertEqual(stats["accepted"], 1)
+        self.assertEqual(stats["fallback"], 0)
+        self.assertEqual(validate_clean_scene(scene), [])
+        self.assertNotEqual(scene["question"], before["question"])
+        for field in ("macro_graph", "world", "task_evidence_graphs",
+                      "feedback_bank", "goal_evidence_coverage", "source_priors"):
+            self.assertEqual(scene[field], before[field], field)
+        for payload in author.requests + critic.requests:
+            flattened = json.dumps(payload)
+            self.assertNotIn(before["world"]["case_reference"], flattened)
+            self.assertNotIn('"macro_graph"', flattened)
+            self.assertNotIn('"task_evidence_graphs"', flattened)
+            self.assertNotIn('"feedback_bank"', flattened)
+            self.assertNotIn('"source_fact_refs"', flattened)
+            self.assertNotIn('"task_id"', flattened)
+            self.assertNotIn('"depends_on"', flattened)
+        self.assertFalse(
+            scene["question_authoring"]["semantic_equivalence_certified"]
+        )
+        self.assertEqual(
+            scene["question_authoring"]["accepted_review"]["verdict"], "pass"
+        )
+        self.assertEqual(scene["question_authoring"]["author_calls"], 1)
+        self.assertEqual(scene["question_authoring"]["critic_calls"], 1)
+
+    def test_critic_revise_local_issues_and_resubmit(self):
+        scene = self.build(1)
+        class Author:
+            def __init__(self):
+                self.requests = []
+            def complete_json(self, system, user, *, response_schema=None):
+                p = json.loads(user)
+                self.requests.append(p)
+                if "previous_draft" in p:
+                    self_test.assertEqual(
+                        p["reviewer_feedback"]["differences"][0]["problem"],
+                        "The phrase is awkward and repetitive",
+                    )
+                    question = p["reference_question"].replace(
+                        " Explain which documented findings support your assessment.",
+                        " Please cite the relevant evidence.",
+                    )
+                else:
+                    question = p["reference_question"].replace(
+                        " Explain which documented findings support your assessment.",
+                        " What evidence supports your assessment?",
+                    )
+                return {"question": question}
+        class Critic:
+            def __init__(self):
+                self.calls = 0
+            def complete_json(self, system, user, *, response_schema=None):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "verdict": "revise",
+                        "naturalness": "needs_polish",
+                        "summary": "One local style issue",
+                        "differences": [{
+                            "reference_excerpt": "",
+                            "candidate_excerpt": "What evidence",
+                            "problem": "The phrase is awkward and repetitive",
+                            "minimal_fix": "Use a shorter evidence request",
+                        }],
+                    }
+                return {
+                    "verdict": "pass", "naturalness": "acceptable",
+                    "summary": "Equivalent and natural", "differences": [],
+                }
+        self_test = self
+        author, critic = Author(), Critic()
+        question, meta = naturalize_one(
+            scene, author=author, critic=critic, max_revisions=2,
+        )
+        self.assertNotEqual(scene["question"], question)
+        self.assertEqual(meta["status"], "accepted")
+        self.assertEqual(meta["author_calls"], 2)
+        self.assertEqual(meta["critic_calls"], 2)
+        self.assertEqual(meta["revision_rounds"], 1)
+        self.assertEqual(critic.calls, 2)
+        self.assertIn("previous_draft", author.requests[1])
+        scene["question"] = question
+        scene["public"]["question"] = question
+        scene["question_authoring"] = meta
+        self.assertEqual(validate_clean_scene(scene), [])
+
+    def test_semantic_drift_or_uncertainty_falls_back(self):
+        scene = self.build(4)
+        reference = scene["question"]
+        self.assertIn("invented_numeric_constraint", surface_issues(
+            scene, reference + " Use the 98765 threshold.",
+        ))
+        self.assertIn("private_orchestration_plan_leak", surface_issues(
+            scene, reference + " Delegate to S1.",
+        ))
+        class DriftAuthor:
+            def __init__(self):
+                self.calls = 0
+            def complete_json(self, system, user, *, response_schema=None):
+                self.calls += 1
+                return {"question": json.loads(user)["reference_question"]
+                        + " Use the 98765 threshold."}
+        class ShouldNotCallCritic:
+            def complete_json(self, *args, **kwargs):
+                raise AssertionError("Guard must reject before critic")
+        author = DriftAuthor()
+        question, meta = naturalize_one(
+            scene, author=author, critic=ShouldNotCallCritic(),
+            max_revisions=2,
+        )
+        self.assertEqual(question, reference)
+        self.assertEqual(meta["status"], "fallback")
+        self.assertEqual(meta["author_calls"], 3)
+        self.assertEqual(meta["critic_calls"], 0)
+        self.assertEqual(author.calls, 3)
+
+    def test_critic_uncertain_and_tampered_certificate_rejected(self):
+        scene = self.build(6)
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"question": json.loads(user)["reference_question"].replace(
+                    " Explain which documented findings support your assessment.",
+                    " What evidence supports your conclusion?",
+                )}
+        class Uncertain:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {
+                    "verdict": "uncertain", "naturalness": "acceptable",
+                    "summary": "I cannot establish equivalence",
+                    "differences": [],
+                }
+        reference = scene["question"]
+        question, meta = naturalize_one(
+            scene, author=Author(), critic=Uncertain(), max_revisions=2,
+        )
+        self.assertEqual(question, reference)
+        self.assertEqual(meta["status"], "fallback")
+        self.assertEqual(meta["reason"], "critic_uncertain")
+        self.assertEqual(meta["author_calls"], 1)
+        self.assertEqual(meta["critic_calls"], 1)
+        scene["question_authoring"] = meta
+        self.assertEqual(validate_clean_scene(scene), [])
+        scene["question_authoring"]["macro_graph_sha256"] = "not-the-original"
+        self.assertIn("review_macro_graph_changed", validate_clean_scene(scene))
+
+    def test_question_only_cli_naturalize_does_not_regenerate_evidence(self):
+        originals, _ = build_batch(
+            kqa=self.kqa, mmqa=self.mmqa, target=3, seed=17,
+        )
+        source = self.temp / "bank.jsonl"
+        source.write_text(
+            "\n".join(json.dumps(r) for r in originals) + "\n",
+            encoding="utf-8",
+        )
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"question": json.loads(user)["reference_question"].replace(
+                    " Explain which documented findings support your assessment.",
+                    " What evidence supports the assessment?",
+                )}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {
+                    "verdict": "pass", "naturalness": "acceptable",
+                    "summary": "Aligned", "differences": [],
+                }
+        instances = [Author(), Critic()]
+        def fake_backend(**kwargs):
+            return instances.pop(0)
+        output = self.temp / "naturalized"
+        with patch(
+            "environment.question_generation.backend.OpenAICompatibleBackend",
+            side_effect=fake_backend,
+        ), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main([
+                "naturalize", "--scenes", str(source),
+                "--output-dir", str(output),
+                "--question-model", "fake-author",
+                "--question-api-base", "http://localhost:8807/v1",
+                "--question-workers", "2",
+                "--max-revisions", "1",
+            ]), 0)
+            self.assertEqual(main([
+                "replay", "--scenes", str(
+                    output / "private_clean_scenes_v4.jsonl"),
+            ]), 0)
+        changed = [
+            json.loads(l) for l in
+            (output / "private_clean_scenes_v4.jsonl").read_text().splitlines()
+        ]
+        summary = json.loads((output / "macro_v4_summary.json").read_text())
+        self.assertEqual(summary["statistics"]["question_authoring"]["accepted"], 3)
+        self.assertEqual(len(
+            (output / "question_review_audit_v4.jsonl").read_text().splitlines()
+        ), 3)
+        for original, rewritten in zip(originals, changed):
+            self.assertNotEqual(original["question"], rewritten["question"])
+            for key in ("macro_graph", "world", "task_evidence_graphs", "feedback_bank"):
+                self.assertEqual(original[key], rewritten[key])
+
+    def test_duplicate_accepted_surface_reverts_later_scene(self):
+        first = self.build(8)
+        second = copy.deepcopy(first)
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"question": json.loads(user)["reference_question"].replace(
+                    " Explain which documented findings support your assessment.",
+                    " What evidence supports the conclusion?",
+                )}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {
+                    "verdict": "pass", "naturalness": "acceptable",
+                    "summary": "Equivalent user request", "differences": [],
+                }
+        stats = naturalize_scenes(
+            [first, second], author=Author(), critic=Critic(),
+        )
+        self.assertEqual(stats["accepted"], 1)
+        self.assertEqual(stats["fallback"], 1)
+        self.assertEqual(
+            stats["failure_reasons"]["duplicate_naturalized_question"], 1,
+        )
+        self.assertNotEqual(first["question"], second["question"])
+        self.assertEqual(validate_clean_scene(first), [])
+        self.assertEqual(validate_clean_scene(second), [])
+
+    def test_critic_format_retry_uses_same_draft(self):
+        scene = self.build(7)
+        class Author:
+            def __init__(self):
+                self.calls = 0
+            def complete_json(self, system, user, *, response_schema=None):
+                self.calls += 1
+                return {"question": json.loads(user)["reference_question"].replace(
+                    " Explain which documented findings support your assessment.",
+                    " What evidence supports your conclusion?",
+                )}
+        class Critic:
+            def __init__(self):
+                self.drafts = []
+            def complete_json(self, system, user, *, response_schema=None):
+                request = json.loads(user)
+                self.drafts.append(request["candidate_question"])
+                if len(self.drafts) == 1:
+                    return {"verdict": "pass"}  # Malformed response.
+                return {
+                    "verdict": "pass", "naturalness": "acceptable",
+                    "summary": "Equivalent", "differences": [],
+                }
+        author, critic = Author(), Critic()
+        question, info = naturalize_one(
+            scene, author=author, critic=critic, max_revisions=2,
+        )
+        self.assertEqual(info["status"], "accepted", info)
+        self.assertEqual(info["author_calls"], 1)
+        self.assertEqual(info["critic_calls"], 2)
+        self.assertEqual(critic.drafts, [question, question])
 
     def test_cli_build_replay_and_no_overwrite(self):
         path = self.temp / "out"
