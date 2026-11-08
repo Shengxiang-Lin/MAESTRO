@@ -23,6 +23,7 @@ from pathlib import Path
 
 from .priors import load_kqa
 from .scene_catalog import load_scenario_seeds, enrich_with_yago
+from .source_contexts import load_supporting_contexts
 from .v4_builder import build_batch
 from .v4_streaming import stream_naturalize_scenes
 from .v4_validation import validate_clean_scene
@@ -146,9 +147,16 @@ def build(args):
         args.mmqa, limit=args.max_mmqa_records)
     yago_stats = enrich_with_yago(
         scenario_seeds, args.yago, max_triples=args.max_yago_triples)
+    context_dir = args.mmqa_context_dir or args.mmqa.parent
+    contexts, context_stats = (
+        ({}, {"policy": "disabled", "available_context_excerpts": 0})
+        if args.no_mmqa_context else
+        load_supporting_contexts(
+            scenario_seeds, context_dir, excerpt_chars=args.mmqa_excerpt_chars)
+    )
     scenes, stats = build_batch(
         kqa=kqa, scenario_seeds=scenario_seeds,
-        target=args.target, seed=args.seed,
+        target=args.target, seed=args.seed, contexts=contexts,
     )
     # Only selected, successfully compiled source records are exported.
     manifest = args.output_dir / "scenario_seed_manifest.jsonl"
@@ -179,15 +187,17 @@ def build(args):
         "statistics": stats,
         "original_pattern_coverage": {"KQA": ks, "MultiModalQA": ms},
         "yago_enrichment": yago_stats,
+        "mmqa_context_enrichment": context_stats,
         "scenario_seed_manifest": str(manifest),
         "files": {key: str(path) for key, path in paths.items()},
         "stage_order": [
             "extract_mmqa_scenario_and_need_seeds",
             "enrich_exact_yago_entities_when_available",
             "compile_mmqa_composition_into_macro_tasks",
+            "bind_all_supporting_sources_and_optional_original_context",
             "derive_reference_question_from_terminal_work_goal",
             "optional_question_author_critic_revision",
-            "construct_per_task_synthetic_evidence",
+            "execute_per_task_synthetic_typed_operations",
             "derive_clean_feedback_and_summary_trace",
             "verify_terminal_evidence_coverage",
         ],
@@ -354,6 +364,12 @@ def parser():
     b.add_argument("--seed", type=int, default=17)
     b.add_argument("--max-kqa-records", type=int, default=10000)
     b.add_argument("--max-mmqa-records", type=int, default=30000)
+    b.add_argument("--mmqa-context-dir", type=Path, default=None,
+                   help="Existing MMQA bank directory (defaults to --mmqa file directory)")
+    b.add_argument("--no-mmqa-context", action="store_true",
+                   help="Skip optional lookup of original MMQA text/table/caption banks")
+    b.add_argument("--mmqa-excerpt-chars", type=int, default=1200,
+                   help="Maximum excerpt characters per original supporting source")
     b.add_argument("--overwrite", action="store_true")
     _question_flags(b)
     n = sub.add_parser(
