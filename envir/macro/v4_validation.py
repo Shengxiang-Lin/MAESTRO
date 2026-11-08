@@ -79,20 +79,40 @@ def validate_clean_scene(scene: dict) -> list[str]:
             errors.append("duplicated_task_source_grants")
         if not set(grants.get(t["task_id"], [])) <= set(sources):
             errors.append("unauthorized_source_grant")
-    # Dataset-derived questions must preserve the original MMQA information
-    # need in the terminal work goal, with every source handle traceable to
-    # the original supporting context or an explicitly marked modality role.
+    # The MMQA question is only private, teacher-side provenance. New goals
+    # are independently sampled from the Goal Bank; the final Task carries
+    # the only allowed question blueprint. Prevent reintroducing copy-based QA.
     if scene.get("scenario", {}).get("source_kind") == "MultiModalQA":
         from .data_taskfirst import FINAL_PREFIX
+        from .goal_grammar import GOALS
+        from envir.schema import normalize_label
         prior = scene.get("source_priors", {}).get("MultiModalQA", {})
-        original = prior.get("original_question")
+        original = prior.get("original_question", "")
         terminal = (plan.get("terminal_handoffs") or [{}])[0]
         terminal_task = next(
             (task for task in tasks if task["task_id"] == terminal.get("from_task")),
             None)
-        if (not original or terminal_task is None
-                or terminal_task.get("goal") != FINAL_PREFIX + original):
-            errors.append("mmqa_question_terminal_goal_drift")
+        pattern_id = scene.get("goal", {}).get("intent")
+        pattern = GOALS.get(pattern_id)
+        blueprint = (
+            terminal_task.get("question_blueprint", {})
+            if terminal_task is not None else {}
+        )
+        expected_work_goal = (
+            FINAL_PREFIX + pattern["goal"] + " Scene: " +
+            scene["scenario"]["topic"] + "." if pattern else None
+        )
+        if (terminal_task is None or pattern is None
+                or terminal_task.get("goal") != expected_work_goal
+                or blueprint.get("pattern_id") != pattern_id
+                or blueprint.get("goal_artifact") != pattern.get("artifact")
+                or scene.get("goal", {}).get("desired_artifact_type") != pattern["artifact"]):
+            errors.append("macro_goal_terminal_blueprint_drift")
+        if original and (
+            normalize_label(original) == normalize_label(scene.get("question", ""))
+            or (terminal_task is not None and original in terminal_task.get("goal", ""))
+        ):
+            errors.append("copied_original_mmqa_question")
         expected_sources = {
             (src.get("modality"), src.get("doc_id"))
             for src in prior.get("supporting_sources", [])
