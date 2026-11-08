@@ -1,6 +1,6 @@
 """Canonical programmatic construction pipeline for MAESTRO synthetic tasks."""
 from __future__ import annotations
-import argparse,json
+import argparse,json,re
 from pathlib import Path
 from typing import Any,Mapping
 from tqdm.auto import tqdm
@@ -14,7 +14,7 @@ from .quality.p1_audit import audit_plausibility_jsonl
 from .rendering import render_jsonl
 from .rendering.modality import audit_modality_jsonl
 from .scenario import audit_scenarios_jsonl
-from .source_preparation import SourcePreparationPaths,prepare_source_priors
+from .source_preparation import SourcePreparationPaths,prepare_source_priors,compact_source_summary
 from .task_design.io import plan_task_designs_jsonl
 from .utils.io import write_json as _write_json
 ENVIRONMENT_DIR=Path(__file__).resolve().parents[1];REPOSITORY_DIR=ENVIRONMENT_DIR.parent;WORLD_SOURCE_DIR=REPOSITORY_DIR/"data"/"world-source";OUTPUT_DIR=ENVIRONMENT_DIR/"data"
@@ -36,19 +36,30 @@ def _require_inputs(paths):
     if missing:raise SystemExit("Missing required input file(s):\n"+"\n".join(f"  - {p}" for p in missing))
 def _count_jsonl(path):
     with Path(path).open("r",encoding="utf-8") as handle:return sum(1 for line in handle if line.strip())
-def _artifact_paths(pool_size):return {"task_design":OUTPUT_DIR/f"task_designs_{pool_size}.jsonl","scenario":OUTPUT_DIR/f"scenario_validity_{pool_size}.jsonl","capability":OUTPUT_DIR/f"capability_worlds_{pool_size}.jsonl","authoring":OUTPUT_DIR/f"authoring_inputs_{pool_size}.jsonl","manifest":OUTPUT_DIR/f"frozen_manifest_{pool_size}.json"}
+def _artifact_paths(pool_size,run_tag=""):
+    suffix=f"_{pool_size}"+(f"_{run_tag}" if run_tag else "")
+    return {
+        "task_design":OUTPUT_DIR/f"task_designs{suffix}.jsonl",
+        "scenario":OUTPUT_DIR/f"scenario_validity{suffix}.jsonl",
+        "capability":OUTPUT_DIR/f"capability_worlds{suffix}.jsonl",
+        "authoring":OUTPUT_DIR/f"authoring_inputs{suffix}.jsonl",
+        "manifest":OUTPUT_DIR/f"frozen_manifest{suffix}.json",
+    }
 def _require_prepared_sources():_require_inputs([KQA_ANALYSIS,YAGO_CATALOG,YAGO_ENTITY_PROFILES,YAGO_TAXONOMY_INDEX,MMQA_SEMANTIC_BUNDLES,MMQA_SCENARIO_PRIOR])
-def _run_downstream(worlds_path,rendered_path,*,accepted,pool_size,seed,progress):
-    paths=_artifact_paths(pool_size);result={};bar=tqdm(total=5,desc="Environment downstream",unit="stage",disable=not progress,dynamic_ncols=True)
+def _run_downstream(worlds_path,rendered_path,*,accepted,pool_size,seed,progress,run_tag=""):
+    suffix=f"_{pool_size}"+(f"_{run_tag}" if run_tag else "")
+    paths=_artifact_paths(pool_size,run_tag);result={};bar=tqdm(total=5,desc="Environment downstream",unit="stage",disable=not progress,dynamic_ncols=True)
     result["task_design"]=plan_task_designs_jsonl(worlds_path,paths["task_design"],max_records=accepted,taxonomy_index_path=YAGO_TAXONOMY_INDEX);bar.update(1)
     result["rendered"]=render_jsonl(worlds_path,rendered_path,seed=seed);bar.update(1)
-    modality=audit_modality_jsonl(worlds_path,max_records=accepted);_write_json(OUTPUT_DIR/f"modality_audit_{pool_size}.json",modality);result["modality"]=modality;bar.update(1)
-    scenario=audit_scenarios_jsonl(worlds_path,output_path=paths["scenario"],max_records=accepted);_write_json(OUTPUT_DIR/f"scenario_validity_summary_{pool_size}.json",scenario);result["scenario_validity"]=scenario;bar.update(1)
-    capability=ground_capabilities_jsonl(worlds_path,paths["capability"],max_records=accepted,seed=seed,task_design_path=paths["task_design"]);_write_json(OUTPUT_DIR/f"capability_grounding_{pool_size}.json",capability);result["capability_grounding"]=capability;result["semantic_plausibility"]=audit_plausibility_jsonl(worlds_path,YAGO_CATALOG,YAGO_TAXONOMY_INDEX,output_path=OUTPUT_DIR/f"semantic_plausibility_{pool_size}.jsonl");result["execution_contract"]=audit_execution_contract_jsonl(worlds_path,output_path=OUTPUT_DIR/f"execution_contract_{pool_size}.jsonl",seed=seed);bar.update(1);bar.close();return result
+    modality=audit_modality_jsonl(worlds_path,max_records=accepted);_write_json(OUTPUT_DIR/f"modality_audit{suffix}.json",modality);result["modality"]=modality;bar.update(1)
+    scenario=audit_scenarios_jsonl(worlds_path,output_path=paths["scenario"],max_records=accepted);_write_json(OUTPUT_DIR/f"scenario_validity_summary{suffix}.json",scenario);result["scenario_validity"]=scenario;bar.update(1)
+    capability=ground_capabilities_jsonl(worlds_path,paths["capability"],max_records=accepted,seed=seed,task_design_path=paths["task_design"]);_write_json(OUTPUT_DIR/f"capability_grounding{suffix}.json",capability);result["capability_grounding"]=capability;result["semantic_plausibility"]=audit_plausibility_jsonl(worlds_path,YAGO_CATALOG,YAGO_TAXONOMY_INDEX,output_path=OUTPUT_DIR/f"semantic_plausibility{suffix}.jsonl");result["execution_contract"]=audit_execution_contract_jsonl(worlds_path,output_path=OUTPUT_DIR/f"execution_contract{suffix}.jsonl",seed=seed);bar.update(1);bar.close();return result
 def build_parser():
     p=argparse.ArgumentParser(description="Build all valid MAESTRO worlds from a fixed semantic candidate pool")
     p.add_argument("--candidate-pool-size",type=int,default=2000,help="number of validated semantic candidates to collect and evaluate")
-    p.add_argument("--construction-mode",choices=("program_composition","semantic_anchored"),
+    p.add_argument("--run-tag",default="",
+                   help="Isolate experimental artifacts without changing source priors; e.g. v2")
+    p.add_argument("--construction-mode",choices=("program_composition","semantic_anchored","semantic_anchored_v2"),
                    default="program_composition",
                    help="Original KQA/YAGO composition or YAGO subject-profile-anchored binding")
     p.add_argument("--anchor-tries",type=int,default=6,
@@ -99,6 +110,10 @@ def main():
         raise SystemExit("--world-attempts-per-candidate must be positive")
     if args.anchor_tries<1:
         raise SystemExit("--anchor-tries must be positive")
+    if args.construction_mode=="semantic_anchored_v2" and not args.run_tag:
+        raise SystemExit("--run-tag is required in semantic_anchored_v2 mode to avoid overwriting a prior pool")
+    if args.run_tag and not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", args.run_tag):
+        raise SystemExit("--run-tag must be 1-24 letters, numbers, hyphen or underscore")
     if args.candidate_max_attempts is not None and args.candidate_max_attempts<1:
         raise SystemExit("--candidate-max-attempts must be positive")
     scenario_weights=(args.web_search_weight,args.hybrid_weight,args.provided_media_weight)
@@ -109,15 +124,19 @@ def main():
                          "--restart-candidates or --resume-downstream")
     progress=not args.no_progress
     OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
-    candidates=OUTPUT_DIR/f"semantic_candidates_pool_{pool_size}.jsonl"
-    worlds=OUTPUT_DIR/f"typed_worlds_{pool_size}.jsonl"
-    rendered=OUTPUT_DIR/f"rendered_worlds_{pool_size}.jsonl"
+    suffix=f"_{pool_size}"+(f"_{args.run_tag}" if args.run_tag else "")
+    candidates=OUTPUT_DIR/f"semantic_candidates_pool{suffix}.jsonl"
+    worlds=OUTPUT_DIR/f"typed_worlds{suffix}.jsonl"
+    rendered=OUTPUT_DIR/f"rendered_worlds{suffix}.jsonl"
     summary_path=OUTPUT_DIR/(
-        f"build_summary_semantic_anchored_{pool_size}.json"
-        if args.construction_mode=="semantic_anchored" else "build_summary.json"
+        f"build_summary_{args.construction_mode}_{pool_size}.json"
+        if args.construction_mode in ("semantic_anchored","semantic_anchored_v2") else "build_summary.json"
     )
+    if args.run_tag:
+        summary_path=summary_path.with_name(summary_path.stem+f"_{args.run_tag}.json")
     summary={"pipeline":{
         "mode":"fixed_candidate_pool",
+        "run_tag":args.run_tag,
         "construction_mode":args.construction_mode,
         "candidate_pool_size":pool_size,
         "seed":args.seed,
@@ -136,11 +155,11 @@ def main():
             "resumed":True,
         }
         summary.update(_run_downstream(worlds,rendered,accepted=accepted,pool_size=pool_size,
-                                       seed=args.seed,progress=progress))
+                                       seed=args.seed,progress=progress,run_tag=args.run_tag))
     else:
         if args.reuse_source_priors:
             _require_prepared_sources()
-            summary["source_preparation"]=_read_json(SOURCE_PATHS.summary)
+            summary["source_preparation"]=compact_source_summary(_read_json(SOURCE_PATHS.summary))
         else:
             _require_inputs([args.kqa_train,args.kqa_val,args.yago_facts,args.yago_schema,
                              args.yago_taxonomy,args.mmqa_train,args.mmqa_dev])
@@ -172,7 +191,7 @@ def main():
             if (settings.get("seed") != args.seed
                     or settings.get("pool_size") != pool_size
                     or settings.get("construction_mode","program_composition") != args.construction_mode
-                    or (args.construction_mode=="semantic_anchored" and settings.get("anchor_tries") != args.anchor_tries)
+                    or (args.construction_mode in ("semantic_anchored","semantic_anchored_v2") and settings.get("anchor_tries") != args.anchor_tries)
                     or state.get("status") not in {"complete","budget_exhausted"}):
                 raise SystemExit(
                     "Reusable candidate checkpoint has incompatible seed, "
@@ -207,7 +226,7 @@ def main():
                 candidate_proposal_batch_size=args.candidate_proposal_batch_size,
                     restart_candidates=args.restart_candidates,
                 construction_mode=args.construction_mode,
-                anchor_profiles_path=YAGO_ENTITY_PROFILES if args.construction_mode=="semantic_anchored" else None,
+                anchor_profiles_path=YAGO_ENTITY_PROFILES if args.construction_mode in ("semantic_anchored","semantic_anchored_v2") else None,
                 anchor_tries=args.anchor_tries)
             except CandidateCheckpointError as exc:
                 raise SystemExit(f"Candidate checkpoint error: {exc}") from exc
@@ -229,10 +248,10 @@ def main():
                              f"Rejection reasons: {summary['worlds'].get('rejection_reasons',{})}. "
                              f"See {summary['worlds'].get('rejected_output')} and {summary_path}")
         summary.update(_run_downstream(worlds,rendered,accepted=accepted,pool_size=pool_size,
-                                       seed=args.seed,progress=progress))
+                                       seed=args.seed,progress=progress,run_tag=args.run_tag))
     _write_json(summary_path,summary)
     accepted=int(summary["worlds"].get("accepted",0) or 0)
-    paths=_artifact_paths(pool_size)
+    paths=_artifact_paths(pool_size,args.run_tag)
     try:
         manifest=freeze_batch(
             summary,accepted_count=accepted,seed=args.seed,worlds_path=worlds,

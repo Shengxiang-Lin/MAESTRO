@@ -76,7 +76,8 @@ def bind_proposal(proposal):
     raw=proposal['program']
     program=ProgramIR([ProgramNode(int(n['node_id']),n['op'],tuple(n['dependencies']),
         tuple(n['inputs']),n.get('raw_function')) for n in raw['nodes']],metadata=raw['metadata'])
-    anchored=proposal.get('construction_mode')=='semantic_anchored'
+    anchored=proposal.get('construction_mode') in {'semantic_anchored', 'semantic_anchored_v2'}
+    v2=proposal.get('construction_mode')=='semantic_anchored_v2'
     if anchored and anchor_bank is None:
         return {'attempt':proposal['attempt'],'error':'semantic_anchor_bank_missing'}
     if anchored and not anchor_bank.can_anchor(program):
@@ -86,9 +87,18 @@ def bind_proposal(proposal):
     for index in range(attempts):
         binding_seed=proposal['binding_seed']+index*10007
         predicates.rng=random.Random(binding_seed)
-        anchor=anchor_bank.sample(program,rng=random.Random(binding_seed)) if anchored else None
+        anchor=anchor_bank.sample(program,rng=random.Random(binding_seed),
+            usage=proposal.get('predicate_usage'),balanced=v2) if anchored else None
         try:
-            validator=(lambda candidate: anchor_bank.evaluate(candidate,anchor) is not None) if anchor else None
+            def validator(candidate):
+                if anchor is None:
+                    return True
+                proof = anchor_bank.evaluate(candidate,anchor)
+                if proof is None:
+                    return False
+                # v2 requires the real subject profile to explain a
+                # meaningful fraction of the WHOLE bound program.
+                return not v2 or proof['global_coverage'] >= 0.45
             binder=GraphGroundedProgramBinder(catalog,taxonomy,seed=binding_seed,
                 candidate_limit=16,max_states=256 if anchored else 128,
                 predicate_usage=proposal['predicate_usage'],
@@ -100,6 +110,9 @@ def bind_proposal(proposal):
             if anchored and evidence is None:
                 last_error='semantic_anchor_joint_support_missing'
                 continue
+            if v2 and evidence['global_coverage'] < 0.45:
+                last_error='semantic_anchor_low_global_coverage'
+                continue
             row={'program':plan.program.to_dict(),
                 'binding':plan.to_dict(),'source_program_signature':plan.program.canonical_signature(),
                 'reasoning_motif':proposal['reasoning_motif'],'hardness':proposal['hardness'],
@@ -107,6 +120,8 @@ def bind_proposal(proposal):
                 'terminal_family':terminal_family(plan.program)}
             if evidence is not None:
                 row['semantic_anchor']=evidence
+                if v2:
+                    row['semantic_anchor']['policy']='yago_subject_cohesion_v2'
             return {'attempt':proposal['attempt'],'row':row}
         except (BindingError,ValueError,RuntimeError) as exc:
             last_error=type(exc).__name__+':'+str(exc).split(':',1)[0]
@@ -273,8 +288,12 @@ def _run_locked(state_path,partial,signature,target,attempts_limit,seed,workers,
 
 
 def _predicates(row):
-    return {str(item['predicate']) for section in ('relation_bindings','attribute_bindings')
+    result = {str(item['predicate']) for section in ('relation_bindings','attribute_bindings')
         for item in row.get('binding',{}).get(section,{}).values() if item.get('predicate')}
+    anchor = row.get('semantic_anchor') or {}
+    if anchor.get('anchor_type'):
+        result.add('anchor_type:' + str(anchor['anchor_type']))
+    return result
 
 
 class _NullProgress:

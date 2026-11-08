@@ -57,7 +57,7 @@ class SemanticAnchorBank:
     def from_file(cls, path, catalog, taxonomy):
         return cls(json.loads(Path(path).read_text(encoding="utf-8")), catalog, taxonomy)
 
-    def sample(self, program, *, rng: random.Random):
+    def sample(self, program, *, rng: random.Random, usage=None, balanced=False):
         """Choose a compatible motif before typed binding (no gold answers)."""
         ops = {node.op for node in program.nodes}
         has_relation = "RELATE" in ops
@@ -73,7 +73,23 @@ class SemanticAnchorBank:
         ]
         # Some structurally unusual KoPL programs have no matching dual-kind
         # real subject. Never silently relax the final joint-witness check.
-        return rng.choice(eligible or self.profiles)
+        eligible = eligible or self.profiles
+        if not balanced:
+            return rng.choice(eligible)
+        # V2 balances anchor types and repeated predicates BEFORE World
+        # Generation instead of wasting most samples on late caps.
+        usage = usage or {}
+        best = None
+        for candidate in eligible:
+            predicate_cost = sum(usage.get(p, 0) for p in candidate["predicates"])
+            predicate_cost /= max(1, len(candidate["predicates"]))
+            type_cost = min(
+                usage.get("anchor_type:" + t, 0) for t in candidate["types"]
+            )
+            score = (type_cost * 4.0 + predicate_cost, rng.random())
+            if best is None or score < best[0]:
+                best = (score, candidate)
+        return best[1]
 
     def can_anchor(self, program):
         """Fast feasibility test: one scope must own at least two predicate slots."""
@@ -143,12 +159,20 @@ class SemanticAnchorBank:
                 best = (len(matches), next(iter(sorted(k for k in kinds if k)), ""), matches)
         if best[0] < 2:
             return None
+        unique = {
+            binding.predicate
+            for binding in (*plan.relation_bindings.values(),
+                            *plan.attribute_bindings.values())
+        }
+        coverage = best[0] / max(1, len(unique))
         return {
             "policy": "yago_subject_joint_predicates_v1",
             "anchor_id": anchor["id"],
             "anchor_type": best[1],
             "matched_predicates": list(best[2]),
             "matched_count": best[0],
+            "global_predicate_count": len(unique),
+            "global_coverage": round(coverage, 5),
             "profile_predicate_count": len(selected),
             "evidence": "observed predicates of one real YAGO subject",
         }
