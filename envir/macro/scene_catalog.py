@@ -102,6 +102,54 @@ def _sources(record: dict, motif: dict) -> list[dict]:
     return sources
 
 
+SCENE_STOPWORDS = {
+    "Which", "What", "Who", "Where", "When", "How", "Why", "Is", "Are",
+    "Was", "Were", "The", "A", "An", "Do", "Does", "Did", "In", "At",
+    "Of", "On", "For", "From", "Can", "Have", "Has", "List", "Name",
+}
+
+
+def _scene_topic(motif: dict, entities: list[str], record: dict) -> tuple[str, str]:
+    """Extract a subject/entity label, never the original question as a goal.
+
+    Original MMQA question text may help identify proper nouns *only*.
+    Query operators, target properties, and entire interrogative sentences
+    must not become a newly generated Question or terminal work goal.
+    """
+    if entities:
+        return entities[0], "original_mmqa_entity_metadata"
+    meta = record.get("metadata") or {}
+    for field in ("topic", "entity_title", "page_title", "subject_title"):
+        title = meta.get(field) or record.get(field)
+        if isinstance(title, str):
+            title = " ".join(title.split())[:100]
+            if title and "?" not in title and not re.match(
+                r"^(which|what|who|when|where|why|how)\b", title, re.I
+            ):
+                return title, "original_mmqa_scene_metadata"
+    raw_question = motif["question_hint"]
+    # Only capitalized proper-noun spans. Never extract a whole clause or
+    # use the dataset question verb/answer criterion as a new task.
+    spans = re.findall(
+        r"\b[A-Z][A-Za-z0-9'-]*(?:\s+[A-Z][A-Za-z0-9'-]*){0,4}\b",
+        raw_question,
+    )
+    clean = []
+    for span in spans:
+        words = [word for word in span.split() if word not in SCENE_STOPWORDS]
+        label = " ".join(words).strip(" .,:;!?")
+        if not label or len(label) < 3 or "?" in label:
+            continue
+        clean.append(label)
+    if clean:
+        # Favor subject-specific named phrases over one-letter/source verbs.
+        return max(clean, key=lambda value: (len(value.split()), len(value))), (
+            "named_scene_entity_from_mmqa_question")
+    group = motif["domain_hint"].replace("_", " ")
+    return f"{group} reference collection {motif['record_id'][:7]}", (
+        "original_mmqa_source_bundle_fallback")
+
+
 def _question_operation(motif: dict, question: str) -> str:
     pattern = motif["logical_pattern"]
     lower = question.lower()
@@ -142,15 +190,16 @@ def load_scenario_seeds(path: str | Path, *, limit: int = 30000) -> tuple[list[d
         sources = _sources(record, motif)
         tree = parse_composition(motif["question_type"])
         entities = _entities(record)
-        topic = entities[0] if entities else question.rstrip(" ?.")[:110]
-        op = _question_operation(motif, question)
+        topic, topic_policy = _scene_topic(motif, entities, record)
+        original_op = _question_operation(motif, question)
         seed = {
             "record_id": motif["record_id"],
             "question": question,
             "topic": topic,
             "entities": entities,
             "domain_hint": motif["domain_hint"],
-            "operation": op,
+            "original_question_operation": original_op,
+            "scene_topic_policy": topic_policy,
             "composition": tree,
             "question_type": motif["question_type"],
             "logical_pattern": motif["logical_pattern"],
@@ -162,7 +211,7 @@ def load_scenario_seeds(path: str | Path, *, limit: int = 30000) -> tuple[list[d
             "yago_matches": [],
         }
         seeds.append(seed)
-        counters["operation:" + op] += 1
+        counters["original_question_operation:" + original_op] += 1
         counters["domain:" + motif["domain_hint"]] += 1
         for source in sources:
             counters["source_modality:" + source["modality"]] += 1

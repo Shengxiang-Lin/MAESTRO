@@ -83,12 +83,15 @@ class MMQATaskFirstTests(unittest.TestCase):
         plan = compose_seed_taskfirst(
             seed_record=record, ordinal=0, run_seed=17, kqa=KQA)
         tasks = plan["macro_graph"]["tasks"]
-        self.assertEqual(len(tasks), 7)
-        self.assertEqual(len(plan["macro_graph"]["edges"]), 7)
-        self.assertEqual(plan["question"], record["question"])
-        self.assertEqual(plan["goal"]["intent"], "comparison")
-        self.assertEqual(plan["macro_graph"]["terminal_handoffs"][0]["type"],
-                         "AnswerReport")
+        self.assertGreaterEqual(len(tasks), 7)
+        self.assertGreaterEqual(len(plan["macro_graph"]["edges"]), 7)
+        self.assertNotEqual(plan["question"], record["question"])
+        from envir.macro.goal_grammar import GOALS
+        self.assertIn(plan["goal"]["intent"], GOALS)
+        self.assertEqual(
+            plan["macro_graph"]["terminal_handoffs"][0]["type"],
+            GOALS[plan["goal"]["intent"]]["artifact"],
+        )
         self.assertEqual(plan["source_priors"]["MultiModalQA"]["record_id"],
                          record["record_id"])
         self.assertEqual(plan["source_priors"]["KQA"]["signature"], "fixture-kopl")
@@ -99,9 +102,9 @@ class MMQATaskFirstTests(unittest.TestCase):
             ordinal=0, seed=17, kqa=KQA, seed_record=seed())
         self.assertEqual([], validate_clean_scene(scene))
         self.assertEqual(scene["public"]["question"], scene["question"])
-        self.assertEqual(scene["question"], seed()["question"])
+        self.assertNotEqual(scene["question"], seed()["question"])
         self.assertEqual(scene["goal_evidence_coverage"]["can_finish_cleanly"], True)
-        self.assertEqual(len(scene["macro_graph"]["tasks"]), 7)
+        self.assertGreaterEqual(len(scene["macro_graph"]["tasks"]), 7)
         self.assertEqual(scene["world"]["real_multimodal_files"], False)
 
     def test_two_independent_sources_yield_real_work_products(self):
@@ -163,18 +166,51 @@ class MMQATaskFirstTests(unittest.TestCase):
             self.assertEqual(work["operation_result"], operations[0]["result"])
         self.assertEqual([], validate_clean_scene(scene))
 
+    def test_original_question_does_not_determine_goal_or_question(self):
+        import copy
+        base = seed()
+        variant = copy.deepcopy(base)
+        variant["question"] = "What is the unrelated result of a different comparison?"
+        variant["operation"] = "temporal"
+        first = compose_seed_taskfirst(
+            seed_record=base, ordinal=12, run_seed=17, kqa=KQA)
+        second = compose_seed_taskfirst(
+            seed_record=variant, ordinal=12, run_seed=17, kqa=KQA)
+        self.assertEqual(first["question"], second["question"])
+        self.assertEqual(first["goal"], second["goal"])
+        self.assertEqual(first["macro_graph"]["tasks"],
+                         second["macro_graph"]["tasks"])
+        self.assertEqual(first["macro_graph"]["edges"],
+                         second["macro_graph"]["edges"])
+
+    def test_independent_scene_goal_random_pairs_yield_different_goals(self):
+        from envir.macro.goal_grammar import GOALS
+        patterns = set()
+        for ordinal in range(64):
+            plan = compose_seed_taskfirst(
+                seed_record=seed(), ordinal=ordinal, run_seed=17, kqa=KQA)
+            patterns.add(plan["goal"]["intent"])
+            self.assertNotEqual(plan["question"], seed()["question"])
+            self.assertIn(plan["goal"]["intent"], GOALS)
+            self.assertEqual(
+                plan["macro_graph"]["tasks"][-1]["question_blueprint"]["pattern_id"],
+                plan["goal"]["intent"],
+            )
+        self.assertGreaterEqual(len(patterns), 7)
+
     def test_nested_macro_graph_has_stages_and_typed_handoffs(self):
         plan = compose_seed_taskfirst(
             seed_record=seed(), ordinal=0, run_seed=17, kqa=KQA)
         tasks = plan["macro_graph"]["tasks"]
         work_types = [task["work_type"] for task in tasks]
         self.assertIn("reference_chain_resolution", work_types)
-        self.assertIn("comparative_assessment", work_types)
+        from envir.macro.goal_grammar import GOALS
+        self.assertIn(GOALS[plan["goal"]["intent"]]["assessment"], work_types)
         self.assertIn("evidence_consistency_review", work_types)
         self.assertIn("answer_evidence_synthesis", work_types)
         self.assertGreaterEqual(
             plan["macro_graph"]["complexity"]["macro_dependency_depth"], 4)
-        self.assertEqual(len(plan["macro_graph"]["edges"]), 7)
+        self.assertGreaterEqual(len(plan["macro_graph"]["edges"]), 7)
 
     def test_single_source_is_not_inflated_into_fake_macro_dag(self):
         record = seed("TextQ")
@@ -190,7 +226,7 @@ class MMQATaskFirstTests(unittest.TestCase):
         scene = build_one(ordinal=3, seed=17, kqa=KQA, seed_record=seed())
         modified = copy.deepcopy(scene)
         modified["macro_graph"]["tasks"][-1]["goal"] = "An unrelated goal"
-        self.assertIn("mmqa_question_terminal_goal_drift",
+        self.assertIn("macro_goal_terminal_blueprint_drift",
                       validate_clean_scene(modified))
         modified = copy.deepcopy(scene)
         modified["macro_graph"]["tasks"][0]["source_requirements"][0][
@@ -230,7 +266,7 @@ class MMQATaskFirstTests(unittest.TestCase):
             def complete_json(self, system, user, *, response_schema=None):
                 payload = json_module.loads(user)
                 seen.append(("author", payload))
-                return {"question": "Which artist has the earlier exhibition date?"}
+                return {"question": scene["question"]}
 
         class Critic:
             def complete_json(self, system, user, *, response_schema=None):
@@ -319,6 +355,20 @@ class MMQATaskFirstTests(unittest.TestCase):
             ]
             self.assertEqual(len(manifest), 3)
             self.assertEqual(len({row["mmqa_record_id"] for row in manifest}), 3)
+            self.assertTrue(all(
+                row["question"] != row["original_mmqa_question_audit_only"]
+                for row in manifest
+            ))
+            self.assertTrue((output / "scene_bank_v4.jsonl").exists())
+            bank = [
+                json.loads(line) for line in
+                (output / "scene_bank_v4.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(len(bank), 4)
+            self.assertTrue(all("question" not in item for item in bank))
+            patterns = json.loads((output / "goal_pattern_bank_v4.json").read_text())
+            self.assertEqual(patterns["total_patterns"], 8)
+            self.assertEqual(summary["statistics"]["original_mmqa_question_copies"], 0)
             with self.assertRaises(FileExistsError):
                 with contextlib.redirect_stdout(io.StringIO()):
                     main(args)

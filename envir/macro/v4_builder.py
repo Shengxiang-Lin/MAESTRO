@@ -56,6 +56,7 @@ def build_batch(*, kqa: list[dict], scenario_seeds: list[dict],
     order = list(scenario_seeds)
     random.Random(seed * 271828).shuffle(order)
     scenes = []
+    seen_question_texts = set()
     rejected = Counter()
     for ordinal, seed_record in enumerate(order):
         if len(scenes) >= target:
@@ -67,6 +68,12 @@ def build_batch(*, kqa: list[dict], scenario_seeds: list[dict],
         except UnsuitableSeed as exc:
             rejected[str(exc)] += 1
             continue
+        from envir.schema import normalize_label
+        qnorm = normalize_label(scene["question"])
+        if qnorm in seen_question_texts:
+            rejected["duplicate_new_question_from_scene_goal_combination"] += 1
+            continue
+        seen_question_texts.add(qnorm)
         scenes.append(scene)
     if len(scenes) < target:
         raise ValueError(
@@ -134,5 +141,19 @@ def build_batch(*, kqa: list[dict], scenario_seeds: list[dict],
         "untrusted_scenarios_generated": False,
         "media_policy": "synthetic_text_records_only",
         "scenario_seed_rejections": dict(rejected),
-        "question_provenance": "MMQA question embedded in terminal work goal",
+        "question_provenance": "novel_question_derived_from_terminal_macro_task_blueprint",
+        "original_mmqa_question_copies": sum(
+            scene["question"].casefold().strip() ==
+            scene["source_priors"]["MultiModalQA"]["original_question"].casefold().strip()
+            for scene in scenes
+        ),
+        "unique_scene_record_ids": len({
+            scene["source_priors"]["MultiModalQA"]["record_id"] for scene in scenes
+        }),
+        "scene_goal_combination_count": len({
+            (scene["source_priors"]["MultiModalQA"]["record_id"],
+             scene["goal"]["intent"])
+            for scene in scenes
+        }),
+        "goal_pattern_selection": "reproducible_random_independent_of_mmqa_original_question",
     }

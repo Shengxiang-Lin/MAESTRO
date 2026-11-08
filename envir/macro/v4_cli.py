@@ -24,6 +24,7 @@ from pathlib import Path
 from .priors import load_kqa
 from .scene_catalog import load_scenario_seeds, enrich_with_yago
 from .source_contexts import load_supporting_contexts
+from .goal_grammar import goal_bank_manifest
 from .v4_builder import build_batch
 from .v4_streaming import stream_naturalize_scenes
 from .v4_validation import validate_clean_scene
@@ -147,6 +148,30 @@ def build(args):
         args.mmqa, limit=args.max_mmqa_records)
     yago_stats = enrich_with_yago(
         scenario_seeds, args.yago, max_triples=args.max_yago_triples)
+    # Offline preparation: materialize an independently reusable Scene Bank
+    # and a curated Goal/Pattern Bank BEFORE selecting any question.
+    # Original MMQA questions are intentionally excluded from the scene bank.
+    scene_bank_file = args.output_dir / "scene_bank_v4.jsonl"
+    pattern_bank_file = args.output_dir / "goal_pattern_bank_v4.json"
+    _jsonl(scene_bank_file, [{
+        "scene_id": row["record_id"],
+        "topic": row["topic"],
+        "topic_provenance": row.get("scene_topic_policy"),
+        "domain_hint": row["domain_hint"],
+        "entities": row["entities"],
+        "source_modalities": row["source_modalities"],
+        "supporting_sources": row["supporting_sources"],
+        "source_structure_hint": row["composition"],
+        "source_structure_type": row["question_type"],
+        "yago_matches": row.get("yago_matches", []),
+    } for row in scenario_seeds])
+    pattern_bank = goal_bank_manifest()
+    _json(pattern_bank_file, {
+        "policy": "independent_curated_workproduct_grammar",
+        "patterns": pattern_bank,
+        "total_patterns": len(pattern_bank),
+        "combination_policy": "seeded_random_scene_pattern_pairing_with_source_compatibility",
+    })
     context_dir = args.mmqa_context_dir or args.mmqa.parent
     contexts, context_stats = (
         ({}, {"policy": "disabled", "available_context_excerpts": 0})
@@ -163,9 +188,10 @@ def build(args):
     _jsonl(manifest, [{
         "task_id": sc["task_id"],
         "mmqa_record_id": sc["source_priors"]["MultiModalQA"]["record_id"],
-        "question": sc["source_priors"]["MultiModalQA"]["original_question"],
+        "question": sc["question"],
+        "original_mmqa_question_audit_only": sc["source_priors"]["MultiModalQA"]["original_question"],
         "domain_hint": sc["scenario"]["domain"],
-        "operation": sc["goal"]["intent"],
+        "selected_goal_pattern": sc["goal"]["intent"],
         "composition_type": sc["source_priors"]["MultiModalQA"]["official_question_type"],
         "supporting_sources": sc["source_priors"]["MultiModalQA"]["supporting_sources"],
         "yago_matches": sc["source_priors"]["YAGO"]["matches"],
@@ -189,13 +215,23 @@ def build(args):
         "yago_enrichment": yago_stats,
         "mmqa_context_enrichment": context_stats,
         "scenario_seed_manifest": str(manifest),
+        "scene_bank": str(scene_bank_file),
+        "goal_pattern_bank": str(pattern_bank_file),
+        "scene_pattern_bank": {
+            "scene_count": len(scenario_seeds),
+            "pattern_count": len(pattern_bank),
+            "cross_product_candidate_count": len(scenario_seeds) * len(pattern_bank),
+            "policy": "random_independent_pairing_then_macro_graph_construction",
+        },
         "files": {key: str(path) for key, path in paths.items()},
         "stage_order": [
-            "extract_mmqa_scenario_and_need_seeds",
+            "prepare_mmqa_scene_bank_without_original_question_goals",
             "enrich_exact_yago_entities_when_available",
-            "compile_mmqa_composition_into_macro_tasks",
+            "prepare_independent_goal_and_problem_pattern_bank",
+            "randomly_combine_compatible_scenes_with_work_goals",
+            "compile_typed_macro_taskgraph_from_combined_scene_and_goal",
             "bind_all_supporting_sources_and_optional_original_context",
-            "derive_reference_question_from_terminal_work_goal",
+            "derive_new_question_from_terminal_macro_task_question_blueprint",
             "optional_question_author_critic_revision",
             "execute_per_task_synthetic_typed_operations",
             "derive_clean_feedback_and_summary_trace",

@@ -642,6 +642,11 @@ def naturalize_one(scene: dict, *, author, critic,
         latest = candidate
         row["candidate"] = candidate
         issues = minimal_question_guards(candidate)
+        from envir.schema import normalize_label
+        source_original = scene.get("source_priors", {}).get(
+            "MultiModalQA", {}).get("original_question", "")
+        if source_original and normalize_label(candidate) == normalize_label(source_original):
+            issues.append("candidate_copies_original_mmqa_question")
         row["deterministic_guards"] = issues
         if issues:
             last_failure = "surface_guard"
@@ -796,6 +801,11 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         return []
     errors = []
     original = reference_question(scene)
+    from envir.schema import normalize_label
+    source_original = scene.get("source_priors", {}).get(
+        "MultiModalQA", {}).get("original_question", "")
+    if source_original and normalize_label(scene["question"]) == normalize_label(source_original):
+        errors.append("naturalized_question_copies_original_mmqa_question")
     policy = meta.get("review_policy_version")
     if meta.get("reference_question") != original:
         errors.append("review_reference_drift")
