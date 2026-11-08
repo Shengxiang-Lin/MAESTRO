@@ -66,7 +66,8 @@ def _synthetic_facts(*, case_ref: str, source: dict, question: str,
     ]
 
 
-def build_clean_world(plan: dict, *, seed: int) -> dict:
+def build_clean_world(plan: dict, *, seed: int,
+                      contexts: dict | None = None) -> dict:
     domain = plan["scenario"]["domain"]
     case_ref = f"{domain[:3].upper()}-{seed % 100:02d}-{plan['task_id'][-7:]}"
     question = plan["source_priors"]["MultiModalQA"]["original_question"]
@@ -94,6 +95,22 @@ def build_clean_world(plan: dict, *, seed: int) -> dict:
                     case_ref=case_ref, source=source, question=question,
                     domain=domain, topic=topic,
                 )
+                context = (contexts or {}).get((modality, str(doc_id)))
+                if context is not None:
+                    source["representation"] = (
+                        "synthetic_observations_plus_original_text_excerpt"
+                    )
+                    source["context_provenance"] = context["provenance"]
+                    source["facts"].append({
+                        "fact_id": f"F{len(source['facts']) + 1}",
+                        "field": "original_context_excerpt",
+                        "value": context["text"],
+                        "statement": (
+                            f"Exact-source MMQA {modality} context excerpt "
+                            f"for {doc_id}: {context['text']}"
+                        ),
+                        "verification": "original_mmqa_text_excerpt_not_pixels",
+                    })
                 sources[source_id] = source
             granted.append(source_id)
         grants[task["task_id"]] = sorted(set(granted))
