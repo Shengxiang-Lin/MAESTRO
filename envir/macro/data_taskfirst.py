@@ -102,11 +102,11 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
                      if s["modality"] == modality
                      and (s["modality"], s.get("doc_id")) not in used_source_keys), None)
         if pick is None:
-            pick = next((s for s in available
-                         if (s["modality"], s.get("doc_id")) not in used_source_keys), None)
+            # Never silently substitute a table for a requested image (etc.).
+            # The original MMQA type must have a corresponding source role.
+            pick = next((s for s in available if s["modality"] == modality), None)
         if pick is None:
-            # Reusing one already-reviewed source must reuse its work product.
-            pick = next((s for s in available if s["modality"] == modality), available[0])
+            raise UnsuitableSeed("missing required source modality: " + modality)
         key = (pick["modality"], pick.get("doc_id"))
         if key in leaf_cache:
             return leaf_cache[key]
