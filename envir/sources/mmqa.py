@@ -89,6 +89,8 @@ def _bank_indexes(parent: Path, needed: dict[str, set[str]]) -> dict[tuple[str, 
         if not path:
             continue
         wanted = needed[mod]
+        if not wanted:
+            continue
         found = 0
         for row in _rows(path):
             key = row.get("id") or row.get("doc_id") or row.get("source_id")
@@ -170,11 +172,19 @@ def ingest_mmqa(store: EvidenceStore, path: str | Path, *,
             if mod == "image":
                 for field in ("image_path", "path", "file", "filename"):
                     value = raw.get(field)
-                    if isinstance(value, str):
-                        candidate = (path.parent / value).resolve()
-                        if candidate.is_file() and candidate.is_relative_to(path.parent.resolve()):
+                    if not isinstance(value, str) or not value.strip():
+                        continue
+                    for root in (
+                        path.parent, path.parent / "final_dataset_images",
+                        path.parent / "images",
+                    ):
+                        candidate = (root / value).resolve()
+                        if (candidate.is_file()
+                                and candidate.is_relative_to(path.parent.resolve())):
                             media_path = str(candidate)
                             break
+                    if media_path:
+                        break
             if not body.strip() and media_path is None:
                 counters["unavailable_context"] += 1
                 continue
