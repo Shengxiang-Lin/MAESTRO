@@ -146,7 +146,7 @@ The run uses `environment/data/semantic_candidates_pool_30.jsonl`,
 `typed_worlds_30.jsonl`, `frozen_manifest_30.json`,
 `capability_worlds_30.jsonl` and `authoring_inputs_30.jsonl`.
 If *any* of these `*_30` files already belong to another experiment,
-back them up first. Check `environment/data/build_summary.json` for
+back them up first. Check `environment/data/build_summary_semantic_anchored_30.json` for
 `candidate_selection.semantic_anchor_count`,
 `candidate_selection.rejection_reasons`,
 `worlds.semantic_anchor_worlds`, and `worlds.rejection_reasons`.
