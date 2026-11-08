@@ -118,6 +118,17 @@ def _execute_operation(task: dict, rows: list[dict]) -> dict:
     elif op in {"aggregation", "candidate_aggregation", "count"}:
         result["selected_count"] = len(selected)
         result["total_count"] = len(rows)
+    elif op in {"prioritization", "candidate_prioritization"}:
+        result["priority_order"] = [row["candidate_key"] for row in ranked]
+        result["priority_scores"] = {
+            row["candidate_key"]: row["score"] for row in ranked
+        }
+    elif op in {"feasibility", "candidate_feasibility"}:
+        result["eligibility_rule"] = "attribute_present and score >= 50"
+        result["eligible_candidates"] = [
+            row["candidate_key"] for row in rows
+            if row["attribute_present"] and row["score"] >= 50
+        ]
     elif op in {"verify_evidence"}:
         result["source_handle_unique"] = (
             len({row["source_id"] for row in rows}) == len(rows))
@@ -127,12 +138,24 @@ def _execute_operation(task: dict, rows: list[dict]) -> dict:
     elif op in {"answer_synthesis"}:
         # A structured *demonstration* result, not a Gold answer claim.
         result["candidate_selection"] = (
-            [row["candidate_key"] for row in by_time[:1]]
+            [by_time[0]["candidate_key"]]
             if family == "temporal" else
             [ranked[0]["candidate_key"]]
             if family == "comparison" else
+            [row["candidate_key"] for row in ranked]
+            if family == "prioritization" else
+            [row["candidate_key"] for row in rows
+             if row["attribute_present"] and row["score"] >= 50]
+            if family == "feasibility" else
             list(selected)
         )
+        if family == "aggregation":
+            result["selected_count"] = len(selected)
+        if family == "intersection":
+            result["matched_groups"] = {
+                key: value for key, value in sorted(groups.items())
+                if len(value) >= 2
+            }
         result["answer_status"] = "synthetic_evidence_only_not_gold_answer"
     else:
         result["selected_candidates"] = list(selected)
