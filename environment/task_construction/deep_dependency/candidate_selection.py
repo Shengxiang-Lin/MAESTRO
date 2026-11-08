@@ -59,10 +59,20 @@ def _generate_candidate_pool(
     min_latent_anchors=2, min_parallel_width=2, progress=False,
     max_attempts=None, candidate_workers=None,
     candidate_proposal_batch_size=None, restart_candidates=False,
+    construction_mode='program_composition', anchor_profiles_path=None,
+    anchor_tries=6,
 ):
     """Build a fixed number of *validated* semantic candidates, with checkpoints."""
     if pool_size<1:
         raise ValueError("pool_size must be positive")
+    if construction_mode not in {"program_composition","semantic_anchored"}:
+        raise ValueError("unknown construction mode: "+str(construction_mode))
+    if anchor_tries<1:
+        raise ValueError("anchor_tries must be positive")
+    if construction_mode=="semantic_anchored" and (
+        anchor_profiles_path is None or not Path(anchor_profiles_path).is_file()
+    ):
+        raise ValueError("semantic_anchored requires an existing YAGO entity profile index")
     if max_attempts is not None and max_attempts<1:
         raise ValueError("max_attempts must be positive")
     programs = _iter_kqa_programs(kqa_paths, max_records=max_records)
@@ -85,8 +95,14 @@ def _generate_candidate_pool(
         min_fragment_depth=min_fragment_depth,max_fragment_depth=max_fragment_depth,
         min_orchestration_depth=min_orchestration_depth,max_orchestration_depth=max_orchestration_depth,
         min_latent_anchors=min_latent_anchors,min_parallel_width=min_parallel_width)
-    signature=input_signature([*kqa_paths,yago_catalog_path,taxonomy_path],settings)
-    prepare_worker_context(catalog,taxonomy,seed)
+    if construction_mode=='semantic_anchored':
+        settings.update(construction_mode=construction_mode,anchor_tries=anchor_tries)
+    signature_paths=[*kqa_paths,yago_catalog_path,taxonomy_path]
+    if construction_mode=='semantic_anchored':
+        signature_paths.append(anchor_profiles_path)
+    signature=input_signature(signature_paths,settings)
+    prepare_worker_context(catalog,taxonomy,seed,
+        anchor_profiles_path if construction_mode=='semantic_anchored' else None)
 
     def make_proposal(attempt,rng,predicate_usage):
         try:
@@ -99,8 +115,11 @@ def _generate_candidate_pool(
             profile=complexity_profile(composed,min_depth=5)
             if not profile.qualifies:
                 return {'attempt':attempt,'error':'hardness'}
-            return {'attempt':attempt,'program':composed.to_dict(),'binding_seed':rng.randrange(1<<31),
+            proposal={'attempt':attempt,'program':composed.to_dict(),'binding_seed':rng.randrange(1<<31),
                 'predicate_usage':predicate_usage,'reasoning_motif':profile.label,'hardness':profile.to_dict()}
+            if construction_mode=='semantic_anchored':
+                proposal.update(construction_mode=construction_mode,anchor_tries=anchor_tries)
+            return proposal
         except (BindingError,ValueError,RuntimeError) as exc:
             return {'attempt':attempt,'error':type(exc).__name__+':'+str(exc).split(':',1)[0],
                     'detail':str(exc)[:240]}
@@ -108,7 +127,8 @@ def _generate_candidate_pool(
     candidates,parallel=run_batches(output_path,signature=signature,target=pool_size,
         attempts_limit=attempts_limit,seed=seed,workers=workers,batch_size=batch_size,
         make_proposal=make_proposal,progress=progress,restart=restart_candidates,
-        initializer=_worker_init,initargs=(str(yago_catalog_path),str(taxonomy_path),seed))
+        initializer=_worker_init,initargs=(str(yago_catalog_path),str(taxonomy_path),seed,
+            str(anchor_profiles_path) if construction_mode=='semantic_anchored' else None))
     output=Path(output_path)
     output.parent.mkdir(parents=True,exist_ok=True)
     with output.open("w",encoding="utf-8") as writer:
@@ -117,6 +137,8 @@ def _generate_candidate_pool(
     return {
         "output":str(output),
         "candidate_pool_size":pool_size,
+        "construction_mode":construction_mode,
+        "semantic_anchor_count":sum("semantic_anchor" in row for row in candidates),
         "validated_candidates":len(candidates),
         "pool_filled":len(candidates)>=pool_size,
         "generated_attempts":parallel["attempts"],

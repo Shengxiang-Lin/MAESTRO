@@ -40,7 +40,7 @@ def input_signature(paths,settings):
             'implementation':hashlib.sha256(''.join(_digest(p) for p in code).encode()).hexdigest()}
 
 
-def prepare_worker_context(catalog,taxonomy,seed):
+def prepare_worker_context(catalog,taxonomy,seed,anchor_profiles_path=None):
     """Build reusable read-mostly indexes before Linux fork."""
     global _CONTEXT
     from ..binding.predicate_binder import PredicateBinder
@@ -50,16 +50,20 @@ def prepare_worker_context(catalog,taxonomy,seed):
     for kind in (None,'string','number','year','date'):
         tuple(predicates._attribute_specs(kind))
     GraphWitnessIndex(catalog,taxonomy)
-    _CONTEXT=(catalog,taxonomy,predicates)
+    anchor_bank=None
+    if anchor_profiles_path is not None:
+        from ..binding.semantic_anchors import SemanticAnchorBank
+        anchor_bank=SemanticAnchorBank.from_file(anchor_profiles_path,catalog,taxonomy)
+    _CONTEXT=(catalog,taxonomy,predicates,anchor_bank)
 
 
-def _worker_init(catalog_path,taxonomy_path,seed):
+def _worker_init(catalog_path,taxonomy_path,seed,anchor_profiles_path=None):
     global _CONTEXT
     signal.signal(signal.SIGINT,signal.SIG_IGN)
     if _CONTEXT is None:
         from ..data_sources.taxonomy import TaxonomyIndex
         prepare_worker_context(json.loads(Path(catalog_path).read_text()),
-                               TaxonomyIndex.from_json(taxonomy_path),seed)
+                               TaxonomyIndex.from_json(taxonomy_path),seed,anchor_profiles_path)
 
 
 def bind_proposal(proposal):
@@ -68,24 +72,46 @@ def bind_proposal(proposal):
     from ..ir import ProgramIR,ProgramNode
     from ..quality.hardness import pure_topology_signature
     from .terminal_families import terminal_family
-    catalog,taxonomy,predicates=_CONTEXT
-    predicates.rng=random.Random(proposal['binding_seed'])
+    catalog,taxonomy,predicates,anchor_bank=_CONTEXT
     raw=proposal['program']
     program=ProgramIR([ProgramNode(int(n['node_id']),n['op'],tuple(n['dependencies']),
         tuple(n['inputs']),n.get('raw_function')) for n in raw['nodes']],metadata=raw['metadata'])
-    try:
-        binder=GraphGroundedProgramBinder(catalog,taxonomy,seed=proposal['binding_seed'],
-            candidate_limit=16,max_states=128,predicate_usage=proposal['predicate_usage'],
-            predicate_binder=predicates)
-        plan=binder.bind(program)
-        return {'attempt':proposal['attempt'],'row':{'program':plan.program.to_dict(),
-            'binding':plan.to_dict(),'source_program_signature':plan.program.canonical_signature(),
-            'reasoning_motif':proposal['reasoning_motif'],'hardness':proposal['hardness'],
-            'topology_signature':pure_topology_signature(plan.program),
-            'terminal_family':terminal_family(plan.program)}}
-    except (BindingError,ValueError,RuntimeError) as exc:
-        return {'attempt':proposal['attempt'],'error':type(exc).__name__+':'+str(exc).split(':',1)[0],
-                'detail':str(exc)[:240]}
+    anchored=proposal.get('construction_mode')=='semantic_anchored'
+    if anchored and anchor_bank is None:
+        return {'attempt':proposal['attempt'],'error':'semantic_anchor_bank_missing'}
+    if anchored and not anchor_bank.can_anchor(program):
+        return {'attempt':proposal['attempt'],'error':'semantic_anchor_no_joint_scope'}
+    attempts=proposal.get('anchor_tries',6) if anchored else 1
+    last_error='semantic_anchor_joint_support_missing'
+    for index in range(attempts):
+        binding_seed=proposal['binding_seed']+index*10007
+        predicates.rng=random.Random(binding_seed)
+        anchor=anchor_bank.sample(program,rng=random.Random(binding_seed)) if anchored else None
+        try:
+            validator=(lambda candidate: anchor_bank.evaluate(candidate,anchor) is not None) if anchor else None
+            binder=GraphGroundedProgramBinder(catalog,taxonomy,seed=binding_seed,
+                candidate_limit=16,max_states=256 if anchored else 128,
+                predicate_usage=proposal['predicate_usage'],
+                predicate_binder=predicates,
+                preferred_predicates=anchor['predicates'] if anchor else None,
+                anchor_validator=validator)
+            plan=binder.bind(program)
+            evidence=anchor_bank.evaluate(plan,anchor) if anchored else None
+            if anchored and evidence is None:
+                last_error='semantic_anchor_joint_support_missing'
+                continue
+            row={'program':plan.program.to_dict(),
+                'binding':plan.to_dict(),'source_program_signature':plan.program.canonical_signature(),
+                'reasoning_motif':proposal['reasoning_motif'],'hardness':proposal['hardness'],
+                'topology_signature':pure_topology_signature(plan.program),
+                'terminal_family':terminal_family(plan.program)}
+            if evidence is not None:
+                row['semantic_anchor']=evidence
+            return {'attempt':proposal['attempt'],'row':row}
+        except (BindingError,ValueError,RuntimeError) as exc:
+            last_error=type(exc).__name__+':'+str(exc).split(':',1)[0]
+    return {'attempt':proposal['attempt'],'error':last_error,
+            'detail':f'No supported subject-centered joint predicate binding after {attempts} attempts'}
 
 
 @contextmanager

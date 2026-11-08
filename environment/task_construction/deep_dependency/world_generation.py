@@ -92,6 +92,7 @@ def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_
                 if isinstance(answer,set):answer=sorted(answer)
                 evidence=dict(world.metadata.get('evidence_allocation',{}))
                 payload={'candidate_id':row.get('candidate_id'),
+                    **({'semantic_anchor':row['semantic_anchor']} if 'semantic_anchor' in row else {}),
                     'source_program_signature':row.get('source_program_signature'),
                     'reasoning_motif':row.get('reasoning_motif'),'program':program.to_dict(),
                     'binding':{**row['binding'],'program':program.to_dict()},'world':_serialize_world(world),
@@ -147,6 +148,7 @@ def generate_world_batch(candidates_path,yago_catalog_path,taxonomy_path,output_
         "candidates_tested":candidates_tested,
         "pool_fully_evaluated":candidates_tested==len(rows),
         "accepted":len(accepted),
+        "semantic_anchor_worlds":sum("semantic_anchor" in row for row in accepted),
         "candidate_acceptance_rate":len(accepted)/candidates_tested if candidates_tested else 0.0,
         "rejected_attempts":len(rejected),
         "rejection_reasons":dict(reasons),
