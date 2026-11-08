@@ -26,7 +26,7 @@ from envir.macro.v4_streaming import (
 )
 from envir.macro.v4_question_review import (
     naturalize_one, naturalize_scenes, public_task_contract, surface_issues,
-    polished_reference_question,
+    polished_reference_question, macro_task_view, minimal_question_guards,
 )
 from envir.macro.v4_question_audit import audit_scenes
 
@@ -278,28 +278,50 @@ class CleanTaskFirstTests(unittest.TestCase):
             "Please compare the cases.",
         )
 
-    def test_no_approval_for_candidate_only_specifics_even_with_critic_pass(self):
+    def test_macro_critic_handles_unsupported_specificity_not_word_blacklist(self):
         science = self.build(4)
+
         class BadAuthor:
             def complete_json(self, system, user, *, response_schema=None):
+                self_test.assertIn("macro_task_graph", json.loads(user))
+                self_test.assertNotIn("immutable_task_contract", json.loads(user))
                 return {"question": json.loads(user)["reference_question"].replace(
                     "laboratory instrument", "spectrometer",
                 )}
-        class OverconfidentCritic:
-            def complete_json(self, *args, **kwargs):
-                raise AssertionError("Unsafe candidate must not reach Critic")
+
+        class TaskAwareCritic:
+            def __init__(self):
+                self.calls = 0
+            def complete_json(self, system, user, *, response_schema=None):
+                self.calls += 1
+                payload = json.loads(user)
+                self_test.assertIn("macro_task_graph", payload)
+                self_test.assertIn("spectrometer", payload["candidate_question"])
+                return {
+                    "verdict": "revise",
+                    "naturalness": "acceptable",
+                    "summary": "Invented a narrower instrument type",
+                    "differences": [{
+                        "reference_excerpt": "laboratory instrument",
+                        "candidate_excerpt": "spectrometer",
+                        "problem": "Unsupported instrument specificity",
+                        "minimal_fix": "Keep the instrument generic",
+                    }],
+                }
+
+        self_test = self
+        reviewer = TaskAwareCritic()
         question, metadata = naturalize_one(
-            science, author=BadAuthor(), critic=OverconfidentCritic(),
-            max_revisions=1,
+            science, author=BadAuthor(), critic=reviewer,
+            max_revisions=0,
         )
         self.assertEqual(metadata["status"], "fallback")
-        self.assertEqual(metadata["critic_calls"], 0)
+        self.assertEqual(metadata["critic_calls"], 1)
         self.assertEqual(metadata["review_policy_version"],
-                         "v4.2_fidelity_naturalness")
-        self.assertIn(
-            "unsupported_concrete_detail",
-            metadata["audit"][0]["deterministic_guards"],
-        )
+                         "v4.3_macro_task_critic")
+        self.assertEqual(metadata["audit"][0]["deterministic_guards"], [])
+        self.assertEqual(metadata["audit"][0]["critic_review"]["verdict"], "revise")
+        self.assertEqual(reviewer.calls, 1)
         self.assertEqual(question, polished_reference_question(science["question"]))
         science["question"] = question
         science["public"]["question"] = question
@@ -343,6 +365,70 @@ class CleanTaskFirstTests(unittest.TestCase):
         # Legacy replay checks integrity, but does NOT retrospectively label
         # old proposals as having passed a stronger v4.2 review policy.
         self.assertEqual(validate_clean_scene(scene), [])
+
+    def test_semantic_macro_task_view_contains_real_work_dependencies(self):
+        scene = self.build(3)
+        view = macro_task_view(scene)
+        self.assertEqual(len(view["macro_tasks"]),
+                         len(scene["macro_graph"]["tasks"]))
+        self.assertEqual(view["overall_user_need"]["final_work_goal"],
+                         scene["question_brief"]["final_work_goal"])
+        for item, original in zip(view["macro_tasks"],
+                                  scene["macro_graph"]["tasks"]):
+            self.assertEqual(item["goal"], original["goal"])
+            self.assertEqual(item["deliverable"], original["deliverable"])
+            self.assertEqual(
+                len(item["prerequisite_task_numbers"]),
+                len(original["depends_on"]),
+            )
+        encoded = json.dumps(view)
+        for key in ("task_evidence_graphs", "summary_trace", "feedback_bank",
+                    "world", "task_id", "reference_waves", "source_fact_refs"):
+            self.assertNotIn('"'+key+'"', encoded)
+        self.assertIn("prerequisite_task_numbers", encoded)
+
+    def test_task_critic_accepts_semantic_paraphrase_without_template_terms(self):
+        scene = self.build(1)
+        original = copy.deepcopy(scene)
+        text = ("Our museum has a visitor reservation problem. "
+                "Which responses should we tackle first, and why?")
+        self.assertEqual(minimal_question_guards(text), [])
+        self.assertNotIn("documented findings", text)
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                payload = json.loads(user)
+                self_test.assertIn("macro_task_graph", payload)
+                self_test.assertNotIn("immutable_task_contract", payload)
+                return {"question": text}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                payload = json.loads(user)
+                self_test.assertIn("macro_tasks", payload["macro_task_graph"])
+                self_test.assertEqual(payload["candidate_question"], text)
+                return {
+                    "verdict": "pass",
+                    "naturalness": "acceptable",
+                    "summary": "Same final objective and supporting work",
+                    "differences": [],
+                }
+        self_test = self
+        result, meta = naturalize_one(
+            scene, author=Author(), critic=Critic(),
+        )
+        self.assertEqual(result, text)
+        self.assertEqual(meta["status"], "accepted")
+        self.assertEqual(meta["review_policy_version"], "v4.3_macro_task_critic")
+        self.assertNotIn("contract_sha256", meta)
+        self.assertIn("macro_task_view_sha256", meta)
+        scene["question"] = result
+        scene["public"]["question"] = result
+        scene["question_authoring"] = meta
+        self.assertEqual(validate_clean_scene(scene), [])
+        self.assertEqual(scene["macro_graph"], original["macro_graph"])
+        tampered = copy.deepcopy(scene)
+        tampered["question_authoring"]["macro_task_view_sha256"] = "mismatch"
+        self.assertIn("review_macro_task_view_changed",
+                      validate_clean_scene(tampered))
 
     def test_llm_author_critic_accepts_natural_question_without_changing_tasks(self):
         scene = self.build(2)
@@ -454,15 +540,17 @@ class CleanTaskFirstTests(unittest.TestCase):
         scene["question_authoring"] = meta
         self.assertEqual(validate_clean_scene(scene), [])
 
-    def test_semantic_drift_or_uncertainty_falls_back(self):
+    def test_new_numeric_constraint_is_for_critic_not_keyword_guard(self):
         scene = self.build(4)
         reference = scene["question"]
         self.assertIn("invented_numeric_constraint", surface_issues(
             scene, reference + " Use the 98765 threshold.",
-        ))
-        self.assertIn("private_orchestration_plan_leak", surface_issues(
-            scene, reference + " Delegate to S1.",
-        ))
+        ))  # legacy audit can still flag it
+        self.assertEqual(minimal_question_guards(
+            reference + " Use the 98765 threshold."), [])
+        self.assertIn("private_task_structure_leak",
+                      minimal_question_guards(reference + " Delegate to S1."))
+
         class DriftAuthor:
             def __init__(self):
                 self.calls = 0
@@ -470,19 +558,33 @@ class CleanTaskFirstTests(unittest.TestCase):
                 self.calls += 1
                 return {"question": json.loads(user)["reference_question"]
                         + " Use the 98765 threshold."}
-        class ShouldNotCallCritic:
-            def complete_json(self, *args, **kwargs):
-                raise AssertionError("Guard must reject before critic")
-        author = DriftAuthor()
+
+        class Critic:
+            def __init__(self):
+                self.calls = 0
+            def complete_json(self, system, user, *, response_schema=None):
+                self.calls += 1
+                return {
+                    "verdict": "revise", "naturalness": "acceptable",
+                    "summary": "Invented numeric requirement",
+                    "differences": [{
+                        "reference_excerpt": "",
+                        "candidate_excerpt": "98765 threshold",
+                        "problem": "Unsupported numeric constraint",
+                        "minimal_fix": "Remove that threshold",
+                    }],
+                }
+
+        author, critic = DriftAuthor(), Critic()
         question, meta = naturalize_one(
-            scene, author=author, critic=ShouldNotCallCritic(),
-            max_revisions=2,
+            scene, author=author, critic=critic, max_revisions=2,
         )
-        self.assertEqual(question, reference)
+        self.assertEqual(question, polished_reference_question(reference))
         self.assertEqual(meta["status"], "fallback")
         self.assertEqual(meta["author_calls"], 3)
-        self.assertEqual(meta["critic_calls"], 0)
+        self.assertEqual(meta["critic_calls"], 3)
         self.assertEqual(author.calls, 3)
+        self.assertEqual(critic.calls, 3)
 
     def test_critic_uncertain_and_tampered_certificate_rejected(self):
         scene = self.build(6)

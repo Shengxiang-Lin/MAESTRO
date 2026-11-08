@@ -24,7 +24,7 @@ from tqdm.auto import tqdm
 
 from environment.question_generation.streaming import question_output_lock
 from .v4_question_review import (
-    _fingerprint, naturalize_one, public_task_contract, reference_question,
+    _fingerprint, naturalize_one, macro_task_view, reference_question,
     polished_reference_question,
 )
 from .v4_validation import validate_clean_scene
@@ -381,16 +381,15 @@ def _normalize_question(value: str) -> str:
 def _fallback(scene, reason: str, *, detail: str = "") -> tuple[str, dict]:
     original = reference_question(scene)
     question = polished_reference_question(original)
-    contract = public_task_contract(scene)
     return question, {
-        "pipeline": "v4_task_contract_author_local_critic_repair",
-        "review_policy_version": "v4.2_fidelity_naturalness",
+        "pipeline": "v4_macro_task_aware_author_critic_repair",
+        "review_policy_version": "v4.3_macro_task_critic",
         "safe_reference_polish_applied": question != original,
         "status": "fallback",
         "reason": reason,
         "reference_question": original,
         "final_question": question,
-        "contract_sha256": _fingerprint(contract),
+        "macro_task_view_sha256": _fingerprint(macro_task_view(scene)),
         "macro_graph_sha256": _fingerprint(scene["macro_graph"]),
         "reference_sha256": _fingerprint(original),
         "accepted_review": None,
