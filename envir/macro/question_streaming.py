@@ -23,11 +23,11 @@ from pathlib import Path
 from tqdm.auto import tqdm
 
 from environment.question_generation.streaming import question_output_lock
-from .v4_question_review import (
+from .question_review import (
     _fingerprint, naturalize_one, macro_task_view, reference_question,
     polished_reference_question,
 )
-from .v4_validation import validate_clean_scene
+from .validation import validate_clean_scene
 
 
 SCHEMA = "maestro.v4.question_stream.v1"
@@ -84,10 +84,10 @@ def signature_for_v4_scenes(scenes: list[dict], args) -> str:
         h.update(_encoded(scene))
     source_files = (
         Path(__file__),
-        Path(__file__).with_name("v4_question_review.py"),
-        Path(__file__).with_name("v4_taskfirst.py"),
-        Path(__file__).with_name("v4_validation.py"),
-        Path(__file__).with_name("v4_cli.py"),
+        Path(__file__).with_name("question_review.py"),
+        Path(__file__).with_name("question.py"),
+        Path(__file__).with_name("validation.py"),
+        Path(__file__).with_name("cli.py"),
         Path(__file__).parents[2] / "environment/question_generation/backend.py",
     )
     payload = {
