@@ -248,7 +248,7 @@ class BackwardRecipePlannerTests(unittest.TestCase):
         self.assertIn("semantic_contract_sha256", meta)
         self.assertEqual(meta["review_policy_version"],
                          "taskfirst_semantic_contract_v1")
-        self.assertNotIn("world", json.dumps(calls[0][1]))
+        self.assertNotIn("world", calls[0][1])
         self.assertNotIn("source_priors", json.dumps(calls[0][1]))
 
     def test_semantic_contract_is_derived_without_original_mmqa_question(self):
@@ -265,7 +265,7 @@ class BackwardRecipePlannerTests(unittest.TestCase):
         contract = semantic_contract(original)
         self.assertEqual(contract["contract_version"], "question_semantics_v1")
         self.assertNotIn("original_question", json.dumps(contract))
-        self.assertNotIn("world", json.dumps(contract))
+        self.assertNotIn("world", contract)
         self.assertEqual(
             len(contract["source_inventory"]),
             len(original["public"]["available_source_descriptions"]),
