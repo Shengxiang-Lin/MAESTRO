@@ -95,13 +95,25 @@ class EvidenceStore:
                    title: str, body: str, asset_path: str | None = None,
                    metadata: dict[str, Any] | None = None) -> None:
         metadata = metadata or {}
+        encoded = json.dumps(metadata, ensure_ascii=False)
+        previous = self.db.execute(
+            "SELECT dataset,modality,title,body,asset_path,metadata "
+            "FROM sources WHERE source_id=?", (source_id,),
+        ).fetchone()
+        values = (dataset, modality, title, body, asset_path, encoded)
+        if previous is not None and tuple(previous) == values:
+            return  # Repeated MMQA references must not reindex unchanged docs.
         self.db.execute(
             "INSERT OR REPLACE INTO sources VALUES (?,?,?,?,?,?,?)",
-            (source_id, dataset, modality, title, body, asset_path,
-             json.dumps(metadata, ensure_ascii=False)),
+            (source_id, *values),
         )
         if self._fts:
-            self.db.execute("DELETE FROM source_search WHERE source_id=?", (source_id,))
+            # FTS5 source_id is UNINDEXED. A DELETE for a nonexistent ID
+            # can cause a full scan, so never do this for initial inserts.
+            if previous is not None:
+                self.db.execute(
+                    "DELETE FROM source_search WHERE source_id=?", (source_id,)
+                )
             self.db.execute(
                 "INSERT INTO source_search(source_id,title,body) VALUES (?,?,?)",
                 (source_id, title, body),
