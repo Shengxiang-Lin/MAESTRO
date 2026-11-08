@@ -97,6 +97,10 @@ class EnvirIntegrationTests(unittest.TestCase):
             self.assertEqual(db.cached_count(), before + 1)
             bad = {**task, "answer": {**task["answer"], "value": "Fake Director"}}
             self.assertFalse(factory.replay(bad))
+            invalid_trace = {**task, "summary_trace": ["Invented a web page."]}
+            self.assertFalse(factory.replay(invalid_trace))
+            db.cache_subtask(bad, subject_key="yago:Film_A")
+            self.assertIsNone(factory.yago("yago:Film_A", "schema:director"))
             self.assertIsNone(factory.yago("yago:Film_A", "schema:unknown"))
 
     def test_chain_parallel_cross_dataset_bridge(self):

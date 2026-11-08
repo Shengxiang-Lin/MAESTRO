@@ -26,6 +26,7 @@ class TaskGraphComposer:
             )
         }
         self.rejections = Counter()
+        self._candidate_cache = {}
 
     def _pack(self, pattern: str, nodes: list[dict], edges: list[dict],
               question: str, brief: dict, optional_ids: tuple[str, ...] = ()):
@@ -69,7 +70,14 @@ class TaskGraphComposer:
         }
 
     def _rows(self, sql: str, *, limit: int = 1000):
-        return self.store.db.execute(sql + " LIMIT ?", (limit,)).fetchall()
+        # Expensive connected-graph joins should run ONCE per composition
+        # pass, not once per attempted question.
+        key = (sql, limit)
+        if key not in self._candidate_cache:
+            self._candidate_cache[key] = self.store.db.execute(
+                sql + " LIMIT ?", (limit,)
+            ).fetchall()
+        return list(self._candidate_cache[key])
 
     def chain(self) -> dict | None:
         if "chain" not in self.allowed:

@@ -17,7 +17,7 @@ class SubtaskFactory:
         task_id = "yago-task-" + digest(subject, predicate)
         cached = self.store.task(task_id)
         if cached is not None:
-            return cached
+            return cached if self.replay(cached) else None
         rows = self.store.get_facts(subject, predicate)
         # No arbitrary choice among multiple facts: ambiguous output is
         # excluded until a set-valued executor is implemented.
@@ -103,9 +103,23 @@ class SubtaskFactory:
         if claim not in source["body"]:
             return False
         query = f"{display(subject)} {display(predicate)}"
-        return sid in {
-            r["source_id"] for r in self.store.search(query, limit=30)
-        }
+        hits = self.store.search(query, limit=30)
+        if sid not in {r["source_id"] for r in hits}:
+            return False
+        events = task.get("tool_events") or ()
+        expected_events = [
+            {"action": "LocalSearch", "query": query,
+             "returned_ids": [h["source_id"] for h in hits]},
+            {"action": "OpenPage", "source_id": sid, "observed_claim": claim},
+        ]
+        expected_trace = [
+            f"Searched the public index for '{query}'.",
+            f"Opened {source['title']} and observed: {claim}",
+        ]
+        return (list(events) == expected_events
+                and list(task.get("summary_trace") or ()) == expected_trace
+                and task.get("summary") ==
+                f"{display(subject)} has {display(predicate)}: {answer['value']}.")
 
 
 def unique_entity_labels(store: EvidenceStore, *, max_subjects: int = 100000
