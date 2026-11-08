@@ -87,6 +87,11 @@ def validate_clean_scene(scene: dict) -> list[str]:
         expected_sources = {
             (src.get("modality"), src.get("doc_id"))
             for src in prior.get("supporting_sources", [])
+            if src.get("provenance") == "mmqa_supporting_context"
+        }
+        expected_source_roles = {
+            (src.get("modality"), src.get("doc_id"))
+            for src in prior.get("supporting_sources", [])
         }
         bound_original_sources = set()
         for task in tasks:
@@ -117,7 +122,7 @@ def validate_clean_scene(scene: dict) -> list[str]:
                 (item.get("modality"), item.get("doc_id"))
                 for item in declared.get("source_keys", [])
             }
-            if not expected_sources <= declared_keys or (
+            if not expected_source_roles <= declared_keys or (
                 declared.get("expected") != len(declared_keys)
                 or declared.get("assigned") != len(declared_keys)
             ):
