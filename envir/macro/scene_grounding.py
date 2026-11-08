@@ -96,6 +96,9 @@ Check independently:
   meaningful, domain-appropriate entry and field labels, not boilerplate.
 - frozen_facts: no new or changed values, dates, entities alleged to be
   factual, inferred media contents, or unsupported relations.
+- Source-ablation is merely a goal-result influence diagnostic. Do not
+  fabricate stronger multi-source links to compensate for weak influence;
+  label sources honestly and leave TaskGraph improvements to a later stage.
 - source_roles: labels refer only to supplied sources; they do not imply
   possession of unprovided documents or observed source media.
 - solution_compatibility: the same operation, filters, source dependencies,
@@ -258,6 +261,7 @@ def constructor_input(scene: dict) -> dict:
             "source_priors", {}).get("MultiModalQA", {}).get("original_question"),
         "source_records": source_records(scene),
         "evidence_graph_operations": evidence_summary(scene),
+        "goal_source_ablation_proxy": source_ablation_signal(scene),
         "simulation_notice": (
             "All source scores, flags, order and group attributes are "
             "already computed synthetic facts; actual image contents have "
@@ -557,6 +561,7 @@ def ground_one(scene: dict, *, constructor, critic,
                 "goal_id": request["goal_id"],
                 "source_records": request["source_records"],
                 "evidence_graph_operations": request["evidence_graph_operations"],
+                "goal_source_ablation_proxy": request["goal_source_ablation_proxy"],
                 "original_mmqa_question_weak_style_cue": request[
                     "original_mmqa_question_weak_style_cue"],
                 "review_focus": (
