@@ -152,7 +152,7 @@ class TestMacroTaskPlans(unittest.TestCase):
 
         author = StubAuthor()
         stats = naturalize_questions(plans, author=author, workers=2)
-        self.assertEqual(stats["accepted"], 6)
+        self.assertEqual(stats["accepted"], 6, [p["question_authoring"] for p in plans])
         for packet in author.packets:
             self.assertEqual(set(packet), {
                 "situation", "user_role", "reference_question",
