@@ -43,7 +43,10 @@ class V4QuestionCheckpointError(RuntimeError):
 
 
 def _encoded(obj: dict) -> bytes:
-    return (json.dumps(obj, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    # Preserve the insertion order of typed input slots. The clean replay
+    # compiler respects those slots when constructing its internal evidence
+    # sequence, so a JSON writer MUST NOT alphabetically reorder dict keys.
+    return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
 
 
 def _durable_json(path: Path, obj: dict):
