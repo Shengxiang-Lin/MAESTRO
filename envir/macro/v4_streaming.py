@@ -25,6 +25,7 @@ from tqdm.auto import tqdm
 from environment.question_generation.streaming import question_output_lock
 from .v4_question_review import (
     _fingerprint, naturalize_one, public_task_contract, reference_question,
+    polished_reference_question,
 )
 from .v4_validation import validate_clean_scene
 
@@ -378,17 +379,20 @@ def _normalize_question(value: str) -> str:
 
 
 def _fallback(scene, reason: str, *, detail: str = "") -> tuple[str, dict]:
-    question = reference_question(scene)
+    original = reference_question(scene)
+    question = polished_reference_question(original)
     contract = public_task_contract(scene)
     return question, {
         "pipeline": "v4_task_contract_author_local_critic_repair",
+        "review_policy_version": "v4.2_fidelity_naturalness",
+        "safe_reference_polish_applied": question != original,
         "status": "fallback",
         "reason": reason,
-        "reference_question": question,
+        "reference_question": original,
         "final_question": question,
         "contract_sha256": _fingerprint(contract),
         "macro_graph_sha256": _fingerprint(scene["macro_graph"]),
-        "reference_sha256": _fingerprint(question),
+        "reference_sha256": _fingerprint(original),
         "accepted_review": None,
         "audit": [{"stage": "unhandled_exception", "detail": detail[:180]}],
         "revision_rounds": 0,
@@ -402,7 +406,10 @@ def _complete(scene, question: str, meta: dict, seen: set[str]):
     """Commit-time uniqueness + full clean replay before writing any bytes."""
     normalized = _normalize_question(question)
     if meta["status"] == "accepted" and normalized in seen:
-        question = meta["reference_question"]
+        question = polished_reference_question(meta["reference_question"])
+        meta["safe_reference_polish_applied"] = (
+            question != meta["reference_question"]
+        )
         meta["status"] = "fallback"
         meta["reason"] = "duplicate_naturalized_question"
         meta["final_question"] = question
@@ -418,7 +425,10 @@ def _complete(scene, question: str, meta: dict, seen: set[str]):
     if issues and meta["status"] == "accepted":
         # An accepted LLM rewrite is never allowed to corrupt the evidence
         # replay or the frozen macro-task semantic contract.
-        question = meta["reference_question"]
+        question = polished_reference_question(meta["reference_question"])
+        meta["safe_reference_polish_applied"] = (
+            question != meta["reference_question"]
+        )
         meta["status"] = "fallback"
         meta["reason"] = "postflight_replay_failed"
         meta["final_question"] = question

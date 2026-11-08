@@ -89,3 +89,60 @@ A changed input source, model setting or reviewer code will deliberately
 block resume; use a new output directory or explicitly restart. The
 writer uses a single-writer lock to prevent overlapping runs against the
 same output directory.
+
+## V4.2 naturalness and task-semantic fidelity update
+
+After a 100-Question Qwen3.5-9B pilot (84 accepted, 16 fallback),
+the reviewer distinguishes harmless wording changes from factual additions.
+Author and Critic now explicitly screen for (a) unsupported specificity,
+such as changing "laboratory instrument" into "spectrometer" or inventing
+specific record types; (b) adding a "currently" or "still" state not present
+in the Task; (c) changing the object being ranked or assessed; and
+(d) exposing a hidden "first investigate, then rank" work schedule.
+
+Surface checks are less dependent on exact keywords or the literal
+phrase "documented findings". For instance, "our museum" can preserve
+the case setting of "municipal museum" if the reviewer finds the context
+consistent. This can reduce false rejections, while the independent
+Critic still checks the complete immutable Macro Task contract.
+
+Newly accepted LLM Questions should not keep copied "documented findings"
+boilerplate. The original deterministic Question is **not** changed for
+existing inputs: it remains the reference semantic authority. If the
+original accidentally repeated the exact support request twice, failed
+LLM generations may use a narrowly defined deterministic cleanup of
+only that duplicate clause, recorded in the review metadata.
+
+V4.2 reviews are versioned. Old V4.1 Questions can still pass structural
+replay checks but are **not retrospectively certified** to have passed
+V4.2's stricter semantic guards. Because the review code has changed,
+use a NEW directory rather than resuming an old V4.1 checkpoint.
+
+Run the same frozen 100 TaskGraph/Evidence scenarios again:
+
+```bash
+python -m envir.macro.v4_cli naturalize \
+  --scenes envir/data/macro_v4/private_clean_scenes_v4.jsonl \
+  --output-dir envir/data/macro_v4_naturalized_v42_100 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 4 --max-revisions 2 --flush-every 1
+```
+
+Compare existing and new naturalizations with the READ-ONLY diagnostic:
+
+To assess the old 100-record pilot, point `audit-questions` to its
+existing `private_clean_scenes_v4.jsonl` file. Then use the same command
+on the new v4.2 output for a paired comparison:
+
+```bash
+python -m envir.macro.v4_cli audit-questions \
+  --scenes envir/data/macro_v4_naturalized_v42_100/private_clean_scenes_v4.jsonl \
+  --output envir/data/macro_v4_naturalized_v42_100/quality_audit.json
+```
+
+The audit reports questionable added details, internal-order leakage,
+location paraphrases, stock phrasing and fallback reasons. Warnings are
+heuristic signals for manual comparison, not a formal proof of semantic
+equivalence. No Macro Task, EvidenceGraph, Feedback or runtime policy
+changes are introduced by this phase.
