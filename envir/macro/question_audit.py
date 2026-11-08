@@ -1,4 +1,4 @@
-"""Read-only diagnostic audit for V4 task-preserving Question naturalization.
+"""Read-only diagnostics for TaskGraph-preserving Question realization.
 
 Heuristic violations are *warnings*, not a proof of semantic drift. This is
 useful for comparing the original 100-question local pilot against a fresh
@@ -11,10 +11,10 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from .v4_question_review import (
+from .question_review import (
     polished_reference_question, reference_question, surface_issues,
 )
-from .v4_validation import validate_clean_scene
+from .validation import validate_clean_scene
 
 
 FIDELITY_FLAGS = {

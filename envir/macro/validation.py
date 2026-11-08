@@ -12,14 +12,14 @@ import json
 import re
 
 from .graph import compile_contracts, compile_waves, MacroPlanError
-from .v4_taskfirst import author_question, task_level_brief
-from .v4_question_review import validate_naturalized_question
-from .v4_evidence import run_clean_tasks, EvidenceExecutionError
+from .question import author_question, task_level_brief
+from .question_review import validate_naturalized_question
+from .evidence import run_clean_tasks, EvidenceExecutionError
 
 
 def validate_clean_scene(scene: dict) -> list[str]:
     errors = []
-    if scene.get("schema") != "maestro.clean_taskfirst.v4":
+    if scene.get("schema") != "maestro.taskfirst.v1":
         errors.append("invalid_schema")
     if scene.get("construction_status") != "clean_task_evidence_replayed":
         errors.append("incorrect_construction_status")
@@ -83,7 +83,7 @@ def validate_clean_scene(scene: dict) -> list[str]:
     # are independently sampled from the Goal Bank; the final Task carries
     # the only allowed question blueprint. Prevent reintroducing copy-based QA.
     if scene.get("scenario", {}).get("source_kind") == "MultiModalQA":
-        from .data_taskfirst import FINAL_PREFIX
+        from .recipe_planner import FINAL_PREFIX
         from .goal_grammar import GOALS
         from envir.schema import normalize_label
         prior = scene.get("source_priors", {}).get("MultiModalQA", {})

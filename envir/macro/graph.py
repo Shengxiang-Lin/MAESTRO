@@ -6,6 +6,7 @@ operations stay inside one macro package and may appear later in summary_trace.
 from __future__ import annotations
 
 from collections import defaultdict
+from itertools import permutations, product
 
 MAX_CONCURRENCY = 10
 
@@ -157,3 +158,30 @@ def complexity(tasks: list[dict], waves: list[list[str]], stats: dict) -> dict:
         "collapsed_internal_steps": stats["collapsed_internal_steps"],
         "concurrency_limit": MAX_CONCURRENCY,
     }
+
+
+def canonical_topology(tasks: list[dict], edges: list[dict],
+                       waves: list[list[str]]) -> str:
+    """Exact unlabeled DAG canonical key for bounded Macro graphs.
+
+    The iterative topological-wave partition is isomorphism-invariant.
+    For every permutation within each wave, encode directed adjacency,
+    taking its lexicographically minimal representation. With 3-9 Macro
+    Tasks and at most four independent source roots this is inexpensive.
+    Crucially, Work Types and source identities do not enter the key.
+    """
+    node_count = len(tasks)
+    if node_count > 9:
+        raise MacroPlanError("canonical topology supports at most nine tasks")
+    ids = {task["task_id"] for task in tasks}
+    if set(sum(waves, [])) != ids:
+        raise MacroPlanError("topology waves do not cover the task graph")
+    edge_set = {(edge["from"], edge["to"]) for edge in edges}
+    best = None
+    for grouped in product(*(permutations(wave) for wave in waves)):
+        order = [node for wave in grouped for node in wave]
+        bits = "".join("1" if (src, dst) in edge_set else "0"
+                       for src in order for dst in order)
+        if best is None or bits < best:
+            best = bits
+    return f"{node_count}:{best}"

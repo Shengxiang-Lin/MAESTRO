@@ -23,23 +23,23 @@ from pathlib import Path
 from tqdm.auto import tqdm
 
 from environment.question_generation.streaming import question_output_lock
-from .v4_question_review import (
+from .question_review import (
     _fingerprint, naturalize_one, macro_task_view, reference_question,
     polished_reference_question,
 )
-from .v4_validation import validate_clean_scene
+from .validation import validate_clean_scene
 
 
-SCHEMA = "maestro.v4.question_stream.v1"
-STATE_FILE = "question_progress_state_v4.json"
+SCHEMA = "maestro.question_stream.v2"
+STATE_FILE = "question_checkpoint.json"
 OUTPUT_FILES = {
-    "private": "private_clean_scenes_v4.jsonl",
-    "public": "public_questions_v4.jsonl",
-    "audit": "question_review_audit_v4.jsonl",
+    "private": "scenes.jsonl",
+    "public": "questions.jsonl",
+    "audit": "question_audit.jsonl",
 }
 
 
-class V4QuestionCheckpointError(RuntimeError):
+class QuestionCheckpointError(RuntimeError):
     """Existing output cannot safely be continued."""
 
 
@@ -72,7 +72,7 @@ def _sha_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def signature_for_v4_scenes(scenes: list[dict], args) -> str:
+def signature_for_scenes(scenes: list[dict], args) -> str:
     """Hash all immutable inputs, model settings and executable review code.
 
     API KEY VALUES are intentionally excluded. Workers/flush/progress style
@@ -84,10 +84,10 @@ def signature_for_v4_scenes(scenes: list[dict], args) -> str:
         h.update(_encoded(scene))
     source_files = (
         Path(__file__),
-        Path(__file__).with_name("v4_question_review.py"),
-        Path(__file__).with_name("v4_taskfirst.py"),
-        Path(__file__).with_name("v4_validation.py"),
-        Path(__file__).with_name("v4_cli.py"),
+        Path(__file__).with_name("question_review.py"),
+        Path(__file__).with_name("question.py"),
+        Path(__file__).with_name("validation.py"),
+        Path(__file__).with_name("cli.py"),
         Path(__file__).parents[2] / "environment/question_generation/backend.py",
     )
     payload = {
@@ -111,7 +111,7 @@ def signature_for_v4_scenes(scenes: list[dict], args) -> str:
     return _fingerprint(payload)
 
 
-class V4QuestionProgress:
+class QuestionProgress:
     """Durable three-file transaction journal with a committed prefix."""
 
     def __init__(self, directory: Path, signature: str, task_ids: list[str],
@@ -124,7 +124,7 @@ class V4QuestionProgress:
             name: self.directory / value for name, value in OUTPUT_FILES.items()
         }
         self.checkpoint_path = self.directory / STATE_FILE
-        self.summary_path = self.directory / "macro_v4_summary.json"
+        self.summary_path = self.directory / "summary.json"
         self.signature = signature
         self.task_ids = task_ids
         self.flush_every = flush_every
@@ -145,18 +145,18 @@ class V4QuestionProgress:
             if (self.state.get("schema") != SCHEMA or
                     self.state.get("signature") != signature or
                     self.state.get("task_ids") != task_ids):
-                raise V4QuestionCheckpointError(
+                raise QuestionCheckpointError(
                     "V4 checkpoint input/model/code signature differs. "
                     "Use a different --output-dir, or explicitly --overwrite "
                     "to restart from scratch."
                 )
             if not 0 <= self.completed <= len(task_ids):
-                raise V4QuestionCheckpointError("invalid completed count")
+                raise QuestionCheckpointError("invalid completed count")
             self._recover_committed()
         else:
             if (self.summary_path.exists()
                     or any(path.exists() for path in self.paths.values())):
-                raise V4QuestionCheckpointError(
+                raise QuestionCheckpointError(
                     "V4 output exists without checkpoint; refusing to "
                     "overwrite it. Use a fresh --output-dir or --overwrite."
                 )
@@ -194,9 +194,9 @@ class V4QuestionProgress:
         for key, path in self.paths.items():
             committed = self.state.get("offsets", {}).get(key)
             if not isinstance(committed, int) or committed < 0 or not path.is_file():
-                raise V4QuestionCheckpointError("missing output: " + str(path))
+                raise QuestionCheckpointError("missing output: " + str(path))
             if path.stat().st_size < committed:
-                raise V4QuestionCheckpointError(
+                raise QuestionCheckpointError(
                     "previously committed output was truncated: " + str(path)
                 )
             digest = hashlib.sha256()
@@ -205,11 +205,11 @@ class V4QuestionProgress:
                 while remaining:
                     chunk = reader.read(min(remaining, 1 << 20))
                     if not chunk:
-                        raise V4QuestionCheckpointError("truncated output")
+                        raise QuestionCheckpointError("truncated output")
                     digest.update(chunk)
                     remaining -= len(chunk)
             if digest.hexdigest() != self.state.get("sha256", {}).get(key):
-                raise V4QuestionCheckpointError(
+                raise QuestionCheckpointError(
                     "previously committed output checksum mismatch: " + str(path)
                 )
             self.offsets[key] = committed
@@ -227,14 +227,14 @@ class V4QuestionProgress:
         try:
             return [json.loads(line) for line in text.splitlines()]
         except (UnicodeError, ValueError) as exc:
-            raise V4QuestionCheckpointError(
+            raise QuestionCheckpointError(
                 "invalid committed JSONL in " + key
             ) from exc
 
     def _verify_alignment(self):
         rows = {key: self._read_committed(key) for key in self.paths}
         if any(len(row) != self.completed for row in rows.values()):
-            raise V4QuestionCheckpointError(
+            raise QuestionCheckpointError(
                 "committed private/public/audit JSONL counts disagree"
             )
         accepted = fallback = author_calls = critic_calls = revised = 0
@@ -251,7 +251,7 @@ class V4QuestionProgress:
                     private.get("question") != public.get("question") or
                     audit.get("question") != private.get("question") or
                     audit.get("review") != meta):
-                raise V4QuestionCheckpointError(
+                raise QuestionCheckpointError(
                     "committed outputs do not match task order or review audit"
                 )
             status = meta.get("status")
@@ -262,7 +262,7 @@ class V4QuestionProgress:
                 fallback += 1
                 reasons[meta.get("reason", "unknown")] += 1
             else:
-                raise V4QuestionCheckpointError("invalid committed review status")
+                raise QuestionCheckpointError("invalid committed review status")
             author_calls += meta.get("author_calls", 0)
             critic_calls += meta.get("critic_calls", 0)
         if any((
@@ -273,7 +273,7 @@ class V4QuestionProgress:
             self.state["accepted_after_revision"] != revised,
             self.state["failure_reasons"] != dict(reasons),
         )):
-            raise V4QuestionCheckpointError("checkpoint counters disagree with audit")
+            raise QuestionCheckpointError("checkpoint counters disagree with audit")
 
     def committed_questions(self) -> set[str]:
         return {
@@ -283,7 +283,7 @@ class V4QuestionProgress:
 
     def append(self, index: int, scene: dict):
         if index != self.completed or scene["task_id"] != self.task_ids[index]:
-            raise V4QuestionCheckpointError(
+            raise QuestionCheckpointError(
                 "out-of-order task write or mismatched task ID"
             )
         issues = validate_clean_scene(scene)
@@ -293,7 +293,7 @@ class V4QuestionProgress:
             )
         review = scene["question_authoring"]
         if review.get("status") not in {"accepted", "fallback"}:
-            raise V4QuestionCheckpointError("review must accept or fall back")
+            raise QuestionCheckpointError("review must accept or fall back")
         audit = {
             "index": index,
             "task_id": scene["task_id"],
@@ -466,12 +466,12 @@ def stream_naturalize_scenes(
         raise ValueError("need at least one V4 scene")
     if args.question_workers < 1 or args.flush_every < 1:
         raise ValueError("question-workers and flush-every must be positive")
-    signature = signature_for_v4_scenes(scenes, args)
+    signature = signature_for_scenes(scenes, args)
     task_ids = [item["task_id"] for item in scenes]
     if len(set(task_ids)) != len(task_ids):
         raise ValueError("duplicate Task IDs in V4 input")
     with question_output_lock(output_dir):
-        with V4QuestionProgress(
+        with QuestionProgress(
             output_dir, signature, task_ids, flush_every=args.flush_every,
             overwrite=overwrite,
         ) as progress:
@@ -488,7 +488,7 @@ def stream_naturalize_scenes(
             try:
                 with ThreadPoolExecutor(
                     max_workers=args.question_workers,
-                    thread_name_prefix="v4-question",
+                    thread_name_prefix="taskfirst-question",
                 ) as pool:
                     def fill():
                         nonlocal next_submit

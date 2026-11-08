@@ -1,11 +1,11 @@
-"""V4 clean Task-first Question generation and optional LLM review.
+"""MAESTRO Task-First dataset generation and optional LLM Question review.
 
 Deterministic pilot:
-  python -m envir.macro.v4_cli build --kqa ... --mmqa ... --target 100
+  python -m envir.macro.cli build --kqa ... --mmqa ... --target 100
 
 Naturalize an EXISTING immutable Task/Evidence bank (no KQA/MMQA reload):
-  python -m envir.macro.v4_cli naturalize \
-    --scenes envir/data/macro_v4/private_clean_scenes_v4.jsonl \
+  python -m envir.macro.cli naturalize \
+    --scenes envir/data/macro_v4/scenes.jsonl \
     --output-dir envir/data/macro_v4_naturalized \
     --question-api-base http://127.0.0.1:8807/v1 \
     --question-model local-qwen3.5-9b --max-revisions 2
@@ -25,10 +25,11 @@ from .priors import load_kqa
 from .scene_catalog import load_scenario_seeds, enrich_with_yago
 from .source_contexts import load_supporting_contexts
 from .goal_grammar import goal_bank_manifest
-from .v4_builder import build_batch
-from .v4_streaming import stream_naturalize_scenes
-from .v4_validation import validate_clean_scene
-from .v4_question_audit import audit_file
+from .recipes import recipe_manifest, RECIPES_BY_OUTPUT
+from .builder import build_batch
+from .question_streaming import stream_naturalize_scenes
+from .validation import validate_clean_scene
+from .question_audit import audit_file
 
 
 def _json(path: Path, value) -> None:
@@ -44,18 +45,18 @@ def _jsonl(path: Path, entries: list[dict]) -> None:
 
 def _paths(output: Path, *, include_audit: bool):
     paths = {
-        "private": output / "private_clean_scenes_v4.jsonl",
-        "public": output / "public_questions_v4.jsonl",
-        "summary": output / "macro_v4_summary.json",
+        "private": output / "scenes.jsonl",
+        "public": output / "questions.jsonl",
+        "summary": output / "summary.json",
     }
     if include_audit:
-        paths["question_review_audit"] = output / "question_review_audit_v4.jsonl"
+        paths["question_review_audit"] = output / "question_audit.jsonl"
     return paths
 
 
 def _check_output(paths: dict, overwrite: bool):
     if not overwrite and any(p.exists() for p in paths.values()):
-        raise FileExistsError("V4 output exists; choose a new directory or --overwrite")
+        raise FileExistsError("Task-First output exists; use a new directory or --overwrite")
 
 
 def _write_outputs(paths: dict, scenes: list[dict], summary: dict):
@@ -151,8 +152,9 @@ def build(args):
     # Offline preparation: materialize an independently reusable Scene Bank
     # and a curated Goal/Pattern Bank BEFORE selecting any question.
     # Original MMQA questions are intentionally excluded from the scene bank.
-    scene_bank_file = args.output_dir / "scene_bank_v4.jsonl"
-    pattern_bank_file = args.output_dir / "goal_pattern_bank_v4.json"
+    scene_bank_file = args.output_dir / "scene_bank.jsonl"
+    pattern_bank_file = args.output_dir / "goal_bank.json"
+    recipe_bank_file = args.output_dir / "recipe_bank.json"
     _jsonl(scene_bank_file, [{
         "scene_id": row["record_id"],
         "topic": row["topic"],
@@ -172,6 +174,14 @@ def build(args):
         "total_patterns": len(pattern_bank),
         "combination_policy": "seeded_random_scene_pattern_pairing_with_source_compatibility",
     })
+    _json(recipe_bank_file, {
+        "policy": "recursive_backwards_typed_workproduct_grammar",
+        "recipes": recipe_manifest(),
+        "producer_alternatives": {
+            key: [recipe.id for recipe in alternatives]
+            for key, alternatives in RECIPES_BY_OUTPUT.items()
+        },
+    })
     context_dir = args.mmqa_context_dir or args.mmqa.parent
     contexts, context_stats = (
         ({}, {"policy": "disabled", "available_context_excerpts": 0})
@@ -184,7 +194,7 @@ def build(args):
         target=args.target, seed=args.seed, contexts=contexts,
     )
     # Only selected, successfully compiled source records are exported.
-    manifest = args.output_dir / "scenario_seed_manifest.jsonl"
+    manifest = args.output_dir / "source_manifest.jsonl"
     _jsonl(manifest, [{
         "task_id": sc["task_id"],
         "mmqa_record_id": sc["source_priors"]["MultiModalQA"]["record_id"],
@@ -217,6 +227,7 @@ def build(args):
         "scenario_seed_manifest": str(manifest),
         "scene_bank": str(scene_bank_file),
         "goal_pattern_bank": str(pattern_bank_file),
+        "recipe_bank": str(recipe_bank_file),
         "scene_pattern_bank": {
             "scene_count": len(scenario_seeds),
             "pattern_count": len(pattern_bank),
@@ -225,13 +236,14 @@ def build(args):
         },
         "files": {key: str(path) for key, path in paths.items()},
         "stage_order": [
-            "prepare_mmqa_scene_bank_without_original_question_goals",
+            "extract_scene_bank_from_mmqa_metadata",
             "enrich_exact_yago_entities_when_available",
             "prepare_independent_goal_and_problem_pattern_bank",
+            "prepare_typed_workproduct_recipe_bank",
             "randomly_combine_compatible_scenes_with_work_goals",
-            "compile_typed_macro_taskgraph_from_combined_scene_and_goal",
+            "backchain_recursive_workproduct_recipes_from_final_goal",
             "bind_all_supporting_sources_and_optional_original_context",
-            "derive_new_question_from_terminal_macro_task_question_blueprint",
+            "derive_new_question_from_terminal_workproduct_blueprint",
             "optional_question_author_critic_revision",
             "execute_per_task_synthetic_typed_operations",
             "derive_clean_feedback_and_summary_trace",
@@ -286,7 +298,7 @@ def naturalize(args):
                 )
             if "question_authoring" in scene:
                 raise ValueError(
-                    "Input already naturalized. Use the original V4 bank, "
+                    "Input already naturalized. Use the initial Task-First bank, "
                     "not an accepted/rejected LLM revision bank."
                 )
             scenes.append(scene)
@@ -298,7 +310,7 @@ def naturalize(args):
     question_stats, unique_questions = _stream_questions(scenes, args)
     summary = {
         "status": "done",
-        "pipeline": "v4_question_only_author_critic_revision",
+        "pipeline": "taskgraph_question_only_author_critic_revision",
         "source_scenes": str(args.scenes),
         "requested": len(scenes),
         "statistics": {
@@ -383,7 +395,7 @@ def _question_flags(parser):
 
 def parser():
     p = argparse.ArgumentParser(
-        description="MAESTRO V4 Clean Task-first with optional Author/Critic Question naturalization"
+        description="MAESTRO recursive Work-Product Task-First generator"
     )
     sub = p.add_subparsers(dest="command", required=True)
     b = sub.add_parser("build")
@@ -392,7 +404,7 @@ def parser():
     b.add_argument("--mmqa", type=Path,
                    default=Path("data/world-source/MultiModalQA/MMQA_train.jsonl.gz"))
     b.add_argument("--output-dir", type=Path,
-                   default=Path("envir/data/macro_v4"))
+                   default=Path("envir/data/taskfirst"))
     b.add_argument("--target", type=int, default=100)
     b.add_argument("--yago", type=Path, default=None,
                    help="Optional YAGO-4.6 TTL for bounded exact entity enrichment")
@@ -410,7 +422,7 @@ def parser():
     _question_flags(b)
     n = sub.add_parser(
         "naturalize",
-        help="Refine existing V4 questions only; NEVER regenerate TaskGraph or Evidence",
+        help="Refine existing questions only; NEVER regenerate TaskGraph or Evidence",
     )
     n.add_argument("--scenes", type=Path, required=True)
     n.add_argument("--output-dir", type=Path, required=True)
@@ -420,7 +432,7 @@ def parser():
     r = sub.add_parser("replay")
     r.add_argument("--scenes", type=Path, required=True)
     a = sub.add_parser("audit-questions",
-        help="Read-only fidelity/style audit of existing naturalized V4 Questions")
+        help="Read-only fidelity/style audit of naturalized Task-First questions")
     a.add_argument("--scenes", type=Path, required=True)
     a.add_argument("--max-records", type=int, default=None)
     a.add_argument("--max-examples", type=int, default=12)

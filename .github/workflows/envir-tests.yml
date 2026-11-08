@@ -1,4 +1,4 @@
-name: Envir subtask-first tests
+name: MAESTRO Task-First environment tests
 
 on:
   pull_request:
