@@ -75,6 +75,29 @@ class SemanticAnchorBank:
         # real subject. Never silently relax the final joint-witness check.
         return rng.choice(eligible or self.profiles)
 
+    def can_anchor(self, program):
+        """Fast feasibility test: one scope must own at least two predicate slots."""
+        solver = TypeConstraintSolver.for_program(program, self.taxonomy)
+        slots = defaultdict(set)
+        for node in program.nodes:
+            if node.op == "RELATE" and node.dependencies:
+                direction = node.inputs[1] if len(node.inputs) > 1 else "forward"
+                owner = node.dependencies[0] if direction == "forward" else node.node_id
+                slots[solver.find(owner)].add(node.node_id)
+            elif node.op in {
+                "FILTER_STRING", "FILTER_NUMBER", "FILTER_YEAR", "FILTER_DATE",
+                "QUERY_ATTR", "SELECT_BETWEEN", "SELECT_AMONG",
+            }:
+                if node.op == "QUERY_ATTR":
+                    owners = node.dependencies[:1]
+                elif node.op == "SELECT_BETWEEN":
+                    owners = node.dependencies
+                else:
+                    owners = (node.node_id,)
+                for owner in owners:
+                    slots[solver.find(owner)].add(node.node_id)
+        return any(len(items) >= 2 for items in slots.values())
+
     def evaluate(self, plan, anchor):
         """Require two chosen predicates on ONE logical entity scope.
 
@@ -117,7 +140,7 @@ class SemanticAnchorBank:
                 continue
             matches = tuple(sorted(predicates & selected))
             if len(matches) > best[0]:
-                best = (len(matches), next((k for k in kinds if k), ""), matches)
+                best = (len(matches), next(iter(sorted(k for k in kinds if k)), ""), matches)
         if best[0] < 2:
             return None
         return {
