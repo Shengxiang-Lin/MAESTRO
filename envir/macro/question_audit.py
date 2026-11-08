@@ -1,4 +1,4 @@
-"""Read-only diagnostic audit for V4 task-preserving Question naturalization.
+"""Read-only diagnostics for TaskGraph-preserving Question realization.
 
 Heuristic violations are *warnings*, not a proof of semantic drift. This is
 useful for comparing the original 100-question local pilot against a fresh
