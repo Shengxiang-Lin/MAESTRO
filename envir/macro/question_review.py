@@ -18,7 +18,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from environment.question_generation.backend import BackendError
-from .v4_taskfirst import author_question, task_level_brief
+from .question import author_question, task_level_brief
 
 
 AUTHOR_SYSTEM = """You write ONE natural benchmark-style USER question.
