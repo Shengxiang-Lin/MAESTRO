@@ -11,62 +11,106 @@ import random
 from envir.schema import digest
 
 
-def _synthetic_facts(*, role: str, case_id: str, date: str,
+# Domain-specific evidence descriptors are synthetic operational semantics,
+# never copied truth from an original KQA/MMQA record.
+DOMAIN_FIELDS = {
+    "logistics": ("vehicle movement", "dispatch log", "gate access", "carrier"),
+    "culture": ("museum event", "exhibition booking", "gallery schedule", "visitor"),
+    "sports": ("competition event", "results register", "eligibility", "participant"),
+    "education": ("conference session", "program entry", "venue assignment", "speaker"),
+    "science": ("experimental run", "instrument log", "calibration", "researcher"),
+    "commerce": ("product batch", "shipment record", "recall handling", "customer"),
+    "environment": ("field observation", "survey register", "habitat protection", "ranger"),
+    "civic": ("maintenance incident", "service order", "safety procedure", "technician"),
+    "general": ("venue event", "booking record", "access requirement", "attendee"),
+}
+
+
+def _synthetic_facts(*, role: str, domain: str, case_id: str, date: str,
                      issue: str, setting: str, user_role: str,
                      rng: random.Random) -> list[dict]:
-    common = {
-        "case_reference": (
-            case_id, f"The source refers to review case {case_id}."
-        ),
-        "review_date": (
-            date, f"The relevant review is dated {date}."
-        ),
+    event_label, record_label, rule_label, stakeholder_label = DOMAIN_FIELDS[domain]
+    capacity = rng.randint(6, 13)
+    requested = rng.randint(2, capacity)
+    # Each source has its own independent facts and an explicit case and
+    # date scope. Extra observations are meaningful source fields, not
+    # hallucinated OCR or claims that a real media model ran.
+    details = {
+        "material": [
+            ("observation_type", event_label,
+             f"The primary observation concerns a {event_label}."),
+            ("observed_issue", issue,
+             f"The observed {event_label} concerns {issue}."),
+            ("observation_location", setting,
+             f"The primary account places the incident at the {setting}."),
+        ],
+        "records": [
+            ("register_type", record_label,
+             f"The relevant entries are recorded in the {record_label}."),
+            ("indexed_subject", case_id,
+             f"The {record_label} includes the case reference {case_id}."),
+            ("record_scope", issue,
+             f"The indexed entry relates to {issue}."),
+        ],
+        "rule_source": [
+            ("requirement_type", rule_label,
+             f"The applicable requirement area is {rule_label}."),
+            ("rule_scope", setting,
+             f"The guidance applies to activities at the {setting}."),
+            ("review_condition", "review_case_before_action",
+             f"Activities under {rule_label} require case-scoped review before action."),
+        ],
+        "independent_reports": [
+            ("independent_type", event_label,
+             f"A separately recorded account concerns the {event_label}."),
+            ("independent_case", case_id,
+             f"The separate report references the same case {case_id}."),
+            ("independent_issue", issue,
+             f"The separate report describes {issue}."),
+        ],
+        "context": [
+            ("context_type", event_label,
+             f"Background documents describe the {event_label} process."),
+            ("context_location", setting,
+             f"Those documents apply to the {setting}."),
+            ("context_relevance", issue,
+             f"The contextual material is relevant to {issue}."),
+        ],
+        "capacity": [
+            ("available_units", capacity,
+             f"The synthetic capacity register lists {capacity} available units."),
+            ("requested_units", requested,
+             f"The case requests {requested} units from the same register."),
+            ("capacity_scope", case_id,
+             f"Both capacity entries are scoped to {case_id}."),
+        ],
+        "stakeholders": [
+            ("decision_owner", user_role,
+             f"The coordinating role is the {user_role}."),
+            ("stakeholder_group", stakeholder_label,
+             f"The relevant stakeholder group is the {stakeholder_label}."),
+            ("stakeholder_requirement", "documented_resolution",
+             f"The stakeholder requires a documented resolution of {issue}."),
+        ],
     }
-    role_fact = {
-        "material": (
-            "observed_issue", issue,
-            f"The primary observation concerns {issue} at the {setting}."
-        ),
-        "records": (
-            "recorded_issue", issue,
-            f"The indexed case record relates to {issue}."
-        ),
-        "rule_source": (
-            "rule_scope", setting,
-            f"The applicable guidance addresses activities at the {setting}."
-        ),
-        "independent_reports": (
-            "independent_subject", issue,
-            f"The independently recorded account concerns {issue}."
-        ),
-        "context": (
-            "context_scope", setting,
-            f"The background material concerns the {setting}."
-        ),
-        "capacity": (
-            "resource_availability", rng.randint(3, 11),
-            f"The case resource register records available capacity for {case_id}."
-        ),
-        "stakeholders": (
-            "responsible_party", user_role,
-            f"The coordination responsibility belongs to the {user_role}."
-        ),
-    }
-    key, value, statement = role_fact.get(role, role_fact["context"])
+    if role not in details:
+        raise ValueError("unsupported source role: " + role)
     pairs = [
-        ("case_reference", *common["case_reference"]),
-        ("review_date", *common["review_date"]),
-        (key, value, statement),
+        ("case_reference", case_id,
+         f"The source is indexed under case {case_id}."),
+        ("review_date", date,
+         f"The evidence in this source is scoped to {date}."),
+        *details[role],
     ]
     return [
         {
             "fact_id": f"F{i+1}",
-            "field": k,
-            "value": val,
-            "statement": stmt,
+            "field": key,
+            "value": value,
+            "statement": claim,
             "verification": "consistent_synthetic_record",
         }
-        for i, (k, val, stmt) in enumerate(pairs)
+        for i, (key, value, claim) in enumerate(pairs)
     ]
 
 
@@ -92,7 +136,7 @@ def build_clean_world(plan: dict, *, seed: int) -> dict:
                     "modality_hint": requirement["candidate_modalities"][0],
                     "representation": "synthetic_text_record_not_raw_media",
                     "facts": _synthetic_facts(
-                        role=role, case_id=case_ref, date=as_of,
+                        role=role, domain=domain, case_id=case_ref, date=as_of,
                         issue=plan["scenario"]["issue"],
                         setting=plan["scenario"]["setting"],
                         user_role=plan["scenario"]["user_role"],
