@@ -57,6 +57,29 @@ def build(args) -> dict:
     else:
         plans, stats = build_batch(kqa=kqa, mmqa=mmqa,
                                    target=args.target, seed=args.seed)
+    question_authoring = {"mode": "deterministic", "accepted": 0,
+                          "rejected": 0, "errors": 0}
+    if args.question_model or args.question_api_base:
+        if not args.question_model or not args.question_api_base:
+            raise ValueError("--question-model and --question-api-base are both required")
+        from .author import OpenAICompatibleQuestionAuthor, naturalize_questions
+        author = OpenAICompatibleQuestionAuthor(
+            api_base=args.question_api_base,
+            model=args.question_model,
+            timeout=args.question_timeout,
+        )
+        author_stats = naturalize_questions(
+            plans, author=author, workers=args.question_workers,
+        )
+        question_authoring = {"mode": "optional_llm_surface", **author_stats}
+        from .validation import validate_plan
+        for plan in plans:
+            problems = validate_plan(plan)
+            if problems:
+                raise ValueError("LLM surface modification invalid: " + str(problems))
+    stats["unique_question_texts"] = len({p["question"] for p in plans})
+    stats["question_duplicate_count"] = len(plans) - stats["unique_question_texts"]
+    stats["question_authoring"] = question_authoring
     _jsonl(outputs["private_taskplans.jsonl"], plans)
     _jsonl(outputs["public_questions.jsonl"], [p["public"] for p in plans])
     priors = {
@@ -120,6 +143,12 @@ def parser() -> argparse.ArgumentParser:
     b.add_argument("--max-mmqa-records", type=int, default=3000)
     b.add_argument("--seed", type=int, default=17)
     b.add_argument("--overwrite", action="store_true")
+    b.add_argument("--question-api-base", default=None,
+                   help="Optional OpenAI-compatible vLLM base, e.g. http://localhost:8000/v1")
+    b.add_argument("--question-model", default=None,
+                   help="Optional local model for public question naturalization only")
+    b.add_argument("--question-workers", type=int, default=4)
+    b.add_argument("--question-timeout", type=int, default=90)
     r = sub.add_parser("replay", help="Recheck macro DAG contracts from saved teacher plans")
     r.add_argument("--plans", "--gold", dest="gold", type=Path, required=True)
     return p
