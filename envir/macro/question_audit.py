@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from .question_review import (
     polished_reference_question, reference_question, surface_issues,
+    SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY,
 )
 from .validation import validate_clean_scene
 
@@ -32,6 +34,8 @@ STYLE_FLAGS = {
     "formulaic_evidence_phrasing",
     "changed_or_missing_setting",
     "missing_case_subject",
+    "internal_schema_jargon",
+    "template_like_rewrite",
 }
 
 
@@ -55,6 +59,29 @@ def audit_scenes(scenes: list[dict], *, max_examples: int = 12) -> dict:
         question = scene["question"]
         ref = reference_question(scene)
         checklist = surface_issues(scene, question, baseline=ref)
+        if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}:
+            # Internal 'MultiModalQA reference collection' and a generic
+            # 'source-grounded issue' are NOT user-facing context. Their
+            # omission is correct, not a naturalization style defect.
+            checklist = [
+                item for item in checklist
+                if item not in {"changed_or_missing_setting", "missing_case_subject"}
+            ]
+        similarity = SequenceMatcher(
+            None, " ".join(ref.casefold().split()),
+            " ".join(question.casefold().split()),
+        ).ratio()
+        counts["sum_reference_similarity"] += similarity
+        if similarity >= 0.85:
+            counts["near_template_questions"] += 1
+            checklist.append("template_like_rewrite")
+        if re.search(
+            r"\b(?:synthetic_\w+|source-linked|candidate\s+observations?|"
+            r"goalassessment|workproduct)\b", question, re.I
+        ):
+            counts["schema_jargon_questions"] += 1
+            checklist.append("internal_schema_jargon")
+        checklist = sorted(set(checklist))
         if status == "fallback":
             counts["fallback"] += 1
             counts["fallback_reason:" + meta.get("reason", "unknown")] += 1
@@ -85,9 +112,13 @@ def audit_scenes(scenes: list[dict], *, max_examples: int = 12) -> dict:
                 counts["critic_flagged_workflow_rounds"] += 1
             if review.get("user_framing") == "robotic":
                 counts["critic_flagged_robotic_rounds"] += 1
-            if review.get("goal_alignment") == "changed":
+            if (review.get("goal_alignment") == "changed"
+                    or review.get("objective_equivalent") == "no"):
                 counts["critic_flagged_goal_shift_rounds"] += 1
-            if review.get("task_sufficiency") == "insufficient":
+            if (review.get("task_sufficiency") == "insufficient"
+                    or review.get("solution_preserved") == "no"
+                    or review.get("required_work_preserved") == "no"
+                    or review.get("answer_equivalent") == "no"):
                 counts["critic_flagged_insufficiency_rounds"] += 1
             if review.get("unsupported_additions"):
                 counts["critic_flagged_unsupported_additions_rounds"] += 1
@@ -140,6 +171,11 @@ def audit_scenes(scenes: list[dict], *, max_examples: int = 12) -> dict:
             "mean_question_words": round(
                 counts["total_word_count"] / counts["total"], 2
             ),
+            "mean_template_similarity": round(
+                counts["sum_reference_similarity"] / counts["total"], 3
+            ),
+            "near_template_questions": counts["near_template_questions"],
+            "schema_jargon_questions": counts["schema_jargon_questions"],
             "starts_with_please": counts["starts_with_please"],
             "has_question_mark": counts["has_question_mark"],
             "procedural_connector_cues": counts["procedural_connector_cues"],
