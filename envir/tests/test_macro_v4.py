@@ -316,8 +316,8 @@ class CleanTaskFirstTests(unittest.TestCase):
         from envir.macro.v4_question_review import (
             AUTHOR_SYSTEM, CRITIC_SYSTEM, CRITIC_SCHEMA_V44,
         )
-        self.assertIn("to-do list", AUTHOR_SYSTEM)
-        self.assertIn("AGENT'S WORKFLOW", CRITIC_SYSTEM)
+        self.assertIn("NOT extra requested deliverables", AUTHOR_SYSTEM)
+        self.assertIn("workflow_instructions", CRITIC_SYSTEM)
         scene = self.build(1)
         reference = scene["question"]
         bad = (
