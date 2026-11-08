@@ -287,6 +287,26 @@ class BackwardRecipePlannerTests(unittest.TestCase):
                 contract,
             ),
         )
+        self.assertIn(
+            "unverified_media_content_claim",
+            semantic_surface_issues(
+                "Which image shows a woman in red in the records?",
+                contract,
+            ),
+        )
+        self.assertIn(
+            "unsupported_specific_source_type",
+            semantic_surface_issues(
+                "Which poster is the most important?",
+                contract,
+            ),
+        )
+        self.assertIn(
+            "unsupported_number_or_threshold",
+            semantic_surface_issues(
+                "Which candidate scored at least 2038?", contract,
+            ),
+        )
 
     def test_strict_critic_rejects_false_positive_and_uncertainty(self):
         from envir.macro.question_review import (
