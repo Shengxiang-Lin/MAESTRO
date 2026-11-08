@@ -208,6 +208,7 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
     tree = seed_record["composition"]
     tasks, edges, recipes = [], [], {}
     root_outputs = []
+    root_cache = {}
 
     def add(work_type: str, artifact: str, goal: str, deliverable: str,
             inputs: list[tuple] | None = None,
@@ -257,10 +258,18 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
         return result
 
     for bucket in buckets:
+        source_set = tuple(sorted((_source_key(item) for item in bucket),
+                                  key=lambda x: (x[0], str(x[1]))))
+        # One document/role can be referenced by multiple MMQA composition
+        # leaves. Reuse a completed source investigation, creating genuine
+        # branch fanout instead of two independent duplicate source tasks.
+        if source_set in root_cache:
+            root_outputs.append(root_cache[source_set])
+            continue
         mod = bucket[0]["modality"]
         kind, name, capability = MODALITY_TYPES[mod]
         requirements = [_requirement(source, seed_record) for source in bucket]
-        root_outputs.append(add(
+        source_output = add(
             "source_investigation_" + mod, kind,
             f"Inspect the {len(bucket)} {mod} source reference(s) for relevant "
             f"entities, attributes and candidate records concerning {seed_record['topic']}.",
@@ -273,7 +282,9 @@ def compose_seed_taskfirst(*, seed_record: dict, ordinal: int, run_seed: int,
                 "compile the typed source evidence package",
             ],
             op="source_extract_" + mod,
-        ))
+        )
+        root_cache[source_set] = source_output
+        root_outputs.append(source_output)
 
     leaf_index = 0
 
