@@ -146,3 +146,41 @@ location paraphrases, stock phrasing and fallback reasons. Warnings are
 heuristic signals for manual comparison, not a formal proof of semantic
 equivalence. No Macro Task, EvidenceGraph, Feedback or runtime policy
 changes are introduced by this phase.
+
+## V4.3: simpler Macro Task-aware LLM Critic
+
+V4.3 asks one core semantic question: would the SAME Macro Tasks
+still be a reasonable and sufficient work plan for the rewritten
+user Question? The Author has strict instructions not to invent entities,
+sources, facts, current states or new work, but broad freedom to write
+natural MMQA/OmniGAIA-style user requests.
+
+Author and Critic receive the overall goal, scenario, Task goals,
+deliverables, and semantic prerequisite links from the Macro TaskGraph.
+The model does not see private evidence, summary traces, full internal
+Task IDs or reference execution waves. Unlike earlier versions, this
+view is for semantic understanding, not a strict lexical writing contract.
+Questions do not need to name every Task or preserve original wording.
+
+The deterministic guards now check only basic length, malformed formatting
+and private Task structure leakage. The LLM Critic judges meaning, task
+coverage and naturalness. It may request up to three local repairs; the
+Author can revise twice. Failed or uncertain reviews safely fall back.
+
+Macro TaskGraph SHA-256 and model-view hashes still protect data integrity
+and reproducibility. They do not enforce rigid wording. The old V4.1/V4.2
+reviews remain replay-compatible, but do not claim the newer review policy.
+Model Critic PASS is still a fallible judgment, not a semantic proof.
+
+Use a NEW output directory for the same 100 fixed Macro TaskGraphs:
+
+    python -m envir.macro.v4_cli naturalize \
+      --scenes envir/data/macro_v4/private_clean_scenes_v4.jsonl \
+      --output-dir envir/data/macro_v4_naturalized_v43_100 \
+      --question-api-base http://127.0.0.1:8807/v1 \
+      --question-model local-qwen3.5-9b \
+      --question-workers 4 --max-revisions 2 --flush-every 1
+
+Checkpoint resume, live progress, ordered writes and read-only quality
+audits continue to work. A changed review policy prevents resuming old
+checkpoints; it does not invalidate completed old data.
