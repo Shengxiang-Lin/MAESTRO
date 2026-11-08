@@ -85,6 +85,42 @@ class EnvirIntegrationTests(unittest.TestCase):
         templates = json.loads((self.bank.parent / "subtask_templates.json").read_text())
         self.assertTrue(any(t["predicate"] == "schema:director" for t in templates))
 
+    def test_official_mmqa_answers_plural_and_supporting_context(self):
+        """The released dataset uses answers=[{answer:...}], not answer."""
+        from envir.sources.mmqa import ingest_mmqa
+        official = self.root / "MMQA_official.jsonl"
+        valid = {
+            "qid": "official-qa", "question": "Which film is described?",
+            "answers": [{"answer": "Film A", "type": "string",
+                         "modality": "text"}],
+            "supporting_context": [{"doc_id": "text-7",
+                                    "doc_part": "text"}],
+            "metadata": {"type": "TextQ"},
+        }
+        ambiguous = {
+            **valid, "qid": "conflicting-answers",
+            "answers": [{"answer": "Film A"}, {"answer": "Film B"}],
+        }
+        official.write_text(
+            json.dumps(valid) + "\n" + json.dumps(ambiguous) + "\n",
+            encoding="utf-8",
+        )
+        (self.root / "MMQA_texts.jsonl").write_text(json.dumps({
+            "id": "text-7", "title": "Film archive",
+            "text": "Film A is described in this paragraph.",
+        }) + "\n", encoding="utf-8")
+        with EvidenceStore(self.bank) as db:
+            stats = ingest_mmqa(db, official, max_records=10)
+            self.assertEqual(stats["context_documents_found"], 1)
+            self.assertEqual(stats["eligible_labeled_records"], 1)
+            self.assertEqual(stats["missing_or_ambiguous_answers"], 1)
+            self.assertEqual(stats["labeled_subtasks"], 1)
+            row = db.db.execute(
+                "SELECT data FROM subtasks WHERE kind='mmqa_qa' "
+                "AND answer_key='film a' ORDER BY subtask_id LIMIT 1"
+            ).fetchone()
+            self.assertIsNotNone(row)
+
     def test_lazy_verification_and_tamper_rejection(self):
         with EvidenceStore(self.bank) as db:
             factory = SubtaskFactory(db)

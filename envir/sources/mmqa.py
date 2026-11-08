@@ -63,6 +63,25 @@ def _answer(value: object) -> str | None:
     return None
 
 
+def _answer_record(record: dict) -> str | None:
+    """Decode official MultiModalQA answers=[{answer,type,...}] records.
+
+    Multiple alternative annotations are not silently reduced to one answer.
+    A list is accepted only when the normalized answers agree.
+    """
+    if "answers" not in record:
+        return _answer(record.get("answer"))  # backward-compatible test fixture
+    raw = record["answers"]
+    if not isinstance(raw, list) or not raw:
+        return None
+    answers = [_answer(item) for item in raw]
+    if any(not value for value in answers):
+        return None
+    if len({value.casefold().strip() for value in answers}) != 1:
+        return None
+    return answers[0]
+
+
 def _bank_indexes(parent: Path, needed: dict[str, set[str]]) -> dict[tuple[str, str], dict]:
     index = {}
     for mod, names in _BANK_FILES.items():
@@ -70,6 +89,8 @@ def _bank_indexes(parent: Path, needed: dict[str, set[str]]) -> dict[tuple[str, 
         if not path:
             continue
         wanted = needed[mod]
+        if not wanted:
+            continue
         found = 0
         for row in _rows(path):
             key = row.get("id") or row.get("doc_id") or row.get("source_id")
@@ -107,15 +128,23 @@ def ingest_mmqa(store: EvidenceStore, path: str | Path, *,
     path = Path(path)
     records = []
     scanned = 0
+    counters = Counter()
     needed: dict[str, set[str]] = defaultdict(set)
     for ix, record in enumerate(_rows(path)):
         if ix >= max_records:
             break
         scanned += 1
         question = str(record.get("question") or "").strip()
-        answer = _answer(record.get("answer"))
+        answer = _answer_record(record)
         context = _contexts(record)
-        if not question or not answer or not context:
+        if not question:
+            counters["missing_question"] += 1
+            continue
+        if not answer:
+            counters["missing_or_ambiguous_answers"] += 1
+            continue
+        if not context:
+            counters["missing_supporting_context"] += 1
             continue
         supports = []
         for item in context:
@@ -127,8 +156,11 @@ def ingest_mmqa(store: EvidenceStore, path: str | Path, *,
                 needed[mod].add(str(doc_id))
         if supports:
             records.append((ix, record, question, answer, supports))
+            counters["eligible_labeled_records"] += 1
+        else:
+            counters["missing_support_ids"] += 1
     index = _bank_indexes(path.parent, needed)
-    counters = Counter()
+    counters["requested_context_ids"] = sum(map(len, needed.values()))
     for ix, record, question, answer, supports in records:
         sources = []
         media = []
@@ -140,11 +172,19 @@ def ingest_mmqa(store: EvidenceStore, path: str | Path, *,
             if mod == "image":
                 for field in ("image_path", "path", "file", "filename"):
                     value = raw.get(field)
-                    if isinstance(value, str):
-                        candidate = (path.parent / value).resolve()
-                        if candidate.is_file() and candidate.is_relative_to(path.parent.resolve()):
+                    if not isinstance(value, str) or not value.strip():
+                        continue
+                    for root in (
+                        path.parent, path.parent / "final_dataset_images",
+                        path.parent / "images",
+                    ):
+                        candidate = (root / value).resolve()
+                        if (candidate.is_file()
+                                and candidate.is_relative_to(path.parent.resolve())):
                             media_path = str(candidate)
                             break
+                    if media_path:
+                        break
             if not body.strip() and media_path is None:
                 counters["unavailable_context"] += 1
                 continue
@@ -160,9 +200,10 @@ def ingest_mmqa(store: EvidenceStore, path: str | Path, *,
             sources.append(sid)
             if mod == "image":
                 media.append("file_available_unverified" if media_path else "caption_proxy")
-        # Only label QA supported by sources that were actually indexed.
-        if not sources:
-            counters["no_accessible_evidence"] += 1
+        # Supporting context is a complete gold list. Missing image pixels
+        # or missing bank files must not silently become partial certified QA.
+        if len(sources) != len(supports):
+            counters["incomplete_supporting_evidence"] += 1
             continue
         task_id = "mmqa-" + digest(record.get("qid") or record.get("id") or ix, question)
         task = Subtask(
@@ -193,5 +234,16 @@ def ingest_mmqa(store: EvidenceStore, path: str | Path, *,
         if media:
             counters["containing_images"] += 1
     store.db.commit()
-    return {"dataset": "MultiModalQA", "records_sampled": scanned,
-            "context_documents_found": len(index), **dict(counters)}
+    return {
+        "dataset": "MultiModalQA", "records_sampled": scanned,
+        "context_documents_found": len(index),
+        "requested_context_ids_by_modality": {
+            mod: len(needed[mod]) for mod in ("text", "table", "image")
+        },
+        "context_files_found": {
+            mod: next((str(path.parent / name) for name in names
+                       if (path.parent / name).is_file()), None)
+            for mod, names in _BANK_FILES.items()
+        },
+        **dict(counters),
+    }
