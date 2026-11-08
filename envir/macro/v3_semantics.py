@@ -71,7 +71,7 @@ def _ops(kqa_pattern):
     return [n["op"] for n in kqa_pattern["program"]["nodes"]]
 
 
-def choose_question_seed(*, ordinal, seed, kqa, mmqa):
+def choose_question_seed(*, ordinal, seed, kqa, mmqa, omni_styles=None):
     rng = random.Random(seed * 7919 + ordinal * 104729)
     base = CASES[ordinal % len(CASES)]
     iteration = ordinal // len(CASES)
@@ -115,6 +115,19 @@ def choose_question_seed(*, ordinal, seed, kqa, mmqa):
     # discovered case IDs; no artificial edge is ever inserted.
     scoped_records = (rng.randrange(3) != 0)
     count_result = ("COUNT" in ops or mmqa_family == "aggregation")
+    if omni_styles:
+        selected_style = omni_styles[rng.randrange(len(omni_styles))]
+        style = selected_style["style"]
+        omni_prior = {
+            "policy": "original_question_style_only",
+            "record_id": selected_style["record_id"],
+            "source_difficulty": selected_style.get("difficulty"),
+        }
+    else:
+        style = ("concise_compositional", "contextual_investigation",
+                 "explicit_result_constraints", "cross_source_explanation")[
+                     (iteration * 3 + ordinal + seed) % 4]
+        omni_prior = {"policy": "deterministic_question_style_not_original_content"}
     return {
         "seed_id": "need-" + digest(seed, ordinal, case.domain, intent, ids, mp["motif_id"]),
         "domain": case.domain,
@@ -137,6 +150,7 @@ def choose_question_seed(*, ordinal, seed, kqa, mmqa):
             "temporal_reconciliation"
         ),
         "aggregation_mode": "count" if count_result else "enumerate",
+        "question_style": style,
         "source_names": {
             "event": DOMAIN[case.domain][3],
             "records": DOMAIN[case.domain][4],
@@ -146,6 +160,7 @@ def choose_question_seed(*, ordinal, seed, kqa, mmqa):
         },
         "source_media_hint": list(case.entry_modalities),
         "source_priors": {
+            "OmniGAIA": omni_prior,
             "KQA": {
                 "policy": kqa_policy,
                 "signature": kp["signature"],
@@ -275,11 +290,34 @@ def public_question(need: dict) -> str:
     joined_ids = ", ".join(ids[:-1]) + " and " + ids[-1]
     role_names = [need["source_names"][r] for r in need["required_source_roles"]]
     resources = ", ".join(role_names[:-1]) + " and " + role_names[-1]
-    prefix = (
-        f"At the {need['setting']}, consider {need['entity_plural']} "
-        f"{joined_ids} on {need['as_of']} in connection with {need['issue']}. "
-        f"Use the {resources}. "
+    subject = (
+        f"{need['entity_plural']} {joined_ids} on {need['as_of']}"
     )
+    style = need.get("question_style", "concise_compositional")
+    if style == "contextual_investigation":
+        prefix = (
+            f"I'm reviewing {need['issue']} at the {need['setting']}. "
+            f"The cases in scope are {subject}. "
+            f"Using the {resources}, "
+        )
+    elif style == "explicit_result_constraints":
+        prefix = (
+            f"Please assess {subject} at the {need['setting']} "
+            f"in connection with {need['issue']}. "
+            f"Ground your answer in the {resources}. "
+        )
+    elif style == "cross_source_explanation":
+        prefix = (
+            f"The {resources} provide complementary evidence about "
+            f"{need['issue']} at the {need['setting']}. "
+            f"For {subject}, "
+        )
+    else:
+        prefix = (
+            f"At the {need['setting']}, consider {subject} "
+            f"in connection with {need['issue']}. "
+            f"Use the {resources}. "
+        )
     intent = need["intent"]
     if intent == "compliance":
         ask = ("Which of these cases fail the applicable status or time-window "
@@ -317,7 +355,8 @@ def public_question(need: dict) -> str:
                "and the resulting immediate mitigation priority.")
     else:
         raise ValueError("unsupported V3 intent")
-    return prefix + ask
+    question = prefix + ask
+    return question[0].upper() + question[1:]
 
 
 def seed_statistics(seeds: list[dict]) -> dict:
@@ -328,6 +367,7 @@ def seed_statistics(seeds: list[dict]) -> dict:
             s["source_priors"]["MultiModalQA"]["logical_pattern"] for s in seeds)),
         "question_operations": dict(Counter(s["question_operation"] for s in seeds)),
         "record_scope": dict(Counter(s["record_scope"] for s in seeds)),
+        "question_styles": dict(Counter(s["question_style"] for s in seeds)),
         "distinct_kqa_signatures": len({s["source_priors"]["KQA"]["signature"] for s in seeds}),
         "distinct_mmqa_motifs": len({s["source_priors"]["MultiModalQA"]["motif_id"] for s in seeds}),
     }
