@@ -31,6 +31,40 @@ from envir.macro.v4_question_review import (
 from envir.macro.v4_question_audit import audit_scenes
 
 
+def v44_review(review: dict) -> dict:
+    """Complete the V4.4 diagnostic protocol for offline mocked Critics."""
+    verdict = review["verdict"]
+    if verdict == "pass":
+        diagnostics = {
+            "goal_alignment": "same",
+            "task_sufficiency": "sufficient",
+            "user_framing": "user_goal",
+            "unsupported_additions": [],
+        }
+    elif verdict == "revise" and review.get("naturalness") == "needs_polish":
+        diagnostics = {
+            "goal_alignment": "same",
+            "task_sufficiency": "sufficient",
+            "user_framing": "robotic",
+            "unsupported_additions": [],
+        }
+    elif verdict == "revise":
+        diagnostics = {
+            "goal_alignment": "changed",
+            "task_sufficiency": "insufficient",
+            "user_framing": "user_goal",
+            "unsupported_additions": ["candidate-only requirement"],
+        }
+    else:
+        diagnostics = {
+            "goal_alignment": "uncertain",
+            "task_sufficiency": "uncertain",
+            "user_framing": "user_goal",
+            "unsupported_additions": [],
+        }
+    return {**diagnostics, **review}
+
+
 class CleanTaskFirstTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -297,7 +331,7 @@ class CleanTaskFirstTests(unittest.TestCase):
                 payload = json.loads(user)
                 self_test.assertIn("macro_task_graph", payload)
                 self_test.assertIn("spectrometer", payload["candidate_question"])
-                return {
+                return v44_review({
                     "verdict": "revise",
                     "naturalness": "acceptable",
                     "summary": "Invented a narrower instrument type",
@@ -307,7 +341,7 @@ class CleanTaskFirstTests(unittest.TestCase):
                         "problem": "Unsupported instrument specificity",
                         "minimal_fix": "Keep the instrument generic",
                     }],
-                }
+                })
 
         self_test = self
         reviewer = TaskAwareCritic()
@@ -318,7 +352,7 @@ class CleanTaskFirstTests(unittest.TestCase):
         self.assertEqual(metadata["status"], "fallback")
         self.assertEqual(metadata["critic_calls"], 1)
         self.assertEqual(metadata["review_policy_version"],
-                         "v4.3_macro_task_critic")
+                         "v4.4_goal_first_critic")
         self.assertEqual(metadata["audit"][0]["deterministic_guards"], [])
         self.assertEqual(metadata["audit"][0]["critic_review"]["verdict"], "revise")
         self.assertEqual(reviewer.calls, 1)
@@ -405,19 +439,19 @@ class CleanTaskFirstTests(unittest.TestCase):
                 payload = json.loads(user)
                 self_test.assertIn("macro_tasks", payload["macro_task_graph"])
                 self_test.assertEqual(payload["candidate_question"], text)
-                return {
+                return v44_review({
                     "verdict": "pass",
                     "naturalness": "acceptable",
                     "summary": "Same final objective and supporting work",
                     "differences": [],
-                }
+                })
         self_test = self
         result, meta = naturalize_one(
             scene, author=Author(), critic=Critic(),
         )
         self.assertEqual(result, text)
         self.assertEqual(meta["status"], "accepted")
-        self.assertEqual(meta["review_policy_version"], "v4.3_macro_task_critic")
+        self.assertEqual(meta["review_policy_version"], "v4.4_goal_first_critic")
         self.assertNotIn("contract_sha256", meta)
         self.assertIn("macro_task_view_sha256", meta)
         scene["question"] = result
@@ -449,9 +483,9 @@ class CleanTaskFirstTests(unittest.TestCase):
             def complete_json(self, system, user, *, response_schema=None):
                 p = json.loads(user)
                 self.requests.append(p)
-                return {"verdict": "pass", "naturalness": "acceptable",
+                return v44_review({"verdict": "pass", "naturalness": "acceptable",
                         "summary": "Same task goal and natural wording.",
-                        "differences": []}
+                        "differences": []})
         author, critic = Author(), Critic()
         stats = naturalize_scenes([scene], author=author, critic=critic)
         self.assertEqual(stats["accepted"], 1)
@@ -508,7 +542,7 @@ class CleanTaskFirstTests(unittest.TestCase):
             def complete_json(self, system, user, *, response_schema=None):
                 self.calls += 1
                 if self.calls == 1:
-                    return {
+                    return v44_review({
                         "verdict": "revise",
                         "naturalness": "needs_polish",
                         "summary": "One local style issue",
@@ -518,11 +552,11 @@ class CleanTaskFirstTests(unittest.TestCase):
                             "problem": "The phrase is awkward and repetitive",
                             "minimal_fix": "Use a shorter evidence request",
                         }],
-                    }
-                return {
+                    })
+                return v44_review({
                     "verdict": "pass", "naturalness": "acceptable",
                     "summary": "Equivalent and natural", "differences": [],
-                }
+                })
         self_test = self
         author, critic = Author(), Critic()
         question, meta = naturalize_one(
@@ -564,7 +598,7 @@ class CleanTaskFirstTests(unittest.TestCase):
                 self.calls = 0
             def complete_json(self, system, user, *, response_schema=None):
                 self.calls += 1
-                return {
+                return v44_review({
                     "verdict": "revise", "naturalness": "acceptable",
                     "summary": "Invented numeric requirement",
                     "differences": [{
@@ -573,7 +607,7 @@ class CleanTaskFirstTests(unittest.TestCase):
                         "problem": "Unsupported numeric constraint",
                         "minimal_fix": "Remove that threshold",
                     }],
-                }
+                })
 
         author, critic = DriftAuthor(), Critic()
         question, meta = naturalize_one(
@@ -596,11 +630,11 @@ class CleanTaskFirstTests(unittest.TestCase):
                 )}
         class Uncertain:
             def complete_json(self, system, user, *, response_schema=None):
-                return {
+                return v44_review({
                     "verdict": "uncertain", "naturalness": "acceptable",
                     "summary": "I cannot establish equivalence",
                     "differences": [],
-                }
+                })
         reference = scene["question"]
         question, meta = naturalize_one(
             scene, author=Author(), critic=Uncertain(), max_revisions=2,
@@ -632,10 +666,10 @@ class CleanTaskFirstTests(unittest.TestCase):
                 )}
         class Critic:
             def complete_json(self, system, user, *, response_schema=None):
-                return {
+                return v44_review({
                     "verdict": "pass", "naturalness": "acceptable",
                     "summary": "Aligned", "differences": [],
-                }
+                })
         instances = [Author(), Critic()]
         def fake_backend(**kwargs):
             return instances.pop(0)
@@ -686,10 +720,10 @@ class CleanTaskFirstTests(unittest.TestCase):
                 )}
         class Critic:
             def complete_json(self, system, user, *, response_schema=None):
-                return {
+                return v44_review({
                     "verdict": "pass", "naturalness": "acceptable",
                     "summary": "Equivalent user request", "differences": [],
-                }
+                })
         stats = naturalize_scenes(
             [first, second], author=Author(), critic=Critic(),
         )
@@ -721,10 +755,10 @@ class CleanTaskFirstTests(unittest.TestCase):
                 self.drafts.append(request["candidate_question"])
                 if len(self.drafts) == 1:
                     return {"verdict": "pass"}  # Malformed response.
-                return {
+                return v44_review({
                     "verdict": "pass", "naturalness": "acceptable",
                     "summary": "Equivalent", "differences": [],
-                }
+                })
         author, critic = Author(), Critic()
         question, info = naturalize_one(
             scene, author=author, critic=critic, max_revisions=2,
@@ -772,8 +806,8 @@ class CleanTaskFirstTests(unittest.TestCase):
                 )}
         class Critic:
             def complete_json(self, system, user, *, response_schema=None):
-                return {"verdict": "pass", "naturalness": "acceptable",
-                        "summary": "No semantic change", "differences": []}
+                return v44_review({"verdict": "pass", "naturalness": "acceptable",
+                        "summary": "No semantic change", "differences": []})
         writer = V4QuestionProgress.append
         def interrupted(self_writer, index, scene):
             if index == 2:
@@ -851,8 +885,8 @@ class CleanTaskFirstTests(unittest.TestCase):
                 )}
         class Critic:
             def complete_json(self, system, user, *, response_schema=None):
-                return {"verdict": "pass", "naturalness": "acceptable",
-                        "summary": "Equivalent", "differences": []}
+                return v44_review({"verdict": "pass", "naturalness": "acceptable",
+                        "summary": "Equivalent", "differences": []})
         path = self.temp / "tamper"
         stream_naturalize_scenes(
             copy.deepcopy(originals), args=args, output_dir=path,
@@ -898,8 +932,8 @@ class CleanTaskFirstTests(unittest.TestCase):
                 )}
         class Critic:
             def complete_json(self, system, user, *, response_schema=None):
-                return {"verdict": "pass", "naturalness": "acceptable",
-                        "summary": "Same goal", "differences": []}
+                return v44_review({"verdict": "pass", "naturalness": "acceptable",
+                        "summary": "Same goal", "differences": []})
         with patch("envir.macro.v4_streaming.tqdm", FakeBar):
             stats, _ = stream_naturalize_scenes(
                 copy.deepcopy(originals), args=args,
