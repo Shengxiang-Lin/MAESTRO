@@ -56,8 +56,8 @@ PRESERVE ONLY THESE HARD SEMANTICS:
    the image depicts; a synthetic score is NOT real-world popularity,
    prestige, performance or quality; a relative time index is NOT a date.
 
-Do NOT expose backend field names, labels such as 'synthetic_attribute_flag',
-agents, internal WorkProducts, Task IDs, or an explicit task checklist.
+Do NOT expose backend field names, machine identifiers, agent labels,
+internal work products, task IDs, or an explicit task checklist.
 If the records only support an abstract comparison, ask an ordinary question
 about that comparison instead of inventing a richer real-world problem.
 
