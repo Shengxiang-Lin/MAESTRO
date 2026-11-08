@@ -112,7 +112,10 @@ def main():
     candidates=OUTPUT_DIR/f"semantic_candidates_pool_{pool_size}.jsonl"
     worlds=OUTPUT_DIR/f"typed_worlds_{pool_size}.jsonl"
     rendered=OUTPUT_DIR/f"rendered_worlds_{pool_size}.jsonl"
-    summary_path=OUTPUT_DIR/"build_summary.json"
+    summary_path=OUTPUT_DIR/(
+        f"build_summary_semantic_anchored_{pool_size}.json"
+        if args.construction_mode=="semantic_anchored" else "build_summary.json"
+    )
     summary={"pipeline":{
         "mode":"fixed_candidate_pool",
         "construction_mode":args.construction_mode,
