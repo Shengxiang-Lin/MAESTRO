@@ -1,171 +1,140 @@
-# MAESTRO `envir/`: V4.5 Task-First with V4.6 semantic-work improvements
+# MAESTRO — Task-First Environment
 
-This directory builds **multi-domain, multi-source orchestration questions** from
-the three existing corpora only: **MultiModalQA**, **KQA-Pro**, and optionally
-**YAGO-4.6**. It does not import GAIA/OmniGAIA questions or additional datasets.
+`envir/` is the **only** data-driven Task-First training-environment
+generator. It builds independent multi-domain problems from the existing
+**MultiModalQA, KQA-Pro and optional YAGO-4.6** corpora. No original
+MultiModalQA question is a generated target question or WorkProduct goal.
 
-## What is generated, and by whom?
+## Architecture
 
-1. **Offline Scene Bank (MultiModalQA + optional YAGO):** pre-extract topic,
-   entities, domains, real supporting-context IDs, source modalities, and
-   composition-structure hints. An original MMQA question may identify a
-   scene's named entities, but its interrogative wording, target property,
-   original answer, and inferred question intent are **not** used to choose
-   a new goal or form a new Question. The exported `scene_bank_v4.jsonl`
-   contains no original MMQA question text.
-   **Offline Goal/Pattern Bank:** `goal_pattern_bank_v4.json` has eight
-   domain-neutral typed work-product goals (lookup audit, source linkage,
-   comparison, reconciliation, aggregation, chronology, prioritization,
-   feasibility). These are reusable orchestration design constraints, not
-   labels copied from a selected MMQA question.
-   **Random compatible combination:** shuffle the Scene Bank, independently
-   sample a Goal Bank entry with a recorded seed, and compile an executable
-   typed Macro TaskGraph before authoring any final Question.
-2. **Optional YAGO enrichment:** bounded scan of the local YAGO TTL file;
-   attach only *unique exact normalized entity-label* matches, with RDF
-   subject IDs and observed facts. An unmatched entity stays unmatched.
-   The YAGO context is a teacher-side annotation, **not** a magically
-   available MMQA document and not proof of entity equivalence.
-3. **Internal KQA prior:** load full KoPL ProgramIR, preserving program shape.
-   It is a seed for future *inside-Sub-Agent* operations and trace builders.
-   KoPL nodes are **not** delegated as Macro Tasks, and the saved program is
-   not claimed to have executed in the current clean environment.
-4. **Macro TaskGraph:** use MMQA's nested composition and all supporting
-   sources to construct a typed Work-Product DAG. Semantic work includes
-   source investigation, reference/entity alignment, attribute verification,
-   temporal reconstruction, aggregation, comparison/intersection, evidence
-   consistency review and answer synthesis. Shared source leaves are reused;
-   repeated documents are never silently dropped. Accept only 3–9
-   meaningful Macro Tasks per question.
-5. **NEW initial Question:** construct an independent, structured goal
-   inside the terminal Macro Task and generate its Question from that task's
-   `question_blueprint` only **after** the complete graph has been compiled.
-   No selected MMQA original Question is a Question template or paraphrase
-   seed. The optional V4.5 Author–Critic refines this newly generated
-   graph-derived reference.
-6. **Optional V4.5 Author–Critic:** rewrite the public Question with a local
-   OpenAI-compatible model. Author and Critic see sanitized semantic Macro
-   goals/inputs, not private evidence, Gold answers or the actual KoPL program.
-   Retain the task graph/evidence/feedback unchanged during naturalization.
-7. **Source content + typed internal execution:** whenever original MMQA
-   context-bank files are already present, read text/table excerpts or image
-   caption proxies by exact supporting `doc_id`. For every source, produce
-   distinct, question-scoped **synthetic** candidate observations (never
-   invented facts about actual image pixels). Evaluate typed operations over
-   these observations and write the computed result to `summary_trace` and
-   the WorkProduct; this is not execution of the saved KQA KoPL program and
-   is **not** the original MMQA Gold answer.
-8. **Replay and source audit:** validate every original supporting document
-   handle appears in the private source world and in reachable Macro Tasks;
-   check typed dependencies, operator traces and deterministic results.
+```text
+MultiModalQA source annotations ───► Scene Bank
+YAGO optional exact matches ──────► scene context
+Independent curated Goal Bank ────┐
+                                  ├─► seeded Scene × Goal selection
+Typed Work-Product Recipe Bank ───┘             │
+                                                ▼
+                              recursive backwards WorkProduct planner
+                                ├─ choose alternative output recipes
+                                ├─ recursively expand required typed inputs
+                                ├─ memoize shared intermediate products
+                                ├─ attach ALL original MMQA source handles
+                                └─ validate 3–9 task DAG, source closure
+                                                ▼
+                              terminal Macro Task question blueprint
+                                                ▼
+                           NEW deterministic question (3 styles/goal)
+                                                │
+                                  optional LLM Author → independent Critic
+                                                ▼
+                         simulated multi-source EvidenceGraph + Task Feedback
+                                                ▼
+                             replay, proof closure and diversity audit
+```
 
-This is an orchestration-question generator. It does **not** claim to solve
-the original MMQA question or perform an independent raw-media inference.
+**Macro Tasks are substantial work packages, not individual KoPL operations.**
+Alternative recipes for `EvidenceBundle`, `AlignedCandidates`,
+`EvidenceReview`, `GoalAssessment` and `GoalReport` make the DAG
+structurally variable. Each recipe declares its input/output WorkProduct
+types, operation and deliverable. When several downstream tasks require one
+product, the compiler reuses it. The source documents do NOT determine
+Macro topology; the MMQA nested type is a source-side prior only.
 
-## Run from MAESTRO repository root
+The **Scene Bank** contains MMQA entities/topic, broad domain hints,
+modalities, source IDs and optional YAGO matches. The **Goal Bank** contains
+eight independent problem-solving needs, including comparison, counting,
+reference linkage, reconciliation, chronology, prioritization and
+feasibility. A compatibility check rejects unusable source combinations.
 
-Prepare 1,000 candidates using full MMQA training data and the local KQA file:
+## Canonical Python modules
+
+| Module | Responsibility |
+| --- | --- |
+| `scene_catalog.py`, `scene_sources.py` | Extract and group scene/source handles |
+| `source_contexts.py`, `priors.py` | Optional MMQA excerpts and KQA ProgramIR |
+| `goal_grammar.py`, `recipes.py` | Reusable Goal and typed Recipe Banks |
+| `recipe_planner.py` | Backward recursive WorkProduct planning |
+| `graph.py` | Typed edges, coarsening, waves and exact DAG topology signature |
+| `question.py`, `question_review.py` | Graph-first new question and Author–Critic |
+| `world.py`, `evidence.py`, `validation.py` | Synthetic observations, trace execution, replay |
+| `builder.py`, `cli.py`, `question_streaming.py`, `question_audit.py` | Batch pipeline, CLI, checkpointing and diagnostics |
+
+The canonical command-line entry is **`python -m envir`**.
+
+## Build (from the MAESTRO repo root)
 
 ```bash
-python -m envir.macro.v4_cli build \
+python -m envir build \
   --kqa data/world-source/KQA-Pro/train.json \
   --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
   --yago data/world-source/YAGO-4.6/yago-facts.ttl \
-  --max-kqa-records 10000 \
-  --max-mmqa-records 30000 \
-  --max-yago-triples 500000 \
-  --target 1000 \
-  --seed 17 \
-  --output-dir envir/data/macro_v46_data_1000
+  --max-kqa-records 10000 --max-mmqa-records 30000 \
+  --target 1000 --seed 17 \
+  --output-dir envir/data/taskfirst_1000
 ```
 
-`--yago` is optional. MMQA context-bank files are loaded automatically from
-`--mmqa`'s parent directory when present; override with
-`--mmqa-context-dir PATH`, cap excerpts with `--mmqa-excerpt-chars 1200`, or
-use `--no-mmqa-context`. No new datasets are needed. Skip YAGO when no usable local YAGO fact file is
-available. A bounded prefix scan may match few MMQA entities; the result
-reports actual coverage. The number of eligible multi-source compositions
-depends on the loaded MMQA sample. If the requested target cannot be
-reached, build **fails explicitly with a rejection breakdown** rather
-than duplicating questions.
+YAGO is optional: omit `--yago` if the local file is not available.
+Source-bank text/table/caption excerpts are read from MMQA's parent directory
+when present, or specify `--mmqa-context-dir`. They are never treated as
+decoded image pixels.
 
-Question-only naturalization of the saved, structurally validated scenes:
+Generate questions without LLM calls by default. To optionally naturalize
+the prebuilt question bank using a local OpenAI-compatible Author–Critic:
 
 ```bash
-python -m envir.macro.v4_cli naturalize \
-  --scenes envir/data/macro_v45_data_1000/private_clean_scenes_v4.jsonl \
-  --output-dir envir/data/macro_v46_data_1000_natural \
+python -m envir naturalize \
+  --scenes envir/data/taskfirst_1000/scenes.jsonl \
+  --output-dir envir/data/taskfirst_1000_natural \
   --question-api-base http://127.0.0.1:8807/v1 \
-  --question-model local-qwen3.5-9b \
-  --question-workers 4 --max-revisions 2 --flush-every 1
+  --question-model local-model-name \
+  --question-workers 4 --max-revisions 2
 ```
 
-Or supply the Author–Critic options directly to `build`.
-To replay the clean evidence and graph/question contracts:
+To replay and check internal evidence:
 
 ```bash
-python -m envir.macro.v4_cli replay \
-  --scenes envir/data/macro_v45_data_1000/private_clean_scenes_v4.jsonl
+python -m envir replay \
+  --scenes envir/data/taskfirst_1000/scenes.jsonl
 
 python -m unittest discover -s envir/tests -p 'test_*.py' -v
 ```
 
-## Output contracts
+## Output files
 
-- `scene_bank_v4.jsonl`: pre-extracted multi-domain scenes and all
-  original source IDs/modality/composition hints, **without original MMQA questions**.
-- `goal_pattern_bank_v4.json`: reusable independent problem-solving patterns
-  and their required typed work-product semantics, materialized before
-  pairing or TaskGraph generation.
-- `scenario_seed_manifest.jsonl`: only the **selected** MMQA record IDs,
-  original question, source IDs/modalities, composition type and optional
-  YAGO provenance. It is teacher-side metadata.
-- `private_clean_scenes_v4.jsonl`: complete TaskGraph, synthetic source
-  observations plus source-matched excerpts when present, per-Task EvidenceGraph,
-  executable synthetic operator results in Feedback/Trace, KQA
-  ProgramIR and original MMQA source provenance.
-- `public_questions_v4.jsonl`: user Question and publicly described,
-  simulated source handles; no hidden DAG, KoPL program, evidence values,
-  teacher answers or feedback.
-- `question_review_audit_v4.jsonl`: only when Author–Critic is enabled,
-  candidate/revision/verdict metadata.
-- `macro_v4_summary.json`: corpus coverage, rejected compositions, Macro
-  depth/size/topology distributions, missing original support counts,
-  number of original MMQA context excerpts attached, and data policies.
-- `question_progress_state_v4.json`: when naturalizing with the incremental
-  checkpoint writer, for safe deterministic resume.
+- `scene_bank.jsonl`: extracted scene/source catalog **without MMQA
+  question text**.
+- `goal_bank.json`: curated, scene-independent Goal and question patterns.
+- `recipe_bank.json`: all typed WorkProduct producers and their alternatives.
+- `source_manifest.jsonl`: selected scene/goal, original MMQA source
+  provenance and generated question; original dataset question is
+  teacher-side audit metadata only.
+- `scenes.jsonl`: private DAG, KQA ProgramIR, source worlds, WorkProducts,
+  EvidenceGraphs and Sub-Agent Feedback/summary_trace.
+- `questions.jsonl`: model-facing questions and source descriptions.
+- `summary.json`: source coverage, work types, recipe diversity,
+  **exact unlabeled DAG isomorphism count**, depths, failure/rejection reasons,
+  question provenance and review status.
+- `question_audit.jsonl` and `question_checkpoint.json`: only for
+  optional LLM question review/streamed resumption.
 
-## Why this differs from the previous pilot
+The structured source facts and internally computed values are synthetic
+task observations. They provide deterministic typed operation semantics,
+but they do **not** prove the original MMQA answer or perform actual
+image/audio/video perception. KQA ProgramIR is an unexecuted
+inside-Sub-Agent reasoning prior; KoPL nodes are not Main-Agent Tasks.
+Clean replay proves internal consistency and complete source reference
+closure—not real-world factual correctness.
 
-Previous V4.5 used a closed set of 9 domains, 36 predefined incident
-descriptions and 8 handcrafted business intents; MMQA was only a weak
-recipe-selection weight. The new build path is **Scene Bank + Goal Bank first, random
-compatible pairing second, Macro DAG third, NEW Question fourth**. It preserves the original Task-First
-principle: no LLM invents the TaskGraph topology, and all Macro edges are
-typed work-product dependencies. The original fixed-scene generator is
-not used by the default CLI path.
+## Diversity and safety invariants
 
-An MMQA composition is a *prior for macro work*, not a guarantee that each
-dataset-level micro QA operation deserves one Sub-Agent. Source investigation
-is one bounded, independently meaningful work package. KoPL retrieval,
-filtering, and arithmetic belong to a later verified **internal** execution
-layer.
+The full generator checks: no copied MMQA questions; no duplicate generated
+question text; complete coverage of original supporting source IDs;
+typed WorkProduct input/output closure; no orphan Macro tasks; source facts
+never leak to the public question file; reproducible recipe selection;
+and exactly 3–9 Macro Tasks per accepted scene.
 
-**Interpretation:** these are NEW graph-derived questions about available
-structured *synthetic* observations in real MMQA subject areas. The question
-templates refer to synthetic attribute scores, flags and time indices whose
-behavior is replay-verifiable; they do not claim to reproduce real MMQA
-answers. Subsequent Author–Critic naturalization can improve readability,
-but cannot make fabricated media observations into real facts.
-
-## Validation scope and future boundary
-
-Current deterministic clean EvidenceGraph nodes **do execute the new typed
-synthetic source-attribute operations**, but do **not** execute the original
-KQA ProgramIR or independently solve the original MMQA multimodal questions;
-the simulated observations are intentionally clearly labeled. Do not use the
-current clean feedback as a factual answer oracle. Before training Main
-Agents on attacks/retries/rollback, implement a richer internal executor
-and semantically sufficient observations. The present task is focused on
-**dataset ingestion → diverse scenario/need selection → Macro TaskGraph →
-Question generation**.
+The `unlabeled_dag_topologies` statistic is a **true DAG isomorphism
+measure**, invariant to node ID and Work Type. It should be considered
+alongside `unique_recipe_sequences`, actual Goal distribution, graph
+depth, breadth and question-style variation. More tasks/edges do not
+automatically mean better orchestration problems.
