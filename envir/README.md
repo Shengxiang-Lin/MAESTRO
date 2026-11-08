@@ -228,14 +228,13 @@ uses KQA + MMQA structural priors without a YAGO semantic hint.
 Replay structural validation:
 
     python -m envir.macro.cli replay \
-      --gold envir/data/macro_v1/macro_gold_plans.jsonl
+      --plans envir/data/macro_v1/private_taskplans.jsonl
 
 Output files:
 
-* macro_gold_plans.jsonl: PRIVATE teacher structural TaskPlans with
+* private_taskplans.jsonl: PRIVATE teacher structural TaskPlans with
   source-program priors, macro DAG, typed contracts, internal execution
-  outlines, coarsening stats and reference scheduling waves. Despite
-  historical "gold" naming, **there are NO grounded Gold answers yet**.
+  outlines, coarsening stats and reference scheduling waves. **There are NO grounded Gold answers yet**.
 * public_questions.jsonl: only public question, situation/resource
   descriptions and an explicit unrealized-resource notice.
 * macro_summary.json: graph, intent/domain and question diversity counters.
