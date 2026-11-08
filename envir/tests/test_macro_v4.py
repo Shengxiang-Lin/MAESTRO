@@ -312,6 +312,176 @@ class CleanTaskFirstTests(unittest.TestCase):
             "Please compare the cases.",
         )
 
+    def test_v44_skeptical_critic_catches_agent_workflow_and_repairs(self):
+        from envir.macro.v4_question_review import (
+            AUTHOR_SYSTEM, CRITIC_SYSTEM, CRITIC_SCHEMA_V44,
+        )
+        self.assertIn("to-do list", AUTHOR_SYSTEM)
+        self.assertIn("AGENT'S WORKFLOW", CRITIC_SYSTEM)
+        scene = self.build(1)
+        reference = scene["question"]
+        bad = (
+            "Please review the museum reservation records, cross-reference "
+            "operational constraints, then assess priorities, and finally "
+            "rank responses in a detailed report."
+        )
+        fixed = (
+            "Our museum is dealing with reservation problems. "
+            "Which responses should take priority, considering our "
+            "capacity, and what supports that order?"
+        )
+        self.assertEqual(minimal_question_guards(bad), [])
+        class Author:
+            def __init__(self):
+                self.calls = []
+            def complete_json(self, system, user, *, response_schema=None):
+                payload = json.loads(user)
+                self.calls.append(payload)
+                if "previous_draft" in payload:
+                    self_test.assertEqual(payload["previous_draft"], bad)
+                    self_test.assertEqual(
+                        payload["reviewer_feedback"]["user_framing"],
+                        "workflow_instructions",
+                    )
+                    return {"question": fixed}
+                return {"question": bad}
+        class Critic:
+            def __init__(self):
+                self.calls = []
+            def complete_json(self, system, user, *, response_schema=None):
+                self_test.assertEqual(response_schema, CRITIC_SCHEMA_V44)
+                payload = json.loads(user)
+                self.calls.append(payload)
+                if payload["candidate_question"] == bad:
+                    return {
+                        "goal_alignment": "same",
+                        "task_sufficiency": "sufficient",
+                        "user_framing": "workflow_instructions",
+                        "unsupported_additions": [],
+                        "verdict": "revise",
+                        "naturalness": "needs_polish",
+                        "summary": "The final goal is preserved, but this is an execution plan.",
+                        "differences": [{
+                            "reference_excerpt": "",
+                            "candidate_excerpt": "then assess priorities, and finally rank responses",
+                            "problem": "Lists internal processing steps",
+                            "minimal_fix": "Ask directly what the response priorities should be",
+                        }],
+                    }
+                return v44_review({
+                    "verdict": "pass", "naturalness": "acceptable",
+                    "summary": "The user is asking for priority responses, as in the terminal task.",
+                    "differences": [],
+                })
+        self_test = self
+        author, critic = Author(), Critic()
+        question, meta = naturalize_one(
+            scene, author=author, critic=critic, max_revisions=2,
+        )
+        self.assertEqual(question, fixed)
+        self.assertEqual(meta["status"], "accepted")
+        self.assertEqual(meta["review_policy_version"], "v4.4_goal_first_critic")
+        self.assertEqual(meta["author_calls"], 2)
+        self.assertEqual(meta["critic_calls"], 2)
+        self.assertEqual(meta["audit"][0]["critic_review"]["user_framing"],
+                         "workflow_instructions")
+        self.assertEqual(meta["accepted_review"]["user_framing"], "user_goal")
+        scene["question"] = question
+        scene["public"]["question"] = question
+        scene["question_authoring"] = meta
+        self.assertEqual(validate_clean_scene(scene), [])
+
+    def test_v44_critic_rejects_contradictory_pass_axes_and_tampering(self):
+        from envir.macro.v4_question_review import _validate_review
+        valid = v44_review({
+            "verdict": "pass",
+            "naturalness": "acceptable",
+            "summary": "Task goal and final deliverable are preserved.",
+            "differences": [],
+        })
+        self.assertEqual(
+            _validate_review(valid, policy="v4.4_goal_first_critic")["verdict"],
+            "pass",
+        )
+        cases = [
+            {"goal_alignment": "changed"},
+            {"task_sufficiency": "insufficient"},
+            {"user_framing": "workflow_instructions"},
+            {"user_framing": "robotic"},
+            {"unsupported_additions": ["surveillance footage"]},
+        ]
+        for override in cases:
+            with self.subTest(override=override):
+                invalid = {**valid, **override}
+                with self.assertRaisesRegex(
+                    ValueError, "critic_v44_pass_contradicts_diagnostics"
+                ):
+                    _validate_review(invalid, policy="v4.4_goal_first_critic")
+
+        scene = self.build(1)
+        text = ("Our museum has a reservation issue. "
+                "Which responses should we prioritize and why?")
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"question": text}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                return valid
+        result, meta = naturalize_one(scene, author=Author(), critic=Critic())
+        self.assertEqual(meta["status"], "accepted")
+        scene["question"] = result
+        scene["public"]["question"] = result
+        scene["question_authoring"] = meta
+        self.assertEqual(validate_clean_scene(scene), [])
+        scene["question_authoring"]["accepted_review"]["user_framing"] = \
+            "workflow_instructions"
+        self.assertIn("review_invalid_pass_record",
+                      validate_clean_scene(scene))
+
+    def test_v44_source_concretization_diagnostic_is_reviewed_not_rule(self):
+        scene = self.build(0)
+        candidate = (
+            "Our terminal had a carrier arrive outside its delivery window. "
+            "Based on surveillance footage and dispatch logs, "
+            "did it comply with applicable rules?"
+        )
+        self.assertEqual(minimal_question_guards(candidate), [])
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"question": candidate}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                payload = json.loads(user)
+                self_test.assertEqual(payload["candidate_question"], candidate)
+                return {
+                    "goal_alignment": "same",
+                    "task_sufficiency": "sufficient",
+                    "user_framing": "user_goal",
+                    "unsupported_additions": [
+                        "surveillance footage", "dispatch logs",
+                    ],
+                    "verdict": "revise",
+                    "naturalness": "acceptable",
+                    "summary": "Sources are more specific than the TaskGraph authorizes.",
+                    "differences": [{
+                        "reference_excerpt": "primary event material",
+                        "candidate_excerpt": "surveillance footage and dispatch logs",
+                        "problem": "Invented named source types",
+                        "minimal_fix": "Refer to relevant materials and records generically",
+                    }],
+                }
+        self_test = self
+        question, meta = naturalize_one(
+            scene, author=Author(), critic=Critic(), max_revisions=0,
+        )
+        self.assertEqual(meta["status"], "fallback")
+        self.assertEqual(meta["critic_calls"], 1)
+        self.assertEqual(
+            meta["audit"][0]["critic_review"]["unsupported_additions"],
+            ["surveillance footage", "dispatch logs"],
+        )
+        self.assertEqual(question, polished_reference_question(scene["question"]))
+
     def test_macro_critic_handles_unsupported_specificity_not_word_blacklist(self):
         science = self.build(4)
 
