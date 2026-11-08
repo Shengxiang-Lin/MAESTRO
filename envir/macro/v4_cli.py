@@ -23,7 +23,7 @@ from pathlib import Path
 
 from .priors import load_kqa, load_mmqa
 from .v4_builder import build_batch
-from .v4_question_review import naturalize_scenes
+from .v4_streaming import stream_naturalize_scenes
 from .v4_validation import validate_clean_scene
 
 
@@ -83,22 +83,19 @@ def _llm_requested(args) -> bool:
     )
 
 
-def _naturalize_if_requested(scenes, args):
-    if not _llm_requested(args):
-        if args.command == "naturalize":
-            raise ValueError("naturalize requires --question-model and --question-api-base")
-        return {
-            "mode": "deterministic",
-            "accepted": 0, "fallback": 0, "author_calls": 0,
-            "critic_calls": 0, "accepted_after_revision": 0,
-            "model_review_not_formal_proof": True,
-        }
+def _author_critic_clients(args):
     if not args.question_model or not args.question_api_base:
         raise ValueError("both --question-model and --question-api-base are required")
-    if not 0 <= args.max_revisions <= 8 or args.question_workers < 1:
-        raise ValueError("--max-revisions must be 0..8; --question-workers >= 1")
+    if (not 0 <= args.max_revisions <= 8 or args.question_workers < 1
+            or args.flush_every < 1):
+        raise ValueError(
+            "--max-revisions must be 0..8; --question-workers and --flush-every must be positive"
+        )
     from environment.question_generation.backend import OpenAICompatibleBackend
-    key = os.environ.get(args.question_api_key_env) if args.question_api_key_env else None
+    key = (
+        os.environ.get(args.question_api_key_env)
+        if args.question_api_key_env else None
+    )
     critic_key = (
         os.environ.get(args.question_critic_api_key_env)
         if args.question_critic_api_key_env else key
@@ -120,14 +117,15 @@ def _naturalize_if_requested(scenes, args):
         timeout=args.question_timeout,
         json_mode=not args.question_no_json_mode,
     )
-    stats = naturalize_scenes(
-        scenes, author=author, critic=critic,
-        max_revisions=args.max_revisions,
-        workers=args.question_workers,
+    return author, critic
+
+
+def _stream_questions(scenes, args):
+    author, critic = _author_critic_clients(args)
+    return stream_naturalize_scenes(
+        scenes, args=args, output_dir=args.output_dir,
+        author=author, critic=critic, overwrite=args.overwrite,
     )
-    stats["author_model"] = args.question_model
-    stats["critic_model"] = args.question_critic_model or args.question_model
-    return stats
 
 
 def build(args):
@@ -136,16 +134,26 @@ def build(args):
     for path in (args.kqa, args.mmqa):
         if not path.is_file():
             raise FileNotFoundError(path)
-    paths = _paths(args.output_dir, include_audit=_llm_requested(args))
-    _check_output(paths, args.overwrite)
+    llm_mode = _llm_requested(args)
+    paths = _paths(args.output_dir, include_audit=llm_mode)
+    if not llm_mode:
+        _check_output(paths, args.overwrite)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     kqa, ks = load_kqa(args.kqa, limit=args.max_kqa_records)
     mmqa, ms = load_mmqa(args.mmqa, limit=args.max_mmqa_records)
     scenes, stats = build_batch(
         kqa=kqa, mmqa=mmqa, target=args.target, seed=args.seed,
     )
-    review_stats = _naturalize_if_requested(scenes, args)
-    stats["unique_question_texts"] = len({scene["question"] for scene in scenes})
+    if llm_mode:
+        # Writes private/public/audit one record at a time, with a checkpoint.
+        review_stats, unique_questions = _stream_questions(scenes, args)
+        stats["unique_question_texts"] = unique_questions
+    else:
+        review_stats = {
+            "mode": "deterministic", "accepted": 0, "fallback": 0,
+            "accepted_after_revision": 0, "author_calls": 0,
+            "critic_calls": 0, "model_review_not_formal_proof": True,
+        }
     stats["question_authoring"] = review_stats
     summary = {
         "status": "done",
@@ -176,7 +184,11 @@ def build(args):
             "LLM_semantic_review_is_a_judgment_not_formal_proof",
         ],
     }
-    _write_outputs(paths, scenes, summary)
+    if llm_mode:
+        # The streamed JSONLs are already committed; finish with summary.
+        _json(paths["summary"], summary)
+    else:
+        _write_outputs(paths, scenes, summary)
     return summary
 
 
@@ -190,8 +202,9 @@ def naturalize(args):
         raise ValueError(
             "naturalize output directory must differ from input directory"
         )
+    if not _llm_requested(args):
+        raise ValueError("naturalize requires --question-model and --question-api-base")
     paths = _paths(args.output_dir, include_audit=True)
-    _check_output(paths, args.overwrite)
     scenes = []
     with args.scenes.open("r", encoding="utf-8") as reader:
         for raw in reader:
@@ -214,7 +227,7 @@ def naturalize(args):
     if not scenes:
         raise ValueError("no valid scenes loaded")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    question_stats = _naturalize_if_requested(scenes, args)
+    question_stats, unique_questions = _stream_questions(scenes, args)
     summary = {
         "status": "done",
         "pipeline": "v4_question_only_author_critic_revision",
@@ -222,7 +235,7 @@ def naturalize(args):
         "requested": len(scenes),
         "statistics": {
             "generated": len(scenes),
-            "unique_question_texts": len({s["question"] for s in scenes}),
+            "unique_question_texts": unique_questions,
             "question_authoring": question_stats,
             "macro_graphs_preserved": True,
             "evidence_graphs_preserved": True,
@@ -240,7 +253,7 @@ def naturalize(args):
             "no_evidence_conflicts_or_replanning",
         ],
     }
-    _write_outputs(paths, scenes, summary)
+    _json(paths["summary"], summary)
     return summary
 
 
@@ -283,6 +296,10 @@ def _question_flags(parser):
     parser.add_argument("--question-critic-max-tokens", type=int, default=2000)
     parser.add_argument("--question-timeout", type=int, default=180)
     parser.add_argument("--question-no-json-mode", action="store_true")
+    parser.add_argument("--flush-every", type=int, default=1,
+                        help="Checkpoint after each N questions (default: 1)")
+    parser.add_argument("--no-progress", action="store_true",
+                        help="Disable tqdm progress display")
 
 
 def parser():

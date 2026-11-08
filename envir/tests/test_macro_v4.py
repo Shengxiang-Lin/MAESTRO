@@ -11,6 +11,7 @@ import io
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,6 +21,9 @@ from envir.macro.v4_cli import main
 from envir.macro.v4_evidence import run_clean_tasks, EvidenceExecutionError
 from envir.macro.v4_taskfirst import author_question, task_level_brief
 from envir.macro.v4_validation import validate_clean_scene
+from envir.macro.v4_streaming import (
+    V4QuestionCheckpointError, V4QuestionProgress, stream_naturalize_scenes,
+)
 from envir.macro.v4_question_review import (
     naturalize_one, naturalize_scenes, public_task_contract, surface_issues,
 )
@@ -488,6 +492,173 @@ class CleanTaskFirstTests(unittest.TestCase):
         self.assertEqual(info["author_calls"], 1)
         self.assertEqual(info["critic_calls"], 2)
         self.assertEqual(critic.drafts, [question, question])
+
+
+    @staticmethod
+    def stream_args(**updates):
+        settings = {
+            "question_workers": 2, "flush_every": 1,
+            "no_progress": True, "max_revisions": 1,
+            "question_model": "fake-author",
+            "question_critic_model": None,
+            "question_api_base": "http://localhost:8807/v1",
+            "question_critic_api_base": None,
+            "question_temperature": 0.55,
+            "question_critic_temperature": 0.0,
+            "question_max_tokens": 1400,
+            "question_critic_max_tokens": 2000,
+            "question_timeout": 180,
+            "question_no_json_mode": False,
+        }
+        settings.update(updates)
+        return SimpleNamespace(**settings)
+
+    def test_stream_checkpoint_resume_and_truncate_uncommitted_tail(self):
+        originals = [self.build(i) for i in range(6)]
+        args = self.stream_args()
+        output = self.temp / "stream"
+        class Author:
+            def __init__(self):
+                self.calls = 0
+            def complete_json(self, system, user, *, response_schema=None):
+                self.calls += 1
+                return {"question": json.loads(user)["reference_question"].replace(
+                    " Explain which documented findings support your assessment.",
+                    " What evidence supports the conclusion?",
+                )}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"verdict": "pass", "naturalness": "acceptable",
+                        "summary": "No semantic change", "differences": []}
+        writer = V4QuestionProgress.append
+        def interrupted(self_writer, index, scene):
+            if index == 2:
+                raise RuntimeError("simulated process interruption")
+            return writer(self_writer, index, scene)
+        with patch.object(V4QuestionProgress, "append", interrupted):
+            with self.assertRaisesRegex(RuntimeError, "simulated process"):
+                stream_naturalize_scenes(
+                    copy.deepcopy(originals), args=args,
+                    output_dir=output, author=Author(), critic=Critic(),
+                )
+        state = json.loads((output / "question_progress_state_v4.json").read_text())
+        self.assertEqual(state["completed"], 2)
+        for file in (
+            "private_clean_scenes_v4.jsonl",
+            "public_questions_v4.jsonl",
+            "question_review_audit_v4.jsonl",
+        ):
+            self.assertEqual(
+                len((output / file).read_text(encoding="utf-8").splitlines()), 2
+            )
+        # Simulate a crash midway through the NEXT JSONL write.
+        with (output / "public_questions_v4.jsonl").open("ab") as handle:
+            handle.write(b'{"half_written":')
+        author = Author()
+        stats, unique = stream_naturalize_scenes(
+            copy.deepcopy(originals), args=args,
+            output_dir=output, author=author, critic=Critic(),
+        )
+        self.assertEqual(stats["resumed_records"], 2)
+        self.assertEqual(stats["streaming"]["completed"], 6)
+        self.assertEqual(stats["streaming"]["total"], 6)
+        self.assertEqual(author.calls, 4)  # no model calls for committed records
+        self.assertGreaterEqual(unique, 1)
+        for file in (
+            "private_clean_scenes_v4.jsonl",
+            "public_questions_v4.jsonl",
+            "question_review_audit_v4.jsonl",
+        ):
+            self.assertEqual(
+                len((output / file).read_text(encoding="utf-8").splitlines()), 6
+            )
+        questions = [
+            json.loads(line) for line in
+            (output / "private_clean_scenes_v4.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual([x["task_id"] for x in questions],
+                         [x["task_id"] for x in originals])
+        for scene in questions:
+            self.assertEqual(validate_clean_scene(scene), [])
+        # Completed resumption is a no-op (including no Author calls).
+        no_op_author = Author()
+        stats2, _ = stream_naturalize_scenes(
+            copy.deepcopy(originals), args=args,
+            output_dir=output, author=no_op_author, critic=Critic(),
+        )
+        self.assertEqual(no_op_author.calls, 0)
+        self.assertEqual(stats2["resumed_records"], 6)
+
+    def test_stream_detects_tampering_and_settings_change(self):
+        originals = [self.build(i) for i in range(3)]
+        args = self.stream_args()
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"question": json.loads(user)["reference_question"].replace(
+                    " Explain which documented findings support your assessment.",
+                    " What evidence supports the conclusion?",
+                )}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"verdict": "pass", "naturalness": "acceptable",
+                        "summary": "Equivalent", "differences": []}
+        path = self.temp / "tamper"
+        stream_naturalize_scenes(
+            copy.deepcopy(originals), args=args, output_dir=path,
+            author=Author(), critic=Critic(),
+        )
+        with self.assertRaisesRegex(
+            V4QuestionCheckpointError, "signature differs"
+        ):
+            stream_naturalize_scenes(
+                copy.deepcopy(originals),
+                args=self.stream_args(question_model="different-model"),
+                output_dir=path, author=Author(), critic=Critic(),
+            )
+        private_file = path / "private_clean_scenes_v4.jsonl"
+        with private_file.open("r+b") as handle:
+            handle.write(b"X")
+        with self.assertRaisesRegex(
+            V4QuestionCheckpointError, "checksum mismatch"
+        ):
+            stream_naturalize_scenes(
+                copy.deepcopy(originals), args=args, output_dir=path,
+                author=Author(), critic=Critic(),
+            )
+
+    def test_stream_incremental_progress_updates(self):
+        originals = [self.build(i) for i in range(4)]
+        args = self.stream_args(no_progress=False, question_workers=2)
+        calls = []
+        class FakeBar:
+            def __init__(self, **kwargs):
+                calls.append(("init", kwargs["initial"], kwargs["total"]))
+            def update(self, n):
+                calls.append(("update", n))
+            def set_postfix(self, **kwargs):
+                calls.append(("postfix", kwargs["accepted"], kwargs["fallback"]))
+            def close(self):
+                calls.append(("close",))
+        class Author:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"question": json.loads(user)["reference_question"].replace(
+                    " Explain which documented findings support your assessment.",
+                    " What evidence supports the conclusion?",
+                )}
+        class Critic:
+            def complete_json(self, system, user, *, response_schema=None):
+                return {"verdict": "pass", "naturalness": "acceptable",
+                        "summary": "Same goal", "differences": []}
+        with patch("envir.macro.v4_streaming.tqdm", FakeBar):
+            stats, _ = stream_naturalize_scenes(
+                copy.deepcopy(originals), args=args,
+                output_dir=self.temp / "progress",
+                author=Author(), critic=Critic(),
+            )
+        self.assertIn(("init", 0, 4), calls)
+        self.assertEqual(calls.count(("update", 1)), 4)
+        self.assertIn(("close",), calls)
+        self.assertEqual(stats["streaming"]["flush_every"], 1)
 
     def test_cli_build_replay_and_no_overwrite(self):
         path = self.temp / "out"
