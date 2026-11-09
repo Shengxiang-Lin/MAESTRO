@@ -614,6 +614,48 @@ class CanonicalReasoningWorkflowTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             generate(args)
 
+    def test_full_hundred_topic_bank_quality_and_task_budget(self):
+        from envir.reasoning.workflow import generate
+        with self.scenes.open("a", encoding="utf-8") as writer:
+            for ordinal in range(15, 120):
+                writer.write(json.dumps({
+                    "scenario": {
+                        "topic": f"Fictional Collection {ordinal}",
+                        "domain": "books",
+                    },
+                    "task_id": f"source-{ordinal}",
+                    "source_priors": {
+                        "MultiModalQA": {
+                            "record_id": f"topic-{ordinal}",
+                            "source_modalities": ["text", "image", "table"],
+                            "supporting_sources": [],
+                        },
+                    },
+                }) + "\n")
+        args = parser().parse_args([
+            "generate", "--scenes", str(self.scenes),
+            "--output-dir", str(self.root / "hundred_run"),
+            "--target", "100", "--max-records", "120",
+            "--difficulty-mix", "20,50,30", "--no-progress",
+        ])
+        summary = generate(args)
+        self.assertEqual(summary["generated"], 100)
+        self.assertEqual(summary["quality"]["replay_pass"], 100)
+        report = json.loads((self.root / "hundred_run" /
+                             "quality_report.json").read_text(encoding="utf-8"))
+        patterns = report["semantic_reasoning_pattern_distribution"]
+        for name in ("approval", "time_window", "status_disagreement",
+                     "dynamic_threshold"):
+            self.assertGreater(patterns.get(name, 0), 5)
+        self.assertEqual(report["reasoning"]["macro_tasks_above_nine"], 0)
+        self.assertEqual(report["replay_pass"], 100)
+        self.assertGreaterEqual(
+            report["reasoning"]["unique_structural_program_signatures"], 15
+        )
+        self.assertTrue(
+            report["reasoning"]["media_specific_observation_predicates_used"]
+        )
+
     def test_partial_question_configuration_fails_before_generation(self):
         from envir.reasoning.workflow import generate
         args = parser().parse_args([
