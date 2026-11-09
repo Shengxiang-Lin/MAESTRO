@@ -26,6 +26,7 @@ class Relation:
 _ARITY = {
     "scan": 0, "filter_eq": 1, "filter_gte": 1,
     "project": 1, "unique": 1, "join": 2, "count": 1,
+    "sort": 1, "take": 1, "group_count": 1,
 }
 
 
@@ -64,6 +65,14 @@ def validate_program(program: dict) -> list[str]:
             len(set(node["fields"])) != len(node["fields"])
         ):
             issues.append("project_invalid_fields")
+        if op == "group_count" and not isinstance(node.get("field"), str):
+            issues.append("group_count_invalid_field")
+        if op == "sort" and (not isinstance(node.get("field"), str) or
+                not isinstance(node.get("descending", False), bool)):
+            issues.append("sort_invalid_field_or_direction")
+        if op == "take" and (isinstance(node.get("limit"), bool) or
+                not isinstance(node.get("limit"), int) or node["limit"] < 1):
+            issues.append("take_invalid_limit")
         if op == "join" and any(
             not isinstance(node.get(key), str)
             for key in ("left_on", "right_on")
@@ -169,6 +178,34 @@ def _apply(node: dict, inputs: list[Relation]) -> Relation:
             "values": item["values"],
             "support": tuple(sorted(item["support"])),
         } for _, item in sorted(grouped.items())))
+    if op == "group_count":
+        src = inputs[0]
+        field = node["field"]
+        _check(src, field)
+        counts = {}
+        for row in src.rows:
+            key = json.dumps(row["values"][field], sort_keys=True)
+            if key not in counts:
+                counts[key] = {
+                    "value": row["values"][field], "count": 0, "support": set(),
+                }
+            counts[key]["count"] += 1
+            counts[key]["support"].update(row["support"])
+        return Relation((field, "count"), tuple({
+            "values": {field: group["value"], "count": group["count"]},
+            "support": tuple(sorted(group["support"])),
+        } for _, group in sorted(counts.items())))
+    if op == "sort":
+        src = inputs[0]
+        _check(src, node["field"])
+        return Relation(src.columns, tuple(sorted(
+            src.rows, key=lambda row: (row["values"][node["field"]],
+                                        json.dumps(row["values"], sort_keys=True)),
+            reverse=node.get("descending", False),
+        )))
+    if op == "take":
+        src = inputs[0]
+        return Relation(src.columns, src.rows[:node["limit"]])
     if op == "count":
         src = inputs[0]
         support = sorted({ref for row in src.rows for ref in row["support"]})

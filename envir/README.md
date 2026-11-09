@@ -1,5 +1,9 @@
 # MAESTRO — Task-First Semantic World Environment
 
+**New:** [Reasoning-First V2 pipeline](v2/README.md) provides end-to-end
+build-v2, replay-v2, audit-v2 and naturalize-v2 commands. The original
+Task-First commands below remain available for prior runs.
+
 `envir/` generates **synthetic**, replayable, multi-source Macro TaskGraph
 problems. MultiModalQA supplies topic/source *handles*; KQA-Pro provides
 unexecuted structural priors. Our independent Goal/Recipe Bank composes
