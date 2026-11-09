@@ -86,3 +86,30 @@ A different model, input scene bank, generator contract or code must
 use a new output directory or explicitly overwrite the old run.
 Completed legacy outputs from the old all-at-once implementation have
 no checkpoint and cannot be resumed retrospectively.
+
+
+### Single-command Stage 2 (Oracle + naturalized Sub-Agent reports)
+
+The recommended new-run entrypoint can now execute both Stage-2 passes
+without an intermediate manual command:
+
+~~~bash
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --scenes envir/data/maestro_question_fresh_100/questions/scenes.jsonl \
+  --output-dir envir/data/maestro_subagent_reports_all_in_one_100
+~~~
+
+The CLI creates a PRIVATE deterministic Oracle bank in
+<report-output>/oracle/{subtasks.jsonl,scene_index.jsonl,...}, then
+generates normal Sub-Agent finish reports in <report-output>/
+with the existing Author/Critic and streaming journal. An Oracle
+manifest locks the scene input hash, execution implementation, and
+teacher output hashes. On interruption, the SAME command/directory
+reuses this valid Oracle; the report checkpoint skips already
+committed Macro reviews. Incorrect or changed inputs fail closed.
+
+The separate implement-subtasks command is still supported for
+Oracle-only inspection. The old naturalize-subtasks command without
+--scenes continues to consume pre-materialized Oracle files configured
+under reporting.source_subtasks and reporting.source_scene_index.
