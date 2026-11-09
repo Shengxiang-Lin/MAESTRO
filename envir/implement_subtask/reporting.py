@@ -36,6 +36,20 @@ If no rows meet conditions, this is a valid completed result: say so, with
 status done, not partial. If the reported relation is a handoff, say what the
 handoff contains instead of falsely claiming it answers the overall question.
 
+CRITICAL STAGE BOUNDARY:
+Each Macro is only ONE stage of a multi-step DAG. The overall_question is
+background, NOT a list of filters you already executed. Read the actual
+observed_operator_steps. For a scan-only Macro, report the unfiltered source
+rows; for a join-only Macro, report joined candidates. Do NOT claim that
+every joined entry is active/approved/above threshold or meets final
+eligibility requirements unless the supplied steps actually established it.
+A join does NOT itself check active, measured_value, time windows, approval
+or clearance. Some candidate rows can have active=false or value=0.
+Later Macro Tasks perform those filters. NEVER alter, omit or pre-filter the
+EXACT Oracle output rows, even when they fail the overall question's later
+criteria. If a reviewer objects to a premature claim, correct ONLY the prose
+summary, never the result rows.
+
 The result field may be (A) a concise grounded STRING describing the
 workproduct, or (B) EXACTLY the frozen structured answer rows as a JSON
 array. If the answer consists ONLY of entry_label, a JSON array of those
@@ -70,6 +84,17 @@ Check separately:
   that was not accessible to this Macro; no unsupported timestamps/URLs;
 - natural: reads like a concise specialized Sub-Agent completion message,
   not raw backend schema, templated "To produce X", or an overlong narration.
+
+STAGE-LOCAL REVIEW: Judge against THIS Macro's permitted operator steps,
+not the final overall question. A scan of a glossary is not an approval or
+clearance check. A join that includes active=false is CORRECT when it
+precedes an active filter. The row set may include candidates that fail
+LATER checks; never demand filtering them here.
+If a candidate summary overclaims final qualification, require that the
+SUMMARY be corrected to accurately describe the current stage, NOT that
+the already-exact structured result be filtered or rewritten. Your
+repair_hint must NEVER suggest deleting, filtering, adding or changing
+the frozen answer rows.
 
 For empty results, a genuine complete "no matches" is correct, not partial.
 For a structured candidate result, the application has already verified
@@ -131,6 +156,15 @@ def _teacher_contract(record: dict, *, question: str | None,
         "available_provenance_sources": sorted(allowed),
         "terminal_output_schema_of_this_macro": record["output_schema"],
         "exact_oracle_answer": rows,
+        "executed_operations_in_this_macro": [
+            step["operation"] for step in steps
+        ],
+        "stage_scope_note": (
+            "Only these operators were executed in this Macro. "
+            "An intermediate join/scan does not imply later eligibility "
+            "filters; preserve the complete input rows and report only "
+            "what THIS Macro established."
+        ),
         "answer_supporting_fact_refs": trace["answer_supporting_fact_refs"],
         "observed_operator_steps": [
             {
@@ -225,6 +259,77 @@ def _normalize_author_result(value, exact_rows: list[dict],
     return _readable_verified_answer(exact_rows), []
 
 
+def _stage_scope_issues(text: str, contract: dict) -> list[str]:
+    """High-precision claims contradicted by the frozen Macro output/ops.
+
+    A narrow evidence guard, not a complete semantic entailment checker.
+    Only reject explicit strong claims with no present execution support.
+    """
+    rows = contract["exact_oracle_answer"]
+    operations = set(contract["executed_operations_in_this_macro"])
+    fields = set(contract["terminal_output_schema_of_this_macro"])
+    terminal = contract["macro_is_terminal"]
+    errors = []
+    if "active" in fields and any(row.get("active") is False for row in rows):
+        if re.search(
+            r"\b(?:all|every|each)\b.{0,85}\bactive\b"
+            r"|\bonly\s+active\s+(?:entries|records|rows)\b"
+            r"|\b(?:records|entries|rows)\s+(?:are|were)\s+all\s+active\b",
+            text, re.I,
+        ):
+            errors.append("claims_all_active_with_inactive_rows")
+    if "approved" in fields and any(row.get("approved") is False for row in rows):
+        if re.search(
+            r"\b(?:all|every|each)\b.{0,85}\bapproved\b"
+            r"|\bonly\s+approved\s+(?:entries|records|rows|categories)\b",
+            text, re.I,
+        ):
+            errors.append("claims_all_approved_with_unapproved_rows")
+
+    # A standalone source read cannot have filtered data. Upstream
+    # workproducts are not involved in scan-only Macro Tasks.
+    if operations == {"scan"} and not contract["upstream_handoffs"]:
+        if re.search(
+            r"\b(?:filtered|filtering|excluded|removed|retained\s+only|"
+            r"screened\s+out)\b", text, re.I,
+        ):
+            errors.append("scan_claims_unexecuted_filter")
+        if "active" not in fields and re.search(
+            r"\b(?:scanned|retrieved|extracted|identified|listed)\b"
+            r".{0,80}\bactive\s+(?:entries|records|items)\b",
+            text, re.I,
+        ):
+            errors.append("scan_claims_unobserved_active_status")
+        if "approved" not in fields and re.search(
+            r"\b(?:scanned|retrieved|extracted|identified)\b"
+            r".{0,100}\bapproved\s+(?:translated\s+)?"
+            r"(?:category\s+)?(?:labels|entries|records)\b",
+            text, re.I,
+        ):
+            errors.append("scan_claims_unobserved_approval")
+        if "cleared" not in fields and re.search(
+            r"\b(?:satisfied|met|verified|passed)\b"
+            r".{0,65}\bclearance\b",
+            text, re.I,
+        ):
+            errors.append("scan_claims_unchecked_clearance")
+
+    # An intermediate join that has no interval boundaries and no
+    # compare step cannot establish that temporal conditions passed.
+    if (not terminal and "compare_fields" not in operations
+            and not any("step_start" in f or "step_end" in f
+                        for f in fields)):
+        if re.search(
+            r"\b(?:verified|confirmed|checked|satisfied|passed)\b"
+            r".{0,95}\b(?:event[\s_-]*step\s+(?:constraints|criteria)|"
+            r"interval\s+(?:bounds|constraints)|"
+            r"session\s+(?:window|interval)|time\s+(?:window|bounds))\b",
+            text, re.I,
+        ):
+            errors.append("claims_unexecuted_temporal_verification")
+    return sorted(set(errors))
+
+
 def _guard(candidate: dict, contract: dict) -> list[str]:
     errors = []
     if not isinstance(candidate, dict):
@@ -251,7 +356,11 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
         if re.search(r"\b(?:gold program|teacher world|oracle|macro taskgraph|"
                      r"synthetic ground truth)\b", value, re.I):
             errors.append(field + "_internal_teacher_jargon")
-    return errors
+        errors.extend(
+            field + "_" + issue
+            for issue in _stage_scope_issues(value, contract)
+        )
+    return sorted(set(errors))
 
 
 def author_critic_report(
@@ -277,11 +386,24 @@ def author_critic_report(
     for revision in range(max_revisions + 1):
         request = {
             "frozen_task_and_evidence": contract,
-            "previous_review_feedback": failures[-2:],
+            "previous_review_feedback": [{
+                "stage": f.get("stage"),
+                "errors": f.get("errors", []),
+                "reason": f.get("reason"),
+                "repair_hint": (
+                    "Revise the prose to describe only operations actually "
+                    "executed by this Macro; leave ALL exact Oracle answer "
+                    "rows unchanged. Do not apply future-stage filters."
+                    if f.get("stage") == "critic" else None
+                ),
+            } for f in failures[-2:]],
             "style": (
                 "Act like a real Sub-Agent returning finish to Main-Agent. "
                 "result = actionable finding; summary = actual work and evidence. "
-                "Do not add facts beyond the frozen observations."
+                "Describe ONLY this Macro's executed operations and stage-local "
+                "findings. Preserve ALL exact Oracle answer rows including "
+                "candidates that may fail later filters. When repairing, "
+                "correct only prose, not the answer."
             ),
         }
         try:
@@ -350,7 +472,11 @@ def author_critic_report(
                 return row, row["report_authoring"]
             failures.append({
                 "stage": "critic", "reason": decision.get("reason"),
-                "repair_hint": decision.get("repair_hint"),
+                "repair_hint": (
+                    "Correct stage-local summary/prose only. Preserve the "
+                    "entire frozen answer exactly; do not pre-filter or "
+                    "alter any result rows."
+                ),
                 "axes": {key: decision.get(key) for key in axes},
                 "preview": str(candidate)[:220],
             })

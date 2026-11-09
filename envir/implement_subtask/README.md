@@ -155,3 +155,39 @@ python -m envir naturalize-subtasks \
   --max-scenes 5 \
   --output-dir envir/data/maestro_subagent_reports_trial_5_v2
 ~~~
+
+
+## Intermediate Macro scope guard (2026-11 second-pilot follow-up)
+
+The second five-scene Qwen trial improved to 30/31 accepted Macro
+reports, 4/5 complete scenes. The only failed Macro was a join-stage
+handoff (work_mapped_entries): its *correct* Oracle answer contained
+inactive and zero-valued candidate records, because later Macros apply
+the eligibility checks. Critic objected to the Author's inaccurate
+"all qualify" summary but then recommended deleting the candidate
+rows, causing the last attempt to violate Oracle exact equality.
+
+The Author/Critic instructions now explicitly enforce the **current
+Macro stage** rather than the final overall question. A source scan
+cannot claim unrelated approval/clearance conditions; a join does not
+implicitly prove that all records are active or within time windows.
+Contradictions against actual active/approved values and common
+unexecuted filter claims are guarded deterministically before Critic.
+A Critic's "filter out the rows" suggestion is never forwarded to
+Author as an instruction: only the **narrative** can be repaired, not
+the Oracle answer.
+
+Use a NEW output directory for the same five-scene A/B test:
+
+~~~bash
+git pull origin main
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --max-scenes 5 \
+  --output-dir envir/data/maestro_subagent_reports_trial_5_v3
+~~~
+
+The stricter rules may initially reduce accepted reports, but prevent
+misleading intermediate handoffs from being published. Report counts
+alone cannot establish semantic quality; inspect the private
+review_audit.jsonl and accepted finish_result summaries.
