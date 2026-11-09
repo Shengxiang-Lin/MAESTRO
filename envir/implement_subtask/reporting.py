@@ -311,7 +311,7 @@ def _scan_claims_completed_filter(text: str) -> bool:
 # falsely rejected 42 otherwise accurate Author attempts in one pilot.
 _ALL_ACTIVE_ASSERTION = re.compile(
     r"\b(?:all|every|each)\s+(?:(?:of\s+)?the\s+)?"
-    r"(?:(?:\d+|returned|retrieved|matched|selected|output|candidate|qualifying)\s+){0,3}"
+    r"(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|returned|retrieved|matched|selected|output|candidate|qualifying)\s+){0,3}"
     r"(?:records|rows|entries|items|candidates)\s+"
     r"(?:are|were|is|have\s+been|has\s+been)\s+"
     r"(?:marked\s+as\s+|flagged\s+as\s+|confirmed\s+as\s+)?active\b"
