@@ -1,0 +1,258 @@
+"""End-to-end tests for V2: the real CLI, executable dependencies and audit."""
+from __future__ import annotations
+
+import copy
+import json
+import tempfile
+import unittest
+from argparse import Namespace
+from pathlib import Path
+from unittest.mock import patch
+
+from envir.macro.cli import parser
+from envir.macro.program_ir import MissingSourceError, ProgramError
+from envir.v2.spec import (
+    DIFFICULTIES, FAMILIES, difficulty_sequence, make_spec, spec_issues,
+)
+from envir.v2.world import build_scene
+from envir.v2.question import guard_question, reference_question
+from envir.v2.compiler import (
+    V2Session, compile_macro_tasks, oracle_schedule, run_macro_tasks,
+)
+from envir.v2.quality import (
+    compile_and_validate, validate_replay, audit_scene,
+    weak_single_source_baseline,
+)
+from envir.v2.pipeline import build_v2, replay_v2, audit_v2, naturalize_v2
+
+
+def seed(ordinal=0):
+    return {
+        "record_id": f"mmqa-{ordinal:05d}",
+        "topic": f"Fictional Topic {ordinal}",
+        "domain_hint": "sports",
+        "source_modalities": ["table", "image", "text"],
+        "supporting_sources": [],
+    }
+
+
+def scene(*, difficulty="medium", ordinal=0, family=None):
+    spec = make_spec(
+        seed_record=seed(ordinal), ordinal=ordinal, run_seed=17,
+        difficulty=difficulty,
+    )
+    if family is not None:
+        spec["family"] = family
+        spec["requirements"]["answer_kind"] = (
+            "count" if family == "coverage_count" else
+            "single_entry" if family in {"priority", "chronology"} else
+            "entry_list"
+        )
+    return compile_and_validate(spec, reference_question(spec))
+
+
+class V2ReasoningTests(unittest.TestCase):
+    def test_real_program_compiles_into_macro_tasks(self):
+        for difficulty in DIFFICULTIES:
+            data = scene(difficulty=difficulty)
+            self.assertEqual(validate_replay(data)["status"], "valid")
+            self.assertEqual(data["gold_answer"], oracle_schedule(data)["answer"])
+            self.assertEqual(data["gold_answer"], run_macro_tasks(
+                data["macro_graph"], sources=data["world"]["sources"]
+            )["answer"])
+            self.assertEqual(
+                data["macro_graph"]["macro_task_count"],
+                len(data["gold_program"]["nodes"]),
+            )
+
+    def test_each_difficulty_meets_published_structure(self):
+        expectations = {
+            "easy": (1, 0),
+            "medium": (3, 2),
+            "hard": (4, 3),
+        }
+        for difficulty, (n_sources, n_joins) in expectations.items():
+            data = scene(difficulty=difficulty)
+            self.assertEqual(len(data["world"]["sources"]), n_sources)
+            self.assertGreaterEqual(
+                data["difficulty_audit"]["reasoning"]["join_count"], n_joins)
+            self.assertTrue(data["difficulty_audit"]["replay_exact"])
+
+    def test_six_families_across_medium_and_hard(self):
+        for difficulty in ("medium", "hard"):
+            for family in FAMILIES:
+                with self.subTest(difficulty=difficulty, family=family):
+                    data = scene(difficulty=difficulty, family=family)
+                    self.assertEqual(validate_replay(data)["status"], "valid")
+                    report = data["difficulty_audit"]
+                    self.assertFalse(report["one_source_baseline"]["exact_match"])
+                    self.assertTrue(all(
+                        item["changing_source_changes_answer"]
+                        for item in report["counterfactual_source_tests"].values()
+                    ))
+
+    def test_media_modalities_include_simulated_video_and_audio(self):
+        modalities = set()
+        for i in range(30):
+            data = scene(difficulty="medium", ordinal=i)
+            source = data["world"]["sources"]["annotations"]
+            modalities.add(source["modality"])
+            self.assertIn("synthetic_", source["representation"])
+            self.assertFalse(source["original_mmqa_handle_used"])
+        self.assertIn("video", modalities)
+        self.assertIn("audio", modalities)
+        self.assertIn("image", modalities)
+
+    def test_session_requires_source_acquisition_before_scan(self):
+        data = scene(difficulty="hard")
+        session = V2Session(data)
+        first = data["macro_graph"]["tasks"][0]
+        with self.assertRaises(MissingSourceError):
+            session.run_task(first["task_id"])
+        result = session.read_source("register")
+        self.assertIn("observations", result)
+        result["observations"].clear()
+        self.assertTrue(data["world"]["sources"]["register"]["observations"])
+        session.run_task(first["task_id"])
+        with self.assertRaises(ProgramError):
+            session.run_task(first["task_id"])
+        check = session.verify(first["task_id"])
+        self.assertTrue(check["valid_evidence_closure"])
+        self.assertFalse(check["independent_source_verification"])
+
+    def test_direct_world_source_leak_is_not_public(self):
+        data = scene(difficulty="hard")
+        published = data["public"]
+        for field in ("gold_answer", "world", "gold_program",
+                      "entities", "task_feedback", "macro_graph"):
+            self.assertNotIn(field, published)
+        serialized = json.dumps(published)
+        self.assertNotIn("F001", serialized)
+        self.assertNotIn("Entry-01", serialized)
+        self.assertNotIn("fictional-001", serialized)
+
+    def test_ungranted_source_cannot_be_used_by_non_scan_task(self):
+        data = scene(difficulty="medium")
+        graph = copy.deepcopy(data["macro_graph"])
+        node = next(x for x in graph["tasks"] if x["operation"] == "join")
+        node["source_ids"] = ["glossary"]
+        with self.assertRaises(ProgramError):
+            run_macro_tasks(graph, sources=data["world"]["sources"])
+
+    def test_change_source_facts_invalidates_replay(self):
+        data = scene(difficulty="medium")
+        bad = copy.deepcopy(data)
+        bad["world"]["sources"]["register"]["observations"][0]["values"]["active"] = False
+        result = validate_replay(bad)
+        self.assertEqual(result["status"], "invalid")
+        self.assertIn("world_not_reproducible_from_frozen_spec", result["issues"])
+
+    def test_bad_macro_task_dependency_invalidates_replay(self):
+        data = scene(difficulty="hard")
+        bad = copy.deepcopy(data)
+        bad["macro_graph"]["tasks"][1]["depends_on"] = []
+        result = validate_replay(bad)
+        self.assertEqual(result["status"], "invalid")
+        self.assertIn("macro_graph_not_program_compiled", result["issues"])
+
+    def test_spec_guards_and_question_guards(self):
+        data = scene(difficulty="hard", family="coverage_count")
+        question = data["question"]
+        self.assertEqual(guard_question(question, data["problem_spec"]), [])
+        self.assertTrue(guard_question(question.replace("clearance", "extra"),
+                                       data["problem_spec"]))
+        spec = copy.deepcopy(data["problem_spec"])
+        spec["sources"] = []
+        self.assertIn("wrong_source_count", spec_issues(spec))
+
+    def test_difficulty_mix_exact_counts(self):
+        values = difficulty_sequence(target=101, mix=(20, 50, 30), run_seed=17)
+        self.assertEqual(len(values), 101)
+        self.assertEqual(len([x for x in values if x == "medium"]), 51)
+        with self.assertRaises(ValueError):
+            difficulty_sequence(target=100, mix=(20, 30, 30), run_seed=17)
+
+    def test_old_cli_remains_available_with_v2_commands(self):
+        for command in ("build", "naturalize", "realize-world", "replay",
+                        "build-v2", "naturalize-v2", "replay-v2", "audit-v2"):
+            self.assertIn(command, parser()._subparsers._group_actions[0].choices)
+
+
+class V2PipelineTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.legacy = self.root / "legacy_scenes.jsonl"
+        with self.legacy.open("w", encoding="utf-8") as handle:
+            for i in range(24):
+                handle.write(json.dumps({
+                    "task_id": f"macro-{i}",
+                    "scenario": {
+                        "topic": f"Fictional Topic {i}",
+                        "domain": "sports",
+                    },
+                    "source_priors": {"MultiModalQA": {
+                        "record_id": f"mmqa-{i}",
+                        "source_modalities": ["table", "image", "text"],
+                        "supporting_sources": [],
+                    }},
+                }) + "\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def build(self, target=12):
+        output = self.root / "v2"
+        return build_v2(Namespace(
+            scenes=self.legacy, mmqa=None, output_dir=output,
+            target=target, max_records=24, seed=17,
+            difficulty_mix="25,50,25", overwrite=False,
+        ))
+
+    def test_batch_outputs_and_strict_replay(self):
+        summary = self.build(12)
+        self.assertEqual(summary["status"], "done")
+        self.assertEqual(summary["generated"], 12)
+        self.assertEqual(sum(summary["difficulty_target_distribution"].values()), 12)
+        output = self.root / "v2" / "scenes.jsonl"
+        replay = replay_v2(Namespace(scenes=output, max_records=None))
+        self.assertEqual(replay["status"], "valid")
+        self.assertEqual(replay["checked"], 12)
+        aggregate = audit_v2(Namespace(scenes=output, max_records=None))
+        self.assertEqual(aggregate["replay_pass"], 12)
+        self.assertEqual(aggregate["one_source_shortcut_successes"], 3)
+        self.assertEqual(aggregate["counterfactual_full_pass"], 12)
+        self.assertTrue((self.root / "v2" / "questions.jsonl").exists())
+        self.assertTrue((self.root / "v2" / "difficulty_audit.jsonl").exists())
+
+    def test_does_not_overwrite_existing_outputs(self):
+        self.build(3)
+        with self.assertRaises(FileExistsError):
+            self.build(3)
+
+    def test_llm_failure_falls_back_without_world_mutation(self):
+        self.build(4)
+        class BrokenClient:
+            def complete_json(self, *_args, **_kwargs):
+                raise RuntimeError("intentional artificial backend error")
+        src = self.root / "v2" / "scenes.jsonl"
+        out = self.root / "naturalized"
+        with patch("envir.v2.pipeline._llm_clients",
+                   return_value=(BrokenClient(), BrokenClient())):
+            summary = naturalize_v2(Namespace(
+                scenes=src, output_dir=out, max_records=4,
+                question_workers=2, max_revisions=1,
+                question_api_base="mock", question_model="mock",
+                question_critic_api_base=None,
+                question_critic_model=None,
+                question_api_key_env="OPENAI_API_KEY",
+                question_timeout=4, overwrite=False,
+            ))
+        self.assertEqual(summary["question_results"].get("fallback"), 4)
+        self.assertEqual(replay_v2(Namespace(
+            scenes=out / "scenes.jsonl", max_records=None
+        ))["status"], "valid")
+
+
+if __name__ == "__main__":
+    unittest.main()
