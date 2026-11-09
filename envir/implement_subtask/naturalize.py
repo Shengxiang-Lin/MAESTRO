@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -12,6 +11,10 @@ from tqdm.auto import tqdm
 from envir.generate_question.backend import OpenAICompatibleBackend
 from envir.generate_question.stages import read_jsonl
 from .reporting import author_critic_report
+from envir.streaming import (
+    OrderedJournal, StreamingError, file_digest, output_lock,
+    run_ordered, stable_signature,
+)
 
 
 def _write_json(path: Path, value: dict) -> None:
@@ -52,6 +55,152 @@ def _clients(*, api_base: str, model: str,
     )
 
 
+class _ScenePublisher:
+    """Single-writer public outputs; only fully reviewed DAGs get published.
+
+    Public outputs are reconstructed from the durable Macro journal on resume,
+    so a partial scene or an uncommitted tail can never be published by
+    accident after a crash. Macro review/audit files grow continuously.
+    """
+
+    def __init__(self, names: dict, indexes: list[dict],
+                 ordered: list[tuple], *,
+                 source_subtasks: Path, source_scene_index: Path,
+                 journal: OrderedJournal, flush_every: int):
+        self.names = names
+        self.indexes = indexes
+        self.ordered = ordered
+        self.source_subtasks = source_subtasks
+        self.source_scene_index = source_scene_index
+        self.journal = journal
+        self.handles = {
+            key: names[key].open("w", encoding="utf-8")
+            for key in ("subtasks", "scene_index", "failed", "review_audit")
+        }
+        self.completed_scenes = 0
+        self.accepted_scenes = 0
+        self.failed_scenes = 0
+        self.published_macro_tasks = 0
+        self._pending_scene = []
+        self.rejection_causes = Counter()
+        self.flush_every = flush_every
+
+    def _append(self, key: str, row: dict) -> None:
+        self.handles[key].write(json.dumps(row, ensure_ascii=False) + "\n")
+        self.handles[key].flush()
+
+    def commit(self, index: int, accepted: bool,
+               payload: dict, meta: dict, *, snapshot: bool = True) -> None:
+        expected = self.ordered[index][0]
+        macro_id = self.ordered[index][1]["macro_task_id"]
+        self._append("review_audit", {
+            "scene_task_id": expected,
+            "macro_task_id": macro_id,
+            "status": meta["status"],
+            "attempts": meta.get("attempts", 0),
+            "failures": meta.get("failures", []),
+            "accepted_preview": meta.get("accepted_preview"),
+        })
+        for attempt in meta.get("failures", []):
+            if attempt.get("stage") == "guard":
+                self.rejection_causes.update(attempt.get("errors", []))
+            elif attempt.get("stage") == "critic":
+                self.rejection_causes.update([
+                    "critic:" + str(attempt.get("reason", "unspecified"))[:120]
+                ])
+            elif attempt.get("stage") in {"backend", "oracle_contract"}:
+                self.rejection_causes.update([attempt["stage"]])
+        self._pending_scene.append((macro_id, accepted, payload, meta))
+        end_of_scene = (
+            index == len(self.ordered) - 1
+            or expected != self.ordered[index + 1][0]
+        )
+        if not end_of_scene:
+            return
+        scene = self.indexes[self.completed_scenes]
+        if scene["scene_task_id"] != expected:
+            raise StreamingError("scene_publisher_input_order_mismatch")
+        bad = [
+            {"macro_task_id": tid, "review": meta}
+            for tid, accepted, _, meta in self._pending_scene if not accepted
+        ]
+        if bad:
+            self._append("failed", {
+                "scene_task_id": expected,
+                "stage": "subagent_report_author_critic",
+                "status": "failed",
+                "failed_macro_tasks": bad,
+            })
+            self.failed_scenes += 1
+        else:
+            for _, _, row, _ in self._pending_scene:
+                self._append("subtasks", row)
+            self._append("scene_index", scene)
+            self.accepted_scenes += 1
+            self.published_macro_tasks += len(self._pending_scene)
+        self.completed_scenes += 1
+        self._pending_scene = []
+        for key in ("subtasks", "scene_index", "failed"):
+            os.fsync(self.handles[key].fileno())
+        if snapshot:
+            _write_json(self.names["summary"], self.summary())
+
+    def summary(self) -> dict:
+        completed = self.journal.completed
+        all_done = completed == len(self.ordered)
+        return {
+            "status": (
+                "running" if not all_done
+                else "done" if self.accepted_scenes == len(self.indexes)
+                else "partial" if self.accepted_scenes else "failed"
+            ),
+            "pipeline": "maestro_subagent_finish_author_critic_v1",
+            "source_oracle_subtasks": str(self.source_subtasks),
+            "source_scene_index": str(self.source_scene_index),
+            "attempted_scenes": len(self.indexes),
+            "completed_scenes": self.completed_scenes,
+            "accepted_scenes": self.accepted_scenes,
+            "failed_scenes": self.failed_scenes,
+            "attempted_macro_tasks": len(self.ordered),
+            "completed_macro_tasks": completed,
+            "author_critic_passed_macros": self.journal.accepted,
+            "author_critic_failed_macros": self.journal.rejected,
+            "published_macro_tasks": self.published_macro_tasks,
+            "review_counts": {
+                "accepted": self.journal.accepted,
+                "failed": self.journal.rejected,
+            },
+            "rejection_causes_across_attempts": dict(self.rejection_causes),
+            "review_audit_is_private": True,
+            "fallback_counted_as_success": False,
+            "teacher_answers_and_evidence_unchanged": True,
+            "subagent_reports_are_oracle_narratives_not_real_llm_tool_runs": True,
+            "streaming": {
+                "ordered_writes": True,
+                "flush_every": self.flush_every,
+                "resumable": True,
+                "checkpoint": str(self.journal.state_path),
+                "resume_at_macro": completed,
+                "reviewed_accepted_provisional_file": str(
+                    self.journal.paths["accepted"]),
+                "reviewed_rejected_provisional_file": str(
+                    self.journal.paths["rejected"]),
+                "publication_policy": "complete_scene_only",
+            },
+            "files": {k: str(p) for k, p in self.names.items()},
+        }
+
+    def close(self) -> None:
+        try:
+            for file in self.handles.values():
+                file.flush()
+                os.fsync(file.fileno())
+            _write_json(self.names["summary"], self.summary())
+        finally:
+            for file in self.handles.values():
+                file.close()
+
+
 def naturalize_subtasks(
     *, source_subtasks: Path, source_scene_index: Path, output_dir: Path,
     api_base: str, model: str,
@@ -59,13 +208,15 @@ def naturalize_subtasks(
     api_key_env: str | None = None, critic_api_key_env: str | None = None,
     workers: int = 8, max_revisions: int = 2, timeout: int = 180,
     max_scenes: int | None = None, no_progress: bool = False,
-    overwrite: bool = False, clients: tuple | None = None,
+    overwrite: bool = False, flush_every: int = 1,
+    clients: tuple | None = None,
 ) -> dict:
-    """Produce only COMPLETE-scene accepted Sub-Agent finish messages.
+    """Stream per-Macro reviews, publish complete scenes, and resume safely.
 
-    No Stage-1 World re-execution or model-based answer generation is needed.
-    Teacher rows are frozen and are not rewritten by Author/Critic. A single
-    rejected Macro rejects the whole scene, preserving downstream DAG use.
+    Independent Macro LLM calls can finish out of order. Journal records
+    persist as soon as the contiguous prefix completes; accepted/rejected
+    counters update when EACH call completes, not when its whole scene
+    is eventually publishable.
     """
     source_subtasks = Path(source_subtasks)
     source_scene_index = Path(source_scene_index)
@@ -76,6 +227,8 @@ def naturalize_subtasks(
         raise ValueError("timeout must be positive")
     if type(max_revisions) is not int or not 0 <= max_revisions <= 8:
         raise ValueError("max_revisions must be between 0 and 8")
+    if type(flush_every) is not int or flush_every < 1:
+        raise ValueError("flush_every must be a positive integer")
     if max_scenes is not None and (
         type(max_scenes) is not int or max_scenes < 1
     ):
@@ -96,8 +249,6 @@ def naturalize_subtasks(
             "summary": "summary.json",
         }.items()
     }
-    if not overwrite and any(path.exists() for path in names.values()):
-        raise FileExistsError("reporting output exists; choose a new directory")
     indexes = read_jsonl(source_scene_index, limit=max_scenes)
     if not indexes:
         raise ValueError("empty_scene_index")
@@ -126,8 +277,10 @@ def naturalize_subtasks(
             row = groups[sid][task_id]
             if any(parent not in set(expected) for parent in row["depends_on"]):
                 raise ValueError("unknown_upstream_handoff:" + sid)
-            ordered.append((sid, row, scene["question"],
-                            task_id == scene["terminal_macro_task_id"]))
+            ordered.append((
+                sid, row, scene["question"],
+                task_id == scene["terminal_macro_task_id"],
+            ))
     if clients is None:
         clients = _clients(
             api_base=api_base, model=model,
@@ -155,84 +308,96 @@ def naturalize_subtasks(
             }
         return sid, row["macro_task_id"], accepted, feedback
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        completed = list(tqdm(
-            pool.map(review, ordered), total=len(ordered),
-            desc="Sub-Agent report Author/Critic", unit="macro",
-            disable=no_progress,
-        ))
-    by_scene = defaultdict(list)
-    for sid, task_id, accepted, feedback in completed:
-        by_scene[sid].append((task_id, accepted, feedback))
-    publish, keep_indices, failures = [], [], []
-    feedback_counts = Counter()
-    rejection_causes = Counter()
-    private_review_audit = []
-    for sid, task_id, accepted, feedback in completed:
-        # The audit includes every Macro outcome, even accepted Macros in
-        # scenes that cannot be published because another Macro failed.
-        for attempt in feedback.get("failures", []):
-            if attempt.get("stage") == "guard":
-                rejection_causes.update(attempt.get("errors", []))
-            elif attempt.get("stage") == "critic":
-                rejection_causes.update(["critic:" + str(attempt.get("reason", "unspecified"))[:120]])
-            elif attempt.get("stage") in {"backend", "oracle_contract"}:
-                rejection_causes.update([attempt["stage"]])
-        private_review_audit.append({
-            "scene_task_id": sid,
-            "macro_task_id": task_id,
+    def classify(result):
+        sid, task_id, accepted, feedback = result
+        ok = accepted is not None
+        data = (accepted if ok else {
+            "scene_task_id": sid, "macro_task_id": task_id, "review": feedback
+        })
+        return ok, data, {
             "status": feedback["status"],
             "attempts": feedback.get("attempts", 0),
             "failures": feedback.get("failures", []),
             "accepted_preview": (
-                accepted["finish_result"]
-                if accepted is not None else None
+                accepted["finish_result"] if ok else None
             ),
-        })
-    for scene in indexes:
-        sid = scene["scene_task_id"]
-        reports = by_scene[sid]
-        failed = [(task_id, fb) for task_id, row, fb in reports
-                  if row is None]
-        feedback_counts.update(fb["status"] for _, _, fb in reports)
-        if failed:
-            failures.append({
-                "scene_task_id": sid,
-                "stage": "subagent_report_author_critic",
-                "status": "failed",
-                "failed_macro_tasks": [
-                    {"macro_task_id": task_id, "review": report}
-                    for task_id, report in failed
-                ],
-            })
-            continue
-        publish.extend(row for _, row, _ in reports)
-        keep_indices.append(scene)
+        }
+
+    task_ids = [sid + "::" + row["macro_task_id"] for sid, row, _, _ in ordered]
+    # Changing models, revisions, the frozen input bytes or the author/critic
+    # implementation invalidates a prior checkpoint. workers and display
+    # options do not influence semantics, so may change on resume.
+    code_root = Path(__file__).resolve().parent
+    signature = stable_signature({
+        "schema": "maestro.subagent_reports.stream.v1",
+        "task_ids": task_ids,
+        "oracle_subtasks_hash": file_digest(source_subtasks),
+        "scene_index_hash": file_digest(source_scene_index),
+        "author_model": model, "author_endpoint": api_base,
+        "critic_model": critic_model or model,
+        "critic_endpoint": critic_api_base or api_base,
+        "max_revisions": max_revisions, "timeout": timeout,
+        "prompt_code_hash": file_digest(code_root / "reporting.py"),
+        "pipeline_code_hash": file_digest(Path(__file__)),
+    })
     output_dir.mkdir(parents=True, exist_ok=True)
-    _write_jsonl(names["subtasks"], publish)
-    _write_jsonl(names["scene_index"], keep_indices)
-    _write_jsonl(names["failed"], failures)
-    _write_jsonl(names["review_audit"], private_review_audit)
-    summary = {
-        "status": "done" if len(keep_indices) == len(indexes)
-                  else "partial" if keep_indices else "failed",
-        "pipeline": "maestro_subagent_finish_author_critic_v1",
-        "source_oracle_subtasks": str(source_subtasks),
-        "source_scene_index": str(source_scene_index),
-        "attempted_scenes": len(indexes),
-        "accepted_scenes": len(keep_indices),
-        "failed_scenes": len(failures),
-        "attempted_macro_tasks": len(ordered),
-        "author_critic_passed_macros": feedback_counts["accepted"],
-        "author_critic_failed_macros": feedback_counts["failed"],
-        "published_macro_tasks": len(publish),
-        "review_counts": dict(feedback_counts),
-        "rejection_causes_across_attempts": dict(rejection_causes),
-        "review_audit_is_private": True,
-        "fallback_counted_as_success": False,
-        "teacher_answers_and_evidence_unchanged": True,
-        "subagent_reports_are_oracle_narratives_not_real_llm_tool_runs": True,
-        "files": {k: str(p) for k, p in names.items()},
-    }
-    _write_json(names["summary"], summary)
-    return summary
+    with output_lock(output_dir, "subagent_reports"):
+        with OrderedJournal(
+            output_dir, "subagent_reports", signature, task_ids,
+            flush_every=flush_every, restart=overwrite,
+        ) as journal:
+            # A legacy output with no matching checkpoint must not be
+            # silently overwritten. Existing checkpointed reports are
+            # always rebuilt from the committed journal.
+            if journal.completed == 0 and not overwrite and any(
+                path.exists() for path in names.values()
+            ):
+                raise StreamingError(
+                    "Existing legacy report output has no resumable checkpoint; "
+                    "choose a new --output-dir or enable overwrite"
+                )
+            publisher = _ScenePublisher(
+                names, indexes, ordered,
+                source_subtasks=source_subtasks,
+                source_scene_index=source_scene_index,
+                journal=journal, flush_every=flush_every,
+            )
+            try:
+                # Rebuild independently from committed checkpoints. Public
+                # output files never contain a partially accepted DAG.
+                for ix, (good, data, meta) in enumerate(journal.replay()):
+                    publisher.commit(ix, good, data, meta, snapshot=False)
+                _write_json(names["summary"], publisher.summary())
+                run_ordered(
+                    ordered, review, classify, journal=journal,
+                    workers=workers, desc="Sub-Agent report Author/Critic",
+                    unit="macro", no_progress=no_progress,
+                    on_commit=publisher.commit,
+                    on_exception=lambda ix, exc: (
+                        False,
+                        {
+                            "scene_task_id": ordered[ix][0],
+                            "macro_task_id": ordered[ix][1]["macro_task_id"],
+                            "review": {
+                                "status": "failed", "attempts": 0,
+                                "failures": [{
+                                    "stage": "backend",
+                                    "error_type": type(exc).__name__,
+                                    "error": str(exc)[:240],
+                                }],
+                            },
+                        },
+                        {
+                            "status": "failed", "attempts": 0,
+                            "failures": [{
+                                "stage": "backend",
+                                "error_type": type(exc).__name__,
+                                "error": str(exc)[:240],
+                            }],
+                        },
+                    ),
+                )
+                result = publisher.summary()
+            finally:
+                publisher.close()
+            return result
