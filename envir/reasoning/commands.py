@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .pipeline import build_v2, naturalize_v2, replay_v2, audit_v2
+from .pipeline import build_bank, refine_bank, replay_bank, audit_bank
 from .workflow import generate, quality
 
 
@@ -109,10 +109,10 @@ def reasoning_handlers() -> dict:
     return {
         "generate": generate,
         "quality": quality,
-        "validate": replay_v2,
-        "refine-questions": naturalize_v2,
-        "build-v2": build_v2,
-        "replay-v2": replay_v2,
-        "audit-v2": audit_v2,
-        "naturalize-v2": naturalize_v2,
+        "validate": replay_bank,
+        "refine-questions": refine_bank,
+        "build-v2": build_bank,
+        "replay-v2": replay_bank,
+        "audit-v2": audit_bank,
+        "naturalize-v2": refine_bank,
     }
