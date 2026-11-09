@@ -36,10 +36,23 @@ If no rows meet conditions, this is a valid completed result: say so, with
 status done, not partial. If the reported relation is a handoff, say what the
 handoff contains instead of falsely claiming it answers the overall question.
 
-Exact structured results will be appended to your result by the program.
-Do not copy or rewrite all JSON rows. Focus on a grounded concise finding
-and why it was obtained. Use one or two concrete result examples when useful.
+The result field may be (A) a concise grounded STRING describing the
+workproduct, or (B) EXACTLY the frozen structured answer rows as a JSON
+array. If the answer consists ONLY of entry_label, a JSON array of those
+exact entry labels is also accepted. For a single-row result, one exact
+object is acceptable. Do NOT invent a filtered subset or an extra row:
+structured output is programmatically compared to the full exact answer.
+Do not copy/modify JSON if you can simply describe the result naturally.
+The program always attaches exact verified answer values afterward.
 Output ONLY JSON with keys result, summary, status; status must be done.
+
+Examples of VALID result shapes:
+{"result":"Identified two records matching the assigned condition.",
+ "summary":"Checked the supplied annotations against the register and retained
+ the two supported records.","status":"done"}
+{"result":[{"entry_label":"Entry-02"}],
+ "summary":"Compared the supplied event steps against the session windows and
+ found one matching record.","status":"done"}
 """
 
 
@@ -59,6 +72,10 @@ Check separately:
   not raw backend schema, templated "To produce X", or an overlong narration.
 
 For empty results, a genuine complete "no matches" is correct, not partial.
+For a structured candidate result, the application has already verified
+an EXACT match to the full frozen answer rows; do not reject it merely
+because it is rendered as a list/array. Review the proposed natural
+summary and any prose for actual factual errors.
 Do not demand all raw fact IDs in the user-facing summary.
 Do not invent any issue merely to be critical; pass accurate natural reports.
 Return ONLY JSON:
@@ -138,18 +155,93 @@ def _teacher_contract(record: dict, *, question: str | None,
     }
 
 
+def _readable_value(value) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    if value is None:
+        return "not specified"
+    return str(value)
+
+
+def _readable_verified_answer(rows: list[dict]) -> str:
+    """Render the EXACT Oracle relation without needing an LLM rewrite.
+
+    All machine-readable rows remain separately available as answer.
+    This sentence can be shown directly to Main-Agent.
+    """
+    if not rows:
+        return "No matching records were found."
+    rendered = []
+    for row in rows:
+        if set(row) == {"entry_label"}:
+            rendered.append(_readable_value(row["entry_label"]))
+        elif set(row) == {"count"}:
+            rendered.append(_readable_value(row["count"]))
+        elif set(row) == {"category_name", "count"}:
+            rendered.append(
+                f"{_readable_value(row['category_name'])}: "
+                f"{_readable_value(row['count'])}"
+            )
+        else:
+            rendered.append("; ".join(
+                f"{key}: {_readable_value(value)}"
+                for key, value in row.items()
+            ))
+    return (
+        f"{len(rows)} row(s) returned: " + " | ".join(rendered)
+    )
+
+
+def _normalize_author_result(value, exact_rows: list[dict],
+                             output_schema: list[str]) -> tuple[str | None, list[str]]:
+    """Accept the natural real-world variation of Sub-Agent result payloads.
+
+    The model can write prose OR provide exact structured records. Any
+    structured payload MUST be an exact multiset match to the frozen Oracle.
+    A filtered subset, reordered field meaning, or fabricated rows FAIL.
+    """
+    if isinstance(value, str):
+        if not 12 <= len(value.strip()) <= 1600:
+            return None, ["result_invalid_length_or_type"]
+        return value.strip(), []
+    if isinstance(value, dict):
+        proposed = [value]
+    elif isinstance(value, list):
+        proposed = value
+    elif (type(value) in {int, float, bool}
+          and output_schema == ["count"]):
+        proposed = [{"count": value}]
+    else:
+        return None, ["result_invalid_type"]
+    if (len(output_schema) == 1 and proposed
+            and all(not isinstance(row, dict) for row in proposed)):
+        proposed = [{output_schema[0]: row} for row in proposed]
+    if not all(isinstance(row, dict) for row in proposed):
+        return None, ["structured_result_invalid_rows"]
+    if sorted(map(_canonical, proposed)) != sorted(map(_canonical, exact_rows)):
+        return None, ["structured_result_not_equal_to_oracle"]
+    return _readable_verified_answer(exact_rows), []
+
+
 def _guard(candidate: dict, contract: dict) -> list[str]:
     errors = []
     if not isinstance(candidate, dict):
         return ["report_not_object"]
     if candidate.get("status") != "done":
         errors.append("status_not_done_for_complete_oracle")
-    for field, minimum, maximum in (
-        ("result", 12, 1600), ("summary", 25, 750)
-    ):
-        value = candidate.get(field)
-        if not isinstance(value, str) or not minimum <= len(value.strip()) <= maximum:
-            errors.append(field + "_invalid_length_or_type")
+    result_text, result_errors = _normalize_author_result(
+        candidate.get("result"), contract["exact_oracle_answer"],
+        contract["terminal_output_schema_of_this_macro"],
+    )
+    errors.extend(result_errors)
+    summary = candidate.get("summary")
+    if (not isinstance(summary, str)
+            or not 25 <= len(summary.strip()) <= 750):
+        errors.append("summary_invalid_length_or_type")
+    for field, value in (("result", result_text), ("summary", summary)):
+        if not isinstance(value, str):
             continue
         if _TOOL_HALLUCINATION.search(value):
             errors.append(field + "_claims_unperformed_tool_or_media_action")
@@ -203,10 +295,21 @@ def author_critic_report(
                     "preview": str(candidate)[:220],
                 })
                 continue
+            normalized_result, _ = _normalize_author_result(
+                candidate["result"], contract["exact_oracle_answer"],
+                contract["terminal_output_schema_of_this_macro"],
+            )
             decision = critic.complete_json(
                 CRITIC_SYSTEM, json.dumps({
                     "frozen_task_and_evidence": contract,
-                    "candidate_finish": candidate,
+                    "candidate_finish": {
+                        "result": normalized_result,
+                        "summary": candidate["summary"],
+                        "status": "done",
+                    },
+                    "author_result_was_structured": not isinstance(
+                        candidate["result"], str
+                    ),
                 }, ensure_ascii=False)
             )
             axes = (
@@ -215,13 +318,16 @@ def author_critic_report(
             )
             if (decision.get("verdict") == "pass"
                     and all(decision.get(axis) is True for axis in axes)):
-                result_text = candidate["result"].strip()
+                result_text = normalized_result
                 summary_text = candidate["summary"].strip()
-                # Model cannot rewrite the exact answer: ensure its machine-
-                # readable rows appear verbatim in the Main-facing result.
+                # Structured reports have been checked against every exact
+                # answer row. For prose reports, programmatically append the
+                # complete canonical answer (never the LLM's guessed rows).
                 verified_result = (
-                    result_text + "\n\nVerified result: "
-                    + _canonical(teacher_record["answer"])
+                    result_text
+                    if not isinstance(candidate["result"], str)
+                    else result_text + "\n\nVerified result: "
+                         + _canonical(teacher_record["answer"])
                 )
                 row = deepcopy(teacher_record)
                 row["answer_text"] = verified_result

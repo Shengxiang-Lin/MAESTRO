@@ -121,3 +121,37 @@ The reporting configuration uses the existing
 It writes separate `subtasks.jsonl`, `scene_index.jsonl`,
 `failed.jsonl`, and `summary.json` under
 `envir/data/maestro_subagent_reports_100`.
+
+
+## Structured result compatibility and review audit
+
+In the five-scene local-Qwen pilot, 21/31 Macro reports failed. Of the
+63 attempt-level reasons recorded in the failure file, 60 were the exact
+guard code result_invalid_length_or_type: Qwen produced structured JSON
+arrays (often correct Oracle rows), while the guard required a string.
+This is primarily a response-shape mismatch, not 60 independent wrong
+answers.
+
+The Author may now return: a natural English result string; an exact
+array of row objects; one exact row object; or a list of values for a
+single-column output. EVERY structured result is compared to the
+complete frozen Oracle answer, without changing field/value types.
+Wrong subsets, extra rows, lost columns or invented values FAIL. Exact
+structured answers are rendered into a readable result sentence before
+independent Critic. Plain prose still gets the program-verified exact
+answer appended. Model summaries remain reviewed for factual claims.
+
+The new PRIVATE review_audit.jsonl includes each Macro's accepted or
+failed status, revision attempts, reasons, and accepted preview—even if
+one failed Macro prevents the scene's complete DAG from being
+published. summary.json includes rejection_causes_across_attempts.
+Only complete reviewed scenes are retained in public subtasks.jsonl.
+
+Retry the five-scene trial in a NEW output directory:
+
+~~~bash
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --max-scenes 5 \
+  --output-dir envir/data/maestro_subagent_reports_trial_5_v2
+~~~

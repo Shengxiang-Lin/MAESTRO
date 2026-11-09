@@ -89,6 +89,35 @@ class ReportCritic:
         }
 
 
+class StructuredResultAuthor:
+    """Mock the exact JSON-array pattern observed in the user's Qwen logs."""
+    def __init__(self, *, wrong_subset=False, collapse_labels=False):
+        self.calls = []
+        self.wrong_subset = wrong_subset
+        self.collapse_labels = collapse_labels
+
+    def complete_json(self, system_prompt, user_prompt):
+        request = json.loads(user_prompt)
+        contract = request["frozen_task_and_evidence"]
+        self.calls.append(contract)
+        rows = deepcopy(contract["exact_oracle_answer"])
+        if self.wrong_subset:
+            rows = rows[:-1] if rows else [{"entry_label": "Invented"}]
+        if self.collapse_labels and rows and all(
+            set(item) == {"entry_label"} for item in rows
+        ):
+            rows = [item["entry_label"] for item in rows]
+        return {
+            "result": rows,
+            "summary": (
+                "Checked the assigned source observations against the "
+                "provided upstream workproducts and returned the exact "
+                "matching records without adding unrelated filters."
+            ),
+            "status": "done",
+        }
+
+
 class ReportingUnitTests(unittest.TestCase):
     def test_real_finish_shape_and_frozen_gold(self):
         frozen = scene(23, "hard")
@@ -127,6 +156,71 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertNotIn("world", author.calls[0])
         self.assertNotIn("gold_program", author.calls[0])
         self.assertEqual(len(critic.calls), 1)
+
+    def test_structured_result_exact_match_accepted_and_made_readable(self):
+        frozen = scene(24, "medium")
+        candidate = realize_scene(frozen)["macro_tasks"][0]
+        author = StructuredResultAuthor()
+        critic = ReportCritic()
+        revised, review = author_critic_report(
+            candidate, question=frozen["question"],
+            author=author, critic=critic,
+            max_revisions=0,
+        )
+        self.assertIsNotNone(revised)
+        self.assertEqual(review["status"], "accepted")
+        self.assertEqual(revised["answer"], candidate["answer"])
+        self.assertIsInstance(revised["finish_result"]["result"], str)
+        self.assertIn("row(s) returned", revised["finish_result"]["result"])
+        self.assertEqual(
+            critic.calls[0]["candidate_finish"]["result"],
+            revised["finish_result"]["result"],
+        )
+        self.assertTrue(critic.calls[0]["author_result_was_structured"])
+
+    def test_structured_entry_label_list_is_accepted_only_when_exact(self):
+        frozen = scene(25, "medium")
+        realized = realize_scene(frozen)
+        final = next(
+            row for row in realized["macro_tasks"]
+            if row["macro_task_id"] == realized["terminal_macro_task_id"]
+        )
+        self.assertTrue(all(
+            set(item) == {"entry_label"} for item in final["answer"]
+        ))
+        revised, status = author_critic_report(
+            final, question=frozen["question"],
+            author=StructuredResultAuthor(collapse_labels=True),
+            critic=ReportCritic(), max_revisions=0, is_terminal=True,
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(revised["answer"], final["answer"])
+
+    def test_wrong_subset_or_invented_extra_row_still_fails(self):
+        frozen = scene(26, "hard")
+        realized = realize_scene(frozen)
+        record = next(
+            row for row in realized["macro_tasks"]
+            if row["answer"] and len(row["answer"]) > 1
+        )
+        reviewed, report = author_critic_report(
+            record, question=frozen["question"],
+            author=StructuredResultAuthor(wrong_subset=True),
+            critic=ReportCritic(), max_revisions=1,
+        )
+        self.assertIsNone(reviewed)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(len(report["failures"]), 2)
+        self.assertTrue(all(
+            "structured_result_not_equal_to_oracle" in attempt["errors"]
+            for attempt in report["failures"]
+        ))
+
+    def test_empty_structured_answer_still_done(self):
+        from envir.implement_subtask.reporting import _normalize_author_result
+        text, errors = _normalize_author_result([], [], ["entry_label"])
+        self.assertEqual(errors, [])
+        self.assertEqual(text, "No matching records were found.")
 
     def test_partial_from_author_never_counts_as_complete(self):
         record = realize_scene(scene(10, "medium"))["macro_tasks"][0]
@@ -214,6 +308,17 @@ class ReportingBatchTests(unittest.TestCase):
                                  .read_text().splitlines()), 1)
             self.assertEqual(len((root / "reviewed/failed.jsonl")
                                  .read_text().splitlines()), 1)
+            all_reviews = [
+                json.loads(line) for line in
+                (root / "reviewed/review_audit.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(len(all_reviews), summary["attempted_macro_tasks"])
+            self.assertTrue(any(
+                row["status"] == "accepted" for row in all_reviews
+            ))
+            self.assertTrue(any(
+                row["status"] == "failed" for row in all_reviews
+            ))
             with self.assertRaises(FileExistsError):
                 naturalize_subtasks(
                     source_subtasks=subtasks, source_scene_index=index,
