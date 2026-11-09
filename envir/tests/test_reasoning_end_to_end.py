@@ -1194,7 +1194,10 @@ class MacroQuestionAdditionalPredicateTests(unittest.TestCase):
         )
         corrupted["public"]["question"] = corrupted["question"]
         report = quality_report([corrupted], no_progress=True)
-        self.assertEqual(report["replay_pass"], 1)
+        # The stricter Question guard deliberately invalidates this
+        # historically accepted but semantically unlicensed task.
+        self.assertEqual(report["replay_pass"], 0)
+        self.assertEqual(report["replay_fail"], 1)
         warnings = report["question_surface"][
             "semantic_language_warnings"]["counts"]
         self.assertEqual(
