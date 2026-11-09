@@ -240,6 +240,149 @@ class StageAndQualityTests(unittest.TestCase):
             self.assertEqual(len(read_jsonl(args.output_dir / "questions.jsonl")), 3)
             self.assertEqual(len(read_jsonl(args.output_dir / "failed.jsonl")), 3)
 
+    def test_question_reports_are_written_during_calls_and_can_resume(self):
+        from envir.generate_question.stages import (
+            run_ordered as real_run_ordered,
+        )
+        original = [scene(i, "medium") for i in range(5)]
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "constructed.jsonl"
+            _jsonl(source, original)
+            args = args_from_config(load_config(DEFAULT_CONFIG))
+            args.scenes = source
+            args.output_dir = root / "questions"
+            args.max_records = None
+            args.question_workers = 1
+            called = []
+            def author(specification, *, author, critic, max_revisions,
+                       macro_graph):
+                called.append(specification["task_id"])
+                if len(called) > 1:
+                    self.assertGreater(
+                        len(read_jsonl(args.output_dir / "scenes.jsonl")), 0,
+                        "The first Question should already be on disk before "
+                        "the next Author returns"
+                    )
+                return reference_question(specification), {
+                    "status": "accepted", "attempts": 1,
+                }
+            class Interrupted(RuntimeError):
+                pass
+            def stop_after_two(*items, **options):
+                old = options["on_commit"]
+                def callback(index, good, payload, meta):
+                    old(index, good, payload, meta)
+                    if index == 1:
+                        raise Interrupted("question stopped")
+                options["on_commit"] = callback
+                return real_run_ordered(*items, **options)
+            with patch(
+                "envir.generate_question.stages._llm_clients",
+                return_value=(object(), object()),
+            ), patch(
+                "envir.generate_question.stages.naturalize_one",
+                side_effect=author,
+            ), patch(
+                "envir.generate_question.stages.run_ordered",
+                side_effect=stop_after_two,
+            ):
+                with self.assertRaises(Interrupted):
+                    review_questions(args)
+            self.assertEqual(
+                json.loads(
+                    (args.output_dir / "question_authoring_progress.json").read_text()
+                )["completed"], 2,
+            )
+            self.assertEqual(
+                json.loads((args.output_dir / "summary.json").read_text())["status"],
+                "running",
+            )
+            before = len(called)
+            with patch(
+                "envir.generate_question.stages._llm_clients",
+                return_value=(object(), object()),
+            ), patch(
+                "envir.generate_question.stages.naturalize_one",
+                side_effect=author,
+            ):
+                summary = review_questions(args)
+            self.assertEqual(len(called) - before, 3)
+            self.assertEqual(summary["status"], "done")
+            self.assertEqual(summary["generated"], 5)
+            self.assertEqual(len(read_jsonl(args.output_dir / "scenes.jsonl")), 5)
+            self.assertEqual(len(read_jsonl(args.output_dir / "questions.jsonl")), 5)
+            self.assertEqual(len(read_jsonl(args.output_dir / "failed.jsonl")), 0)
+            self.assertTrue(
+                (args.output_dir / "question_authoring_accepted.jsonl").exists()
+            )
+            with self.assertRaises(FileExistsError):
+                review_questions(args)
+
+    def test_scenario_checkpoint_recovers_before_compilation(self):
+        from envir.generate_question.stages import (
+            run_ordered as real_run_ordered,
+        )
+        args = args_from_config(load_config(DEFAULT_CONFIG))
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            args.output_dir = root / "constructed"
+            args.target = 4
+            args.scenario_workers = 1
+            records = [{
+                "record_id": f"item-{i}",
+                "topic": f"Fictional Collection {i}",
+                "domain_hint": "science",
+                "source_modalities": ["image", "text", "table"],
+            } for i in range(4)]
+            called = []
+            def enrich(specification, **kwargs):
+                called.append(specification["task_id"])
+                row = copy.deepcopy(specification)
+                row["scenario_authoring"] = {
+                    "status": "accepted", "attempts": 1
+                }
+                return row, {}
+            class Interrupted(RuntimeError):
+                pass
+            def stop_after_two(*items, **options):
+                callback = options.get("on_commit")
+                def interruption(index, good, payload, meta):
+                    if callback:
+                        callback(index, good, payload, meta)
+                    if index == 1:
+                        raise Interrupted("scenario interrupted")
+                options["on_commit"] = interruption
+                return real_run_ordered(*items, **options)
+            patches = (
+                patch(
+                    "envir.generate_question.sources.load_scenario_seeds",
+                    return_value=(records, {}),
+                ),
+                patch("envir.generate_question.stages._scenario_clients",
+                      return_value=(object(), object())),
+                patch("envir.generate_question.scenario.enrich_one",
+                      side_effect=enrich),
+            )
+            with patches[0], patches[1], patches[2], patch(
+                "envir.generate_question.stages.run_ordered",
+                side_effect=stop_after_two,
+            ):
+                with self.assertRaises(Interrupted):
+                    construct_scenes(args)
+            self.assertEqual(
+                json.loads(
+                    (args.output_dir / "scenario_authoring_progress.json").read_text()
+                )["completed"], 2,
+            )
+            before = len(called)
+            with patches[0], patches[1], patches[2]:
+                result = construct_scenes(args)
+            self.assertEqual(len(called) - before, 2)
+            self.assertEqual(result["generated"], 4)
+            self.assertEqual(result["status"], "done")
+            self.assertEqual(len(read_jsonl(args.output_dir / "scenes.jsonl")), 4)
+
     def test_quality_marks_bad_predicate_non_publishable(self):
         entry = scene(3, "medium", "reconcile")
         bad = copy.deepcopy(entry)
