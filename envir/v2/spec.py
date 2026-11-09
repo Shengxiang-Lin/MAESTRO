@@ -173,6 +173,33 @@ def spec_issues(spec: dict) -> list[str]:
     ids = [s.get("source_id") for s in sources]
     if len(ids) != len(set(ids)):
         errors.append("duplicate_source_id")
+    expected_ids = ["register"]
+    if spec.get("difficulty_target") in {"medium", "hard"}:
+        expected_ids.extend(["glossary", "annotations"])
+    if spec.get("difficulty_target") == "hard":
+        expected_ids.append("clearance")
+    if ids != expected_ids:
+        errors.append("source_role_contract_mismatch")
+    needs = spec.get("requirements", {})
+    expected_answer = (
+        "count" if spec.get("family") == "coverage_count"
+        else "category_counts" if spec.get("family") == "category_distribution"
+        else "single_entry" if spec.get("family") in {"priority", "chronology"}
+        else "entry_list"
+    )
+    if needs.get("answer_kind") != expected_answer:
+        errors.append("answer_kind_contract_mismatch")
+    required_aliases = spec.get("difficulty_target") != "easy"
+    if needs.get("must_resolve_aliases") is not required_aliases:
+        errors.append("alias_requirement_contract_mismatch")
+    if needs.get("must_match_independent_reviews") is not required_aliases:
+        errors.append("review_requirement_contract_mismatch")
+    if needs.get("must_check_independent_clearance") is not (
+        spec.get("difficulty_target") == "hard"
+    ):
+        errors.append("clearance_requirement_contract_mismatch")
+    if needs.get("must_preserve_source_provenance") is not True:
+        errors.append("provenance_requirement_missing")
     for source in sources:
         if source.get("modality") not in MEDIA:
             errors.append("unsupported_modality")
