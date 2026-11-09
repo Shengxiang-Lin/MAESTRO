@@ -16,7 +16,7 @@ from .compiler import (
 )
 from .world import build_scene, generate_world, compile_program
 from .question import guard_question
-from .spec import spec_issues
+from .spec import spec_issues, VERSION
 
 
 def _mutate(sources: dict, source_id: str, answer: list[dict]) -> dict:
@@ -155,7 +155,9 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             issues.append("gold_program_answer_mismatch")
         if execution["trace"] != scene["gold_trace"]:
             issues.append("gold_execution_trace_mismatch")
-        graph = compile_macro_tasks(program, execution["trace"])
+        graph = compile_macro_tasks(
+        program, execution["trace"], compact=spec.get("version") == VERSION
+    )
         if graph != scene["macro_graph"]:
             issues.append("macro_graph_not_program_compiled")
         macro = run_macro_tasks(graph, sources=world["sources"])
@@ -180,6 +182,8 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         "hard": (4, 3, 4),
     }
     source_count, joins, depth = levels[difficulty]
+    if spec.get("version") == VERSION and graph["macro_task_count"] > 9:
+        issues.append("macro_task_budget_exceeded")
     if profile["source_count"] < source_count:
         issues.append("insufficient_source_count")
     if profile["join_count"] < joins:
@@ -276,7 +280,9 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
 def compile_and_validate(spec: dict, question: str) -> dict:
     scene = build_scene(spec, question)
     program = scene["gold_program"]
-    graph = compile_macro_tasks(program, scene["gold_trace"])
+    graph = compile_macro_tasks(
+        program, scene["gold_trace"], compact=spec.get("version") == VERSION
+    )
     scene["macro_graph"] = graph
     scene["task_feedback"] = run_macro_tasks(
         graph, sources=scene["world"]["sources"]
