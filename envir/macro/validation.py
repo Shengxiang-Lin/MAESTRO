@@ -16,6 +16,7 @@ from .question import author_question, task_level_brief
 from .question_review import validate_naturalized_question
 from .evidence import run_clean_tasks, EvidenceExecutionError
 from .scene_grounding import validate_grounding
+from .semantic_world import validate_semantic_world_scene
 
 
 def validate_clean_scene(scene: dict) -> list[str]:
@@ -254,4 +255,5 @@ def validate_clean_scene(scene: dict) -> list[str]:
     # An optional post-graph interpretation may label existing facts but must
     # not alter any World, operation, source grant, EvidenceGraph or Feedback.
     errors.extend(validate_grounding(scene))
+    errors.extend(validate_semantic_world_scene(scene))
     return sorted(set(errors))
