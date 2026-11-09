@@ -159,7 +159,7 @@ class V2ReasoningTests(unittest.TestCase):
         data = scene(difficulty="hard", family="coverage_count")
         question = data["question"]
         self.assertEqual(guard_question(question, data["problem_spec"]), [])
-        self.assertTrue(guard_question(question.replace("clearance", "extra"),
+        self.assertTrue(guard_question(question.replace("clearance", "extra").replace("cleared", "selected"),
                                        data["problem_spec"]))
         spec = copy.deepcopy(data["problem_spec"])
         spec["sources"] = []
