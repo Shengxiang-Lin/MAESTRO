@@ -1,9 +1,8 @@
-"""V4 optional LLM Question Author -> local Critic -> bounded revision -> accept.
+"""Canonical semantic-World Question Author -> Critic -> bounded revision.
 
-Adapted from environment/question_generation/{realization,question_review}.py,
-but unlike Stage 2's KoPL-specific question review, this module checks that a
-natural user Question is still implied by the *same immutable Macro Task
-work goals, deliverable and dependencies*.
+Enforces the same immutable Macro Goal, typed WorkProducts, source scopes
+and domain-semantic World contract as the simulator. No optional legacy
+Question policy or old post-World Grounding interface remains.
 
 Only a sanitized Task/Question contract is passed to either LLM. The actual
 DAG IDs, reference waves, KoPL programs, private evidence, Feedback and world
@@ -14,8 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 
 from environment.question_generation.backend import BackendError
 from .question import author_question, task_level_brief
@@ -183,31 +180,7 @@ CRITIC_SCHEMA = {
     "additionalProperties": False,
 }
 
-# V4.4 uses structured critical axes so "natural professional restatement"
-# cannot quietly count as PASS when the same model detects extra workflow
-# instructions, unsupported source claims, or a new final deliverable.
-CRITIC_SCHEMA_V44 = {
-    "type": "object",
-    "properties": {
-        "goal_alignment": {"enum": ["same", "changed", "uncertain"]},
-        "task_sufficiency": {"enum": ["sufficient", "insufficient", "uncertain"]},
-        "user_framing": {"enum": ["user_goal", "workflow_instructions", "robotic"]},
-        "unsupported_additions": {
-            "type": "array", "items": {"type": "string"},
-        },
-        **CRITIC_SCHEMA["properties"],
-    },
-    "required": [
-        "goal_alignment", "task_sufficiency", "user_framing",
-        "unsupported_additions", "verdict", "naturalness",
-        "summary", "differences",
-    ],
-    "additionalProperties": False,
-}
-
-
-# Strict, versioned Question-only semantic review. Legacy audits keep their
-# original schema; this does not modify downstream Task/Trace/Answer work.
+# One current Question-only semantic review policy.
 SEMANTIC_REVIEW_POLICY = "semantic_world_natural_question_v3"
 SEMANTIC_REVIEW_PIPELINE = "taskfirst_semantic_world_author_critic_v3"
 SEMANTIC_AXES = (
@@ -244,50 +217,6 @@ STOP = {
     "potential", "affecting", "associated", "there", "where", "into",
     "relating", "review", "records", "current", "available", "relevant",
 }
-STEMS = {
-    "impact": ("impact", "affect", "consequen", "effect", "implication"),
-    "compliance": ("complian", "require", "rule", "policy", "eligib",
-                   "authoriz", "permit", "satisf", "violat"),
-    "reconciliation": ("reconcil", "discrepan", "conflict", "inconsisten",
-                       "differen", "match", "account", "align"),
-    "mitigation": ("mitigat", "respond", "response", "remed", "recommend",
-                   "action", "address", "solution"),
-    "prioritization": ("priorit", "urgent", "rank", "first", "order",
-                       "sequence"),
-    "comparison": ("compar", "differen", "relative", "versus", "better",
-                   "which", "more", "less"),
-    "feasibility": ("feasib", "possible", "practic", "implement",
-                    "workable", "constraint"),
-    "timeline": ("timeline", "chronolog", "sequence", "when", "time",
-                 "order", "occur"),
-}
-STYLE_HINTS = {
-    "composition": [
-        "A concise direct question with just enough real-world context",
-        "A short first-person user concern followed by the key decision question",
-        "An applied question about the overall outcome, with no procedural checklist",
-    ],
-    "intersection": [
-        "A straightforward user question about the issue to resolve",
-        "A compact situation description plus a focused question",
-        "A first-person concern with an implicit need to reconcile several facts",
-    ],
-    "comparison": [
-        "A direct comparison question without listing the steps of analysis",
-        "A practical choice framed as a short natural question",
-        "A user decision request emphasizing the outcome, not investigation steps",
-    ],
-    "aggregation": [
-        "A succinct synthesis request, expressed as a real user need",
-        "A single compact question about the overall result",
-    ],
-    "lookup": [
-        "A direct fact-finding question with a clear target",
-        "A natural context sentence followed by one focused question",
-    ],
-}
-
-
 def _fingerprint(value) -> str:
     packed = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(packed.encode("utf-8")).hexdigest()
@@ -428,14 +357,6 @@ def minimal_question_guards(candidate: str) -> list[str]:
     ):
         errors.append("non_user_question_format")
     return sorted(set(errors))
-
-
-def style_hint(scene: dict) -> str:
-    intent = scene["goal"]["intent"]
-    choices = STYLE_HINTS.get(intent, STYLE_HINTS["lookup"])
-    seed = int(_fingerprint([scene["task_id"], "question_style"])[:12], 16)
-    return choices[seed % len(choices)]
-
 
 
 # High-precision additions that materially narrow otherwise generic
@@ -586,7 +507,7 @@ def surface_issues(scene: dict, candidate: str, *, baseline: str | None = None) 
 
 
 def _validate_review(value: dict, *, policy: str | None = None) -> dict:
-    """Validate critic protocol. V4.1-V4.3 audits keep their original format."""
+    """Validate the canonical semantic Question Critic protocol."""
     if not isinstance(value, dict):
         raise ValueError("critic_review_not_object")
     verdict = value.get("verdict")
@@ -868,67 +789,6 @@ def naturalize_one(scene: dict, *, author, critic,
         "semantic_equivalence_certified": False,
     }
     return result, metadata
-
-
-def naturalize_scenes(scenes: list[dict], *, author, critic,
-                      max_revisions: int = 2, workers: int = 4) -> dict:
-    if workers < 1:
-        raise ValueError("workers must be >= 1")
-
-    def process(scene):
-        return naturalize_one(
-            scene, author=author, critic=critic, max_revisions=max_revisions
-        )
-
-    # map preserves input order, while individual Author -> Critic -> Repair
-    # loops execute sequentially per scene.
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        produced = list(pool.map(process, scenes))
-    counts = Counter()
-    failure_reasons = Counter()
-    # Accepting 100 independently natural-looking questions can still
-    # collapse distinct records into identical prose. Keep the earliest
-    # accepted candidate and revert later duplicates to the frozen
-    # deterministic reference, preserving the original Task semantics.
-    previously_seen = set()
-    for scene, (question, info) in zip(scenes, produced):
-        normalized = re.sub(r"\W+", " ", question.casefold()).strip()
-        if info["status"] == "accepted" and normalized in previously_seen:
-            question = polished_reference_question(info["reference_question"])
-            info["safe_reference_polish_applied"] = (
-                question != info["reference_question"]
-            )
-            info["status"] = "fallback"
-            info["reason"] = "duplicate_naturalized_question"
-            info["final_question"] = question
-            info["accepted_review"] = None
-            for row in info["audit"]:
-                if row.get("accepted"):
-                    row["accepted"] = False
-                    row["failure"] = "duplicate_naturalized_question"
-        previously_seen.add(re.sub(r"\W+", " ", question.casefold()).strip())
-        scene["question"] = question
-        scene["public"]["question"] = question
-        scene["question_authoring"] = info
-        counts[info["status"]] += 1
-        if info["status"] == "fallback":
-            failure_reasons[info["reason"]] += 1
-        counts["author_calls"] += info["author_calls"]
-        counts["critic_calls"] += info["critic_calls"]
-        if info["status"] == "accepted" and info["revision_rounds"] > 0:
-            counts["accepted_after_revision"] += 1
-    return {
-        "mode": "optional_llm_author_critic",
-        "accepted": counts["accepted"],
-        "fallback": counts["fallback"],
-        "accepted_after_revision": counts["accepted_after_revision"],
-        "author_calls": counts["author_calls"],
-        "critic_calls": counts["critic_calls"],
-        "failure_reasons": dict(failure_reasons),
-        "max_revisions": max_revisions,
-        "workers": workers,
-        "model_review_not_formal_proof": True,
-    }
 
 
 def validate_naturalized_question(scene: dict) -> list[str]:
