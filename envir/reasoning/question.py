@@ -344,6 +344,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             key: graph_contract[key] for key in (
                 "semantic_pattern", "answer_kind", "output_fields",
                 "required_source_roles", "required_operations",
+                "comparison_contract", "selection_contract",
                 "macro_task_count", "macro_dependency_depth",
                 "no_extra_question_conditions",
             )
