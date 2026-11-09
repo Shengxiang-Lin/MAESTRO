@@ -10,7 +10,8 @@ import copy
 import json
 import re
 
-from .spec import spec_issues
+from .spec import spec_issues, VERSION as SPEC_VERSION
+from .intent import intent_contract
 
 AUTHOR_SYSTEM = """Design one coherent, concrete FICTIONAL information-work scenario
 based on a topic label and a FROZEN reasoning contract. This is a simulated
@@ -99,6 +100,11 @@ def enrich_one(spec: dict, *, author, critic,
         "topic": spec["scenario"]["topic"],
         "difficulty": spec["difficulty_target"],
         "goal_family": spec["family"],
+        "semantic_pattern": spec.get("reasoning_pattern", "approval"),
+        "source_scoped_conditions": (
+            intent_contract(spec)["nonnegotiable_conditions"]
+            if spec.get("version") == SPEC_VERSION else []
+        ),
         "source_contract": [{
             "source_id": role["source_id"],
             "modality": role["modality"],
