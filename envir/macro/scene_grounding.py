@@ -487,9 +487,21 @@ def source_ablation_signal(scene: dict) -> dict:
     }
 
 
+def _canonical_proposal(proposal: dict) -> dict:
+    """Canonicalize source-role list only; each source ID is an identity.
+
+    Model serialization order must not change interpretation fingerprints.
+    This is safe only after strict source coverage/uniqueness validation.
+    """
+    normalized = copy.deepcopy(proposal)
+    normalized["source_roles"] = sorted(
+        normalized["source_roles"], key=lambda row: row["source_id"])
+    return normalized
+
+
 def materialize_grounding(
         scene: dict, proposal: dict, review: dict, *,
-        version: str = "synthetic_world_concretization_v2") -> dict:
+        version: str = "synthetic_world_concretization_v3") -> dict:
     """LLM writes labels; Python binds immutable values + fact references."""
     errors = validate_proposal(
         scene, proposal,
@@ -524,7 +536,9 @@ def materialize_grounding(
         "review": copy.deepcopy(review),
         "original_world_fingerprint": fingerprint(scene["world"]),
         "frozen_solution_fingerprint": frozen_fingerprint(scene),
-        "proposal_fingerprint": fingerprint(proposal),
+        "proposal_fingerprint": fingerprint(
+            _canonical_proposal(proposal)
+            if version == "synthetic_world_concretization_v3" else proposal),
         "validation": {
             "source_coverage": "exact",
             "fact_values": "bound_from_frozen_world",
@@ -548,6 +562,7 @@ def validate_grounding(scene: dict) -> list[str]:
     if version not in {
         "synthetic_world_concretization_v1",
         "synthetic_world_concretization_v2",
+        "synthetic_world_concretization_v3",
     }:
         return ["unknown_grounding_version"]
     if g.get("mode") != "synthetic_interpretation_not_original_media_annotation":
@@ -580,7 +595,14 @@ def validate_grounding(scene: dict) -> list[str]:
     errors.extend(validate_proposal(
         scene, proposal,
         legacy_v1=(version == "synthetic_world_concretization_v1")))
-    if g.get("proposal_fingerprint") != fingerprint(proposal):
+    # Legacy v1/v2 accepted overlays stored model source-role ordering,
+    # which necessarily matched the saved order to pass replay. Preserve
+    # their hash convention. In v3 fingerprint roles by source ID.
+    canonical = (
+        _canonical_proposal(proposal)
+        if version == "synthetic_world_concretization_v3" else proposal
+    )
+    if g.get("proposal_fingerprint") != fingerprint(canonical):
         errors.append("grounding_proposal_changed")
     try:
         expected = materialize_grounding(
@@ -679,6 +701,16 @@ def ground_one(scene: dict, *, constructor, critic,
             entry["failure"] = "model_or_protocol_error"
             entry["detail"] = str(exc)[:240]
             attempts.append(entry)
+            # Bad JSON is a recoverable model-output failure. Retry the
+            # same fixed request (bounded by max_revisions), not an endless
+            # retry loop or a false Critic rejection. Other errors surface.
+            if "did not return a JSON object" in str(exc):
+                feedback = {"issues": [
+                    "The previous response was not a JSON object. "
+                    "Return exactly the structured JSON schema."
+                ]}
+                last = None
+                continue
             break
     return None, {
         "status": "rejected",

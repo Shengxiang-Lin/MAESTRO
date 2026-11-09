@@ -202,6 +202,28 @@ python -m envir replay \
 model/prompt version, or `--overwrite` only when discarding a previous run.
 No re-execution or modification of the original Macro TaskGraph is needed.
 
+#### Grounding source-role ordering fix (v3)
+
+The 100-scene v2 pilot reached 95 accepted. Three of the remaining
+five failures were unrelated to semantic content: the LLM returned a valid
+`source_roles` array in a different order from the canonical order used
+by Python when writing `source_cards`. The prior hash treated list order
+as substantive and falsely rejected the World overlay with both
+`grounding_proposal_changed` and `grounding_fact_bindings_changed`.
+
+In v3, source roles are canonically sorted by immutable `source_id`
+*only for the proposal fingerprint*. Every source must still occur exactly
+once, values still bind to the original World, and old v1/v2 accepted
+overlays retain their original replay hash convention. A malformed JSON
+constructor response receives a bounded retry.
+
+Importantly, 95% acceptance is not proof of substantive grounding:
+some accepted scenarios still attach specific historical events or visual
+details not supported by existing simulated facts. Manually inspect the
+actual `scene_context`, `user_need` and `source_roles` before using
+the new examples for supervised training. A separate stronger semantic
+grounding audit is needed; v3 addresses the deterministic false rejects.
+
 #### Grounding validation notes (v2)
 
 The first 100-scene pilot produced 11 accepted proposals and 89 rejections,
