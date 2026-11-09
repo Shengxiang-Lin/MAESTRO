@@ -28,11 +28,38 @@ def _construction_identity(args) -> str:
         "seed": args.seed,
         "difficulty_mix": args.difficulty_mix,
         "mmqa": str(args.mmqa),
+        "mmqa_sha256": (
+            file_digest(args.mmqa) if Path(args.mmqa).is_file() else None
+        ),
+        "generation_code": {
+            name: file_digest(Path(__file__).with_name(name))
+            for name in (
+                "spec.py", "scenario.py", "world.py", "quality.py",
+                "backend.py", "stages.py",
+            )
+        },
         "scenario_model": args.scenario_model,
         "scenario_api_base": args.scenario_api_base,
         "scenario_critic_model": args.scenario_critic_model,
         "scenario_critic_api_base": args.scenario_critic_api_base,
         "scenario_max_revisions": args.scenario_max_revisions,
+    })
+
+
+def _question_signature(args, rows: list[dict]) -> str:
+    """Exact resume identity shared by LLM reviewer and root pipeline."""
+    return stable_signature({
+        "stage": "question_author_critic.v1",
+        "ids": [scene["task_id"] for scene in rows],
+        "scene_bank_hash": file_digest(args.scenes),
+        "model": args.question_model,
+        "api_base": args.question_api_base,
+        "critic_model": args.question_critic_model,
+        "critic_api_base": args.question_critic_api_base,
+        "max_revisions": args.max_revisions,
+        "question_code": file_digest(Path(__file__).with_name("question.py")),
+        "stage_code": file_digest(Path(__file__)),
+        "backend_code": file_digest(Path(__file__).with_name("backend.py")),
     })
 
 
@@ -477,19 +504,7 @@ def review_questions(args) -> dict:
         }
 
     ids = [scene["task_id"] for scene in rows]
-    signature = stable_signature({
-        "stage": "question_author_critic.v1",
-        "ids": ids,
-        "scene_bank_hash": file_digest(args.scenes),
-        "model": args.question_model,
-        "api_base": args.question_api_base,
-        "critic_model": args.question_critic_model,
-        "critic_api_base": args.question_critic_api_base,
-        "max_revisions": args.max_revisions,
-        "question_code": file_digest(Path(__file__).with_name("question.py")),
-        "stage_code": file_digest(Path(__file__)),
-        "backend_code": file_digest(Path(__file__).with_name("backend.py")),
-    })
+    signature = _question_signature(args, rows)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with output_lock(args.output_dir, "question_authoring"):
         with OrderedJournal(
