@@ -283,6 +283,9 @@ def construct_scenes(args) -> dict:
             "partial" if generated else "failed"
         ),
         "pipeline": "maestro_reasoning_program_world_taskgraph_question",
+        "run_identity": __import__(
+            "envir.generate_question.pipeline", fromlist=["_construction_identity"]
+        )._construction_identity(args),
         "seed_source": seed_source,
         "target": args.target,
         "attempted": len(chosen),
