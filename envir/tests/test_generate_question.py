@@ -70,7 +70,7 @@ class ConfigAndCliTests(unittest.TestCase):
     def test_cli_exposes_one_generation_command(self):
         sub = parser()._subparsers._group_actions[0].choices
         self.assertEqual(
-            set(sub), {"generate-questions", "quality", "implement-subtasks"}
+            set(sub), {"generate-questions", "quality", "implement-subtasks", "naturalize-subtasks"}
         )
         self.assertNotIn("build-v2", sub)
         self.assertNotIn("refine-questions", sub)
