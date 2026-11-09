@@ -257,7 +257,7 @@ def build_bank(args) -> dict:
         "failed_file": str(files["failed"]),
         "rejected": dict(rejected),
         "scenario_authoring": dict(Counter(
-            s["problem_spec"].get("scenario_authoring", {}).get("status", "off")
+            s.get("scenario_authoring", {}).get("status", "off")
             for s in selected
         )),
         "difficulty_target_distribution": dict(Counter(
