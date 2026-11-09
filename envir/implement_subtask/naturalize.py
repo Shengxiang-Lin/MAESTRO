@@ -92,6 +92,7 @@ def naturalize_subtasks(
             "subtasks": "subtasks.jsonl",
             "scene_index": "scene_index.jsonl",
             "failed": "failed.jsonl",
+            "review_audit": "review_audit.jsonl",
             "summary": "summary.json",
         }.items()
     }
@@ -165,6 +166,29 @@ def naturalize_subtasks(
         by_scene[sid].append((task_id, accepted, feedback))
     publish, keep_indices, failures = [], [], []
     feedback_counts = Counter()
+    rejection_causes = Counter()
+    private_review_audit = []
+    for sid, task_id, accepted, feedback in completed:
+        # The audit includes every Macro outcome, even accepted Macros in
+        # scenes that cannot be published because another Macro failed.
+        for attempt in feedback.get("failures", []):
+            if attempt.get("stage") == "guard":
+                rejection_causes.update(attempt.get("errors", []))
+            elif attempt.get("stage") == "critic":
+                rejection_causes.update(["critic:" + str(attempt.get("reason", "unspecified"))[:120]])
+            elif attempt.get("stage") in {"backend", "oracle_contract"}:
+                rejection_causes.update([attempt["stage"]])
+        private_review_audit.append({
+            "scene_task_id": sid,
+            "macro_task_id": task_id,
+            "status": feedback["status"],
+            "attempts": feedback.get("attempts", 0),
+            "failures": feedback.get("failures", []),
+            "accepted_preview": (
+                accepted["finish_result"]
+                if accepted is not None else None
+            ),
+        })
     for scene in indexes:
         sid = scene["scene_task_id"]
         reports = by_scene[sid]
@@ -188,6 +212,7 @@ def naturalize_subtasks(
     _write_jsonl(names["subtasks"], publish)
     _write_jsonl(names["scene_index"], keep_indices)
     _write_jsonl(names["failed"], failures)
+    _write_jsonl(names["review_audit"], private_review_audit)
     summary = {
         "status": "done" if len(keep_indices) == len(indexes)
                   else "partial" if keep_indices else "failed",
@@ -202,6 +227,8 @@ def naturalize_subtasks(
         "author_critic_failed_macros": feedback_counts["failed"],
         "published_macro_tasks": len(publish),
         "review_counts": dict(feedback_counts),
+        "rejection_causes_across_attempts": dict(rejection_causes),
+        "review_audit_is_private": True,
         "fallback_counted_as_success": False,
         "teacher_answers_and_evidence_unchanged": True,
         "subagent_reports_are_oracle_narratives_not_real_llm_tool_runs": True,
