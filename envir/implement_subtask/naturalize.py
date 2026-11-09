@@ -125,7 +125,8 @@ def naturalize_subtasks(
             row = groups[sid][task_id]
             if any(parent not in set(expected) for parent in row["depends_on"]):
                 raise ValueError("unknown_upstream_handoff:" + sid)
-            ordered.append((sid, row, scene["question"]))
+            ordered.append((sid, row, scene["question"],
+                            task_id == scene["terminal_macro_task_id"]))
     if clients is None:
         clients = _clients(
             api_base=api_base, model=model,
@@ -136,10 +137,10 @@ def naturalize_subtasks(
     author, critic = clients
 
     def review(entry):
-        sid, row, question = entry
+        sid, row, question, is_terminal = entry
         accepted, feedback = author_critic_report(
             row, question=question, author=author, critic=critic,
-            max_revisions=max_revisions,
+            max_revisions=max_revisions, is_terminal=is_terminal,
         )
         return sid, row["macro_task_id"], accepted, feedback
 
