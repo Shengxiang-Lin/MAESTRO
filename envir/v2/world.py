@@ -140,7 +140,7 @@ def generate_world(spec: dict) -> dict:
     # an alias. Other records serve as valid hard negatives, not fake steps.
     indexed = [0, 0, 1, 2, 3, 1, 2, 0]
     active = [True, True, True, False, True, False, True, False]
-    relative_steps = [9, 4, 7, 2, 11, 1, 14, 18]
+    relative_steps = [9, 4, 1, 2, 11, 7, 14, 18]
     priority = [84, 63, 95, 38, 77, 10, 72, 30]
     entries = [{
         "entry_label": f"Entry-{i+1:02d}",
