@@ -31,6 +31,7 @@ from .question_streaming import stream_naturalize_scenes
 from .validation import validate_clean_scene
 from .question_audit import audit_file
 from .scene_grounding_cli import ground_scenes
+from .semantic_world_cli import realize_world
 
 
 def _json(path: Path, value) -> None:
@@ -455,6 +456,48 @@ def parser():
     g.add_argument("--max-revisions", type=int, default=2)
     g.add_argument("--flush-every", type=int, default=1)
     g.add_argument("--no-progress", action="store_true")
+    w = sub.add_parser(
+        "realize-world",
+        help="Compile NEW domain-semantic synthetic World and EvidenceGraph "
+             "AFTER Macro TaskGraph, BEFORE numeric source facts; original "
+             "MMQA questions/media never enter the model",
+    )
+    w.add_argument("--scenes", type=Path, required=True,
+                   help="Original pre-grounding MacroPlan scenes.jsonl")
+    w.add_argument("--output-dir", type=Path, required=True)
+    w.add_argument("--max-records", type=int, default=None)
+    w.add_argument("--overwrite", action="store_true")
+    w.add_argument("--world-api-base", "--grounding-api-base",
+                   dest="grounding_api_base", required=True)
+    w.add_argument("--world-model", "--grounding-model",
+                   dest="grounding_model", required=True)
+    w.add_argument("--world-critic-api-base", "--grounding-critic-api-base",
+                   dest="grounding_critic_api_base", default=None)
+    w.add_argument("--world-critic-model", "--grounding-critic-model",
+                   dest="grounding_critic_model", default=None)
+    w.add_argument("--world-api-key-env", dest="grounding_api_key_env",
+                   default="OPENAI_API_KEY")
+    w.add_argument("--world-critic-api-key-env",
+                   dest="grounding_critic_api_key_env", default=None)
+    w.add_argument("--world-workers", "--grounding-workers",
+                   dest="grounding_workers", type=int, default=4)
+    w.add_argument("--world-temperature", dest="grounding_temperature",
+                   type=float, default=0.6)
+    w.add_argument("--world-critic-temperature",
+                   dest="grounding_critic_temperature",
+                   type=float, default=0.0)
+    w.add_argument("--world-max-tokens", dest="grounding_max_tokens",
+                   type=int, default=2000)
+    w.add_argument("--world-critic-max-tokens",
+                   dest="grounding_critic_max_tokens",
+                   type=int, default=1400)
+    w.add_argument("--world-timeout", dest="grounding_timeout",
+                   type=int, default=180)
+    w.add_argument("--world-no-json-mode",
+                   dest="grounding_no_json_mode", action="store_true")
+    w.add_argument("--max-revisions", type=int, default=2)
+    w.add_argument("--flush-every", type=int, default=1)
+    w.add_argument("--no-progress", action="store_true")
     r = sub.add_parser("replay")
     r.add_argument("--scenes", type=Path, required=True)
     a = sub.add_parser("audit-questions",
@@ -472,6 +515,7 @@ def main(argv=None):
         "build": build,
         "naturalize": naturalize,
         "ground-scenes": ground_scenes,
+        "realize-world": realize_world,
         "replay": replay,
         "audit-questions": audit_questions,
     }[args.command](args)

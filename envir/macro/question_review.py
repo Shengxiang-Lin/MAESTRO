@@ -87,6 +87,11 @@ Five evidence-based decisions, each yes/no/uncertain:
   or source modality, and that omission is NOT a failure.
 - source_faithful: no invented concrete entity, source subtype, observed
   media contents, contextual facts or undocumented real-world properties.
+  If semantic_contract contains synthetic_world_specification, the
+  domain-specific schema, fictional candidate labels, source roles and
+  Goal-compatible need were defined BEFORE numeric World sampling. These
+  are licensed hypothetical meanings, NOT claims about real-world events,
+  original images or observed historical facts.
   If semantic_contract contains synthetic_scenario_contract, its
   source-bound hypothetical setting, candidate kind, field meanings and
   fixed question_intent are licensed, NOT as historical or media facts.
@@ -338,13 +343,27 @@ def macro_task_view(scene: dict) -> dict:
     brief = task_level_brief(scene)
     tasks = scene["macro_graph"]["tasks"]
     order = {task["task_id"]: index + 1 for index, task in enumerate(tasks)}
-    return {
-        "scenario": {
+    world_spec = scene.get("semantic_world_spec")
+    if world_spec and world_spec.get("status") == "accepted":
+        # The original MMQA domain hint can be misleading for mixed-domain
+        # questions. Show the Critic the semantic subject type approved
+        # BEFORE World sampling; do NOT mutate the frozen MacroPlan.
+        semantic_scene = world_spec["scenario"]
+        critic_scenario = {
+            "domain": semantic_scene["subject_type"],
+            "setting": semantic_scene["setting"],
+            "issue": semantic_scene["motivation"],
+            "user_role": semantic_scene["user_role"],
+        }
+    else:
+        critic_scenario = {
             "domain": brief["domain"],
             "setting": brief["setting"],
             "issue": brief["issue"],
             "user_role": brief["user_role"],
-        },
+        }
+    return {
+        "scenario": critic_scenario,
         "overall_user_need": {
             "intent": brief["intent"],
             "final_work_goal": brief["final_work_goal"],
