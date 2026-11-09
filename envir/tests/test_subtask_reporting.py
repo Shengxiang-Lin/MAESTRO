@@ -118,6 +118,105 @@ class StructuredResultAuthor:
         }
 
 
+class StageLocalScopeRegressions(unittest.TestCase):
+    """Examples from the user's 30/31 Qwen trial: do not claim later work."""
+
+    def _contract(self, rows, operations, fields, *, parents=None,
+                  terminal=False):
+        return {
+            "exact_oracle_answer": rows,
+            "terminal_output_schema_of_this_macro": fields,
+            "executed_operations_in_this_macro": operations,
+            "upstream_handoffs": parents or [],
+            "macro_is_terminal": terminal,
+        }
+
+    def test_join_must_not_pretend_inactive_rows_are_filtered(self):
+        from envir.implement_subtask.reporting import _stage_scope_issues
+        contract = self._contract(
+            [{"entry_label": "Entry-03", "active": False,
+              "measured_value": 58, "group_id": "Collection group D"},
+             {"entry_label": "Entry-04", "active": True,
+              "measured_value": 0, "group_id": "Collection group C"}],
+            ["join"],
+            ["entry_label", "active", "measured_value", "group_id"],
+            parents=["work_register_rows", "work_codebook_rows"],
+        )
+        self.assertEqual(_stage_scope_issues(
+            "Joined register and codebook candidates, preserving both "
+            "active and inactive entries for subsequent checks.", contract), [])
+        self.assertIn(
+            "claims_all_active_with_inactive_rows",
+            _stage_scope_issues(
+                "The join confirmed all retrieved rows are active.", contract,
+            ),
+        )
+
+    def test_glossary_scan_does_not_approve_or_filter(self):
+        from envir.implement_subtask.reporting import _stage_scope_issues
+        contract = self._contract(
+            [{"route_code": "R-01", "group_id": "Collection group A"}],
+            ["scan"], ["route_code", "group_id"],
+        )
+        for summary, name in (
+            ("Scanned the glossary for active entries with matching codes.",
+             "scan_claims_unobserved_active_status"),
+            ("Scanned the glossary source for approved translated category labels.",
+             "scan_claims_unobserved_approval"),
+            ("Scanned the glossary and filtered rows to retain only approvals.",
+             "scan_claims_unexecuted_filter"),
+            ("The retrieved rows satisfied clearance conditions.",
+             "scan_claims_unchecked_clearance"),
+        ):
+            with self.subTest(summary=summary):
+                self.assertIn(name, _stage_scope_issues(summary, contract))
+        self.assertEqual(
+            _stage_scope_issues(
+                "Read the glossary and returned its route-to-group mappings. "
+                "Approval and clearance still need separate checks.", contract
+            ),
+            [],
+        )
+
+    def test_intermediate_join_does_not_claim_unexecuted_time_check(self):
+        from envir.implement_subtask.reporting import _stage_scope_issues
+        contract = self._contract(
+            [{"entry_label": "Entry-02", "event_step": 68,
+              "group_id": "Collection group B"}],
+            ["join"], ["entry_label", "event_step", "group_id"],
+            parents=["work_active_events", "work_codebook_rows"],
+        )
+        self.assertIn(
+            "claims_unexecuted_temporal_verification",
+            _stage_scope_issues(
+                "The mapped records were verified against event step "
+                "constraints and satisfy the session matching rules.",
+                contract,
+            ),
+        )
+        self.assertEqual(
+            _stage_scope_issues(
+                "Joined the codebook and register by route code, "
+                "producing one mapped candidate for the next time-window check.",
+                contract,
+            ), [],
+        )
+
+    def test_critic_repair_must_not_change_oracle_result_rows(self):
+        record = realize_scene(scene(27, "hard"))["macro_tasks"][0]
+        author = ReportAuthor()
+        critic = ReportCritic(reject_first=True)
+        revised, review = author_critic_report(
+            record, question="Check Fictional Study 27 records",
+            author=author, critic=critic, max_revisions=1,
+        )
+        self.assertEqual(review["status"], "accepted")
+        self.assertEqual(revised["answer"], record["answer"])
+        self.assertEqual(
+            revised["answer_with_provenance"], record["answer_with_provenance"]
+        )
+        self.assertEqual(len(critic.calls), 2)
+
 class ReportingUnitTests(unittest.TestCase):
     def test_real_finish_shape_and_frozen_gold(self):
         frozen = scene(23, "hard")
