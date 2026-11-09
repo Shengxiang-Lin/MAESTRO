@@ -187,6 +187,70 @@ class WorldConcretizationTests(unittest.TestCase):
                 **self.original, "scene_grounding": overlay
             }))
 
+    def test_natural_descriptions_do_not_fail_on_arbitrary_110_character_cap(self):
+        proposal = proposal_for(self.original)
+        proposal["field_meanings"]["score"] = (
+            "A fictional internal confidence score between zero and one "
+            "hundred, assigned by this hypothetical audit to compare "
+            "the existing synthetic candidate records; it is not a "
+            "real-world sport or financial measurement."
+        )
+        proposal["source_roles"][0]["source_role"] = (
+            "Hypothetical source metadata record from a source of the "
+            "existing modality, describing an invented review submission "
+            "and its synthetic attributes, without claiming any real "
+            "image was viewed or historical fact was verified."
+        )
+        proposal["user_need"] = (
+            "For this hypothetical review case, identify the complete "
+            "result required by the existing source evidence and preserve "
+            "the established goal and candidate universe, without "
+            "introducing new facts, sources, metrics or operations."
+        )
+        self.assertGreater(len(proposal["field_meanings"]["score"]), 110)
+        self.assertGreater(len(proposal["source_roles"][0]["source_role"]), 110)
+        self.assertEqual([], validate_proposal(self.original, proposal))
+        reviewer = {**pass_review(), "summary": "Same semantics. " * 55}
+        self.assertGreater(len(reviewer["summary"]), 600)
+        output, issues = validate_review(reviewer)
+        self.assertEqual(issues, [])
+        self.assertEqual(output["verdict"], "pass")
+
+    def test_v2_blocks_false_media_observation_v1_is_replayable(self):
+        proposal = proposal_for(self.original)
+        proposal["source_roles"][0]["source_role"] = (
+            "Image-derived observation containing visual confirmation "
+            "of the actual logo."
+        )
+        self.assertIn(
+            "unsupported_media_perception_certainty",
+            validate_proposal(self.original, proposal),
+        )
+        # Legacy accepted overlays retain their original validation
+        # policy, instead of silently changing the replay contract.
+        self.assertEqual(
+            [], validate_proposal(self.original, proposal, legacy_v1=True)
+        )
+        previous = materialize_grounding(
+            self.original, proposal, pass_review(),
+            version="synthetic_world_concretization_v1",
+        )
+        self.assertEqual(
+            [], validate_grounding({**self.original,
+                                    "scene_grounding": previous})
+        )
+
+    def test_source_inventory_remains_strict_even_after_length_relaxation(self):
+        proposal = proposal_for(self.original)
+        proposal["source_roles"].append({
+            "source_id": "new-unauthorized-source",
+            "candidate_label": "Submission Z",
+            "source_role": "Invented fourth source",
+        })
+        issues = validate_proposal(self.original, proposal)
+        self.assertIn("source_role_count_mismatch", issues)
+        self.assertIn("unknown_or_duplicate_source_id", issues)
+
     def test_tampered_value_or_source_id_is_rejected(self):
         overlay = materialize_grounding(
             self.original, proposal_for(self.original), pass_review())

@@ -202,6 +202,32 @@ python -m envir replay \
 model/prompt version, or `--overwrite` only when discarding a previous run.
 No re-execution or modification of the original Macro TaskGraph is needed.
 
+#### Grounding validation notes (v2)
+
+The first 100-scene pilot produced 11 accepted proposals and 89 rejections,
+mainly because the old validator restricted all `field_meanings` and
+`source_role` descriptions to 110 characters, and `user_need` to 220
+characters. These limits did not represent semantic correctness. Version 2
+uses 320/360-character description limits (candidate labels 140), and
+accepts longer Critic explanations. Source IDs, source coverage, fact values,
+World/TaskGraph/EvidenceGraph/Feedback fingerprints and Replay constraints
+remain strict.
+
+A v2-specific safety check now rejects interpretations claiming that visual
+features were actually confirmed or detected in unobserved original media.
+An internal synthetic flag can mean a *fictional* review marker, but cannot
+certify content in original image/video pixels. Accepted v1 overlays retain
+their earlier validation policy for backwards Replay compatibility; a fresh
+v2 run should use a **new output directory**, not reuse its old checkpoint.
+
+`summary.json` now reports `validation_error_counts` and explicit
+`rejection_reasons`; each audit row also includes
+`last_validation_errors`. These make prompt failures and genuine
+source/provenance violations separately diagnosable. Improved acceptance
+alone is not evidence of realistic scene quality: inspect accepted
+`scene_context`, `field_meanings`, `source_roles` and the
+independent Critic assessments before scaling.
+
 ### Question-only natural language realization (v2)
 
 Question Author and Critic have deliberately **different views**:
