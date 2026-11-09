@@ -21,7 +21,7 @@ from envir.macro.semantic_world import (
     validate_semantic_world_scene,
 )
 from envir.macro.semantic_world_cli import realize_world
-from envir.macro.question_review import naturalize_one
+from envir.macro.question_review import macro_task_view
 from envir.macro.realization_brief import question_realization_brief
 from envir.macro.semantic_contract import semantic_contract
 from envir.macro.validation import validate_clean_scene
@@ -168,6 +168,12 @@ class SemanticWorldTests(unittest.TestCase):
             self.assertIn("semantic_candidate_label", source)
         self.assertIn(
             "synthetic_world_specification", semantic_contract(realized))
+        self.assertEqual(
+            macro_task_view(realized)["scenario"]["domain"],
+            spec["scenario"]["subject_type"])
+        self.assertEqual(
+            macro_task_view(self.original)["scenario"]["domain"],
+            self.original["scenario"]["domain"])
         brief = question_realization_brief(realized)
         self.assertIn("hypothetical_scene", brief)
         self.assertIn("internal review points",
