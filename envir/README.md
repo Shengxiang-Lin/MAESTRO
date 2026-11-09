@@ -32,6 +32,17 @@ python -m envir implement-subtasks \
 ~~~
 
 See [implement_subtask/README.md](implement_subtask/README.md).
+
+A separate Stage-2 language pass rewrites the frozen Oracle responses into
+realistic Sub-Agent `finish_result.result/status/summary` messages with
+an LLM Author and independent Critic. The typed answer, primitive evidence
+steps, and fact refs are never regenerated or edited:
+
+~~~bash
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml
+~~~
+
 Stage 3, Subtask scheduling and composition, remains separate and is not
 implemented here.
 
