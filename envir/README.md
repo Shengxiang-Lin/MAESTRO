@@ -56,8 +56,25 @@ python -m envir build \
 ```
 
 The existing `envir/data/taskfirst_recursive_1000/scenes.jsonl` from
-earlier runs is also suitable as long as it has no `semantic_world_spec`
-or `question_authoring` overlay and passes `replay`.
+earlier runs is also suitable, provided that it is an original
+pre-semantic TaskGraph bank (no `semantic_world_spec`,
+`scene_grounding` or `question_authoring` overlay). **It need not pass
+the NEW executor's strict `replay` before import**: its old
+`feedback_bank` and `task_evidence_graphs` were generated using
+different derived result fields. The `realize-world` importer instead
+checks all original MacroPlan/source authorizations, provenance, source
+fact IDs and values (recreated deterministically from the original
+plan/seed) and structural evidence closure, and waives only the two
+known differences in the OLD derived feedback/graph payloads. This is
+an input migration allowance only, not relaxed validation for new outputs.
+
+For accepted semantic specs, the World, relational facts, EvidenceGraph
+and Feedback are regenerated. For rejected or `not_realizable` specs,
+the original World and MacroPlan remain, but EvidenceGraph and Feedback
+are **re-executed using the current interpreter**; therefore even
+fallback rows in `scenes.jsonl` must pass NEW strict `replay`.
+Run `replay` on the resulting `semantic_relational_100/scenes.jsonl`,
+rather than the old TaskGraph bank.
 
 ### 2. Define a semantic World **before** generating values
 
