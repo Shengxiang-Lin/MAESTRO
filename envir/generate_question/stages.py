@@ -421,7 +421,12 @@ def review_questions(args) -> dict:
     files = _out_files(args.output_dir)
     progress_path = args.output_dir / "question_authoring_progress.json"
     if not args.overwrite and any(path.exists() for path in files.values()):
-        if files["summary"].exists() or not progress_path.exists():
+        running_summary = (
+            json.loads(files["summary"].read_text(encoding="utf-8"))
+            if files["summary"].is_file() else {}
+        )
+        if (not progress_path.exists()
+                or running_summary.get("status") not in ({}, "running")):
             raise FileExistsError(
                 "Question review output exists without resumable progress; "
                 "choose a new directory or enable overwrite"
