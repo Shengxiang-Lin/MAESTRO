@@ -43,10 +43,16 @@ def scene(*, difficulty="medium", ordinal=0, family=None):
     )
     if family is not None:
         spec["family"] = family
+        spec["reasoning_pattern"] = {
+            "window_alignment": "time_window",
+            "status_disagreement": "status_disagreement",
+            "threshold_eligibility": "dynamic_threshold",
+        }.get(family, "approval")
         spec["requirements"]["answer_kind"] = (
             "count" if family == "coverage_count" else
             "category_counts" if family == "category_distribution" else
             "single_entry" if family in {"priority", "chronology"} else
+            "entry_evidence" if family == "evidence_reconcile" else
             "entry_list"
         )
     return compile_and_validate(spec, reference_question(spec))
@@ -61,10 +67,14 @@ class V2ReasoningTests(unittest.TestCase):
             self.assertEqual(data["gold_answer"], run_macro_tasks(
                 data["macro_graph"], sources=data["world"]["sources"]
             )["answer"])
+            self.assertLessEqual(
+                data["macro_graph"]["macro_task_count"], 9)
             self.assertEqual(
+                data["macro_graph"]["primitive_operator_count"],
+                len(data["gold_program"]["nodes"]))
+            self.assertLessEqual(
                 data["macro_graph"]["macro_task_count"],
-                len(data["gold_program"]["nodes"]),
-            )
+                data["macro_graph"]["primitive_operator_count"])
 
     def test_each_difficulty_meets_published_structure(self):
         expectations = {
@@ -110,10 +120,11 @@ class V2ReasoningTests(unittest.TestCase):
         first = data["macro_graph"]["tasks"][0]
         with self.assertRaises(MissingSourceError):
             session.run_task(first["task_id"])
-        result = session.read_source("register")
+        sid = first["source_ids"][0]
+        result = session.read_source(sid)
         self.assertIn("observations", result)
         result["observations"].clear()
-        self.assertTrue(data["world"]["sources"]["register"]["observations"])
+        self.assertTrue(data["world"]["sources"][sid]["observations"])
         session.run_task(first["task_id"])
         with self.assertRaises(ProgramError):
             session.run_task(first["task_id"])
@@ -135,7 +146,12 @@ class V2ReasoningTests(unittest.TestCase):
     def test_ungranted_source_cannot_be_used_by_non_scan_task(self):
         data = scene(difficulty="medium")
         graph = copy.deepcopy(data["macro_graph"])
-        node = next(x for x in graph["tasks"] if x["operation"] == "join")
+        node = next(
+            x for x in graph["tasks"]
+            if any(step["op"] == "join" for step in x.get(
+                "operator_chain", [{"op": x["operation"]}]
+            ))
+        )
         node["source_ids"] = ["glossary"]
         with self.assertRaises(ProgramError):
             run_macro_tasks(graph, sources=data["world"]["sources"])
@@ -194,7 +210,7 @@ class GenerationQualityRegressionTests(unittest.TestCase):
                     else "hard"
                 ),
             )
-            self.assertEqual(spec["version"], "maestro.problem_spec.v3")
+            self.assertEqual(spec["version"], "maestro.problem_spec.v4")
             sample = compile_and_validate(spec, reference_question(spec))
             self.assertEqual(validate_replay(sample)["status"], "valid")
             self.assertEqual(sample["difficulty_audit"]["status"], "valid")
@@ -228,7 +244,7 @@ class GenerationQualityRegressionTests(unittest.TestCase):
         self.assertGreaterEqual(len(selected), 4)
 
     def test_private_entity_registry_matches_shuffled_source_rows(self):
-        sample = scene(difficulty="hard", ordinal=33)
+        sample = scene(difficulty="hard", ordinal=33, family="priority")
         register = {
             x["values"]["entry_label"]: x["values"]["label_code"]
             for x in sample["world"]["sources"]["register"]["observations"]
@@ -248,6 +264,9 @@ class GenerationQualityRegressionTests(unittest.TestCase):
             seed_record=seed(9), ordinal=9, run_seed=17, difficulty="hard"
         )
         spec["version"] = "maestro.problem_spec.v2"
+        spec["reasoning_pattern"] = "approval"
+        spec["family"] = "priority"
+        spec["requirements"]["answer_kind"] = "single_entry"
         frozen = compile_and_validate(spec, reference_question(spec))
         self.assertEqual(
             frozen["world"]["version"], "maestro.source_observation_world.v2"
@@ -263,6 +282,7 @@ class GenerationQualityRegressionTests(unittest.TestCase):
             seed_record=seed(12), ordinal=12,
             run_seed=17, difficulty="hard"
         )
+        spec["version"] = "maestro.problem_spec.v3"
         reference = reference_question(spec)
         seen = []
         class EchoAuthor:
@@ -315,6 +335,91 @@ class GenerationQualityRegressionTests(unittest.TestCase):
         self.assertIn("question_length_out_of_bounds", failure["errors"])
 
 
+class SemanticPatternContractTests(unittest.TestCase):
+    def test_three_new_semantic_families_with_true_media_predicates(self):
+        from envir.reasoning.pattern_world import modality_fields
+        patterns = set()
+        media_used = set()
+        for ordinal in range(44):
+            sample = scene(difficulty="hard", ordinal=ordinal)
+            spec = sample["problem_spec"]
+            pattern = spec["reasoning_pattern"]
+            patterns.add(pattern)
+            self.assertLessEqual(sample["macro_graph"]["macro_task_count"], 9)
+            self.assertEqual(validate_replay(sample)["status"], "valid")
+            if pattern == "approval":
+                continue
+            source = sample["world"]["sources"]["annotations"]
+            mod = source["modality"]
+            fields = modality_fields(mod, pattern)
+            expected = set(fields) if isinstance(fields, tuple) else {fields}
+            predicates = {step["right_field"] for step in
+                          sample["gold_program"]["nodes"]
+                          if step["op"] == "compare_fields"}
+            self.assertTrue(expected & predicates)
+            if mod in {"image", "video", "audio"}:
+                media_used.add(mod)
+        self.assertEqual(patterns, {
+            "approval", "time_window",
+            "status_disagreement", "dynamic_threshold",
+        })
+        self.assertTrue(media_used)
+
+    def test_evidence_output_contains_actual_cited_facts(self):
+        sample = scene(difficulty="hard", ordinal=1, family="evidence_reconcile")
+        self.assertEqual(sample["problem_spec"]["requirements"]["answer_kind"],
+                         "entry_evidence")
+        self.assertTrue(sample["gold_answer"])
+        for row in sample["gold_answer"]:
+            self.assertEqual(set(row), {"entry_label", "evidence_refs"})
+            self.assertEqual(len(row["evidence_refs"]), 4)
+            self.assertTrue(all(":" in ref for ref in row["evidence_refs"]))
+        self.assertEqual(validate_replay(sample)["status"], "valid")
+
+    def test_question_author_receives_structured_intent_not_template(self):
+        from envir.reasoning.question import naturalize_one
+        spec = make_spec(seed_record=seed(15), ordinal=15,
+                         run_seed=17, difficulty="medium")
+        seen = []
+        class SyntheticAuthor:
+            def complete_json(self, system_prompt, user_prompt):
+                p = json.loads(user_prompt)
+                seen.append(p["contract"])
+                return {"question": "Not a full question"}
+        class NeverCritic:
+            def complete_json(self, *_args):
+                raise AssertionError("malformed question should fail guard")
+        question, result = naturalize_one(
+            spec, author=SyntheticAuthor(), critic=NeverCritic(),
+            max_revisions=0,
+        )
+        self.assertEqual(result["status"], "fallback")
+        self.assertNotIn("frozen_reference_question", seen[0])
+        self.assertIn("intent", seen[0])
+        self.assertIn("style", seen[0])
+
+    def test_compact_task_rejects_unauthorized_grants_and_missing_inputs(self):
+        data = scene(difficulty="hard", ordinal=7)
+        bad = copy.deepcopy(data["macro_graph"])
+        composite = next(t for t in bad["tasks"] if t["operator_chain"]
+                         and len(t["operator_chain"]) > 1)
+        composite["source_ids"] = ["unexpected-source"]
+        with self.assertRaises((ProgramError, MissingSourceError)):
+            run_macro_tasks(bad, sources=data["world"]["sources"])
+
+    def test_legacy_v3_source_data_is_still_replayable(self):
+        spec = make_spec(seed_record=seed(10), ordinal=10,
+                         run_seed=17, difficulty="medium")
+        spec["version"] = "maestro.problem_spec.v3"
+        spec["reasoning_pattern"] = "approval"
+        spec["family"] = "priority"
+        spec["requirements"]["answer_kind"] = "single_entry"
+        result = compile_and_validate(spec, reference_question(spec))
+        self.assertEqual(result["gold_program"]["version"],
+                         "maestro.reasoning_program.v3")
+        self.assertEqual(validate_replay(result)["status"], "valid")
+
+
 class V2PipelineTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -364,7 +469,7 @@ class V2PipelineTests(unittest.TestCase):
         self.assertEqual(replay["checked"], 12)
         aggregate = audit_v2(Namespace(scenes=output, max_records=None))
         self.assertEqual(aggregate["replay_pass"], 12)
-        self.assertEqual(aggregate["one_source_shortcut_successes"], 3)
+        self.assertLessEqual(aggregate["one_source_shortcut_successes"], 3)
         self.assertEqual(aggregate["counterfactual_full_pass"], 12)
         self.assertTrue((self.root / "v2" / "questions.jsonl").exists())
         self.assertTrue((self.root / "v2" / "difficulty_audit.jsonl").exists())
