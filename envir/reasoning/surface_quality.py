@@ -47,3 +47,59 @@ def question_language_warnings(question: str, spec: dict) -> list[str]:
     if unlicensed_calendar_years(question, topic):
         warnings.append("unlicensed_calendar_year_not_in_topic")
     return warnings
+
+
+def topic_mentioned(text: str, topic: str) -> bool:
+    """Require the grounded topic, allowing harmless typographic variation.
+
+    A parenthetical *type* suffix may be omitted ("Green Lantern (film)"
+    -> "Green Lantern"); not arbitrary words, invented organizations,
+    unrelated aliases, or semantic/embedding-only matches.
+    """
+    if not isinstance(text, str) or not isinstance(topic, str):
+        return False
+    def canonical(value: str) -> str:
+        value = value.casefold()
+        value = re.sub(r"[\u2010-\u2015\u2212]", "-", value)
+        value = re.sub(r"[\u2018\u2019]", "'", value)
+        return re.sub(r"\s+", " ", value).strip()
+    candidate = canonical(text)
+    anchor = canonical(topic)
+    core = re.sub(r"\s*\([^()]+\)\s*$", "", anchor).strip()
+    return bool(anchor and (anchor in candidate or
+                            len(core) >= 5 and core in candidate))
+
+
+REQUEST_VERB = (
+    r"(?:identify|list|find|determine|report|return|select|count|provide|"
+    r"show|give|tell|extract|name|calculate|check|filter|compare)"
+)
+
+
+def is_explicit_user_request(text: str) -> bool:
+    """An imperative is a valid benchmark task even without '?'.
+
+    Do not treat an arbitrary fact description or fragment as an actionable
+    question. All semantic constraints still go through the deterministic
+    guards and independent Critic.
+    """
+    if not isinstance(text, str):
+        return False
+    normalized = text.strip()
+    if "?" in normalized:
+        return True
+    if len(normalized) < 55:
+        return False
+    if re.search(
+        rf"(?:^|[.!?]\s+|[,;:]\s+)(?:please\s+|kindly\s+)?"
+        rf"{REQUEST_VERB}\b",
+        normalized, re.I,
+    ):
+        return True
+    if re.search(
+        rf"\b(?:I need to|I want to|I would like to|we need to)"
+        rf"\s+(?:please\s+)?{REQUEST_VERB}\b",
+        normalized, re.I,
+    ):
+        return True
+    return False

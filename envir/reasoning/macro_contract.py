@@ -45,6 +45,12 @@ def macro_graph_signature(graph: dict) -> str:
                 step.get("field") if step["op"] in {
                     "filter_eq", "filter_gte", "sort", "group_count"
                 } else None,
+                step.get("left_on"), step.get("right_on"),
+                step.get("left_field"), step.get("right_field"),
+                step.get("limit"),
+                step.get("value") if step["op"] in {
+                    "filter_eq", "filter_gte"
+                } else None,
             ) for step in _primitive_steps(task)),
         )
         value = (local, tuple(encode(parent) for parent in task["depends_on"]))
@@ -118,8 +124,23 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
             "maestro.problem_spec.v2", "maestro.problem_spec.v3"
         }:
             raise ValueError("macro_question_missing_evidence_output")
-    if family in {"priority", "chronology"} and not (ops["sort"] and ops["take"]):
-        raise ValueError("macro_question_missing_selection_operation")
+    sorts = [step for step in steps if step["op"] == "sort"]
+    takes = [step for step in steps if step["op"] == "take"]
+    if family in {"priority", "chronology"}:
+        if not (sorts and takes):
+            raise ValueError("macro_question_missing_selection_operation")
+        wanted_field = (
+            "recorded_priority" if family == "priority" else "relative_step"
+        )
+        descending = family == "priority"
+        if not any(
+            step.get("field") == wanted_field
+            and step.get("descending") is descending
+            for step in sorts
+        ):
+            raise ValueError("macro_question_wrong_selection_direction")
+        if not any(step.get("limit") == 1 for step in takes):
+            raise ValueError("macro_question_wrong_selection_cardinality")
     if family in {"coverage_count", "category_distribution"} and not (
         ops["count"] or ops["group_count"]
     ):
@@ -142,6 +163,20 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         "entry_label" not in output_fields
     ):
         raise ValueError("macro_question_wrong_entry_output_schema")
+    comparison_contract = [
+        {
+            "comparison": step["comparison"],
+            "left_field": step["left_field"],
+            "right_field": step["right_field"],
+        } for step in steps if step["op"] == "compare_fields"
+    ]
+    selection_contract = (
+        {
+            "field": sorts[0]["field"],
+            "descending": sorts[0]["descending"],
+            "limit": takes[0]["limit"],
+        } if sorts and takes else None
+    )
     source_roles = {
         row["source_id"]: row["modality"] for row in spec["sources"]
     }
@@ -154,6 +189,8 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
             for sid in sorted(used_sources)
         ],
         "required_operations": dict(ops),
+        "comparison_contract": comparison_contract,
+        "selection_contract": selection_contract,
         "macro_task_count": len(graph["tasks"]),
         "macro_dependency_depth": graph["critical_path_depth"],
         "graph_fingerprint": macro_graph_signature(graph),

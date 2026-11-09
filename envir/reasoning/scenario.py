@@ -12,10 +12,13 @@ import re
 
 from .spec import spec_issues, VERSION as SPEC_VERSION
 from .intent import intent_contract
-from .surface_quality import unlicensed_calendar_years
+from .surface_quality import unlicensed_calendar_years, topic_mentioned
 
 AUTHOR_SYSTEM = """Design one coherent, concrete FICTIONAL information-work scenario
-based on a topic label and a FROZEN reasoning contract. This is a simulated
+based on a topic label and a FROZEN reasoning contract. Keep the original
+Topic's exact proper name in the narrative setting. You may omit a
+non-essential parenthetical type qualifier (e.g. "(film)") but must NEVER
+substitute a different person, organization, product or city. This is a simulated
 benchmark, not a claim about real teams, people, publications, images, audio,
 videos or events.
 
@@ -83,7 +86,7 @@ def _narrative_issues(spec: dict, proposal: dict) -> list[str]:
             errors.append("implementation_or_original_media_claim")
     topic = spec["scenario"]["topic"]
     if isinstance(narrative.get("setting"), str):
-        if topic.casefold() not in narrative["setting"].casefold():
+        if not topic_mentioned(narrative["setting"], topic):
             errors.append("topic_missing_from_setting")
     # Do not authorize a new historical anchor simply because both
     # Scenario Author and Critic happen to find it plausible.

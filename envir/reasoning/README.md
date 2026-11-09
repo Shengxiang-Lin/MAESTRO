@@ -6,6 +6,48 @@ envir/reasoning/. Prior names containing "-v2" remain supported as
 backwards-compatible CLI aliases for existing experiments. Existing teacher
 scene schema versions remain frozen to preserve replay of prior data.
 
+## Acceptance precision follow-up for the 74/100 strict pilot
+
+For maestro_macro_strict_100, the frozen Macro DAGs compiled 91
+candidates, and 74 Questions passed review. Nine Scenario fallbacks and
+17 Question fallbacks correctly stayed outside the public accepted set.
+
+Several Question rejections were false negatives: clear imperative user
+requests lacking a question mark; status-discrepancy synonyms not found
+by the regex; and formatting variants of anchored topics with parenthetical
+type suffixes or Unicode punctuation. The new guard permits unambiguous
+natural imperatives, recognizes these status verbs, and allows ONLY safe
+topic orthographic variations (not substitutions of real identities).
+The independent semantic Critic remains mandatory. Failed questions
+continue to be excluded from all publishable output.
+
+The compiled Macro Question contract checks priority descending,
+chronology ascending and selection cardinality. MacroGraph structure
+fingerprints now include actual join keys and compared fields, so a
+recheck of unchanged old data may show a slightly different unique
+graph count due to more complete structural identification.
+
+To retest without rerunning the successful 91 Scenario calls, use the
+EXISTING frozen constructed scenes as input, and a NEW output directory:
+
+~~~bash
+git pull origin main
+python -m envir refine-questions \
+  --scenes envir/data/maestro_macro_strict_100/constructed/scenes.jsonl \
+  --output-dir envir/data/maestro_macro_question_precision_91 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 8 --max-revisions 2
+
+python -m envir quality \
+  --scenes envir/data/maestro_macro_question_precision_91/scenes.jsonl \
+  --output envir/data/maestro_macro_question_precision_91/quality_report.json
+~~~
+
+Rejected Questions still appear in the private failed.jsonl, NEVER in
+accepted questions.jsonl. This A/B comparison does not retry the nine
+failed Scenario attempts, so its maximum publishable size is 91.
+
 ## MacroGraph-first acceptance and diversity (current)
 
 The executable pipeline is:
