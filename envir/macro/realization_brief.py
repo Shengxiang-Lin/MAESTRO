@@ -94,74 +94,6 @@ def question_realization_brief(scene: dict) -> dict:
             "allowed; claiming a new account or document is not."
         ),
     }
-    grounding = scene.get("scene_grounding")
-    if grounding and grounding.get("status") == "accepted" and (
-            grounding.get("version") == "semantic_scenario_contract_v1"):
-        scenario = grounding["scenario"]
-        bindings = grounding["semantic_bindings"]
-        brief["hypothetical_scene"] = {
-            "context": scenario["setting"],
-            "user_role": scenario["user_role"],
-            "motivation": scenario["motivation"],
-            "candidate_kind": bindings["candidate_kind"],
-            "field_meanings": {
-                key: value for key, value in bindings.items()
-                if key != "candidate_kind"
-            },
-            "goal_need": grounding["user_need"],
-            "frozen_question_intent": grounding["question_intent"],
-            "sample_entries": [{
-                "display_label": card["candidate_label"],
-                "record_role": card["source_role"],
-            } for card in grounding["source_cards"]],
-            "provenance": (
-                "A source-bound hypothetical SYNTHETIC scenario. "
-                "No original image/video/audio was observed. "
-                "Use the approved object, attribute and source meanings, "
-                "but never add a new operation, observation, source or "
-                "historical claim."
-            ),
-        }
-        brief["language_guide"] += (
-            " Express this exact information need naturally within the "
-            "approved domain Scenario Contract; preserve every formal "
-            "Goal condition, answer component and candidate scope. "
-            "Do not describe internal implementation steps."
-        )
-        brief["evidence_boundary"] = (
-            "Only approved hypothetical scenario and source-bound labels "
-            "are licensed, not actual historical assertions or observed media."
-        )
-    elif grounding and grounding.get("status") == "accepted":
-        brief["hypothetical_scene"] = {
-            "context": grounding["scene_context"],
-            "candidate_kind": grounding["candidate_kind"],
-            "field_meanings": grounding["field_meanings"],
-            "goal_need": grounding["user_need"],
-            "sample_entries": [
-                {
-                    "display_label": card["candidate_label"],
-                    "record_role": card["source_role"],
-                }
-                for card in grounding["source_cards"]
-            ],
-            "provenance": (
-                "These are validated fictional interpretation labels for "
-                "existing simulated source values, NOT original MMQA facts. "
-                "You may use these labels, but do not add new events, "
-                "corrections, measurements, dates or source claims."
-            ),
-        }
-        brief["language_guide"] += (
-            " Use the domain-appropriate labels and hypothetical context "
-            "when it improves clarity; do not revert to generic entries "
-            "and marks unless the scenario lacks a clearer equivalent."
-        )
-        brief["evidence_boundary"] = (
-            "The approved hypothetical_scene is allowed as fictional "
-            "scenario wording, but no claims about actual historical "
-            "events, images or external original documents are permitted."
-        )
     world_spec = scene.get("semantic_world_spec")
     if world_spec and world_spec.get("status") == "accepted":
         scene_description = world_spec["scenario"]
@@ -176,6 +108,7 @@ def question_realization_brief(scene: dict) -> dict:
             },
             "goal_need": world_spec["user_need"],
             "frozen_question_intent": world_spec["goal_contract"],
+            "goal_execution_rules": world_spec["goal_contract"]["execution_rules"],
             "sample_entries": [{
                 "display_label": x["candidate_label"],
                 "record_role": x["source_role"],
@@ -189,9 +122,13 @@ def question_realization_brief(scene: dict) -> dict:
         }
         brief["language_guide"] += (
             " Express the existing Goal using the approved candidate kind, "
-            "field meanings and scenario purpose. Do not introduce extra "
-            "operations or historical facts. Do not copy the reference "
-            "Question's abstract terminology."
+            "field meanings and scenario purpose. Preserve exact Python "
+            "execution rules: score rankings descending, relative chronology "
+            "ascending, eligibility with AND and threshold 50, "
+            "category-overlap distinct from entity identity, composition "
+            "using explicit source references only. Never mention backend "
+            "report names, synthetic/WorkProduct tokens, or identifiers. "
+            "Do not invent media details or actual historical results."
         )
         brief["evidence_boundary"] = (
             "The semantic World is fictional, not an observed real source. "
