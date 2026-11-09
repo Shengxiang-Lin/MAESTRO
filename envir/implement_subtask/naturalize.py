@@ -341,21 +341,19 @@ def naturalize_subtasks(
         "pipeline_code_hash": file_digest(Path(__file__)),
     })
     output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint = output_dir / "subagent_reports_progress.json"
+    if not overwrite and not checkpoint.exists() and any(
+        path.exists() for path in names.values()
+    ):
+        raise StreamingError(
+            "Existing legacy report output has no resumable checkpoint; "
+            "choose a new --output-dir or enable overwrite"
+        )
     with output_lock(output_dir, "subagent_reports"):
         with OrderedJournal(
             output_dir, "subagent_reports", signature, task_ids,
             flush_every=flush_every, restart=overwrite,
         ) as journal:
-            # A legacy output with no matching checkpoint must not be
-            # silently overwritten. Existing checkpointed reports are
-            # always rebuilt from the committed journal.
-            if journal.completed == 0 and not overwrite and any(
-                path.exists() for path in names.values()
-            ):
-                raise StreamingError(
-                    "Existing legacy report output has no resumable checkpoint; "
-                    "choose a new --output-dir or enable overwrite"
-                )
             publisher = _ScenePublisher(
                 names, indexes, ordered,
                 source_subtasks=source_subtasks,
