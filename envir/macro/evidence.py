@@ -54,13 +54,19 @@ def _candidate_rows(inputs: dict, permitted: set, world: dict) -> list[dict]:
             "attribute_present": bool(facts["synthetic_attribute_flag"]),
             "time_index": int(facts["synthetic_time_index"]),
             "group": facts["synthetic_group_key"],
+            "entity_key": facts.get("synthetic_entity_key", facts["candidate_key"]),
+            "reference_targets": list(facts.get(
+                "synthetic_reference_target_source_ids", [])),
+            "precedes_targets": list(facts.get(
+                "synthetic_precedes_source_ids", [])),
             "provenance": "deterministic_synthetic_observation",
         })
         seen.add(sid)
     return sorted(rows, key=lambda row: row["source_id"])
 
 
-def _execute_operation(task: dict, rows: list[dict]) -> dict:
+def _execute_operation(task: dict, rows: list[dict],
+                       *, world: dict | None = None) -> dict:
     """A small executable typed work semantics over *synthetic* observations.
 
     These computations are useful for trace inspection and corruption tests,
@@ -71,9 +77,58 @@ def _execute_operation(task: dict, rows: list[dict]) -> dict:
     spec = task.get("operation_spec", {})
     op = spec.get("op", task["work_type"]).lower()
     family = spec.get("question_operation", "lookup")
-    groups = {}
+    groups, entities = {}, {}
     for row in rows:
-        groups.setdefault(row["group"], []).append(row["candidate_key"])
+        groups.setdefault(row["group"], []).append(row)
+        entities.setdefault(row.get("entity_key", row["candidate_key"]), []).append(row)
+    # Group/category overlap does not establish same entity identity.
+    # Directed explicit references are separate from both notions.
+    row_by_source = {row["source_id"]: row for row in rows}
+    matched_groups = {
+        group: sorted(r["candidate_key"] for r in members)
+        for group, members in sorted(groups.items())
+        if len({r["source_id"] for r in members}) >= 2
+    }
+    matched_group_sources = {
+        group: sorted(r["source_id"] for r in members)
+        for group, members in sorted(groups.items())
+        if group in matched_groups
+    }
+    same_entity_links = [
+        {"entity_key": key,
+         "source_ids": sorted(r["source_id"] for r in members),
+         "candidate_observations": sorted(r["candidate_key"] for r in members)}
+        for key, members in sorted(entities.items())
+        if len({r["source_id"] for r in members}) >= 2
+    ]
+    reference_links = sorted(
+        [
+            {"from_source_id": row["source_id"],
+             "to_source_id": target,
+             "from_candidate": row["candidate_key"],
+             "to_candidate": row_by_source[target]["candidate_key"]}
+            for row in rows
+            for target in row.get("reference_targets", [])
+            if target in row_by_source and target != row["source_id"]
+        ],
+        key=lambda link: (link["from_source_id"], link["to_source_id"]),
+    )
+    precedence_links = sorted(
+        [
+            {"before_source_id": row["source_id"],
+             "after_source_id": target}
+            for row in rows
+            for target in row.get("precedes_targets", [])
+            if target in row_by_source and target != row["source_id"]
+        ],
+        key=lambda link: (link["before_source_id"], link["after_source_id"]),
+    )
+    scoped = set(row_by_source)
+    relation_witnesses = [
+        copy.deepcopy(relation)
+        for relation in (world or {}).get("relations", [])
+        if set(relation["source_ids"]) <= scoped
+    ]
     selected = [row["candidate_key"] for row in rows if row["attribute_present"]]
     ranked = sorted(rows, key=lambda row: (-row["score"], row["candidate_key"]))
     by_time = sorted(rows, key=lambda row: (row["time_index"], row["candidate_key"]))
@@ -84,6 +139,15 @@ def _execute_operation(task: dict, rows: list[dict]) -> dict:
         "source_ids": [row["source_id"] for row in rows],
         "simulation_only": True,
         "question_operation": family,
+        "relation_evidence": relation_witnesses,
+        "relation_counts": {
+            "shared_category_pairs": sum(
+                r["kind"] == "shared_category" for r in relation_witnesses),
+            "shared_entity_pairs": sum(
+                r["kind"] == "same_entity" for r in relation_witnesses),
+            "explicit_references": len(reference_links),
+            "explicit_precedence": len(precedence_links),
+        },
         "original_context_source_count": sum(
             bool(row.get("original_context_available")) for row in rows
         ),
@@ -100,13 +164,18 @@ def _execute_operation(task: dict, rows: list[dict]) -> dict:
         ]
     elif op in {"align_candidates", "compose", "reference_chain_resolution",
                 "cross_source_evidence_alignment"}:
-        result["synthetic_groups"] = {
-            key: list(value) for key, value in sorted(groups.items())}
-    elif op in {"intersection", "intersect", "record_matching"}:
-        result["matched_groups"] = {
-            key: value for key, value in sorted(groups.items())
-            if len(value) >= 2
+        result["category_memberships"] = {
+            key: sorted(row["candidate_key"] for row in members)
+            for key, members in sorted(groups.items())
         }
+        result["same_entity_links"] = same_entity_links
+        result["reference_links"] = reference_links
+        result["linkage_policy"] = (
+            "explicit_source_references_distinct_from_identity_and_category")
+    elif op in {"intersection", "intersect", "record_matching"}:
+        result["matched_groups"] = matched_groups
+        result["matched_group_source_ids"] = matched_group_sources
+        result["match_policy"] = "category_overlap_across_distinct_sources_not_entity_identity"
     elif op in {"compare", "comparison", "comparative_assessment"}:
         result["top_candidate"] = ranked[0]["candidate_key"]
         result["ranked_candidates"] = [row["candidate_key"] for row in ranked]
@@ -115,6 +184,8 @@ def _execute_operation(task: dict, rows: list[dict]) -> dict:
             row["candidate_key"] for row in by_time
         ]
         result["earliest_time_index"] = by_time[0]["time_index"]
+        result["explicit_precedence_links"] = precedence_links
+        result["temporal_policy"] = "relative_order_not_real_calendar_dates"
     elif op in {"aggregation", "candidate_aggregation", "count"}:
         result["selected_count"] = len(selected)
         result["total_count"] = len(rows)
@@ -152,10 +223,17 @@ def _execute_operation(task: dict, rows: list[dict]) -> dict:
         if family == "aggregation":
             result["selected_count"] = len(selected)
         if family == "intersection":
-            result["matched_groups"] = {
-                key: value for key, value in sorted(groups.items())
-                if len(value) >= 2
-            }
+            result["matched_groups"] = matched_groups
+            result["matched_group_source_ids"] = matched_group_sources
+            result["match_policy"] = (
+                "category_overlap_across_distinct_sources_not_entity_identity")
+        if family == "composition":
+            result["reference_links"] = reference_links
+            result["same_entity_links"] = same_entity_links
+            result["linkage_policy"] = (
+                "directed_reference_links_do_not_imply_shared_entity")
+        if family == "temporal":
+            result["explicit_precedence_links"] = precedence_links
         result["answer_status"] = "synthetic_evidence_only_not_gold_answer"
     else:
         result["selected_candidates"] = list(selected)
@@ -260,7 +338,7 @@ def _task_feedback(task: dict, *, world: dict, completed: dict,
         })
     base_ids = [e["evidence_id"] for e in evidence]
     candidates = _candidate_rows(inputs, permitted, world)
-    computed = _execute_operation(task, candidates)
+    computed = _execute_operation(task, candidates, world=world)
     operator_id = f"{tid}.E{len(evidence)+1}"
     evidence.append({
         "evidence_id": operator_id,
