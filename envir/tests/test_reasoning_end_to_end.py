@@ -305,5 +305,121 @@ class V2PipelineTests(unittest.TestCase):
         ))["status"], "valid")
 
 
+class CanonicalReasoningWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.scenes = self.root / "source_bank.jsonl"
+        with self.scenes.open("w", encoding="utf-8") as f:
+            for ordinal in range(15):
+                f.write(json.dumps({
+                    "scenario": {
+                        "topic": f"Fictional Collection {ordinal}",
+                        "domain": "books",
+                    },
+                    "task_id": f"source-{ordinal}",
+                    "source_priors": {
+                        "MultiModalQA": {
+                            "record_id": f"topic-{ordinal}",
+                            "source_modalities": ["text", "image", "table"],
+                            "supporting_sources": [],
+                        },
+                    },
+                }) + "\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_canonical_generate_quality_validate_and_legacy_aliases(self):
+        from envir.reasoning.workflow import generate, quality
+        args = parser().parse_args([
+            "generate", "--scenes", str(self.scenes),
+            "--output-dir", str(self.root / "new_run"),
+            "--target", "12", "--max-records", "15",
+            "--difficulty-mix", "25,50,25", "--no-progress",
+        ])
+        summary = generate(args)
+        self.assertEqual(summary["status"], "done")
+        self.assertEqual(summary["generated"], 12)
+        self.assertEqual(summary["question_authoring"], {"off": 12})
+        bank = self.root / "new_run" / "constructed" / "scenes.jsonl"
+        public = self.root / "new_run" / "constructed" / "questions.jsonl"
+        report_file = self.root / "new_run" / "quality_report.json"
+        self.assertTrue(bank.is_file())
+        self.assertTrue(public.is_file())
+        self.assertTrue(report_file.is_file())
+        stored = json.loads(report_file.read_text(encoding="utf-8"))
+        self.assertEqual(stored["checked"], 12)
+        self.assertEqual(stored["replay_pass"], 12)
+        self.assertEqual(stored["replay_fail"], 0)
+        self.assertTrue(stored["reasoning"]["unique_structural_program_signatures"])
+        self.assertTrue(stored["question_surface"]["unique_abstract_shapes"])
+        self.assertEqual(
+            replay_v2(Namespace(scenes=bank, max_records=None,
+                                no_progress=True))["status"], "valid"
+        )
+        self.assertEqual(quality(parser().parse_args([
+            "quality", "--scenes", str(bank), "--no-progress",
+        ]))["status"], "valid")
+        for alias in ("build-v2", "replay-v2", "audit-v2",
+                      "naturalize-v2", "generate", "quality",
+                      "validate", "refine-questions"):
+            self.assertIn(
+                alias, parser()._subparsers._group_actions[0].choices
+            )
+        with self.assertRaises(FileExistsError):
+            generate(args)
+
+    def test_partial_question_configuration_fails_before_generation(self):
+        from envir.reasoning.workflow import generate
+        args = parser().parse_args([
+            "generate", "--scenes", str(self.scenes),
+            "--output-dir", str(self.root / "partial"),
+            "--target", "3", "--question-model", "local-test",
+            "--no-progress",
+        ])
+        with self.assertRaisesRegex(ValueError, "both"):
+            generate(args)
+        self.assertFalse((self.root / "partial").exists())
+
+    def test_parallel_progress_tracks_actual_completions_without_reordering(self):
+        from envir.reasoning.pipeline import _parallel_ordered
+        from time import sleep
+
+        completed = []
+        class FakeBar:
+            def __init__(self, *args, **kwargs):
+                self.total = kwargs["total"]
+                self.updates = 0
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                pass
+            def update(self, n):
+                self.updates += n
+
+        bars = []
+        def progress(*args, **kwargs):
+            instance = FakeBar(*args, **kwargs)
+            bars.append(instance)
+            return instance
+
+        def work(x):
+            if x == 0:
+                sleep(0.04)
+            completed.append(x)
+            return x * 10
+
+        with patch("envir.reasoning.pipeline.tqdm", progress):
+            results = _parallel_ordered(
+                [0, 1, 2], work, workers=3,
+                desc="Scenario Author/Critic", no_progress=False
+            )
+        self.assertEqual(results, [0, 10, 20])
+        self.assertEqual(bars[0].total, 3)
+        self.assertEqual(bars[0].updates, 3)
+        self.assertNotEqual(completed, [0, 1, 2])
+
+
 if __name__ == "__main__":
     unittest.main()
