@@ -12,6 +12,7 @@ generation:
   seed: 17
   difficulty_mix: [20, 50, 30]  # Easy, Medium, Hard
   overwrite: false
+  flush_every: 1   # persist every completed LLM decision (safe to resume)
   no_progress: false
 
 scenario:
