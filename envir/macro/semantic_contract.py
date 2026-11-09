@@ -111,6 +111,23 @@ def semantic_contract(scene: dict) -> dict:
             ],
         },
     }
+    world_spec = scene.get("semantic_world_spec")
+    if world_spec and world_spec.get("status") == "accepted":
+        contract["synthetic_world_specification"] = {
+            "scenario": world_spec["scenario"],
+            "semantic_bindings": world_spec["semantic_bindings"],
+            "user_need": world_spec["user_need"],
+            "goal_contract": world_spec["goal_contract"],
+            "source_cards": [{
+                "source_id": source["source_id"],
+                "candidate_label": source["candidate_label"],
+                "source_role": source["source_role"],
+            } for source in world_spec["source_bindings"]],
+            "provenance": (
+                "hypothetical_schema_defined_before_simulated_values;"
+                "source_facts_generated_by_deterministic_code"
+            ),
+        }
     grounding = scene.get("scene_grounding")
     if grounding and grounding.get("status") == "accepted" and (
             grounding.get("version") == "semantic_scenario_contract_v1"):
