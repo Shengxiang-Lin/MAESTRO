@@ -31,6 +31,9 @@ from .question_streaming import stream_naturalize_scenes
 from .validation import validate_clean_scene
 from .question_audit import audit_file
 from .semantic_world_cli import realize_world
+from envir.v2.pipeline import (
+    build_v2, replay_v2, audit_v2, naturalize_v2,
+)
 
 
 def _json(path: Path, value) -> None:
@@ -480,6 +483,47 @@ def parser():
     a.add_argument("--max-records", type=int, default=None)
     a.add_argument("--max-examples", type=int, default=12)
     a.add_argument("--output", type=Path, default=None)
+
+    v2 = sub.add_parser(
+        "build-v2",
+        help="Reasoning-first V2: ProblemSpec -> relational observations -> "
+             "dependency Macro Tasks -> difficulty checks -> Question",
+    )
+    v2_input = v2.add_mutually_exclusive_group(required=True)
+    v2_input.add_argument("--scenes", type=Path,
+                          help="Legacy TaskGraph scenes.jsonl OR topic scene_bank.jsonl")
+    v2_input.add_argument("--mmqa", type=Path,
+                          help="Original MultiModalQA .jsonl(.gz), topics only")
+    v2.add_argument("--output-dir", type=Path, required=True)
+    v2.add_argument("--target", type=int, default=100)
+    v2.add_argument("--max-records", type=int, default=30000)
+    v2.add_argument("--seed", type=int, default=17)
+    v2.add_argument("--difficulty-mix", default="20,50,30",
+                    help="Easy,Medium,Hard percentages summing to 100")
+    v2.add_argument("--overwrite", action="store_true")
+
+    rv2 = sub.add_parser("replay-v2", help="Strict V2 World/Program/TaskGraph replay")
+    rv2.add_argument("--scenes", type=Path, required=True)
+    rv2.add_argument("--max-records", type=int, default=None)
+    av2 = sub.add_parser("audit-v2", help="Aggregate V2 difficulty and source audits")
+    av2.add_argument("--scenes", type=Path, required=True)
+    av2.add_argument("--max-records", type=int, default=None)
+
+    nv2 = sub.add_parser(
+        "naturalize-v2", help="Optional LLM Question Author/Critic on immutable V2 scenes"
+    )
+    nv2.add_argument("--scenes", type=Path, required=True)
+    nv2.add_argument("--output-dir", type=Path, required=True)
+    nv2.add_argument("--max-records", type=int, default=None)
+    nv2.add_argument("--question-api-base", required=True)
+    nv2.add_argument("--question-model", required=True)
+    nv2.add_argument("--question-critic-api-base", default=None)
+    nv2.add_argument("--question-critic-model", default=None)
+    nv2.add_argument("--question-api-key-env", default="OPENAI_API_KEY")
+    nv2.add_argument("--question-workers", type=int, default=4)
+    nv2.add_argument("--question-timeout", type=int, default=180)
+    nv2.add_argument("--max-revisions", type=int, default=2)
+    nv2.add_argument("--overwrite", action="store_true")
     return p
 
 
@@ -491,6 +535,10 @@ def main(argv=None):
         "realize-world": realize_world,
         "replay": replay,
         "audit-questions": audit_questions,
+        "build-v2": build_v2,
+        "replay-v2": replay_v2,
+        "audit-v2": audit_v2,
+        "naturalize-v2": naturalize_v2,
     }[args.command](args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["status"] in {"done", "valid"} else 2
