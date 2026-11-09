@@ -463,6 +463,12 @@ class BackwardRecipePlannerTests(unittest.TestCase):
             "accepted_review": None, "audit": [],
             "semantic_equivalence_certified": False,
         }
+        from envir.macro.question_review import polished_reference_question
+        polished = polished_reference_question(payload["question"])
+        meta["safe_reference_polish_applied"] = (polished != payload["question"])
+        meta["final_question"] = polished
+        payload["question"] = polished
+        payload["public"]["question"] = polished
         payload["question_authoring"] = meta
         report = audit_scenes([payload])
         self.assertNotIn("changed_or_missing_setting", report["warning_counts"])
