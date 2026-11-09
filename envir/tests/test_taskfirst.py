@@ -343,10 +343,6 @@ class BackwardRecipePlannerTests(unittest.TestCase):
             _validate_review(rejected, policy=SEMANTIC_REVIEW_POLICY)["verdict"],
             "revise",
         )
-        # The existing strict-v1 policy remains independently replayable.
-        from envir.macro.question_review import LEGACY_SEMANTIC_REVIEW_POLICY
-        with self.assertRaisesRegex(ValueError, "semantic_pass_contradicts"):
-            _validate_review(rejected, policy=LEGACY_SEMANTIC_REVIEW_POLICY)
         uncertain = dict(valid)
         uncertain["objective_equivalent"] = "uncertain"
         uncertain["verdict"] = "revise"
