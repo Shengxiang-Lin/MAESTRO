@@ -226,6 +226,49 @@ class V2PipelineTests(unittest.TestCase):
         self.assertTrue((self.root / "v2" / "questions.jsonl").exists())
         self.assertTrue((self.root / "v2" / "difficulty_audit.jsonl").exists())
 
+    def test_pre_world_scenario_author_critic_retains_frozen_contract(self):
+        from envir.v2.scenario import enrich_one
+        spec = make_spec(seed_record=seed(4), ordinal=4,
+                         run_seed=17, difficulty="hard")
+        frozen_program = copy.deepcopy(spec["requirements"])
+        frozen_sources = [(x["source_id"], x["modality"]) for x in spec["sources"]]
+        proposal = {
+            "scenario": {
+                "setting": f"a fictional staffing review involving {spec['scenario']['topic']}",
+                "user_role": "audit coordinator",
+                "purpose": "reconcile independent simulated reports",
+                "motivation": "prepare a traceable staffing summary",
+                "entity_kind": "recorded roster entries",
+            },
+            "source_titles": [
+                {"source_id": x["source_id"], "title": x["title"] + " copy"}
+                for x in spec["sources"]
+            ],
+        }
+        class Author:
+            def complete_json(self, *_args, **_kwargs):
+                return proposal
+        class Critic:
+            def complete_json(self, *_args, **_kwargs):
+                return {
+                    "verdict": "pass", "topic_coherent": True,
+                    "same_relation_semantics": True,
+                    "source_faithful": True, "no_unlicensed_facts": True,
+                    "reason": "fixture",
+                }
+        updated, review = enrich_one(spec, author=Author(), critic=Critic(),
+                                     max_revisions=0)
+        self.assertEqual(review["status"], "accepted")
+        self.assertEqual(updated["requirements"], frozen_program)
+        self.assertEqual(
+            [(x["source_id"], x["modality"]) for x in updated["sources"]],
+            frozen_sources,
+        )
+        self.assertEqual(
+            validate_replay(compile_and_validate(
+                updated, reference_question(updated)))["status"], "valid",
+        )
+
     def test_does_not_overwrite_existing_outputs(self):
         self.build(3)
         with self.assertRaises(FileExistsError):
