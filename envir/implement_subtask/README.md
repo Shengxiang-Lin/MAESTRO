@@ -281,3 +281,37 @@ any still fail, inspect the new review audit and distinguish genuine
 incorrect Oracle-result proposals from semantic reviewer mistakes.
 Never modify the old completed run in place; --reuse-from must point to
 a DIFFERENT, previously completed reporting directory.
+
+
+## Recommended one-command Stage 2
+
+To go from accepted Stage-1 scenes directly to the realistic
+Sub-Agent reports, without manually running the Oracle command:
+
+~~~bash
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --scenes envir/data/maestro_question_fresh_100/questions/scenes.jsonl \
+  --output-dir envir/data/maestro_subagent_reports_all_in_one_100
+~~~
+
+What happens internally:
+
+1. Deterministically replay/verify each accepted Scene, exporting
+   private answer/evidence ground truth under OUTPUT_DIR/oracle/.
+2. Generate and independently review a stage-local finish_result for
+   each Macro, streaming accepted/rejected reports with checkpoints.
+3. Publish only complete reviewed scene DAGs to OUTPUT_DIR/subtasks.jsonl
+   and OUTPUT_DIR/scene_index.jsonl.
+
+OUTPUT_DIR/oracle/manifest.json binds the scene input bytes and the
+oracle executor to the exported Oracle files. A crash can be resumed
+with the exact SAME command and output directory, without rerunning
+finished Oracle or already checkpointed report generation. Source or
+executor code changes cannot reuse the old cached Oracle.
+
+Previous commands continue to work: implement-subtasks exports only
+Oracle data, and naturalize-subtasks without --scenes consumes already
+materialized Oracle JSONL files. The combined mode forbids mixing
+--scenes with --source-subtasks/--source-scene-index. Use a NEW output
+directory when switching generation modes.
