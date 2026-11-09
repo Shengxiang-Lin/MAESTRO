@@ -1,4 +1,4 @@
-"""General V2 synthetic world factory and executable reasoning program compiler.
+"""Synthetic source World and executable Program compiler for Stage 1.
 
 Every generated fact is fictional. Image/video/audio roles yield *structured
 simulated annotations*, not analysis of original real media. Teacher entity
@@ -10,9 +10,9 @@ import random
 from envir.schema import digest
 
 from .program_ir import answer_values, evaluate_program
-from .spec import spec_issues, LEGACY_VERSION, VERSION as SPEC_VERSION
+from .spec import spec_issues, VERSION as SPEC_VERSION
 
-VERSION = "maestro.source_observation_world.v2"
+WORLD_VERSION = "maestro.source_observation_world.v4"
 
 
 def _rows(sid: str, modality: str, title: str, description: str,
@@ -42,7 +42,7 @@ def _node(node_id: str, operation: str, *parents, **args) -> dict:
     return {"id": node_id, "op": operation, "inputs": list(parents), **args}
 
 
-def _compile_program_legacy(spec: dict) -> dict:
+def _compile_approval_base(spec: dict) -> dict:
     """Compile multi-stage information requirements BEFORE any World sampling."""
     issues = spec_issues(spec)
     if issues:
@@ -104,7 +104,7 @@ def _compile_program_legacy(spec: dict) -> dict:
         ])
         output = "distinct_answer"
     return {
-        "version": "maestro.reasoning_program.v2",
+        "version": "maestro.reasoning_program.v4",
         "nodes": nodes,
         "output": output,
         "authorized_source_ids": [
@@ -124,79 +124,6 @@ def _field_for_modality(modality: str, index: int) -> tuple[str, object]:
     if modality == "text":
         return "text_line", 10 * index
     return "table_row", index
-
-
-def _generate_world_legacy(spec: dict) -> dict:
-    """Sample values from independent source roles after freezing the Program."""
-    issues = spec_issues(spec)
-    if issues:
-        raise ValueError("invalid_spec:" + ",".join(issues))
-    rng = random.Random(int(digest(spec["seed"], spec["task_id"],
-                                   "fact-world-v2")[:15], 16))
-    codes = [f"{rng.choice('KLMNPRST')}{i+1}" for i in range(4)]
-    if len(set(codes)) != len(codes):
-        codes = [f"Q{i+1}" for i in range(4)]
-    categories = [
-        f"{spec['scenario']['entity_kind'].rstrip('s')} category {i+1}"
-        for i in range(4)
-    ]
-    # Synthetically coherent but nonidentical records. The first two share
-    # an alias. Other records serve as valid hard negatives, not fake steps.
-    indexed = [0, 0, 1, 2, 3, 1, 2, 0]
-    active = [True, True, True, False, True, False, True, False]
-    relative_steps = [9, 4, 1, 2, 11, 7, 14, 18]
-    priority = [84, 63, 95, 38, 77, 10, 72, 30]
-    entries = [{
-        "entry_label": f"Entry-{i+1:02d}",
-        "label_code": codes[position],
-        "active": active[i],
-        "recorded_priority": priority[i] + rng.randrange(-3, 4),
-        "relative_step": relative_steps[i],
-    } for i, position in enumerate(indexed)]
-    glossary = [{
-        "label_code": code,
-        "category_name": name,
-    } for code, name in zip(codes, categories)]
-    modality = next((x["modality"] for x in spec["sources"]
-                     if x["source_id"] == "annotations"), "text")
-    annotations = []
-    for i, name in enumerate(categories, 1):
-        display_field, display_value = _field_for_modality(modality, i)
-        annotations.append({
-            "category_name": name,
-            "approved": i == 1,
-            display_field: display_value,
-        })
-    clearance = [{
-        "entry_label": f"Entry-{i+1:02d}",
-        "cleared": i == 0,
-    } for i in range(8)]
-    data = {
-        "register": entries,
-        "glossary": glossary,
-        "annotations": annotations,
-        "clearance": clearance,
-    }
-    sources = {
-        role["source_id"]: _rows(
-            role["source_id"], role["modality"], role["title"],
-            role["purpose"], data[role["source_id"]]
-        ) for role in spec["sources"]
-    }
-    registry = [{
-        "hidden_entity_id": f"fictional-{i+1:03d}",
-        "entry_label": item["entry_label"],
-        "category_name": categories[indexed[i]],
-        "identity_source": "synthetic_generation_only",
-    } for i, item in enumerate(entries)]
-    return {
-        "version": VERSION,
-        "simulated_only": True,
-        "sources": sources,
-        "entities": registry,
-        "generation_seed": spec["seed"],
-        "value_sampling_contract": "deterministic_after_frozen_problem_spec",
-    }
 
 
 def initial_public_view(spec: dict, world: dict, question: str) -> dict:
@@ -222,7 +149,7 @@ def build_scene(spec: dict, question: str) -> dict:
     execution = evaluate_program(program, sources=world["sources"])
     answer = answer_values(execution)
     return {
-        "version": "maestro.reasoning_v2_scene.v1",
+        "version": "maestro.generate_question.scene.v1",
         "task_id": spec["task_id"],
         "problem_spec": spec,
         "world": world,
@@ -241,15 +168,9 @@ def build_scene(spec: dict, question: str) -> dict:
     }
 
 
-# The v2 compiler/sampler above are intentionally retained byte-for-byte in
-# semantics: old exported banks must still replay exactly after a code update.
-NEW_WORLD_VERSION = "maestro.source_observation_world.v3"
-
 
 def _finalize_current_program(program: dict, spec: dict) -> dict:
     """Make latest approval answers obey their explicit evidence contract."""
-    if spec.get("version") != SPEC_VERSION:
-        return program
     program["version"] = "maestro.reasoning_program.v4"
     program["semantic_operator_pattern"] = "approval"
     if spec["family"] == "evidence_reconcile":
@@ -263,11 +184,9 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 
 def compile_program(spec: dict) -> dict:
     """Compile semantic branches into source-scoped executable programs."""
-    if spec.get("version") == SPEC_VERSION and spec.get("reasoning_pattern") != "approval":
+    if spec.get("reasoning_pattern") != "approval":
         from .pattern_world import compile_pattern_program
         return compile_pattern_program(spec)
-    if spec.get("version") == LEGACY_VERSION:
-        return _compile_program_legacy(spec)
     issues = spec_issues(spec)
     if issues:
         raise ValueError("invalid_spec:" + ",".join(issues))
@@ -276,8 +195,7 @@ def compile_program(spec: dict) -> dict:
                          "program-variant")[:8], 16) % 4
 
     if difficulty == "easy" or variant == 0:
-        program = _compile_program_legacy(spec)
-        program["version"] = "maestro.reasoning_program.v3"
+        program = _compile_approval_base(spec)
         return _finalize_current_program(program, spec)
 
     if variant == 1:
@@ -371,7 +289,7 @@ def compile_program(spec: dict) -> dict:
         ]
         output = "distinct_answer"
     return _finalize_current_program({
-        "version": "maestro.reasoning_program.v3",
+        "version": "maestro.reasoning_program.v4",
         "nodes": nodes,
         "output": output,
         "authorized_source_ids": [
@@ -383,11 +301,9 @@ def compile_program(spec: dict) -> dict:
 
 def generate_world(spec: dict) -> dict:
     """Versioned synthetic sources; never rewrite old private World facts."""
-    if spec.get("version") == SPEC_VERSION and spec.get("reasoning_pattern") != "approval":
+    if spec.get("reasoning_pattern") != "approval":
         from .pattern_world import generate_pattern_world
         return generate_pattern_world(spec)
-    if spec.get("version") == LEGACY_VERSION:
-        return _generate_world_legacy(spec)
     issues = spec_issues(spec)
     if issues:
         raise ValueError("invalid_spec:" + ",".join(issues))
@@ -489,15 +405,13 @@ def generate_world(spec: dict) -> dict:
         ) for role in spec["sources"]
     }
     result = {
-        "version": NEW_WORLD_VERSION,
+        "version": WORLD_VERSION,
         "simulated_only": True,
         "sources": sources,
         "entities": registry,
         "generation_seed": spec["seed"],
         "value_sampling_contract": (
-            "deterministic_relational_observations_after_frozen_spec_v3"
+            "deterministic_relational_observations_after_frozen_spec"
         ),
     }
-    if spec.get("version") == SPEC_VERSION:
-        result["version"] = "maestro.source_observation_world.v4"
     return result
