@@ -259,7 +259,8 @@ def construct_scenes(args) -> dict:
 
 def _scenario_clients(args):
     from .backend import OpenAICompatibleBackend
-    author_key = os.environ.get(args.scenario_api_key_env)
+    author_key = (os.environ.get(args.scenario_api_key_env)
+                  if args.scenario_api_key_env else None)
     critic_key = (os.environ.get(args.scenario_critic_api_key_env)
                   if args.scenario_critic_api_key_env else author_key)
     return (
@@ -281,7 +282,8 @@ def _llm_clients(args):
     from .backend import OpenAICompatibleBackend
     if not args.question_api_base or not args.question_model:
         raise ValueError("both question endpoint and model are required")
-    key = os.environ.get(args.question_api_key_env)
+    key = (os.environ.get(args.question_api_key_env)
+           if args.question_api_key_env else None)
     return (
         OpenAICompatibleBackend(
             base_url=args.question_api_base, model=args.question_model,
