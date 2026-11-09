@@ -13,7 +13,7 @@ from pathlib import Path
 
 from envir.schema import normalize_label
 
-from .pipeline import build_v2, naturalize_v2, read_jsonl
+from .pipeline import build_bank, refine_bank, read_jsonl
 from .quality import validate_replay
 
 
@@ -188,7 +188,7 @@ def generate(args) -> dict:
         )
     staged = copy.copy(args)
     staged.output_dir = root / "constructed"
-    constructed_summary = build_v2(staged)
+    constructed_summary = build_bank(staged)
     scene_path = staged.output_dir / "scenes.jsonl"
     question_summary = None
     if args.question_model:
@@ -197,7 +197,7 @@ def generate(args) -> dict:
         authored.output_dir = root / "questions"
         # Constructed bank is exactly target records; do not truncate.
         authored.max_records = None
-        question_summary = naturalize_v2(authored)
+        question_summary = refine_bank(authored)
         scene_path = authored.output_dir / "scenes.jsonl"
     # The quality report also performs strict independent replay from the
     # frozen Program/World (not simply accepting stored difficulty flags).
