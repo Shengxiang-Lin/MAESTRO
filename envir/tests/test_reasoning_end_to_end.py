@@ -11,19 +11,19 @@ from unittest.mock import patch
 
 from envir.macro.cli import parser
 from envir.macro.program_ir import MissingSourceError, ProgramError
-from envir.v2.spec import (
+from envir.reasoning.spec import (
     DIFFICULTIES, FAMILIES, difficulty_sequence, make_spec, spec_issues,
 )
-from envir.v2.world import build_scene
-from envir.v2.question import guard_question, reference_question
-from envir.v2.compiler import (
+from envir.reasoning.world import build_scene
+from envir.reasoning.question import guard_question, reference_question
+from envir.reasoning.compiler import (
     V2Session, compile_macro_tasks, oracle_schedule, run_macro_tasks,
 )
-from envir.v2.quality import (
+from envir.reasoning.quality import (
     compile_and_validate, validate_replay, audit_scene,
     weak_single_source_baseline,
 )
-from envir.v2.pipeline import build_v2, replay_v2, audit_v2, naturalize_v2, read_jsonl
+from envir.reasoning.pipeline import build_v2, replay_v2, audit_v2, naturalize_v2, read_jsonl
 
 
 def seed(ordinal=0):
@@ -234,7 +234,7 @@ class V2PipelineTests(unittest.TestCase):
         self.assertTrue((self.root / "v2" / "difficulty_audit.jsonl").exists())
 
     def test_pre_world_scenario_author_critic_retains_frozen_contract(self):
-        from envir.v2.scenario import enrich_one
+        from envir.reasoning.scenario import enrich_one
         spec = make_spec(seed_record=seed(4), ordinal=4,
                          run_seed=17, difficulty="hard")
         frozen_program = copy.deepcopy(spec["requirements"])
@@ -288,7 +288,7 @@ class V2PipelineTests(unittest.TestCase):
                 raise RuntimeError("intentional artificial backend error")
         src = self.root / "v2" / "scenes.jsonl"
         out = self.root / "naturalized"
-        with patch("envir.v2.pipeline._llm_clients",
+        with patch("envir.reasoning.pipeline._llm_clients",
                    return_value=(BrokenClient(), BrokenClient())):
             summary = naturalize_v2(Namespace(
                 scenes=src, output_dir=out, max_records=4,
