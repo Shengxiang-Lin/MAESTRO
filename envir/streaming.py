@@ -279,7 +279,7 @@ class OrderedJournal:
 
 
 def run_ordered(items: list, job, classify, *, journal: OrderedJournal,
-                workers: int, desc: str, unit: str = "task",
+                workers: int, desc: str = "Processing", unit: str = "task",
                 no_progress: bool = False, on_commit=None,
                 on_exception=None) -> None:
     """Bounded parallel execution; completed-future progress; ordered writes.
