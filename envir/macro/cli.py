@@ -501,6 +501,16 @@ def parser():
     v2.add_argument("--difficulty-mix", default="20,50,30",
                     help="Easy,Medium,Hard percentages summing to 100")
     v2.add_argument("--overwrite", action="store_true")
+    v2.add_argument("--scenario-api-base", default=None,
+                    help="Optional LLM scene author before sampling any World facts")
+    v2.add_argument("--scenario-model", default=None)
+    v2.add_argument("--scenario-critic-api-base", default=None)
+    v2.add_argument("--scenario-critic-model", default=None)
+    v2.add_argument("--scenario-api-key-env", default="OPENAI_API_KEY")
+    v2.add_argument("--scenario-critic-api-key-env", default=None)
+    v2.add_argument("--scenario-workers", type=int, default=4)
+    v2.add_argument("--scenario-max-revisions", type=int, default=2)
+    v2.add_argument("--scenario-timeout", type=int, default=180)
 
     rv2 = sub.add_parser("replay-v2", help="Strict V2 World/Program/TaskGraph replay")
     rv2.add_argument("--scenes", type=Path, required=True)
