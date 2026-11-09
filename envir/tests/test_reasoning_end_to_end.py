@@ -902,6 +902,27 @@ class CanonicalReasoningWorkflowTests(unittest.TestCase):
         self.assertTrue(
             report["reasoning"]["media_specific_observation_predicates_used"]
         )
+        graphs = report["macro_graph_diversity"]
+        self.assertGreater(graphs["distinct_executable_graph_signatures"], 24)
+        for pattern in ("time_window", "status_disagreement",
+                        "dynamic_threshold"):
+            self.assertGreaterEqual(
+                graphs["distinct_by_semantic_pattern"][pattern], 3
+            )
+        self.assertEqual(graphs["graph_to_question_contract_failures"], {})
+
+    def test_historical_question_fallback_is_not_publishable_on_recheck(self):
+        from envir.reasoning.workflow import quality_report
+        sample = scene(difficulty="medium", ordinal=2)
+        sample["question_authoring"] = {
+            "status": "fallback", "attempts": 3,
+            "failures": [{"stage": "critic"}],
+        }
+        report = quality_report([sample], no_progress=True)
+        self.assertEqual(report["replay_pass"], 1)
+        self.assertEqual(report["question_publishable"], 0)
+        self.assertEqual(report["question_failed_fallback"], 1)
+        self.assertEqual(report["status"], "partial")
 
     def test_partial_question_configuration_fails_before_generation(self):
         from envir.reasoning.workflow import generate
