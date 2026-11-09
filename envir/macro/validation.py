@@ -47,8 +47,51 @@ def validate_original_macroplan_input(scene: dict) -> list[str]:
             "question_authoring")):
         return ["not_original_presemantic_macroplan"]
     errors = validate_clean_scene(scene)
-    return [error for error in errors
-            if error not in _PRESEMANTIC_DERIVED_SCHEMA_DRIFT]
+    remaining = [
+        error for error in errors
+        if error not in _PRESEMANTIC_DERIVED_SCHEMA_DRIFT
+    ]
+    # Not accepting arbitrary source modifications under the guise of
+    # historical executor changes: regenerate the original synthetic
+    # source facts from its independently frozen Plan+seed. Legitimate
+    # original MMQA text excerpts are an optional, separately provenance-
+    # checked attachment and are deliberately not regenerated here.
+    try:
+        from .world import build_clean_world
+        seed = scene["task_plan_provenance"]["seed"]
+        expected_world = build_clean_world(scene, seed=seed, contexts=None)
+        actual_world = scene["world"]
+        for field in (
+                "world_id", "case_reference", "as_of", "source_truth",
+                "real_multimodal_files", "observation_policy",
+                "source_grants"):
+            if actual_world.get(field) != expected_world.get(field):
+                remaining.append("original_macroplan_world_drift:" + field)
+        actual_sources = actual_world["sources"]
+        expected_sources = expected_world["sources"]
+        if set(actual_sources) != set(expected_sources):
+            remaining.append("original_macroplan_world_source_inventory_drift")
+        for sid, expected in expected_sources.items():
+            if sid not in actual_sources:
+                continue
+            actual = actual_sources[sid]
+            for field in (
+                    "source_id", "role", "title", "modality_hint",
+                    "original_doc_id", "source_origin"):
+                if actual.get(field) != expected.get(field):
+                    remaining.append("original_macroplan_source_metadata_drift:" + sid)
+            actual_base_facts = [
+                row for row in actual["facts"]
+                if row.get("field") != "original_context_excerpt"
+            ]
+            if actual_base_facts != expected["facts"]:
+                remaining.append("original_macroplan_source_facts_drift:" + sid)
+    except (KeyError, TypeError, ValueError) as exc:
+        remaining.append(
+            "original_macroplan_world_reconstruction_failed:"
+            + type(exc).__name__ + ":" + str(exc)[:100]
+        )
+    return sorted(set(remaining))
 
 
 def validate_clean_scene(scene: dict) -> list[str]:
