@@ -40,7 +40,16 @@ def _jsonl(path: Path, rows) -> None:
 
 def read_jsonl(path: Path, *, limit: int | None = None) -> list[dict]:
     if not path.is_file():
-        raise FileNotFoundError(path)
+        raise FileNotFoundError(
+            f"V2 input file does not exist: {path}. "
+            "The README's example TaskGraph bank is a local generated artifact "
+            "and may not be present on this machine. "
+            "For build-v2, either locate an existing scenes.jsonl with "
+            "'find envir environment -name scenes.jsonl -type f' "
+            "and pass its actual path via --scenes, or use "
+            "'--mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz' "
+            "if that MMQA source file exists."
+        )
     entries = []
     with path.open("r", encoding="utf-8") as reader:
         for lineno, line in enumerate(reader, 1):

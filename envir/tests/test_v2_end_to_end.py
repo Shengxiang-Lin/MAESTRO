@@ -23,7 +23,7 @@ from envir.v2.quality import (
     compile_and_validate, validate_replay, audit_scene,
     weak_single_source_baseline,
 )
-from envir.v2.pipeline import build_v2, replay_v2, audit_v2, naturalize_v2
+from envir.v2.pipeline import build_v2, replay_v2, audit_v2, naturalize_v2, read_jsonl
 
 
 def seed(ordinal=0):
@@ -209,6 +209,13 @@ class V2PipelineTests(unittest.TestCase):
             target=target, max_records=24, seed=17,
             difficulty_mix="25,50,25", overwrite=False,
         ))
+
+    def test_missing_example_scene_path_gives_actionable_alternative(self):
+        path = self.root / "taskfirst_recursive_1000" / "scenes.jsonl"
+        with self.assertRaisesRegex(FileNotFoundError, "--mmqa") as caught:
+            read_jsonl(path)
+        self.assertIn(str(path), str(caught.exception))
+        self.assertIn("find envir environment", str(caught.exception))
 
     def test_batch_outputs_and_strict_replay(self):
         summary = self.build(12)
