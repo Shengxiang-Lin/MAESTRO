@@ -59,3 +59,65 @@ World, and Macro DAG remain unmodified.
 Stage 3 (Subtask composition & scheduling) is not implemented here.
 It can consume `subtasks.jsonl` and `scene_index.jsonl` to simulate
 dependency-respecting handoffs.
+
+
+## Natural-language Sub-Agent finish results (Author + Critic)
+
+In the two reference OmniGAIA runtime trajectories, a Sub-Agent returns a
+compact finish contract with a detailed result, a completion status, and a
+short evidence-oriented summary:
+
+~~~json
+{
+  "result": "Concrete findings and the supporting observations",
+  "status": "done",
+  "summary": "Actions taken, what was established, and significant limitations."
+}
+~~~
+
+A true runtime Sub-Agent can return status partial when evidence is missing.
+For this Stage-2 fully executed oracle, even an empty matching relation is
+a complete answer (done), not a partial or invented success.
+
+To mimic the real Main-Agent-facing format, Stage 2 now offers a second
+pass that works directly from the ALREADY EXPORTED oracle Subtasks. LLM
+Author writes the natural result/summary; independent LLM Critic reviews
+grounding, unchanged answer scope, source permissions and natural style.
+A deterministic guard blocks fabricated tool/media use, invented fact IDs,
+internal Teacher jargon and incorrect completion status. Revisions receive
+focused previous failure feedback.
+
+New report output preserves, UNCHANGED, the exact typed answer,
+answer_with_provenance, and all trace_summary.steps; it adds:
+
+- `answer_text`: Main-facing report result with exact Python-appended rows
+- `trace_summary.narrative`: concise, evidence-grounded Sub-Agent summary
+- `finish_result`: real-world shape (result, status, summary)
+- `report_authoring`: acceptance, attempts, independent Critic verdict
+
+If any Macro report fails, the **whole scene** is withheld, ensuring the
+published DAG remains complete; a fallback NEVER counts as success.
+This is a teacher-grounded *simulated* Sub-Agent report, not a genuine
+LLM Sub-Agent's autonomous tool-use trajectory.
+
+### Naturalize existing 529 Macro Oracle results (no stage reruns)
+
+~~~bash
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml
+~~~
+
+First try a five-scene sample:
+
+~~~bash
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --max-scenes 5 \
+  --output-dir envir/data/maestro_subagent_reports_trial_5
+~~~
+
+The reporting configuration uses the existing
+`maestro_subtask_teacher_100/subtasks.jsonl` and `scene_index.jsonl`.
+It writes separate `subtasks.jsonl`, `scene_index.jsonl`,
+`failed.jsonl`, and `summary.json` under
+`envir/data/maestro_subagent_reports_100`.
