@@ -334,7 +334,7 @@ class GenerationQualityRegressionTests(unittest.TestCase):
         self.assertEqual(audit["status"], "fallback")
         failure = audit["failures"][0]
         self.assertEqual(failure["candidate_preview"], "Entries")
-        self.assertIn("question_missing_interrogative", failure["errors"])
+        self.assertIn("question_not_actionable_request", failure["errors"])
         self.assertIn("question_length_out_of_bounds", failure["errors"])
 
 
