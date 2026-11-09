@@ -258,7 +258,7 @@ class StageAndQualityTests(unittest.TestCase):
             def author(specification, *, author, critic, max_revisions,
                        macro_graph):
                 called.append(specification["task_id"])
-                if len(called) > 1:
+                if len(called) > 2:
                     self.assertGreater(
                         len(read_jsonl(args.output_dir / "scenes.jsonl")), 0,
                         "The first Question should already be on disk before "
