@@ -12,51 +12,9 @@ from .program_ir import (
     answer_values, evaluate_program, validate_program,
 )
 
-VERSION = "maestro.dependency_macro_graph.v2"
-
-
-def compile_macro_tasks(program: dict, execution_trace: list[dict],
-                        *, compact: bool = False) -> dict:
-    if compact:
-        return _compile_compact_tasks(program, execution_trace)
-    errors = validate_program(program)
-    if errors:
-        raise ProgramError("invalid_program:" + ",".join(errors))
-    trace = {x["node_id"]: x for x in execution_trace}
-    tasks = []
-    for node in program["nodes"]:
-        tid = "work_" + node["id"]
-        depends_on = ["work_" + item for item in node["inputs"]]
-        source_ids = [node["source_id"]] if node["op"] == "scan" else []
-        tasks.append({
-            "task_id": tid,
-            "program_node_id": node["id"],
-            "operation": node["op"],
-            "operation_args": {
-                key: value for key, value in node.items()
-                if key not in {"id", "op", "inputs"}
-            },
-            "depends_on": depends_on,
-            "source_ids": source_ids,
-            "input_schema": {
-                "input_" + str(i): list(trace[parent]["schema"])
-                for i, parent in enumerate(node["inputs"])
-            },
-            "outputs": {"typed_relation": list(trace[node["id"]]["schema"])},
-            "handoff_type": "SourceScopedRelationWithFactRefs",
-            "dispatchable": True,
-            "execution_policy": "upstream_derived_results_only",
-        })
-    waves = compile_waves(tasks)
-    return {
-        "version": VERSION,
-        "tasks": tasks,
-        "reference_waves": waves,
-        "terminal_task_id": "work_" + program["output"],
-        "macro_task_count": len(tasks),
-        "critical_path_depth": _critical_path(tasks),
-        "source_scope_policy": "only_scan_may_access_explicitly_granted_source",
-    }
+def compile_macro_tasks(program: dict, execution_trace: list[dict]) -> dict:
+    """Compile the sole supported executable, bounded Macro TaskGraph."""
+    return _compile_compact_tasks(program, execution_trace)
 
 
 def _compile_compact_tasks(program: dict, execution_trace: list[dict]) -> dict:
@@ -259,7 +217,7 @@ def run_macro_tasks(graph: dict, *, sources: dict,
     }
 
 
-class V2Session:
+class QuestionSession:
     """Stateful, costed orchestration simulator with explicit source access.
 
     Teacher-owned graph is only accessible to the environment. Main-Agent
@@ -357,7 +315,7 @@ class V2Session:
 
 def oracle_schedule(scene: dict) -> dict:
     """Reproduce the reference DAG using legal read/execute actions."""
-    session = V2Session(scene)
+    session = QuestionSession(scene)
     for wave in scene["macro_graph"]["reference_waves"]:
         for tid in wave:
             task = next(t for t in scene["macro_graph"]["tasks"]
