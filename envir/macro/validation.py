@@ -18,6 +18,39 @@ from .evidence import run_clean_tasks, EvidenceExecutionError
 from .semantic_world import validate_semantic_world_scene
 
 
+# Original pre-semantic MacroPlan banks were compiled with an earlier
+# EvidenceGraph result schema. The new relation-aware executor changes the
+# DERIVED graph/feedback payload, not the plan, evidence authorization, or
+# original synthetic source inventory. Only these two derived comparison
+# errors may be waived, and ONLY while importing an ungrounded bank for
+# deterministic World + EvidenceGraph regeneration.
+_PRESEMANTIC_DERIVED_SCHEMA_DRIFT = frozenset({
+    "clean_evidence_or_feedback_replay_mismatch:feedback_bank",
+    "clean_evidence_or_feedback_replay_mismatch:task_evidence_graphs",
+})
+
+
+def validate_original_macroplan_input(scene: dict) -> list[str]:
+    """Import-only validator for *original* compiled TaskGraph banks.
+
+    All structural, task/fact authorization, source provenance, Question
+    blueprint, public projection, source evidence closure and terminal
+    coverage checks still run. We waive ONLY the old DERIVED
+    EvidenceGraph/Feedback format comparisons, because those values are
+    re-executed with the current interpreter before entering any output.
+
+    Do not use this for replay/training validation: those paths MUST use
+    validate_clean_scene and require exact freshly executed artifacts.
+    """
+    if any(key in scene for key in (
+            "semantic_world_spec", "scene_grounding",
+            "question_authoring")):
+        return ["not_original_presemantic_macroplan"]
+    errors = validate_clean_scene(scene)
+    return [error for error in errors
+            if error not in _PRESEMANTIC_DERIVED_SCHEMA_DRIFT]
+
+
 def validate_clean_scene(scene: dict) -> list[str]:
     errors = []
     if scene.get("schema") != "maestro.taskfirst.v1":
