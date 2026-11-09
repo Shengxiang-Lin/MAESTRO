@@ -166,7 +166,13 @@ a real topic does NOT assert historical facts. NEVER add calendar years,
 seasons, dated cycles or concrete thresholds that the original topic
 and frozen intent do not provide. Do not invent an additional eligibility
 criterion such as a funding tier or certification that is absent from
-the required predicates.
+the required predicates. Specifically, do not add "non-archived" or
+"exclude archived" unless the contract contains an archived field. A
+time window is NOT independently "approved" merely because it exists;
+a policy group meeting a threshold is NOT "approved" unless the graph
+contains an explicit approval filter. Describe any synthetic source
+field in readable language ("measured value", "audio interval start step"),
+not raw names such as measured_value, minimum_required or diagram_step_start.
 
 The compiled Macro Task contract is the operational authority when
 provided. Its source roles, typed operators, dependency plan, and terminal
@@ -230,7 +236,11 @@ Check substantive semantics independently: (a) required source mapping,
 The candidate must be grounded in the frozen topic/conditions, not in
 unsupported elaborations supplied by an earlier scene paraphrase.
 A candidate saying "strictly inside" while also claiming inclusive
-boundaries MUST be rejected. A well-formed imperative user request (e.g.
+boundaries MUST be rejected. Reject added predicates such as "approved
+policy group" in a threshold-only task, "approved session window" in a
+temporal-only task, or excluding "archived" items when the Program only
+filters active=True. A plausible fictional setting does NOT license
+adding unsupported eligibility criteria. A well-formed imperative user request (e.g.
 "Please identify ...") is just as valid as an interrogative question.
 For chronology, the compiled sort uses ascending relative_step: "earliest"
 or "first" is correct; "latest" or "most recent" is WRONG. Never hallucinate
