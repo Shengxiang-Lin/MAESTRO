@@ -152,7 +152,9 @@ class V2ReasoningTests(unittest.TestCase):
     def test_bad_macro_task_dependency_invalidates_replay(self):
         data = scene(difficulty="hard")
         bad = copy.deepcopy(data)
-        bad["macro_graph"]["tasks"][1]["depends_on"] = []
+        dependent = next(t for t in bad["macro_graph"]["tasks"]
+                         if t["depends_on"])
+        dependent["depends_on"] = []
         result = validate_replay(bad)
         self.assertEqual(result["status"], "invalid")
         self.assertIn("macro_graph_not_program_compiled", result["issues"])
