@@ -7,9 +7,17 @@ Existing Task-First scene banks and CLI commands remain available.
 
 From the MAESTRO repository root:
 
+First verify the MultiModalQA source file exists locally:
+
+~~~bash
+ls -lh data/world-source/MultiModalQA/MMQA_train.jsonl.gz
+~~~
+
+Then use this **preferred command**. V2 does not require an old TaskGraph bank:
+
 ~~~bash
 python -m envir build-v2 \
-  --scenes envir/data/taskfirst_recursive_1000/scenes.jsonl \
+  --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
   --output-dir envir/data/v2_reasoning_100 \
   --target 100 --max-records 1000 --seed 17 \
   --difficulty-mix 20,50,30
@@ -21,16 +29,25 @@ python -m envir audit-v2 \
   --scenes envir/data/v2_reasoning_100/scenes.jsonl
 ~~~
 
-Input scenes may be from the old Task-First scene bank, including the
-previous 859-question bank. V2 reuses topic and source-modality hints,
-not the old MMQA question, answer, World, DAG or original media.
-
-Alternatively:
+Alternatively, reuse a **real, locally existing** Task-First
+`scenes.jsonl` (including a bank from the earlier 859-question run).
+Generated data under `envir/data/` is not guaranteed to be downloaded
+by `git pull`. Locate the actual file first:
 
 ~~~bash
+find envir environment -name scenes.jsonl -type f 2>/dev/null
+# Then substitute an existing path:
 python -m envir build-v2 \
-  --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
-  --target 100 --seed 17 --output-dir envir/data/v2_from_mmqa_100
+  --scenes /actual/path/to/scenes.jsonl \
+  --target 100 --seed 17 --output-dir envir/data/v2_from_scenes_100
+~~~
+
+Only scene topics and source-modality hints are reused, not the old MMQA
+question, answer, World, DAG or original media. If the MMQA file is
+also absent, locate it with:
+
+~~~bash
+find data environment envir -iname '*mmqa*train*' -type f 2>/dev/null
 ~~~
 
 ## 2. Optional richer pre-World scenario design (local Qwen)
@@ -42,7 +59,7 @@ The frozen deterministic scenario is the safe fallback.
 
 ~~~bash
 python -m envir build-v2 \
-  --scenes envir/data/taskfirst_recursive_1000/scenes.jsonl \
+  --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
   --output-dir envir/data/v2_scenario_100 \
   --target 100 --seed 17 --difficulty-mix 20,50,30 \
   --scenario-api-base http://127.0.0.1:8807/v1 \
