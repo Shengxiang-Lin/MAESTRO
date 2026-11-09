@@ -49,6 +49,10 @@ fictional sports submissions, a technician comparing audit scores. Choose
 specific, meaningful roles for the existing abstract numerical/boolean
 fields. You MAY invent fictional labels for synthetic entries, clearly
 as an interpretation of the simulation, not names extracted from media.
+Write short, concrete fields rather than long explanations: ideally each
+field meaning <= 130 characters, source role <= 160 characters, and user
+need <= 220 characters. These are WRITING GUIDELINES, not brittle rejection
+thresholds; exact source/fact bindings and meaning are what matter.
 
 You MUST NOT:
 - change, recompute or invent a single source fact, score, flag, index,
@@ -65,6 +69,17 @@ You MUST NOT:
 IMPORTANT: The outputs are a SYNTHETIC INTERPRETATION LAYER, not verified
 annotations of original MMQA sources. A hypothetical record card label is
 fine; claiming an actual screenshot depicted a person is not.
+An assigned boolean flag MAY be described as an imaginary review marker;
+it MUST NOT become "visually confirmed", "detected in the image",
+"verified by the photograph" or a factual claim about what pixels show.
+Distinguish "a hypothetical crest-check flag" from "the actual crest has
+a crown". Likewise, a synthetic time index is a relative record order,
+not evidence of a historical release date or an actual event chronology.
+Where domain-specific imagery is unavailable, describe its *source role*
+as an image-source metadata record, not an observed photograph/poster.
+The original MMQA Question may contain details about unseen original media.
+Use it only as inspiration for WHAT DOMAIN to simulate, never claim its
+specific event/visual details were observed in these simulated sources.
 The chosen field meanings must not contradict boolean flags, numeric scores,
 group IDs or relative time indices. Use 'relative sequence' not calendar dates.
 
@@ -95,7 +110,10 @@ Check independently:
 - domain_plausibility: a coherent realistic HYPOTHETICAL use case with
   meaningful, domain-appropriate entry and field labels, not boilerplate.
 - frozen_facts: no new or changed values, dates, entities alleged to be
-  factual, inferred media contents, or unsupported relations.
+  factual, inferred media contents, or unsupported relations. Carefully
+  distinguish fictional marker semantics from claims that a visual feature
+  was actually observed, confirmed, detected or verified in source media.
+  A generated label MUST NOT be treated as actual image/video recognition.
 - Source-ablation is merely a goal-result influence diagnostic. Do not
   fabricate stronger multi-source links to compensate for weak influence;
   label sources honestly and leave TaskGraph improvements to a later stage.
@@ -282,8 +300,8 @@ def validate_proposal(scene: dict, proposal: dict) -> list[str]:
     if not isinstance(proposal, dict) or set(proposal) != set(PROP_SCHEMA["required"]):
         return ["invalid_proposal_schema"]
     for key, limit in (
-        ("scene_context", 500), ("candidate_kind", 100),
-        ("user_need", 220),
+        ("scene_context", 650), ("candidate_kind", 160),
+        ("user_need", 360),
     ):
         if not _single_line(proposal.get(key), limit=limit):
             errors.append("invalid_" + key)
@@ -304,7 +322,7 @@ def validate_proposal(scene: dict, proposal: dict) -> list[str]:
             errors.append("unknown_or_duplicate_source_id")
         seen.add(sid)
         for key in ("candidate_label", "source_role"):
-            if not _single_line(row[key], limit=110):
+            if not _single_line(row[key], limit=(140 if key == "candidate_label" else 320)):
                 errors.append("invalid_" + key)
         label = row["candidate_label"].casefold().strip()
         if label in labels:
@@ -317,7 +335,7 @@ def validate_proposal(scene: dict, proposal: dict) -> list[str]:
         "score", "positive_flag", "relative_time_index", "group_key",
     }:
         errors.append("field_meaning_schema_invalid")
-    elif any(not _single_line(value, limit=110) for value in meanings.values()):
+    elif any(not _single_line(value, limit=320) for value in meanings.values()):
         errors.append("invalid_field_meanings")
     # No media content assertions or claims about actual original documents.
     prose = " ".join([
@@ -325,11 +343,28 @@ def validate_proposal(scene: dict, proposal: dict) -> list[str]:
         str(proposal.get("user_need", "")),
     ] + [
         str(row.get("source_role", "")) for row in roles if isinstance(row, dict)
-    ])
+    ] + [
+        str(row.get("candidate_label", "")) for row in roles
+        if isinstance(row, dict)
+    ] + [
+        str(value) for value in (meanings or {}).values()
+    ] if isinstance(meanings, dict) else [])
     if re.search(r"\b(?:image|photo|poster|screenshot|video|footage)\b"
                  r".{0,60}\b(?:shows?|depicts?|contains?|reveals?)\b",
                  prose, re.I):
         errors.append("unobserved_media_content_claim")
+    # Frozen World contains synthetic flags, NOT source-media perception.
+    # A free-form hypothetical context is allowed; explicit claims of
+    # *confirmed actual visual observation* are not.
+    if re.search(
+        r"\b(?:visual(?:ly)?\s+(?:confirmation|confirmed|verification|"
+        r"verified|detected)|image[- ]derived\s+(?:observation|confirmation)|"
+        r"logo\s+(?:confirmed|verified|observed|detected)|"
+        r"(?:confirmed|verified|detected)\s+(?:in|from|by)\s+(?:the\s+)?"
+        r"(?:image|photo|poster|screenshot))\b",
+        prose, re.I
+    ):
+        errors.append("unsupported_media_perception_certainty")
     if re.search(r"\b(?:verified|authentic|historically|actually)\b"
                  r".{0,30}\b(?:fact|award|event|winner|record)\b",
                  prose, re.I):
@@ -350,7 +385,7 @@ def validate_review(review: dict) -> tuple[dict, list[str]]:
             or not isinstance(review.get("issues"), list)
             or any(not isinstance(x, str) or not x.strip()
                    for x in review.get("issues", []))
-            or not _single_line(review.get("summary"), limit=600)):
+            or not _single_line(review.get("summary"), limit=1400)):
         issues.append("invalid_critic_fields")
     # Keep decision conservative in the face of contradictory outputs.
     if not issues:
@@ -551,6 +586,7 @@ def ground_one(scene: dict, *, constructor, critic,
             local = validate_proposal(scene, proposal)
             if local:
                 entry["validation_errors"] = local
+                entry["failure"] = "local_schema_or_media_validation"
                 feedback = {"issues": local}
                 last = proposal
                 attempts.append(entry)
@@ -576,6 +612,7 @@ def ground_one(scene: dict, *, constructor, critic,
             entry["critic_review"] = review
             if review_errors:
                 entry["validation_errors"] = review_errors
+                entry["failure"] = "critic_response_protocol"
                 feedback = {"issues": review_errors}
                 last = proposal
                 attempts.append(entry)
@@ -586,6 +623,7 @@ def ground_one(scene: dict, *, constructor, critic,
                 replay_errors = validate_grounding(probe)
                 if replay_errors:
                     entry["validation_errors"] = replay_errors
+                    entry["failure"] = "grounding_replay_validation"
                     feedback = {"issues": replay_errors}
                     last = proposal
                     attempts.append(entry)
@@ -616,6 +654,9 @@ def ground_one(scene: dict, *, constructor, critic,
         "status": "rejected",
         "reason": attempts[-1].get(
             "failure", "validation_failed") if attempts else "no_attempt",
+        "last_validation_errors": (
+            attempts[-1].get("validation_errors", []) if attempts else []
+        ),
         "attempts": attempts,
         "revision_rounds": max(0, len(attempts) - 1),
         "author_calls": len(attempts),
