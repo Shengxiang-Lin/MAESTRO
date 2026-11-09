@@ -10,7 +10,7 @@ import random
 from envir.schema import digest
 
 from envir.macro.program_ir import answer_values, evaluate_program
-from .spec import spec_issues, LEGACY_VERSION, VERSION
+from .spec import spec_issues, LEGACY_VERSION, VERSION as SPEC_VERSION
 
 VERSION = "maestro.source_observation_world.v2"
 
@@ -248,7 +248,7 @@ NEW_WORLD_VERSION = "maestro.source_observation_world.v3"
 
 def _finalize_current_program(program: dict, spec: dict) -> dict:
     """Make latest approval answers obey their explicit evidence contract."""
-    if spec.get("version") != VERSION:
+    if spec.get("version") != SPEC_VERSION:
         return program
     program["version"] = "maestro.reasoning_program.v4"
     program["semantic_operator_pattern"] = "approval"
@@ -263,7 +263,7 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 
 def compile_program(spec: dict) -> dict:
     """Compile semantic branches into source-scoped executable programs."""
-    if spec.get("version") == VERSION and spec.get("reasoning_pattern") != "approval":
+    if spec.get("version") == SPEC_VERSION and spec.get("reasoning_pattern") != "approval":
         from .pattern_world import compile_pattern_program
         return compile_pattern_program(spec)
     if spec.get("version") == LEGACY_VERSION:
@@ -383,7 +383,7 @@ def compile_program(spec: dict) -> dict:
 
 def generate_world(spec: dict) -> dict:
     """Versioned synthetic sources; never rewrite old private World facts."""
-    if spec.get("version") == VERSION and spec.get("reasoning_pattern") != "approval":
+    if spec.get("version") == SPEC_VERSION and spec.get("reasoning_pattern") != "approval":
         from .pattern_world import generate_pattern_world
         return generate_pattern_world(spec)
     if spec.get("version") == LEGACY_VERSION:
@@ -498,6 +498,6 @@ def generate_world(spec: dict) -> dict:
             "deterministic_relational_observations_after_frozen_spec_v3"
         ),
     }
-    if spec.get("version") == VERSION:
+    if spec.get("version") == SPEC_VERSION:
         result["version"] = "maestro.source_observation_world.v4"
     return result
