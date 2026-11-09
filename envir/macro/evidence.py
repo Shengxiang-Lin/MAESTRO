@@ -220,8 +220,31 @@ def _execute_operation(task: dict, rows: list[dict],
             if family == "feasibility" else
             list(selected)
         )
+        # The final GoalReport must expose the FULL user-requested
+        # work product. Intermediate scores/groups are not a substitute.
+        if family == "comparison":
+            result["ranked_candidates"] = [
+                row["candidate_key"] for row in ranked]
+            result["top_candidate"] = ranked[0]["candidate_key"]
+        if family == "prioritization":
+            result["priority_order"] = [
+                row["candidate_key"] for row in ranked]
+            result["priority_scores"] = {
+                row["candidate_key"]: row["score"] for row in ranked}
+        if family == "temporal":
+            result["ordered_candidates"] = [
+                row["candidate_key"] for row in by_time]
+            result["earliest_time_index"] = by_time[0]["time_index"]
+        if family == "lookup":
+            result["selected_candidates"] = sorted(selected)
+        if family == "feasibility":
+            result["eligible_candidates"] = sorted(
+                row["candidate_key"] for row in rows
+                if row["attribute_present"] and row["score"] >= 50)
+            result["eligibility_rule"] = "positive_flag=true AND score>=50"
         if family == "aggregation":
             result["selected_count"] = len(selected)
+            result["total_count"] = len(rows)
         if family == "intersection":
             result["matched_groups"] = matched_groups
             result["matched_group_source_ids"] = matched_group_sources
