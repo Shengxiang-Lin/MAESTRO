@@ -26,11 +26,75 @@ def unlicensed_calendar_years(text: str, topic: str) -> list[str]:
     return sorted(set(YEAR_RE.findall(text)) - set(YEAR_RE.findall(topic or "")))
 
 
+SCHEMA_LABELS = {
+    "diagram_step_start": "diagram interval start step",
+    "diagram_step_end": "diagram interval end step",
+    "utterance_step_start": "audio utterance start step",
+    "utterance_step_end": "audio utterance end step",
+    "clip_step_start": "video clip start step",
+    "clip_step_end": "video clip end step",
+    "measured_value": "measured value",
+    "minimum_required": "minimum required threshold",
+}
+
+
 def normalize_question_punctuation(question: str) -> str:
-    """Repair harmless repeated terminal question marks, never alter predicates."""
+    """Make only semantics-preserving text repairs BEFORE Critic review.
+
+    The repaired text is what the Critic actually evaluates and, if
+    approved, what becomes public. It never adds criteria, drops source
+    requirements or changes a comparison.
+    """
     if not isinstance(question, str):
         raise TypeError("question must be a string")
-    return re.sub(r"\?{2,}", "?", question.strip())
+    q = question.strip()
+    for field, label in SCHEMA_LABELS.items():
+        q = re.sub(r"\b" + re.escape(field) + r"\b", label, q)
+    q = re.sub(r"\?{2,}", "?", q)
+    q = re.sub(r"\.\s*\?$", "?", q)
+    # Some LLMs leave a single unpaired final quote after the answer
+    # instruction. Do not touch balanced quotation marks around topics.
+    if q.endswith('"') and q.count('"') % 2:
+        q = q[:-1].rstrip()
+    return q
+
+
+def unsupported_macro_predicates(question: str, spec: dict) -> list[str]:
+    """High-precision extra eligibility criteria missing from the Program.
+
+    This is intentionally narrow: any unrecognized phrasing still needs
+    Critic judgement. Never infer that "active" implies "not archived",
+    that a matching time-window is "approved", or that a policy group
+    passing a dynamic-threshold comparison is also independently approved.
+    """
+    if not isinstance(question, str):
+        return ["question_not_string"]
+    pattern = spec.get("reasoning_pattern", "approval")
+    difficulty = spec.get("difficulty_target")
+    problems = []
+    if re.search(
+        r"\b(?:non[- ]archived|unarchived)\b"
+        r"|\b(?:exclude|excluding|excluded)\b(?:\s+\w+){0,7}"
+        r"\s+archived\b",
+        question, re.I,
+    ):
+        problems.append("unlicensed_archive_status_filter")
+    if pattern in {"time_window", "status_disagreement", "dynamic_threshold"}:
+        if re.search(
+            r"\b(?:approved|approval[- ]verified|authorized)\b"
+            r"(?:\s+\w+){0,3}\s+"
+            r"(?:groups?|sessions?|windows?|intervals?|polic(?:y|ies))\b",
+            question, re.I,
+        ):
+            problems.append("unlicensed_independent_approval_filter")
+    if pattern == "approval" and difficulty == "easy":
+        if re.search(
+            r"\bqualif(?:y|ies|ied)\b(?:\s+\w+){0,6}"
+            r"\s+\bapproved\b",
+            question, re.I,
+        ):
+            problems.append("unlicensed_easy_approval_filter")
+    return sorted(set(problems))
 
 
 def question_language_warnings(question: str, spec: dict) -> list[str]:
@@ -46,7 +110,8 @@ def question_language_warnings(question: str, spec: dict) -> list[str]:
     topic = spec.get("scenario", {}).get("topic", "")
     if unlicensed_calendar_years(question, topic):
         warnings.append("unlicensed_calendar_year_not_in_topic")
-    return warnings
+    warnings.extend(unsupported_macro_predicates(question, spec))
+    return sorted(set(warnings))
 
 
 def topic_mentioned(text: str, topic: str) -> bool:

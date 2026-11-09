@@ -6,6 +6,35 @@ envir/reasoning/. Prior names containing "-v2" remain supported as
 backwards-compatible CLI aliases for existing experiments. Existing teacher
 scene schema versions remain frozen to preserve replay of prior data.
 
+## Audit of the 91/91 Question acceptance result
+
+The 91/91 Question-only retest is a strong review-acceptance result, but
+manual inspection revealed a few ACCEPTED Question conditions not present
+in the executable MacroGraph: "approved group" in threshold-only tasks,
+"approved session window" in interval-only tasks, and "non-archived"
+eligibility filters where an Easy Program checks only active=True.
+
+The latest guard rejects these specific added conditions. It still
+requires independent Critic approval and never counts fallback as a
+generated success. Presentation-only fixes are applied BEFORE the Critic:
+extra question punctuation, an unmatched trailing double quote, and
+machine-level field identifiers are normalized to reader-friendly text.
+
+To re-audit the unchanged previous Question bank without rerunning Qwen:
+
+~~~bash
+git pull origin main
+python -m envir quality \
+  --scenes envir/data/maestro_macro_question_precision_91/scenes.jsonl \
+  --output envir/data/maestro_macro_question_precision_91/quality_recheck.json
+~~~
+
+Inspect question_surface.semantic_language_warnings in the report.
+Quality flags past issues but never silently rewrites input data.
+To use the new stricter generation rules, re-run refine-questions
+from the original constructed/ bank into a NEW destination, rather
+than re-refining a Question bank that already has review records.
+
 ## Acceptance precision follow-up for the 74/100 strict pilot
 
 For maestro_macro_strict_100, the frozen Macro DAGs compiled 91
