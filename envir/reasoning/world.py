@@ -457,6 +457,12 @@ def generate_world(spec: dict) -> dict:
         "annotations": annotations,
         "clearance": clearance,
     }
+    registry = [{
+        "hidden_entity_id": f"fictional-{i+1:03d}",
+        "entry_label": item["entry_label"],
+        "category_name": categories[indexed[i]],
+        "identity_source": "synthetic_generation_only",
+    } for i, item in enumerate(entries)]
     for role_data in data.values():
         rng.shuffle(role_data)  # avoid privileged first-row / F001 shortcuts
     sources = {
@@ -465,12 +471,6 @@ def generate_world(spec: dict) -> dict:
             role["purpose"], data[role["source_id"]]
         ) for role in spec["sources"]
     }
-    registry = [{
-        "hidden_entity_id": f"fictional-{i+1:03d}",
-        "entry_label": item["entry_label"],
-        "category_name": categories[indexed[i]],
-        "identity_source": "synthetic_generation_only",
-    } for i, item in enumerate(entries)]
     return {
         "version": NEW_WORLD_VERSION,
         "simulated_only": True,
