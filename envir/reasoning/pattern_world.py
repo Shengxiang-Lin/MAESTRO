@@ -19,10 +19,10 @@ def modality_fields(modality: str, pattern: str):
     """Name functional observation fields after their simulated media role."""
     if pattern == "time_window":
         return {
-            "video": ("clip_start_second", "clip_end_second"),
-            "audio": ("utterance_start_second", "utterance_end_second"),
-            "image": ("region_index_min", "region_index_max"),
-        }.get(modality, ("interval_start", "interval_end"))
+            "video": ("clip_step_start", "clip_step_end"),
+            "audio": ("utterance_step_start", "utterance_step_end"),
+            "image": ("diagram_step_start", "diagram_step_end"),
+        }.get(modality, ("interval_step_start", "interval_step_end"))
     if pattern == "status_disagreement":
         return {
             "video": "clip_reported_status",
