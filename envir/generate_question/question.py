@@ -1,4 +1,4 @@
-"""Scenario-aware questions from immutable V2 ProblemSpecs, never from old MMQA QAs.
+"""MacroGraph-grounded Question authoring from frozen source-scoped specifications.
 
 LLM rewriting is optional. An independent Critic and deterministic guards
 can reject additions; the original executable problem remains unchanged.
@@ -19,62 +19,10 @@ from .surface_quality import (
 
 
 def reference_question(spec: dict) -> str:
-    problems = spec_issues(spec)
-    if problems:
-        raise ValueError("invalid_spec:" + ",".join(problems))
-    if spec.get("version") == VERSION:
-        return _intent_reference_question(spec)
-    scene = spec["scenario"]
-    topic = scene["topic"]
-    noun = " ".join(scene["entity_kind"].replace("_", " ").split())
-    difficulty = spec["difficulty_target"]
-    family = spec["family"]
-    purpose = re.sub(r"^(to\s+)+", "", scene["purpose"].strip(), flags=re.I)
-    purpose = purpose.strip().rstrip(".!;: ")
-    purpose = purpose[:1].lower() + purpose[1:]
-    beginning = (
-        f"As a {scene['user_role']} reviewing a fictional {topic} "
-        f"reference collection, I need to {purpose}."
-    )
-    if difficulty == "easy":
-        condition = (
-            f"Using the working register, consider only active {noun}."
-        )
-    else:
-        condition = (
-            f"The working register uses abbreviated category codes, a separate "
-            f"glossary resolves those codes, and independent simulated "
-            f"annotations mark categories as approved. "
-            f"Consider only active {noun} whose resolved category is approved."
-        )
-    if difficulty == "hard":
-        condition += (
-            " Also require the entry-specific clearance note to mark each "
-            "selected entry as cleared."
-        )
-    questions = {
-        "reconcile": "Which entries meet all these conditions?",
-        "coverage_count": "How many distinct entries meet all these conditions?",
-        "eligibility": (
-            "Which entries qualify after combining these independent conditions?"
-        ),
-        "priority": (
-            "Which qualifying entry has the highest recorded priority value?"
-        ),
-        "chronology": (
-            "Which qualifying entry has the earliest relative step in "
-            "the working register?"
-        ),
-        "evidence_reconcile": (
-            "Which entries meet all these conditions, and what are their "
-            "supporting source observations?"
-        ),
-        "category_distribution": (
-            "For each qualifying category, how many entries meet all "
-            "these conditions?"
-        ),
-    }
-    return " ".join([beginning, condition, questions[family]])
+    errors = spec_issues(spec)
+    if errors:
+        raise ValueError("invalid_spec:" + ",".join(errors))
+    return _intent_reference_question(spec)
 
 
 def _intent_reference_question(spec: dict) -> str:
@@ -266,21 +214,15 @@ def guard_question(question: str, spec: dict,
     errors = []
     if len(q) < 55 or len(q) > 1200:
         errors.append("question_length_out_of_bounds")
-    if spec.get("version") == VERSION:
-        if not is_explicit_user_request(q):
-            errors.append("question_not_actionable_request")
-    elif "?" not in q:
-        # Keep historical v2/v3 guard semantics reproducible.
-        errors.append("question_missing_interrogative")
-    if spec.get("version") == VERSION:
-        errors.extend(question_language_warnings(q, spec, macro_graph))
+    if not is_explicit_user_request(q):
+        errors.append("question_not_actionable_request")
+    errors.extend(question_language_warnings(q, spec, macro_graph))
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     if not re.search(r"\bactive\b", q, flags=re.I):
         errors.append("active_condition_missing")
     pattern = spec.get("reasoning_pattern", "approval")
-    latest = spec.get("version") == VERSION
-    if latest and pattern != "approval":
+    if pattern != "approval":
         if not re.search(r"\b(codes?|glossary|map|mapped|mapping|crosswalk|translat\w*|resolv\w*)\b", q, re.I):
             errors.append("cross_source_code_mapping_missing")
         if pattern == "time_window":
@@ -324,7 +266,7 @@ def guard_question(question: str, spec: dict,
             r"\b(latest|most recent|newest|last|most current)\b", q, re.I
         ):
             errors.append("reversed_chronological_direction")
-    if latest and family == "evidence_reconcile":
+    if family == "evidence_reconcile":
         if not re.search(r"\b(evidence|source|citation|reference|support)\w*", q, re.I):
             errors.append("evidence_output_scope_missing")
     if re.search(r"\b(TaskGraph|WorkProduct|candidate-\d+|source_id|fact_refs|synthetic_attribute)\b", q, re.I):
@@ -338,21 +280,11 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                    macro_graph: dict | None = None) -> tuple[str, dict]:
     """Model cannot edit World, Program, TaskGraph, or Gold Answer."""
     initial = reference_question(spec)
-    latest = spec.get("version") == VERSION
-    instruction = (
-        {
-            "intent": intent_contract(spec),
-            "style": style_contract(spec),
-            "frozen_scenario": spec["scenario"],
-        } if latest else {
-            "frozen_reference_question": initial,
-            "frozen_scenario": spec["scenario"],
-            "required_source_roles": spec["sources"],
-            "requirements": spec["requirements"],
-            "difficulty": spec["difficulty_target"],
-            "goal_family": spec["family"],
-        }
-    )
+    instruction = {
+        "intent": intent_contract(spec),
+        "style": style_contract(spec),
+        "frozen_scenario": spec["scenario"],
+    }
     graph_contract = (
         macro_question_contract(spec, macro_graph)
         if macro_graph is not None else None
@@ -391,7 +323,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
     failures = []
     for attempt in range(max_revisions + 1):
         author_contract = dict(instruction)
-        if latest and attempt > 0:
+        if attempt > 0:
             author_contract["repair_reference_question"] = initial
         user_text = json.dumps({
             "contract": author_contract,
@@ -412,7 +344,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             q = (normalize_question_punctuation(raw)
                  if isinstance(raw, str) else raw)
             surface = guard_question(q, spec, macro_graph)
-            if (latest and isinstance(q, str)
+            if (isinstance(q, str)
                     and SequenceMatcher(None, q.strip().casefold(),
                                         initial.casefold()).ratio() > 0.96):
                 surface.append("too_similar_to_reference_question")
