@@ -9,7 +9,9 @@ import random
 import re
 from envir.schema import digest
 
-VERSION = "maestro.problem_spec.v2"
+VERSION = "maestro.problem_spec.v3"
+LEGACY_VERSION = "maestro.problem_spec.v2"
+SUPPORTED_VERSIONS = (LEGACY_VERSION, VERSION)
 
 FAMILIES = (
     "reconcile",
@@ -154,7 +156,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
 
 def spec_issues(spec: dict) -> list[str]:
     errors = []
-    if spec.get("version") != VERSION:
+    if spec.get("version") not in SUPPORTED_VERSIONS:
         errors.append("invalid_problem_version")
     if spec.get("difficulty_target") not in DIFFICULTIES:
         errors.append("invalid_difficulty")

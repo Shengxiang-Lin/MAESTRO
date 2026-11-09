@@ -6,6 +6,63 @@ envir/reasoning/. Prior names containing "-v2" remain supported as
 backwards-compatible CLI aliases for existing experiments. Existing teacher
 scene schema versions remain frozen to preserve replay of prior data.
 
+## Quality repair after the 100-question pilot
+
+The first full Qwen run (100 tasks) showed high Scenario approval but poor
+Question acceptance. The author was originally not given the frozen
+reference question. The corrected Author now receives that exact
+program-derived question, with requirements and bounded-revision feedback.
+Rejected candidates are captured in PRIVATE question_authoring.failures
+with separate length/punctuation errors and previews. These are not public.
+
+To measure only this fix, **reuse the existing constructed bank**. You do
+not have to call Scenario Author again:
+
+~~~bash
+git pull origin main
+
+python -m envir refine-questions \
+  --scenes envir/data/maestro_reasoning_100/constructed/scenes.jsonl \
+  --output-dir envir/data/maestro_question_repair_100 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 8 --max-revisions 2
+
+python -m envir quality \
+  --scenes envir/data/maestro_question_repair_100/scenes.jsonl \
+  --output envir/data/maestro_question_repair_100/quality_report.json
+~~~
+
+Compare question_review, question_rejections.guard_reasons and
+question_surface with the old report. Do not reuse an already
+naturalized questions/scenes.jsonl input.
+
+For the new **v3 fact sampler and reasoning program variants**, generate to a
+NEW directory. It intentionally changes the sampled synthetic answers,
+so compare distributions, not row-for-row Gold labels with the old batch:
+
+~~~bash
+python -m envir generate \
+  --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+  --output-dir envir/data/maestro_diverse_100 \
+  --target 100 --max-records 1000 --seed 17 \
+  --difficulty-mix 20,50,30 \
+  --scenario-api-base http://127.0.0.1:8807/v1 \
+  --scenario-model local-qwen3.5-9b \
+  --scenario-workers 8 --scenario-max-revisions 2 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 8 --max-revisions 2
+~~~
+
+The quality report now includes answer_diversity with exact answer-set
+repetition counts, and question_rejections with rejection stage and guard
+reason breakdown. New scenes use versioned v3 synthetic sampling; older
+v2 scenes retain legacy program and World regeneration for replay
+compatibility. Repeated answers, synthetic category labels, and step-level
+Macro Tasks remain research limitations; real Agent difficulty and truly
+3-9 coarsened Macro Tasks are not yet established.
+
 ## 0. Inputs and local LLM
 
 MultiModalQA is used for topic and source-role metadata, not original answers

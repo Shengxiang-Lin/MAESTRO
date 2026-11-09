@@ -51,6 +51,9 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     modalities, scenario_reviews, question_reviews = Counter(), Counter(), Counter()
     one_source = Counter()
     cf_sensitive = Counter()
+    answer_signatures = Counter()
+    answer_by_difficulty = {}
+    question_failure_stages, question_guard_issues = Counter(), Counter()
     macro_tasks, operator_depth, macro_depth = [], [], []
     issue_counts, examples = Counter(), []
     with tqdm(scenes, desc="Quality & replay", unit="task",
@@ -70,8 +73,16 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     modalities[role["modality"]] += 1
                 scenario_reviews[spec.get("scenario_authoring", {}).get(
                     "status", "off")] += 1
-            question_reviews[scene.get("question_authoring", {}).get(
-                "status", "off")] += 1
+            review = scene.get("question_authoring", {})
+            question_reviews[review.get("status", "off")] += 1
+            for failure in review.get("failures", []):
+                question_failure_stages[failure.get("stage", "unknown")] += 1
+                question_guard_issues.update(failure.get("errors", []))
+            answer_key = json.dumps(scene.get("gold_answer", []),
+                                    ensure_ascii=False, sort_keys=True)
+            answer_signatures[answer_key] += 1
+            level = spec.get("difficulty_target", "unknown")
+            answer_by_difficulty.setdefault(level, Counter())[answer_key] += 1
             if "gold_program" in scene:
                 nodes = scene["gold_program"]["nodes"]
                 key = tuple((node["op"], tuple(node["inputs"]))
@@ -112,6 +123,26 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
         "source_modality_distribution": dict(modalities),
         "scenario_authoring": dict(scenario_reviews),
         "question_review": dict(question_reviews),
+        "question_rejections": {
+            "by_stage": dict(question_failure_stages),
+            "guard_reasons": dict(question_guard_issues),
+            "audit_note": "Rejected candidate previews are stored only "
+                          "in private question_authoring records.",
+        },
+        "answer_diversity": {
+            "distinct_exact_answer_sets": len(answer_signatures),
+            "largest_identical_answer_set": max(
+                answer_signatures.values(), default=0),
+            "by_difficulty": {
+                level: {
+                    "total": sum(counts.values()),
+                    "distinct_answer_sets": len(counts),
+                    "largest_repeated_answer_set": max(
+                        counts.values(), default=0),
+                } for level, counts in answer_by_difficulty.items()
+            },
+            "scope": "exact synthetic answer values; not a semantic diversity proof",
+        },
         "question_surface": {
             "unique_normalized_questions": len(exact_questions),
             "duplicate_normalized_questions": sum(

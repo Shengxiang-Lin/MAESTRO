@@ -43,6 +43,40 @@ def _mutate(sources: dict, source_id: str, answer: list[dict]) -> dict:
     return other
 
 
+def _mutate_answer_witness(sources: dict, source_id: str,
+                           gold_workproducts: list[dict]) -> dict:
+    """Flip ONE source observation that actually supports the Gold answer.
+
+    New data should not depend on the position of F001, Entry-01, or a
+    fixed category. Count/group-count output does not identify an entry,
+    so use the cited source fact instead of an output label.
+    """
+    refs = {ref for item in gold_workproducts
+            for ref in item["source_fact_refs"]
+            if ref.startswith(source_id + ":")}
+    if not refs:
+        raise ValueError("missing_gold_source_witness:" + source_id)
+    revised = copy.deepcopy(sources)
+    rows = revised[source_id]["observations"]
+    selected = next((
+        row for row in rows if refs.intersection(row["fact_refs"])
+    ), None)
+    if selected is None:
+        raise ValueError("referenced_source_fact_not_found:" + source_id)
+    fields = selected["values"]
+    if source_id == "register":
+        fields["active"] = False
+    elif source_id == "glossary":
+        fields["category_name"] = "__unmapped_intervention__"
+    elif source_id == "annotations":
+        fields["approved"] = False
+    elif source_id == "clearance":
+        fields["cleared"] = False
+    else:
+        raise ValueError("unknown_mutation_source:" + source_id)
+    return revised
+
+
 def weak_single_source_baseline(scene: dict) -> list[dict]:
     """A measured shortcut attempt, NOT exhaustive program minimization."""
     rows = [
@@ -160,7 +194,13 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             access_blocked = False
         except MissingSourceError:
             access_blocked = True
-        changed = _mutate(world["sources"], source_id, answer)
+        if spec.get("version") == "maestro.problem_spec.v2":
+            # Keep historical audit JSON byte-for-byte replay compatible.
+            changed = _mutate(world["sources"], source_id, answer)
+        else:
+            changed = _mutate_answer_witness(
+                world["sources"], source_id, macro["answer_with_provenance"]
+            )
         altered = answer_values(evaluate_program(program, sources=changed))
         semantic_effect = altered != answer
         counterfactual[source_id] = {
