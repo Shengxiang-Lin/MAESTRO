@@ -21,6 +21,21 @@ from envir.streaming import (
 )
 
 
+def _construction_identity(args) -> str:
+    return stable_signature({
+        "target": args.target,
+        "max_records": args.max_records,
+        "seed": args.seed,
+        "difficulty_mix": args.difficulty_mix,
+        "mmqa": str(args.mmqa),
+        "scenario_model": args.scenario_model,
+        "scenario_api_base": args.scenario_api_base,
+        "scenario_critic_model": args.scenario_critic_model,
+        "scenario_critic_api_base": args.scenario_critic_api_base,
+        "scenario_max_revisions": args.scenario_max_revisions,
+    })
+
+
 def _parallel_ordered(items, job, *, workers: int, desc: str,
                       no_progress: bool = False):
     """Show *completed* futures immediately, but keep deterministic row order."""
@@ -283,9 +298,7 @@ def construct_scenes(args) -> dict:
             "partial" if generated else "failed"
         ),
         "pipeline": "maestro_reasoning_program_world_taskgraph_question",
-        "run_identity": __import__(
-            "envir.generate_question.pipeline", fromlist=["_construction_identity"]
-        )._construction_identity(args),
+        "run_identity": _construction_identity(args),
         "seed_source": seed_source,
         "target": args.target,
         "attempted": len(chosen),
