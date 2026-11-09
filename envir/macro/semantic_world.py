@@ -515,3 +515,74 @@ def realize_spec_one(plan: dict, *, author, critic, max_revisions=2):
         "critic_calls": sum("review" in a for a in attempts),
         "revision_rounds": max(0, len(attempts) - 1),
     }
+
+
+def compile_semantic_world_scene(original: dict, spec: dict) -> dict:
+    """Rebuild World + EvidenceGraph AFTER semantic spec, preserve MacroPlan.
+
+    Accepts a precompiled TaskGraph bank to avoid rebuilding all KQA/MMQA
+    plans. The legacy *values*, source facts and feedback in 'original' are
+    NEVER read as inputs to this new World, only the frozen MacroPlan and
+    its deterministic seed are used. Original snippets are excluded.
+    """
+    if "scene_grounding" in original or "question_authoring" in original or (
+            "semantic_world_spec" in original):
+        raise ValueError("use_original_unrealized_taskgraph_bank")
+    problems = validate_spec(original, spec)
+    if problems:
+        raise ValueError("invalid_semantic_spec:" + ";".join(problems))
+    from .world import build_clean_world
+    from .evidence import run_clean_tasks
+    rebuilt = build_clean_world(
+        original,
+        seed=original["task_plan_provenance"]["seed"],
+        semantic_spec=spec,
+        contexts=None,
+    )
+    executed = run_clean_tasks(original, rebuilt)
+    public = copy.deepcopy(original["public"])
+    public["available_source_descriptions"] = [
+        {
+            "source_id": sid,
+            "title": source["title"],
+            "modality_hint": source["modality_hint"],
+            "representation": source["representation"],
+        } for sid, source in sorted(rebuilt["sources"].items())
+    ]
+    realized = {
+        **original,
+        "world": rebuilt,
+        **executed,
+        "public": public,
+        "semantic_world_spec": spec,
+    }
+    from .validation import validate_clean_scene
+    errors = validate_clean_scene(realized)
+    if errors:
+        raise ValueError("semantic_world_replay_failed:" + ";".join(errors))
+    return realized
+
+
+def validate_semantic_world_scene(scene: dict) -> list[str]:
+    """Pure replay from Plan + approved schema; detects value manipulation."""
+    spec = scene.get("semantic_world_spec")
+    if spec is None:
+        return []
+    errors = validate_spec(scene, spec)
+    if errors:
+        return errors
+    from .world import build_clean_world
+    try:
+        expected = build_clean_world(
+            scene,
+            seed=scene["task_plan_provenance"]["seed"],
+            semantic_spec=spec,
+            contexts=None,
+        )
+        if scene["world"] != expected:
+            errors.append("semantic_world_values_or_source_roles_drift")
+    except (ValueError, TypeError, KeyError, IndexError) as exc:
+        errors.append(
+            "semantic_world_reinstantiation_error:" +
+            type(exc).__name__ + ":" + str(exc)[:120])
+    return sorted(set(errors))
