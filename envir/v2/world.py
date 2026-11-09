@@ -90,7 +90,11 @@ def compile_program(spec: dict) -> dict:
             _node("earliest", "take", "ordered", limit=1),
         ]
         final = "earliest"
-    if family == "coverage_count":
+    if family == "category_distribution":
+        nodes.append(_node("category_summary", "group_count", final,
+                           field="category_name"))
+        output = "category_summary"
+    elif family == "coverage_count":
         nodes.append(_node("answer_count", "count", final))
         output = "answer_count"
     else:
