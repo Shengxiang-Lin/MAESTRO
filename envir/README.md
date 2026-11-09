@@ -22,7 +22,20 @@ python -m envir quality --config envir/config.yaml
 The implementation and detailed output contract are documented in
 [generate_question/README.md](generate_question/README.md).
 
-The current package only implements **Stage 1, Generate Question**.
+Stage 2, **Implement Subtask**, now materializes the frozen Macro
+execution into per-Subtask `answer` + evidence-grounded `trace_summary`.
+It reuses accepted Stage-1 private scenes and does not call a model:
+
+~~~bash
+python -m envir implement-subtasks \
+  --config envir/implement_subtask/config.yaml
+~~~
+
+See [implement_subtask/README.md](implement_subtask/README.md).
+Stage 3, Subtask scheduling and composition, remains separate and is not
+implemented here.
+
+Stage 1 remains Generate Question.
 Stage 2 (implement Subtask) and Stage 3 (compose/schedule Subtasks) have
 distinct future interfaces. They do not belong in this generator.
 

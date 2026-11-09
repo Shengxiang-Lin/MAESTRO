@@ -1,0 +1,224 @@
+"""Stage 2: turn frozen Macro programs into evidence-grounded Subtask feedback.
+
+This is an *oracle teacher materializer*: it does not run an LLM Sub-Agent.
+Each answer is copied from independently checked executable feedback, and
+every trace step is constructed from the exact deterministic Program run.
+"""
+from __future__ import annotations
+
+import json
+
+from envir.generate_question.compiler import run_macro_tasks
+from envir.generate_question.program_ir import evaluate_program, answer_values
+from envir.generate_question.quality import validate_replay
+
+
+def _fact_index(world: dict) -> dict[str, dict]:
+    index = {}
+    for source_id, source in world["sources"].items():
+        for observation in source["observations"]:
+            for fact_ref in observation["fact_refs"]:
+                if fact_ref in index:
+                    raise ValueError("duplicate_fact_ref:" + fact_ref)
+                index[fact_ref] = {
+                    "fact_ref": fact_ref,
+                    "source_id": source_id,
+                    "observation_id": observation["observation_id"],
+                    "values": dict(observation["values"]),
+                }
+    return index
+
+
+def _describe_operation(node: dict) -> str:
+    op = node["op"]
+    if op == "scan":
+        return f"Read the {node['source_id']} source to obtain relevant observations"
+    if op == "filter_eq":
+        return (f"Keep rows whose {node['field']} equals "
+                f"{node['value']!r}")
+    if op == "filter_gte":
+        return (f"Keep rows whose {node['field']} is at least "
+                f"{node['value']!r}")
+    if op == "join":
+        return (
+            f"Align the two input workproducts by "
+            f"{node['left_on']} = {node['right_on']}"
+        )
+    if op == "compare_fields":
+        comparison = {
+            "gte": "is at least", "lte": "is at most", "eq": "equals",
+            "ne": "differs from", "gt": "exceeds", "lt": "is below",
+        }.get(node.get("comparison"), node.get("comparison", "compares with"))
+        return (f"Check that {node['left_field']} {comparison} "
+                f"{node['right_field']}")
+    if op == "sort":
+        return (f"Order by {node['field']} "
+                f"{'descending' if node.get('descending') else 'ascending'}")
+    if op == "take":
+        return f"Select the first {node['limit']} row(s)"
+    if op == "project":
+        return "Keep only the output field(s): " + ", ".join(node["fields"])
+    if op == "unique":
+        return "Remove duplicate output rows"
+    if op == "count":
+        return "Count the remaining rows"
+    if op == "group_count":
+        return f"Count rows within each {node['field']} group"
+    if op == "attach_evidence":
+        return "Attach the source fact references supporting each result"
+    raise ValueError("unsupported_subtask_operation:" + op)
+
+
+def _reachable_source_ids(task_id: str, tasks: dict, memo: dict) -> set[str]:
+    if task_id in memo:
+        return memo[task_id]
+    task = tasks[task_id]
+    result = set(task["source_ids"])
+    for parent in task["depends_on"]:
+        result.update(_reachable_source_ids(parent, tasks, memo))
+    memo[task_id] = result
+    return result
+
+
+def _operator_evidence(
+    node: dict, product, trace_row: dict, fact_index: dict,
+    accessible_sources: set[str], *, evidence_limit: int,
+) -> dict:
+    actual_refs = sorted({
+        ref for row in product.rows for ref in row["support"]
+    })
+    if trace_row["source_fact_refs"] != actual_refs:
+        raise ValueError("primitive_trace_fact_refs_mismatch:" + node["id"])
+    for fact_ref in actual_refs:
+        fact = fact_index.get(fact_ref)
+        if fact is None:
+            raise ValueError("unknown_fact_ref:" + fact_ref)
+        if fact["source_id"] not in accessible_sources:
+            raise ValueError("unauthorized_fact_source:" + fact_ref)
+    return {
+        "node_id": node["id"],
+        "operation": node["op"],
+        "input_nodes": list(node["inputs"]),
+        "action": _describe_operation(node),
+        "observed_result": (
+            f"Produced {len(product.rows)} row(s) with "
+            + ", ".join(product.columns)
+        ),
+        "output_schema": list(product.columns),
+        "output_row_count": len(product.rows),
+        "supporting_fact_refs": actual_refs,
+        "evidence_atoms": [
+            fact_index[ref] for ref in actual_refs[:evidence_limit]
+        ],
+        "evidence_atoms_total": len(actual_refs),
+        "evidence_atoms_truncated": len(actual_refs) > evidence_limit,
+    }
+
+
+def realize_scene(scene: dict, *, evidence_limit: int = 12,
+                  strict: bool = True) -> dict:
+    """Build a complete, grounded Sub-Agent response for every Macro.
+
+    The Stage-1 scene is read-only. STRICT mode replays its frozen World,
+    Program, MacroGraph, Gold and feedback, before materializing any rows.
+    """
+    if not isinstance(evidence_limit, int) or evidence_limit < 0:
+        raise ValueError("evidence_limit must be a nonnegative integer")
+    if strict:
+        check = validate_replay(scene)
+        if check["status"] != "valid":
+            raise ValueError("source_scene_replay_invalid:" + repr(check["issues"]))
+    graph = scene["macro_graph"]
+    nodes = {n["id"]: n for n in scene["gold_program"]["nodes"]}
+    execution = evaluate_program(
+        scene["gold_program"], sources=scene["world"]["sources"]
+    )
+    trace = {row["node_id"]: row for row in execution["trace"]}
+    facts = _fact_index(scene["world"])
+    oracle = run_macro_tasks(graph, sources=scene["world"]["sources"])
+    if oracle["task_feedback"] != scene["task_feedback"]:
+        raise ValueError("macro_task_feedback_drift")
+    if oracle["answer"] != scene["gold_answer"]:
+        raise ValueError("macro_terminal_answer_drift")
+    tasks = {t["task_id"]: t for t in graph["tasks"]}
+    feedback = {item["task_id"]: item for item in oracle["task_feedback"]}
+    memo = {}
+    records = []
+    for wave in graph["reference_waves"]:
+        for macro_id in wave:
+            macro = tasks[macro_id]
+            result = feedback[macro_id]
+            accessible = _reachable_source_ids(macro_id, tasks, memo)
+            evidence_steps = []
+            for op in macro["operator_chain"]:
+                row = trace[op["id"]]
+                evidence_steps.append(_operator_evidence(
+                    nodes[op["id"]], execution["products"][op["id"]],
+                    row, facts, accessible, evidence_limit=evidence_limit
+                ))
+            terminal_schema = list(macro["outputs"]["typed_relation"])
+            if result["output_schema"] != terminal_schema:
+                raise ValueError("subtask_output_schema_mismatch:" + macro_id)
+            answer_with_provenance = result["workproduct"]
+            refs = sorted({
+                ref for item in answer_with_provenance
+                for ref in item["source_fact_refs"]
+            })
+            if set(refs) - set(facts):
+                raise ValueError("subtask_result_unknown_fact_refs:" + macro_id)
+            descriptions = [
+                step["action"] + f" ({step['output_row_count']} row(s))"
+                for step in evidence_steps
+            ]
+            summary = (
+                "To produce " + ", ".join(terminal_schema) + ", "
+                + "; then ".join(
+                    part[0].lower() + part[1:] for part in descriptions
+                ) + ". "
+                + f"The resulting workproduct has {result['result_rows']} row(s), "
+                + f"supported by {len(refs)} source fact reference(s)."
+            )
+            records.append({
+                "scene_task_id": scene["task_id"],
+                "macro_task_id": macro_id,
+                "depends_on": list(macro["depends_on"]),
+                "authorized_source_ids": list(macro["source_ids"]),
+                "output_schema": terminal_schema,
+                "answer": [
+                    dict(item["values"]) for item in answer_with_provenance
+                ],
+                "answer_with_provenance": answer_with_provenance,
+                "trace_summary": {
+                    "objective": "Produce " + ", ".join(terminal_schema),
+                    "summary": summary,
+                    "steps": evidence_steps,
+                    "upstream_macro_tasks": list(macro["depends_on"]),
+                    "direct_source_ids": list(macro["source_ids"]),
+                    "available_evidence_source_ids": sorted(accessible),
+                    "answer_supporting_fact_refs": refs,
+                },
+                "grounding": "exact_deterministic_oracle_not_llm_subagent",
+            })
+    if len(records) != graph["macro_task_count"]:
+        raise ValueError("incomplete_macro_task_feedback")
+    terminal = next(
+        row for row in records
+        if row["macro_task_id"] == graph["terminal_task_id"]
+    )
+    if sorted(map(_canonical, terminal["answer"])) != sorted(
+        map(_canonical, scene["gold_answer"])
+    ):
+        raise ValueError("stage2_terminal_answer_mismatch")
+    return {
+        "scene_task_id": scene["task_id"],
+        "question": scene["question"],
+        "terminal_macro_task_id": graph["terminal_task_id"],
+        "reference_waves": graph["reference_waves"],
+        "macro_tasks": records,
+        "macro_task_count": len(records),
+        "provenance": "frozen_stage1_world_and_program_exact_replay",
+    }
+
+
+def _canonical(value: dict) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
