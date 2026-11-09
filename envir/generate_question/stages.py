@@ -395,6 +395,12 @@ def _naturalize_entry(scene: dict, *, clients, max_revisions: int) -> dict:
 
 
 def review_questions(args) -> dict:
+    """Review frozen scenes with immediate per-Question durable streaming.
+
+    Accepted private/public Question files are updated as decisions are
+    committed; fallback/rejected decisions appear in failed.jsonl.
+    An interruption can resume safely from the ordered Question journal.
+    """
     if args.output_dir.resolve() == args.scenes.parent.resolve():
         raise ValueError("Question review requires a separate output directory")
     if args.question_workers < 1 or args.max_revisions < 0 or args.max_revisions > 8:
@@ -402,60 +408,154 @@ def review_questions(args) -> dict:
     rows = read_jsonl(args.scenes, limit=args.max_records)
     if not rows:
         raise ValueError("no scenes loaded")
-    for scene in tqdm(rows, desc="Validate frozen scenes", unit="task",
-                      disable=getattr(args, "no_progress", False)):
-        result = validate_replay(scene)
-        if result["status"] != "valid":
-            raise ValueError("invalid incoming scene:" + str(result))
-        if scene.get("question_authoring") is not None:
-            raise ValueError("input already naturalized")
+    with tqdm(rows, desc="Validate frozen scenes", unit="task",
+              disable=getattr(args, "no_progress", False),
+              dynamic_ncols=True) as bar:
+        for ix, scene in enumerate(bar, 1):
+            result = validate_replay(scene)
+            if result["status"] != "valid":
+                raise ValueError("invalid incoming scene:" + str(result))
+            if scene.get("question_authoring") is not None:
+                raise ValueError("input already naturalized")
+            bar.set_postfix({"accepted": ix, "rejected": 0}, refresh=False)
     files = _out_files(args.output_dir)
+    progress_path = args.output_dir / "question_authoring_progress.json"
     if not args.overwrite and any(path.exists() for path in files.values()):
-        raise FileExistsError("Question review output exists")
+        if files["summary"].exists() or not progress_path.exists():
+            raise FileExistsError(
+                "Question review output exists without resumable progress; "
+                "choose a new directory or enable overwrite"
+            )
     clients = _llm_clients(args)
+
     def one(scene):
         return _naturalize_entry(
             scene, clients=clients, max_revisions=args.max_revisions
         )
-    updated = _parallel_ordered(
-        rows, one, workers=args.question_workers,
-        desc="Question Author/Critic",
-        no_progress=getattr(args, "no_progress", False),
-    )
-    statuses = Counter(s["question_authoring"]["status"] for s in updated)
-    accepted = [s for s in updated
-                if s["question_authoring"]["status"] == "accepted"]
-    failed = [{
-        "task_id": s["task_id"], "stage": "question",
-        "review": s["question_authoring"],
-        "reference_question": reference_question(s["problem_spec"]),
-        "problem_spec": s["problem_spec"],
-    } for s in updated if s["question_authoring"]["status"] != "accepted"]
+
+    def classify(scene):
+        review = scene.get("question_authoring", {})
+        return (
+            review.get("status") == "accepted",
+            scene,
+            {"status": review.get("status", "failed")},
+        )
+
+    def on_exception(index, exc):
+        failed_scene = copy.deepcopy(rows[index])
+        failed_scene["question_authoring"] = {
+            "status": "failed", "attempts": 0,
+            "failures": [{
+                "stage": "backend",
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:220],
+            }],
+        }
+        return False, failed_scene, {
+            "status": "failed", "error": str(exc)[:220],
+        }
+
+    ids = [scene["task_id"] for scene in rows]
+    signature = stable_signature({
+        "stage": "question_author_critic.v1",
+        "ids": ids,
+        "scene_bank_hash": file_digest(args.scenes),
+        "model": args.question_model,
+        "api_base": args.question_api_base,
+        "critic_model": args.question_critic_model,
+        "critic_api_base": args.question_critic_api_base,
+        "max_revisions": args.max_revisions,
+        "question_code": file_digest(Path(__file__).with_name("question.py")),
+        "stage_code": file_digest(Path(__file__)),
+        "backend_code": file_digest(Path(__file__).with_name("backend.py")),
+    })
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    _jsonl(files["private"], accepted)
-    _jsonl(files["public"], [s["public"] for s in accepted])
-    _jsonl(files["failed"], failed)
-    _jsonl(files["audit"], [{
-        "task_id": s["task_id"],
-        "difficulty": s["difficulty_audit"],
-        "question_authoring": s["question_authoring"],
-    } for s in accepted])
-    summary = {
-        "status": (
-            "done" if len(accepted) == len(rows)
-            else "partial" if accepted else "failed"
-        ),
-        "pipeline": "maestro_frozen_program_question_author_critic",
-        "source_scenes": str(args.scenes),
-        "attempted": len(updated),
-        "generated": len(accepted),
-        "failed": len(failed),
-        "question_results": dict(statuses),
-        "world_program_macrograph_unmodified": True,
-        "accepted_question_equivalence": "critic_judgment_not_formal_proof",
-        "files": {key: str(path) for key, path in files.items()},
-    }
-    _json(files["summary"], summary)
-    return summary
+    with output_lock(args.output_dir, "question_authoring"):
+        with OrderedJournal(
+            args.output_dir, "question_authoring", signature, ids,
+            flush_every=getattr(args, "flush_every", 1),
+            restart=args.overwrite,
+        ) as journal:
+            statuses = Counter()
+            accepted_count = rejected_count = 0
 
+            def summary() -> dict:
+                finished = journal.completed == len(rows)
+                return {
+                    "status": (
+                        "running" if not finished else
+                        "done" if accepted_count == len(rows) else
+                        "partial" if accepted_count else "failed"
+                    ),
+                    "pipeline": "maestro_frozen_program_question_author_critic",
+                    "source_scenes": str(args.scenes),
+                    "attempted": len(rows),
+                    "completed": journal.completed,
+                    "generated": accepted_count,
+                    "failed": rejected_count,
+                    "question_results": dict(statuses),
+                    "world_program_macrograph_unmodified": True,
+                    "accepted_question_equivalence": (
+                        "critic_judgment_not_formal_proof"
+                    ),
+                    "streaming": {
+                        "ordered_writes": True,
+                        "flush_every": getattr(args, "flush_every", 1),
+                        "resumable": True,
+                        "checkpoint": str(journal.state_path),
+                        "resumed_prefix": journal.completed,
+                    },
+                    "files": {key: str(path) for key, path in files.items()},
+                }
 
+            with (files["private"].open("w", encoding="utf-8") as private,
+                  files["public"].open("w", encoding="utf-8") as public,
+                  files["audit"].open("w", encoding="utf-8") as audit,
+                  files["failed"].open("w", encoding="utf-8") as failed):
+                def publish(index, good, scene, meta, *, snapshot=True):
+                    nonlocal accepted_count, rejected_count
+                    review = scene.get("question_authoring", {})
+                    statuses[review.get("status", "failed")] += 1
+                    if good:
+                        accepted_count += 1
+                        private.write(json.dumps(scene, ensure_ascii=False) + "\n")
+                        public.write(json.dumps(scene["public"], ensure_ascii=False) + "\n")
+                        audit.write(json.dumps({
+                            "task_id": scene["task_id"],
+                            "difficulty": scene["difficulty_audit"],
+                            "question_authoring": review,
+                        }, ensure_ascii=False) + "\n")
+                    else:
+                        rejected_count += 1
+                        failed.write(json.dumps({
+                            "task_id": scene["task_id"], "stage": "question",
+                            "review": review,
+                            "reference_question": reference_question(
+                                scene["problem_spec"]
+                            ),
+                            "problem_spec": scene["problem_spec"],
+                        }, ensure_ascii=False) + "\n")
+                    # Make user-visible output available immediately, while
+                    # the journal checkpoint guarantees crash-safe replay.
+                    for stream in (private, public, audit, failed):
+                        stream.flush()
+                    if snapshot:
+                        _json(files["summary"], summary())
+
+                try:
+                    # Rebuild public files solely from committed checkpoints.
+                    # All half-written tails from a crash are discarded.
+                    for idx, (good, payload, meta) in enumerate(journal.replay()):
+                        publish(idx, good, payload, meta, snapshot=False)
+                    _json(files["summary"], summary())
+                    run_ordered(
+                        rows, one, classify, journal=journal,
+                        workers=args.question_workers,
+                        desc="Question Author/Critic",
+                        no_progress=getattr(args, "no_progress", False),
+                        on_commit=publish, on_exception=on_exception,
+                    )
+                    result = summary()
+                finally:
+                    _json(files["summary"], summary())
+                return result
