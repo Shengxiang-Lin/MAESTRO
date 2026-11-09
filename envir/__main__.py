@@ -30,6 +30,8 @@ def parser() -> argparse.ArgumentParser:
     generate.add_argument("--target", type=int,
                           help="Override generation.target from YAML")
     generate.add_argument("--no-progress", action="store_true")
+    generate.add_argument("--flush-every", type=int,
+                          help="Commit a durable checkpoint every N LLM reports")
     audit = sub.add_parser("quality",
                            help="Read-only strict replay and MacroGraph/Question audit")
     audit.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -63,6 +65,8 @@ def parser() -> argparse.ArgumentParser:
     naturalize.add_argument("--max-scenes", type=int,
                             help="Process a small scene subset for testing")
     naturalize.add_argument("--no-progress", action="store_true")
+    naturalize.add_argument("--flush-every", type=int,
+                            help="Commit a durable checkpoint every N Macro reports")
     return root
 
 
@@ -92,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
                 options[override] = value
         if cli.no_progress:
             options["no_progress"] = True
+        if cli.flush_every is not None:
+            options["flush_every"] = cli.flush_every
         result = naturalize_subtasks(**options)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["status"] in {"done", "partial"} else 1
@@ -101,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
             config, output_dir=cli.output_dir,
             target=cli.target, no_progress=cli.no_progress,
         )
+        if cli.flush_every is not None:
+            options.flush_every = cli.flush_every
         result = generate_questions(options)
     else:
         config_args = args_from_config(config)
