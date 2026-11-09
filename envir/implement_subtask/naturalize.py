@@ -138,10 +138,20 @@ def naturalize_subtasks(
 
     def review(entry):
         sid, row, question, is_terminal = entry
-        accepted, feedback = author_critic_report(
-            row, question=question, author=author, critic=critic,
-            max_revisions=max_revisions, is_terminal=is_terminal,
-        )
+        try:
+            accepted, feedback = author_critic_report(
+                row, question=question, author=author, critic=critic,
+                max_revisions=max_revisions, is_terminal=is_terminal,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            accepted, feedback = None, {
+                "status": "failed", "attempts": 0,
+                "failures": [{
+                    "stage": "oracle_contract",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:240],
+                }],
+            }
         return sid, row["macro_task_id"], accepted, feedback
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
