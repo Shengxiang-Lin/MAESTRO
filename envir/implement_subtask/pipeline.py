@@ -59,50 +59,51 @@ def materialize_subtasks(*, scenes_path: Path, output_dir: Path,
     completed_macros = 0
     failures = Counter()
     macro_sizes = Counter()
+    completed_items = 0
     with (temp_paths["subtasks"].open("w", encoding="utf-8") as tasks_file,
           temp_paths["scene_index"].open("w", encoding="utf-8") as index_file,
           temp_paths["failed"].open("w", encoding="utf-8") as failures_file):
         with tqdm(rows, desc="Stage 2: Macro answers & traces",
                   unit="scene", disable=no_progress,
                   dynamic_ncols=True) as bar:
-          for scene in bar:
-              scene_id = scene.get("task_id")
-              try:
-                  status = scene.get("question_authoring", {}).get("status")
-                  if status != "accepted":
-                      raise ValueError("stage1_question_not_accepted")
-                  result = realize_scene(
-                      scene, evidence_limit=evidence_limit,
-                      strict=strict_replay,
-                  )
-              except (ValueError, KeyError, TypeError, IndexError) as exc:
-                  reason = type(exc).__name__ + ":" + str(exc)[:400]
-                  failures[reason] += 1
-                  failures_file.write(json.dumps({
-                      "scene_task_id": scene_id, "stage": "implement_subtask",
-                      "status": "failed", "reason": reason,
-                  }, ensure_ascii=False) + "\n")
-                  continue
-              # Commit the entire scene's Macro rows only after successful
-              # evidence validation; avoid publishing partial DAGs.
-              for item in result["macro_tasks"]:
-                  tasks_file.write(json.dumps(
-                      item, ensure_ascii=False
-                  ) + "\n")
-              index_file.write(json.dumps({
-                  key: value for key, value in result.items()
-                  if key != "macro_tasks"
-              }, ensure_ascii=False) + "\n")
-              completed_scenes += 1
-              completed_macros += result["macro_task_count"]
-              macro_sizes[result["macro_task_count"]] += 1
-            bar.set_postfix({
-                "accepted": completed_scenes,
-                "rejected": len(rows) if False else (
-                    bar.n + 1 - completed_scenes
-                ),
-                "macros": completed_macros,
-            }, refresh=False)
+            for scene in bar:
+                completed_items += 1
+                scene_id = scene.get("task_id")
+                try:
+                    status = scene.get("question_authoring", {}).get("status")
+                    if status != "accepted":
+                        raise ValueError("stage1_question_not_accepted")
+                    result = realize_scene(
+                        scene, evidence_limit=evidence_limit,
+                        strict=strict_replay,
+                    )
+                except (ValueError, KeyError, TypeError, IndexError) as exc:
+                    reason = type(exc).__name__ + ":" + str(exc)[:400]
+                    failures[reason] += 1
+                    failures_file.write(json.dumps({
+                        "scene_task_id": scene_id, "stage": "implement_subtask",
+                        "status": "failed", "reason": reason,
+                    }, ensure_ascii=False) + "\n")
+                else:
+                    # Publish only the entire scene's validated Macro rows.
+                    for item in result["macro_tasks"]:
+                        tasks_file.write(json.dumps(
+                            item, ensure_ascii=False
+                        ) + "\n")
+                    index_file.write(json.dumps({
+                        key: value for key, value in result.items()
+                        if key != "macro_tasks"
+                    }, ensure_ascii=False) + "\n")
+                    completed_scenes += 1
+                    completed_macros += result["macro_task_count"]
+                    macro_sizes[result["macro_task_count"]] += 1
+                for stream in (tasks_file, index_file, failures_file):
+                    stream.flush()
+                bar.set_postfix({
+                    "accepted": completed_scenes,
+                    "rejected": completed_items - completed_scenes,
+                    "macros": completed_macros,
+                }, refresh=False)
     for key, path in temp_paths.items():
         path.replace(filenames[key])
     status = (
