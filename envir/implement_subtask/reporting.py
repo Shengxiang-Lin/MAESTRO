@@ -97,6 +97,12 @@ repair_hint must NEVER suggest deleting, filtering, adding or changing
 the frozen answer rows.
 
 For empty results, a genuine complete "no matches" is correct, not partial.
+For judging a structured result, treat exact_oracle_answer as the
+COMPLETE authoritative relation. sampled_evidence_atoms is an abbreviated
+display for explanation, NOT an exhaustive list of records. NEVER call
+an exact verified result fabricated just because its rows are absent
+from the sampled evidence atoms. Critique unsupported claims in the
+summary instead, using exact_oracle_answer as ground truth.
 For a structured candidate result, the application has already verified
 an EXACT match to the full frozen answer rows; do not reject it merely
 because it is rendered as a list/array. Review the proposed natural
@@ -298,6 +304,38 @@ def _scan_claims_completed_filter(text: str) -> bool:
     return False
 
 
+# Detect only a POSITIVE assertion that the current relation contains
+# exclusively active rows. "all rows contain the active field", "all
+# records, including inactive ones" and "all active/inactive statuses"
+# are NOT such assertions. Older broad \b all ... active \b matching
+# falsely rejected 42 otherwise accurate Author attempts in one pilot.
+_ALL_ACTIVE_ASSERTION = re.compile(
+    r"\b(?:all|every|each)\s+(?:(?:of\s+)?the\s+)?"
+    r"(?:(?:\d+|returned|retrieved|matched|selected|output|candidate|qualifying)\s+){0,3}"
+    r"(?:records|rows|entries|items|candidates)\s+"
+    r"(?:are|were|is|have\s+been|has\s+been)\s+"
+    r"(?:marked\s+as\s+|flagged\s+as\s+|confirmed\s+as\s+)?active\b"
+    r"|\b(?:only|exclusively)\s+active\s+"
+    r"(?:rows|records|entries|items|candidates)\b"
+    r"|\b(?:all|every|each)\s+(?:record|row|entry|item|candidate)\s+"
+    r"(?:is|was|has\s+been)\s+(?:marked\s+as\s+)?active\b"
+    r"|\b(?:all|every|each)\s+"
+    r"(?:(?:returned|retrieved|matched|selected)\s+)?"
+    r"(?:records|rows|entries|items|candidates)\s+"
+    r"(?:have|had)\s+active\s+(?:=|status\s+(?:=|of|as))\s*"
+    r"(?:true|yes)\b"
+    r"|\bactive\s*(?:=|equals|is)\s*(?:true|yes)\s+"
+    r"(?:for|across|in)\s+all\b"
+    r"|\b(?:returned|retained|selected|identified|produced|"
+    r"extracted|includes?|consists\s+of|contains?)\s+"
+    r"(?:only|exclusively)\s+(?:records|rows|entries|items|candidates)\s+"
+    r"(?:that\s+(?:are|were)\s+)?(?:marked\s+as\s+)?active\b"
+    r"|\b(?:records|rows|entries|items|candidates)\s+"
+    r"(?:are|were)\s+all\s+active\b",
+    re.I,
+)
+
+
 def _stage_scope_issues(text: str, contract: dict) -> list[str]:
     """High-precision claims contradicted by the frozen Macro output/ops.
 
@@ -310,12 +348,7 @@ def _stage_scope_issues(text: str, contract: dict) -> list[str]:
     terminal = contract["macro_is_terminal"]
     errors = []
     if "active" in fields and any(row.get("active") is False for row in rows):
-        if re.search(
-            r"\b(?:all|every|each)\b.{0,85}\bactive\b"
-            r"|\bonly\s+active\s+(?:entries|records|rows)\b"
-            r"|\b(?:records|entries|rows)\s+(?:are|were)\s+all\s+active\b",
-            text, re.I,
-        ):
+        if _ALL_ACTIVE_ASSERTION.search(text):
             errors.append("claims_all_active_with_inactive_rows")
     if "approved" in fields and any(row.get("approved") is False for row in rows):
         if re.search(
