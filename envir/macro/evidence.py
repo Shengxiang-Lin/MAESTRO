@@ -208,18 +208,6 @@ def _execute_operation(task: dict, rows: list[dict],
             for row in rows)
     elif op in {"answer_synthesis"}:
         # A structured *demonstration* result, not a Gold answer claim.
-        result["candidate_selection"] = (
-            [by_time[0]["candidate_key"]]
-            if family == "temporal" else
-            [ranked[0]["candidate_key"]]
-            if family == "comparison" else
-            [row["candidate_key"] for row in ranked]
-            if family == "prioritization" else
-            [row["candidate_key"] for row in rows
-             if row["attribute_present"] and row["score"] >= 50]
-            if family == "feasibility" else
-            list(selected)
-        )
         # The final GoalReport must expose the FULL user-requested
         # work product. Intermediate scores/groups are not a substitute.
         if family == "comparison":
