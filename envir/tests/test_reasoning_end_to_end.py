@@ -283,6 +283,9 @@ class GenerationQualityRegressionTests(unittest.TestCase):
             run_seed=17, difficulty="hard"
         )
         spec["version"] = "maestro.problem_spec.v3"
+        spec["reasoning_pattern"] = "approval"
+        spec["family"] = "priority"
+        spec["requirements"]["answer_kind"] = "single_entry"
         reference = reference_question(spec)
         seen = []
         class EchoAuthor:
