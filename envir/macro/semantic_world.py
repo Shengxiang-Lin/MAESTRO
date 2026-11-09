@@ -8,15 +8,23 @@ World facts, EvidenceGraphs and Feedback must be rebuilt and replayed.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 
 from envir.schema import digest
 from .goal_grammar import GOALS
 from .semantic_contract import GOAL_SEMANTICS
-from .scene_grounding import fingerprint
+from .goal_invariants import goal_rules, goal_text_issues
 
-VERSION = "semantic_world_spec_v1"
+VERSION = "semantic_world_spec_v2"
+
+
+def fingerprint(value) -> str:
+    packed = json.dumps(value, ensure_ascii=False, sort_keys=True,
+                        separators=(",", ":"))
+    return hashlib.sha256(packed.encode("utf-8")).hexdigest()
+
 BINDING_FIELDS = (
     "candidate_kind", "score", "positive_flag",
     "relative_time_index", "group_key",
@@ -46,6 +54,10 @@ pretend a real film is a sports league or a named song is a corporation.
 Use general knowledge ONLY to decide a natural hypothetical subject type,
 not to assert real identities, dates, award winners, media contents or events.
 
+The frozen Goal provides explicit Python-authored execution_rules.
+Those are AUTHORITATIVE, including rank direction, thresholds and answer
+scope. Use a compatible user_need; never reinterpret a descending ranking as
+ascending, group overlap as identity matching, or a conjunction as OR.
 The frozen Goal supports ONLY abstract operations, such as count marked
 records, rank numeric scores, filter two known conditions, order relative
 record indices, or match recorded group keys. Select domain-meaningful
@@ -110,6 +122,9 @@ source_faithfulness: exactly the existing source modalities/IDs, nothing
 that implies original media were examined or a new source was acquired.
 goal_compatibility: the proposed user_need only requires the frozen
 operation/threshold/candidate scope/output, no extra data or computations.
+Enforce goal_contract.execution_rules literally: ranking direction, AND
+predicate, categorical intersection vs identity and explicit reference links.
+An empty intersection or eligibility result is valid.
 no_unsupported_media_or_history: no claims of real events, observed image
 details, named historical outcomes, actual dates or genuine measured stats.
 
@@ -207,6 +222,7 @@ def goal_contract_from_plan(plan: dict) -> dict:
         "hard_constraints": list(constraints),
         "expected_result": result,
         "artifact_type": GOALS[intent]["artifact"],
+        "execution_rules": goal_rules(intent),
         "source_universe": [
             item["source_id"] for item in source_manifest_from_plan(plan)
         ],
@@ -305,6 +321,7 @@ def validate_proposal(plan: dict, proposal: dict) -> list[str]:
         errors.append("duplicate_source_id")
     if errors:
         return sorted(set(errors))
+    errors.extend(goal_text_issues(plan["goal"]["intent"], proposal["user_need"]))
     prose = _all_prose(proposal)
     # Reject explicit claims of perception, not legitimate hypothetical roles.
     if re.search(

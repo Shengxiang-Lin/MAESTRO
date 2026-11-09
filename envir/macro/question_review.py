@@ -1,9 +1,8 @@
-"""V4 optional LLM Question Author -> local Critic -> bounded revision -> accept.
+"""Canonical semantic-World Question Author -> Critic -> bounded revision.
 
-Adapted from environment/question_generation/{realization,question_review}.py,
-but unlike Stage 2's KoPL-specific question review, this module checks that a
-natural user Question is still implied by the *same immutable Macro Task
-work goals, deliverable and dependencies*.
+Enforces the same immutable Macro Goal, typed WorkProducts, source scopes
+and domain-semantic World contract as the simulator. No optional legacy
+Question policy or old post-World Grounding interface remains.
 
 Only a sanitized Task/Question contract is passed to either LLM. The actual
 DAG IDs, reference waves, KoPL programs, private evidence, Feedback and world
@@ -14,13 +13,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 
 from environment.question_generation.backend import BackendError
 from .question import author_question, task_level_brief
 from .semantic_contract import semantic_contract, semantic_surface_issues
 from .realization_brief import question_realization_brief
+from .goal_invariants import (
+    goal_text_issues, question_surface_issues, goal_rules,
+)
 
 
 AUTHOR_SYSTEM = """You are an experienced benchmark QUESTION WRITER.
@@ -52,6 +52,18 @@ WRITE THE QUESTION AFRESH:
   entry labels and domain field meanings as fictional scenario language.
   These labels are source-bound synthetic interpretations, NOT historical
   facts or observed media contents. Do not invent anything beyond them.
+- When using the pre-approved semantic World, preserve the Python-authored
+  execution rules: comparison/prioritization = DESCENDING recorded score;
+  temporal = ASCENDING relative order; feasibility = positive mark AND
+  score>=50; intersection = shared CATEGORIES across sources, NOT
+  same person; composition = EXPLICIT directed references, NOT category
+  equality or proof of same entity.
+- Do not expose any backend WorkProduct/Report class (PriorityReport,
+  ComparativeReport etc.), fields with underscores, synthetic/simulator
+  markers, machine source/candidate keys, agent/task labels, or internal
+  implementation terms. These are NEVER natural user questions.
+- If a source is merely an image/video modality handle, NEVER say what
+  the unseen media visually shows, proves, or confirms.
 - Keep intermediate research, matching and verification steps implicit.
 
 PRESERVE ONLY THESE HARD SEMANTICS:
@@ -87,22 +99,23 @@ Five evidence-based decisions, each yes/no/uncertain:
   or source modality, and that omission is NOT a failure.
 - source_faithful: no invented concrete entity, source subtype, observed
   media contents, contextual facts or undocumented real-world properties.
-  If semantic_contract contains synthetic_world_specification, the
+  If semantic_contract contains synthetic_world_specification, its
   domain-specific schema, fictional candidate labels, source roles and
   Goal-compatible need were defined BEFORE numeric World sampling. These
   are licensed hypothetical meanings, NOT claims about real-world events,
-  original images or observed historical facts.
-  If semantic_contract contains synthetic_scenario_contract, its
-  source-bound hypothetical setting, candidate kind, field meanings and
-  fixed question_intent are licensed, NOT as historical or media facts.
-  The same allowance applies to legacy synthetic_scene_interpretation.
-  Do not reject approved hypothetical labels merely because they are
-  absent from the Macro TaskGraph. Reject additions beyond the overlay,
-  especially unprovided historical events or claimed image observations.
+  original images or observed historical facts. Do not reject these labels
+  merely because they were not present in the Macro TaskGraph; reject
+  invented new facts, extra operations or observed media claims.
   Generic 'records', 'sources', 'materials' and neutral 'I'm reviewing' are
   permitted, not invented evidence.
 - answer_equivalent: the requested answer has the same substantive result,
-  full ranking/sequence/count/filters, and candidate scope. Source citations
+  full ranking/sequence/count/filters, and candidate scope. Enforce EXACT
+  execution_rules from the contract, especially DESCENDING score, AND
+  eligibility, relative chronology, category-vs-entity distinction and
+  directed cross-source references. Reject "shared category means same
+  player/person", invented image observations, and accidental question
+  text such as PriorityReport, synthetic, or relative_time_index.
+  Source citations
   and verification still belong to the frozen solver contract, but need NOT
   be explicitly requested in a natural user Question; omitting those words
   is not a task change. Do not infer missing substantive result components.
@@ -167,35 +180,9 @@ CRITIC_SCHEMA = {
     "additionalProperties": False,
 }
 
-# V4.4 uses structured critical axes so "natural professional restatement"
-# cannot quietly count as PASS when the same model detects extra workflow
-# instructions, unsupported source claims, or a new final deliverable.
-CRITIC_SCHEMA_V44 = {
-    "type": "object",
-    "properties": {
-        "goal_alignment": {"enum": ["same", "changed", "uncertain"]},
-        "task_sufficiency": {"enum": ["sufficient", "insufficient", "uncertain"]},
-        "user_framing": {"enum": ["user_goal", "workflow_instructions", "robotic"]},
-        "unsupported_additions": {
-            "type": "array", "items": {"type": "string"},
-        },
-        **CRITIC_SCHEMA["properties"],
-    },
-    "required": [
-        "goal_alignment", "task_sufficiency", "user_framing",
-        "unsupported_additions", "verdict", "naturalness",
-        "summary", "differences",
-    ],
-    "additionalProperties": False,
-}
-
-
-# Strict, versioned Question-only semantic review. Legacy audits keep their
-# original schema; this does not modify downstream Task/Trace/Answer work.
-SEMANTIC_REVIEW_POLICY = "taskfirst_natural_question_v2"
-LEGACY_SEMANTIC_REVIEW_POLICY = "taskfirst_semantic_contract_v1"
-SEMANTIC_REVIEW_PIPELINE = "taskfirst_natural_question_author_critic_v2"
-LEGACY_SEMANTIC_REVIEW_PIPELINE = "taskfirst_question_semantic_author_critic_v1"
+# One current Question-only semantic review policy.
+SEMANTIC_REVIEW_POLICY = "semantic_world_natural_question_v3"
+SEMANTIC_REVIEW_PIPELINE = "taskfirst_semantic_world_author_critic_v3"
 SEMANTIC_AXES = (
     "objective_equivalent",
     "solution_preserved",
@@ -230,50 +217,6 @@ STOP = {
     "potential", "affecting", "associated", "there", "where", "into",
     "relating", "review", "records", "current", "available", "relevant",
 }
-STEMS = {
-    "impact": ("impact", "affect", "consequen", "effect", "implication"),
-    "compliance": ("complian", "require", "rule", "policy", "eligib",
-                   "authoriz", "permit", "satisf", "violat"),
-    "reconciliation": ("reconcil", "discrepan", "conflict", "inconsisten",
-                       "differen", "match", "account", "align"),
-    "mitigation": ("mitigat", "respond", "response", "remed", "recommend",
-                   "action", "address", "solution"),
-    "prioritization": ("priorit", "urgent", "rank", "first", "order",
-                       "sequence"),
-    "comparison": ("compar", "differen", "relative", "versus", "better",
-                   "which", "more", "less"),
-    "feasibility": ("feasib", "possible", "practic", "implement",
-                    "workable", "constraint"),
-    "timeline": ("timeline", "chronolog", "sequence", "when", "time",
-                 "order", "occur"),
-}
-STYLE_HINTS = {
-    "composition": [
-        "A concise direct question with just enough real-world context",
-        "A short first-person user concern followed by the key decision question",
-        "An applied question about the overall outcome, with no procedural checklist",
-    ],
-    "intersection": [
-        "A straightforward user question about the issue to resolve",
-        "A compact situation description plus a focused question",
-        "A first-person concern with an implicit need to reconcile several facts",
-    ],
-    "comparison": [
-        "A direct comparison question without listing the steps of analysis",
-        "A practical choice framed as a short natural question",
-        "A user decision request emphasizing the outcome, not investigation steps",
-    ],
-    "aggregation": [
-        "A succinct synthesis request, expressed as a real user need",
-        "A single compact question about the overall result",
-    ],
-    "lookup": [
-        "A direct fact-finding question with a clear target",
-        "A natural context sentence followed by one focused question",
-    ],
-}
-
-
 def _fingerprint(value) -> str:
     packed = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(packed.encode("utf-8")).hexdigest()
@@ -414,14 +357,6 @@ def minimal_question_guards(candidate: str) -> list[str]:
     ):
         errors.append("non_user_question_format")
     return sorted(set(errors))
-
-
-def style_hint(scene: dict) -> str:
-    intent = scene["goal"]["intent"]
-    choices = STYLE_HINTS.get(intent, STYLE_HINTS["lookup"])
-    seed = int(_fingerprint([scene["task_id"], "question_style"])[:12], 16)
-    return choices[seed % len(choices)]
-
 
 
 # High-precision additions that materially narrow otherwise generic
@@ -572,7 +507,7 @@ def surface_issues(scene: dict, candidate: str, *, baseline: str | None = None) 
 
 
 def _validate_review(value: dict, *, policy: str | None = None) -> dict:
-    """Validate critic protocol. V4.1-V4.3 audits keep their original format."""
+    """Validate the canonical semantic Question Critic protocol."""
     if not isinstance(value, dict):
         raise ValueError("critic_review_not_object")
     verdict = value.get("verdict")
@@ -626,7 +561,7 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
             )} for diff in differences
         ],
     }
-    if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}:
+    if policy == SEMANTIC_REVIEW_POLICY:
         axes = {key: value.get(key) for key in SEMANTIC_AXES}
         framing = value.get("user_framing")
         additions = value.get("unsupported_additions")
@@ -652,39 +587,6 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
             **axes,
             "user_framing": framing,
             "unsupported_additions": list(additions),
-        })
-    if policy in {"v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}:
-        alignment = value.get("goal_alignment")
-        sufficiency = value.get("task_sufficiency")
-        framing = value.get("user_framing")
-        additions = value.get("unsupported_additions")
-        if (alignment not in {"same", "changed", "uncertain"}
-                or sufficiency not in {"sufficient", "insufficient", "uncertain"}
-                or framing not in {"user_goal", "workflow_instructions", "robotic"}
-                or not isinstance(additions, list) or len(additions) > 5
-                or any(not isinstance(x, str) or not x.strip()
-                       for x in additions)):
-            raise ValueError("critic_v44_diagnostic_axes_invalid")
-        if verdict == "pass" and (
-            alignment != "same" or sufficiency != "sufficient"
-            or framing != "user_goal" or additions
-        ):
-            raise ValueError("critic_v44_pass_contradicts_diagnostics")
-        if verdict == "revise" and (alignment == "uncertain" or
-                                    sufficiency == "uncertain"):
-            # Doubt must not be transformed into a confident repair decision.
-            raise ValueError("critic_v44_uncertain_as_revision")
-        if verdict == "uncertain" and alignment == "same" and (
-            sufficiency == "sufficient" and framing == "user_goal"
-            and not additions and naturalness == "acceptable"
-            and not differences
-        ):
-            raise ValueError("critic_v44_uncertain_without_issue")
-        output.update({
-            "goal_alignment": alignment,
-            "task_sufficiency": sufficiency,
-            "user_framing": framing,
-            "unsupported_additions": additions[:5],
         })
     return output
 
@@ -781,6 +683,8 @@ def naturalize_one(scene: dict, *, author, critic,
         row["candidate"] = candidate
         issues = minimal_question_guards(candidate)
         issues.extend(semantic_surface_issues(candidate, contract))
+        issues.extend(question_surface_issues(candidate))
+        issues.extend(goal_text_issues(scene["goal"]["intent"], candidate))
         from envir.schema import normalize_label
         source_original = scene.get("source_priors", {}).get(
             "MultiModalQA", {}).get("original_question", "")
@@ -799,6 +703,7 @@ def naturalize_one(scene: dict, *, author, critic,
             "candidate_question": candidate,
             "macro_task_graph": task_view,
             "semantic_contract": contract,
+            "goal_execution_rules": goal_rules(scene["goal"]["intent"]),
             "review_focus": (
                 "Check semantic preservation, not lexical similarity. A natural "
                 "Question may omit source modalities and internal steps, while "
@@ -886,114 +791,39 @@ def naturalize_one(scene: dict, *, author, critic,
     return result, metadata
 
 
-def naturalize_scenes(scenes: list[dict], *, author, critic,
-                      max_revisions: int = 2, workers: int = 4) -> dict:
-    if workers < 1:
-        raise ValueError("workers must be >= 1")
-
-    def process(scene):
-        return naturalize_one(
-            scene, author=author, critic=critic, max_revisions=max_revisions
-        )
-
-    # map preserves input order, while individual Author -> Critic -> Repair
-    # loops execute sequentially per scene.
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        produced = list(pool.map(process, scenes))
-    counts = Counter()
-    failure_reasons = Counter()
-    # Accepting 100 independently natural-looking questions can still
-    # collapse distinct records into identical prose. Keep the earliest
-    # accepted candidate and revert later duplicates to the frozen
-    # deterministic reference, preserving the original Task semantics.
-    previously_seen = set()
-    for scene, (question, info) in zip(scenes, produced):
-        normalized = re.sub(r"\W+", " ", question.casefold()).strip()
-        if info["status"] == "accepted" and normalized in previously_seen:
-            question = polished_reference_question(info["reference_question"])
-            info["safe_reference_polish_applied"] = (
-                question != info["reference_question"]
-            )
-            info["status"] = "fallback"
-            info["reason"] = "duplicate_naturalized_question"
-            info["final_question"] = question
-            info["accepted_review"] = None
-            for row in info["audit"]:
-                if row.get("accepted"):
-                    row["accepted"] = False
-                    row["failure"] = "duplicate_naturalized_question"
-        previously_seen.add(re.sub(r"\W+", " ", question.casefold()).strip())
-        scene["question"] = question
-        scene["public"]["question"] = question
-        scene["question_authoring"] = info
-        counts[info["status"]] += 1
-        if info["status"] == "fallback":
-            failure_reasons[info["reason"]] += 1
-        counts["author_calls"] += info["author_calls"]
-        counts["critic_calls"] += info["critic_calls"]
-        if info["status"] == "accepted" and info["revision_rounds"] > 0:
-            counts["accepted_after_revision"] += 1
-    return {
-        "mode": "optional_llm_author_critic",
-        "accepted": counts["accepted"],
-        "fallback": counts["fallback"],
-        "accepted_after_revision": counts["accepted_after_revision"],
-        "author_calls": counts["author_calls"],
-        "critic_calls": counts["critic_calls"],
-        "failure_reasons": dict(failure_reasons),
-        "max_revisions": max_revisions,
-        "workers": workers,
-        "model_review_not_formal_proof": True,
-    }
-
-
 def validate_naturalized_question(scene: dict) -> list[str]:
-    """Replay-verifiable invariants, not a fresh LLM Critic call."""
+    """Replay-check ONLY the canonical semantic World Question policy.
+
+    Obsolete v4/v5 multi-policy metadata and old post-World Grounding are
+    no longer supported. The final accepted question is still screened
+    by deterministic Goal and surface checks in addition to the Critic
+    judgment; approval is not a formal semantic equivalence proof.
+    """
     meta = scene.get("question_authoring")
     if meta is None:
         return []
     errors = []
     original = reference_question(scene)
     from envir.schema import normalize_label
-    source_original = scene.get("source_priors", {}).get(
+    original_mmqa = scene.get("source_priors", {}).get(
         "MultiModalQA", {}).get("original_question", "")
-    if source_original and normalize_label(scene["question"]) == normalize_label(source_original):
+    if original_mmqa and normalize_label(scene["question"]) == normalize_label(original_mmqa):
         errors.append("naturalized_question_copies_original_mmqa_question")
-    policy = meta.get("review_policy_version")
-    if meta.get("reference_question") != original:
+    if meta.get("review_policy_version") != SEMANTIC_REVIEW_POLICY:
+        errors.append("unknown_question_review_policy")
+    if meta.get("reference_question") != original or (
+            meta.get("reference_sha256") != _fingerprint(original)):
         errors.append("review_reference_drift")
-    if meta.get("reference_sha256") != _fingerprint(original):
-        errors.append("review_reference_fingerprint_mismatch")
-    if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}:
-        try:
-            if meta.get("semantic_contract_sha256") != _fingerprint(semantic_contract(scene)):
-                errors.append("semantic_contract_fingerprint_mismatch")
-        except (ValueError, KeyError, TypeError):
-            errors.append("semantic_contract_unavailable")
-        if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
-            errors.append("review_macro_task_view_changed")
-        expected_pipeline = (
-            LEGACY_SEMANTIC_REVIEW_PIPELINE
-            if policy == LEGACY_SEMANTIC_REVIEW_POLICY
-            else SEMANTIC_REVIEW_PIPELINE
-        )
-        if meta.get("pipeline") != expected_pipeline:
-            errors.append("review_wrong_pipeline")
-    elif policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}:
-        if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
-            errors.append("review_macro_task_view_changed")
-        expected_pipeline = {
-            "v4.3_macro_task_critic": "v4_macro_task_aware_author_critic_repair",
-            "v4.4_goal_first_critic": "v4_goal_first_author_diagnostic_critic_repair",
-            "v4.5_graph_primary_benchmark_style": "v4_benchmark_style_graph_primary_author_critic_repair",
-        }[policy]
-        if meta.get("pipeline") != expected_pipeline:
-            errors.append("review_wrong_pipeline")
-    else:
-        # Backward compatibility: V4.1/V4.2 metadata was originally bound
-        # to the old task contract. Don't re-certify it under V4.3.
-        if meta.get("contract_sha256") != _fingerprint(public_task_contract(scene)):
-            errors.append("review_task_contract_changed")
+    try:
+        if meta.get("semantic_contract_sha256") != _fingerprint(
+                semantic_contract(scene)):
+            errors.append("semantic_contract_fingerprint_mismatch")
+    except (KeyError, TypeError, ValueError):
+        errors.append("semantic_contract_unavailable")
+    if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
+        errors.append("review_macro_task_view_changed")
+    if meta.get("pipeline") != SEMANTIC_REVIEW_PIPELINE:
+        errors.append("review_wrong_pipeline")
     if meta.get("macro_graph_sha256") != _fingerprint(scene["macro_graph"]):
         errors.append("review_macro_graph_changed")
     if meta.get("final_question") != scene["question"]:
@@ -1002,49 +832,36 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         errors.append("review_overclaims_semantic_certification")
     status = meta.get("status")
     if status == "accepted":
-        review = meta.get("accepted_review")
         try:
-            validated = _validate_review(review, policy=policy)
-            if validated["verdict"] != "pass":
+            verdict = _validate_review(
+                meta.get("accepted_review"), policy=SEMANTIC_REVIEW_POLICY)
+            if verdict["verdict"] != "pass":
                 errors.append("review_not_passed")
         except (ValueError, TypeError):
             errors.append("review_invalid_pass_record")
-        # Previously published (pre-v4.2) records retain their old schema
-        # and cannot retroactively claim stronger semantic screening. New
-        # naturalizations are checked against the current stricter guard.
-        if (policy == "v4.2_fidelity_naturalness"
-                and surface_issues(scene, scene["question"], baseline=original)):
-            errors.append("review_surface_mismatch")
-        if (policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic"}
-                and minimal_question_guards(scene["question"])):
-            errors.append("review_surface_mismatch")
-        if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY} and (
-            minimal_question_guards(scene["question"]) or
-            semantic_surface_issues(scene["question"], semantic_contract(scene))
-        ):
-            errors.append("review_semantic_surface_guard_failed")
-        if scene["question"] == original and policy not in {
-            "v4.5_graph_primary_benchmark_style", SEMANTIC_REVIEW_POLICY,
-            LEGACY_SEMANTIC_REVIEW_POLICY,
-        }:
-            errors.append("review_not_naturalized")
+        guards = (
+            minimal_question_guards(scene["question"]) +
+            semantic_surface_issues(scene["question"], semantic_contract(scene)) +
+            question_surface_issues(scene["question"]) +
+            goal_text_issues(scene["goal"]["intent"], scene["question"])
+        )
+        if guards:
+            errors.append("question_surface_or_goal_guard_failed")
         if not any(
-            a.get("accepted") and a.get("candidate") == scene["question"]
-            and a.get("critic_review") == review
-            for a in meta.get("audit", [])
+            attempt.get("accepted")
+            and attempt.get("candidate") == scene["question"]
+            and attempt.get("critic_review") == meta.get("accepted_review")
+            for attempt in meta.get("audit", [])
         ):
             errors.append("review_audit_missing_approved_candidate")
     elif status == "fallback":
-        expected = (
-            polished_reference_question(original)
-            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style", SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}
-            else original
-        )
-        if scene["question"] != expected or meta.get("accepted_review") is not None:
+        fallback = polished_reference_question(original)
+        if (scene["question"] != fallback
+                or meta.get("accepted_review") is not None):
             errors.append("review_fallback_changed_question")
-        if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic"}:
-            if meta.get("safe_reference_polish_applied") is not (expected != original):
-                errors.append("review_fallback_polish_metadata_mismatch")
+        if meta.get("safe_reference_polish_applied") is not (
+                fallback != original):
+            errors.append("review_fallback_polish_metadata_mismatch")
     else:
         errors.append("review_unknown_status")
-    return errors
+    return sorted(set(errors))

@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 
 from .goal_grammar import GOALS
+from .goal_invariants import goal_rules
 
 
 # Machine-readable interpretation of existing eight Goal Bank operations.
@@ -21,8 +22,9 @@ from .goal_grammar import GOALS
 GOAL_SEMANTICS = {
     "lookup": ("select_positive_flag", ("candidate_key", "synthetic_attribute_flag"),
                (), "source-backed candidates with a positive recorded flag"),
-    "composition": ("link_candidate_references", ("candidate_key", "synthetic_group_key"),
-                    (), "source-linked candidate-reference relationships"),
+    "composition": ("link_candidate_references",
+                    ("candidate_key", "synthetic_reference_target_source_ids"),
+                    (), "explicit directed cross-source record references"),
     "comparison": ("rank_by_recorded_score", ("candidate_key", "synthetic_attribute_score"),
                    (), "candidate score ordering and highest-scoring candidate"),
     "intersection": ("match_candidate_groups", ("candidate_key", "synthetic_group_key"),
@@ -70,7 +72,7 @@ def semantic_contract(scene: dict) -> dict:
     ]
     topic = scene["scenario"]["topic"]
     contract = {
-        "contract_version": "question_semantics_v1",
+        "contract_version": "question_semantics_v2",
         "authorized_topic": topic,
         "authorized_entities": [topic],
         "goal_id": intent,
@@ -80,6 +82,7 @@ def semantic_contract(scene: dict) -> dict:
         "hard_constraints": list(constraints),
         "final_workproduct_type": goal["artifact"],
         "required_answer": expected_answer,
+        "execution_rules": goal_rules(intent),
         "source_inventory": allowed_sources,
         "allowed_modalities": sorted({row["modality"] for row in allowed_sources}),
         "source_policy": (
@@ -88,8 +91,10 @@ def semantic_contract(scene: dict) -> dict:
         ),
         "simulation_policy": (
             "Candidate flags/scores/time indices are synthetic records. "
-            "Do not reinterpret them as real prestige, importance, awards, "
-            "dates, rankings, identity, or other unprovided world facts."
+            "Do not reinterpret them as real prestige, awards or dates. "
+            "Separate observed-candidate IDs, entity identity keys, "
+            "group-category overlap, explicit directed source references "
+            "and relative-order links; NONE of those implies another."
         ),
         "immutable_solution_contract": {
             "task_count": len(graph["tasks"]),
@@ -127,42 +132,6 @@ def semantic_contract(scene: dict) -> dict:
                 "hypothetical_schema_defined_before_simulated_values;"
                 "source_facts_generated_by_deterministic_code"
             ),
-        }
-    grounding = scene.get("scene_grounding")
-    if grounding and grounding.get("status") == "accepted" and (
-            grounding.get("version") == "semantic_scenario_contract_v1"):
-        # v4 carries an explicit, typed semantic contract shared by all
-        # downstream writing stages. Its question_intent was constructed by
-        # Python, not supplied by the model.
-        contract["synthetic_scenario_contract"] = {
-            "scenario": grounding["scenario"],
-            "semantic_bindings": grounding["semantic_bindings"],
-            "question_intent": grounding["question_intent"],
-            "user_need": grounding["user_need"],
-            "source_cards": [{
-                "source_id": card["source_id"],
-                "candidate_key": card["candidate_key"],
-                "candidate_label": card["candidate_label"],
-                "source_role": card["source_role"],
-            } for card in grounding["source_cards"]],
-            "provenance": "source_bound_hypothetical_synthetic_only",
-        }
-    elif grounding and grounding.get("status") == "accepted":
-        # LLM interpretation is *hypothetical synthetic* context. The
-        # Critic may permit these labels, but it must not assert original
-        # media/real-world verification or change the core operation.
-        contract["synthetic_scene_interpretation"] = {
-            "status": "accepted_hypothetical_labels_only",
-            "scene_context": grounding["scene_context"],
-            "candidate_kind": grounding["candidate_kind"],
-            "field_meanings": grounding["field_meanings"],
-            "user_need": grounding["user_need"],
-            "source_cards": [{
-                "source_id": card["source_id"],
-                "candidate_label": card["candidate_label"],
-                "source_role": card["source_role"],
-                "candidate_key": card["candidate_key"],
-            } for card in grounding["source_cards"]],
         }
     return contract
 
