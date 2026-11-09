@@ -27,6 +27,7 @@ _ARITY = {
     "scan": 0, "filter_eq": 1, "filter_gte": 1,
     "project": 1, "unique": 1, "join": 2, "count": 1,
     "sort": 1, "take": 1, "group_count": 1,
+    "compare_fields": 1, "attach_evidence": 1,
 }
 
 
@@ -65,6 +66,12 @@ def validate_program(program: dict) -> list[str]:
             len(set(node["fields"])) != len(node["fields"])
         ):
             issues.append("project_invalid_fields")
+        if op == "compare_fields" and (
+            not isinstance(node.get("left_field"), str)
+            or not isinstance(node.get("right_field"), str)
+            or node.get("comparison") not in {"eq", "ne", "gte", "lte"}
+        ):
+            issues.append("compare_fields_invalid")
         if op == "group_count" and not isinstance(node.get("field"), str):
             issues.append("group_count_invalid_field")
         if op == "sort" and (not isinstance(node.get("field"), str) or
@@ -159,6 +166,34 @@ def _apply(node: dict, inputs: list[Relation]) -> Relation:
                     "support": tuple(sorted(set(a["support"]) | set(b["support"]))),
                 })
         return Relation(columns, tuple(rows))
+    if op == "compare_fields":
+        src = inputs[0]
+        left_name, right_name = node["left_field"], node["right_field"]
+        _check(src, left_name)
+        _check(src, right_name)
+        comparison = node["comparison"]
+        def matches(row):
+            left, right = row["values"][left_name], row["values"][right_name]
+            if comparison == "eq":
+                return left == right
+            if comparison == "ne":
+                return left != right
+            if (isinstance(left, bool) or isinstance(right, bool)
+                    or not isinstance(left, (int, float))
+                    or not isinstance(right, (int, float))):
+                raise ProgramError("compare_fields_requires_numeric_values")
+            return left >= right if comparison == "gte" else left <= right
+        return Relation(src.columns, tuple(row for row in src.rows
+                                           if matches(row)))
+    if op == "attach_evidence":
+        src = inputs[0]
+        if "evidence_refs" in src.columns:
+            raise ProgramError("evidence_refs_already_present")
+        return Relation((*src.columns, "evidence_refs"), tuple({
+            "values": {**row["values"],
+                       "evidence_refs": list(row["support"])},
+            "support": row["support"],
+        } for row in src.rows))
     if op == "project":
         src = inputs[0]
         for field in node["fields"]:
