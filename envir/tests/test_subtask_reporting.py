@@ -302,6 +302,71 @@ class StageLocalScopeRegressions(unittest.TestCase):
         )
         self.assertEqual(len(critic.calls), 2)
 
+class ActiveStatusPrecisionRegressions(unittest.TestCase):
+    """Examples sampled from 42 false-positive 'all...active' rejections."""
+
+    def test_scan_field_descriptions_are_not_all_active_assertions(self):
+        from envir.implement_subtask.reporting import _stage_scope_issues
+        contract = {
+            "exact_oracle_answer": [
+                {"entry_label": "Entry-03", "active": False},
+                {"entry_label": "Entry-04", "active": True},
+            ],
+            "terminal_output_schema_of_this_macro": [
+                "entry_label", "active",
+            ],
+            "executed_operations_in_this_macro": ["scan"],
+            "upstream_handoffs": [],
+            "macro_is_terminal": False,
+        }
+        true_descriptions = [
+            "Scanned all 11 rows containing entry_label, route_code, active and measured_value.",
+            "Returned all candidates regardless of active status.",
+            "The register scan retrieved all 9 records containing entry_label, "
+            "route_code, active status, and event_step fields.",
+            "Returned all rows including those with varying active states.",
+            "Preserved all 10 rows, including those with active=false.",
+            "Returned all records preserving both active and inactive entries.",
+            "Retrieved all rows without applying eligibility filters such as active.",
+            "The output contains both active and inactive entries.",
+        ]
+        for description in true_descriptions:
+            with self.subTest(description=description):
+                self.assertNotIn(
+                    "claims_all_active_with_inactive_rows",
+                    _stage_scope_issues(description, contract),
+                )
+
+    def test_explicit_claim_all_records_active_is_still_rejected(self):
+        from envir.implement_subtask.reporting import _stage_scope_issues
+        contract = {
+            "exact_oracle_answer": [
+                {"entry_label": "Entry-03", "active": False},
+                {"entry_label": "Entry-04", "active": True},
+            ],
+            "terminal_output_schema_of_this_macro": [
+                "entry_label", "active",
+            ],
+            "executed_operations_in_this_macro": ["scan"],
+            "upstream_handoffs": [],
+            "macro_is_terminal": False,
+        }
+        false_assertions = [
+            "All ten rows are active.",
+            "Every record is active.",
+            "Only active entries were returned.",
+            "The scan returned exclusively active rows.",
+            "All returned entries were marked as active.",
+            "The records were all active.",
+        ]
+        for description in false_assertions:
+            with self.subTest(description=description):
+                self.assertIn(
+                    "claims_all_active_with_inactive_rows",
+                    _stage_scope_issues(description, contract),
+                )
+
+
 class ReportingUnitTests(unittest.TestCase):
     def test_real_finish_shape_and_frozen_gold(self):
         frozen = scene(23, "hard")
@@ -628,6 +693,73 @@ class ReportingBatchTests(unittest.TestCase):
                     output_dir=output, api_base="http://mock/v1",
                     model="mock", clients=(ReportAuthor(), ReportCritic()),
                     workers=1, no_progress=True,
+                )
+
+    def test_reuse_completed_prior_accepts_and_retry_only_failures(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            oracle, index = self._teacher_inputs(root, [46, 47])
+            prior_dir, repaired_dir = root / "prior", root / "repaired"
+            prior = naturalize_subtasks(
+                source_subtasks=oracle, source_scene_index=index,
+                output_dir=prior_dir, api_base="http://mock/v1",
+                model="mock", workers=2, no_progress=True, max_revisions=0,
+                clients=(ReportAuthor(fail_topic="Fictional Study 47"),
+                         ReportCritic()),
+            )
+            self.assertEqual(prior["status"], "partial")
+            self.assertGreater(prior["author_critic_passed_macros"], 0)
+            self.assertGreater(prior["author_critic_failed_macros"], 0)
+            author = ReportAuthor()
+            recovered = naturalize_subtasks(
+                source_subtasks=oracle, source_scene_index=index,
+                output_dir=repaired_dir, api_base="http://mock/v1",
+                model="mock", workers=3, no_progress=True, max_revisions=0,
+                reuse_from=prior_dir, clients=(author, ReportCritic()),
+            )
+            self.assertEqual(recovered["status"], "done")
+            self.assertEqual(recovered["accepted_scenes"], 2)
+            self.assertEqual(recovered["author_critic_failed_macros"], 0)
+            self.assertEqual(
+                recovered["reused_accepted_macros"],
+                prior["author_critic_passed_macros"],
+            )
+            self.assertEqual(
+                len(author.calls), prior["author_critic_failed_macros"],
+            )
+            self.assertEqual(
+                len((repaired_dir / "review_audit.jsonl").read_text().splitlines()),
+                recovered["attempted_macro_tasks"],
+            )
+            self.assertEqual(
+                len((repaired_dir / "subtasks.jsonl").read_text().splitlines()),
+                recovered["attempted_macro_tasks"],
+            )
+
+    def test_reuse_rejects_tampered_previous_accepted_journal(self):
+        from envir.streaming import StreamingError
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            oracle, index = self._teacher_inputs(root, [48])
+            old = root / "prior"
+            naturalize_subtasks(
+                source_subtasks=oracle, source_scene_index=index,
+                output_dir=old, api_base="http://mock/v1",
+                model="mock", workers=1, no_progress=True,
+                clients=(ReportAuthor(), ReportCritic()),
+            )
+            journal = old / "subagent_reports_accepted.jsonl"
+            journal.write_bytes(journal.read_bytes() + b'{"extra":"tamper"}\n')
+            # Uncommitted trailing data are permitted. Tampering with the
+            # committed prefix must NOT be allowed.
+            orig = journal.read_bytes()
+            journal.write_bytes(orig.replace(b'"accepted"', b'"tampered"', 1))
+            with self.assertRaises(StreamingError):
+                naturalize_subtasks(
+                    source_subtasks=oracle, source_scene_index=index,
+                    output_dir=root / "repaired", api_base="http://mock/v1",
+                    model="mock", reuse_from=old, workers=1, no_progress=True,
+                    clients=(ReportAuthor(), ReportCritic()),
                 )
 
     def test_successful_batch_retains_one_response_per_oracle_macro(self):

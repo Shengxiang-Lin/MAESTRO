@@ -67,6 +67,10 @@ def parser() -> argparse.ArgumentParser:
     naturalize.add_argument("--no-progress", action="store_true")
     naturalize.add_argument("--flush-every", type=int,
                             help="Commit a durable checkpoint every N Macro reports")
+    naturalize.add_argument(
+        "--reuse-from", type=Path,
+        help="Completed prior reporting directory: reuse accepted Macros, retry only rejected ones in a NEW output folder",
+    )
     return root
 
 
@@ -98,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
             options["no_progress"] = True
         if cli.flush_every is not None:
             options["flush_every"] = cli.flush_every
+        if cli.reuse_from is not None:
+            options["reuse_from"] = cli.reuse_from
         result = naturalize_subtasks(**options)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["status"] in {"done", "partial"} else 1

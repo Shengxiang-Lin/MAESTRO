@@ -233,3 +233,48 @@ Use a NEW output folder when migrating from the old all-at-once
 implementation: old outputs have no checkpoint. Completed runs do not
 silently overwrite existing files; choose a new directory or explicitly
 enable overwrite to restart from scratch.
+
+
+## Full-run 529-Macro audit: precise all-active Guard + rejected-only retry
+
+A full 97-scene, 529-Macro run accepted 512 Macros but published only
+81 complete scenes (431 Macros) because 17 Macro reports failed.
+Detailed review: 14 distinct failed Macros produced 42 attempts
+rejected by the overbroad old all ... active guard, even when the
+report said "all rows containing the active field" or "including inactive
+entries". The rule now rejects only explicit claims that all result
+rows ARE active, not source-field names or descriptions of mixed states.
+The Oracle relation and evidence were never at issue.
+
+Other failures include structured results that did not equal Oracle
+and Critic disputes where sampled evidence was mistaken for the full
+answer. The Critic is now reminded that exact_oracle_answer is the
+authoritative full relation; sampled_evidence_atoms is non-exhaustive.
+
+To avoid paying for all 529 LLM calls again, reuse the fully checked
+accepted Macros from the PREVIOUS completed stream and retry only
+the 17 rejected Macros:
+
+~~~bash
+git pull origin main
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --reuse-from envir/data/maestro_subagent_reports_streamed_100 \
+  --output-dir envir/data/maestro_subagent_reports_repaired_100
+~~~
+
+The original directory is READ-ONLY. The new run checks the previous
+checkpoint's SHA256 and row order, requires its full 529-Macro
+completion, and validates every reused reviewed record against the
+CURRENT exact Oracle Answer, provenance, executed steps, and Critic
+acceptance. Only previously rejected Macros trigger new model calls.
+Previously accepted but withheld (because their scene had another failed
+Macro) are also reused. The new output has its OWN checkpoint and
+scene-atomic publication. Summary fields are reused_accepted_macros
+and freshly_reviewed_macro_tasks.
+
+This does NOT automatically claim that all failed Macros will pass. If
+any still fail, inspect the new review audit and distinguish genuine
+incorrect Oracle-result proposals from semantic reviewer mistakes.
+Never modify the old completed run in place; --reuse-from must point to
+a DIFFERENT, previously completed reporting directory.

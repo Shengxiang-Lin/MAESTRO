@@ -66,7 +66,7 @@ _REPORTING_FIELDS = {
     "source_subtasks", "source_scene_index", "output_dir",
     "api_base", "model", "critic_api_base", "critic_model",
     "api_key_env", "critic_api_key_env", "workers",
-    "max_revisions", "timeout", "max_scenes", "no_progress", "overwrite", "flush_every",
+    "max_revisions", "timeout", "max_scenes", "no_progress", "overwrite", "flush_every", "reuse_from",
 }
 
 
@@ -105,6 +105,10 @@ def load_reporting_config(path: str | Path = DEFAULT_CONFIG) -> dict:
         raise ValueError("reporting.flush_every must be positive")
     return {
         "flush_every": flush_every,
+        "reuse_from": (
+            _resolve(values["reuse_from"])
+            if values.get("reuse_from") else None
+        ),
         "source_subtasks": _resolve(values["source_subtasks"]),
         "source_scene_index": _resolve(values["source_scene_index"]),
         "output_dir": _resolve(values["output_dir"]),
