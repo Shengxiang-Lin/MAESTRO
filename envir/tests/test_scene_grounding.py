@@ -251,6 +251,56 @@ class WorldConcretizationTests(unittest.TestCase):
         self.assertIn("source_role_count_mismatch", issues)
         self.assertIn("unknown_or_duplicate_source_id", issues)
 
+    def test_v3_proposal_role_order_is_semantically_irrelevant(self):
+        """Unsorted valid source list must not cause a replay failure."""
+        proposal = proposal_for(self.original)
+        proposal["source_roles"] = list(reversed(proposal["source_roles"]))
+        self.assertEqual([], validate_proposal(self.original, proposal))
+        overlay = materialize_grounding(
+            self.original, proposal, pass_review())
+        self.assertEqual(
+            overlay["version"], "synthetic_world_concretization_v3")
+        self.assertEqual(
+            [], validate_grounding({**self.original, "scene_grounding": overlay}))
+        normal = proposal_for(self.original)
+        overlay_sorted = materialize_grounding(
+            self.original, normal, pass_review())
+        self.assertEqual(
+            overlay["proposal_fingerprint"],
+            overlay_sorted["proposal_fingerprint"])
+        self.assertEqual(overlay["source_cards"], overlay_sorted["source_cards"])
+
+        class UnsortedAuthor:
+            def complete_json(self, system, user, *, response_schema=None):
+                return proposal
+        generated, review = ground_one(
+            self.original, constructor=UnsortedAuthor(), critic=Critic(),
+            max_revisions=0)
+        self.assertEqual(review["status"], "accepted")
+        self.assertEqual([], validate_grounding({
+            **self.original, "scene_grounding": generated,
+        }))
+
+    def test_recoverable_nonjson_model_output_gets_a_bounded_retry(self):
+        class FlakyAuthor:
+            def __init__(self):
+                self.calls = 0
+            def complete_json(self, system, user, *, response_schema=None):
+                self.calls += 1
+                if self.calls == 1:
+                    raise ValueError("model did not return a JSON object")
+                return proposal_for(self_original)
+        self_original = self.original
+        author = FlakyAuthor()
+        overlay, meta = ground_one(
+            self.original, constructor=author, critic=Critic(),
+            max_revisions=1)
+        self.assertEqual(meta["status"], "accepted")
+        self.assertEqual(meta["author_calls"], 2)
+        self.assertEqual([], validate_grounding({
+            **self.original, "scene_grounding": overlay,
+        }))
+
     def test_tampered_value_or_source_id_is_rejected(self):
         overlay = materialize_grounding(
             self.original, proposal_for(self.original), pass_review())
