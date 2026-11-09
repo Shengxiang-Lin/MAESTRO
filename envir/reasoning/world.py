@@ -10,7 +10,7 @@ import random
 from envir.schema import digest
 
 from envir.macro.program_ir import answer_values, evaluate_program
-from .spec import spec_issues, LEGACY_VERSION
+from .spec import spec_issues, LEGACY_VERSION, VERSION
 
 VERSION = "maestro.source_observation_world.v2"
 
@@ -246,8 +246,26 @@ def build_scene(spec: dict, question: str) -> dict:
 NEW_WORLD_VERSION = "maestro.source_observation_world.v3"
 
 
+def _finalize_current_program(program: dict, spec: dict) -> dict:
+    """Make latest approval answers obey their explicit evidence contract."""
+    if spec.get("version") != VERSION:
+        return program
+    program["version"] = "maestro.reasoning_program.v4"
+    program["semantic_operator_pattern"] = "approval"
+    if spec["family"] == "evidence_reconcile":
+        terminal = program["output"]
+        program["nodes"].append(
+            _node("answer_with_evidence", "attach_evidence", terminal)
+        )
+        program["output"] = "answer_with_evidence"
+    return program
+
+
 def compile_program(spec: dict) -> dict:
-    """Compile varied but equivalent source-scoped plans for NEW specs only."""
+    """Compile semantic branches into source-scoped executable programs."""
+    if spec.get("version") == VERSION and spec.get("reasoning_pattern") != "approval":
+        from .pattern_world import compile_pattern_program
+        return compile_pattern_program(spec)
     if spec.get("version") == LEGACY_VERSION:
         return _compile_program_legacy(spec)
     issues = spec_issues(spec)
@@ -260,7 +278,7 @@ def compile_program(spec: dict) -> dict:
     if difficulty == "easy" or variant == 0:
         program = _compile_program_legacy(spec)
         program["version"] = "maestro.reasoning_program.v3"
-        return program
+        return _finalize_current_program(program, spec)
 
     if variant == 1:
         # Apply active/approval filters only AFTER their two join boundaries.
@@ -352,7 +370,7 @@ def compile_program(spec: dict) -> dict:
             _node("distinct_answer", "unique", "answer_entries"),
         ]
         output = "distinct_answer"
-    return {
+    return _finalize_current_program({
         "version": "maestro.reasoning_program.v3",
         "nodes": nodes,
         "output": output,
@@ -360,15 +378,14 @@ def compile_program(spec: dict) -> dict:
             source["source_id"] for source in spec["sources"]
         ],
         "frozen_problem_spec_id": spec["task_id"],
-    }
+    }, spec)
 
 
 def generate_world(spec: dict) -> dict:
-    """Deterministic source-restricted observations with nonconstant answers.
-
-    Generate all values only after the ProblemSpec and reasoning operations
-    are frozen. Legacy exports continue to use their original sampler.
-    """
+    """Versioned synthetic sources; never rewrite old private World facts."""
+    if spec.get("version") == VERSION and spec.get("reasoning_pattern") != "approval":
+        from .pattern_world import generate_pattern_world
+        return generate_pattern_world(spec)
     if spec.get("version") == LEGACY_VERSION:
         return _generate_world_legacy(spec)
     issues = spec_issues(spec)
@@ -471,7 +488,7 @@ def generate_world(spec: dict) -> dict:
             role["purpose"], data[role["source_id"]]
         ) for role in spec["sources"]
     }
-    return {
+    result = {
         "version": NEW_WORLD_VERSION,
         "simulated_only": True,
         "sources": sources,
@@ -481,3 +498,6 @@ def generate_world(spec: dict) -> dict:
             "deterministic_relational_observations_after_frozen_spec_v3"
         ),
     }
+    if spec.get("version") == VERSION:
+        result["version"] = "maestro.source_observation_world.v4"
+    return result
