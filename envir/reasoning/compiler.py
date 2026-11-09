@@ -15,7 +15,10 @@ from envir.macro.program_ir import (
 VERSION = "maestro.dependency_macro_graph.v2"
 
 
-def compile_macro_tasks(program: dict, execution_trace: list[dict]) -> dict:
+def compile_macro_tasks(program: dict, execution_trace: list[dict],
+                        *, compact: bool = False) -> dict:
+    if compact:
+        return _compile_compact_tasks(program, execution_trace)
     errors = validate_program(program)
     if errors:
         raise ProgramError("invalid_program:" + ",".join(errors))
@@ -56,6 +59,92 @@ def compile_macro_tasks(program: dict, execution_trace: list[dict]) -> dict:
     }
 
 
+def _compile_compact_tasks(program: dict, execution_trace: list[dict]) -> dict:
+    """Fuse ONLY linear unary dependency chains into executable work units.
+
+    Every merged operation still runs and every source scan remains explicitly
+    authorized. Branched DAG joins stay as separate typed handoffs.
+    """
+    errors = validate_program(program)
+    if errors:
+        raise ProgramError("invalid_program:" + ",".join(errors))
+    trace = {row["node_id"]: row for row in execution_trace}
+    uses = {}
+    for node in program["nodes"]:
+        for parent in node["inputs"]:
+            uses[parent] = uses.get(parent, 0) + 1
+    groups, owner = [], {}
+    for node in program["nodes"]:
+        parents = node["inputs"]
+        merge = len(parents) == 1 and uses.get(parents[0], 0) == 1
+        if merge:
+            parent = parents[0]
+            group_idx = owner[parent]
+            group = groups[group_idx]
+            merge = (
+                group[-1]["id"] == parent
+                and len(group) < 3
+                and node["op"] != "scan"
+            )
+        if merge:
+            groups[group_idx].append(node)
+        else:
+            group_idx = len(groups)
+            groups.append([node])
+        owner[node["id"]] = group_idx
+
+    tasks = []
+    for group in groups:
+        local = set()
+        external = []
+        for node in group:
+            for parent in node["inputs"]:
+                if parent not in local and parent not in external:
+                    external.append(parent)
+            local.add(node["id"])
+        terminal = group[-1]["id"]
+        sources = [node["source_id"] for node in group if node["op"] == "scan"]
+        # Fusion must never grant a source that an included scan does not use.
+        if len(sources) > 1:
+            raise ProgramError("compact_group_grants_multiple_sources")
+        tasks.append({
+            "task_id": "work_" + terminal,
+            "program_node_id": terminal,
+            "operation": group[0]["op"] if len(group) == 1 else "composite",
+            "operation_args": {
+                k: v for k, v in group[0].items()
+                if k not in {"id", "op", "inputs"}
+            } if len(group) == 1 else {},
+            "operator_chain": [dict(node) for node in group],
+            "external_inputs": external,
+            "depends_on": [
+                "work_" + groups[owner[parent]][-1]["id"]
+                for parent in external
+            ],
+            "source_ids": sources,
+            "input_schema": {
+                "input_" + str(i): list(trace[parent]["schema"])
+                for i, parent in enumerate(external)
+            },
+            "outputs": {"typed_relation": list(trace[terminal]["schema"])},
+            "handoff_type": "SourceScopedRelationWithFactRefs",
+            "dispatchable": True,
+            "execution_policy": "typed_input_chain_no_teacher_world",
+        })
+    waves = compile_waves(tasks)
+    return {
+        "version": "maestro.dependency_macro_graph.v4",
+        "tasks": tasks,
+        "reference_waves": waves,
+        "terminal_task_id": "work_" + groups[owner[program["output"]]][-1]["id"],
+        "macro_task_count": len(tasks),
+        "primitive_operator_count": len(program["nodes"]),
+        "critical_path_depth": _critical_path(tasks),
+        "source_scope_policy": "only_scans_grant_explicit_source",
+        "coarsening": "bounded_linear_chain_fusion_max3",
+    }
+
+
 def _critical_path(tasks: list[dict]) -> int:
     depth = {}
     for task in tasks:
@@ -74,6 +163,27 @@ def execute_task(task: dict, *, input_products: list[Relation],
         expected = task["input_schema"]["input_" + str(index)]
         if list(relation.columns) != expected:
             raise ProgramError("input_schema_mismatch:" + task["task_id"])
+    if "operator_chain" in task:
+        # The only information available is authorized scan data and
+        # previously completed typed handoffs, never the private World.
+        if set(visible_sources) != set(task["source_ids"]):
+            raise ProgramError("compact_source_scope_mismatch")
+        results = dict(zip(task["external_inputs"], input_products))
+        for step in task["operator_chain"]:
+            if step["op"] == "scan":
+                sid = step["source_id"]
+                if sid not in visible_sources:
+                    raise MissingSourceError("compact_scan_not_granted:" + sid)
+                product = _scan(sid, visible_sources[sid])
+            else:
+                product = _apply(
+                    step, [results[parent] for parent in step["inputs"]]
+                )
+            results[step["id"]] = product
+        output = results[task["program_node_id"]]
+        if list(output.columns) != task["outputs"]["typed_relation"]:
+            raise ProgramError("compact_output_schema_mismatch:" + task["task_id"])
+        return output
     args = task["operation_args"]
     if task["operation"] == "scan":
         if task["depends_on"] or len(task["source_ids"]) != 1:
