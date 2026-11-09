@@ -1,4 +1,4 @@
-"""Frozen ProblemSpec for the independently generated MAESTRO V2 pipeline.
+"""Frozen Question Specification for the MAESTRO Stage-1 generator.
 
 The original MMQA question, answer and media are NOT input to this spec.
 Its scene/topic/source hints are used only to create new fictional tasks.
@@ -10,9 +10,6 @@ import re
 from envir.schema import digest
 
 VERSION = "maestro.problem_spec.v4"
-PREVIOUS_VERSION = "maestro.problem_spec.v3"
-LEGACY_VERSION = "maestro.problem_spec.v2"
-SUPPORTED_VERSIONS = (LEGACY_VERSION, PREVIOUS_VERSION, VERSION)
 RELATION_PATTERNS = (
     "approval", "time_window", "status_disagreement", "dynamic_threshold",
 )
@@ -162,7 +159,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         })
     return {
         "version": VERSION,
-        "task_id": f"v2-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
+        "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
         "scene_id": record_id,
         "source_anchor": {
             "dataset": "MultiModalQA_topic_only" if seed_record.get("record_id")
@@ -177,7 +174,6 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         "reasoning_pattern": pattern,
         # An executable alternative join/filter dependency plan; this
         # affects the MacroGraph, NOT just names or prompt wording.
-        # Absent on old frozen specs, preserving their original replay.
         "macro_plan_variant": int(digest(
             run_seed, ordinal, record_id, "macro-graph-plan-v1"
         )[:8], 16) % 4,
@@ -204,7 +200,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
 
 def spec_issues(spec: dict) -> list[str]:
     errors = []
-    if spec.get("version") not in SUPPORTED_VERSIONS:
+    if spec.get("version") != VERSION:
         errors.append("invalid_problem_version")
     if spec.get("difficulty_target") not in DIFFICULTIES:
         errors.append("invalid_difficulty")
