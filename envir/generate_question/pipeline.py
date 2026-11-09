@@ -14,7 +14,10 @@ from pathlib import Path
 
 from envir.schema import normalize_label
 
-from .stages import construct_scenes, review_questions, read_jsonl, _construction_identity
+from .stages import (
+    construct_scenes, review_questions, read_jsonl,
+    _construction_identity, _question_signature,
+)
 from .quality import validate_replay
 from .macro_contract import macro_graph_profile, macro_question_contract
 from .surface_quality import question_language_warnings
@@ -384,6 +387,22 @@ def generate_questions(args) -> dict:
                 raise ValueError("question_summary_source_mismatch")
             if not (authored.output_dir / "scenes.jsonl").exists():
                 raise ValueError("question_summary_missing_scene_bank")
+            prior_state = authored.output_dir / "question_authoring_progress.json"
+            if not prior_state.is_file():
+                raise ValueError(
+                    "completed_legacy_question_bank_has_no_resume_checkpoint"
+                )
+            previous_signature = json.loads(
+                prior_state.read_text(encoding="utf-8")
+            ).get("signature")
+            current_signature = _question_signature(
+                authored, read_jsonl(scene_path)
+            )
+            if previous_signature != current_signature:
+                raise ValueError(
+                    "Question model, frozen input, or prompt code changed; "
+                    "choose a new output directory or enable overwrite"
+                )
             question_summary = previous
         else:
             question_summary = review_questions(authored)
