@@ -170,8 +170,10 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     valid = sum(x["status"] == "valid" for x in results)
     fallback_count = question_reviews.get("fallback", 0)
     publishable = sum(
-        item.get("question_authoring", {}).get("status", "off")
-        in {"off", "accepted"} for item in scenes
+        result["status"] == "valid"
+        and item.get("question_authoring", {}).get("status", "off")
+        in {"off", "accepted"}
+        for item, result in zip(scenes, results)
     )
     data = {
         "status": (
