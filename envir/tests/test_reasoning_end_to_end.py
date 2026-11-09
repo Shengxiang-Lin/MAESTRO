@@ -1198,6 +1198,7 @@ class MacroQuestionAdditionalPredicateTests(unittest.TestCase):
         # historically accepted but semantically unlicensed task.
         self.assertEqual(report["replay_pass"], 0)
         self.assertEqual(report["replay_fail"], 1)
+        self.assertEqual(report["question_publishable"], 0)
         warnings = report["question_surface"][
             "semantic_language_warnings"]["counts"]
         self.assertEqual(
