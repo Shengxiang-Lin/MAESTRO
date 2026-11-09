@@ -1,8 +1,4 @@
-"""Source-scoped reasoning bank construction, audit and replay implementation.
-
-Maintains a separate schema/output tree; legacy envir build/realize-world,
-naturalize and replay remain byte-for-byte backward compatible.
-"""
+"""Stage-1 scene construction and independent LLM Question review."""
 from __future__ import annotations
 
 import copy
@@ -17,10 +13,7 @@ from tqdm.auto import tqdm
 
 from envir.schema import normalize_label
 from .spec import difficulty_sequence, make_spec
-from .world import initial_public_view
-from .question import (
-    guard_question, naturalize_one, reference_question,
-)
+from .question import naturalize_one, reference_question
 from .quality import compile_and_validate, validate_replay
 
 
@@ -82,32 +75,6 @@ def read_jsonl(path: Path, *, limit: int | None = None) -> list[dict]:
     return entries
 
 
-def _seeds_from_scenes(path: Path, max_records: int) -> list[dict]:
-    extracted = []
-    for row in read_jsonl(path, limit=max_records):
-        if "problem_spec" in row:
-            raise ValueError(
-                "generation needs original TaskGraph/Scene Bank, not an already "
-                "generated reasoning scene bank"
-            )
-        scenario = row.get("scenario", {})
-        priors = row.get("source_priors", {}).get("MultiModalQA", {})
-        topic = (scenario.get("topic") or row.get("topic"))
-        if not topic:
-            continue
-        extracted.append({
-            "record_id": (priors.get("record_id") or row.get("scene_id")
-                          or row.get("task_id") or str(len(extracted))),
-            "topic": topic,
-            "domain_hint": scenario.get("domain", row.get("domain_hint", "general")),
-            "source_modalities": priors.get(
-                "source_modalities", row.get("source_modalities", [])),
-            "supporting_sources": priors.get(
-                "supporting_sources", row.get("supporting_sources", [])),
-        })
-    return extracted
-
-
 def _parse_mix(text: str) -> tuple[int, int, int]:
     try:
         pieces = tuple(int(part.strip()) for part in text.split(","))
@@ -128,18 +95,12 @@ def _out_files(output_dir: Path) -> dict:
     }
 
 
-def build_bank(args) -> dict:
+def construct_scenes(args) -> dict:
     if args.target < 1 or args.max_records < 1:
         raise ValueError("target and max-records must be positive")
-    if bool(args.scenes) == bool(args.mmqa):
-        raise ValueError("supply exactly one of --scenes or --mmqa")
-    if args.scenes:
-        seeds = _seeds_from_scenes(args.scenes, args.max_records)
-        seed_source = str(args.scenes)
-    else:
-        from .sources import load_scenario_seeds
-        seeds, _ = load_scenario_seeds(args.mmqa, limit=args.max_records)
-        seed_source = str(args.mmqa)
+    from .sources import load_scenario_seeds
+    seeds, _ = load_scenario_seeds(args.mmqa, limit=args.max_records)
+    seed_source = str(args.mmqa)
     if len(seeds) < args.target:
         raise ValueError(
             f"not enough scene/topic seeds: {len(seeds)} for target {args.target}"
@@ -176,7 +137,7 @@ def build_bank(args) -> dict:
             rejected[type(exc).__name__ + ":" + str(exc)[:140]] += 1
     if len(chosen) != args.target:
         raise ValueError(
-            f"only {len(chosen)}/{args.target} V2 ProblemSpecs passed "
+            f"only {len(chosen)}/{args.target} ProblemSpecs passed "
             f"pre-World checks; rejected={dict(rejected)}"
         )
 
@@ -296,63 +257,6 @@ def build_bank(args) -> dict:
     return summary
 
 
-def replay_bank(args) -> dict:
-    rows = read_jsonl(args.scenes, limit=getattr(args, "max_records", None))
-    failures = []
-    for row in tqdm(rows, desc="Strict replay", unit="task",
-                    disable=getattr(args, "no_progress", False)):
-        result = validate_replay(row)
-        if result["status"] != "valid":
-            failures.append(result)
-    return {
-        "status": "valid" if rows and not failures else "invalid",
-        "checked": len(rows), "failure_count": len(failures),
-        "failures": failures[:30],
-    }
-
-
-def audit_bank(args) -> dict:
-    rows = read_jsonl(args.scenes, limit=getattr(args, "max_records", None))
-    reports = [validate_replay(row) for row in tqdm(
-        rows, desc="Quality audit", unit="task",
-        disable=getattr(args, "no_progress", False))]
-    passed = [row for row, report in zip(rows, reports)
-              if report["status"] == "valid"]
-    invalid = [report for report in reports if report["status"] != "valid"]
-    return {
-        "status": "valid" if rows and not invalid else "invalid",
-        "checked": len(rows),
-        "replay_pass": len(passed),
-        "replay_fail": len(invalid),
-        "difficulty_distribution": dict(
-            Counter(row["problem_spec"]["difficulty_target"] for row in passed)
-        ),
-        "goal_families": dict(Counter(
-            row["problem_spec"]["family"] for row in passed
-        )),
-        "mean_reasoning_depth": (
-            round(sum(
-                row["difficulty_audit"]["reasoning"]["necessary_structural_operator_depth"]
-                for row in passed
-            ) / len(passed), 3) if passed else None
-        ),
-        "mean_macro_depth": (
-            round(sum(row["macro_graph"]["critical_path_depth"] for row in passed)
-                  / len(passed), 3) if passed else None
-        ),
-        "one_source_shortcut_successes": sum(
-            row["difficulty_audit"]["one_source_baseline"]["exact_match"]
-            for row in passed
-        ),
-        "counterfactual_full_pass": sum(
-            all(item["changing_source_changes_answer"] for item in
-                row["difficulty_audit"]["counterfactual_source_tests"].values())
-            for row in passed
-        ),
-        "first_failures": invalid[:20],
-    }
-
-
 def _scenario_clients(args):
     from .backend import OpenAICompatibleBackend
     author_key = os.environ.get(args.scenario_api_key_env)
@@ -415,24 +319,24 @@ def _naturalize_entry(scene: dict, *, clients, max_revisions: int) -> dict:
     return updated
 
 
-def refine_bank(args) -> dict:
+def review_questions(args) -> dict:
     if args.output_dir.resolve() == args.scenes.parent.resolve():
-        raise ValueError("naturalize-v2 requires a separate output directory")
+        raise ValueError("Question review requires a separate output directory")
     if args.question_workers < 1 or args.max_revisions < 0 or args.max_revisions > 8:
         raise ValueError("invalid worker/revision settings")
     rows = read_jsonl(args.scenes, limit=args.max_records)
     if not rows:
-        raise ValueError("no V2 scenes loaded")
+        raise ValueError("no scenes loaded")
     for scene in tqdm(rows, desc="Validate frozen scenes", unit="task",
                       disable=getattr(args, "no_progress", False)):
         result = validate_replay(scene)
         if result["status"] != "valid":
-            raise ValueError("invalid incoming V2 scene:" + str(result))
+            raise ValueError("invalid incoming scene:" + str(result))
         if scene.get("question_authoring") is not None:
             raise ValueError("input already naturalized")
     files = _out_files(args.output_dir)
     if not args.overwrite and any(path.exists() for path in files.values()):
-        raise FileExistsError("naturalize-v2 output exists")
+        raise FileExistsError("Question review output exists")
     clients = _llm_clients(args)
     def one(scene):
         return _naturalize_entry(
@@ -480,9 +384,3 @@ def refine_bank(args) -> dict:
     return summary
 
 
-# Historic Python callers can keep the old symbol names. The new canonical
-# application imports build_bank/replay_bank/audit_bank/refine_bank directly.
-build_v2 = build_bank
-replay_v2 = replay_bank
-audit_v2 = audit_bank
-naturalize_v2 = refine_bank
