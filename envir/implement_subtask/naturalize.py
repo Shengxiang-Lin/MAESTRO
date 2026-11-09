@@ -341,6 +341,13 @@ def naturalize_subtasks(
         "pipeline_code_hash": file_digest(Path(__file__)),
     })
     output_dir.mkdir(parents=True, exist_ok=True)
+    if names["summary"].is_file() and not overwrite:
+        previous = json.loads(names["summary"].read_text(encoding="utf-8"))
+        if previous.get("status") in {"done", "partial", "failed"}:
+            raise FileExistsError(
+                "Completed Sub-Agent reporting output already exists; "
+                "use a new output folder or enable overwrite"
+            )
     checkpoint = output_dir / "subagent_reports_progress.json"
     if not overwrite and not checkpoint.exists() and any(
         path.exists() for path in names.values()
