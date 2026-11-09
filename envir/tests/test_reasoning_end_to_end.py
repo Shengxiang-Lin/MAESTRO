@@ -1088,5 +1088,119 @@ class ReviewPrecisionRegressionTests(unittest.TestCase):
         )
 
 
+class MacroQuestionAdditionalPredicateTests(unittest.TestCase):
+    def test_threshold_approval_is_not_in_macro_graph(self):
+        from envir.reasoning.surface_quality import (
+            unsupported_macro_predicates,
+        )
+        sample = scene(difficulty="hard", ordinal=23,
+                       family="threshold_eligibility")
+        spec = sample["problem_spec"]
+        for added in (
+            "Only entries mapped to an approved group qualify.",
+            "Only entries mapped to independently approved policy groups qualify.",
+        ):
+            question = reference_question(spec) + " " + added
+            self.assertIn(
+                "unlicensed_independent_approval_filter",
+                unsupported_macro_predicates(question, spec),
+            )
+            self.assertIn(
+                "unlicensed_independent_approval_filter",
+                guard_question(question, spec),
+            )
+        # The original high-precision reference must remain acceptable.
+        self.assertEqual(guard_question(reference_question(spec), spec), [])
+
+    def test_time_window_cannot_acquire_approval_predicate(self):
+        sample = scene(difficulty="medium", ordinal=21,
+                       family="window_alignment")
+        spec = sample["problem_spec"]
+        corrupted = (
+            reference_question(spec)
+            + " Choose only the approved simulation session window."
+        )
+        self.assertIn(
+            "unlicensed_independent_approval_filter",
+            guard_question(corrupted, spec),
+        )
+        self.assertEqual(guard_question(reference_question(spec), spec), [])
+
+    def test_archived_state_is_not_implicit_in_active_flag(self):
+        sample = scene(difficulty="easy", ordinal=8, family="eligibility")
+        spec = sample["problem_spec"]
+        for added in (
+            "Please exclude any inactive or archived entries.",
+            "Retain only valid non-archived entries.",
+        ):
+            with self.subTest(added=added):
+                q = reference_question(spec) + " " + added
+                self.assertIn(
+                    "unlicensed_archive_status_filter",
+                    guard_question(q, spec),
+                )
+
+    def test_easy_chronology_does_not_invent_independent_approval(self):
+        sample = scene(difficulty="easy", ordinal=4, family="chronology")
+        spec = sample["problem_spec"]
+        original = reference_question(spec)
+        q = (
+            f"For {spec['scenario']['topic']}, identify the single active "
+            "entry that qualifies for the official approved register, "
+            "specifically the one with the earliest relative step."
+        )
+        self.assertIn(
+            "unlicensed_easy_approval_filter",
+            guard_question(q, spec),
+        )
+        self.assertEqual(guard_question(original, spec), [])
+
+    def test_surface_normalization_repairs_format_only(self):
+        from envir.reasoning.surface_quality import (
+            normalize_question_punctuation,
+        )
+        raw = (
+            "Please identify active records using diagram_step_start and "
+            "diagram_step_end with measured_value meeting minimum_required.??"
+        )
+        cleaned = normalize_question_punctuation(raw)
+        self.assertEqual(
+            cleaned,
+            "Please identify active records using diagram interval start step "
+            "and diagram interval end step with measured value meeting "
+            "minimum required threshold?",
+        )
+        self.assertEqual(
+            normalize_question_punctuation(
+                'Please identify all active entries."'
+            ),
+            "Please identify all active entries.",
+        )
+        self.assertEqual(
+            normalize_question_punctuation(
+                'For "The Office" records, identify active entries.'
+            ),
+            'For "The Office" records, identify active entries.',
+        )
+
+    def test_language_quality_report_surfaces_accepted_bad_predicate(self):
+        from envir.reasoning.workflow import quality_report
+        sample = scene(difficulty="medium", ordinal=5,
+                       family="threshold_eligibility")
+        corrupted = copy.deepcopy(sample)
+        corrupted["question"] = (
+            reference_question(sample["problem_spec"])
+            + " Keep only entries assigned to an approved policy group."
+        )
+        corrupted["public"]["question"] = corrupted["question"]
+        report = quality_report([corrupted], no_progress=True)
+        self.assertEqual(report["replay_pass"], 1)
+        warnings = report["question_surface"][
+            "semantic_language_warnings"]["counts"]
+        self.assertEqual(
+            warnings["unlicensed_independent_approval_filter"], 1
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
