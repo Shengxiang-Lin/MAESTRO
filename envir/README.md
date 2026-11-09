@@ -57,6 +57,7 @@ feasibility. A compatibility check rejects unusable source combinations.
 | `graph.py` | Typed edges, coarsening, waves and exact DAG topology signature |
 | `question.py`, `question_review.py` | Graph-first new question and Author–Critic |
 | `world.py`, `evidence.py`, `validation.py` | Synthetic observations, trace execution, replay |
+| `semantic_world.py`, `semantic_world_cli.py` | Semantic World Spec before values, deterministic World re-instantiation and audit |
 | `builder.py`, `cli.py`, `question_streaming.py`, `question_audit.py` | Batch pipeline, CLI, checkpointing and diagnostics |
 
 The canonical command-line entry is **`python -m envir`**.
@@ -89,6 +90,102 @@ python -m envir naturalize
   --question-model local-model-name 
   --question-workers 4 --max-revisions 2
 ```
+
+### Semantic-first World construction (recommended: `realize-world`)
+
+The new pipeline fixes a limitation of the old `ground-scenes` approach:
+it no longer generates unrelated random numbers and asks an LLM to invent
+a story about them AFTER EvidenceGraph execution. Instead it creates a
+**Semantic World Specification first**, then samples values and executes
+the graph using that same frozen specification.
+
+```text
+MMQA Scene/Source metadata + independent Goal Bank
+     → Existing Recursive Recipe Planner → immutable Macro TaskGraph
+     → LLM Semantic World Spec + independent Critic (NO numeric facts)
+     → deterministic synthetic candidate/score/flag/order/group sampling
+     → executable World + EvidenceGraph + Feedback
+     → Question Author/Critic (consumes the SAME semantic schema)
+```
+
+For efficiency, `realize-world` accepts the existing **original**
+`build` output `scenes.jsonl` as a bank of compiled MacroPlans.
+The old World and Feedback fields are **never shown to the spec LLM**
+and are **discarded/recomputed for accepted scenes**. This avoids rerunning
+the expensive KQA/MMQA planning stage. It produces genuinely *new* World
+facts; it is NOT a post-hoc overlay of old random values.
+
+The LLM sees Topic, a deliberately **weak** domain hint, the frozen Goal
+operation/fields/thresholds/answer type, existing source IDs/modalities and
+Macro Task operations/dependencies. It does NOT see the original MMQA
+Question/answers/context excerpts or any old synthetic values. This is
+especially important for mixed-domain MMQA questions, where a topic about
+a film could otherwise be mistaken for a sports dataset.
+
+Its proposal contains a fictional `scenario` (subject type, setting,
+user role, motivation), `semantic_bindings` (candidate kind, internal
+score, binary mark, relative ordering, group category), one honest
+`source_bindings` role and label per original source ID, and the
+existing Goal's `user_need`. No numeric fact, real-media perception,
+new operation, historical fact or source is allowed. An independent
+five-axis Critic checks topic/field/source/Goal/provenance coherence.
+Empty answers (no shared groups or no eligible entries) are **valid**.
+
+Python binds the approved spec to every source. It then *samples* the
+0–100 score, Boolean marker, relative ordinal, group key and candidate ID
+deterministically from the spec fingerprint and source ID. Fact
+`statements` use the previously approved domain meanings; the standard
+field names, typed WorkProduct interfaces and Macro TaskGraph stay
+unchanged. The EvidenceGraph and Feedback are completely recomputed and
+validated, and the new World can be deterministically recreated for Replay.
+
+The compiled `scene` stores `semantic_world_spec`; a rejected or
+`not_realizable` proposal leaves its original scene untouched, clearly
+recorded in `semantic_world_audit.jsonl`. An `accepted_scenes.jsonl`
+subset is provided to avoid accidentally training on unchanged fallbacks.
+The source modality `image` denotes a *simulated metadata source role*;
+no original pixels/audio/video were analyzed. Original MMQA text excerpts
+are intentionally not copied into the regenerated fictional World.
+
+From the existing 1,000-graph bank:
+
+```bash
+python -m envir realize-world \
+  --scenes envir/data/taskfirst_recursive_1000/scenes.jsonl \
+  --output-dir envir/data/semantic_first_world_20 \
+  --max-records 20 \
+  --world-api-base http://127.0.0.1:8807/v1 \
+  --world-model local-qwen3.5-9b \
+  --world-workers 8 \
+  --max-revisions 2 --flush-every 1
+
+python -m envir replay \
+  --scenes envir/data/semantic_first_world_20/scenes.jsonl
+
+python -m envir naturalize \
+  --scenes envir/data/semantic_first_world_20/accepted_scenes.jsonl \
+  --output-dir envir/data/semantic_first_natural_20 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 8 --max-revisions 2 --flush-every 1
+```
+
+The final naturalization command requires at least one accepted scene.
+Output files: `scenes.jsonl` (all input tasks), `questions.jsonl`,
+`accepted_scenes.jsonl` (semantically instantiated tasks only),
+`semantic_world_audit.jsonl`, `semantic_world_checkpoint.json`,
+and `summary.json`. Resume in the same directory only with the exact
+same input/model/prompt/code signature. Use a new directory when switching
+experiments, and do not overwrite your V4 Grounding results.
+
+**Important comparison:** New synthetic values and EvidenceGraphs differ
+from the old `build` output; this is not a matched-answer evaluation.
+Old data remains fully replayable. This approach improves the *shared*
+domain schema but does not, by itself, add genuinely new operations,
+cross-source entity relationships, real MMQA media interpretation,
+conflicting evidence, or malicious-agent recovery.
+
+#### Legacy post-World interpretation
 
 ### Semantic Scenario Contract (v4, default post-graph grounding)
 
