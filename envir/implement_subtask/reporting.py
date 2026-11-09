@@ -259,6 +259,45 @@ def _normalize_author_result(value, exact_rows: list[dict],
     return _readable_verified_answer(exact_rows), []
 
 
+_ASSERTED_FILTER_ACTION = re.compile(
+    r"\b(?:filtered|excluded|removed|dropped|"
+    r"screened\s+out|retained\s+only|"
+    r"filtering\s+out|applied\s+(?:an?\s+)?filter)\b",
+    re.I,
+)
+_FILTER_NEGATION_OR_DEFERMENT = re.compile(
+    r"\b(?:without|not|never|no|none|neither|"
+    r"did\s+not|was\s+not|were\s+not|has\s+not|have\s+not|"
+    r"before|prior\s+to|pending|awaiting|rather\s+than|"
+    r"left\s+for|reserved\s+for|deferred\s+to|"
+    r"for\s+(?:later|future|subsequent|downstream))"
+    r"(?:\s+[\w-]+){0,7}\s*$",
+    re.I,
+)
+
+
+def _scan_claims_completed_filter(text: str) -> bool:
+    """Only flag *asserted* filtering during a read-only source scan.
+
+    References to a FUTURE filtering step or negated operations (e.g.
+    "without filtering" and "no rows were excluded") are NOT claims
+    that the current Macro filtered anything. Prior lexical matching
+    incorrectly rejected such honest stage-boundary summaries.
+    """
+    for action in _ASSERTED_FILTER_ACTION.finditer(text):
+        prefix = text[max(0, action.start() - 115):action.start()]
+        prefix = re.split(r"[.;:!?\n]", prefix)[-1]
+        if _FILTER_NEGATION_OR_DEFERMENT.search(prefix):
+            continue
+        # "Rows to be filtered in the next stage" describes intended
+        # future work rather than work the current scan completed.
+        if re.search(r"\b(?:to\s+be|will\s+be|would\s+be|"
+                     r"can\s+be|may\s+be)\s*$", prefix, re.I):
+            continue
+        return True
+    return False
+
+
 def _stage_scope_issues(text: str, contract: dict) -> list[str]:
     """High-precision claims contradicted by the frozen Macro output/ops.
 
@@ -289,10 +328,7 @@ def _stage_scope_issues(text: str, contract: dict) -> list[str]:
     # A standalone source read cannot have filtered data. Upstream
     # workproducts are not involved in scan-only Macro Tasks.
     if operations == {"scan"} and not contract["upstream_handoffs"]:
-        if re.search(
-            r"\b(?:filtered|filtering|excluded|removed|retained\s+only|"
-            r"screened\s+out)\b", text, re.I,
-        ):
+        if _scan_claims_completed_filter(text):
             errors.append("scan_claims_unexecuted_filter")
         if "active" not in fields and re.search(
             r"\b(?:scanned|retrieved|extracted|identified|listed)\b"
@@ -415,6 +451,18 @@ def author_critic_report(
                 failures.append({
                     "stage": "guard", "errors": problems,
                     "preview": str(candidate)[:220],
+                    "candidate_result_type": type(
+                        candidate.get("result")
+                    ).__name__ if isinstance(candidate, dict) else None,
+                    # Keep full short natural-language text only in the
+                    # PRIVATE per-Macro review audit. The old preview lost
+                    # summaries behind long structured result arrays.
+                    "candidate_summary": (
+                        candidate["summary"][:1000]
+                        if isinstance(candidate, dict)
+                        and isinstance(candidate.get("summary"), str)
+                        else None
+                    ),
                 })
                 continue
             normalized_result, _ = _normalize_author_result(
@@ -472,6 +520,7 @@ def author_critic_report(
                 return row, row["report_authoring"]
             failures.append({
                 "stage": "critic", "reason": decision.get("reason"),
+                "candidate_summary": candidate.get("summary"),
                 "repair_hint": (
                     "Correct stage-local summary/prose only. Preserve the "
                     "entire frozen answer exactly; do not pre-filter or "
