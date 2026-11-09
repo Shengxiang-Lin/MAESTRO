@@ -87,6 +87,11 @@ Five evidence-based decisions, each yes/no/uncertain:
   or source modality, and that omission is NOT a failure.
 - source_faithful: no invented concrete entity, source subtype, observed
   media contents, contextual facts or undocumented real-world properties.
+  If semantic_contract contains synthetic_world_specification, the
+  domain-specific schema, fictional candidate labels, source roles and
+  Goal-compatible need were defined BEFORE numeric World sampling. These
+  are licensed hypothetical meanings, NOT claims about real-world events,
+  original images or observed historical facts.
   If semantic_contract contains synthetic_scenario_contract, its
   source-bound hypothetical setting, candidate kind, field meanings and
   fixed question_intent are licensed, NOT as historical or media facts.
