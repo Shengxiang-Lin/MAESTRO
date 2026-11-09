@@ -294,14 +294,21 @@ def _single_line(value, *, limit=220) -> bool:
             and "synthetic_" not in value.lower())
 
 
-def validate_proposal(scene: dict, proposal: dict) -> list[str]:
-    """High-confidence checks. World value binding is done in Python."""
+def validate_proposal(scene: dict, proposal: dict, *,
+                      legacy_v1: bool = False) -> list[str]:
+    """High-confidence checks with replay-compatible v1 validation.
+
+    A previously accepted v1 overlay retains its original policy; only
+    new v2 generation adopts the stronger media-perception language gate.
+    Neither policy may alter source IDs or the frozen fact values.
+    """
     errors = []
     if not isinstance(proposal, dict) or set(proposal) != set(PROP_SCHEMA["required"]):
         return ["invalid_proposal_schema"]
     for key, limit in (
-        ("scene_context", 650), ("candidate_kind", 160),
-        ("user_need", 360),
+        ("scene_context", 500 if legacy_v1 else 650),
+        ("candidate_kind", 100 if legacy_v1 else 160),
+        ("user_need", 220 if legacy_v1 else 360),
     ):
         if not _single_line(proposal.get(key), limit=limit):
             errors.append("invalid_" + key)
@@ -322,7 +329,13 @@ def validate_proposal(scene: dict, proposal: dict) -> list[str]:
             errors.append("unknown_or_duplicate_source_id")
         seen.add(sid)
         for key in ("candidate_label", "source_role"):
-            if not _single_line(row[key], limit=(140 if key == "candidate_label" else 320)):
+            if not _single_line(
+                row[key], limit=(
+                    110 if legacy_v1 else (
+                        140 if key == "candidate_label" else 320
+                    )
+                )
+            ):
                 errors.append("invalid_" + key)
         label = row["candidate_label"].casefold().strip()
         if label in labels:
@@ -335,7 +348,9 @@ def validate_proposal(scene: dict, proposal: dict) -> list[str]:
         "score", "positive_flag", "relative_time_index", "group_key",
     }:
         errors.append("field_meaning_schema_invalid")
-    elif any(not _single_line(value, limit=320) for value in meanings.values()):
+    elif any(not _single_line(
+            value, limit=(110 if legacy_v1 else 320)
+    ) for value in meanings.values()):
         errors.append("invalid_field_meanings")
     # No media content assertions or claims about actual original documents.
     prose = " ".join([
@@ -343,12 +358,12 @@ def validate_proposal(scene: dict, proposal: dict) -> list[str]:
         str(proposal.get("user_need", "")),
     ] + [
         str(row.get("source_role", "")) for row in roles if isinstance(row, dict)
-    ] + [
+    ] + ([] if legacy_v1 else [
         str(row.get("candidate_label", "")) for row in roles
         if isinstance(row, dict)
     ] + [
-        str(value) for value in (meanings or {}).values()
-    ] if isinstance(meanings, dict) else [])
+        str(value) for value in meanings.values()
+    ] if isinstance(meanings, dict) else []))
     if re.search(r"\b(?:image|photo|poster|screenshot|video|footage)\b"
                  r".{0,60}\b(?:shows?|depicts?|contains?|reveals?)\b",
                  prose, re.I):
@@ -356,8 +371,8 @@ def validate_proposal(scene: dict, proposal: dict) -> list[str]:
     # Frozen World contains synthetic flags, NOT source-media perception.
     # A free-form hypothetical context is allowed; explicit claims of
     # *confirmed actual visual observation* are not.
-    if re.search(
-        r"\b(?:visual(?:ly)?\s+(?:confirmation|confirmed|verification|"
+    if not legacy_v1 and re.search(
+        r"\b(?:visual(?:ly)?\s+(?:confirmation|confirmed|verification|
         r"verified|detected)|image[- ]derived\s+(?:observation|confirmation)|"
         r"logo\s+(?:confirmed|verified|observed|detected)|"
         r"(?:confirmed|verified|detected)\s+(?:in|from|by)\s+(?:the\s+)?"
@@ -468,9 +483,13 @@ def source_ablation_signal(scene: dict) -> dict:
     }
 
 
-def materialize_grounding(scene: dict, proposal: dict, review: dict) -> dict:
+def materialize_grounding(
+        scene: dict, proposal: dict, review: dict, *,
+        version: str = "synthetic_world_concretization_v2") -> dict:
     """LLM writes labels; Python binds immutable values + fact references."""
-    errors = validate_proposal(scene, proposal)
+    errors = validate_proposal(
+        scene, proposal,
+        legacy_v1=(version == "synthetic_world_concretization_v1"))
     if errors:
         raise ValueError("cannot_materialize:" + ",".join(errors))
     roles = {role["source_id"]: role for role in proposal["source_roles"]}
@@ -488,7 +507,7 @@ def materialize_grounding(scene: dict, proposal: dict, review: dict) -> dict:
             "fact_origin": "deterministic_synthetic_world_not_original_mmqa",
         })
     return {
-        "version": "synthetic_world_concretization_v1",
+        "version": version,
         "mode": "synthetic_interpretation_not_original_media_annotation",
         "status": "accepted",
         "topic": scene["scenario"]["topic"],
@@ -521,8 +540,12 @@ def validate_grounding(scene: dict) -> list[str]:
     errors = []
     if not isinstance(g, dict) or g.get("status") != "accepted":
         return ["invalid_scene_grounding"]
-    if g.get("version") != "synthetic_world_concretization_v1":
-        errors.append("unknown_grounding_version")
+    version = g.get("version")
+    if version not in {
+        "synthetic_world_concretization_v1",
+        "synthetic_world_concretization_v2",
+    }:
+        return ["unknown_grounding_version"]
     if g.get("mode") != "synthetic_interpretation_not_original_media_annotation":
         errors.append("grounding_claims_real_media")
     if g.get("topic") != scene["scenario"]["topic"] or (
@@ -550,11 +573,14 @@ def validate_grounding(scene: dict) -> list[str]:
         ],
         "user_need": g.get("user_need"),
     }
-    errors.extend(validate_proposal(scene, proposal))
+    errors.extend(validate_proposal(
+        scene, proposal,
+        legacy_v1=(version == "synthetic_world_concretization_v1")))
     if g.get("proposal_fingerprint") != fingerprint(proposal):
         errors.append("grounding_proposal_changed")
     try:
-        expected = materialize_grounding(scene, proposal, g["review"])
+        expected = materialize_grounding(
+            scene, proposal, g["review"], version=version)
         if g != expected:
             errors.append("grounding_fact_bindings_changed")
     except (ValueError, KeyError, TypeError, IndexError):
