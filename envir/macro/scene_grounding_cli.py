@@ -165,6 +165,9 @@ def ground_scenes(args):
     # Counts are derived from accepted prefix, not mutable partial summary.
     for item in _read_jsonl(audit):
         counts[item["status"]] += 1
+        for attempt in item.get("attempts", []):
+            for issue in set(attempt.get("validation_errors", [])):
+                counts["validation_error:" + issue] += 1
         counts["author_calls"] += item["author_calls"]
         counts["critic_calls"] += item["critic_calls"]
         counts["revised"] += int(
@@ -216,12 +219,17 @@ def ground_scenes(args):
                     "author_calls": review["author_calls"],
                     "critic_calls": review["critic_calls"],
                     "attempts": review["attempts"],
+                    "last_validation_errors": review.get(
+                        "last_validation_errors", []),
                 }
                 for handle, data in (
                     (p, result), (q, result["public"]), (a, row)
                 ):
                     handle.write(json.dumps(data, ensure_ascii=False) + "\n")
                 counts[review["status"]] += 1
+                for attempt in review.get("attempts", []):
+                    for issue in set(attempt.get("validation_errors", [])):
+                        counts["validation_error:" + issue] += 1
                 counts["author_calls"] += review["author_calls"]
                 counts["critic_calls"] += review["critic_calls"]
                 counts["revised"] += int(
@@ -262,6 +270,11 @@ def ground_scenes(args):
             "rejection_reasons": {
                 key[7:]: count for key, count in sorted(counts.items())
                 if key.startswith("reason:")
+            },
+            "validation_error_counts": {
+                key[len("validation_error:"):]: count
+                for key, count in sorted(counts.items())
+                if key.startswith("validation_error:")
             },
             "frozen_world_and_graph_preserved": True,
             "source_fact_binding": "exact_source_id_fact_id_values",
