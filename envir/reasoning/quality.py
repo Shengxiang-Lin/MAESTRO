@@ -16,7 +16,7 @@ from .compiler import (
 )
 from .world import build_scene, generate_world, compile_program
 from .question import guard_question
-from .spec import spec_issues
+from .spec import spec_issues, VERSION
 
 
 def _mutate(sources: dict, source_id: str, answer: list[dict]) -> dict:
@@ -44,7 +44,8 @@ def _mutate(sources: dict, source_id: str, answer: list[dict]) -> dict:
 
 
 def _mutate_answer_witness(sources: dict, source_id: str,
-                           gold_workproducts: list[dict]) -> dict:
+                           gold_workproducts: list[dict],
+                           spec: dict | None = None) -> dict:
     """Flip ONE source observation that actually supports the Gold answer.
 
     New data should not depend on the position of F001, Entry-01, or a
@@ -67,9 +68,24 @@ def _mutate_answer_witness(sources: dict, source_id: str,
     if source_id == "register":
         fields["active"] = False
     elif source_id == "glossary":
-        fields["category_name"] = "__unmapped_intervention__"
+        field = "group_id" if "group_id" in fields else "category_name"
+        fields[field] = "__unmapped_intervention__"
     elif source_id == "annotations":
-        fields["approved"] = False
+        pattern = (spec or {}).get("reasoning_pattern", "approval")
+        if pattern == "approval":
+            fields["approved"] = False
+        else:
+            from .pattern_world import modality_fields
+            modality = revised[source_id]["modality"]
+            target = modality_fields(modality, pattern)
+            if isinstance(target, tuple):
+                # A simulated time window moved well beyond all event steps.
+                fields[target[0]] = 100000
+                fields[target[1]] = 100100
+            elif pattern == "status_disagreement":
+                fields[target] = not fields[target]
+            else:
+                fields[target] = 100000
     elif source_id == "clearance":
         fields["cleared"] = False
     else:
@@ -139,7 +155,9 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             issues.append("gold_program_answer_mismatch")
         if execution["trace"] != scene["gold_trace"]:
             issues.append("gold_execution_trace_mismatch")
-        graph = compile_macro_tasks(program, execution["trace"])
+        graph = compile_macro_tasks(
+        program, execution["trace"], compact=spec.get("version") == VERSION
+    )
         if graph != scene["macro_graph"]:
             issues.append("macro_graph_not_program_compiled")
         macro = run_macro_tasks(graph, sources=world["sources"])
@@ -164,6 +182,8 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         "hard": (4, 3, 4),
     }
     source_count, joins, depth = levels[difficulty]
+    if spec.get("version") == VERSION and graph["macro_task_count"] > 9:
+        issues.append("macro_task_budget_exceeded")
     if profile["source_count"] < source_count:
         issues.append("insufficient_source_count")
     if profile["join_count"] < joins:
@@ -177,6 +197,15 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         issues.append("missing_annotation_witness")
     if not answer:
         issues.append("unexpected_empty_answer")
+    if (spec.get("version") == "maestro.problem_spec.v4"
+            and spec["family"] == "evidence_reconcile"):
+        if any(
+            set(entry) != {"entry_label", "evidence_refs"}
+            or not isinstance(entry.get("evidence_refs"), list)
+            or not entry["evidence_refs"]
+            for entry in answer
+        ):
+            issues.append("gold_evidence_output_contract_mismatch")
     if len({json.dumps(row, sort_keys=True) for row in answer}) != len(answer):
         issues.append("duplicate_answer_rows")
     one_source = weak_single_source_baseline(scene)
@@ -199,7 +228,8 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             changed = _mutate(world["sources"], source_id, answer)
         else:
             changed = _mutate_answer_witness(
-                world["sources"], source_id, macro["answer_with_provenance"]
+                world["sources"], source_id,
+                macro["answer_with_provenance"], spec=spec,
             )
         altered = answer_values(evaluate_program(program, sources=changed))
         semantic_effect = altered != answer
@@ -250,7 +280,9 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
 def compile_and_validate(spec: dict, question: str) -> dict:
     scene = build_scene(spec, question)
     program = scene["gold_program"]
-    graph = compile_macro_tasks(program, scene["gold_trace"])
+    graph = compile_macro_tasks(
+        program, scene["gold_trace"], compact=spec.get("version") == VERSION
+    )
     scene["macro_graph"] = graph
     scene["task_feedback"] = run_macro_tasks(
         graph, sources=scene["world"]["sources"]

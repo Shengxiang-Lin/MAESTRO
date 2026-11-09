@@ -10,7 +10,8 @@ import copy
 import json
 import re
 
-from .spec import spec_issues
+from .spec import spec_issues, VERSION as SPEC_VERSION
+from .intent import intent_contract
 
 AUTHOR_SYSTEM = """Design one coherent, concrete FICTIONAL information-work scenario
 based on a topic label and a FROZEN reasoning contract. This is a simulated
@@ -20,9 +21,13 @@ videos or events.
 Return concise narrative fields for the existing scenario, plus honest
 hypothetical titles for each source. NEVER change any source ID/modality,
 difficulty, solution operation, constraints, field mapping or answer.
-The primary register contains abbreviated labels, a second fictional source
-is a terminology codebook, a third is simulated annotations about category
-approval, and (if present) a fourth supplies independent clearance.
+The sources have FROZEN roles. They may describe (depending on the pattern):
+approved category labels, time-window intervals for tracked events,
+a binary-status disagreement, or per-group numerical thresholds.
+The first source holds entry facts, the second translates source-specific
+codes, the third gives independent observations or standards, and
+a fourth (when present) supplies entry-specific clearance. NEVER silently
+convert time-window matching or disagreement into category approval.
 There are no real media to perceive; images, video and audio are simulated
 structured annotations. Do not assert what original media actually shows.
 Do not add any specific observed fact, person, historical year/date, filter,
@@ -95,6 +100,11 @@ def enrich_one(spec: dict, *, author, critic,
         "topic": spec["scenario"]["topic"],
         "difficulty": spec["difficulty_target"],
         "goal_family": spec["family"],
+        "semantic_pattern": spec.get("reasoning_pattern", "approval"),
+        "source_scoped_conditions": (
+            intent_contract(spec)["nonnegotiable_conditions"]
+            if spec.get("version") == SPEC_VERSION else []
+        ),
         "source_contract": [{
             "source_id": role["source_id"],
             "modality": role["modality"],

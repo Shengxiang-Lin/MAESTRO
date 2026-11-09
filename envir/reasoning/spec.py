@@ -9,9 +9,13 @@ import random
 import re
 from envir.schema import digest
 
-VERSION = "maestro.problem_spec.v3"
+VERSION = "maestro.problem_spec.v4"
+PREVIOUS_VERSION = "maestro.problem_spec.v3"
 LEGACY_VERSION = "maestro.problem_spec.v2"
-SUPPORTED_VERSIONS = (LEGACY_VERSION, VERSION)
+SUPPORTED_VERSIONS = (LEGACY_VERSION, PREVIOUS_VERSION, VERSION)
+RELATION_PATTERNS = (
+    "approval", "time_window", "status_disagreement", "dynamic_threshold",
+)
 
 FAMILIES = (
     "reconcile",
@@ -21,6 +25,9 @@ FAMILIES = (
     "chronology",
     "evidence_reconcile",
     "category_distribution",
+    "window_alignment",
+    "status_disagreement",
+    "threshold_eligibility",
 )
 DIFFICULTIES = ("easy", "medium", "hard")
 
@@ -86,9 +93,22 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     record_id = str(seed_record.get("record_id") or seed_record.get("scene_id")
                     or f"topic-{ordinal}")
     rng = random.Random(int(digest(run_seed, ordinal, record_id, "v2")[:15], 16))
-    family = FAMILIES[(ordinal + run_seed) % len(FAMILIES)]
+    # Semantic families change the actual relations/predicates, not only
+    # the execution order. Easy remains a one-source independent task.
+    pattern = ("approval" if difficulty == "easy"
+               else RELATION_PATTERNS[(ordinal + run_seed) % len(RELATION_PATTERNS)])
+    legacy_families = FAMILIES[:7]
+    family = (
+        legacy_families[(ordinal + run_seed) % len(legacy_families)]
+        if pattern == "approval" else
+        {
+            "time_window": "window_alignment",
+            "status_disagreement": "status_disagreement",
+            "dynamic_threshold": "threshold_eligibility",
+        }[pattern]
+    )
     if difficulty == "easy" and family == "category_distribution":
-        family = "coverage_count"  # no cross-source category key in Easy
+        family = "coverage_count"
     role, purpose, entity_kind = source_profile(seed_record.get("domain_hint", ""))
     media = _choose_media(seed_record, ordinal, rng)
     scenario = {
@@ -114,6 +134,26 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
              "title": f"{topic} independent annotation record",
              "purpose": "review judgments, sequence and category descriptions"},
         ]
+    if pattern != "approval":
+        semantics = {
+            "time_window": (
+                "tracked events with recorded relative occurrence steps",
+                "map event codes to simulated sessions",
+                "simulated event windows and their time boundaries",
+            ),
+            "status_disagreement": (
+                "tracked entries and their reported binary status",
+                "resolve status codes to their record groups",
+                "independently reported binary status by group",
+            ),
+            "dynamic_threshold": (
+                "tracked entries with numerical measured quantities",
+                "translate policy codes to policy groups",
+                "independent per-group minimum acceptable values",
+            ),
+        }[pattern]
+        for entry, meaning in zip(source_roles, semantics):
+            entry["purpose"] = meaning
     if difficulty == "hard":
         source_roles.append({
             "source_id": "clearance", "modality": "text",
@@ -134,6 +174,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         },
         "difficulty_target": difficulty,
         "family": family,
+        "reasoning_pattern": pattern,
         "scenario": scenario,
         "sources": source_roles,
         "requirements": {
@@ -144,6 +185,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
                 "count" if family == "coverage_count" else
                 "category_counts" if family == "category_distribution" else
                 "single_entry" if family in {"priority", "chronology"} else
+                "entry_evidence" if family == "evidence_reconcile" else
                 "entry_list"
             ),
             "must_preserve_source_provenance": True,
@@ -162,6 +204,20 @@ def spec_issues(spec: dict) -> list[str]:
         errors.append("invalid_difficulty")
     if spec.get("family") not in FAMILIES:
         errors.append("invalid_family")
+    if spec.get("version") == VERSION:
+        pattern = spec.get("reasoning_pattern")
+        mapped = {
+            "time_window": "window_alignment",
+            "status_disagreement": "status_disagreement",
+            "dynamic_threshold": "threshold_eligibility",
+        }
+        if pattern not in RELATION_PATTERNS:
+            errors.append("invalid_reasoning_pattern")
+        elif pattern == "approval":
+            if spec.get("family") not in FAMILIES[:7]:
+                errors.append("approval_family_mismatch")
+        elif spec.get("family") != mapped[pattern]:
+            errors.append("reasoning_pattern_family_mismatch")
     scenario = spec.get("scenario", {})
     for key in ("topic", "setting", "user_role", "purpose", "motivation", "entity_kind"):
         if not isinstance(scenario.get(key), str) or not scenario[key].strip():
@@ -187,7 +243,10 @@ def spec_issues(spec: dict) -> list[str]:
         "count" if spec.get("family") == "coverage_count"
         else "category_counts" if spec.get("family") == "category_distribution"
         else "single_entry" if spec.get("family") in {"priority", "chronology"}
-        else "entry_list"
+        else "entry_evidence" if (
+            spec.get("version") == VERSION
+            and spec.get("family") == "evidence_reconcile"
+        ) else "entry_list"
     )
     if needs.get("answer_kind") != expected_answer:
         errors.append("answer_kind_contract_mismatch")

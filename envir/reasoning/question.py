@@ -7,14 +7,18 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 
-from .spec import spec_issues
+from .spec import spec_issues, VERSION
+from .intent import intent_contract, style_contract
 
 
 def reference_question(spec: dict) -> str:
     problems = spec_issues(spec)
     if problems:
         raise ValueError("invalid_spec:" + ",".join(problems))
+    if spec.get("version") == VERSION:
+        return _intent_reference_question(spec)
     scene = spec["scenario"]
     topic = scene["topic"]
     noun = " ".join(scene["entity_kind"].replace("_", " ").split())
@@ -68,6 +72,77 @@ def reference_question(spec: dict) -> str:
     return " ".join([beginning, condition, questions[family]])
 
 
+def _intent_reference_question(spec: dict) -> str:
+    """Deterministic fidelity fallback, not the Author's primary template."""
+    intent = intent_contract(spec)
+    context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    pattern = spec["reasoning_pattern"]
+    constraints = {
+        "approval": (
+            "Consider only active register entries, resolve their category "
+            "codes through the glossary, and use the annotation source to "
+            "retain independently approved categories."
+        ),
+        "time_window": (
+            "For active register entries, map their session codes with the "
+            "glossary and compare each event step with the corresponding "
+            "annotation's inclusive time window."
+        ),
+        "status_disagreement": (
+            "For active register entries, resolve group codes through the "
+            "glossary and compare reported statuses with independent "
+            "annotation statuses; retain only disagreements."
+        ),
+        "dynamic_threshold": (
+            "For active register entries, resolve policy codes with the "
+            "glossary and compare each measured value with its group's "
+            "independently recorded minimum threshold."
+        ),
+    }[pattern]
+    if spec["difficulty_target"] == "easy":
+        constraints = "Consider only active entries from the register."
+    if spec["difficulty_target"] == "hard":
+        constraints += (
+            " Also require each selected entry to have a separate "
+            "entry-specific clearance marked cleared."
+        )
+    outputs = {
+        "reconcile": "Which entries meet these conditions?",
+        "eligibility": "Which entries meet these conditions?",
+        "evidence_reconcile": (
+            "Which entries qualify, and what source fact references "
+            "support each entry?"
+        ),
+        "coverage_count": "How many distinct entries qualify?",
+        "category_distribution": (
+            "How many qualifying entries occur in each resolved category?"
+        ),
+        "priority": (
+            "Which qualifying entry has the highest recorded priority?"
+        ),
+        "chronology": (
+            "Which qualifying entry has the earliest relative step?"
+        ),
+        "window_alignment": (
+            "Which entries fall inside their matching annotation time windows?"
+        ),
+        "status_disagreement": (
+            "Which entries have different statuses across the two records?"
+        ),
+        "threshold_eligibility": (
+            "Which entries meet their independently defined minimum values?"
+        ),
+    }
+    beginning = [
+        f"For a fictional {topic} reference collection,",
+        f"I'm examining fictional {topic} records.",
+        f"Please help check the fictional {topic} collection.",
+        f"The fictional {topic} register needs a cross-source review.",
+        f"Regarding the fictional {topic} record set,",
+    ][int(spec["ordinal"]) % 5]
+    return f"{beginning} {constraints} {outputs[spec['family']]}"
+
+
 AUTHOR_SYSTEM = """You write ONE realistic natural-language user question from a
 FROZEN fictional benchmark ProblemSpec. Do not add, delete or change any
 condition, information source or output. The source roles are simulations, not
@@ -84,11 +159,20 @@ answer type (count, list, highest recorded priority, or earliest relative
 ordering). No fabricated additional filters. A hypothetical problem about
 a real topic does NOT assert historical facts.
 
-You are explicitly given a FROZEN REFERENCE QUESTION that contains all
-conditions and the required answer. It is newly authored from the fictional
-contract and is NOT a MultiModalQA question. Rewrite only its phrasing.
-Preserve the word "active" and the code-crosswalk and category approval for
-multi-source cases; preserve distinct entry-specific clearance for hard cases.
+For latest-version requests, you receive a STRUCTURED FROZEN USER INTENT:
+constraints, typed output, source roles and a style preference. Write an
+original user question from that contract. You may vary clause order,
+interrogative structure and user motivation, but every mandatory condition
+must remain unambiguous. Do NOT start with "As a" or "As an". Do not merely
+copy or minimally edit a reference question.
+
+For historical requests and explicit repair attempts, a FROZEN REFERENCE
+QUESTION may also be supplied. It was authored from the fictional
+contract, NOT the original MultiModalQA question. Preserve its meaning.
+Preserve the word "active" and exactly the cross-source relation required
+by the structured intent: approval, temporal window, binary disagreement,
+or per-group threshold. Do NOT substitute one operation for another.
+Preserve distinct entry-specific clearance for hard cases.
 Preserve counting, category grouping, priority MAXIMUM, or chronological
 EARLIEST directions when applicable.
 
@@ -130,7 +214,27 @@ def guard_question(question: str, spec: dict) -> list[str]:
         errors.append("topic_missing")
     if not re.search(r"\bactive\b", q, flags=re.I):
         errors.append("active_condition_missing")
-    if spec["difficulty_target"] != "easy":
+    pattern = spec.get("reasoning_pattern", "approval")
+    latest = spec.get("version") == VERSION
+    if latest and pattern != "approval":
+        if not re.search(r"\b(code|codes|glossary|map|mapped|mapping|translat|resolv)\b", q, re.I):
+            errors.append("cross_source_code_mapping_missing")
+        if pattern == "time_window":
+            if not re.search(r"\b(window|interval|range|between|within|inside|boundary|boundaries)\b", q, re.I):
+                errors.append("temporal_interval_missing")
+            if not re.search(r"\b(time|step|event|moment|frame|timestamp)\b", q, re.I):
+                errors.append("temporal_event_missing")
+        elif pattern == "status_disagreement":
+            if not re.search(r"\b(disagree|different|mismatch|conflict|contradict|inconsisten)\w*", q, re.I):
+                errors.append("status_disagreement_missing")
+            if not re.search(r"\b(status|statuses|mark|reported|observed)\b", q, re.I):
+                errors.append("binary_status_missing")
+        elif pattern == "dynamic_threshold":
+            if not re.search(r"\b(threshold|minimum|at least|exceed|above|meet|qualify)\w*", q, re.I):
+                errors.append("dynamic_threshold_missing")
+            if not re.search(r"\b(measur|value|rating|score)\w*", q, re.I):
+                errors.append("measured_value_missing")
+    elif spec["difficulty_target"] != "easy":
         if not re.search(r"\b(code|codes|abbreviat|glossary|mapped|mapping|translat|resolv)", q, re.I):
             errors.append("alias_resolution_not_expressed")
         if not re.search(r"\b(approv|review|annotat)", q, re.I):
@@ -145,6 +249,9 @@ def guard_question(question: str, spec: dict) -> list[str]:
         errors.append("priority_direction_missing")
     if family == "chronology" and not re.search(r"\b(earliest|first|lowest|minimum)\b", q, re.I):
         errors.append("relative_ordinal_direction_missing")
+    if latest and family == "evidence_reconcile":
+        if not re.search(r"\b(evidence|source|citation|reference|support)\w*", q, re.I):
+            errors.append("evidence_output_scope_missing")
     if re.search(r"\b(TaskGraph|WorkProduct|candidate-\d+|source_id|fact_refs|synthetic_attribute)\b", q, re.I):
         errors.append("internal_implementation_leak")
     if re.search(r"\b(actual photograph shows|original image depicts|original video shows)\b", q, re.I):
@@ -155,31 +262,46 @@ def guard_question(question: str, spec: dict) -> list[str]:
 def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2) -> tuple[str, dict]:
     """Model cannot edit World, Program, TaskGraph, or Gold Answer."""
     initial = reference_question(spec)
-    instruction = {
-        "frozen_reference_question": initial,
-        "frozen_scenario": spec["scenario"],
-        "required_source_roles": spec["sources"],
-        "requirements": spec["requirements"],
-        "difficulty": spec["difficulty_target"],
-        "goal_family": spec["family"],
-    }
+    latest = spec.get("version") == VERSION
+    instruction = (
+        {
+            "intent": intent_contract(spec),
+            "style": style_contract(spec),
+            "frozen_scenario": spec["scenario"],
+        } if latest else {
+            "frozen_reference_question": initial,
+            "frozen_scenario": spec["scenario"],
+            "required_source_roles": spec["sources"],
+            "requirements": spec["requirements"],
+            "difficulty": spec["difficulty_target"],
+            "goal_family": spec["family"],
+        }
+    )
     if max_revisions < 0 or max_revisions > 8:
         raise ValueError("revisions must be 0..8")
     failures = []
     for attempt in range(max_revisions + 1):
+        author_contract = dict(instruction)
+        if latest and attempt > 0:
+            author_contract["repair_reference_question"] = initial
         user_text = json.dumps({
-            "contract": instruction,
+            "contract": author_contract,
             "previous_failures": [{
                 "errors": entry.get("errors", []),
                 "critic_reason": entry.get("decision", {}).get("reason"),
             } for entry in failures[-2:]],
-            "constraint": "Preserve ALL conditions in frozen_reference_question. "
-                          "Return a SINGLE fully formed question ending with '?'.",
+            "constraint": "Preserve all conditions and the exact answer contract. "
+                          "Prefer a direct natural question, avoid As-a role openings. "
+                          "Return one fully formed question ending with '?'.",
         }, ensure_ascii=False)
         try:
             candidate = author.complete_json(AUTHOR_SYSTEM, user_text)
             q = candidate.get("question")
             surface = guard_question(q, spec)
+            if (latest and isinstance(q, str)
+                    and SequenceMatcher(None, q.strip().casefold(),
+                                        initial.casefold()).ratio() > 0.96):
+                surface.append("too_similar_to_reference_question")
             if surface:
                 failures.append({
                     "stage": "guard", "errors": surface,
@@ -193,7 +315,11 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2) -> tup
                 })
                 continue
             decision = critic.complete_json(CRITIC_SYSTEM, json.dumps({
-                "frozen_contract": instruction,
+                "frozen_contract": {
+                    **instruction,
+                    "frozen_reference_question": initial,
+                    "frozen_program_output": spec["requirements"]["answer_kind"],
+                },
                 "candidate_question": q,
             }, ensure_ascii=False))
             axes = ("all_constraints_preserved", "no_unlicensed_facts",
