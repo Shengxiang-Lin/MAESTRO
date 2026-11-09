@@ -21,7 +21,7 @@ from envir.generate_question.surface_quality import (
 from envir.generate_question.stages import (
     construct_scenes, read_jsonl, review_questions, _jsonl,
 )
-from envir.generate_question.pipeline import quality_report
+from envir.generate_question.pipeline import quality_report, generate_questions
 
 
 def spec(ordinal=0, difficulty="medium", family=None):
@@ -391,6 +391,69 @@ class StageAndQualityTests(unittest.TestCase):
         report = quality_report([bad], no_progress=True)
         self.assertEqual(report["replay_pass"], 0)
         self.assertEqual(report["question_publishable"], 0)
+
+    def test_generate_questions_reuses_completed_stages_after_interruption(self):
+        args = args_from_config(load_config(DEFAULT_CONFIG))
+        with tempfile.TemporaryDirectory() as td:
+            args.output_dir = Path(td) / "pipeline"
+            args.target = 4
+            args.no_progress = True
+            records = [{
+                "record_id": f"new-{i}",
+                "topic": f"Fictional Collection {i}",
+                "domain_hint": "science",
+                "source_modalities": ["image", "text", "table"],
+            } for i in range(4)]
+            def scenario_author(specification, **_):
+                modified = copy.deepcopy(specification)
+                modified["scenario_authoring"] = {
+                    "status": "accepted", "attempts": 1,
+                }
+                return modified, {}
+            def question_author(specification, **_):
+                return reference_question(specification), {
+                    "status": "accepted", "attempts": 1,
+                }
+            with patch(
+                "envir.generate_question.sources.load_scenario_seeds",
+                return_value=(records, {}),
+            ), patch(
+                "envir.generate_question.stages._scenario_clients",
+                return_value=(object(), object()),
+            ), patch(
+                "envir.generate_question.stages._llm_clients",
+                return_value=(object(), object()),
+            ), patch(
+                "envir.generate_question.scenario.enrich_one",
+                side_effect=scenario_author,
+            ), patch(
+                "envir.generate_question.stages.naturalize_one",
+                side_effect=question_author,
+            ):
+                first = generate_questions(args)
+            self.assertEqual(first["generated"], 4)
+            self.assertEqual(first["status"], "done")
+            self.assertEqual(
+                len(read_jsonl(args.output_dir / "constructed/scenes.jsonl")), 4
+            )
+            self.assertEqual(
+                len(read_jsonl(args.output_dir / "questions/scenes.jsonl")), 4
+            )
+            (args.output_dir / "summary.json").unlink()
+            # Simulate a crash after all expensive LLM calls but BEFORE the
+            # final unified summary. Re-run must reuse both completed stages.
+            with patch(
+                "envir.generate_question.stages._scenario_clients",
+                side_effect=AssertionError("scenario must not rerun"),
+            ), patch(
+                "envir.generate_question.stages._llm_clients",
+                side_effect=AssertionError("question must not rerun"),
+            ):
+                recovered = generate_questions(args)
+            self.assertEqual(recovered["generated"], 4)
+            self.assertEqual(recovered["status"], "done")
+            self.assertEqual(first["question_authoring"],
+                             recovered["question_authoring"])
 
     def test_scenario_fallback_not_a_success(self):
         args = args_from_config(load_config(DEFAULT_CONFIG))
