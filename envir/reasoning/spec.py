@@ -175,6 +175,12 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         "difficulty_target": difficulty,
         "family": family,
         "reasoning_pattern": pattern,
+        # An executable alternative join/filter dependency plan; this
+        # affects the MacroGraph, NOT just names or prompt wording.
+        # Absent on old frozen specs, preserving their original replay.
+        "macro_plan_variant": int(digest(
+            run_seed, ordinal, record_id, "macro-graph-plan-v1"
+        )[:8], 16) % 4,
         "scenario": scenario,
         "sources": source_roles,
         "requirements": {
@@ -218,6 +224,11 @@ def spec_issues(spec: dict) -> list[str]:
                 errors.append("approval_family_mismatch")
         elif spec.get("family") != mapped[pattern]:
             errors.append("reasoning_pattern_family_mismatch")
+    plan_variant = spec.get("macro_plan_variant")
+    if plan_variant is not None and (
+        type(plan_variant) is not int or plan_variant not in range(4)
+    ):
+        errors.append("invalid_macro_plan_variant")
     scenario = spec.get("scenario", {})
     for key in ("topic", "setting", "user_role", "purpose", "motivation", "entity_kind"):
         if not isinstance(scenario.get(key), str) or not scenario[key].strip():
