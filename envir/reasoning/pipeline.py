@@ -1,4 +1,4 @@
-"""End-to-end MAESTRO Reasoning-First V2 generation, audit and replay CLI.
+"""Source-scoped reasoning bank construction, audit and replay implementation.
 
 Maintains a separate schema/output tree; legacy envir build/realize-world,
 naturalize and replay remain byte-for-byte backward compatible.
@@ -6,13 +6,14 @@ naturalize and replay remain byte-for-byte backward compatible.
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import os
 import random
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+from tqdm.auto import tqdm
 
 from envir.schema import normalize_label
 from .spec import difficulty_sequence, make_spec
@@ -21,6 +22,21 @@ from .question import (
     guard_question, naturalize_one, reference_question,
 )
 from .quality import compile_and_validate, validate_replay
+
+
+def _parallel_ordered(items, job, *, workers: int, desc: str,
+                      no_progress: bool = False):
+    """Show *completed* futures immediately, but keep deterministic row order."""
+    results = [None] * len(items)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(job, item): index
+                   for index, item in enumerate(items)}
+        with tqdm(total=len(items), desc=desc, unit="task",
+                  disable=no_progress) as bar:
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+                bar.update(1)
+    return results
 
 
 def _json(path: Path, value) -> None:
@@ -41,14 +57,12 @@ def _jsonl(path: Path, rows) -> None:
 def read_jsonl(path: Path, *, limit: int | None = None) -> list[dict]:
     if not path.is_file():
         raise FileNotFoundError(
-            f"V2 input file does not exist: {path}. "
-            "The README's example TaskGraph bank is a local generated artifact "
-            "and may not be present on this machine. "
-            "For build-v2, either locate an existing scenes.jsonl with "
-            "'find envir environment -name scenes.jsonl -type f' "
-            "and pass its actual path via --scenes, or use "
+            f"Input file does not exist: {path}. "
+            "Check the directory of this command's --scenes argument. "
+            "For generation, you can instead pass "
             "'--mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz' "
-            "if that MMQA source file exists."
+            "if the file exists, or locate a scene bank using "
+            "'find envir environment -name scenes.jsonl -type f'."
         )
     entries = []
     with path.open("r", encoding="utf-8") as reader:
@@ -73,7 +87,8 @@ def _seeds_from_scenes(path: Path, max_records: int) -> list[dict]:
     for row in read_jsonl(path, limit=max_records):
         if "problem_spec" in row:
             raise ValueError(
-                "build-v2 needs original TaskGraph/Scene Bank, not an existing V2 bank"
+                "generation needs original TaskGraph/Scene Bank, not an already "
+                "generated reasoning scene bank"
             )
         scenario = row.get("scenario", {})
         priors = row.get("source_priors", {}).get("MultiModalQA", {})
@@ -112,7 +127,7 @@ def _out_files(output_dir: Path) -> dict:
     }
 
 
-def build_v2(args) -> dict:
+def build_bank(args) -> dict:
     if args.target < 1 or args.max_records < 1:
         raise ValueError("target and max-records must be positive")
     if bool(args.scenes) == bool(args.mmqa):
@@ -130,7 +145,7 @@ def build_v2(args) -> dict:
         )
     files = _out_files(args.output_dir)
     if not args.overwrite and any(p.exists() for p in files.values()):
-        raise FileExistsError("V2 destination already exists; use --overwrite")
+        raise FileExistsError("Destination already exists; use --overwrite")
     sequence = difficulty_sequence(
         target=args.target, mix=_parse_mix(args.difficulty_mix),
         run_seed=args.seed,
@@ -178,13 +193,17 @@ def build_v2(args) -> dict:
                 spec, author=clients[0], critic=clients[1],
                 max_revisions=args.scenario_max_revisions,
             )[0]
-        with ThreadPoolExecutor(max_workers=args.scenario_workers) as pool:
-            selected = list(pool.map(enrich, chosen))
+        selected = _parallel_ordered(
+            chosen, enrich, workers=args.scenario_workers,
+            desc="Scenario Author/Critic",
+            no_progress=getattr(args, "no_progress", False),
+        )
     else:
         selected = chosen
 
     generated = []
-    for spec in selected:
+    for spec in tqdm(selected, desc="Compile & difficulty audit", unit="task",
+                     disable=getattr(args, "no_progress", False)):
         question = reference_question(spec)
         try:
             scene = compile_and_validate(spec, question)
@@ -206,7 +225,7 @@ def build_v2(args) -> dict:
     } for scene in generated])
     summary = {
         "status": "done",
-        "pipeline": "reasoning_program_before_world_before_macrograph_before_question_v2",
+        "pipeline": "maestro_reasoning_program_world_taskgraph_question",
         "seed_source": seed_source,
         "target": args.target,
         "generated": len(generated),
@@ -244,17 +263,18 @@ def build_v2(args) -> dict:
         "source_observation_policy": (
             "fictional_synthetic_media_annotations_not_original_perception"
         ),
-        "llm_question_review": "off_use_naturalize-v2_if_needed",
+        "llm_question_review": "off_use_refine-questions_or_generate_with_question_model",
         "files": {key: str(value) for key, value in files.items()},
     }
     _json(files["summary"], summary)
     return summary
 
 
-def replay_v2(args) -> dict:
+def replay_bank(args) -> dict:
     rows = read_jsonl(args.scenes, limit=getattr(args, "max_records", None))
     failures = []
-    for row in rows:
+    for row in tqdm(rows, desc="Strict replay", unit="task",
+                    disable=getattr(args, "no_progress", False)):
         result = validate_replay(row)
         if result["status"] != "valid":
             failures.append(result)
@@ -265,9 +285,11 @@ def replay_v2(args) -> dict:
     }
 
 
-def audit_v2(args) -> dict:
+def audit_bank(args) -> dict:
     rows = read_jsonl(args.scenes, limit=getattr(args, "max_records", None))
-    reports = [validate_replay(row) for row in rows]
+    reports = [validate_replay(row) for row in tqdm(
+        rows, desc="Quality audit", unit="task",
+        disable=getattr(args, "no_progress", False))]
     passed = [row for row, report in zip(rows, reports)
               if report["status"] == "valid"]
     invalid = [report for report in reports if report["status"] != "valid"]
@@ -367,7 +389,7 @@ def _naturalize_entry(scene: dict, *, clients, max_revisions: int) -> dict:
     return updated
 
 
-def naturalize_v2(args) -> dict:
+def refine_bank(args) -> dict:
     if args.output_dir.resolve() == args.scenes.parent.resolve():
         raise ValueError("naturalize-v2 requires a separate output directory")
     if args.question_workers < 1 or args.max_revisions < 0 or args.max_revisions > 8:
@@ -375,7 +397,8 @@ def naturalize_v2(args) -> dict:
     rows = read_jsonl(args.scenes, limit=args.max_records)
     if not rows:
         raise ValueError("no V2 scenes loaded")
-    for scene in rows:
+    for scene in tqdm(rows, desc="Validate frozen scenes", unit="task",
+                      disable=getattr(args, "no_progress", False)):
         result = validate_replay(scene)
         if result["status"] != "valid":
             raise ValueError("invalid incoming V2 scene:" + str(result))
@@ -389,8 +412,11 @@ def naturalize_v2(args) -> dict:
         return _naturalize_entry(
             scene, clients=clients, max_revisions=args.max_revisions
         )
-    with ThreadPoolExecutor(max_workers=args.question_workers) as pool:
-        updated = list(pool.map(one, rows))
+    updated = _parallel_ordered(
+        rows, one, workers=args.question_workers,
+        desc="Question Author/Critic",
+        no_progress=getattr(args, "no_progress", False),
+    )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     _jsonl(files["private"], updated)
     _jsonl(files["public"], [s["public"] for s in updated])
@@ -402,7 +428,7 @@ def naturalize_v2(args) -> dict:
     statuses = Counter(s["question_authoring"]["status"] for s in updated)
     summary = {
         "status": "done",
-        "pipeline": "frozen_reasoning_program_question_author_critic_v2",
+        "pipeline": "maestro_frozen_program_question_author_critic",
         "source_scenes": str(args.scenes),
         "generated": len(updated),
         "question_results": dict(statuses),
@@ -412,3 +438,11 @@ def naturalize_v2(args) -> dict:
     }
     _json(files["summary"], summary)
     return summary
+
+
+# Historic Python callers can keep the old symbol names. The new canonical
+# application imports build_bank/replay_bank/audit_bank/refine_bank directly.
+build_v2 = build_bank
+replay_v2 = replay_bank
+audit_v2 = audit_bank
+naturalize_v2 = refine_bank
