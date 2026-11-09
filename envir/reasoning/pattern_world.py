@@ -98,9 +98,11 @@ def _vary_pattern_core(nodes: list[dict], pattern: str,
                 set_inputs("active_entries", "register_rows")
                 set_inputs("with_thresholds", "active_entries", "mapped_entries",
                            left_on="route_code", right_on="route_code")
+                set_inputs("qualified_by_threshold", "with_thresholds")
             else:
                 set_inputs("active_entries", "register_rows")
                 set_inputs("mapped_entries", "active_entries", "codebook_rows")
+                set_inputs("qualified_by_threshold", "with_thresholds")
         else:
             set_inputs("qualified_by_threshold", "with_thresholds")
             set_inputs("active_entries", "qualified_by_threshold")
