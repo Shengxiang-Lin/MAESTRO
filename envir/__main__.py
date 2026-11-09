@@ -10,8 +10,10 @@ from .generate_question.pipeline import generate_questions, audit_questions
 from .implement_subtask.config import (
     DEFAULT_CONFIG as STAGE2_CONFIG,
     load_config as load_stage2_config,
+    load_reporting_config,
 )
 from .implement_subtask.pipeline import materialize_subtasks
+from .implement_subtask.naturalize import naturalize_subtasks
 
 
 def parser() -> argparse.ArgumentParser:
@@ -47,6 +49,20 @@ def parser() -> argparse.ArgumentParser:
                          help="Override Stage-2 output directory")
     subtask.add_argument("--max-records", type=int)
     subtask.add_argument("--no-progress", action="store_true")
+    naturalize = sub.add_parser(
+        "naturalize-subtasks",
+        help="Stage 2: frozen Oracle Macro -> realistic Sub-Agent finish via LLM Author/Critic",
+    )
+    naturalize.add_argument("--config", type=Path, default=STAGE2_CONFIG)
+    naturalize.add_argument("--source-subtasks", type=Path,
+                            help="Override frozen Oracle subtasks.jsonl")
+    naturalize.add_argument("--source-scene-index", type=Path,
+                            help="Override frozen Oracle scene_index.jsonl")
+    naturalize.add_argument("--output-dir", type=Path,
+                            help="Override output for reviewed Sub-Agent responses")
+    naturalize.add_argument("--max-scenes", type=int,
+                            help="Process a small scene subset for testing")
+    naturalize.add_argument("--no-progress", action="store_true")
     return root
 
 
@@ -64,6 +80,19 @@ def main(argv: list[str] | None = None) -> int:
         if cli.no_progress:
             options["no_progress"] = True
         result = materialize_subtasks(**options)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["status"] in {"done", "partial"} else 1
+    if cli.command == "naturalize-subtasks":
+        options = load_reporting_config(cli.config)
+        for override in (
+            "source_subtasks", "source_scene_index", "output_dir", "max_scenes"
+        ):
+            value = getattr(cli, override)
+            if value is not None:
+                options[override] = value
+        if cli.no_progress:
+            options["no_progress"] = True
+        result = naturalize_subtasks(**options)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["status"] in {"done", "partial"} else 1
     config = load_config(cli.config)
