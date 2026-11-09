@@ -90,6 +90,114 @@ python -m envir naturalize
   --question-workers 4 --max-revisions 2
 ```
 
+### Semantic Scenario Contract (v4, default post-graph grounding)
+
+**Purpose:** give the already-compiled Macro TaskGraph, synthetic World and
+EvidenceGraph ONE coherent and reusable domain interpretation. It is not
+creative background decoration, original MultiModalQA answer reconstruction
+or new source perception. The frozen Goal/operation/source inventory remains
+authoritative, so the same contract can later inform the Question, Task,
+Summary Trace and Answer surfaces.
+
+`python -m envir ground-scenes` now uses **v4 Semantic Scenario Contract**.
+The Constructor receives:
+- Topic/domain, immutable Goal operation/required fields/threshold/answer
+  scope, and task-derived reference Question **as a semantic boundary**;
+- exact synthetic candidate/flag/score/order/group values and
+  `source_id:fact_id` references;
+- compact compiled TaskGraph operations, dependencies and computed results;
+- a leave-one-source-out diagnostic (not proof of task necessity).
+
+**The Constructor does NOT see the original MMQA Question, or original
+MMQA source excerpt text.** This prevents the previous Pichichi Trophy /
+The Shape of Water failures, where original MMQA question details were
+mistaken for evidence in a separately sampled Goal. The original source
+files, source inventory and frozen evidence remain unchanged.
+
+The LLM produces this **proposal**, never new source facts:
+
+```json
+{
+  "status": "realizable",
+  "reason": "none",
+  "scenario": {
+    "setting": "In a hypothetical Subject X sports archive...",
+    "user_role": "Sports archive curator",
+    "motivation": "Report the number of internally marked submissions"
+  },
+  "semantic_bindings": {
+    "candidate_kind": "fictional review submissions",
+    "score": "internal evaluation points",
+    "positive_flag": "recorded positive review marker",
+    "relative_time_index": "relative submission order",
+    "group_key": "fictional review cohort"
+  },
+  "source_bindings": [
+    {
+      "source_id": "EXACT_EXISTING_SOURCE_ID",
+      "candidate_label": "Submission A",
+      "source_role": "hypothetical image-source metadata record"
+    }
+  ],
+  "user_need": "Count positively marked submissions for Subject X"
+}
+```
+
+For `status="not_realizable"`, the LLM must provide a specific reason
+instead of inventing missing facts or operations. Such a scene is retained
+in its original form, with an auditable `not_realizable` status.
+
+After syntactic checks and **independent six-axis semantic review**, Python
+builds the accepted `scene_grounding` overlay:
+- `scenario`: setting, user role and why the requested output matters;
+- `semantic_bindings`: stable candidate/score/flag/order/group meanings;
+- `source_cards`: model-supplied *fictional labels and source roles* plus
+  **Python-sourced exact fact values and references** (the model cannot
+  supply or overwrite values);
+- `question_intent`: **derived by Python**, immutable Goal ID, operation,
+  required fields, hard constraints, answer scope, WorkProduct type and
+  authorized sources;
+- `review`, fingerprints and source-ablation diagnostic.
+
+The reviewer screens domain plausibility, semantic coherence, source
+faithfulness, Goal compatibility, evidence boundary and user-need alignment.
+Replay compares full materialized overlays with original World, Goal,
+TaskGraph, EvidenceGraph and Feedback signatures. Legacy v1-v3 overlays
+remain replay-compatible. A reviewer PASS remains **a model judgment, not
+a proof** of realistic semantics or multi-source necessity. The real media
+was not viewed.
+
+Run a small pilot with a **fresh output directory**:
+
+```bash
+python -m envir ground-scenes \
+  --scenes envir/data/taskfirst_recursive_1000/scenes.jsonl \
+  --output-dir envir/data/taskfirst_semantic_v4_20 \
+  --max-records 20 \
+  --grounding-api-base http://127.0.0.1:8807/v1 \
+  --grounding-model local-qwen3.5-9b \
+  --grounding-workers 4 \
+  --max-revisions 2 --flush-every 1
+
+python -m envir replay \
+  --scenes envir/data/taskfirst_semantic_v4_20/scenes.jsonl
+
+python -m envir naturalize \
+  --scenes envir/data/taskfirst_semantic_v4_20/scenes.jsonl \
+  --output-dir envir/data/taskfirst_semantic_v4_natural20 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 2 --max-revisions 2 --flush-every 1
+```
+
+The `summary.json` includes `accepted`, `rejected`,
+`not_realizable`, revision counts, exact validation error counts and
+the source-ablation diagnostic. Inspect both
+`grounding_audit.jsonl` (failed attempts) and accepted
+`scene_grounding` (actual semantic contract) before scaling up.
+
+#### Legacy v1–v3 notes (backward compatibility only)
+
 ### Post-TaskGraph World concretization (optional LLM stage)
 
 After `build` and **before** `naturalize`, run `ground-scenes`.
