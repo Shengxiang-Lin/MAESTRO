@@ -559,7 +559,7 @@ class ReportingBatchTests(unittest.TestCase):
             scenes = [
                 json.loads(line) for line in index.read_text().splitlines()
             ]
-            stopping_at = scenes[0]["macro_task_count"]
+            stopping_at = scenes[0]["macro_task_count"] - 1
             class Interrupted(RuntimeError):
                 pass
             def truncate_after_scene(*args, **kwargs):
@@ -582,8 +582,8 @@ class ReportingBatchTests(unittest.TestCase):
                         model="mock", clients=(ReportAuthor(), ReportCritic()),
                         workers=1, no_progress=True,
                     )
-            # The first complete DAG must already be visible, even while the
-            # second DAG only has a partial Macro prefix in the journal.
+            # The first complete DAG must already be visible, even when
+            # no additional scene has completed.
             self.assertEqual(
                 len((output / "scene_index.jsonl").read_text().splitlines()), 1
             )
