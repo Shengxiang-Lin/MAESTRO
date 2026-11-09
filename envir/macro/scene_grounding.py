@@ -314,9 +314,13 @@ def validate_proposal(scene: dict, proposal: dict, *,
             errors.append("invalid_" + key)
     roles = proposal.get("source_roles")
     expected = {row["source_id"]: row for row in source_records(scene)}
-    if not isinstance(roles, list) or len(roles) != len(expected):
+    if not isinstance(roles, list):
         errors.append("source_role_count_mismatch")
         roles = []
+    elif len(roles) != len(expected):
+        errors.append("source_role_count_mismatch")
+        # Keep the supplied list for precise unknown/duplicate ID diagnostics;
+        # do not collapse every source mismatch into a count-only error.
     seen, labels = set(), set()
     for row in roles:
         if not isinstance(row, dict) or set(row) != {
