@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = Path(__file__).with_name("config.yaml")
 _ALLOWED = {
     "scenes", "output_dir", "max_records", "evidence_limit",
-    "strict_replay", "no_progress", "overwrite", "flush_every",
+    "strict_replay", "no_progress", "overwrite",
 }
 
 
