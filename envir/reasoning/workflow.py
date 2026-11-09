@@ -16,6 +16,7 @@ from envir.schema import normalize_label
 
 from .pipeline import build_bank, refine_bank, read_jsonl
 from .quality import validate_replay
+from .macro_contract import macro_graph_profile, macro_question_contract
 from .surface_quality import question_language_warnings
 
 
@@ -52,6 +53,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     difficulties, families, patterns = Counter(), Counter(), Counter()
     openers, reference_repetition = Counter(), Counter()
     operational_media_fields = Counter()
+    graph_counts, graph_by_pattern, graph_profiles = Counter(), {}, []
+    graph_contract_failures = Counter()
     semantic_language_warnings = Counter()
     semantic_warning_examples = []
     modalities, scenario_reviews, question_reviews = Counter(), Counter(), Counter()
@@ -131,6 +134,18 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                                 "visual_", "spoken_"
                             )):
                                 operational_media_fields[spec["reasoning_pattern"]] += 1
+            if "macro_graph" in scene:
+                profile = macro_graph_profile(scene["macro_graph"])
+                graph_counts[profile["signature"]] += 1
+                graph_by_pattern.setdefault(
+                    spec.get("reasoning_pattern", "approval_legacy"),
+                    Counter()
+                )[profile["signature"]] += 1
+                graph_profiles.append(profile)
+                try:
+                    macro_question_contract(spec, scene["macro_graph"])
+                except ValueError as exc:
+                    graph_contract_failures[str(exc)] += 1
             audit = scene.get("difficulty_audit", {})
             if audit:
                 one_source[spec["difficulty_target"]] += int(
@@ -153,8 +168,18 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 })
     n = len(scenes)
     valid = sum(x["status"] == "valid" for x in results)
+    fallback_count = question_reviews.get("fallback", 0)
+    publishable = sum(
+        item.get("question_authoring", {}).get("status", "off")
+        in {"off", "accepted"} for item in scenes
+    )
     data = {
-        "status": "valid" if n and valid == n else "invalid",
+        "status": (
+            "invalid" if not n or valid != n or graph_contract_failures
+            else "partial" if fallback_count else "valid"
+        ),
+        "question_publishable": publishable,
+        "question_failed_fallback": fallback_count,
         "pipeline": "maestro_reasoning_first_quality",
         "checked": n,
         "replay_pass": valid,
@@ -207,6 +232,38 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "occurrences": count, "shape": shape[:220]
             } for shape, count in shapes.most_common(5)],
             "scope": "heuristic_surface_signatures_not_paraphrase_equivalence",
+        },
+        "macro_graph_diversity": {
+            "distinct_executable_graph_signatures": len(graph_counts),
+            "most_common_graphs": [
+                {"signature": signature, "count": count}
+                for signature, count in graph_counts.most_common(8)
+            ],
+            "distinct_by_semantic_pattern": {
+                name: len(counts) for name, counts in graph_by_pattern.items()
+            },
+            "maximum_repeated_graph_count": max(
+                graph_counts.values(), default=0),
+            "task_count_histogram": dict(sorted(
+                Counter(x["macro_task_count"] for x in graph_profiles).items()
+            )),
+            "mean_macro_task_count": (
+                round(sum(x["macro_task_count"] for x in graph_profiles)
+                      / len(graph_profiles), 3)
+                if graph_profiles else None
+            ),
+            "mean_dependency_edges": (
+                round(sum(x["edge_count"] for x in graph_profiles)
+                      / len(graph_profiles), 3)
+                if graph_profiles else None
+            ),
+            "graph_to_question_contract_failures": dict(
+                graph_contract_failures
+            ),
+            "scope": (
+                "Naming-invariant fingerprint of executable Macro DAGs, "
+                "operator chains and source roles; not a semantic uniqueness proof."
+            ),
         },
         "reasoning": {
             "media_specific_observation_predicates_used": dict(
@@ -280,7 +337,7 @@ def generate(args) -> dict:
     constructed_summary = build_bank(staged)
     scene_path = staged.output_dir / "scenes.jsonl"
     question_summary = None
-    if args.question_model:
+    if args.question_model and constructed_summary["generated"] > 0:
         authored = copy.copy(args)
         authored.scenes = scene_path
         authored.output_dir = root / "questions"
@@ -295,23 +352,43 @@ def generate(args) -> dict:
     audit_args.max_records = None
     audit_args.output = report_path
     report = quality(audit_args)
+    final_count = report["question_publishable"]
+    failed_question_count = (
+        question_summary.get("failed", 0) if question_summary else 0
+    )
     summary = {
-        "status": "done" if report["status"] == "valid" else "invalid",
+        "status": (
+            "done" if (
+                final_count == args.target and report["status"] == "valid"
+            ) else "failed" if final_count == 0 else "partial"
+        ),
         "pipeline": "maestro_reasoning_first_generation",
         "source": constructed_summary["seed_source"],
         "requested": args.target,
-        "generated": constructed_summary["generated"],
+        "attempted": constructed_summary.get("attempted", args.target),
+        "generated": final_count,
+        "failed": args.target - final_count,
+        "failed_scenario": constructed_summary.get("failed", 0),
+        "failed_question": failed_question_count,
+        "failed_case_files": {
+            "scenario": constructed_summary["failed_file"],
+            "question": (
+                str(root / "questions" / "failed.jsonl")
+                if question_summary else None
+            ),
+        },
         "constructed_scenes": str(root / "constructed" / "scenes.jsonl"),
         "final_scenes": str(scene_path),
         "final_public_questions": str(scene_path.parent / "questions.jsonl"),
         "scenario_authoring": constructed_summary["scenario_authoring"],
         "question_authoring": (
             question_summary["question_results"] if question_summary
-            else {"off": args.target}
+            else {"off": constructed_summary["generated"]}
         ),
         "difficulty_distribution": report["difficulty_distribution"],
         "quality": {
             "checked": report["checked"],
+            "macro_graph_diversity": report["macro_graph_diversity"],
             "replay_pass": report["replay_pass"],
             "replay_fail": report["replay_fail"],
             "distinct_program_signatures": report["reasoning"][
