@@ -975,5 +975,118 @@ class CanonicalReasoningWorkflowTests(unittest.TestCase):
         self.assertNotEqual(completed, [0, 1, 2])
 
 
+class ReviewPrecisionRegressionTests(unittest.TestCase):
+    def test_imperative_question_with_correct_source_contract_is_valid(self):
+        from envir.reasoning.question import guard_question, reference_question
+        sample = scene(
+            difficulty="medium", ordinal=15,
+            family="status_disagreement"
+        )
+        spec = sample["problem_spec"]
+        original = reference_question(spec)
+        imperative = original.replace(
+            "Which entries have different statuses across the two records?",
+            "Please identify entries with status discrepancies between "
+            "the two records."
+        )
+        self.assertNotIn("?", imperative)
+        self.assertNotIn(
+            "question_not_actionable_request",
+            guard_question(imperative, spec),
+        )
+        self.assertNotIn(
+            "status_disagreement_missing",
+            guard_question(imperative, spec),
+        )
+        self.assertEqual(guard_question(imperative, spec), [])
+
+    def test_real_discrepancy_and_differ_synonyms_are_recognized(self):
+        original = scene(
+            difficulty="medium", ordinal=16, family="status_disagreement"
+        )
+        spec = original["problem_spec"]
+        reference = reference_question(spec)
+        for description in (
+            "Please list entries with discrepancies between the statuses.",
+            "Please identify entries whose statuses differ across records.",
+            "Please list entries with mismatches in reported status.",
+        ):
+            with self.subTest(description=description):
+                candidate = reference.replace(
+                    "Which entries have different statuses across the two records?",
+                    description
+                )
+                self.assertEqual(guard_question(candidate, spec), [])
+
+    def test_topic_matching_retains_identity_without_overrejecting_punctuation(self):
+        from envir.reasoning.surface_quality import topic_mentioned
+        self.assertTrue(
+            topic_mentioned("The fictional Green Lantern register",
+                            "Green Lantern (film)")
+        )
+        self.assertTrue(
+            topic_mentioned("Review the 2012-13 season", "2012–13")
+        )
+        self.assertTrue(
+            topic_mentioned("Brent McGrath\u2019s register",
+                            "Brent McGrath's")
+        )
+        self.assertFalse(
+            topic_mentioned("The Apex Logistics fleet",
+                            "Brent McGrath's")
+        )
+        self.assertFalse(
+            topic_mentioned("The Swansea register", "Swansea City")
+        )
+
+    def test_descriptive_sentence_without_request_stays_rejected(self):
+        from envir.reasoning.surface_quality import is_explicit_user_request
+        self.assertFalse(
+            is_explicit_user_request(
+                "The independent archive has a descriptive record with "
+                "several fields and no explicit instruction to the reader."
+            )
+        )
+        self.assertTrue(
+            is_explicit_user_request(
+                "For the fictional archival register, please identify "
+                "which active entries have a valid independent confirmation."
+            )
+        )
+
+    def test_macro_contract_rejects_reversed_earliest_selection(self):
+        from envir.reasoning.macro_contract import macro_question_contract
+        sample = scene(
+            difficulty="medium", ordinal=21, family="chronology"
+        )
+        altered = copy.deepcopy(sample["macro_graph"])
+        reversed_sort = False
+        for task in altered["tasks"]:
+            for part in task.get(
+                "operator_chain", [{"op": task["operation"]}]
+            ):
+                if part["op"] == "sort":
+                    part["descending"] = True
+                    reversed_sort = True
+        self.assertTrue(reversed_sort)
+        with self.assertRaisesRegex(
+            ValueError, "wrong_selection_direction"
+        ):
+            macro_question_contract(sample["problem_spec"], altered)
+
+    def test_older_spec_retains_required_question_mark(self):
+        data = scene(
+            difficulty="medium", ordinal=18, family="reconcile"
+        )
+        spec = copy.deepcopy(data["problem_spec"])
+        spec["version"] = "maestro.problem_spec.v3"
+        text = reference_question(spec)
+        without_mark = text.rstrip("?")
+        self.assertIn(
+            "question_missing_interrogative",
+            guard_question(without_mark, spec),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
