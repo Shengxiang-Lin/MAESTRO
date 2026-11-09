@@ -1,0 +1,13 @@
+# MAESTRO Stage 2: derive answer + trace_summary for EVERY accepted Macro.
+# Uses the private accepted Stage-1 scene bank; no LLM API calls.
+version: 1
+
+implementation:
+  # Change this to the "questions/scenes.jsonl" from your accepted Stage-1 run.
+  scenes: envir/data/maestro_question_final_100/questions/scenes.jsonl
+  output_dir: envir/data/maestro_subtask_teacher_100
+  max_records: null
+  evidence_limit: 12
+  strict_replay: true
+  overwrite: false
+  no_progress: false
