@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = Path(__file__).with_name("config.yaml")
 _ALLOWED = {
     "scenes", "output_dir", "max_records", "evidence_limit",
-    "strict_replay", "no_progress", "overwrite",
+    "strict_replay", "no_progress", "overwrite", "flush_every",
 }
 
 
@@ -66,7 +66,7 @@ _REPORTING_FIELDS = {
     "source_subtasks", "source_scene_index", "output_dir",
     "api_base", "model", "critic_api_base", "critic_model",
     "api_key_env", "critic_api_key_env", "workers",
-    "max_revisions", "timeout", "max_scenes", "no_progress", "overwrite",
+    "max_revisions", "timeout", "max_scenes", "no_progress", "overwrite", "flush_every",
 }
 
 
@@ -100,7 +100,11 @@ def load_reporting_config(path: str | Path = DEFAULT_CONFIG) -> dict:
     for field in ("no_progress", "overwrite"):
         if type(values.get(field, False)) is not bool:
             raise ValueError(f"reporting.{field} must be boolean")
+    flush_every = values.get("flush_every", 1)
+    if type(flush_every) is not int or flush_every < 1:
+        raise ValueError("reporting.flush_every must be positive")
     return {
+        "flush_every": flush_every,
         "source_subtasks": _resolve(values["source_subtasks"]),
         "source_scene_index": _resolve(values["source_scene_index"]),
         "output_dir": _resolve(values["output_dir"]),
