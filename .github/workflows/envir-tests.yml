@@ -1,4 +1,4 @@
-name: MAESTRO Task-First environment tests
+name: MAESTRO Stage-1 Generate Question tests
 
 on:
   pull_request:
@@ -24,8 +24,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install reused-parser dependency
-        run: python -m pip install "tqdm>=4.65"
+      - name: Install question-generator dependencies
+        run: python -m pip install "tqdm>=4.65" "PyYAML>=6.0"
       - name: Compile envir
         run: python -m compileall -q envir
       - name: Run isolated envir tests

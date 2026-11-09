@@ -14,7 +14,7 @@ from pathlib import Path
 
 from envir.schema import normalize_label
 
-from .pipeline import build_bank, refine_bank, read_jsonl
+from .stages import construct_scenes, review_questions, read_jsonl
 from .quality import validate_replay
 from .macro_contract import macro_graph_profile, macro_question_contract
 from .surface_quality import question_language_warnings
@@ -80,7 +80,9 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 patterns[spec.get("reasoning_pattern", "approval_legacy")] += 1
                 shapes[_abstract_question(scene.get("question", ""), spec)] += 1
                 question_text = scene.get("question", "").strip()
-                warnings = question_language_warnings(question_text, spec)
+                warnings = question_language_warnings(
+                    question_text, spec, scene.get("macro_graph")
+                )
                 semantic_language_warnings.update(warnings)
                 if warnings and len(semantic_warning_examples) < 20:
                     semantic_warning_examples.append({
@@ -308,7 +310,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     return data
 
 
-def quality(args) -> dict:
+def audit_questions(args) -> dict:
     scenes = read_jsonl(args.scenes, limit=getattr(args, "max_records", None))
     result = quality_report(scenes, no_progress=getattr(args, "no_progress", False))
     if getattr(args, "output", None) is not None:
@@ -317,7 +319,7 @@ def quality(args) -> dict:
     return result
 
 
-def generate(args) -> dict:
+def generate_questions(args) -> dict:
     """One command from MMQA/topic seeds to validated Question quality."""
     if bool(args.question_model) != bool(args.question_api_base):
         raise ValueError(
@@ -336,7 +338,7 @@ def generate(args) -> dict:
         )
     staged = copy.copy(args)
     staged.output_dir = root / "constructed"
-    constructed_summary = build_bank(staged)
+    constructed_summary = construct_scenes(staged)
     scene_path = staged.output_dir / "scenes.jsonl"
     question_summary = None
     if args.question_model and constructed_summary["generated"] > 0:
@@ -345,7 +347,7 @@ def generate(args) -> dict:
         authored.output_dir = root / "questions"
         # Constructed bank is exactly target records; do not truncate.
         authored.max_records = None
-        question_summary = refine_bank(authored)
+        question_summary = review_questions(authored)
         scene_path = authored.output_dir / "scenes.jsonl"
     # The quality report also performs strict independent replay from the
     # frozen Program/World (not simply accepting stored difficulty flags).
@@ -353,7 +355,7 @@ def generate(args) -> dict:
     audit_args.scenes = scene_path
     audit_args.max_records = None
     audit_args.output = report_path
-    report = quality(audit_args)
+    report = audit_questions(audit_args)
     final_count = report["question_publishable"]
     failed_question_count = (
         question_summary.get("failed", 0) if question_summary else 0
@@ -364,7 +366,7 @@ def generate(args) -> dict:
                 final_count == args.target and report["status"] == "valid"
             ) else "failed" if final_count == 0 else "partial"
         ),
-        "pipeline": "maestro_reasoning_first_generation",
+        "pipeline": "maestro_generate_question_v1",
         "source": constructed_summary["seed_source"],
         "requested": args.target,
         "attempted": constructed_summary.get("attempted", args.target),

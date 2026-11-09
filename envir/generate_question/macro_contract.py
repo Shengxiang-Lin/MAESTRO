@@ -119,11 +119,7 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
     if pattern == "dynamic_threshold" and "gte" not in compares:
         raise ValueError("macro_question_missing_threshold_operation")
     if family == "evidence_reconcile" and not ops["attach_evidence"]:
-        # The old v2/v3 evidence family had a weaker answer schema.
-        if spec.get("version") not in {
-            "maestro.problem_spec.v2", "maestro.problem_spec.v3"
-        }:
-            raise ValueError("macro_question_missing_evidence_output")
+        raise ValueError("macro_question_missing_evidence_output")
     sorts = [step for step in steps if step["op"] == "sort"]
     takes = [step for step in steps if step["op"] == "take"]
     if family in {"priority", "chronology"}:

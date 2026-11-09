@@ -16,6 +16,26 @@ pip install -r requirements.txt
 
 The reference platform is Linux x86_64, with PyTorch's CUDA 13.0 build (`2.13.0+cu130`). GPU runs require an NVIDIA driver compatible with that build; the Python interpreter and system dependencies are managed separately from `requirements.txt`.
 
+## Dataset preparation — Stage 1: Generate Question
+
+MAESTRO's supported synthetic Question-generator is
+[envir/generate_question](envir/generate_question/README.md).
+All input/model/reviewer/worker/seed settings are in
+[envir/config.yaml](envir/config.yaml).
+
+~~~bash
+python -m envir generate-questions --config envir/config.yaml
+python -m envir quality --config envir/config.yaml
+~~~
+
+The first phase builds frozen source-scoped executable Macro Tasks and
+questions that agree with the Macro graph's predicates and terminal
+answer fields. Only accepted Questions go into the public output;
+Scenario and Question fallbacks remain private failures. Old envir
+Task-First and -v2 CLI compatibility was deliberately removed.
+Subtask implementation and orchestration scheduling are separate future
+phases, not part of this Question-generation command.
+
 ## Repository layout
 
 ```text

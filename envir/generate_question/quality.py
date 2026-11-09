@@ -8,7 +8,7 @@ from __future__ import annotations
 import copy
 import json
 
-from envir.macro.program_ir import (
+from .program_ir import (
     MissingSourceError, answer_values, evaluate_program, program_complexity,
 )
 from .compiler import (
@@ -18,30 +18,6 @@ from .world import build_scene, generate_world, compile_program
 from .question import guard_question
 from .spec import spec_issues, VERSION
 from .macro_contract import macro_question_contract
-
-
-def _mutate(sources: dict, source_id: str, answer: list[dict]) -> dict:
-    other = copy.deepcopy(sources)
-    rows = other[source_id]["observations"]
-    if source_id == "register":
-        winning = {value.get("entry_label") for value in answer}
-        if not winning:
-            winning = {"Entry-01"}
-        for row in rows:
-            if row["values"]["entry_label"] in winning:
-                row["values"]["active"] = False
-        # Count answers have no entry label; toggle a known qualifying row.
-        if not any(row["values"]["entry_label"] in winning for row in rows):
-            rows[0]["values"]["active"] = False
-    elif source_id == "glossary":
-        rows[0]["values"]["category_name"] = "category not in annotations"
-    elif source_id == "annotations":
-        rows[0]["values"]["approved"] = False
-    elif source_id == "clearance":
-        rows[0]["values"]["cleared"] = False
-    else:
-        raise ValueError("unsupported_counterfactual_source:" + source_id)
-    return other
 
 
 def _mutate_answer_witness(sources: dict, source_id: str,
@@ -148,7 +124,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
     if not scene["question_origin"].startswith(("deterministic_", "llm_")):
         issues.append("unknown_question_origin")
     if scene["question_origin"] == "deterministic_frozen_problem_spec":
-        issues.extend(guard_question(scene["question"], spec))
+        issues.extend(guard_question(scene["question"], spec, scene.get("macro_graph")))
     try:
         execution = evaluate_program(program, sources=world["sources"])
         answer = answer_values(execution)
@@ -157,7 +133,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         if execution["trace"] != scene["gold_trace"]:
             issues.append("gold_execution_trace_mismatch")
         graph = compile_macro_tasks(
-        program, execution["trace"], compact=spec.get("version") == VERSION
+        program, execution["trace"]
     )
         if graph != scene["macro_graph"]:
             issues.append("macro_graph_not_program_compiled")
@@ -229,14 +205,10 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             access_blocked = False
         except MissingSourceError:
             access_blocked = True
-        if spec.get("version") == "maestro.problem_spec.v2":
-            # Keep historical audit JSON byte-for-byte replay compatible.
-            changed = _mutate(world["sources"], source_id, answer)
-        else:
-            changed = _mutate_answer_witness(
-                world["sources"], source_id,
-                macro["answer_with_provenance"], spec=spec,
-            )
+        changed = _mutate_answer_witness(
+            world["sources"], source_id,
+            macro["answer_with_provenance"], spec=spec,
+        )
         altered = answer_values(evaluate_program(program, sources=changed))
         semantic_effect = altered != answer
         counterfactual[source_id] = {
@@ -287,7 +259,7 @@ def compile_and_validate(spec: dict, question: str) -> dict:
     scene = build_scene(spec, question)
     program = scene["gold_program"]
     graph = compile_macro_tasks(
-        program, scene["gold_trace"], compact=spec.get("version") == VERSION
+        program, scene["gold_trace"]
     )
     scene["macro_graph"] = graph
     scene["task_feedback"] = run_macro_tasks(
@@ -296,7 +268,7 @@ def compile_and_validate(spec: dict, question: str) -> dict:
     report = audit_scene(scene)
     if report["status"] != "valid":
         raise ValueError(
-            "V2 failed quality gates: " + ", ".join(report["issues"])
+            "Question generation failed quality gates: " + ", ".join(report["issues"])
         )
     scene["difficulty_audit"] = report
     return scene
