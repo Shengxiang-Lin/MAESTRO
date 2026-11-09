@@ -558,6 +558,11 @@ def validate_grounding(scene: dict) -> list[str]:
     errors = []
     if not isinstance(g, dict) or g.get("status") != "accepted":
         return ["invalid_scene_grounding"]
+    # v4 is independently structured; v1-v3 overlays keep their original
+    # exact replay and historical validation policy.
+    if g.get("version") == "semantic_scenario_contract_v1":
+        from .scenario_contract import validate_scenario_contract
+        return validate_scenario_contract(scene)
     version = g.get("version")
     if version not in {
         "synthetic_world_concretization_v1",

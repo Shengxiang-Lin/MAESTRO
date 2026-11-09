@@ -15,7 +15,8 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from .scene_grounding import ground_one, fingerprint
+from .scene_grounding import fingerprint
+from .scenario_contract import ground_one_contract
 from .validation import validate_clean_scene
 
 
@@ -64,6 +65,7 @@ def _clients(args):
 
 def _stamp(args, source: Path, task_ids: list[str]) -> str:
     from . import scene_grounding as sg
+    from . import scenario_contract as sc
     from . import scene_grounding_cli as sgcli
     return fingerprint({
         "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
@@ -81,6 +83,8 @@ def _stamp(args, source: Path, task_ids: list[str]) -> str:
         "code": {
             "scene_grounding": hashlib.sha256(
                 Path(sg.__file__).read_bytes()).hexdigest(),
+            "scenario_contract": hashlib.sha256(
+                Path(sc.__file__).read_bytes()).hexdigest(),
             "runner": hashlib.sha256(
                 Path(sgcli.__file__).read_bytes()).hexdigest(),
         },
@@ -185,7 +189,7 @@ def ground_scenes(args):
             )
 
     def one(scene):
-        overlay, review = ground_one(
+        overlay, review = ground_one_contract(
             scene, constructor=constructor, critic=critic,
             max_revisions=args.max_revisions)
         result = dict(scene)
@@ -259,11 +263,12 @@ def ground_scenes(args):
             progress.close()
     result = {
         "status": "done",
-        "pipeline": "post_macro_taskgraph_synthetic_world_concretization",
+        "pipeline": "post_macro_taskgraph_semantic_scenario_contract_v1",
         "requested": len(scenes),
         "statistics": {
             "accepted": counts["accepted"],
             "rejected": counts["rejected"],
+            "not_realizable": counts["not_realizable"],
             "revised": counts["revised"],
             "author_calls": counts["author_calls"],
             "critic_calls": counts["critic_calls"],
@@ -277,6 +282,8 @@ def ground_scenes(args):
                 if key.startswith("validation_error:")
             },
             "frozen_world_and_graph_preserved": True,
+            "original_mmqa_question_in_constructor": False,
+            "scenario_contract_version": "semantic_scenario_contract_v1",
             "source_fact_binding": "exact_source_id_fact_id_values",
             "critic_not_formal_semantic_proof": True,
             "goal_proxy_scenes_with_non_influential_sources": counts[
@@ -295,6 +302,7 @@ def ground_scenes(args):
         ),
         "limitations": [
             "hypothetical_synthetic_world_not_original_mmqa_ground_truth",
+            "not_realizable_scenes_fallback_to_abstract_original",
             "original_media_not_perceived",
             "does_not_repair_missing_operation_semantics",
             "critic_judgment_not_formal_proof",

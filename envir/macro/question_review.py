@@ -87,10 +87,13 @@ Five evidence-based decisions, each yes/no/uncertain:
   or source modality, and that omission is NOT a failure.
 - source_faithful: no invented concrete entity, source subtype, observed
   media contents, contextual facts or undocumented real-world properties.
-  If semantic_contract contains synthetic_scene_interpretation, its
-  source-bound fictional labels and hypothetical context ARE licensed.
-  Do not reject such names simply because they are absent from the original
-  TaskGraph, but do reject extra assertions beyond the approved overlay.
+  If semantic_contract contains synthetic_scenario_contract, its
+  source-bound hypothetical setting, candidate kind, field meanings and
+  fixed question_intent are licensed, NOT as historical or media facts.
+  The same allowance applies to legacy synthetic_scene_interpretation.
+  Do not reject approved hypothetical labels merely because they are
+  absent from the Macro TaskGraph. Reject additions beyond the overlay,
+  especially unprovided historical events or claimed image observations.
   Generic 'records', 'sources', 'materials' and neutral 'I'm reviewing' are
   permitted, not invented evidence.
 - answer_equivalent: the requested answer has the same substantive result,

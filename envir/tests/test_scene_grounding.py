@@ -378,8 +378,17 @@ class WorldConcretizationTests(unittest.TestCase):
                 overwrite=False,
             )
             author, critic = Author(), Critic()
+            # Legacy v3 runner behavior remains supported by the
+            # replay validator. Patch its legacy constructor explicitly,
+            # while the new v4 pipeline is tested in test_scenario_contract.
             with patch("envir.macro.scene_grounding_cli._clients",
-                       return_value=(author, critic)):
+                       return_value=(author, critic)), patch(
+                "envir.macro.scene_grounding_cli.ground_one_contract",
+                side_effect=lambda sc, constructor, critic, max_revisions: (
+                    ground_one(sc, constructor=constructor, critic=critic,
+                               max_revisions=max_revisions)
+                )
+            ):
                 result = ground_scenes(args)
                 self.assertEqual(result["statistics"]["accepted"], 1)
                 self.assertEqual((author.calls, critic.calls), (1, 1))
