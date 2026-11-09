@@ -162,4 +162,40 @@ def question_realization_brief(scene: dict) -> dict:
             "scenario wording, but no claims about actual historical "
             "events, images or external original documents are permitted."
         )
+    world_spec = scene.get("semantic_world_spec")
+    if world_spec and world_spec.get("status") == "accepted":
+        scene_description = world_spec["scenario"]
+        meanings = world_spec["semantic_bindings"]
+        brief["hypothetical_scene"] = {
+            "context": scene_description["setting"],
+            "user_role": scene_description["user_role"],
+            "motivation": scene_description["motivation"],
+            "candidate_kind": meanings["candidate_kind"],
+            "field_meanings": {
+                k: v for k, v in meanings.items() if k != "candidate_kind"
+            },
+            "goal_need": world_spec["user_need"],
+            "frozen_question_intent": world_spec["goal_contract"],
+            "sample_entries": [{
+                "display_label": x["candidate_label"],
+                "record_role": x["source_role"],
+            } for x in world_spec["source_bindings"]],
+            "provenance": (
+                "The hypothetical domain meanings were set BEFORE numeric "
+                "source facts were generated. Existing World scores, flags, "
+                "groups and time indices are simulated, not real media "
+                "observations or verified historical information."
+            ),
+        }
+        brief["language_guide"] += (
+            " Express the existing Goal using the approved candidate kind, "
+            "field meanings and scenario purpose. Do not introduce extra "
+            "operations or historical facts. Do not copy the reference "
+            "Question's abstract terminology."
+        )
+        brief["evidence_boundary"] = (
+            "The semantic World is fictional, not an observed real source. "
+            "The author may use its field meanings and fictional labels, "
+            "but cannot assert new facts or image/video contents."
+        )
     return brief
