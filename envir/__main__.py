@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .config import DEFAULT_CONFIG, args_from_config, load_config
-from .generate_question.pipeline import generate, quality
+from .generate_question.pipeline import generate_questions, audit_questions
 
 
 def parser() -> argparse.ArgumentParser:
@@ -43,13 +43,13 @@ def main(argv: list[str] | None = None) -> int:
             config, output_dir=cli.output_dir,
             target=cli.target, no_progress=cli.no_progress,
         )
-        result = generate(options)
+        result = generate_questions(options)
     else:
         config_args = args_from_config(config)
         directory = config_args.output_dir
         scenes = cli.scenes or directory / "questions" / "scenes.jsonl"
         output = cli.output or directory / "quality_recheck.json"
-        result = quality(argparse.Namespace(
+        result = audit_questions(argparse.Namespace(
             scenes=scenes, max_records=None, output=output,
             no_progress=cli.no_progress,
         ))
