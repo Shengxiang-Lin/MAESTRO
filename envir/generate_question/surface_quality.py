@@ -59,27 +59,61 @@ def normalize_question_punctuation(question: str) -> str:
     return q
 
 
-def unsupported_macro_predicates(question: str, spec: dict) -> list[str]:
-    """High-precision extra eligibility criteria missing from the Program.
+# High precision patterns: a mere background mention is not a filter.
+# Only these explicit criteria can be safely screened without a full
+# semantic theorem prover. The independent Critic checks other paraphrases.
+_EXTRA_FILTERS = {
+    "archived": r"archiv(?:ed|ing)|unarchived|non[- ]archived",
+    "published": r"published|unpublished",
+    "certified": r"certified|uncertified",
+    "funded": r"funded|unfunded",
+    "deleted": r"deleted|undeleted",
+}
+_FILTER_PREFIX = (
+    r"(?:only|no|not|without|exclude|excluding|excluded|"
+    r"remove|removing|omit|omitting|filter(?:ing)?\s+out|"
+    r"must\s+(?:not\s+)?be|should\s+(?:not\s+)?be|"
+    r"cannot\s+be|keep\s+only|retain\s+only)"
+)
 
-    This is intentionally narrow: any unrecognized phrasing still needs
-    Critic judgement. Never infer that "active" implies "not archived",
-    that a matching time-window is "approved", or that a policy group
-    passing a dynamic-threshold comparison is also independently approved.
+
+def _macro_filter_fields(graph: dict | None) -> set[str]:
+    if graph is None:
+        return {"active", "approved", "cleared"}
+    return {
+        step["field"]
+        for task in graph["tasks"]
+        for step in task.get("operator_chain", [])
+        if step["op"] in {"filter_eq", "filter_gte"}
+        and "field" in step
+    }
+
+
+def unsupported_macro_predicates(
+    question: str, spec: dict, macro_graph: dict | None = None,
+) -> list[str]:
+    """Detect *explicit* unlicensed eligibility conditions.
+
+    Use the actual operator chain where possible, never infer extra
+    predicates from the existence of a source. High-precision, not a
+    complete NL entailment checker. Ambiguous cases go to the Critic.
     """
     if not isinstance(question, str):
         return ["question_not_string"]
-    pattern = spec.get("reasoning_pattern", "approval")
-    difficulty = spec.get("difficulty_target")
+    fields = _macro_filter_fields(macro_graph)
+    pattern = spec["reasoning_pattern"]
     problems = []
-    if re.search(
-        r"\b(?:non[- ]archived|unarchived)\b"
-        r"|\b(?:exclude|excluding|excluded)\b(?:\s+\w+){0,7}"
-        r"\s+archived\b",
-        question, re.I,
-    ):
-        problems.append("unlicensed_archive_status_filter")
-    if pattern in {"time_window", "status_disagreement", "dynamic_threshold"}:
+    for name, expression in _EXTRA_FILTERS.items():
+        if name in fields:
+            continue
+        expr = rf"\b(?:{expression})\b"
+        # "no archived", "not archived", "exclude archived", including
+        # "ensuring no archived records" (previously missed).
+        if (re.search(rf"\b{_FILTER_PREFIX}(?:\s+\w+){{0,5}}\s+{expr}",
+                      question, re.I)
+                or re.search(rf"{expr}\s+(?:only|excluded)\b", question, re.I)):
+            problems.append(f"unlicensed_{name}_filter")
+    if "approved" not in fields:
         if re.search(
             r"\b(?:approved|approval[- ]verified|authorized)\b"
             r"(?:\s+\w+){0,3}\s+"
@@ -87,17 +121,71 @@ def unsupported_macro_predicates(question: str, spec: dict) -> list[str]:
             question, re.I,
         ):
             problems.append("unlicensed_independent_approval_filter")
-    if pattern == "approval" and difficulty == "easy":
         if re.search(
-            r"\bqualif(?:y|ies|ied)\b(?:\s+\w+){0,6}"
-            r"\s+\bapproved\b",
+            r"\b(?:approved|approval[- ]verified)\s+(?:entry|record)s?\b",
             question, re.I,
         ):
-            problems.append("unlicensed_easy_approval_filter")
+            problems.append("unlicensed_independent_approval_filter")
+    if "cleared" not in fields and re.search(
+        r"\b(?:only|must\s+be|require|requiring)\s+"
+        r"(?:\w+\s+){0,3}(?:cleared|clearance[- ]verified)\b",
+        question, re.I,
+    ):
+        problems.append("unlicensed_clearance_filter")
     return sorted(set(problems))
 
 
-def question_language_warnings(question: str, spec: dict) -> list[str]:
+_OUTPUT_REQUEST = re.compile(
+    r"\b(?:list|return|output|report|provide|show|name|identify|"
+    r"give(?:\s+me)?|which|what\s+are)\b"
+    r"(?:\s+\w+){0,7}\s+"
+    r"(?:abbreviated|shortened|coded)\s+(?:entry\s+)?labels?\b"
+    r"|\b(?:list|return|output|report|provide|show|name|identify|"
+    r"give(?:\s+me)?|which|what\s+are)\b"
+    r"(?:\s+\w+){0,7}\s+"
+    r"(?:label[_ ]?codes?|route[_ ]?codes?|policy[_ ]?codes?|"
+    r"category[_ ]?codes?)\b",
+    re.I,
+)
+
+
+def question_output_issues(
+    question: str, spec: dict, macro_graph: dict | None = None,
+) -> list[str]:
+    """Bind requested display labels to the Graph's *terminal schema*."""
+    if not isinstance(question, str):
+        return ["question_not_string"]
+    expected = spec["requirements"]["answer_kind"]
+    if macro_graph is not None:
+        terminal = next(
+            task for task in macro_graph["tasks"]
+            if task["task_id"] == macro_graph["terminal_task_id"]
+        )
+        fields = set(terminal["outputs"]["typed_relation"])
+    else:
+        fields = {
+            "count" if expected in {"count", "category_counts"}
+            else "entry_label"
+        }
+    issues = []
+    if "entry_label" in fields and _OUTPUT_REQUEST.search(question):
+        issues.append("requested_code_instead_of_entry_label")
+    if expected == "count" and re.search(
+        r"\b(?:list|return|provide|identify)\b(?:\s+\w+){0,6}"
+        r"\s+(?:entry\s+labels?|individual\s+entries)\b", question, re.I,
+    ):
+        issues.append("requested_list_instead_of_count")
+    if expected == "category_counts" and re.search(
+        r"\b(?:list|return|identify)\b(?:\s+\w+){0,6}"
+        r"\s+(?:only\s+)?entry\s+labels?\b", question, re.I,
+    ):
+        issues.append("requested_entry_labels_instead_of_group_counts")
+    return issues
+
+
+def question_language_warnings(
+    question: str, spec: dict, macro_graph: dict | None = None,
+) -> list[str]:
     if not isinstance(question, str):
         return ["question_not_string"]
     warnings = []
@@ -110,7 +198,8 @@ def question_language_warnings(question: str, spec: dict) -> list[str]:
     topic = spec.get("scenario", {}).get("topic", "")
     if unlicensed_calendar_years(question, topic):
         warnings.append("unlicensed_calendar_year_not_in_topic")
-    warnings.extend(unsupported_macro_predicates(question, spec))
+    warnings.extend(unsupported_macro_predicates(question, spec, macro_graph))
+    warnings.extend(question_output_issues(question, spec, macro_graph))
     return sorted(set(warnings))
 
 
