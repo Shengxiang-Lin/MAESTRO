@@ -423,6 +423,97 @@ class SemanticPatternContractTests(unittest.TestCase):
         self.assertEqual(validate_replay(result)["status"], "valid")
 
 
+class SemanticLanguageQualityTests(unittest.TestCase):
+    def test_closed_time_window_rejects_strictly_inside(self):
+        from envir.reasoning.surface_quality import question_language_warnings
+        data = scene(difficulty="medium", ordinal=0,
+                     family="window_alignment")
+        spec = data["problem_spec"]
+        question = reference_question(spec)
+        self.assertFalse(question_language_warnings(question, spec))
+        contradiction = question.replace(
+            "inclusive time window", "closed time window"
+        ).replace(
+            "Which entries fall inside", "Which entries fall strictly inside"
+        )
+        self.assertIn(
+            "strict_vs_inclusive_time_window",
+            question_language_warnings(contradiction, spec),
+        )
+        self.assertIn(
+            "strict_vs_inclusive_time_window",
+            guard_question(contradiction, spec),
+        )
+
+    def test_rejected_unlicensed_year_and_allowed_original_topic_year(self):
+        from envir.reasoning.surface_quality import unlicensed_calendar_years
+        spec = make_spec(seed_record=seed(7), ordinal=7,
+                         run_seed=17, difficulty="medium")
+        question = reference_question(spec)
+        self.assertIn(
+            "unlicensed_calendar_year_not_in_topic",
+            guard_question("For the 2024 cycle, " + question, spec),
+        )
+        self.assertEqual(
+            unlicensed_calendar_years("2024 membership audit", "2024 membership"),
+            [],
+        )
+
+    def test_question_mark_normalization_preserves_meaning(self):
+        from envir.reasoning.surface_quality import (
+            normalize_question_punctuation, question_language_warnings
+        )
+        data = scene(difficulty="medium", ordinal=2,
+                     family="threshold_eligibility")
+        reference = reference_question(data["problem_spec"])
+        self.assertEqual(normalize_question_punctuation(reference + "?"),
+                         reference)
+        self.assertIn("repeated_question_marks",
+                      question_language_warnings(
+                          reference + "?", data["problem_spec"]))
+
+    def test_scenario_guard_rejects_new_calendar_year(self):
+        from envir.reasoning.scenario import _narrative_issues
+        spec = make_spec(seed_record=seed(5), ordinal=5,
+                         run_seed=17, difficulty="hard")
+        proposal = {
+            "scenario": {
+                "setting": f"The fictional 2024 {spec['scenario']['topic']} files",
+                "user_role": "audit researcher",
+                "purpose": "check multiple source annotations",
+                "motivation": "avoid incomplete labels",
+                "entity_kind": "register entries",
+            },
+            "source_titles": [
+                {"source_id": x["source_id"], "title": x["title"] + " archive"}
+                for x in spec["sources"]
+            ],
+        }
+        self.assertIn(
+            "unlicensed_calendar_year_not_in_topic",
+            _narrative_issues(spec, proposal),
+        )
+
+    def test_quality_flags_question_wording_despite_exact_replay(self):
+        from envir.reasoning.workflow import quality_report
+        data = scene(difficulty="medium", ordinal=0,
+                     family="window_alignment")
+        faulty = copy.deepcopy(data)
+        faulty["question"] = (
+            "For a 2024 fictional audit of Fictional Topic 0, which active "
+            "entries have event steps strictly inside the closed time windows "
+            "after mapping their codes through the glossary??"
+        )
+        faulty["public"]["question"] = faulty["question"]
+        faulty["question_origin"] = "llm_accepted_frozen_spec"
+        report = quality_report([faulty], no_progress=True)
+        self.assertEqual(report["replay_pass"], 1)
+        counts = report["question_surface"]["semantic_language_warnings"]["counts"]
+        self.assertEqual(counts["strict_vs_inclusive_time_window"], 1)
+        self.assertEqual(counts["repeated_question_marks"], 1)
+        self.assertEqual(counts["unlicensed_calendar_year_not_in_topic"], 1)
+
+
 class V2PipelineTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
