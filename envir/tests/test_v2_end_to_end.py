@@ -45,6 +45,7 @@ def scene(*, difficulty="medium", ordinal=0, family=None):
         spec["family"] = family
         spec["requirements"]["answer_kind"] = (
             "count" if family == "coverage_count" else
+            "category_counts" if family == "category_distribution" else
             "single_entry" if family in {"priority", "chronology"} else
             "entry_list"
         )
