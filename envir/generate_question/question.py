@@ -166,7 +166,12 @@ a real topic does NOT assert historical facts. NEVER add calendar years,
 seasons, dated cycles or concrete thresholds that the original topic
 and frozen intent do not provide. Do not invent an additional eligibility
 criterion such as a funding tier or certification that is absent from
-the required predicates. Specifically, do not add "non-archived" or
+the required predicates. Even "no archived records" is an extra filter
+unless the frozen MacroGraph explicitly filters an archived field.
+The FINAL ANSWER uses the terminal output schema: entry_label is an
+entry display label, NOT label_code, route_code, abbreviated category
+labels or codes. Never ask to list abbreviated labels if only
+entry_label is projected. Specifically, do not add "non-archived" or
 "exclude archived" unless the contract contains an archived field. A
 time window is NOT independently "approved" merely because it exists;
 a policy group meeting a threshold is NOT "approved" unless the graph
@@ -240,7 +245,11 @@ boundaries MUST be rejected. Reject added predicates such as "approved
 policy group" in a threshold-only task, "approved session window" in a
 temporal-only task, or excluding "archived" items when the Program only
 filters active=True. A plausible fictional setting does NOT license
-adding unsupported eligibility criteria. A well-formed imperative user request (e.g.
+adding unsupported eligibility criteria. In particular distinguish
+the final requested output field: entry_label denotes an entry name,
+label_code/route_code denote source-specific abbreviations. Reject a
+candidate that asks to LIST abbreviated codes when the terminal
+MacroGraph projects entry_label. A well-formed imperative user request (e.g.
 "Please identify ...") is just as valid as an interrogative question.
 For chronology, the compiled sort uses ascending relative_step: "earliest"
 or "first" is correct; "latest" or "most recent" is WRONG. Never hallucinate
@@ -248,7 +257,8 @@ a reversed direction. Surface fluency alone is insufficient.
 Only pass if all four booleans are true."""
 
 
-def guard_question(question: str, spec: dict) -> list[str]:
+def guard_question(question: str, spec: dict,
+                   macro_graph: dict | None = None) -> list[str]:
     """Conservative high-precision textual checks before/after the LLM Critic."""
     if not isinstance(question, str):
         return ["question_not_string"]
@@ -263,7 +273,7 @@ def guard_question(question: str, spec: dict) -> list[str]:
         # Keep historical v2/v3 guard semantics reproducible.
         errors.append("question_missing_interrogative")
     if spec.get("version") == VERSION:
-        errors.extend(question_language_warnings(q, spec))
+        errors.extend(question_language_warnings(q, spec, macro_graph))
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     if not re.search(r"\bactive\b", q, flags=re.I):
@@ -401,7 +411,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             raw = candidate.get("question")
             q = (normalize_question_punctuation(raw)
                  if isinstance(raw, str) else raw)
-            surface = guard_question(q, spec)
+            surface = guard_question(q, spec, macro_graph)
             if (latest and isinstance(q, str)
                     and SequenceMatcher(None, q.strip().casefold(),
                                         initial.casefold()).ratio() > 0.96):
