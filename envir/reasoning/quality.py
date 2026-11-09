@@ -205,7 +205,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             or not entry["evidence_refs"]
             for entry in answer
         ):
-            issues.append("gold_evidence_output_contract_mismatch:" + repr(answer[:1])[:240])
+            issues.append("gold_evidence_output_contract_mismatch")
     if len({json.dumps(row, sort_keys=True) for row in answer}) != len(answer):
         issues.append("duplicate_answer_rows")
     one_source = weak_single_source_baseline(scene)
@@ -231,18 +231,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
                 world["sources"], source_id,
                 macro["answer_with_provenance"], spec=spec,
             )
-        try:
-            altered = answer_values(evaluate_program(program, sources=changed))
-        except Exception as exc:
-            raise ValueError(
-                "counterfactual_error:"
-                + f"pattern={spec.get('reasoning_pattern')},"
-                + f"source={source_id},"
-                + f"modality={world['sources'][source_id]['modality']},"
-                + f"schema={world['sources'][source_id]['schema']},"
-                + f"changed_first={changed[source_id]['observations'][0]['values']},"
-                + f"exception={repr(exc)}"
-            ) from exc
+        altered = answer_values(evaluate_program(program, sources=changed))
         semantic_effect = altered != answer
         counterfactual[source_id] = {
             "access_is_required_by_program": access_blocked,
