@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 from envir.schema import digest
 
-from envir.macro.program_ir import answer_values, evaluate_program
+from .program_ir import answer_values, evaluate_program
 from .spec import spec_issues, LEGACY_VERSION, VERSION as SPEC_VERSION
 
 VERSION = "maestro.source_observation_world.v2"

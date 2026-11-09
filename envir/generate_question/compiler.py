@@ -6,8 +6,8 @@ Teacher-World access is possible during execution.
 """
 from __future__ import annotations
 
-from envir.macro.graph import compile_waves
-from envir.macro.program_ir import (
+from .dag import compile_waves
+from .program_ir import (
     MissingSourceError, ProgramError, Relation, _apply, _scan,
     answer_values, evaluate_program, validate_program,
 )
