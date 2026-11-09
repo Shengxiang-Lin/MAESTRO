@@ -12,8 +12,10 @@ from difflib import SequenceMatcher
 from .spec import spec_issues, VERSION
 from .intent import intent_contract, style_contract
 from .macro_contract import macro_question_contract
-from .surface_quality import (question_language_warnings,
-                              normalize_question_punctuation)
+from .surface_quality import (
+    question_language_warnings, normalize_question_punctuation,
+    topic_mentioned, is_explicit_user_request,
+)
 
 
 def reference_question(spec: dict) -> str:
@@ -192,8 +194,12 @@ interval" or "between the endpoints, inclusive".
 Preserve counting, category grouping, priority MAXIMUM, or chronological
 EARLIEST directions when applicable.
 
-Return ONE complete, grammatical English question (55-1200 characters),
-ending with exactly one question mark. Do not return a summary, classification, fragment, table,
+Return ONE complete, grammatical English user REQUEST (55-1200 characters).
+It may be a direct question ending with '?' or an unambiguous, complete
+imperative such as "Please list ...", "Identify ..." or "For ... identify ...".
+Never return only a declarative description or an incomplete fragment.
+When the original topic has a proper name, keep that exact proper name,
+rather than inventing an unrelated company/organization or dropping it. Do not return a summary, classification, fragment, table,
 answer, explanation, or commentary. If unsure, closely paraphrase the frozen
 reference question without inventing facts. End with '?'.
 
@@ -224,7 +230,11 @@ Check substantive semantics independently: (a) required source mapping,
 The candidate must be grounded in the frozen topic/conditions, not in
 unsupported elaborations supplied by an earlier scene paraphrase.
 A candidate saying "strictly inside" while also claiming inclusive
-boundaries MUST be rejected. Surface fluency alone is insufficient.
+boundaries MUST be rejected. A well-formed imperative user request (e.g.
+"Please identify ...") is just as valid as an interrogative question.
+For chronology, the compiled sort uses ascending relative_step: "earliest"
+or "first" is correct; "latest" or "most recent" is WRONG. Never hallucinate
+a reversed direction. Surface fluency alone is insufficient.
 Only pass if all four booleans are true."""
 
 
@@ -236,11 +246,11 @@ def guard_question(question: str, spec: dict) -> list[str]:
     errors = []
     if len(q) < 55 or len(q) > 1200:
         errors.append("question_length_out_of_bounds")
-    if "?" not in q:
-        errors.append("question_missing_interrogative")
+    if not is_explicit_user_request(q):
+        errors.append("question_not_actionable_request")
     if spec.get("version") == VERSION:
         errors.extend(question_language_warnings(q, spec))
-    if spec["scenario"]["topic"].casefold() not in q.casefold():
+    if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     if not re.search(r"\bactive\b", q, flags=re.I):
         errors.append("active_condition_missing")
@@ -255,14 +265,18 @@ def guard_question(question: str, spec: dict) -> list[str]:
             if not re.search(r"\b(time|step|event|moment|frame|timestamp)\b", q, re.I):
                 errors.append("temporal_event_missing")
         elif pattern == "status_disagreement":
-            if not re.search(r"\b(disagree|different|mismatch|conflict|contradict|inconsisten)\w*", q, re.I):
+            if not re.search(r"\b(disagree(?:s|ment|ments|d)?|discrepanc(?:y|ies)|"
+            r"differ(?:s|ed|ing|ence|ences|ent)?|mismatch(?:es|ed)?|"
+            r"conflict(?:s|ing|ed)?|contradict(?:s|ion|ions)?|"
+            r"inconsisten\w*)\b", q, re.I):
                 errors.append("status_disagreement_missing")
             if not re.search(r"\b(status|statuses|mark|reported|observed)\b", q, re.I):
                 errors.append("binary_status_missing")
         elif pattern == "dynamic_threshold":
             if not re.search(r"\b(threshold|minimum|at least|exceed|above|meet|qualify)\w*", q, re.I):
                 errors.append("dynamic_threshold_missing")
-            if not re.search(r"\b(measur|value|rating|score)\w*", q, re.I):
+            if not re.search(r"\b(measur\w*|value\w*|rating\w*|score\w*|"
+            r"metric\w*|amount\w*|quantity|reading\w*|level\w*)\b", q, re.I):
                 errors.append("measured_value_missing")
     elif spec["difficulty_target"] != "easy":
         if not re.search(r"\b(code|codes|abbreviat|glossary|mapped|mapping|translat|resolv)", q, re.I):
@@ -277,8 +291,15 @@ def guard_question(question: str, spec: dict) -> list[str]:
         errors.append("count_answer_scope_missing")
     if family == "priority" and not re.search(r"\b(highest|largest|top|maximum|greatest)\b", q, re.I):
         errors.append("priority_direction_missing")
-    if family == "chronology" and not re.search(r"\b(earliest|first|lowest|minimum)\b", q, re.I):
-        errors.append("relative_ordinal_direction_missing")
+    if family == "chronology":
+        if not re.search(
+            r"\b(earliest|first|lowest|minimum|oldest)\b", q, re.I
+        ):
+            errors.append("relative_ordinal_direction_missing")
+        if re.search(
+            r"\b(latest|most recent|newest|last|most current)\b", q, re.I
+        ):
+            errors.append("reversed_chronological_direction")
     if latest and family == "evidence_reconcile":
         if not re.search(r"\b(evidence|source|citation|reference|support)\w*", q, re.I):
             errors.append("evidence_output_scope_missing")
@@ -355,7 +376,10 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             } for entry in failures[-2:]],
             "constraint": "Preserve all conditions and the exact answer contract. "
                           "Prefer a direct natural question, avoid As-a role openings. "
-                          "Return one fully formed question ending with '?'.",
+                          "Return a self-contained natural user request: either "
+                          "a question ending in '?' or an explicit imperative "
+                          "with identify/list/determine/return. Preserve the "
+                          "exact grounded topic label and temporal direction.",
         }, ensure_ascii=False)
         try:
             candidate = author.complete_json(AUTHOR_SYSTEM, user_text)
