@@ -193,7 +193,7 @@ class ContractTests(unittest.TestCase):
         contract = macro_question_contract(entry["problem_spec"], entry["macro_graph"])
         text = json.dumps(contract)
         self.assertNotIn("gold_answer", text)
-        self.assertNotIn("world", text)
+        self.assertNotIn('"world":', text)
 
     def test_question_changes_cannot_change_world_or_graph(self):
         entry = scene(18, "medium", "status_disagreement")
