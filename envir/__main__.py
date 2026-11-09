@@ -14,6 +14,7 @@ from .implement_subtask.config import (
 )
 from .implement_subtask.pipeline import materialize_subtasks
 from .implement_subtask.naturalize import naturalize_subtasks
+from .implement_subtask.combined import generate_subagent_reports
 
 
 def parser() -> argparse.ArgumentParser:
@@ -56,6 +57,10 @@ def parser() -> argparse.ArgumentParser:
         help="Stage 2: frozen Oracle Macro -> realistic Sub-Agent finish via LLM Author/Critic",
     )
     naturalize.add_argument("--config", type=Path, default=STAGE2_CONFIG)
+    naturalize.add_argument(
+        "--scenes", type=Path,
+        help="One-command Stage 2: first build Oracle from accepted Stage-1 scenes, then Author/Critic reports",
+    )
     naturalize.add_argument("--source-subtasks", type=Path,
                             help="Override frozen Oracle subtasks.jsonl")
     naturalize.add_argument("--source-scene-index", type=Path,
@@ -104,7 +109,25 @@ def main(argv: list[str] | None = None) -> int:
             options["flush_every"] = cli.flush_every
         if cli.reuse_from is not None:
             options["reuse_from"] = cli.reuse_from
-        result = naturalize_subtasks(**options)
+        if cli.scenes is not None:
+            if (cli.source_subtasks is not None
+                    or cli.source_scene_index is not None):
+                p.error(
+                    "--scenes (combined Stage 2) cannot be used together with "
+                    "--source-subtasks or --source-scene-index"
+                )
+            impl = load_stage2_config(cli.config)
+            result = generate_subagent_reports(
+                scenes_path=cli.scenes,
+                output_dir=options["output_dir"],
+                reporting_options=options,
+                evidence_limit=impl["evidence_limit"],
+                strict_replay=impl["strict_replay"],
+                max_scenes=options.get("max_scenes"),
+                no_progress=options["no_progress"],
+            )
+        else:
+            result = naturalize_subtasks(**options)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["status"] in {"done", "partial"} else 1
     config = load_config(cli.config)
