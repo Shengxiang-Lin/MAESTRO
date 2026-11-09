@@ -143,7 +143,8 @@ class V2ReasoningTests(unittest.TestCase):
     def test_change_source_facts_invalidates_replay(self):
         data = scene(difficulty="medium")
         bad = copy.deepcopy(data)
-        bad["world"]["sources"]["register"]["observations"][0]["values"]["active"] = False
+        record = bad["world"]["sources"]["register"]["observations"][0]["values"]
+        record["active"] = not record["active"]
         result = validate_replay(bad)
         self.assertEqual(result["status"], "invalid")
         self.assertIn("world_not_reproducible_from_frozen_spec", result["issues"])
@@ -177,6 +178,139 @@ class V2ReasoningTests(unittest.TestCase):
         for command in ("build", "naturalize", "realize-world", "replay",
                         "build-v2", "naturalize-v2", "replay-v2", "audit-v2"):
             self.assertIn(command, parser()._subparsers._group_actions[0].choices)
+
+
+class GenerationQualityRegressionTests(unittest.TestCase):
+    def test_v3_varies_actual_answers_and_program_structures(self):
+        variants = []
+        for ordinal in range(60):
+            spec = make_spec(
+                seed_record=seed(ordinal), ordinal=ordinal,
+                run_seed=17, difficulty=(
+                    "easy" if ordinal < 15
+                    else "medium" if ordinal < 40
+                    else "hard"
+                ),
+            )
+            self.assertEqual(spec["version"], "maestro.problem_spec.v3")
+            sample = compile_and_validate(spec, reference_question(spec))
+            self.assertEqual(validate_replay(sample)["status"], "valid")
+            self.assertEqual(sample["difficulty_audit"]["status"], "valid")
+            variants.append(sample)
+        import collections
+        structural = {
+            tuple((node["op"], tuple(node["inputs"]))
+                  for node in row["gold_program"]["nodes"])
+            for row in variants
+        }
+        answers = {
+            json.dumps(row["gold_answer"], ensure_ascii=False, sort_keys=True)
+            for row in variants
+        }
+        self.assertGreater(len(structural), 14)
+        self.assertGreater(len(answers), 15)
+        self.assertTrue(all(
+            all(test["changing_source_changes_answer"]
+                for test in row["difficulty_audit"][
+                    "counterfactual_source_tests"].values())
+            for row in variants
+        ))
+
+    def test_hard_priority_answers_are_not_always_entry_one(self):
+        selected = set()
+        for ordinal in range(40):
+            sample = scene(
+                difficulty="hard", ordinal=ordinal, family="priority"
+            )
+            selected.add(sample["gold_answer"][0]["entry_label"])
+        self.assertGreaterEqual(len(selected), 4)
+
+    def test_private_entity_registry_matches_shuffled_source_rows(self):
+        sample = scene(difficulty="hard", ordinal=33)
+        register = {
+            x["values"]["entry_label"]: x["values"]["label_code"]
+            for x in sample["world"]["sources"]["register"]["observations"]
+        }
+        glossary = {
+            x["values"]["label_code"]: x["values"]["category_name"]
+            for x in sample["world"]["sources"]["glossary"]["observations"]
+        }
+        for entity in sample["world"]["entities"]:
+            self.assertEqual(
+                entity["category_name"],
+                glossary[register[entity["entry_label"]]],
+            )
+
+    def test_legacy_frozen_specs_remain_replayable(self):
+        spec = make_spec(
+            seed_record=seed(9), ordinal=9, run_seed=17, difficulty="hard"
+        )
+        spec["version"] = "maestro.problem_spec.v2"
+        frozen = compile_and_validate(spec, reference_question(spec))
+        self.assertEqual(
+            frozen["world"]["version"], "maestro.source_observation_world.v2"
+        )
+        self.assertEqual(
+            frozen["gold_program"]["version"], "maestro.reasoning_program.v2"
+        )
+        self.assertEqual(validate_replay(frozen)["status"], "valid")
+
+    def test_frozen_reference_is_visible_to_question_author_and_critic(self):
+        from envir.reasoning.question import naturalize_one
+        spec = make_spec(
+            seed_record=seed(12), ordinal=12,
+            run_seed=17, difficulty="hard"
+        )
+        reference = reference_question(spec)
+        seen = []
+        class EchoAuthor:
+            def complete_json(self, system_prompt, user_prompt):
+                payload = json.loads(user_prompt)
+                self_ref = payload["contract"]["frozen_reference_question"]
+                seen.append(("author", self_ref))
+                return {"question": self_ref}
+        class AcceptingCritic:
+            def complete_json(self, system_prompt, user_prompt):
+                payload = json.loads(user_prompt)
+                seen.append(("critic", payload[
+                    "frozen_contract"]["frozen_reference_question"]))
+                return {
+                    "verdict": "pass",
+                    "all_constraints_preserved": True,
+                    "no_unlicensed_facts": True,
+                    "same_answer_scope": True,
+                    "natural": True,
+                    "reason": "mock review of reference wording",
+                }
+        q, audit = naturalize_one(
+            spec, author=EchoAuthor(), critic=AcceptingCritic(),
+            max_revisions=0,
+        )
+        self.assertEqual(audit["status"], "accepted")
+        self.assertEqual(q, reference)
+        self.assertEqual(seen, [("author", reference), ("critic", reference)])
+
+    def test_bad_question_reports_missing_mark_and_preview(self):
+        from envir.reasoning.question import naturalize_one
+        spec = make_spec(
+            seed_record=seed(11), ordinal=11,
+            run_seed=17, difficulty="medium"
+        )
+        class BadAuthor:
+            def complete_json(self, *_args):
+                return {"question": "Entries"}
+        class NeverCritic:
+            def complete_json(self, *_args):
+                raise AssertionError("guard should reject before critic")
+        q, audit = naturalize_one(
+            spec, author=BadAuthor(), critic=NeverCritic(),
+            max_revisions=0
+        )
+        self.assertEqual(audit["status"], "fallback")
+        failure = audit["failures"][0]
+        self.assertEqual(failure["candidate_preview"], "Entries")
+        self.assertIn("question_missing_interrogative", failure["errors"])
+        self.assertIn("question_length_out_of_bounds", failure["errors"])
 
 
 class V2PipelineTests(unittest.TestCase):
