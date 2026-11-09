@@ -18,7 +18,7 @@ from envir.implement_subtask.config import (
 )
 from envir.implement_subtask.realize import realize_scene
 from envir.implement_subtask.naturalize import naturalize_subtasks
-from envir.implement_subtask.reporting import author_critic_report
+from envir.implement_subtask.reporting import author_critic_report, trace_narrative
 
 
 def scene(i, difficulty="medium"):
@@ -58,7 +58,7 @@ class ReportAuthor:
                 "Checked the assigned source records and identified "
                 f"{answer_count} matching row(s); "
                 + ("no qualifying records were found." if answer_count == 0
-                   else "the exact matching items are included below.")
+                   else "the exact items are in the handoff.")
                 + (" Used GoogleSearchAction." if self.forged_tool else "")
             ),
             "summary": (
@@ -153,6 +153,27 @@ class StageLocalScopeRegressions(unittest.TestCase):
             _stage_scope_issues(
                 "The join confirmed all retrieved rows are active.", contract,
             ),
+        )
+
+    def test_annotation_join_cannot_claim_register_disagreement(self):
+        from envir.implement_subtask.reporting import _stage_scope_issues
+        contract = self._contract(
+            [{"route_code": "R-01", "observed_status": True}],
+            ["join"], ["route_code", "observed_status"],
+        )
+        contract["available_provenance_sources"] = ["annotations", "glossary"]
+        self.assertIn(
+            "claims_comparison_without_register_evidence",
+            _stage_scope_issues(
+                "The result contains four rows where the observed status differs "
+                "from the master register.", contract,
+            ),
+        )
+        self.assertEqual(
+            _stage_scope_issues(
+                "I aligned the codes with the observed group statuses for the "
+                "next comparison.", contract,
+            ), [],
         )
 
     def test_glossary_scan_does_not_approve_or_filter(self):
@@ -391,16 +412,17 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(
             set(revised["finish_result"]), {"result", "status", "summary"}
         )
-        self.assertIn("Verified result:", revised["finish_result"]["result"])
-        self.assertIn(
+        self.assertNotIn("Verified result:", revised["finish_result"]["result"])
+        self.assertNotIn(
             json.dumps(record["answer"], ensure_ascii=False,
                        sort_keys=True, separators=(",", ":")),
             revised["finish_result"]["result"],
         )
-        self.assertEqual(revised["answer_text"],
-                         revised["finish_result"]["result"])
+        self.assertEqual(revised["answer_text"], revised["finish_result"]["result"])
         self.assertEqual(revised["trace_summary"]["narrative"],
-                         revised["finish_result"]["summary"])
+                         trace_narrative(original["trace_summary"]))
+        self.assertNotEqual(revised["trace_summary"]["narrative"],
+                            revised["finish_result"]["summary"])
         self.assertTrue(author.calls[0]["macro_is_terminal"])
         self.assertNotIn("world", author.calls[0])
         self.assertNotIn("gold_program", author.calls[0])
@@ -420,7 +442,9 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(review["status"], "accepted")
         self.assertEqual(revised["answer"], candidate["answer"])
         self.assertIsInstance(revised["finish_result"]["result"], str)
-        self.assertIn("row(s) returned", revised["finish_result"]["result"])
+        self.assertNotIn("row(s) returned", revised["finish_result"]["result"])
+        self.assertNotIn("entry_label", revised["finish_result"]["result"])
+        self.assertIn(str(len(candidate["answer"])), revised["finish_result"]["result"])
         self.assertEqual(
             critic.calls[0]["candidate_finish"]["result"],
             revised["finish_result"]["result"],
@@ -469,7 +493,7 @@ class ReportingUnitTests(unittest.TestCase):
         from envir.implement_subtask.reporting import _normalize_author_result
         text, errors = _normalize_author_result([], [], ["entry_label"])
         self.assertEqual(errors, [])
-        self.assertEqual(text, "No matching records were found.")
+        self.assertEqual(text, "No records matched the assigned task.")
 
     def test_partial_from_author_never_counts_as_complete(self):
         record = realize_scene(scene(10, "medium"))["macro_tasks"][0]

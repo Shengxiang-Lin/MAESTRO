@@ -27,6 +27,8 @@ def unlicensed_calendar_years(text: str, topic: str) -> list[str]:
 
 
 SCHEMA_LABELS = {
+    "entry_label": "entry label",
+    "evidence_refs": "supporting source references",
     "diagram_step_start": "diagram interval start step",
     "diagram_step_end": "diagram interval end step",
     "utterance_step_start": "audio utterance start step",

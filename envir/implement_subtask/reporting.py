@@ -9,6 +9,10 @@ from copy import deepcopy
 import json
 import re
 
+from envir.generate_question.surface_quality import SCHEMA_LABELS
+
+PRESENTATION = "clean_finish_v2"
+
 
 AUTHOR_SYSTEM = """You are writing the FINAL message that a real specialized
 Sub-Agent would return to its Main-Agent after completing a delegated task.
@@ -16,13 +20,18 @@ Sub-Agent would return to its Main-Agent after completing a delegated task.
 Follow the actual multi-agent finish convention:
   {"result": "...", "summary": "...", "status": "done"}
 
-"result": concrete findings the Main-Agent can use immediately, with entity
-names/values and short evidence explanation. "summary": 1-3 natural sentences
-saying what work was performed, what it established, and relevant limitations.
-Write professional, specific, compact English. Vary wording by work type.
-Do NOT produce a database log, schema report, generic 'To produce...' boilerplate,
-or a step-by-step internal chain of thought. The Main-Agent needs findings and
-an evidence-backed operational summary, not hidden reasoning.
+"result": put the actionable finding first in a short sentence. For a large
+handoff, say what the records contain and give the most useful grounded detail.
+Full verified records are carried separately. Avoid row dumps, raw field names
+and generic "rows returned" language.
+"summary": describe the local work and the supporting observation in 1–2
+natural sentences. Distinguish findings established here from findings received
+upstream. If this stage only projects fields or removes duplicates, say what
+you did with the upstream result and avoid implying a fresh eligibility check.
+Use source roles and display labels. Refer to earlier results by their role
+(e.g. the mapped entries), without printing work_* identifiers, operator names,
+or names of raw fields. Keep the report useful for a colleague
+taking the next step.
 
 Your input is a deterministic, FICTIONAL observation and execution record,
 not actual image/video/audio perception. You may say 'checked the supplied
@@ -50,23 +59,17 @@ EXACT Oracle output rows, even when they fail the overall question's later
 criteria. If a reviewer objects to a premature claim, correct ONLY the prose
 summary, never the result rows.
 
-The result field may be (A) a concise grounded STRING describing the
-workproduct, or (B) EXACTLY the frozen structured answer rows as a JSON
-array. If the answer consists ONLY of entry_label, a JSON array of those
-exact entry labels is also accepted. For a single-row result, one exact
-object is acceptable. Do NOT invent a filtered subset or an extra row:
-structured output is programmatically compared to the full exact answer.
-Do not copy/modify JSON if you can simply describe the result naturally.
-The program always attaches exact verified answer values afterward.
+Prefer a concise grounded string for result. Exact structured answer rows
+remain accepted if provided, but the runtime carries them independently of the
+prose. Preserve every exact row in the structured form and use the summary for
+a short explanation.
 Output ONLY JSON with keys result, summary, status; status must be done.
 
-Examples of VALID result shapes:
-{"result":"Identified two records matching the assigned condition.",
- "summary":"Checked the supplied annotations against the register and retained
- the two supported records.","status":"done"}
-{"result":[{"entry_label":"Entry-02"}],
- "summary":"Compared the supplied event steps against the session windows and
- found one matching record.","status":"done"}
+Examples of valid finish messages:
+{"result":"Entry-02 is the only entry within its assigned session window.",
+ "summary":"I compared the recorded event steps with the session boundaries. Entry-02 occurred at step 68, inside its session's 63–88 interval.","status":"done"}
+{"result":"Entry-02 remains after removing duplicates.",
+ "summary":"I deduplicated the entry labels received from the earlier stage. The returned list has one distinct entry.","status":"done"}
 """
 
 
@@ -107,7 +110,8 @@ For a structured candidate result, the application has already verified
 an EXACT match to the full frozen answer rows; do not reject it merely
 because it is rendered as a list/array. Review the proposed natural
 summary and any prose for actual factual errors.
-Do not demand all raw fact IDs in the user-facing summary.
+The exact Oracle rows travel separately from the finish prose. Do not demand
+that result repeat all columns or that the summary enumerate raw fact IDs.
 Do not invent any issue merely to be critical; pass accurate natural reports.
 Return ONLY JSON:
 {"verdict":"pass"|"fail","grounded":true|false,
@@ -205,33 +209,71 @@ def _readable_value(value) -> str:
     return str(value)
 
 
-def _readable_verified_answer(rows: list[dict]) -> str:
-    """Render the EXACT Oracle relation without needing an LLM rewrite.
-
-    All machine-readable rows remain separately available as answer.
-    This sentence can be shown directly to Main-Agent.
-    """
-    if not rows:
-        return "No matching records were found."
-    rendered = []
-    for row in rows:
-        if set(row) == {"entry_label"}:
-            rendered.append(_readable_value(row["entry_label"]))
-        elif set(row) == {"count"}:
-            rendered.append(_readable_value(row["count"]))
-        elif set(row) == {"category_name", "count"}:
-            rendered.append(
-                f"{_readable_value(row['category_name'])}: "
-                f"{_readable_value(row['count'])}"
-            )
-        else:
-            rendered.append("; ".join(
-                f"{key}: {_readable_value(value)}"
-                for key, value in row.items()
-            ))
-    return (
-        f"{len(rows)} row(s) returned: " + " | ".join(rendered)
+def _public_field_text(text: str, fields) -> str:
+    names = sorted({field for field in fields if "_" in field})
+    if not names:
+        return text
+    pattern = r"\b(?:" + "|".join(map(re.escape, names)) + r")\b"
+    return re.sub(
+        pattern, lambda match: SCHEMA_LABELS.get(
+            match[0].lower(), match[0].lower().replace("_", " ")
+        ), text, flags=re.I,
     )
+
+
+def _readable_verified_answer(rows: list[dict]) -> str:
+    """Summarize an exact relation. The full verified rows travel separately."""
+    if not rows:
+        return "No records matched the assigned task."
+    if len(rows) == 1 and set(rows[0]) == {"count"}:
+        return f"The count is {_readable_value(rows[0]['count'])}."
+    if all(set(row) == {"entry_label"} for row in rows):
+        return "Entries: " + ", ".join(_readable_value(row["entry_label"]) for row in rows) + "."
+    if all(set(row) == {"category_name", "count"} for row in rows):
+        return "Counts by category: " + ", ".join(
+            f"{row['category_name']} ({row['count']})" for row in rows
+        ) + "."
+    count = len(rows)
+    unit = "record" if count == 1 else "records"
+    labels = list(dict.fromkeys(str(row["entry_label"]) for row in rows if "entry_label" in row))
+    if labels and len(labels) <= 3:
+        return f"The handoff contains {count} {unit} for " + ", ".join(labels) + "."
+    if labels:
+        return f"The handoff contains {count} {unit}, including " + ", ".join(labels[:3]) + "."
+    return f"The handoff contains {count} {unit} from the assigned task."
+
+
+_PAST_ACTION = {
+    "Read": "Read", "Keep": "Kept", "Align": "Aligned", "Check": "Checked",
+    "Order": "Ordered", "Select": "Selected", "Remove": "Removed",
+    "Count": "Counted", "Attach": "Attached",
+}
+
+
+def trace_narrative(trace: dict) -> str:
+    """Describe the actual operator events independently of finish prose."""
+    events = []
+    for step in trace["steps"]:
+        action = step["action"]
+        first, _, rest = action.partition(" ")
+        action = (
+            _PAST_ACTION[first] + " " + rest if first in _PAST_ACTION
+            else "Executed " + step["operation"].replace("_", " ")
+        )
+        fields = set(step["output_schema"]) | set(SCHEMA_LABELS)
+        action = _public_field_text(action, fields)
+        action = action.replace("row(s)", "records")
+        action = action.replace("Checked that", "Checked whether")
+        action = action.replace("Kept only the output field(s): ", "Kept only ")
+        join = re.fullmatch(r"Aligned the two input workproducts by (.+) = (.+)", action)
+        if join:
+            left, right = join.groups()
+            action = (f"Aligned the inputs by their shared {left}" if left == right
+                      else f"Matched {left} in the first input to {right} in the second")
+        count = step["output_row_count"]
+        unit = "record" if count == 1 else "records"
+        events.append(f"{action}. This produced {count} {unit}.")
+    return " ".join(events)
 
 
 def _normalize_author_result(value, exact_rows: list[dict],
@@ -243,7 +285,7 @@ def _normalize_author_result(value, exact_rows: list[dict],
     A filtered subset, reordered field meaning, or fabricated rows FAIL.
     """
     if isinstance(value, str):
-        if not 12 <= len(value.strip()) <= 1600:
+        if not 1 <= len(value.strip()) <= 1600:
             return None, ["result_invalid_length_or_type"]
         return value.strip(), []
     if isinstance(value, dict):
@@ -396,6 +438,17 @@ def _stage_scope_issues(text: str, contract: dict) -> list[str]:
             text, re.I,
         ):
             errors.append("claims_unexecuted_temporal_verification")
+    # Some joins only align the codebook and annotations. Their provenance
+    # has no register observation to support an asserted status disagreement.
+    sources = contract.get("available_provenance_sources")
+    if sources is not None and "register" not in sources and re.search(
+        r"\b(?:contains?|returned|found|identified|retained|selected)\b[^.!?]{0,100}"
+        r"\b(?:observed|reported|binary)\s+status\s+"
+        r"(?:differs?|disagrees?|conflicts?)\s+(?:from|with)\s+"
+        r"(?:the\s+)?(?:master\s+)?(?:register|ledger)\b",
+        text, re.I,
+    ):
+        errors.append("claims_comparison_without_register_evidence")
     return sorted(set(errors))
 
 
@@ -417,6 +470,8 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
     for field, value in (("result", result_text), ("summary", summary)):
         if not isinstance(value, str):
             continue
+        if re.search(r"\bwork_[a-z0-9_]+\b", value, re.I):
+            errors.append(field + "_internal_macro_identifier")
         if _TOOL_HALLUCINATION.search(value):
             errors.append(field + "_claims_unperformed_tool_or_media_action")
         if any(ref not in contract["all_evidence_refs"]
@@ -479,6 +534,18 @@ def author_critic_report(
             candidate = author.complete_json(
                 AUTHOR_SYSTEM, json.dumps(request, ensure_ascii=False)
             )
+            if isinstance(candidate, dict):
+                fields = {
+                    field for step in teacher_record["trace_summary"]["steps"]
+                    for field in step["output_schema"]
+                } | set(SCHEMA_LABELS) | {
+                    step["operation"] for step in teacher_record["trace_summary"]["steps"]
+                }
+                candidate = {
+                    key: _public_field_text(value, fields)
+                    if key in {"result", "summary"} and isinstance(value, str) else value
+                    for key, value in candidate.items()
+                }
             problems = _guard(candidate, contract)
             if problems:
                 failures.append({
@@ -521,22 +588,14 @@ def author_critic_report(
             )
             if (decision.get("verdict") == "pass"
                     and all(decision.get(axis) is True for axis in axes)):
-                result_text = normalized_result
                 summary_text = candidate["summary"].strip()
-                # Structured reports have been checked against every exact
-                # answer row. For prose reports, programmatically append the
-                # complete canonical answer (never the LLM's guessed rows).
-                verified_result = (
-                    result_text
-                    if not isinstance(candidate["result"], str)
-                    else result_text + "\n\nVerified result: "
-                         + _canonical(teacher_record["answer"])
-                )
                 row = deepcopy(teacher_record)
-                row["answer_text"] = verified_result
-                row["trace_summary"]["narrative"] = summary_text
+                row["answer_text"] = normalized_result
+                row["trace_summary"]["narrative"] = trace_narrative(
+                    teacher_record["trace_summary"]
+                )
                 row["finish_result"] = {
-                    "result": verified_result,
+                    "result": normalized_result,
                     "status": "done",
                     "summary": summary_text,
                 }
@@ -545,6 +604,7 @@ def author_critic_report(
                     "attempts": revision + 1,
                     "review": decision,
                     "exact_answer_immutable": True,
+                    "presentation": PRESENTATION,
                     "grounding_note": (
                         "LLM narrative of deterministic oracle evidence, "
                         "NOT independently observed LLM Sub-Agent actions"

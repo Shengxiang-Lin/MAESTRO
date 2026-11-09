@@ -17,6 +17,8 @@ from pathlib import Path
 
 from envir.streaming import SCHEMA, StreamingError, file_digest, stable_signature
 
+from .reporting import PRESENTATION, trace_narrative
+
 
 def _read_committed(path: Path, end: int, expected_sha256: str) -> list[dict]:
     if not path.is_file() or type(end) is not int or end < 0:
@@ -68,7 +70,10 @@ def _validate_reused_result(accepted: dict, teacher: dict) -> None:
             or review.get("status") != "accepted"
             or not review.get("exact_answer_immutable")
             or accepted.get("answer_text") != finish["result"]
-            or old_trace.get("narrative") != finish["summary"]):
+            or old_trace.get("narrative") != (
+                trace_narrative(new_trace) if review.get("presentation") == PRESENTATION
+                else finish["summary"]
+            )):
         raise StreamingError("previous_accepted_invalid_finish_contract")
     critic = review.get("review", {})
     if not isinstance(critic, dict) or critic.get("verdict") != "pass":

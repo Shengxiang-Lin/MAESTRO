@@ -90,10 +90,13 @@ focused previous failure feedback.
 New report output preserves, UNCHANGED, the exact typed answer,
 answer_with_provenance, and all trace_summary.steps; it adds:
 
-- `answer_text`: Main-facing report result with exact Python-appended rows
-- `trace_summary.narrative`: concise, evidence-grounded Sub-Agent summary
-- `finish_result`: real-world shape (result, status, summary)
-- `report_authoring`: acceptance, attempts, independent Critic verdict
+- `answer_text`: compact Main-facing finding or handoff summary
+- `trace_summary.narrative`: deterministic description of executed steps and output counts
+- `finish_result`: concise result, completion status and stage-local Author summary
+- `report_authoring`: acceptance, attempts, independent Critic verdict and presentation version
+
+Use `answer` for the complete typed handoff. Finish prose and the trace
+narrative are separate projections of the same execution.
 
 If any Macro report fails, the **whole scene** is withheld, ensuring the
 published DAG remains complete; a fallback NEVER counts as success.
@@ -138,8 +141,8 @@ single-column output. EVERY structured result is compared to the
 complete frozen Oracle answer, without changing field/value types.
 Wrong subsets, extra rows, lost columns or invented values FAIL. Exact
 structured answers are rendered into a readable result sentence before
-independent Critic. Plain prose still gets the program-verified exact
-answer appended. Model summaries remain reviewed for factual claims.
+independent Critic. The complete verified answer stays in the structured
+answer field. Model summaries remain reviewed for factual claims.
 
 The new PRIVATE review_audit.jsonl includes each Macro's accepted or
 failed status, revision attempts, reasons, and accepted preview—even if

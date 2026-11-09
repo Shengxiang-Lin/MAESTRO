@@ -169,6 +169,16 @@ class ContractTests(unittest.TestCase):
                     guard_question(candidate, frozen, entry["macro_graph"]),
                 )
 
+    def test_raw_output_field_can_be_rendered_as_public_label(self):
+        from envir.generate_question.surface_quality import normalize_question_punctuation
+        entry = scene(9, "easy", "reconcile")
+        frozen, graph = entry["problem_spec"], entry["macro_graph"]
+        raw = reference_question(frozen) + " Return the entry_label values."
+        self.assertIn("internal_implementation_leak", guard_question(raw, frozen, graph))
+        question = normalize_question_punctuation(raw)
+        self.assertIn("entry label", question)
+        self.assertNotIn("internal_implementation_leak", guard_question(question, frozen, graph))
+
     def test_count_cannot_ask_for_entry_labels(self):
         entry = scene(8, "easy", "coverage_count")
         frozen = entry["problem_spec"]

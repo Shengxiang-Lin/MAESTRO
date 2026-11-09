@@ -101,8 +101,15 @@ FROZEN fictional benchmark ProblemSpec. Do not add, delete or change any
 condition, information source or output. The source roles are simulations, not
 actual observations of the original MultiModalQA media.
 
-Vary the question structure and natural motivation. Specific source roles and
-relationships are valuable; do not merely insert a decorative user persona.
+Start with the information the user needs or a concrete clue already available
+in the fictional scenario. Name a supplied material when it helps the user
+identify the clue or understand a comparison. Express the link in ordinary
+language, e.g. a code in the event log identifies the session whose timing
+should be checked. Let the deliverable follow from the user need.
+Use a short context sentence when it helps. Ask for the result once.
+Treat the topic label as the name of the fictional collection if it is an
+ordinary phrase. Source titles can be shortened without changing their roles.
+A role introduction or a recital of every operator adds little context.
 No raw IDs, backend field names, TaskGraph vocabulary, step-by-step tool
 instructions, or hallucinated facts about a real person/event/visual scene.
 All relevant conditions must be clear to someone who will solve it:
@@ -127,10 +134,10 @@ contains an explicit approval filter. Describe any synthetic source
 field in readable language ("measured value", "audio interval start step"),
 not raw names such as measured_value, minimum_required or diagram_step_start.
 
-The compiled Macro Task contract is the operational authority when
-provided. Its source roles, typed operators, dependency plan, and terminal
-output must agree with your question. Do not expose internal operator
-names, step numbers or TaskGraph mechanics in the user-facing question.
+The frozen user intent specifies every answer-defining relationship and
+deliverable. Distinguish active status from the reported status being compared.
+An independent approval applies to the category, not the glossary translation. Use the material titles as readable source handles. Keep
+simulated observations clearly fictional and avoid inventing a new clue.
 
 For latest-version requests, you receive a STRUCTURED FROZEN USER INTENT:
 constraints, typed output, source roles and a style preference. Write an
@@ -269,7 +276,16 @@ def guard_question(question: str, spec: dict,
     if family == "evidence_reconcile":
         if not re.search(r"\b(evidence|source|citation|reference|support)\w*", q, re.I):
             errors.append("evidence_output_scope_missing")
-    if re.search(r"\b(TaskGraph|WorkProduct|candidate-\d+|source_id|fact_refs|synthetic_attribute)\b", q, re.I):
+    fields = {"entry_label", "evidence_refs"}
+    if macro_graph is not None:
+        fields.update(
+            field for task in macro_graph["tasks"]
+            for field in task["outputs"]["typed_relation"]
+            if "_" in field
+        )
+    implementation_terms = r"TaskGraph|WorkProduct|candidate-\d+|source_id|fact_refs|synthetic_attribute"
+    terms = implementation_terms + "|" + "|".join(map(re.escape, sorted(fields)))
+    if re.search(r"\b(?:" + terms + r")\b", q, re.I):
         errors.append("internal_implementation_leak")
     if re.search(r"\b(actual photograph shows|original image depicts|original video shows)\b", q, re.I):
         errors.append("unsupported_real_media_assertion")
@@ -322,9 +338,25 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
         raise ValueError("revisions must be 0..8")
     failures = []
     for attempt in range(max_revisions + 1):
-        author_contract = dict(instruction)
+        author_contract = {
+            "user_intent": {
+                key: value for key, value in instruction["intent"].items()
+                if key not in {"sources", "difficulty", "reasoning_pattern"}
+            },
+            "materials": [
+                {"title": source["title"], "modality": source["modality"],
+                 "purpose": source["purpose"]}
+                for source in spec["sources"]
+            ],
+            "style": instruction["style"],
+        }
         if attempt > 0:
             author_contract["repair_reference_question"] = initial
+            if "topic_missing" in failures[-1].get("errors", ()):
+                author_contract["topic_repair"] = (
+                    "Mention the exact topic as the fictional collection title: "
+                    + spec["scenario"]["topic"]
+                )
         user_text = json.dumps({
             "contract": author_contract,
             "previous_failures": [{

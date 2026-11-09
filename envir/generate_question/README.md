@@ -37,6 +37,11 @@ Critic -> synthetic source World and executable Reasoning Program -> compiled
 Macro Tasks and reference executor -> independent Question Author + Critic ->
 strict replay and Question-Macro contract gate.
 
+The Question Author works from user intent, readable titles and purposes of
+available materials, and a style hint. The Critic also sees the compiled
+Macro contract and reference question. Raw output labels such as
+`entry_label` are rendered in ordinary language before review.
+
 The final Question is checked against the ACTUAL MacroGraph:
 
 1. It may not invent eligibility predicates missing from the executable
