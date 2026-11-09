@@ -352,6 +352,23 @@ def validate_contract_proposal(scene: dict, proposal: dict) -> list[str]:
            or "review" in str(scenario[key]).casefold()
            for key in _SCENARIO_KEYS):
         errors.append("generic_record_review_story")
+    # Minimal operation-family guard. This catches obvious goal drift before
+    # the model Critic; it is deliberately permissive about natural wording.
+    intent_terms = {
+        "lookup": r"\b(?:which|identify|find|select|list|marked|positive)\b",
+        "aggregation": r"\b(?:how many|count|number|total)\b",
+        "comparison": r"\b(?:compare|rank|order|highest|top|largest|greatest)\b",
+        "intersection": r"\b(?:overlap|shared|common|both|recur|match|intersection)\b",
+        "composition": r"\b(?:connect|link|relationship|correspond|reference|map|relat)\w*\b",
+        "temporal": r"\b(?:earliest|order|sequence|first|before|after|timeline)\b",
+        "prioritization": r"\b(?:priorit|rank|order|highest|descending|top)\w*\b",
+        "feasibility": r"\b(?:qualif|eligible|eligib|satisf|meet|threshold|at least)\w*\b",
+    }
+    goal_id = scene["goal"]["intent"]
+    if (goal_id in intent_terms and isinstance(proposal.get("user_need"), str)
+            and not re.search(intent_terms[goal_id],
+                              proposal["user_need"], re.I)):
+        errors.append("user_need_operation_missing")
     if not errors:
         prose = _prose(proposal)
         if re.search(
@@ -481,6 +498,8 @@ def validate_scenario_contract(scene: dict) -> list[str]:
     errors = []
     proposal = _proposal_from_contract(contract)
     errors.extend(validate_contract_proposal(scene, proposal))
+    if errors:
+        return sorted(set(errors))
     review, reviewer_errors = validate_contract_review(contract.get("review"))
     errors.extend(reviewer_errors)
     if review.get("verdict") != "pass" or any(
