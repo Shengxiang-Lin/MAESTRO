@@ -166,7 +166,12 @@ def execute_task(task: dict, *, input_products: list[Relation],
     if "operator_chain" in task:
         # The only information available is authorized scan data and
         # previously completed typed handoffs, never the private World.
-        if set(visible_sources) != set(task["source_ids"]):
+        scan_grants = {
+            step["source_id"] for step in task["operator_chain"]
+            if step["op"] == "scan"
+        }
+        if (set(task["source_ids"]) != scan_grants
+                or set(visible_sources) != scan_grants):
             raise ProgramError("compact_source_scope_mismatch")
         results = dict(zip(task["external_inputs"], input_products))
         for step in task["operator_chain"]:
