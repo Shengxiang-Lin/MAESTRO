@@ -253,7 +253,7 @@ class BackwardRecipePlannerTests(unittest.TestCase):
         self.assertIn("semantic_contract", calls[1][1])
         self.assertIn("semantic_contract_sha256", meta)
         self.assertEqual(meta["review_policy_version"],
-                         "taskfirst_natural_question_v2")
+                         "semantic_world_natural_question_v3")
         self.assertNotIn("world", calls[0][1])
         self.assertNotIn("source_priors", json.dumps(calls[0][1]))
         # An accepted rewrite is replay-valid without touching frozen Task,
@@ -279,7 +279,7 @@ class BackwardRecipePlannerTests(unittest.TestCase):
         )
         self.assertEqual(semantic_contract(original), semantic_contract(changed))
         contract = semantic_contract(original)
-        self.assertEqual(contract["contract_version"], "question_semantics_v1")
+        self.assertEqual(contract["contract_version"], "question_semantics_v2")
         self.assertNotIn("original_question", json.dumps(contract))
         self.assertNotIn("world", contract)
         self.assertEqual(
