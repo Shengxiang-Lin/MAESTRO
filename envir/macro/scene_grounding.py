@@ -372,7 +372,7 @@ def validate_proposal(scene: dict, proposal: dict, *,
     # A free-form hypothetical context is allowed; explicit claims of
     # *confirmed actual visual observation* are not.
     if not legacy_v1 and re.search(
-        r"\b(?:visual(?:ly)?\s+(?:confirmation|confirmed|verification|
+        r"\b(?:visual(?:ly)?\s+(?:confirmation|confirmed|verification|"
         r"verified|detected)|image[- ]derived\s+(?:observation|confirmation)|"
         r"logo\s+(?:confirmed|verified|observed|detected)|"
         r"(?:confirmed|verified|detected)\s+(?:in|from|by)\s+(?:the\s+)?"
