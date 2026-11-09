@@ -66,56 +66,65 @@ def _synthetic_facts(*, case_ref: str, source: dict, question: str,
     ]
 
 
-def _semantic_facts(*, case_ref: str, source: dict, topic: str,
-                    spec: dict, ordinal: int, source_count: int) -> list[dict]:
-    """Sample values after semantics are frozen, not before.
+def _semantic_facts(*, case_ref: str, source: dict,
+                    spec: dict, values: dict) -> list[dict]:
+    """Bind a reviewed meaning to deterministic numeric AND relational facts.
 
-    Numeric values are deterministic synthetic measurements, NEVER inferred
-    from original MMQA media. Fact IDs/field names stay executable by the
-    existing EvidenceGraph evaluator.
+    A source contains one observation of an entity. Observation ID,
+    entity identity, shared category and directed source references are
+    distinct typed fields; none is inferred from actual media.
     """
-    sid = source["source_id"]
     semantic = spec["semantic_bindings"]
-    role = next(x for x in spec["source_bindings"] if x["source_id"] == sid)
+    role = next(
+        row for row in spec["source_bindings"]
+        if row["source_id"] == source["source_id"])
     label = role["candidate_label"]
-    spec_hash = digest(spec["proposal_fingerprint"], case_ref, "values")
-    score = int(digest(spec_hash, sid, "score")[:8], 16) % 101
-    positive = int(digest(spec_hash, sid, "positive")[:8], 16) % 2 == 0
-    # Distinct source ordinal positions are assigned by the caller using
-    # a reproducible shuffled order; no real historical date is implied.
-    time_index = ordinal + 1
-    # Small, explicitly simulated cohort inventory; some outcomes have
-    # group overlap and others do not. Empty intersections remain valid.
-    bucket_count = max(2, (source_count + 1) // 2)
-    group = f"group-{int(digest(spec_hash, sid, 'cohort')[:8], 16) % bucket_count}"
-    candidate = "candidate-" + digest(spec_hash, sid, "candidate")[:10]
-    origin = f"{source['modality_hint']}:{source.get('original_doc_id') or sid}"
-    facts = [
+    origin = (
+        f"{source['modality_hint']}:"
+        f"{source.get('original_doc_id') or source['source_id']}"
+    )
+    values_by_field = [
         ("case_reference", case_ref,
-         f"This fictional evidence source belongs to case {case_ref}."),
+         f"This fictional record is in case {case_ref}."),
         ("original_source_handle", origin,
-         f"Source handle {origin} is a provenance pointer, not observed media."),
+         f"Provenance handle {origin} is not an original-media observation."),
         ("source_modality", source["modality_hint"],
-         f"{source['modality_hint']} is a source modality; no raw pixels, audio or video were decoded."),
-        ("candidate_key", candidate,
-         f"{semantic['candidate_kind']} '{label}' is the synthetic entry corresponding to candidate key {candidate}."),
+         f"Source category {source['modality_hint']} is a handle, not decoded media."),
+        ("candidate_key", values["candidate_key"],
+         f"{semantic['candidate_kind']} '{label}' has synthetic observation "
+         f"ID {values['candidate_key']}."),
         ("question_criterion", spec["user_need"],
-         f"The simulated Goal is: {spec['user_need']}"),
-        ("synthetic_attribute_score", score,
-         f"Fictional {label}: {semantic['score']} = {score} (synthetic 0..100 scale)."),
-        ("synthetic_attribute_flag", positive,
-         f"Fictional {label}: {semantic['positive_flag']} = {positive}; this is NOT an observed original-media feature."),
-        ("synthetic_time_index", time_index,
-         f"Fictional {label}: {semantic['relative_time_index']} = {time_index}; this is an ordinal, NOT a real event date."),
-        ("synthetic_group_key", group,
-         f"Fictional {label}: {semantic['group_key']} = {group}; this denotes a cohort, not entity identity."),
-        ("observation_provenance", "synthetic_semantic_first_not_raw_perception",
-         "The source attributes were sampled after semantic schema approval and are not original MMQA annotations."),
+         f"This fictional collection supports: {spec['user_need']}"),
+        ("synthetic_attribute_score", values["score"],
+         f"Fictional {label}: {semantic['score']} = {values['score']} (0..100)."),
+        ("synthetic_attribute_flag", values["positive_flag"],
+         f"Fictional {label}: {semantic['positive_flag']} = "
+         f"{values['positive_flag']}; not actual media recognition."),
+        ("synthetic_time_index", values["relative_time_index"],
+         f"Fictional {label}: {semantic['relative_time_index']} = "
+         f"{values['relative_time_index']}; not a calendar date."),
+        ("synthetic_group_key", values["group_key"],
+         f"Fictional {label}: {semantic['group_key']} = "
+         f"{values['group_key']}; group membership is NOT identity."),
+        ("synthetic_entity_key", values["entity_key"],
+         f"Fictional {label}: entity key {values['entity_key']} is an "
+         "explicit simulated identity association, not a shared category."),
+        ("synthetic_reference_target_source_ids",
+         values["reference_target_source_ids"],
+         f"Fictional {label}: references the explicitly recorded source "
+         f"handles {values['reference_target_source_ids']}; a reference "
+         "does NOT imply identical entities."),
+        ("synthetic_precedes_source_ids", values["precedes_source_ids"],
+         f"Fictional {label}: precedes source records "
+         f"{values['precedes_source_ids']} according to synthetic sequence."),
+        ("observation_provenance", "semantic_first_relational_simulation_only",
+         "All values and relations are generated deterministically AFTER "
+         "semantic schema approval, never decoded from original MMQA media."),
     ]
     return [
         {"fact_id": f"F{i+1}", "field": field, "value": value,
          "statement": statement, "verification": "consistent_synthetic_record"}
-        for i, (field, value, statement) in enumerate(facts)
+        for i, (field, value, statement) in enumerate(values_by_field)
     ]
 
 
@@ -126,7 +135,7 @@ def build_clean_world(plan: dict, *, seed: int,
     case_ref = f"{domain[:3].upper()}-{seed % 100:02d}-{plan['task_id'][-7:]}"
     question = plan["question"]  # ONLY the newly composed TaskGraph-derived question
     topic = plan["scenario"]["topic"]
-    semantic_roles, ordinals = {}, {}
+    semantic_roles, relation_values = {}, {}
     if semantic_spec is not None:
         from .semantic_world import (
             validate_spec, source_manifest_from_plan,
@@ -137,13 +146,14 @@ def build_clean_world(plan: dict, *, seed: int,
         semantic_roles = {
             row["source_id"]: row for row in semantic_spec["source_bindings"]
         }
+        from .relational_world import relational_layout
         manifest = source_manifest_from_plan(plan)
-        order = sorted(
-            (row["source_id"] for row in manifest),
-            key=lambda sid: digest(
-                semantic_spec["proposal_fingerprint"], sid, "ordinal")
+        relation_values = relational_layout(
+            spec=semantic_spec,
+            case_ref=case_ref,
+            source_ids=[row["source_id"] for row in manifest],
+            goal_id=plan["goal"]["intent"],
         )
-        ordinals = {sid: i for i, sid in enumerate(order)}
     sources, grants = {}, {}
     for task in plan["macro_graph"]["tasks"]:
         granted = []
@@ -173,10 +183,9 @@ def build_clean_world(plan: dict, *, seed: int,
                     source["representation"] = (
                         "synthetic_semantic_metadata_not_raw_media")
                     source["facts"] = _semantic_facts(
-                        case_ref=case_ref, source=source, topic=topic,
+                        case_ref=case_ref, source=source,
                         spec=semantic_spec,
-                        ordinal=ordinals[source_id],
-                        source_count=len(ordinals))
+                        values=relation_values[source_id])
                 else:
                     source["facts"] = _synthetic_facts(
                         case_ref=case_ref, source=source, question=question,
@@ -227,6 +236,8 @@ def build_clean_world(plan: dict, *, seed: int,
         ),
     }
     if semantic_spec:
-        from .scene_grounding import fingerprint
+        from .semantic_world import fingerprint
+        from .relational_world import world_relations
         result["semantic_spec_fingerprint"] = fingerprint(semantic_spec)
+        result["relations"] = world_relations(sources)
     return result
