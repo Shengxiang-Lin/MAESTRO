@@ -169,8 +169,10 @@ copy or minimally edit a reference question.
 For historical requests and explicit repair attempts, a FROZEN REFERENCE
 QUESTION may also be supplied. It was authored from the fictional
 contract, NOT the original MultiModalQA question. Preserve its meaning.
-Preserve the word "active" and the code-crosswalk and category approval for
-multi-source cases; preserve distinct entry-specific clearance for hard cases.
+Preserve the word "active" and exactly the cross-source relation required
+by the structured intent: approval, temporal window, binary disagreement,
+or per-group threshold. Do NOT substitute one operation for another.
+Preserve distinct entry-specific clearance for hard cases.
 Preserve counting, category grouping, priority MAXIMUM, or chronological
 EARLIEST directions when applicable.
 
@@ -210,27 +212,27 @@ def guard_question(question: str, spec: dict) -> list[str]:
         errors.append("question_missing_interrogative")
     if spec["scenario"]["topic"].casefold() not in q.casefold():
         errors.append("topic_missing")
-    if not re.search(r"\\bactive\\b", q, flags=re.I):
+    if not re.search(r"\bactive\b", q, flags=re.I):
         errors.append("active_condition_missing")
     pattern = spec.get("reasoning_pattern", "approval")
     latest = spec.get("version") == VERSION
     if latest and pattern != "approval":
-        if not re.search(r"\\b(code|codes|glossary|map|mapped|mapping|translat|resolv)\\b", q, re.I):
+        if not re.search(r"\b(code|codes|glossary|map|mapped|mapping|translat|resolv)\b", q, re.I):
             errors.append("cross_source_code_mapping_missing")
         if pattern == "time_window":
-            if not re.search(r"\\b(window|interval|range|between|within|inside|boundary|boundaries)\\b", q, re.I):
+            if not re.search(r"\b(window|interval|range|between|within|inside|boundary|boundaries)\b", q, re.I):
                 errors.append("temporal_interval_missing")
-            if not re.search(r"\\b(time|step|event|moment|frame|timestamp)\\b", q, re.I):
+            if not re.search(r"\b(time|step|event|moment|frame|timestamp)\b", q, re.I):
                 errors.append("temporal_event_missing")
         elif pattern == "status_disagreement":
-            if not re.search(r"\\b(disagree|different|mismatch|conflict|contradict|inconsisten)\\w*", q, re.I):
+            if not re.search(r"\b(disagree|different|mismatch|conflict|contradict|inconsisten)\w*", q, re.I):
                 errors.append("status_disagreement_missing")
-            if not re.search(r"\\b(status|statuses|mark|reported|observed)\\b", q, re.I):
+            if not re.search(r"\b(status|statuses|mark|reported|observed)\b", q, re.I):
                 errors.append("binary_status_missing")
         elif pattern == "dynamic_threshold":
-            if not re.search(r"\\b(threshold|minimum|at least|exceed|above|meet|qualify)\\w*", q, re.I):
+            if not re.search(r"\b(threshold|minimum|at least|exceed|above|meet|qualify)\w*", q, re.I):
                 errors.append("dynamic_threshold_missing")
-            if not re.search(r"\\b(measur|value|rating|score)\\w*", q, re.I):
+            if not re.search(r"\b(measur|value|rating|score)\w*", q, re.I):
                 errors.append("measured_value_missing")
     elif spec["difficulty_target"] != "easy":
         if not re.search(r"\b(code|codes|abbreviat|glossary|mapped|mapping|translat|resolv)", q, re.I):
@@ -245,10 +247,10 @@ def guard_question(question: str, spec: dict) -> list[str]:
         errors.append("count_answer_scope_missing")
     if family == "priority" and not re.search(r"\b(highest|largest|top|maximum|greatest)\b", q, re.I):
         errors.append("priority_direction_missing")
-    if family == "chronology" and not re.search(r"\\b(earliest|first|lowest|minimum)\\b", q, re.I):
+    if family == "chronology" and not re.search(r"\b(earliest|first|lowest|minimum)\b", q, re.I):
         errors.append("relative_ordinal_direction_missing")
     if latest and family == "evidence_reconcile":
-        if not re.search(r"\\b(evidence|source|citation|reference|support)\\w*", q, re.I):
+        if not re.search(r"\b(evidence|source|citation|reference|support)\w*", q, re.I):
             errors.append("evidence_output_scope_missing")
     if re.search(r"\b(TaskGraph|WorkProduct|candidate-\d+|source_id|fact_refs|synthetic_attribute)\b", q, re.I):
         errors.append("internal_implementation_leak")
