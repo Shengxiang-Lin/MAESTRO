@@ -11,3 +11,24 @@ implementation:
   strict_replay: true
   overwrite: false
   no_progress: false
+
+
+# Second pass: naturalize the 529 frozen oracle Macro results in the style
+# of a real Sub-Agent's finish(result/status/summary) to Main-Agent.
+# This NEVER changes structured answer or teacher evidence.
+reporting:
+  source_subtasks: envir/data/maestro_subtask_teacher_100/subtasks.jsonl
+  source_scene_index: envir/data/maestro_subtask_teacher_100/scene_index.jsonl
+  output_dir: envir/data/maestro_subagent_reports_100
+  api_base: http://127.0.0.1:8807/v1
+  model: local-qwen3.5-9b
+  critic_api_base: null
+  critic_model: null
+  api_key_env: null
+  critic_api_key_env: null
+  workers: 8
+  max_revisions: 2
+  timeout: 180
+  max_scenes: null
+  no_progress: false
+  overwrite: false
