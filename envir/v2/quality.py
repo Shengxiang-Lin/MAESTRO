@@ -53,6 +53,8 @@ def weak_single_source_baseline(scene: dict) -> list[dict]:
     family = scene["problem_spec"]["family"]
     if family == "coverage_count":
         return [{"count": len(rows)}]
+    if family == "category_distribution":
+        return []  # Register lacks the required category crosswalk.
     if family == "priority":
         rows = sorted(rows, key=lambda x: x["recorded_priority"], reverse=True)[:1]
     if family == "chronology":
