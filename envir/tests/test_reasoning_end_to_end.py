@@ -635,9 +635,165 @@ class V2PipelineTests(unittest.TestCase):
                 question_timeout=4, overwrite=False,
             ))
         self.assertEqual(summary["question_results"].get("fallback"), 4)
+        self.assertEqual(summary["generated"], 0)
+        self.assertEqual(summary["failed"], 4)
+        self.assertEqual(summary["status"], "failed")
+        self.assertEqual(read_jsonl(out / "scenes.jsonl"), [])
+        self.assertEqual(read_jsonl(out / "questions.jsonl"), [])
+        self.assertEqual(len(read_jsonl(out / "failed.jsonl")), 4)
         self.assertEqual(replay_v2(Namespace(
-            scenes=out / "scenes.jsonl", max_records=None
+            scenes=src, max_records=None
         ))["status"], "valid")
+
+
+class MacroGraphAndStrictAcceptanceTests(unittest.TestCase):
+    def test_distinct_macro_dependency_plans_preserve_exact_gold(self):
+        from envir.reasoning.macro_contract import (
+            macro_graph_profile, macro_question_contract,
+        )
+        for pattern, family in (
+            ("time_window", "window_alignment"),
+            ("status_disagreement", "status_disagreement"),
+            ("dynamic_threshold", "threshold_eligibility"),
+        ):
+            with self.subTest(pattern=pattern):
+                base = make_spec(
+                    seed_record=seed(38), ordinal=38,
+                    run_seed=17, difficulty="hard",
+                )
+                base["reasoning_pattern"] = pattern
+                base["family"] = family
+                base["requirements"]["answer_kind"] = "entry_list"
+                base.pop("macro_plan_variant", None)
+                legacy = compile_and_validate(base, reference_question(base))
+                signatures = set()
+                for variant in range(4):
+                    plan = copy.deepcopy(base)
+                    plan["macro_plan_variant"] = variant
+                    scene_data = compile_and_validate(
+                        plan, reference_question(plan))
+                    self.assertEqual(scene_data["gold_answer"], legacy["gold_answer"])
+                    self.assertLessEqual(scene_data["macro_graph"]["macro_task_count"], 9)
+                    self.assertEqual(validate_replay(scene_data)["status"], "valid")
+                    contract = macro_question_contract(
+                        plan, scene_data["macro_graph"])
+                    self.assertEqual(contract["answer_kind"], "entry_list")
+                    signatures.add(macro_graph_profile(
+                        scene_data["macro_graph"])["signature"])
+                self.assertGreaterEqual(len(signatures), 3)
+
+    def test_question_author_sees_compiled_macro_contract(self):
+        from envir.reasoning.question import naturalize_one
+        sample = scene(difficulty="hard", ordinal=24,
+                       family="window_alignment")
+        received = []
+        class Author:
+            def complete_json(self, system_prompt, user_prompt):
+                received.append(json.loads(user_prompt)["contract"])
+                return {"question": "Malformed"}
+        class NeverCritic:
+            def complete_json(self, *_args):
+                raise AssertionError("guard rejects malformed draft")
+        naturalize_one(
+            sample["problem_spec"], author=Author(),
+            critic=NeverCritic(), max_revisions=0,
+            macro_graph=sample["macro_graph"],
+        )
+        contract = received[0]
+        self.assertIn("compiled_macro_task_contract", contract)
+        self.assertIn("macro_dependency_plan", contract)
+        self.assertEqual(
+            contract["compiled_macro_task_contract"]["answer_kind"],
+            "entry_list")
+        self.assertEqual(
+            len(contract["macro_dependency_plan"]),
+            sample["macro_graph"]["macro_task_count"])
+        self.assertNotIn("gold_answer", json.dumps(contract))
+        self.assertNotIn("world", json.dumps(contract))
+
+    def test_fallback_questions_are_private_failures_not_public_successes(self):
+        from envir.reasoning.pipeline import refine_bank
+        from envir.reasoning.pipeline import build_bank
+        from envir.reasoning.question import reference_question
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "seeds.jsonl"
+            with src.open("w", encoding="utf-8") as fp:
+                for ordinal in range(6):
+                    fp.write(json.dumps({
+                        "scenario": {
+                            "topic": f"Fictional Topic {ordinal}",
+                            "domain": "sports",
+                        },
+                        "task_id": f"legacy-{ordinal}",
+                        "source_priors": {"MultiModalQA": {
+                            "record_id": f"fixture-{ordinal}",
+                            "source_modalities": ["table", "image", "text"],
+                        }},
+                    }) + "\n")
+            built = root / "constructed"
+            build_bank(parser().parse_args([
+                "build-v2", "--scenes", str(src), "--target", "6",
+                "--output-dir", str(built), "--no-progress",
+            ]))
+            def fake_author(spec, *, author, critic, max_revisions,
+                            macro_graph=None):
+                return reference_question(spec), {
+                    "status": "accepted" if spec["ordinal"] % 2 else "fallback",
+                    "attempts": 1, "semantic_equivalence_proven": False,
+                }
+            output = root / "reviewed"
+            with patch("envir.reasoning.pipeline._llm_clients",
+                       return_value=(object(), object())), patch(
+                 "envir.reasoning.pipeline.naturalize_one",
+                 side_effect=fake_author):
+                result = refine_bank(parser().parse_args([
+                    "refine-questions", "--scenes", str(built / "scenes.jsonl"),
+                    "--output-dir", str(output),
+                    "--question-api-base", "http://localhost:1000/v1",
+                    "--question-model", "fake", "--no-progress",
+                ]))
+            self.assertEqual(result["status"], "partial")
+            self.assertEqual(result["attempted"], 6)
+            self.assertEqual(result["generated"], 3)
+            self.assertEqual(result["failed"], 3)
+            self.assertEqual(len(read_jsonl(output / "scenes.jsonl")), 3)
+            self.assertEqual(len(read_jsonl(output / "questions.jsonl")), 3)
+            self.assertEqual(len(read_jsonl(output / "failed.jsonl")), 3)
+            self.assertTrue(all(
+                row["question_authoring"]["status"] == "accepted"
+                for row in read_jsonl(output / "scenes.jsonl")))
+
+    def test_scenario_review_fallback_is_not_compiled_or_published(self):
+        from envir.reasoning.pipeline import build_bank
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "seeds.jsonl"
+            with src.open("w", encoding="utf-8") as fp:
+                for i in range(5):
+                    fp.write(json.dumps({
+                        "scenario": {"topic": f"Test Topic {i}",
+                                     "domain": "sports"},
+                        "task_id": f"legacy-{i}",
+                    }) + "\n")
+            class BrokenAuthor:
+                def complete_json(self, *_args):
+                    raise RuntimeError("deliberate review failure")
+            out = root / "out"
+            with patch("envir.reasoning.pipeline._scenario_clients",
+                       return_value=(BrokenAuthor(), BrokenAuthor())):
+                summary = build_bank(parser().parse_args([
+                    "build-v2", "--scenes", str(src), "--target", "5",
+                    "--output-dir", str(out),
+                    "--scenario-api-base", "http://localhost:1000/v1",
+                    "--scenario-model", "fake", "--no-progress",
+                ]))
+            self.assertEqual(summary["status"], "failed")
+            self.assertEqual(summary["attempted"], 5)
+            self.assertEqual(summary["generated"], 0)
+            self.assertEqual(summary["failed"], 5)
+            self.assertEqual(read_jsonl(out / "questions.jsonl"), [])
+            self.assertEqual(len(read_jsonl(out / "failed.jsonl")), 5)
 
 
 class CanonicalReasoningWorkflowTests(unittest.TestCase):
