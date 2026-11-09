@@ -127,7 +127,7 @@ def _out_files(output_dir: Path) -> dict:
     }
 
 
-def build_v2(args) -> dict:
+def build_bank(args) -> dict:
     if args.target < 1 or args.max_records < 1:
         raise ValueError("target and max-records must be positive")
     if bool(args.scenes) == bool(args.mmqa):
@@ -270,7 +270,7 @@ def build_v2(args) -> dict:
     return summary
 
 
-def replay_v2(args) -> dict:
+def replay_bank(args) -> dict:
     rows = read_jsonl(args.scenes, limit=getattr(args, "max_records", None))
     failures = []
     for row in tqdm(rows, desc="Strict replay", unit="task",
@@ -285,7 +285,7 @@ def replay_v2(args) -> dict:
     }
 
 
-def audit_v2(args) -> dict:
+def audit_bank(args) -> dict:
     rows = read_jsonl(args.scenes, limit=getattr(args, "max_records", None))
     reports = [validate_replay(row) for row in tqdm(
         rows, desc="Quality audit", unit="task",
@@ -389,7 +389,7 @@ def _naturalize_entry(scene: dict, *, clients, max_revisions: int) -> dict:
     return updated
 
 
-def naturalize_v2(args) -> dict:
+def refine_bank(args) -> dict:
     if args.output_dir.resolve() == args.scenes.parent.resolve():
         raise ValueError("naturalize-v2 requires a separate output directory")
     if args.question_workers < 1 or args.max_revisions < 0 or args.max_revisions > 8:
@@ -438,3 +438,11 @@ def naturalize_v2(args) -> dict:
     }
     _json(files["summary"], summary)
     return summary
+
+
+# Historic Python callers can keep the old symbol names. The new canonical
+# application imports build_bank/replay_bank/audit_bank/refine_bank directly.
+build_v2 = build_bank
+replay_v2 = replay_bank
+audit_v2 = audit_bank
+naturalize_v2 = refine_bank
