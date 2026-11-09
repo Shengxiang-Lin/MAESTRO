@@ -57,6 +57,10 @@ def reference_question(spec: dict) -> str:
             "Which entries meet all these conditions, and what are their "
             "supporting source observations?"
         ),
+        "category_distribution": (
+            "For each qualifying category, how many entries meet all "
+            "these conditions?"
+        ),
     }
     return " ".join([beginning, condition, questions[family]])
 
@@ -117,7 +121,7 @@ def guard_question(question: str, spec: dict) -> list[str]:
         if not re.search(r"\b(clear|clearance|authoriz)", q, re.I):
             errors.append("clearance_condition_missing")
     family = spec["family"]
-    if family == "coverage_count" and not re.search(r"\b(how many|count|number of)\b", q, re.I):
+    if family in {"coverage_count", "category_distribution"} and not re.search(r"\b(how many|count|number of)\b", q, re.I):
         errors.append("count_answer_scope_missing")
     if family == "priority" and not re.search(r"\b(highest|largest|top|maximum|greatest)\b", q, re.I):
         errors.append("priority_direction_missing")
