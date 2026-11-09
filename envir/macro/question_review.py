@@ -102,18 +102,13 @@ Five evidence-based decisions, each yes/no/uncertain:
   or source modality, and that omission is NOT a failure.
 - source_faithful: no invented concrete entity, source subtype, observed
   media contents, contextual facts or undocumented real-world properties.
-  If semantic_contract contains synthetic_world_specification, the
+  If semantic_contract contains synthetic_world_specification, its
   domain-specific schema, fictional candidate labels, source roles and
   Goal-compatible need were defined BEFORE numeric World sampling. These
   are licensed hypothetical meanings, NOT claims about real-world events,
-  original images or observed historical facts.
-  If semantic_contract contains synthetic_scenario_contract, its
-  source-bound hypothetical setting, candidate kind, field meanings and
-  fixed question_intent are licensed, NOT as historical or media facts.
-  The same allowance applies to legacy synthetic_scene_interpretation.
-  Do not reject approved hypothetical labels merely because they are
-  absent from the Macro TaskGraph. Reject additions beyond the overlay,
-  especially unprovided historical events or claimed image observations.
+  original images or observed historical facts. Do not reject these labels
+  merely because they were not present in the Macro TaskGraph; reject
+  invented new facts, extra operations or observed media claims.
   Generic 'records', 'sources', 'materials' and neutral 'I'm reviewing' are
   permitted, not invented evidence.
 - answer_equivalent: the requested answer has the same substantive result,
@@ -214,9 +209,7 @@ CRITIC_SCHEMA_V44 = {
 # Strict, versioned Question-only semantic review. Legacy audits keep their
 # original schema; this does not modify downstream Task/Trace/Answer work.
 SEMANTIC_REVIEW_POLICY = "semantic_world_natural_question_v3"
-LEGACY_SEMANTIC_REVIEW_POLICY = "taskfirst_semantic_contract_v1"
 SEMANTIC_REVIEW_PIPELINE = "taskfirst_semantic_world_author_critic_v3"
-LEGACY_SEMANTIC_REVIEW_PIPELINE = "taskfirst_question_semantic_author_critic_v1"
 SEMANTIC_AXES = (
     "objective_equivalent",
     "solution_preserved",
@@ -647,7 +640,7 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
             )} for diff in differences
         ],
     }
-    if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}:
+    if policy == SEMANTIC_REVIEW_POLICY:
         axes = {key: value.get(key) for key in SEMANTIC_AXES}
         framing = value.get("user_framing")
         additions = value.get("unsupported_additions")
@@ -673,39 +666,6 @@ def _validate_review(value: dict, *, policy: str | None = None) -> dict:
             **axes,
             "user_framing": framing,
             "unsupported_additions": list(additions),
-        })
-    if policy in {"v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}:
-        alignment = value.get("goal_alignment")
-        sufficiency = value.get("task_sufficiency")
-        framing = value.get("user_framing")
-        additions = value.get("unsupported_additions")
-        if (alignment not in {"same", "changed", "uncertain"}
-                or sufficiency not in {"sufficient", "insufficient", "uncertain"}
-                or framing not in {"user_goal", "workflow_instructions", "robotic"}
-                or not isinstance(additions, list) or len(additions) > 5
-                or any(not isinstance(x, str) or not x.strip()
-                       for x in additions)):
-            raise ValueError("critic_v44_diagnostic_axes_invalid")
-        if verdict == "pass" and (
-            alignment != "same" or sufficiency != "sufficient"
-            or framing != "user_goal" or additions
-        ):
-            raise ValueError("critic_v44_pass_contradicts_diagnostics")
-        if verdict == "revise" and (alignment == "uncertain" or
-                                    sufficiency == "uncertain"):
-            # Doubt must not be transformed into a confident repair decision.
-            raise ValueError("critic_v44_uncertain_as_revision")
-        if verdict == "uncertain" and alignment == "same" and (
-            sufficiency == "sufficient" and framing == "user_goal"
-            and not additions and naturalness == "acceptable"
-            and not differences
-        ):
-            raise ValueError("critic_v44_uncertain_without_issue")
-        output.update({
-            "goal_alignment": alignment,
-            "task_sufficiency": sufficiency,
-            "user_framing": framing,
-            "unsupported_additions": additions[:5],
         })
     return output
 
@@ -972,52 +932,38 @@ def naturalize_scenes(scenes: list[dict], *, author, critic,
 
 
 def validate_naturalized_question(scene: dict) -> list[str]:
-    """Replay-verifiable invariants, not a fresh LLM Critic call."""
+    """Replay-check ONLY the canonical semantic World Question policy.
+
+    Obsolete v4/v5 multi-policy metadata and old post-World Grounding are
+    no longer supported. The final accepted question is still screened
+    by deterministic Goal and surface checks in addition to the Critic
+    judgment; approval is not a formal semantic equivalence proof.
+    """
     meta = scene.get("question_authoring")
     if meta is None:
         return []
     errors = []
     original = reference_question(scene)
     from envir.schema import normalize_label
-    source_original = scene.get("source_priors", {}).get(
+    original_mmqa = scene.get("source_priors", {}).get(
         "MultiModalQA", {}).get("original_question", "")
-    if source_original and normalize_label(scene["question"]) == normalize_label(source_original):
+    if original_mmqa and normalize_label(scene["question"]) == normalize_label(original_mmqa):
         errors.append("naturalized_question_copies_original_mmqa_question")
-    policy = meta.get("review_policy_version")
-    if meta.get("reference_question") != original:
+    if meta.get("review_policy_version") != SEMANTIC_REVIEW_POLICY:
+        errors.append("unknown_question_review_policy")
+    if meta.get("reference_question") != original or (
+            meta.get("reference_sha256") != _fingerprint(original)):
         errors.append("review_reference_drift")
-    if meta.get("reference_sha256") != _fingerprint(original):
-        errors.append("review_reference_fingerprint_mismatch")
-    if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}:
-        try:
-            if meta.get("semantic_contract_sha256") != _fingerprint(semantic_contract(scene)):
-                errors.append("semantic_contract_fingerprint_mismatch")
-        except (ValueError, KeyError, TypeError):
-            errors.append("semantic_contract_unavailable")
-        if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
-            errors.append("review_macro_task_view_changed")
-        expected_pipeline = (
-            LEGACY_SEMANTIC_REVIEW_PIPELINE
-            if policy == LEGACY_SEMANTIC_REVIEW_POLICY
-            else SEMANTIC_REVIEW_PIPELINE
-        )
-        if meta.get("pipeline") != expected_pipeline:
-            errors.append("review_wrong_pipeline")
-    elif policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style"}:
-        if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
-            errors.append("review_macro_task_view_changed")
-        expected_pipeline = {
-            "v4.3_macro_task_critic": "v4_macro_task_aware_author_critic_repair",
-            "v4.4_goal_first_critic": "v4_goal_first_author_diagnostic_critic_repair",
-            "v4.5_graph_primary_benchmark_style": "v4_benchmark_style_graph_primary_author_critic_repair",
-        }[policy]
-        if meta.get("pipeline") != expected_pipeline:
-            errors.append("review_wrong_pipeline")
-    else:
-        # Backward compatibility: V4.1/V4.2 metadata was originally bound
-        # to the old task contract. Don't re-certify it under V4.3.
-        if meta.get("contract_sha256") != _fingerprint(public_task_contract(scene)):
-            errors.append("review_task_contract_changed")
+    try:
+        if meta.get("semantic_contract_sha256") != _fingerprint(
+                semantic_contract(scene)):
+            errors.append("semantic_contract_fingerprint_mismatch")
+    except (KeyError, TypeError, ValueError):
+        errors.append("semantic_contract_unavailable")
+    if meta.get("macro_task_view_sha256") != _fingerprint(macro_task_view(scene)):
+        errors.append("review_macro_task_view_changed")
+    if meta.get("pipeline") != SEMANTIC_REVIEW_PIPELINE:
+        errors.append("review_wrong_pipeline")
     if meta.get("macro_graph_sha256") != _fingerprint(scene["macro_graph"]):
         errors.append("review_macro_graph_changed")
     if meta.get("final_question") != scene["question"]:
@@ -1026,53 +972,36 @@ def validate_naturalized_question(scene: dict) -> list[str]:
         errors.append("review_overclaims_semantic_certification")
     status = meta.get("status")
     if status == "accepted":
-        review = meta.get("accepted_review")
         try:
-            validated = _validate_review(review, policy=policy)
-            if validated["verdict"] != "pass":
+            verdict = _validate_review(
+                meta.get("accepted_review"), policy=SEMANTIC_REVIEW_POLICY)
+            if verdict["verdict"] != "pass":
                 errors.append("review_not_passed")
         except (ValueError, TypeError):
             errors.append("review_invalid_pass_record")
-        # Previously published (pre-v4.2) records retain their old schema
-        # and cannot retroactively claim stronger semantic screening. New
-        # naturalizations are checked against the current stricter guard.
-        if (policy == "v4.2_fidelity_naturalness"
-                and surface_issues(scene, scene["question"], baseline=original)):
-            errors.append("review_surface_mismatch")
-        if (policy in {"v4.3_macro_task_critic", "v4.4_goal_first_critic"}
-                and minimal_question_guards(scene["question"])):
-            errors.append("review_surface_mismatch")
-        if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY} and (
-            minimal_question_guards(scene["question"]) or
-            semantic_surface_issues(scene["question"], semantic_contract(scene)) or
-            (policy == SEMANTIC_REVIEW_POLICY and (
-                question_surface_issues(scene["question"]) or
-                goal_text_issues(scene["goal"]["intent"], scene["question"])
-            ))
-        ):
-            errors.append("review_semantic_surface_guard_failed")
-        if scene["question"] == original and policy not in {
-            "v4.5_graph_primary_benchmark_style", SEMANTIC_REVIEW_POLICY,
-            LEGACY_SEMANTIC_REVIEW_POLICY,
-        }:
-            errors.append("review_not_naturalized")
+        guards = (
+            minimal_question_guards(scene["question"]) +
+            semantic_surface_issues(scene["question"], semantic_contract(scene)) +
+            question_surface_issues(scene["question"]) +
+            goal_text_issues(scene["goal"]["intent"], scene["question"])
+        )
+        if guards:
+            errors.append("question_surface_or_goal_guard_failed")
         if not any(
-            a.get("accepted") and a.get("candidate") == scene["question"]
-            and a.get("critic_review") == review
-            for a in meta.get("audit", [])
+            attempt.get("accepted")
+            and attempt.get("candidate") == scene["question"]
+            and attempt.get("critic_review") == meta.get("accepted_review")
+            for attempt in meta.get("audit", [])
         ):
             errors.append("review_audit_missing_approved_candidate")
     elif status == "fallback":
-        expected = (
-            polished_reference_question(original)
-            if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic", "v4.4_goal_first_critic", "v4.5_graph_primary_benchmark_style", SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}
-            else original
-        )
-        if scene["question"] != expected or meta.get("accepted_review") is not None:
+        fallback = polished_reference_question(original)
+        if (scene["question"] != fallback
+                or meta.get("accepted_review") is not None):
             errors.append("review_fallback_changed_question")
-        if policy in {"v4.2_fidelity_naturalness", "v4.3_macro_task_critic"}:
-            if meta.get("safe_reference_polish_applied") is not (expected != original):
-                errors.append("review_fallback_polish_metadata_mismatch")
+        if meta.get("safe_reference_polish_applied") is not (
+                fallback != original):
+            errors.append("review_fallback_polish_metadata_mismatch")
     else:
         errors.append("review_unknown_status")
-    return errors
+    return sorted(set(errors))
