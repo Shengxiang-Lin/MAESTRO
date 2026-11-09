@@ -14,7 +14,7 @@ from pathlib import Path
 
 from envir.schema import normalize_label
 
-from .pipeline import build_bank, refine_bank, read_jsonl
+from .stages import build_bank, refine_bank, read_jsonl
 from .quality import validate_replay
 from .macro_contract import macro_graph_profile, macro_question_contract
 from .surface_quality import question_language_warnings

@@ -137,7 +137,7 @@ def build_bank(args) -> dict:
         seeds = _seeds_from_scenes(args.scenes, args.max_records)
         seed_source = str(args.scenes)
     else:
-        from envir.macro.scene_catalog import load_scenario_seeds
+        from .sources import load_scenario_seeds
         seeds, _ = load_scenario_seeds(args.mmqa, limit=args.max_records)
         seed_source = str(args.mmqa)
     if len(seeds) < args.target:
@@ -354,7 +354,7 @@ def audit_bank(args) -> dict:
 
 
 def _scenario_clients(args):
-    from environment.question_generation.backend import OpenAICompatibleBackend
+    from .backend import OpenAICompatibleBackend
     author_key = os.environ.get(args.scenario_api_key_env)
     critic_key = (os.environ.get(args.scenario_critic_api_key_env)
                   if args.scenario_critic_api_key_env else author_key)
@@ -374,7 +374,7 @@ def _scenario_clients(args):
 
 
 def _llm_clients(args):
-    from environment.question_generation.backend import OpenAICompatibleBackend
+    from .backend import OpenAICompatibleBackend
     if not args.question_api_base or not args.question_model:
         raise ValueError("both question endpoint and model are required")
     key = os.environ.get(args.question_api_key_env)

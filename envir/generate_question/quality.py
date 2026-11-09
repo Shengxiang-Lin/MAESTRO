@@ -8,7 +8,7 @@ from __future__ import annotations
 import copy
 import json
 
-from envir.macro.program_ir import (
+from .program_ir import (
     MissingSourceError, answer_values, evaluate_program, program_complexity,
 )
 from .compiler import (
