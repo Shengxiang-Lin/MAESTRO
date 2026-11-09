@@ -95,7 +95,44 @@ def question_realization_brief(scene: dict) -> dict:
         ),
     }
     grounding = scene.get("scene_grounding")
-    if grounding and grounding.get("status") == "accepted":
+    if grounding and grounding.get("status") == "accepted" and (
+            grounding.get("version") == "semantic_scenario_contract_v1"):
+        scenario = grounding["scenario"]
+        bindings = grounding["semantic_bindings"]
+        brief["hypothetical_scene"] = {
+            "context": scenario["setting"],
+            "user_role": scenario["user_role"],
+            "motivation": scenario["motivation"],
+            "candidate_kind": bindings["candidate_kind"],
+            "field_meanings": {
+                key: value for key, value in bindings.items()
+                if key != "candidate_kind"
+            },
+            "goal_need": grounding["user_need"],
+            "frozen_question_intent": grounding["question_intent"],
+            "sample_entries": [{
+                "display_label": card["candidate_label"],
+                "record_role": card["source_role"],
+            } for card in grounding["source_cards"]],
+            "provenance": (
+                "A source-bound hypothetical SYNTHETIC scenario. "
+                "No original image/video/audio was observed. "
+                "Use the approved object, attribute and source meanings, "
+                "but never add a new operation, observation, source or "
+                "historical claim."
+            ),
+        }
+        brief["language_guide"] += (
+            " Express this exact information need naturally within the "
+            "approved domain Scenario Contract; preserve every formal "
+            "Goal condition, answer component and candidate scope. "
+            "Do not describe internal implementation steps."
+        )
+        brief["evidence_boundary"] = (
+            "Only approved hypothetical scenario and source-bound labels "
+            "are licensed, not actual historical assertions or observed media."
+        )
+    elif grounding and grounding.get("status") == "accepted":
         brief["hypothetical_scene"] = {
             "context": grounding["scene_context"],
             "candidate_kind": grounding["candidate_kind"],
