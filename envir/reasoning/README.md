@@ -6,6 +6,73 @@ envir/reasoning/. Prior names containing "-v2" remain supported as
 backwards-compatible CLI aliases for existing experiments. Existing teacher
 scene schema versions remain frozen to preserve replay of prior data.
 
+## MacroGraph-first acceptance and diversity (current)
+
+The executable pipeline is:
+
+ProblemSpec -> Reasoning Program -> Synthetic World -> executable Macro
+TaskGraph -> macro-derived Question contract -> optional LLM Author/Critic
+-> accepted final public Question bank.
+
+Macro Tasks control execution of the source-scoped subtask DAG. The Question
+Author and Critic now also receive a read-only contract compiled from this
+DAG (authorized source roles, operator chain, dependencies, and terminal
+answer schema), rather than relying only on descriptive ProblemSpec prose.
+No Gold values or hidden World facts are exposed.
+
+Graph diversity is measured separately from Program signature counts in
+quality_report.json under macro_graph_diversity. It includes an ID-invariant
+DAG/operator-chain signature, number of graph signatures per semantic
+pattern, edge counts, graph repetition and task-count distribution.
+New specs have a frozen macro_plan_variant that changes the actual
+dependency/join-filter order for the three newer semantic patterns.
+Frozen historical specs lacking this key retain exact old replay behavior.
+
+**STRICT ACCEPTANCE:** If Scenario Author/Critic falls back, that candidate
+is a FAILURE and is NOT compiled/published. If Question Author/Critic falls
+back, that candidate is a FAILURE and is NOT written to the final public
+questions.jsonl or successful private scenes.jsonl. Each stage records its
+failures in a PRIVATE failed.jsonl. No "fallback = generated success".
+
+Status and counts are explicit: requested (target), attempted, generated
+(successful/publishable), failed, and status done/partial/failed. Thus a
+target of 100 may yield fewer than 100 publishable Questions, and the run
+must say PARTIAL, not DONE. To collect 100 successes, sample more
+candidates in a separate run and combine only accepted outputs after
+de-duplication; there is not yet an automatic refill mode.
+
+To evaluate existing v4 data without rerunning the LLM:
+
+~~~bash
+git pull origin main
+python -m envir quality \
+  --scenes envir/data/maestro_semantic_100/questions/scenes.jsonl \
+  --output envir/data/maestro_semantic_100/macro_quality_recheck.json
+~~~
+
+This will flag historical Question fallback rows as non-publishable in
+the aggregate report, but will NOT modify old files.
+
+To generate a NEW batch under the strict policy:
+
+~~~bash
+python -m envir generate \
+  --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+  --output-dir envir/data/maestro_macro_strict_100 \
+  --target 100 --max-records 1000 --seed 17 \
+  --difficulty-mix 20,50,30 \
+  --scenario-api-base http://127.0.0.1:8807/v1 \
+  --scenario-model local-qwen3.5-9b \
+  --scenario-workers 8 --scenario-max-revisions 2 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 8 --max-revisions 2
+~~~
+
+The final public file path is reported in summary.json. The corresponding
+questions/failed.jsonl and constructed/failed.jsonl are PRIVATE diagnostics
+and must not be distributed as accepted benchmark questions.
+
 ## Quality repair after the 100-question pilot
 
 The first full Qwen run (100 tasks) showed high Scenario approval but poor
@@ -162,12 +229,14 @@ The unified --output-dir has this structure:
 ~~~text
 maestro_reasoning_100/
   constructed/
+    failed.jsonl                  # PRIVATE rejected scenario candidates
     scenes.jsonl                  # private teacher World, Program, DAG, Gold
     questions.jsonl               # public question and source descriptions
     difficulty_audit.jsonl        # per-task counterfactual/replay diagnostics
     summary.json
   questions/                      # only if Question Author/Critic enabled
-    scenes.jsonl                  # private final, reviewed Question
+    failed.jsonl                  # PRIVATE rejected/fallback Questions
+    scenes.jsonl                  # private accepted final Questions only
     questions.jsonl               # FINAL PUBLIC QUESTION BANK
     difficulty_audit.jsonl
     summary.json

@@ -124,6 +124,7 @@ def _out_files(output_dir: Path) -> dict:
         "public": output_dir / "questions.jsonl",
         "audit": output_dir / "difficulty_audit.jsonl",
         "summary": output_dir / "summary.json",
+        "failed": output_dir / "failed.jsonl",
     }
 
 
@@ -201,8 +202,24 @@ def build_bank(args) -> dict:
     else:
         selected = chosen
 
+    failed_cases = []
+    if scenario_model:
+        valid_specs = []
+        for spec in selected:
+            review = spec.get("scenario_authoring", {})
+            if review.get("status") == "accepted":
+                valid_specs.append(spec)
+            else:
+                rejected["scenario_fallback"] += 1
+                failed_cases.append({
+                    "stage": "scenario", "task_id": spec["task_id"],
+                    "review": review, "problem_spec": spec,
+                })
+        selected_to_compile = valid_specs
+    else:
+        selected_to_compile = selected
     generated = []
-    for spec in tqdm(selected, desc="Compile & difficulty audit", unit="task",
+    for spec in tqdm(selected_to_compile, desc="Compile & difficulty audit", unit="task",
                      disable=getattr(args, "no_progress", False)):
         question = reference_question(spec)
         try:
@@ -210,13 +227,16 @@ def build_bank(args) -> dict:
             generated.append(scene)
         except (ValueError, TypeError, KeyError) as exc:
             rejected[type(exc).__name__ + ":" + str(exc)[:140]] += 1
-    if len(generated) != args.target:
-        raise ValueError(
-            f"only {len(generated)}/{args.target} V2 scenes passed "
-            f"full execution and difficulty checks; rejected={dict(rejected)}"
-        )
+            failed_cases.append({
+                "stage": "execution", "task_id": spec["task_id"],
+                "error_type": type(exc).__name__, "error": str(exc)[:400],
+                "problem_spec": spec,
+            })
+    # Never substitute a deterministic fallback for a failed LLM review.
+    # A partial batch is an explicit partial result, NOT 100% generated.
     args.output_dir.mkdir(parents=True, exist_ok=True)
     _jsonl(files["private"], generated)
+    _jsonl(files["failed"], failed_cases)
     _jsonl(files["public"], [scene["public"] for scene in generated])
     _jsonl(files["audit"], [{
         "task_id": scene["task_id"],
@@ -224,15 +244,21 @@ def build_bank(args) -> dict:
         **scene["difficulty_audit"],
     } for scene in generated])
     summary = {
-        "status": "done",
+        "status": (
+            "done" if len(generated) == args.target else
+            "partial" if generated else "failed"
+        ),
         "pipeline": "maestro_reasoning_program_world_taskgraph_question",
         "seed_source": seed_source,
         "target": args.target,
+        "attempted": len(chosen),
         "generated": len(generated),
+        "failed": len(failed_cases),
+        "failed_file": str(files["failed"]),
         "rejected": dict(rejected),
         "scenario_authoring": dict(Counter(
-            s["problem_spec"].get("scenario_authoring", {}).get("status", "off")
-            for s in generated
+            s.get("scenario_authoring", {}).get("status", "off")
+            for s in selected
         )),
         "difficulty_target_distribution": dict(Counter(
             s["problem_spec"]["difficulty_target"] for s in generated
@@ -248,10 +274,10 @@ def build_bank(args) -> dict:
         "mean_reasoning_operator_depth": round(sum(
             s["difficulty_audit"]["reasoning"]["necessary_structural_operator_depth"]
             for s in generated
-        ) / len(generated), 3),
+        ) / len(generated), 3) if generated else None,
         "mean_macro_task_count": round(sum(
             s["macro_graph"]["macro_task_count"] for s in generated
-        ) / len(generated), 3),
+        ) / len(generated), 3) if generated else None,
         "counterfactual_full_pass": sum(all(
             x["changing_source_changes_answer"] for x in
             scene["difficulty_audit"]["counterfactual_source_tests"].values()
@@ -370,7 +396,7 @@ def _llm_clients(args):
 def _naturalize_entry(scene: dict, *, clients, max_revisions: int) -> dict:
     question, review = naturalize_one(
         scene["problem_spec"], author=clients[0], critic=clients[1],
-        max_revisions=max_revisions,
+        max_revisions=max_revisions, macro_graph=scene["macro_graph"],
     )
     updated = copy.deepcopy(scene)
     updated["question"] = question
@@ -417,20 +443,34 @@ def refine_bank(args) -> dict:
         desc="Question Author/Critic",
         no_progress=getattr(args, "no_progress", False),
     )
+    statuses = Counter(s["question_authoring"]["status"] for s in updated)
+    accepted = [s for s in updated
+                if s["question_authoring"]["status"] == "accepted"]
+    failed = [{
+        "task_id": s["task_id"], "stage": "question",
+        "review": s["question_authoring"],
+        "reference_question": reference_question(s["problem_spec"]),
+        "problem_spec": s["problem_spec"],
+    } for s in updated if s["question_authoring"]["status"] != "accepted"]
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    _jsonl(files["private"], updated)
-    _jsonl(files["public"], [s["public"] for s in updated])
+    _jsonl(files["private"], accepted)
+    _jsonl(files["public"], [s["public"] for s in accepted])
+    _jsonl(files["failed"], failed)
     _jsonl(files["audit"], [{
         "task_id": s["task_id"],
         "difficulty": s["difficulty_audit"],
         "question_authoring": s["question_authoring"],
-    } for s in updated])
-    statuses = Counter(s["question_authoring"]["status"] for s in updated)
+    } for s in accepted])
     summary = {
-        "status": "done",
+        "status": (
+            "done" if len(accepted) == len(rows)
+            else "partial" if accepted else "failed"
+        ),
         "pipeline": "maestro_frozen_program_question_author_critic",
         "source_scenes": str(args.scenes),
-        "generated": len(updated),
+        "attempted": len(updated),
+        "generated": len(accepted),
+        "failed": len(failed),
         "question_results": dict(statuses),
         "world_program_macrograph_unmodified": True,
         "accepted_question_equivalence": "critic_judgment_not_formal_proof",

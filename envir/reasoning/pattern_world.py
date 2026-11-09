@@ -38,6 +38,93 @@ def modality_fields(modality: str, pattern: str):
     raise ValueError("unknown_pattern:" + pattern)
 
 
+def _vary_pattern_core(nodes: list[dict], pattern: str,
+                       variant: int) -> tuple[list[dict], str | None]:
+    """Re-plan *equivalent* relational tasks with real dependency changes.
+
+    This only applies to newly generated specs with macro_plan_variant.
+    Historical v4 specs lacking that field reproduce their original graph.
+    The plans move eligible filters across inner joins or vary which
+    two sources reconcile first; all conditions and Gold values remain
+    unchanged, but task parallelism/dependency shape can differ.
+    """
+    if variant == 0:
+        return nodes, None
+    by_id = {node["id"]: node for node in nodes}
+    final_override = None
+
+    def set_inputs(name, *inputs, **params):
+        node = by_id[name]
+        node["inputs"] = list(inputs)
+        node.update(params)
+
+    if pattern == "time_window":
+        if variant == 1:
+            set_inputs("mapped_events", "register_rows", "codebook_rows")
+            set_inputs("active_events", "mapped_events")
+            set_inputs("events_with_windows", "active_events", "window_rows")
+        elif variant == 2:
+            set_inputs("mapped_events", "register_rows", "codebook_rows")
+            set_inputs("events_with_windows", "mapped_events", "window_rows")
+            set_inputs("active_events", "events_with_windows")
+            set_inputs("after_window_start", "active_events")
+        else:
+            set_inputs("mapped_events", "codebook_rows", "window_rows",
+                       left_on="group_id", right_on="group_id")
+            set_inputs("events_with_windows", "active_events", "mapped_events",
+                       left_on="route_code", right_on="route_code")
+    elif pattern == "status_disagreement":
+        if variant in (1, 2):
+            set_inputs("observation_codes", "register_rows", "codebook_rows",
+                       left_on="route_code", right_on="route_code")
+            if variant == 1:
+                set_inputs("linked_reports", "observation_codes", "observations",
+                           left_on="group_id", right_on="group_id")
+                set_inputs("active_reports", "linked_reports")
+                set_inputs("conflicting_reports", "active_reports")
+            else:
+                set_inputs("active_reports", "observation_codes")
+                set_inputs("linked_reports", "active_reports", "observations",
+                           left_on="group_id", right_on="group_id")
+        else:
+            set_inputs("linked_reports", "register_rows", "observation_codes")
+            set_inputs("active_reports", "linked_reports")
+            set_inputs("conflicting_reports", "active_reports")
+    elif pattern == "dynamic_threshold":
+        if variant in (1, 2):
+            if variant == 1:
+                set_inputs("mapped_entries", "codebook_rows", "policy_rows",
+                           left_on="group_id", right_on="group_id")
+                set_inputs("active_entries", "register_rows")
+                set_inputs("with_thresholds", "active_entries", "mapped_entries",
+                           left_on="route_code", right_on="route_code")
+                set_inputs("qualified_by_threshold", "with_thresholds")
+            else:
+                set_inputs("active_entries", "register_rows")
+                set_inputs("mapped_entries", "active_entries", "codebook_rows")
+                set_inputs("qualified_by_threshold", "with_thresholds")
+        else:
+            set_inputs("qualified_by_threshold", "with_thresholds")
+            set_inputs("active_entries", "qualified_by_threshold")
+            final_override = "active_entries"
+    else:
+        raise ValueError("unknown_pattern_for_plan:" + pattern)
+
+    # Canonical topological sort; changing scan/linear placement without
+    # dependencies alone would NOT create a new graph.
+    remaining = list(nodes)
+    ordered, seen = [], set()
+    while remaining:
+        ready = next((node for node in remaining
+                      if all(parent in seen for parent in node["inputs"])), None)
+        if ready is None:
+            raise ValueError("non_topological_macro_plan_variant")
+        ordered.append(ready)
+        seen.add(ready["id"])
+        remaining.remove(ready)
+    return ordered, final_override
+
+
 def compile_pattern_program(spec: dict) -> dict:
     from .world import _node
     pattern = spec["reasoning_pattern"]
@@ -106,6 +193,12 @@ def compile_pattern_program(spec: dict) -> dict:
     else:
         raise ValueError("unsupported_semantic_pattern:" + pattern)
 
+    plan_variant = spec.get("macro_plan_variant", 0)
+    if plan_variant:
+        nodes, final_override = _vary_pattern_core(nodes, pattern, plan_variant)
+        if final_override:
+            final = final_override
+
     if difficulty == "hard":
         nodes += [
             _node("clearance_rows", "scan", source_id="clearance"),
@@ -130,6 +223,8 @@ def compile_pattern_program(spec: dict) -> dict:
         ],
         "frozen_problem_spec_id": spec["task_id"],
         "semantic_operator_pattern": pattern,
+        **({"macro_plan_variant": plan_variant}
+           if "macro_plan_variant" in spec else {}),
     }
 
 
