@@ -15,7 +15,6 @@ from .graph import compile_contracts, compile_waves, MacroPlanError
 from .question import author_question, task_level_brief
 from .question_review import validate_naturalized_question
 from .evidence import run_clean_tasks, EvidenceExecutionError
-from .scene_grounding import validate_grounding
 from .semantic_world import validate_semantic_world_scene
 
 
@@ -54,6 +53,13 @@ def validate_clean_scene(scene: dict) -> list[str]:
     if source_truth.get("real_multimodal_files") is not False:
         errors.append("false_real_media_claim")
     sources = source_truth.get("sources", {})
+    if scene.get("semantic_world_spec") is not None:
+        from .relational_world import world_relations
+        try:
+            if source_truth.get("relations") != world_relations(sources):
+                errors.append("semantic_world_relation_graph_drift")
+        except (ValueError, KeyError, TypeError):
+            errors.append("semantic_world_relations_malformed")
     for sid, source in sources.items():
         if source.get("source_id") != sid or len(source.get("facts", [])) < 3:
             errors.append("missing_source_facts")
@@ -252,8 +258,7 @@ def validate_clean_scene(scene: dict) -> list[str]:
                     errors.append("evidence_graph_unknown_dependency")
     except (EvidenceExecutionError, KeyError, ValueError, TypeError, IndexError) as exc:
         errors.append("clean_replay_failed:" + type(exc).__name__ + ":" + str(exc)[:130])
-    # An optional post-graph interpretation may label existing facts but must
-    # not alter any World, operation, source grant, EvidenceGraph or Feedback.
-    errors.extend(validate_grounding(scene))
+    # Semantic-first accepted scenes must deterministically recreate the
+    # entire World, including source-cited relational facts, before replay.
     errors.extend(validate_semantic_world_scene(scene))
     return sorted(set(errors))
