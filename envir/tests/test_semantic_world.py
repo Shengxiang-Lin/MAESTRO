@@ -24,7 +24,9 @@ from envir.macro.semantic_world_cli import realize_world
 from envir.macro.question_review import macro_task_view
 from envir.macro.realization_brief import question_realization_brief
 from envir.macro.semantic_contract import semantic_contract
-from envir.macro.validation import validate_clean_scene
+from envir.macro.validation import (
+    validate_clean_scene, validate_original_macroplan_input,
+)
 
 
 def proposal_for(plan):
@@ -249,6 +251,142 @@ class SemanticWorldTests(unittest.TestCase):
         self.assertIsNone(spec)
         self.assertEqual("not_realizable", review["status"])
         self.assertEqual([], validate_clean_scene(self.original))
+
+    def _pre_relational_input(self):
+        """Simulate the former executor's derived result schema only."""
+        older = copy.deepcopy(self.original)
+        tid = self.original["macro_graph"]["tasks"][0]["task_id"]
+        graph = older["task_evidence_graphs"][tid]
+        for node in graph["nodes"]:
+            if node["kind"] == "typed_operation_evaluation":
+                node["result"]["prior_executor_payload"] = True
+                break
+        work = next(iter(older["feedback_bank"][tid]["answer"].values()))
+        work["operation_result"]["prior_executor_payload"] = True
+        return older
+
+    def test_original_macroplan_import_accepts_only_derived_schema_drift(self):
+        older = self._pre_relational_input()
+        assert "semantic_world_spec" not in older
+        strict = validate_clean_scene(older)
+        self.assertIn(
+            "clean_evidence_or_feedback_replay_mismatch:feedback_bank", strict)
+        self.assertIn(
+            "clean_evidence_or_feedback_replay_mismatch:task_evidence_graphs",
+            strict)
+        self.assertEqual([], validate_original_macroplan_input(older))
+        # Actual source value corruption is NOT an executor-format migration.
+        wrong = copy.deepcopy(older)
+        sid = next(iter(wrong["world"]["sources"]))
+        for fact in wrong["world"]["sources"][sid]["facts"]:
+            if fact["field"] == "synthetic_attribute_score":
+                fact["value"] = -100
+                break
+        self.assertIn(
+            "original_macroplan_source_facts_drift:" + sid,
+            validate_original_macroplan_input(wrong))
+        # A forged source grant must remain invalid, even if the old
+        # EvidenceGraph payload is otherwise accepted for re-execution.
+        wrong = copy.deepcopy(older)
+        first_task = wrong["macro_graph"]["tasks"][0]["task_id"]
+        wrong["world"]["source_grants"][first_task].append("invented-source")
+        issues = validate_original_macroplan_input(wrong)
+        self.assertIn("unauthorized_source_grant", issues)
+        # The migration validator never re-approves an existing semantic
+        # World or a naturalized Question.
+        wrong = copy.deepcopy(older)
+        wrong["semantic_world_spec"] = {"version": "invented"}
+        self.assertIn("not_original_presemantic_macroplan",
+                      validate_original_macroplan_input(wrong))
+
+    def test_semantic_world_cli_imports_older_executor_schema_and_normalizes_fallback(self):
+        older = self._pre_relational_input()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "compiled_old.jsonl"
+            source.write_text(
+                json.dumps(older, ensure_ascii=False) + "\n",
+                encoding="utf-8")
+            folder = root / "new_world"
+            args = argparse.Namespace(
+                scenes=source, output_dir=folder, max_records=1,
+                grounding_api_base="http://127.0.0.1:8807/v1",
+                grounding_model="local-qwen3.5-9b",
+                grounding_critic_api_base=None, grounding_critic_model=None,
+                grounding_api_key_env="OPENAI_API_KEY",
+                grounding_critic_api_key_env=None,
+                grounding_workers=1, grounding_temperature=.6,
+                grounding_critic_temperature=0.0,
+                grounding_max_tokens=2000, grounding_critic_max_tokens=1400,
+                grounding_timeout=180, grounding_no_json_mode=False,
+                max_revisions=1, flush_every=1, no_progress=True,
+                overwrite=False)
+            # A rejected semantic candidate must still produce a valid
+            # replayable fallback, with the World unchanged and only
+            # obsolete derived evidence replaced.
+            rejected = {
+                "status": "not_realizable",
+                "reason": "No coherent fictional interpretation can be found.",
+                "scenario": {
+                    k: "" for k in (
+                        "subject_type", "setting", "user_role", "motivation")
+                },
+                "semantic_bindings": {
+                    k: "" for k in (
+                        "candidate_kind", "score", "positive_flag",
+                        "relative_time_index", "group_key")
+                },
+                "source_bindings": [], "user_need": "",
+            }
+            with patch("envir.macro.semantic_world_cli._clients",
+                       return_value=(Author(rejected), Critic())):
+                report = realize_world(args)
+            self.assertEqual(report["statistics"]["not_realizable"], 1)
+            migrated = json.loads((folder / "scenes.jsonl").read_text().strip())
+            self.assertEqual(migrated["world"], older["world"])
+            self.assertNotIn("semantic_world_spec", migrated)
+            self.assertEqual([], validate_clean_scene(migrated))
+            self.assertNotEqual(migrated["feedback_bank"], older["feedback_bank"])
+            self.assertNotEqual(
+                migrated["task_evidence_graphs"], older["task_evidence_graphs"])
+            self.assertEqual(
+                (folder / "accepted_scenes.jsonl").read_text().strip(), "")
+            with patch("envir.macro.semantic_world_cli._clients",
+                       return_value=(Author(rejected), Critic())):
+                resumed = realize_world(args)
+            self.assertEqual(resumed["statistics"]["not_realizable"], 1)
+
+    def test_semantic_world_cli_realizes_from_older_executor_input(self):
+        older = self._pre_relational_input()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            input_file = root / "old.jsonl"
+            input_file.write_text(json.dumps(older) + "\n", encoding="utf-8")
+            out = root / "new"
+            args = argparse.Namespace(
+                scenes=input_file, output_dir=out, max_records=1,
+                grounding_api_base="http://127.0.0.1:8807/v1",
+                grounding_model="local-qwen3.5-9b",
+                grounding_critic_api_base=None, grounding_critic_model=None,
+                grounding_api_key_env="OPENAI_API_KEY",
+                grounding_critic_api_key_env=None,
+                grounding_workers=1, grounding_temperature=.6,
+                grounding_critic_temperature=0.0,
+                grounding_max_tokens=2000, grounding_critic_max_tokens=1400,
+                grounding_timeout=180, grounding_no_json_mode=False,
+                max_revisions=0, flush_every=1, no_progress=True,
+                overwrite=False)
+            with patch("envir.macro.semantic_world_cli._clients",
+                       return_value=(Author(self.proposal), Critic())):
+                report = realize_world(args)
+            self.assertEqual(report["statistics"]["accepted"], 1)
+            created = json.loads((out / "scenes.jsonl").read_text().strip())
+            self.assertNotEqual(created["world"], older["world"])
+            self.assertEqual(created["macro_graph"], older["macro_graph"])
+            self.assertEqual([], validate_clean_scene(created))
+            self.assertEqual(
+                json.loads((out / "accepted_scenes.jsonl").read_text().strip()),
+                created)
 
     def test_streaming_command_and_resume(self):
         with tempfile.TemporaryDirectory() as td:
