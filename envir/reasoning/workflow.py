@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+from difflib import SequenceMatcher
 from collections import Counter
 from pathlib import Path
 
@@ -47,7 +48,9 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     from tqdm.auto import tqdm
 
     results, exact_questions, shapes, programs = [], Counter(), Counter(), Counter()
-    difficulties, families = Counter(), Counter()
+    difficulties, families, patterns = Counter(), Counter(), Counter()
+    openers, reference_repetition = Counter(), Counter()
+    operational_media_fields = Counter()
     modalities, scenario_reviews, question_reviews = Counter(), Counter(), Counter()
     one_source = Counter()
     cf_sensitive = Counter()
@@ -68,7 +71,28 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             if spec:
                 difficulties[spec["difficulty_target"]] += 1
                 families[spec["family"]] += 1
+                patterns[spec.get("reasoning_pattern", "approval_legacy")] += 1
                 shapes[_abstract_question(scene.get("question", ""), spec)] += 1
+                question_text = scene.get("question", "").strip()
+                head = question_text[:90].casefold()
+                openers["starts_as_role"] += int(
+                    head.startswith(("as a ", "as an "))
+                )
+                openers["starts_direct_question"] += int(
+                    head.startswith(("which ", "what ", "how ", "could ",
+                                     "can ", "please ", "for which "))
+                )
+                from .question import reference_question
+                expected = reference_question(spec)
+                proximity = SequenceMatcher(
+                    None, question_text.casefold(), expected.casefold()
+                ).ratio()
+                reference_repetition["identical_reference"] += int(
+                    question_text.casefold() == expected.casefold()
+                )
+                reference_repetition["near_reference_95pct"] += int(
+                    proximity >= 0.95
+                )
                 for role in spec["sources"]:
                     modalities[role["modality"]] += 1
                 scenario_reviews[spec.get("scenario_authoring", {}).get(
@@ -88,6 +112,15 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 key = tuple((node["op"], tuple(node["inputs"]))
                             for node in nodes)
                 programs[str(key)] += 1
+                if spec.get("version") == "maestro.problem_spec.v4":
+                    for node in nodes:
+                        if node["op"] == "compare_fields":
+                            observed = node["right_field"]
+                            if any(x in observed for x in (
+                                "clip_", "utterance_", "region_",
+                                "visual_", "spoken_"
+                            )):
+                                operational_media_fields[spec["reasoning_pattern"]] += 1
             audit = scene.get("difficulty_audit", {})
             if audit:
                 one_source[spec["difficulty_target"]] += int(
@@ -120,6 +153,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
         "first_failures": examples,
         "difficulty_distribution": dict(difficulties),
         "goal_family_distribution": dict(families),
+        "semantic_reasoning_pattern_distribution": dict(patterns),
         "source_modality_distribution": dict(modalities),
         "scenario_authoring": dict(scenario_reviews),
         "question_review": dict(question_reviews),
@@ -144,6 +178,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             "scope": "exact synthetic answer values; not a semantic diversity proof",
         },
         "question_surface": {
+            "opening_patterns": dict(openers),
+            "reference_copying": dict(reference_repetition),
             "unique_normalized_questions": len(exact_questions),
             "duplicate_normalized_questions": sum(
                 count - 1 for count in exact_questions.values()
@@ -155,6 +191,10 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             "scope": "heuristic_surface_signatures_not_paraphrase_equivalence",
         },
         "reasoning": {
+            "media_specific_observation_predicates_used": dict(
+                operational_media_fields
+            ),
+            "semantic_pattern_count": len(patterns),
             "unique_structural_program_signatures": len(programs),
             "top_repeated_structural_programs": [
                 {"occurrences": count, "signature": shape[:200]}
