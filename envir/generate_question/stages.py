@@ -15,6 +15,10 @@ from envir.schema import normalize_label
 from .spec import difficulty_sequence, make_spec
 from .question import naturalize_one, reference_question
 from .quality import compile_and_validate, validate_replay
+from envir.streaming import (
+    OrderedJournal, StreamingError, file_digest,
+    output_lock, run_ordered, stable_signature,
+)
 
 
 def _parallel_ordered(items, job, *, workers: int, desc: str,
@@ -106,8 +110,13 @@ def construct_scenes(args) -> dict:
             f"not enough scene/topic seeds: {len(seeds)} for target {args.target}"
         )
     files = _out_files(args.output_dir)
+    checkpoint = args.output_dir / "scenario_authoring_progress.json"
     if not args.overwrite and any(p.exists() for p in files.values()):
-        raise FileExistsError("Destination already exists; use --overwrite")
+        if files["summary"].exists() or not checkpoint.exists():
+            raise FileExistsError(
+                "Destination already contains a completed or legacy scene bank; "
+                "choose a new directory or enable overwrite"
+            )
     sequence = difficulty_sequence(
         target=args.target, mix=_parse_mix(args.difficulty_mix),
         run_seed=args.seed,
@@ -155,11 +164,54 @@ def construct_scenes(args) -> dict:
                 spec, author=clients[0], critic=clients[1],
                 max_revisions=args.scenario_max_revisions,
             )[0]
-        selected = _parallel_ordered(
-            chosen, enrich, workers=args.scenario_workers,
-            desc="Scenario Author/Critic",
-            no_progress=getattr(args, "no_progress", False),
-        )
+        signature = stable_signature({
+            "stage": "scenario_author_critic.v1",
+            "specs": chosen,
+            "model": args.scenario_model,
+            "api_base": args.scenario_api_base,
+            "critic_model": args.scenario_critic_model,
+            "critic_api_base": args.scenario_critic_api_base,
+            "max_revisions": args.scenario_max_revisions,
+            "scenario_code": file_digest(Path(__file__).with_name("scenario.py")),
+            "stage_code": file_digest(Path(__file__)),
+            "backend_code": file_digest(Path(__file__).with_name("backend.py")),
+        })
+        task_ids = [spec["task_id"] for spec in chosen]
+        with output_lock(args.output_dir, "scenario_authoring"):
+            with OrderedJournal(
+                args.output_dir, "scenario_authoring", signature, task_ids,
+                flush_every=getattr(args, "flush_every", 1),
+                restart=args.overwrite,
+            ) as journal:
+                run_ordered(
+                    chosen, enrich,
+                    lambda spec: (
+                        spec.get("scenario_authoring", {}).get("status") == "accepted",
+                        spec,
+                        {"status": spec.get("scenario_authoring", {}).get("status",
+                                                                         "failed")},
+                    ),
+                    journal=journal,
+                    workers=args.scenario_workers,
+                    desc="Scenario Author/Critic",
+                    no_progress=getattr(args, "no_progress", False),
+                    on_exception=lambda idx, exc: (
+                        False,
+                        {
+                            **chosen[idx],
+                            "scenario_authoring": {
+                                "status": "failed",
+                                "failures": [{
+                                    "stage": "backend",
+                                    "error_type": type(exc).__name__,
+                                    "error": str(exc)[:220],
+                                }],
+                            },
+                        },
+                        {"status": "failed", "error": str(exc)[:220]},
+                    ),
+                )
+                selected = [payload for _, payload, _ in journal.replay()]
     else:
         selected = chosen
 
@@ -179,31 +231,52 @@ def construct_scenes(args) -> dict:
         selected_to_compile = valid_specs
     else:
         selected_to_compile = selected
+    # Compilation is fast/deterministic, so rerun it from the committed
+    # Scenario journal on resume; expensive LLM Scenario calls are reused.
+    # Unlike before, even compiled scenes and failures are written immediately.
     generated = []
-    for spec in tqdm(selected_to_compile, desc="Compile & difficulty audit", unit="task",
-                     disable=getattr(args, "no_progress", False)):
-        question = reference_question(spec)
-        try:
-            scene = compile_and_validate(spec, question)
-            generated.append(scene)
-        except (ValueError, TypeError, KeyError) as exc:
-            rejected[type(exc).__name__ + ":" + str(exc)[:140]] += 1
-            failed_cases.append({
-                "stage": "execution", "task_id": spec["task_id"],
-                "error_type": type(exc).__name__, "error": str(exc)[:400],
-                "problem_spec": spec,
-            })
-    # Never substitute a deterministic fallback for a failed LLM review.
-    # A partial batch is an explicit partial result, NOT 100% generated.
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    _jsonl(files["private"], generated)
-    _jsonl(files["failed"], failed_cases)
-    _jsonl(files["public"], [scene["public"] for scene in generated])
-    _jsonl(files["audit"], [{
-        "task_id": scene["task_id"],
-        "scenario_authoring": scene["problem_spec"].get("scenario_authoring"),
-        **scene["difficulty_audit"],
-    } for scene in generated])
+    with (files["private"].open("w", encoding="utf-8") as private,
+          files["public"].open("w", encoding="utf-8") as public,
+          files["audit"].open("w", encoding="utf-8") as audit,
+          files["failed"].open("w", encoding="utf-8") as failed):
+        for record in failed_cases:
+            failed.write(json.dumps(record, ensure_ascii=False) + "\n")
+        with tqdm(selected_to_compile, desc="Compile & difficulty audit",
+                  unit="task", disable=getattr(args, "no_progress", False),
+                  dynamic_ncols=True) as bar:
+            for spec in bar:
+                question = reference_question(spec)
+                try:
+                    scene = compile_and_validate(spec, question)
+                    generated.append(scene)
+                    private.write(json.dumps(scene, ensure_ascii=False) + "\n")
+                    public.write(json.dumps(scene["public"], ensure_ascii=False) + "\n")
+                    audit.write(json.dumps({
+                        "task_id": scene["task_id"],
+                        "scenario_authoring": (
+                            scene["problem_spec"].get("scenario_authoring")
+                        ),
+                        **scene["difficulty_audit"],
+                    }, ensure_ascii=False) + "\n")
+                except (ValueError, TypeError, KeyError) as exc:
+                    rejected[type(exc).__name__ + ":" + str(exc)[:140]] += 1
+                    case = {
+                        "stage": "execution", "task_id": spec["task_id"],
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:400],
+                        "problem_spec": spec,
+                    }
+                    failed_cases.append(case)
+                    failed.write(json.dumps(case, ensure_ascii=False) + "\n")
+                for writer in (private, public, audit, failed):
+                    writer.flush()
+                bar.set_postfix({
+                    "accepted": len(generated),
+                    "rejected": len(failed_cases),
+                    "written": len(generated) + len(failed_cases),
+                }, refresh=False)
+
     summary = {
         "status": (
             "done" if len(generated) == args.target else
