@@ -63,6 +63,58 @@ compatibility. Repeated answers, synthetic category labels, and step-level
 Macro Tasks remain research limitations; real Agent difficulty and truly
 3-9 coarsened Macro Tasks are not yet established.
 
+## Semantic relation grammar and Question Intent experiment
+
+This generator freezes a v4 ProblemSpec with a meaningful semantic pattern,
+rather than treating every multi-source task as category approval:
+
+- approval: registered entries are mapped and independently approved;
+  evidence-reconcile answers include source fact references.
+- time_window: registered event steps fall inside independently supplied
+  simulated source intervals, using BOTH lower and upper boundaries.
+- status_disagreement: two independent status observations differ after
+  cross-source group resolution.
+- dynamic_threshold: each measurement meets the independently supplied
+  minimum threshold for its mapped group.
+
+Video, audio and image annotation-specific fields enter actual Gold Program
+predicates where those simulated source roles are selected. No real media
+content is accessed.
+
+Structured Question Intent specifies mandatory predicates and the typed
+answer. The Author receives Intent and rhetorical guidance instead of a
+ready-made Question in its first draft; the Critic receives the frozen
+reference and can enforce equivalence. A template may be supplied to the
+Author for a repair attempt. Critic acceptance is not proof of equivalence.
+
+New Macro Tasks fuse up to three consecutive unary dependent IR nodes into
+fully EXECUTABLE composite tasks. Source grants are still explicit, and
+all primitive operations are replayed; the latest scenes require <=9
+Macro Tasks. Old v2/v3 scenes replay unchanged.
+
+Create a NEW experiment output directory:
+
+~~~bash
+git pull origin main
+
+python -m envir generate \
+  --mmqa data/world-source/MultiModalQA/MMQA_train.jsonl.gz \
+  --output-dir envir/data/maestro_semantic_100 \
+  --target 100 --max-records 1000 --seed 17 \
+  --difficulty-mix 20,50,30 \
+  --scenario-api-base http://127.0.0.1:8807/v1 \
+  --scenario-model local-qwen3.5-9b \
+  --scenario-workers 8 --scenario-max-revisions 2 \
+  --question-api-base http://127.0.0.1:8807/v1 \
+  --question-model local-qwen3.5-9b \
+  --question-workers 8 --max-revisions 2
+~~~
+
+Inspect envir/data/maestro_semantic_100/quality_report.json for true semantic
+pattern distributions, simulated media predicates, answer diversity, task
+budgets, copied Question templates and repeated openings. Manually sample
+final Question surfaces too: surface diagnostics are heuristic.
+
 ## 0. Inputs and local LLM
 
 MultiModalQA is used for topic and source-role metadata, not original answers
