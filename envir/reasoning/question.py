@@ -246,8 +246,12 @@ def guard_question(question: str, spec: dict) -> list[str]:
     errors = []
     if len(q) < 55 or len(q) > 1200:
         errors.append("question_length_out_of_bounds")
-    if not is_explicit_user_request(q):
-        errors.append("question_not_actionable_request")
+    if spec.get("version") == VERSION:
+        if not is_explicit_user_request(q):
+            errors.append("question_not_actionable_request")
+    elif "?" not in q:
+        # Keep historical v2/v3 guard semantics reproducible.
+        errors.append("question_missing_interrogative")
     if spec.get("version") == VERSION:
         errors.extend(question_language_warnings(q, spec))
     if not topic_mentioned(q, spec["scenario"]["topic"]):
@@ -257,7 +261,7 @@ def guard_question(question: str, spec: dict) -> list[str]:
     pattern = spec.get("reasoning_pattern", "approval")
     latest = spec.get("version") == VERSION
     if latest and pattern != "approval":
-        if not re.search(r"\b(code|codes|glossary|map|mapped|mapping|translat|resolv)\b", q, re.I):
+        if not re.search(r"\b(codes?|glossary|map|mapped|mapping|crosswalk|translat\w*|resolv\w*)\b", q, re.I):
             errors.append("cross_source_code_mapping_missing")
         if pattern == "time_window":
             if not re.search(r"\b(window|interval|range|between|within|inside|boundary|boundaries)\b", q, re.I):
