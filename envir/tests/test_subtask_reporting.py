@@ -599,6 +599,14 @@ class ReportingBatchTests(unittest.TestCase):
                 json.loads((output / "summary.json").read_text())["status"],
                 "running",
             )
+            with self.assertRaises(StreamingError):
+                naturalize_subtasks(
+                    source_subtasks=oracle, source_scene_index=index,
+                    output_dir=output, api_base="http://mock/v1",
+                    model="other", clients=(ReportAuthor(), ReportCritic()),
+                    workers=1, no_progress=True,
+                    overwrite=False,
+                )
             resumed_author = ReportAuthor()
             final = naturalize_subtasks(
                 source_subtasks=oracle, source_scene_index=index,
@@ -614,13 +622,12 @@ class ReportingBatchTests(unittest.TestCase):
                 len((output / "subtasks.jsonl").read_text().splitlines()),
                 final["published_macro_tasks"],
             )
-            with self.assertRaises(StreamingError):
+            with self.assertRaises(FileExistsError):
                 naturalize_subtasks(
                     source_subtasks=oracle, source_scene_index=index,
                     output_dir=output, api_base="http://mock/v1",
-                    model="other", clients=(ReportAuthor(), ReportCritic()),
+                    model="mock", clients=(ReportAuthor(), ReportCritic()),
                     workers=1, no_progress=True,
-                    overwrite=False,
                 )
 
     def test_successful_batch_retains_one_response_per_oracle_macro(self):
