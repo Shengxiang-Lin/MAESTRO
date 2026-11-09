@@ -84,7 +84,8 @@ def _canonical(value) -> str:
                       separators=(",", ":"))
 
 
-def _teacher_contract(record: dict, *, question: str | None) -> dict:
+def _teacher_contract(record: dict, *, question: str | None,
+                      is_terminal: bool) -> dict:
     trace = record["trace_summary"]
     rows = record["answer"]
     if not isinstance(rows, list) or not isinstance(trace, dict):
@@ -107,7 +108,7 @@ def _teacher_contract(record: dict, *, question: str | None) -> dict:
     return {
         "overall_question_for_context_only": question,
         "macro_task_id": record["macro_task_id"],
-        "macro_is_terminal": None,  # only the parent graph knows this
+        "macro_is_terminal": is_terminal,
         "upstream_handoffs": record["depends_on"],
         "authorized_direct_sources": record["authorized_source_ids"],
         "available_provenance_sources": sorted(allowed),
@@ -164,6 +165,7 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
 def author_critic_report(
     teacher_record: dict, *, question: str | None,
     author, critic, max_revisions: int = 2,
+    is_terminal: bool = False,
 ) -> tuple[dict | None, dict]:
     """Generate, check and repair a Main-facing finish result.
 
@@ -172,7 +174,9 @@ def author_critic_report(
     """
     if type(max_revisions) is not int or not 0 <= max_revisions <= 8:
         raise ValueError("max_revisions must be 0..8")
-    contract = _teacher_contract(teacher_record, question=question)
+    contract = _teacher_contract(
+        teacher_record, question=question, is_terminal=is_terminal
+    )
     contract["all_evidence_refs"] = sorted({
         ref for step in teacher_record["trace_summary"]["steps"]
         for ref in step["supporting_fact_refs"]
@@ -222,7 +226,7 @@ def author_critic_report(
                 row = deepcopy(teacher_record)
                 row["answer_text"] = verified_result
                 row["trace_summary"]["narrative"] = summary_text
-                row["subagent_response"] = {
+                row["finish_result"] = {
                     "result": verified_result,
                     "status": "done",
                     "summary": summary_text,
