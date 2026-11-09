@@ -7,6 +7,11 @@ from pathlib import Path
 
 from .config import DEFAULT_CONFIG, args_from_config, load_config
 from .generate_question.pipeline import generate_questions, audit_questions
+from .implement_subtask.config import (
+    DEFAULT_CONFIG as STAGE2_CONFIG,
+    load_config as load_stage2_config,
+)
+from .implement_subtask.pipeline import materialize_subtasks
 
 
 def parser() -> argparse.ArgumentParser:
@@ -31,12 +36,36 @@ def parser() -> argparse.ArgumentParser:
     audit.add_argument("--output", type=Path,
                        help="Default: <generation.output_dir>/quality_recheck.json")
     audit.add_argument("--no-progress", action="store_true")
+    subtask = sub.add_parser(
+        "implement-subtasks",
+        help="Stage 2: exact per-Macro answer and evidence-grounded trace_summary",
+    )
+    subtask.add_argument("--config", type=Path, default=STAGE2_CONFIG)
+    subtask.add_argument("--scenes", type=Path,
+                         help="Override the accepted frozen Stage-1 scene bank")
+    subtask.add_argument("--output-dir", type=Path,
+                         help="Override Stage-2 output directory")
+    subtask.add_argument("--max-records", type=int)
+    subtask.add_argument("--no-progress", action="store_true")
     return root
 
 
 def main(argv: list[str] | None = None) -> int:
     p = parser()
     cli = p.parse_args(argv)
+    if cli.command == "implement-subtasks":
+        options = load_stage2_config(cli.config)
+        if cli.scenes is not None:
+            options["scenes_path"] = cli.scenes
+        if cli.output_dir is not None:
+            options["output_dir"] = cli.output_dir
+        if cli.max_records is not None:
+            options["max_records"] = cli.max_records
+        if cli.no_progress:
+            options["no_progress"] = True
+        result = materialize_subtasks(**options)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["status"] in {"done", "partial"} else 1
     config = load_config(cli.config)
     if cli.command == "generate-questions":
         options = args_from_config(
