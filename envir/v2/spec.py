@@ -85,6 +85,8 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
                     or f"topic-{ordinal}")
     rng = random.Random(int(digest(run_seed, ordinal, record_id, "v2")[:15], 16))
     family = FAMILIES[(ordinal + run_seed) % len(FAMILIES)]
+    if difficulty == "easy" and family == "category_distribution":
+        family = "coverage_count"  # no cross-source category key in Easy
     role, purpose, entity_kind = source_profile(seed_record.get("domain_hint", ""))
     media = _choose_media(seed_record, ordinal, rng)
     scenario = {
