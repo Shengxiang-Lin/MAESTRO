@@ -21,6 +21,9 @@ from environment.question_generation.backend import BackendError
 from .question import author_question, task_level_brief
 from .semantic_contract import semantic_contract, semantic_surface_issues
 from .realization_brief import question_realization_brief
+from .goal_invariants import (
+    goal_text_issues, question_surface_issues, goal_rules,
+)
 
 
 AUTHOR_SYSTEM = """You are an experienced benchmark QUESTION WRITER.
@@ -52,6 +55,18 @@ WRITE THE QUESTION AFRESH:
   entry labels and domain field meanings as fictional scenario language.
   These labels are source-bound synthetic interpretations, NOT historical
   facts or observed media contents. Do not invent anything beyond them.
+- When using the pre-approved semantic World, preserve the Python-authored
+  execution rules: comparison/prioritization = DESCENDING recorded score;
+  temporal = ASCENDING relative order; feasibility = positive mark AND
+  score>=50; intersection = shared CATEGORIES across sources, NOT
+  same person; composition = EXPLICIT directed references, NOT category
+  equality or proof of same entity.
+- Do not expose any backend WorkProduct/Report class (PriorityReport,
+  ComparativeReport etc.), fields with underscores, synthetic/simulator
+  markers, machine source/candidate keys, agent/task labels, or internal
+  implementation terms. These are NEVER natural user questions.
+- If a source is merely an image/video modality handle, NEVER say what
+  the unseen media visually shows, proves, or confirms.
 - Keep intermediate research, matching and verification steps implicit.
 
 PRESERVE ONLY THESE HARD SEMANTICS:
@@ -102,7 +117,13 @@ Five evidence-based decisions, each yes/no/uncertain:
   Generic 'records', 'sources', 'materials' and neutral 'I'm reviewing' are
   permitted, not invented evidence.
 - answer_equivalent: the requested answer has the same substantive result,
-  full ranking/sequence/count/filters, and candidate scope. Source citations
+  full ranking/sequence/count/filters, and candidate scope. Enforce EXACT
+  execution_rules from the contract, especially DESCENDING score, AND
+  eligibility, relative chronology, category-vs-entity distinction and
+  directed cross-source references. Reject "shared category means same
+  player/person", invented image observations, and accidental question
+  text such as PriorityReport, synthetic, or relative_time_index.
+  Source citations
   and verification still belong to the frozen solver contract, but need NOT
   be explicitly requested in a natural user Question; omitting those words
   is not a task change. Do not infer missing substantive result components.
@@ -192,9 +213,9 @@ CRITIC_SCHEMA_V44 = {
 
 # Strict, versioned Question-only semantic review. Legacy audits keep their
 # original schema; this does not modify downstream Task/Trace/Answer work.
-SEMANTIC_REVIEW_POLICY = "taskfirst_natural_question_v2"
+SEMANTIC_REVIEW_POLICY = "semantic_world_natural_question_v3"
 LEGACY_SEMANTIC_REVIEW_POLICY = "taskfirst_semantic_contract_v1"
-SEMANTIC_REVIEW_PIPELINE = "taskfirst_natural_question_author_critic_v2"
+SEMANTIC_REVIEW_PIPELINE = "taskfirst_semantic_world_author_critic_v3"
 LEGACY_SEMANTIC_REVIEW_PIPELINE = "taskfirst_question_semantic_author_critic_v1"
 SEMANTIC_AXES = (
     "objective_equivalent",
@@ -781,6 +802,8 @@ def naturalize_one(scene: dict, *, author, critic,
         row["candidate"] = candidate
         issues = minimal_question_guards(candidate)
         issues.extend(semantic_surface_issues(candidate, contract))
+        issues.extend(question_surface_issues(candidate))
+        issues.extend(goal_text_issues(scene["goal"]["intent"], candidate))
         from envir.schema import normalize_label
         source_original = scene.get("source_priors", {}).get(
             "MultiModalQA", {}).get("original_question", "")
@@ -799,6 +822,7 @@ def naturalize_one(scene: dict, *, author, critic,
             "candidate_question": candidate,
             "macro_task_graph": task_view,
             "semantic_contract": contract,
+            "goal_execution_rules": goal_rules(scene["goal"]["intent"]),
             "review_focus": (
                 "Check semantic preservation, not lexical similarity. A natural "
                 "Question may omit source modalities and internal steps, while "
@@ -1020,7 +1044,11 @@ def validate_naturalized_question(scene: dict) -> list[str]:
             errors.append("review_surface_mismatch")
         if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY} and (
             minimal_question_guards(scene["question"]) or
-            semantic_surface_issues(scene["question"], semantic_contract(scene))
+            semantic_surface_issues(scene["question"], semantic_contract(scene)) or
+            (policy == SEMANTIC_REVIEW_POLICY and (
+                question_surface_issues(scene["question"]) or
+                goal_text_issues(scene["goal"]["intent"], scene["question"])
+            ))
         ):
             errors.append("review_semantic_surface_guard_failed")
         if scene["question"] == original and policy not in {
