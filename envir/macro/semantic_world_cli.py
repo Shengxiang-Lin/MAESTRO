@@ -15,8 +15,9 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from .scene_grounding import fingerprint
-from .semantic_world import realize_spec_one, compile_semantic_world_scene
+from .semantic_world import (
+    fingerprint, realize_spec_one, compile_semantic_world_scene,
+)
 from .validation import validate_clean_scene
 
 
@@ -68,9 +69,29 @@ def _run_signature(args, scenes: list[dict]) -> str:
 
 
 def _clients(args):
-    # Reuse the same OpenAI-compatible backend and key management as v4.
-    from .scene_grounding_cli import _clients as construct
-    return construct(args)
+    """Two independent OpenAI-compatible schema-generation clients."""
+    from environment.question_generation.backend import OpenAICompatibleBackend
+    author_key = os.environ.get(args.grounding_api_key_env)
+    critic_key = (
+        os.environ.get(args.grounding_critic_api_key_env)
+        if args.grounding_critic_api_key_env else author_key
+    )
+    def build(url, model, temperature, tokens, key):
+        return OpenAICompatibleBackend(
+            base_url=url, model=model, api_key=key,
+            temperature=temperature, max_tokens=tokens,
+            timeout=args.grounding_timeout,
+            json_mode=not args.grounding_no_json_mode,
+        )
+    return (
+        build(args.grounding_api_base, args.grounding_model,
+              args.grounding_temperature, args.grounding_max_tokens,
+              author_key),
+        build(args.grounding_critic_api_base or args.grounding_api_base,
+              args.grounding_critic_model or args.grounding_model,
+              args.grounding_critic_temperature,
+              args.grounding_critic_max_tokens, critic_key),
+    )
 
 
 def realize_world(args):
