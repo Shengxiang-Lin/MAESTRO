@@ -12,6 +12,7 @@ import re
 
 from .spec import spec_issues, VERSION as SPEC_VERSION
 from .intent import intent_contract
+from .surface_quality import unlicensed_calendar_years
 
 AUTHOR_SYSTEM = """Design one coherent, concrete FICTIONAL information-work scenario
 based on a topic label and a FROZEN reasoning contract. This is a simulated
@@ -31,7 +32,10 @@ convert time-window matching or disagreement into category approval.
 There are no real media to perceive; images, video and audio are simulated
 structured annotations. Do not assert what original media actually shows.
 Do not add any specific observed fact, person, historical year/date, filter,
-threshold, score, or condition; those values do not exist yet.
+threshold, score, or condition; those values do not exist yet. In
+particular, do not invent a calendar year (e.g. 2024), school term,
+fiscal year or named historical event unless it appears verbatim in the
+FROZEN original topic.
 
 Prefer topic-specific plausible user roles, purposeful evidence use, and
 sources with distinguishable roles rather than generic boilerplate.
@@ -52,6 +56,10 @@ Return JSON only:
  "topic_coherent":true,"same_relation_semantics":true,
  "source_faithful":true,"no_unlicensed_facts":true,
  "reason":"short reason"}
+Years and named dates absent from the ORIGINAL topic are unlicensed,
+even if framed as an invented project cycle; do not assume the simulator
+contains them. An appealing narrative must not imply an extra
+eligibility rule or unsupported source content.
 Pass only if all four booleans are true."""
 
 
@@ -77,6 +85,17 @@ def _narrative_issues(spec: dict, proposal: dict) -> list[str]:
     if isinstance(narrative.get("setting"), str):
         if topic.casefold() not in narrative["setting"].casefold():
             errors.append("topic_missing_from_setting")
+    # Do not authorize a new historical anchor simply because both
+    # Scenario Author and Critic happen to find it plausible.
+    if spec.get("version") == SPEC_VERSION:
+        proposed_text = " ".join(
+            str(narrative.get(key, "")) for key in keys
+        ) + " " + " ".join(
+            str(x.get("title", "")) for x in titles
+            if isinstance(x, dict)
+        )
+        if unlicensed_calendar_years(proposed_text, topic):
+            errors.append("unlicensed_calendar_year_not_in_topic")
     source_ids = {s["source_id"] for s in spec["sources"]}
     if (len(titles) != len(source_ids) or
             any(not isinstance(x, dict) or set(x) != {"source_id", "title"}
