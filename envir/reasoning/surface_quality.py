@@ -83,7 +83,7 @@ def unsupported_macro_predicates(question: str, spec: dict) -> list[str]:
         if re.search(
             r"\b(?:approved|approval[- ]verified|authorized)\b"
             r"(?:\s+\w+){0,3}\s+"
-            r"(?:group|session|window|interval|policy)\b",
+            r"(?:groups?|sessions?|windows?|intervals?|polic(?:y|ies))\b",
             question, re.I,
         ):
             problems.append("unlicensed_independent_approval_filter")
