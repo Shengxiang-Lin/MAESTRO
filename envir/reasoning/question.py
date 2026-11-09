@@ -11,6 +11,8 @@ from difflib import SequenceMatcher
 
 from .spec import spec_issues, VERSION
 from .intent import intent_contract, style_contract
+from .surface_quality import (question_language_warnings,
+                              normalize_question_punctuation)
 
 
 def reference_question(spec: dict) -> str:
@@ -157,7 +159,11 @@ active records, code-to-category translation and category approval when
 those sources exist, separate clearance when provided, and the exact final
 answer type (count, list, highest recorded priority, or earliest relative
 ordering). No fabricated additional filters. A hypothetical problem about
-a real topic does NOT assert historical facts.
+a real topic does NOT assert historical facts. NEVER add calendar years,
+seasons, dated cycles or concrete thresholds that the original topic
+and frozen intent do not provide. Do not invent an additional eligibility
+criterion such as a funding tier or certification that is absent from
+the required predicates.
 
 For latest-version requests, you receive a STRUCTURED FROZEN USER INTENT:
 constraints, typed output, source roles and a style preference. Write an
@@ -173,11 +179,15 @@ Preserve the word "active" and exactly the cross-source relation required
 by the structured intent: approval, temporal window, binary disagreement,
 or per-group threshold. Do NOT substitute one operation for another.
 Preserve distinct entry-specific clearance for hard cases.
+Temporal boundaries are INCLUSIVE: a step equal to the start or end
+qualifies. NEVER say "strictly inside" or "strictly within" when also
+describing a closed or inclusive interval. Use "within the inclusive
+interval" or "between the endpoints, inclusive".
 Preserve counting, category grouping, priority MAXIMUM, or chronological
 EARLIEST directions when applicable.
 
-Return ONE complete, grammatical English question (55-1200 characters), with
-a question mark. Do not return a summary, classification, fragment, table,
+Return ONE complete, grammatical English question (55-1200 characters),
+ending with exactly one question mark. Do not return a summary, classification, fragment, table,
 answer, explanation, or commentary. If unsure, closely paraphrase the frozen
 reference question without inventing facts. End with '?'.
 
@@ -197,6 +207,14 @@ Output JSON only:
  "same_answer_scope":true,
  "natural":true,
  "reason":"one sentence"}
+Check substantive semantics independently: (a) required source mapping,
+(b) the exact comparator, including inclusive temporal endpoints,
+(c) hard entry-specific clearance if required, (d) exact output type,
+(e) no invented calendar year or new classification/eligibility rule.
+The candidate must be grounded in the frozen topic/conditions, not in
+unsupported elaborations supplied by an earlier scene paraphrase.
+A candidate saying "strictly inside" while also claiming inclusive
+boundaries MUST be rejected. Surface fluency alone is insufficient.
 Only pass if all four booleans are true."""
 
 
@@ -210,6 +228,8 @@ def guard_question(question: str, spec: dict) -> list[str]:
         errors.append("question_length_out_of_bounds")
     if "?" not in q:
         errors.append("question_missing_interrogative")
+    if spec.get("version") == VERSION:
+        errors.extend(question_language_warnings(q, spec))
     if spec["scenario"]["topic"].casefold() not in q.casefold():
         errors.append("topic_missing")
     if not re.search(r"\bactive\b", q, flags=re.I):
@@ -296,7 +316,9 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2) -> tup
         }, ensure_ascii=False)
         try:
             candidate = author.complete_json(AUTHOR_SYSTEM, user_text)
-            q = candidate.get("question")
+            raw = candidate.get("question")
+            q = (normalize_question_punctuation(raw)
+                 if isinstance(raw, str) else raw)
             surface = guard_question(q, spec)
             if (latest and isinstance(q, str)
                     and SequenceMatcher(None, q.strip().casefold(),
@@ -311,6 +333,9 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2) -> tup
                     ),
                     "candidate_preview": (
                         q[:320] if isinstance(q, str) else repr(q)[:120]
+                    ),
+                    "punctuation_normalized": (
+                        isinstance(raw, str) and q != raw.strip()
                     ),
                 })
                 continue
@@ -328,6 +353,9 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2) -> tup
                     all(decision.get(axis) is True for axis in axes)):
                 return q.strip(), {
                     "status": "accepted", "attempts": attempt + 1,
+                    "punctuation_normalized": (
+                        isinstance(raw, str) and q != raw.strip()
+                    ),
                     "review": decision,
                     "semantic_equivalence_proven": False,
                 }

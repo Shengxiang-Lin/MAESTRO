@@ -16,6 +16,7 @@ from envir.schema import normalize_label
 
 from .pipeline import build_bank, refine_bank, read_jsonl
 from .quality import validate_replay
+from .surface_quality import question_language_warnings
 
 
 def _dump(path: Path, payload: dict) -> None:
@@ -51,6 +52,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     difficulties, families, patterns = Counter(), Counter(), Counter()
     openers, reference_repetition = Counter(), Counter()
     operational_media_fields = Counter()
+    semantic_language_warnings = Counter()
+    semantic_warning_examples = []
     modalities, scenario_reviews, question_reviews = Counter(), Counter(), Counter()
     one_source = Counter()
     cf_sensitive = Counter()
@@ -74,6 +77,13 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 patterns[spec.get("reasoning_pattern", "approval_legacy")] += 1
                 shapes[_abstract_question(scene.get("question", ""), spec)] += 1
                 question_text = scene.get("question", "").strip()
+                warnings = question_language_warnings(question_text, spec)
+                semantic_language_warnings.update(warnings)
+                if warnings and len(semantic_warning_examples) < 20:
+                    semantic_warning_examples.append({
+                        "task_id": scene.get("task_id"),
+                        "warnings": warnings,
+                    })
                 head = question_text[:90].casefold()
                 openers["starts_as_role"] += int(
                     head.startswith(("as a ", "as an "))
@@ -178,6 +188,14 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             "scope": "exact synthetic answer values; not a semantic diversity proof",
         },
         "question_surface": {
+            "semantic_language_warnings": {
+                "counts": dict(semantic_language_warnings),
+                "first_examples": semantic_warning_examples,
+                "scope": (
+                    "Conservative wording checks only. These do not prove "
+                    "semantic equality or inequality with the Gold Program."
+                ),
+            },
             "opening_patterns": dict(openers),
             "reference_copying": dict(reference_repetition),
             "unique_normalized_questions": len(exact_questions),
