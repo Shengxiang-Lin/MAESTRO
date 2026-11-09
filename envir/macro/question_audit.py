@@ -14,9 +14,10 @@ from pathlib import Path
 
 from .question_review import (
     polished_reference_question, reference_question, surface_issues,
-    SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY,
+    SEMANTIC_REVIEW_POLICY,
 )
 from .validation import validate_clean_scene
+from .goal_invariants import goal_text_issues, question_surface_issues
 
 
 FIDELITY_FLAGS = {
@@ -29,6 +30,12 @@ FIDELITY_FLAGS = {
     "unverified_attachment_or_observation",
     "private_orchestration_plan_leak",
     "changed_setting",
+    "goal_order_direction_changed",
+    "goal_time_direction_changed",
+    "goal_feasibility_predicate_changed",
+    "group_match_falsely_equated_with_entity_identity",
+    "explicit_reference_falsely_equated_with_identity",
+    "question_asserts_unobserved_media",
 }
 STYLE_FLAGS = {
     "formulaic_evidence_phrasing",
@@ -36,6 +43,7 @@ STYLE_FLAGS = {
     "missing_case_subject",
     "internal_schema_jargon",
     "template_like_rewrite",
+    "question_exposes_internal_schema_or_artifact",
 }
 
 
@@ -59,7 +67,7 @@ def audit_scenes(scenes: list[dict], *, max_examples: int = 12) -> dict:
         question = scene["question"]
         ref = reference_question(scene)
         checklist = surface_issues(scene, question, baseline=ref)
-        if policy in {SEMANTIC_REVIEW_POLICY, LEGACY_SEMANTIC_REVIEW_POLICY}:
+        if policy == SEMANTIC_REVIEW_POLICY:
             # Internal 'MultiModalQA reference collection' and a generic
             # 'source-grounded issue' are NOT user-facing context. Their
             # omission is correct, not a naturalization style defect.
@@ -67,6 +75,8 @@ def audit_scenes(scenes: list[dict], *, max_examples: int = 12) -> dict:
                 item for item in checklist
                 if item not in {"changed_or_missing_setting", "missing_case_subject"}
             ]
+        checklist.extend(question_surface_issues(question))
+        checklist.extend(goal_text_issues(scene["goal"]["intent"], question))
         similarity = SequenceMatcher(
             None, " ".join(ref.casefold().split()),
             " ".join(question.casefold().split()),
@@ -213,7 +223,7 @@ def audit_scenes(scenes: list[dict], *, max_examples: int = 12) -> dict:
         "flagged_examples": examples,
         "limitations": [
             "lexical_and_pattern_warnings_not_formal_semantic_proof",
-            "new_policy_warnings_do_not_retroactively_certify_legacy_questions",
+            "question_audit_warnings_are_heuristic_not_formal_equivalence",
             "manual_review_still_needed_for_unflagged_semantic_shifts",
         ],
     }
