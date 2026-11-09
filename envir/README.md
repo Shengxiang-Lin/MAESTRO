@@ -55,3 +55,34 @@ fallback. Every successful Question is audited against the compiled
 source-scoped Macro TaskGraph and terminal answer fields. Failed candidates
 are private diagnostics. All media evidence is fictional structured
 simulation, not perception of original images/audio/videos.
+
+
+### Streaming and checkpoint recovery
+
+Scenario Author/Critic and Question Author/Critic now append reviewed
+decisions to dedicated accepted/rejected/audit JSONL journals AS THEY
+FINISH, in stable input order. The live progress bar shows accepted,
+rejected, and written (the committed ordered prefix).
+
+Accepted Questions also appear immediately in the ordinary files
+questions/scenes.jsonl and questions/questions.jsonl; rejected
+Questions appear in questions/failed.jsonl.
+
+Each stage has a signed, SHA256-verified checkpoint and a writer lock.
+Interrupting and rerunning the SAME command and output directory
+(with unchanged frozen inputs/model/prompt code) skips completed LLM
+decisions. Uncommitted tails are discarded and published files are
+reconstructed from the durable journal.
+
+The config key generation.flush_every defaults to 1 (fsync every
+decision); the CLI may override this:
+
+~~~bash
+python -m envir generate-questions \
+  --config envir/config.yaml --flush-every 5
+~~~
+
+A different model, input scene bank, generator contract or code must
+use a new output directory or explicitly overwrite the old run.
+Completed legacy outputs from the old all-at-once implementation have
+no checkpoint and cannot be resumed retrospectively.

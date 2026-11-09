@@ -12,7 +12,7 @@ DEFAULT_CONFIG = Path(__file__).with_name("config.yaml")
 SECTIONS = {
     "input": {"mmqa", "max_records"},
     "generation": {"output_dir", "target", "seed", "difficulty_mix",
-                   "overwrite", "no_progress"},
+                   "overwrite", "no_progress", "flush_every"},
     "scenario": {"api_base", "model", "critic_api_base", "critic_model",
                  "api_key_env", "critic_api_key_env", "workers",
                  "max_revisions", "timeout"},
@@ -80,6 +80,9 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     seed = generation.get("seed")
     if type(seed) is not int:
         raise ValueError("generation.seed must be an integer")
+    flush_every = generation.get("flush_every", 1)
+    if type(flush_every) is not int or flush_every < 1:
+        raise ValueError("generation.flush_every must be a positive integer")
     directory = output_dir or generation.get("output_dir")
     if not directory:
         raise ValueError("generation.output_dir is required")
@@ -89,6 +92,7 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         max_records=max_records, seed=seed,
         difficulty_mix=",".join(map(str, mix)),
         overwrite=bool(generation.get("overwrite", False)),
+        flush_every=flush_every,
         no_progress=no_progress or bool(generation.get("no_progress", False)),
         scenario_api_base=scenario["api_base"],
         scenario_model=scenario["model"],

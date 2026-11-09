@@ -191,3 +191,45 @@ The stricter rules may initially reduce accepted reports, but prevent
 misleading intermediate handoffs from being published. Report counts
 alone cannot establish semantic quality; inspect the private
 review_audit.jsonl and accepted finish_result summaries.
+
+
+### Durable live Sub-Agent report streaming
+
+The language pass naturalize-subtasks no longer waits for all 529
+Macros before saving. Its progress bar shows accepted, rejected,
+and written counts for individual Macro Author/Critic reviews.
+These counts are distinct from complete published scenes.
+
+During a run, the following files are updated:
+
+- subagent_reports_accepted.jsonl: provisional accepted Macro results,
+  including Macros belonging to not-yet-complete scene DAGs
+- subagent_reports_rejected.jsonl: provisional failed Macro records
+- subagent_reports_audit.jsonl: per-Macro ordered private audit journal
+- subagent_reports_progress.json: durable checkpoint, hashes and counts
+- review_audit.jsonl: detailed audit for every reviewed Macro
+- subtasks.jsonl and scene_index.jsonl: complete successful scene DAGs,
+  appended as soon as their final Macro decision is committed
+- failed.jsonl: failed scenes as soon as all their Macros are reviewed
+- summary.json: running snapshot on each completed scene
+
+A single writer preserves stable input order despite parallel LLM
+completions. Crash recovery truncates uncommitted tails; rerunning the
+SAME command and output directory reuses all committed decisions.
+The provisional accepted Macro file is PRIVATE and must not be used
+as a published complete-DAG bank.
+
+The reporting.flush_every config key defaults to 1. A new streamed
+full run can be started with:
+
+~~~bash
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --flush-every 1 \
+  --output-dir envir/data/maestro_subagent_reports_streamed_100
+~~~
+
+Use a NEW output folder when migrating from the old all-at-once
+implementation: old outputs have no checkpoint. Completed runs do not
+silently overwrite existing files; choose a new directory or explicitly
+enable overwrite to restart from scratch.

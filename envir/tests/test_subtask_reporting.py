@@ -6,6 +6,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from envir.streaming import StreamingError
 
 from envir.generate_question.spec import make_spec
 from envir.generate_question.question import reference_question
@@ -507,6 +510,124 @@ class ReportingBatchTests(unittest.TestCase):
                     api_base="http://unused/v1", model="mock",
                     clients=(ReportAuthor(), ReportCritic()),
                     no_progress=True,
+                )
+
+    def test_streaming_macro_journal_and_completed_scene_publication(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            oracle, index = self._teacher_inputs(root, [36, 37])
+            output = root / "reports"
+            class ObservingAuthor(ReportAuthor):
+                def complete_json(self, system_prompt, user_prompt):
+                    result = super().complete_json(system_prompt, user_prompt)
+                    if len(self.calls) > 1:
+                        audit = output / "review_audit.jsonl"
+                        if audit.exists():
+                            self.saw_prior_audit = bool(audit.read_text().strip())
+                    return result
+            author = ObservingAuthor()
+            completed = naturalize_subtasks(
+                source_subtasks=oracle, source_scene_index=index,
+                output_dir=output, api_base="http://mock/v1",
+                model="mock", clients=(author, ReportCritic()),
+                workers=1, no_progress=True, flush_every=1,
+            )
+            self.assertEqual(completed["status"], "done")
+            self.assertTrue(getattr(author, "saw_prior_audit", False))
+            self.assertEqual(
+                len((output / "subagent_reports_accepted.jsonl").read_text().splitlines()),
+                completed["author_critic_passed_macros"],
+            )
+            self.assertEqual(
+                len((output / "review_audit.jsonl").read_text().splitlines()),
+                completed["attempted_macro_tasks"],
+            )
+            self.assertEqual(
+                len((output / "scene_index.jsonl").read_text().splitlines()), 2,
+            )
+            self.assertEqual(completed["completed_macro_tasks"],
+                             completed["attempted_macro_tasks"])
+
+    def test_interrupted_reports_resume_without_recalling_persisted_macros(self):
+        from envir.implement_subtask.naturalize import (
+            run_ordered as real_run_ordered,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            oracle, index = self._teacher_inputs(root, [38, 39])
+            output = root / "reports"
+            scenes = [
+                json.loads(line) for line in index.read_text().splitlines()
+            ]
+            stopping_at = scenes[0]["macro_task_count"] - 1
+            class Interrupted(RuntimeError):
+                pass
+            def truncate_after_scene(*args, **kwargs):
+                prior_on_commit = kwargs["on_commit"]
+                def after_commit(index, ok, row, meta):
+                    prior_on_commit(index, ok, row, meta)
+                    if index == stopping_at:
+                        raise Interrupted("simulated process stop")
+                kwargs["on_commit"] = after_commit
+                return real_run_ordered(*args, **kwargs)
+
+            with patch(
+                "envir.implement_subtask.naturalize.run_ordered",
+                side_effect=truncate_after_scene,
+            ):
+                with self.assertRaises(Interrupted):
+                    naturalize_subtasks(
+                        source_subtasks=oracle, source_scene_index=index,
+                        output_dir=output, api_base="http://mock/v1",
+                        model="mock", clients=(ReportAuthor(), ReportCritic()),
+                        workers=1, no_progress=True,
+                    )
+            # The first complete DAG must already be visible, even when
+            # no additional scene has completed.
+            self.assertEqual(
+                len((output / "scene_index.jsonl").read_text().splitlines()), 1
+            )
+            self.assertEqual(
+                len((output / "subtasks.jsonl").read_text().splitlines()),
+                scenes[0]["macro_task_count"],
+            )
+            checkpoint = json.loads(
+                (output / "subagent_reports_progress.json").read_text()
+            )
+            self.assertEqual(checkpoint["completed"], stopping_at + 1)
+            self.assertEqual(
+                json.loads((output / "summary.json").read_text())["status"],
+                "running",
+            )
+            with self.assertRaises(StreamingError):
+                naturalize_subtasks(
+                    source_subtasks=oracle, source_scene_index=index,
+                    output_dir=output, api_base="http://mock/v1",
+                    model="other", clients=(ReportAuthor(), ReportCritic()),
+                    workers=1, no_progress=True,
+                    overwrite=False,
+                )
+            resumed_author = ReportAuthor()
+            final = naturalize_subtasks(
+                source_subtasks=oracle, source_scene_index=index,
+                output_dir=output, api_base="http://mock/v1",
+                model="mock", clients=(resumed_author, ReportCritic()),
+                workers=1, no_progress=True,
+            )
+            self.assertEqual(final["status"], "done")
+            self.assertEqual(final["accepted_scenes"], 2)
+            self.assertEqual(len(resumed_author.calls),
+                             final["attempted_macro_tasks"] - stopping_at - 1)
+            self.assertEqual(
+                len((output / "subtasks.jsonl").read_text().splitlines()),
+                final["published_macro_tasks"],
+            )
+            with self.assertRaises(FileExistsError):
+                naturalize_subtasks(
+                    source_subtasks=oracle, source_scene_index=index,
+                    output_dir=output, api_base="http://mock/v1",
+                    model="mock", clients=(ReportAuthor(), ReportCritic()),
+                    workers=1, no_progress=True,
                 )
 
     def test_successful_batch_retains_one_response_per_oracle_macro(self):

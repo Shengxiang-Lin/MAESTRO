@@ -15,6 +15,52 @@ from envir.schema import normalize_label
 from .spec import difficulty_sequence, make_spec
 from .question import naturalize_one, reference_question
 from .quality import compile_and_validate, validate_replay
+from envir.streaming import (
+    OrderedJournal, StreamingError, file_digest,
+    output_lock, run_ordered, stable_signature,
+)
+
+
+def _construction_identity(args) -> str:
+    return stable_signature({
+        "target": args.target,
+        "max_records": args.max_records,
+        "seed": args.seed,
+        "difficulty_mix": args.difficulty_mix,
+        "mmqa": str(args.mmqa),
+        "mmqa_sha256": (
+            file_digest(args.mmqa) if Path(args.mmqa).is_file() else None
+        ),
+        "generation_code": {
+            name: file_digest(Path(__file__).with_name(name))
+            for name in (
+                "spec.py", "scenario.py", "world.py", "quality.py",
+                "backend.py", "stages.py",
+            )
+        },
+        "scenario_model": args.scenario_model,
+        "scenario_api_base": args.scenario_api_base,
+        "scenario_critic_model": args.scenario_critic_model,
+        "scenario_critic_api_base": args.scenario_critic_api_base,
+        "scenario_max_revisions": args.scenario_max_revisions,
+    })
+
+
+def _question_signature(args, rows: list[dict]) -> str:
+    """Exact resume identity shared by LLM reviewer and root pipeline."""
+    return stable_signature({
+        "stage": "question_author_critic.v1",
+        "ids": [scene["task_id"] for scene in rows],
+        "scene_bank_hash": file_digest(args.scenes),
+        "model": args.question_model,
+        "api_base": args.question_api_base,
+        "critic_model": args.question_critic_model,
+        "critic_api_base": args.question_critic_api_base,
+        "max_revisions": args.max_revisions,
+        "question_code": file_digest(Path(__file__).with_name("question.py")),
+        "stage_code": file_digest(Path(__file__)),
+        "backend_code": file_digest(Path(__file__).with_name("backend.py")),
+    })
 
 
 def _parallel_ordered(items, job, *, workers: int, desc: str,
@@ -106,8 +152,13 @@ def construct_scenes(args) -> dict:
             f"not enough scene/topic seeds: {len(seeds)} for target {args.target}"
         )
     files = _out_files(args.output_dir)
+    checkpoint = args.output_dir / "scenario_authoring_progress.json"
     if not args.overwrite and any(p.exists() for p in files.values()):
-        raise FileExistsError("Destination already exists; use --overwrite")
+        if files["summary"].exists() or not checkpoint.exists():
+            raise FileExistsError(
+                "Destination already contains a completed or legacy scene bank; "
+                "choose a new directory or enable overwrite"
+            )
     sequence = difficulty_sequence(
         target=args.target, mix=_parse_mix(args.difficulty_mix),
         run_seed=args.seed,
@@ -155,11 +206,54 @@ def construct_scenes(args) -> dict:
                 spec, author=clients[0], critic=clients[1],
                 max_revisions=args.scenario_max_revisions,
             )[0]
-        selected = _parallel_ordered(
-            chosen, enrich, workers=args.scenario_workers,
-            desc="Scenario Author/Critic",
-            no_progress=getattr(args, "no_progress", False),
-        )
+        signature = stable_signature({
+            "stage": "scenario_author_critic.v1",
+            "specs": chosen,
+            "model": args.scenario_model,
+            "api_base": args.scenario_api_base,
+            "critic_model": args.scenario_critic_model,
+            "critic_api_base": args.scenario_critic_api_base,
+            "max_revisions": args.scenario_max_revisions,
+            "scenario_code": file_digest(Path(__file__).with_name("scenario.py")),
+            "stage_code": file_digest(Path(__file__)),
+            "backend_code": file_digest(Path(__file__).with_name("backend.py")),
+        })
+        task_ids = [spec["task_id"] for spec in chosen]
+        with output_lock(args.output_dir, "scenario_authoring"):
+            with OrderedJournal(
+                args.output_dir, "scenario_authoring", signature, task_ids,
+                flush_every=getattr(args, "flush_every", 1),
+                restart=args.overwrite,
+            ) as journal:
+                run_ordered(
+                    chosen, enrich,
+                    lambda spec: (
+                        spec.get("scenario_authoring", {}).get("status") == "accepted",
+                        spec,
+                        {"status": spec.get("scenario_authoring", {}).get("status",
+                                                                         "failed")},
+                    ),
+                    journal=journal,
+                    workers=args.scenario_workers,
+                    desc="Scenario Author/Critic",
+                    no_progress=getattr(args, "no_progress", False),
+                    on_exception=lambda idx, exc: (
+                        False,
+                        {
+                            **chosen[idx],
+                            "scenario_authoring": {
+                                "status": "failed",
+                                "failures": [{
+                                    "stage": "backend",
+                                    "error_type": type(exc).__name__,
+                                    "error": str(exc)[:220],
+                                }],
+                            },
+                        },
+                        {"status": "failed", "error": str(exc)[:220]},
+                    ),
+                )
+                selected = [payload for _, payload, _ in journal.replay()]
     else:
         selected = chosen
 
@@ -179,37 +273,59 @@ def construct_scenes(args) -> dict:
         selected_to_compile = valid_specs
     else:
         selected_to_compile = selected
+    # Compilation is fast/deterministic, so rerun it from the committed
+    # Scenario journal on resume; expensive LLM Scenario calls are reused.
+    # Unlike before, even compiled scenes and failures are written immediately.
     generated = []
-    for spec in tqdm(selected_to_compile, desc="Compile & difficulty audit", unit="task",
-                     disable=getattr(args, "no_progress", False)):
-        question = reference_question(spec)
-        try:
-            scene = compile_and_validate(spec, question)
-            generated.append(scene)
-        except (ValueError, TypeError, KeyError) as exc:
-            rejected[type(exc).__name__ + ":" + str(exc)[:140]] += 1
-            failed_cases.append({
-                "stage": "execution", "task_id": spec["task_id"],
-                "error_type": type(exc).__name__, "error": str(exc)[:400],
-                "problem_spec": spec,
-            })
-    # Never substitute a deterministic fallback for a failed LLM review.
-    # A partial batch is an explicit partial result, NOT 100% generated.
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    _jsonl(files["private"], generated)
-    _jsonl(files["failed"], failed_cases)
-    _jsonl(files["public"], [scene["public"] for scene in generated])
-    _jsonl(files["audit"], [{
-        "task_id": scene["task_id"],
-        "scenario_authoring": scene["problem_spec"].get("scenario_authoring"),
-        **scene["difficulty_audit"],
-    } for scene in generated])
+    with (files["private"].open("w", encoding="utf-8") as private,
+          files["public"].open("w", encoding="utf-8") as public,
+          files["audit"].open("w", encoding="utf-8") as audit,
+          files["failed"].open("w", encoding="utf-8") as failed):
+        for record in failed_cases:
+            failed.write(json.dumps(record, ensure_ascii=False) + "\n")
+        with tqdm(selected_to_compile, desc="Compile & difficulty audit",
+                  unit="task", disable=getattr(args, "no_progress", False),
+                  dynamic_ncols=True) as bar:
+            for spec in bar:
+                question = reference_question(spec)
+                try:
+                    scene = compile_and_validate(spec, question)
+                    generated.append(scene)
+                    private.write(json.dumps(scene, ensure_ascii=False) + "\n")
+                    public.write(json.dumps(scene["public"], ensure_ascii=False) + "\n")
+                    audit.write(json.dumps({
+                        "task_id": scene["task_id"],
+                        "scenario_authoring": (
+                            scene["problem_spec"].get("scenario_authoring")
+                        ),
+                        **scene["difficulty_audit"],
+                    }, ensure_ascii=False) + "\n")
+                except (ValueError, TypeError, KeyError) as exc:
+                    rejected[type(exc).__name__ + ":" + str(exc)[:140]] += 1
+                    case = {
+                        "stage": "execution", "task_id": spec["task_id"],
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:400],
+                        "problem_spec": spec,
+                    }
+                    failed_cases.append(case)
+                    failed.write(json.dumps(case, ensure_ascii=False) + "\n")
+                for writer in (private, public, audit, failed):
+                    writer.flush()
+                bar.set_postfix({
+                    "accepted": len(generated),
+                    "rejected": len(failed_cases),
+                    "written": len(generated) + len(failed_cases),
+                }, refresh=False)
+
     summary = {
         "status": (
             "done" if len(generated) == args.target else
             "partial" if generated else "failed"
         ),
         "pipeline": "maestro_reasoning_program_world_taskgraph_question",
+        "run_identity": _construction_identity(args),
         "seed_source": seed_source,
         "target": args.target,
         "attempted": len(chosen),
@@ -322,6 +438,12 @@ def _naturalize_entry(scene: dict, *, clients, max_revisions: int) -> dict:
 
 
 def review_questions(args) -> dict:
+    """Review frozen scenes with immediate per-Question durable streaming.
+
+    Accepted private/public Question files are updated as decisions are
+    committed; fallback/rejected decisions appear in failed.jsonl.
+    An interruption can resume safely from the ordered Question journal.
+    """
     if args.output_dir.resolve() == args.scenes.parent.resolve():
         raise ValueError("Question review requires a separate output directory")
     if args.question_workers < 1 or args.max_revisions < 0 or args.max_revisions > 8:
@@ -329,60 +451,147 @@ def review_questions(args) -> dict:
     rows = read_jsonl(args.scenes, limit=args.max_records)
     if not rows:
         raise ValueError("no scenes loaded")
-    for scene in tqdm(rows, desc="Validate frozen scenes", unit="task",
-                      disable=getattr(args, "no_progress", False)):
-        result = validate_replay(scene)
-        if result["status"] != "valid":
-            raise ValueError("invalid incoming scene:" + str(result))
-        if scene.get("question_authoring") is not None:
-            raise ValueError("input already naturalized")
+    with tqdm(rows, desc="Validate frozen scenes", unit="task",
+              disable=getattr(args, "no_progress", False),
+              dynamic_ncols=True) as bar:
+        for ix, scene in enumerate(bar, 1):
+            result = validate_replay(scene)
+            if result["status"] != "valid":
+                raise ValueError("invalid incoming scene:" + str(result))
+            if scene.get("question_authoring") is not None:
+                raise ValueError("input already naturalized")
+            bar.set_postfix({"accepted": ix, "rejected": 0}, refresh=False)
     files = _out_files(args.output_dir)
+    progress_path = args.output_dir / "question_authoring_progress.json"
     if not args.overwrite and any(path.exists() for path in files.values()):
-        raise FileExistsError("Question review output exists")
+        running_summary = (
+            json.loads(files["summary"].read_text(encoding="utf-8"))
+            if files["summary"].is_file() else {}
+        )
+        if (not progress_path.exists()
+                or running_summary.get("status") not in ({}, "running")):
+            raise FileExistsError(
+                "Question review output exists without resumable progress; "
+                "choose a new directory or enable overwrite"
+            )
     clients = _llm_clients(args)
+
     def one(scene):
         return _naturalize_entry(
             scene, clients=clients, max_revisions=args.max_revisions
         )
-    updated = _parallel_ordered(
-        rows, one, workers=args.question_workers,
-        desc="Question Author/Critic",
-        no_progress=getattr(args, "no_progress", False),
-    )
-    statuses = Counter(s["question_authoring"]["status"] for s in updated)
-    accepted = [s for s in updated
-                if s["question_authoring"]["status"] == "accepted"]
-    failed = [{
-        "task_id": s["task_id"], "stage": "question",
-        "review": s["question_authoring"],
-        "reference_question": reference_question(s["problem_spec"]),
-        "problem_spec": s["problem_spec"],
-    } for s in updated if s["question_authoring"]["status"] != "accepted"]
+
+    def classify(scene):
+        review = scene.get("question_authoring", {})
+        return (
+            review.get("status") == "accepted",
+            scene,
+            {"status": review.get("status", "failed")},
+        )
+
+    def on_exception(index, exc):
+        failed_scene = copy.deepcopy(rows[index])
+        failed_scene["question_authoring"] = {
+            "status": "failed", "attempts": 0,
+            "failures": [{
+                "stage": "backend",
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:220],
+            }],
+        }
+        return False, failed_scene, {
+            "status": "failed", "error": str(exc)[:220],
+        }
+
+    ids = [scene["task_id"] for scene in rows]
+    signature = _question_signature(args, rows)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    _jsonl(files["private"], accepted)
-    _jsonl(files["public"], [s["public"] for s in accepted])
-    _jsonl(files["failed"], failed)
-    _jsonl(files["audit"], [{
-        "task_id": s["task_id"],
-        "difficulty": s["difficulty_audit"],
-        "question_authoring": s["question_authoring"],
-    } for s in accepted])
-    summary = {
-        "status": (
-            "done" if len(accepted) == len(rows)
-            else "partial" if accepted else "failed"
-        ),
-        "pipeline": "maestro_frozen_program_question_author_critic",
-        "source_scenes": str(args.scenes),
-        "attempted": len(updated),
-        "generated": len(accepted),
-        "failed": len(failed),
-        "question_results": dict(statuses),
-        "world_program_macrograph_unmodified": True,
-        "accepted_question_equivalence": "critic_judgment_not_formal_proof",
-        "files": {key: str(path) for key, path in files.items()},
-    }
-    _json(files["summary"], summary)
-    return summary
+    with output_lock(args.output_dir, "question_authoring"):
+        with OrderedJournal(
+            args.output_dir, "question_authoring", signature, ids,
+            flush_every=getattr(args, "flush_every", 1),
+            restart=args.overwrite,
+        ) as journal:
+            statuses = Counter()
+            accepted_count = rejected_count = 0
 
+            def summary() -> dict:
+                finished = journal.completed == len(rows)
+                return {
+                    "status": (
+                        "running" if not finished else
+                        "done" if accepted_count == len(rows) else
+                        "partial" if accepted_count else "failed"
+                    ),
+                    "pipeline": "maestro_frozen_program_question_author_critic",
+                    "source_scenes": str(args.scenes),
+                    "attempted": len(rows),
+                    "completed": journal.completed,
+                    "generated": accepted_count,
+                    "failed": rejected_count,
+                    "question_results": dict(statuses),
+                    "world_program_macrograph_unmodified": True,
+                    "accepted_question_equivalence": (
+                        "critic_judgment_not_formal_proof"
+                    ),
+                    "streaming": {
+                        "ordered_writes": True,
+                        "flush_every": getattr(args, "flush_every", 1),
+                        "resumable": True,
+                        "checkpoint": str(journal.state_path),
+                        "resumed_prefix": journal.completed,
+                    },
+                    "files": {key: str(path) for key, path in files.items()},
+                }
 
+            with (files["private"].open("w", encoding="utf-8") as private,
+                  files["public"].open("w", encoding="utf-8") as public,
+                  files["audit"].open("w", encoding="utf-8") as audit,
+                  files["failed"].open("w", encoding="utf-8") as failed):
+                def publish(index, good, scene, meta, *, snapshot=True):
+                    nonlocal accepted_count, rejected_count
+                    review = scene.get("question_authoring", {})
+                    statuses[review.get("status", "failed")] += 1
+                    if good:
+                        accepted_count += 1
+                        private.write(json.dumps(scene, ensure_ascii=False) + "\n")
+                        public.write(json.dumps(scene["public"], ensure_ascii=False) + "\n")
+                        audit.write(json.dumps({
+                            "task_id": scene["task_id"],
+                            "difficulty": scene["difficulty_audit"],
+                            "question_authoring": review,
+                        }, ensure_ascii=False) + "\n")
+                    else:
+                        rejected_count += 1
+                        failed.write(json.dumps({
+                            "task_id": scene["task_id"], "stage": "question",
+                            "review": review,
+                            "reference_question": reference_question(
+                                scene["problem_spec"]
+                            ),
+                            "problem_spec": scene["problem_spec"],
+                        }, ensure_ascii=False) + "\n")
+                    # Make user-visible output available immediately, while
+                    # the journal checkpoint guarantees crash-safe replay.
+                    for stream in (private, public, audit, failed):
+                        stream.flush()
+                    if snapshot:
+                        _json(files["summary"], summary())
+
+                try:
+                    # Rebuild public files solely from committed checkpoints.
+                    # All half-written tails from a crash are discarded.
+                    for idx, (good, payload, meta) in enumerate(journal.replay()):
+                        publish(idx, good, payload, meta, snapshot=False)
+                    _json(files["summary"], summary())
+                    run_ordered(
+                        rows, one, classify, journal=journal,
+                        workers=args.question_workers,
+                        desc="Question Author/Critic",
+                        no_progress=getattr(args, "no_progress", False),
+                        on_commit=publish, on_exception=on_exception,
+                    )
+                    result = summary()
+                finally:
+                    _json(files["summary"], summary())
+                return result

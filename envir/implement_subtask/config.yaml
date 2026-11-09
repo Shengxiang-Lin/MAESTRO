@@ -28,6 +28,7 @@ reporting:
   critic_api_key_env: null
   workers: 8
   max_revisions: 2
+  flush_every: 1  # save accepted/rejected Macro reviews + checkpoint as they finish
   timeout: 180
   max_scenes: null
   no_progress: false

@@ -14,10 +14,14 @@ from pathlib import Path
 
 from envir.schema import normalize_label
 
-from .stages import construct_scenes, review_questions, read_jsonl
+from .stages import (
+    construct_scenes, review_questions, read_jsonl,
+    _construction_identity, _question_signature,
+)
 from .quality import validate_replay
 from .macro_contract import macro_graph_profile, macro_question_contract
 from .surface_quality import question_language_warnings
+
 
 
 def _dump(path: Path, payload: dict) -> None:
@@ -65,11 +69,18 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     question_failure_stages, question_guard_issues = Counter(), Counter()
     macro_tasks, operator_depth, macro_depth = [], [], []
     issue_counts, examples = Counter(), []
+    replay_accepted = replay_rejected = 0
     with tqdm(scenes, desc="Quality & replay", unit="task",
               disable=no_progress) as bar:
         for scene in bar:
             result = validate_replay(scene)
             results.append(result)
+            replay_accepted += result.get("status") == "valid"
+            replay_rejected += result.get("status") != "valid"
+            bar.set_postfix({
+                "accepted": replay_accepted,
+                "rejected": replay_rejected,
+            }, refresh=False)
             spec = scene.get("problem_spec", {})
             text = normalize_label(scene.get("question", ""))
             if text:
@@ -331,23 +342,70 @@ def generate_questions(args) -> dict:
     root = args.output_dir
     report_path = root / "quality_report.json"
     summary_path = root / "summary.json"
-    if not args.overwrite and any(p.exists() for p in (report_path, summary_path)):
+    if not args.overwrite and summary_path.exists():
         raise FileExistsError(
-            "Unified generation output already exists; choose a new directory "
-            "or pass --overwrite"
+            "Unified generation already completed; choose a new directory "
+            "or enable overwrite"
         )
     staged = copy.copy(args)
     staged.output_dir = root / "constructed"
-    constructed_summary = construct_scenes(staged)
+    constructed_done = staged.output_dir / "summary.json"
+    if constructed_done.is_file() and not args.overwrite:
+        constructed_summary = json.loads(
+            constructed_done.read_text(encoding="utf-8")
+        )
+        constructed_bank = staged.output_dir / "scenes.jsonl"
+        if not constructed_bank.is_file():
+            raise ValueError("constructed_summary_without_scene_bank")
+        # Never silently reuse an unrelated frozen bank when a run was
+        # interrupted AFTER construction but BEFORE final quality.
+        previous_identity = constructed_summary.get("run_identity")
+        current_identity = _construction_identity(staged)
+        if previous_identity != current_identity:
+            raise ValueError(
+                "constructed bank belongs to different generation settings; "
+                "choose another output directory or enable overwrite"
+            )
+    else:
+        constructed_summary = construct_scenes(staged)
     scene_path = staged.output_dir / "scenes.jsonl"
     question_summary = None
     if args.question_model and constructed_summary["generated"] > 0:
         authored = copy.copy(args)
         authored.scenes = scene_path
         authored.output_dir = root / "questions"
-        # Constructed bank is exactly target records; do not truncate.
+        # Constructed bank is exactly the scene set; do not truncate.
         authored.max_records = None
-        question_summary = review_questions(authored)
+        question_done = authored.output_dir / "summary.json"
+        previous = (
+            json.loads(question_done.read_text(encoding="utf-8"))
+            if question_done.is_file() and not args.overwrite else {}
+        )
+        if (previous
+                and previous.get("status") in {"done", "partial", "failed"}):
+            if previous.get("source_scenes") != str(scene_path):
+                raise ValueError("question_summary_source_mismatch")
+            if not (authored.output_dir / "scenes.jsonl").exists():
+                raise ValueError("question_summary_missing_scene_bank")
+            prior_state = authored.output_dir / "question_authoring_progress.json"
+            if not prior_state.is_file():
+                raise ValueError(
+                    "completed_legacy_question_bank_has_no_resume_checkpoint"
+                )
+            previous_signature = json.loads(
+                prior_state.read_text(encoding="utf-8")
+            ).get("signature")
+            current_signature = _question_signature(
+                authored, read_jsonl(scene_path)
+            )
+            if previous_signature != current_signature:
+                raise ValueError(
+                    "Question model, frozen input, or prompt code changed; "
+                    "choose a new output directory or enable overwrite"
+                )
+            question_summary = previous
+        else:
+            question_summary = review_questions(authored)
         scene_path = authored.output_dir / "scenes.jsonl"
     # The quality report also performs strict independent replay from the
     # frozen Program/World (not simply accepting stored difficulty flags).
