@@ -112,7 +112,25 @@ def semantic_contract(scene: dict) -> dict:
         },
     }
     grounding = scene.get("scene_grounding")
-    if grounding and grounding.get("status") == "accepted":
+    if grounding and grounding.get("status") == "accepted" and (
+            grounding.get("version") == "semantic_scenario_contract_v1"):
+        # v4 carries an explicit, typed semantic contract shared by all
+        # downstream writing stages. Its question_intent was constructed by
+        # Python, not supplied by the model.
+        contract["synthetic_scenario_contract"] = {
+            "scenario": grounding["scenario"],
+            "semantic_bindings": grounding["semantic_bindings"],
+            "question_intent": grounding["question_intent"],
+            "user_need": grounding["user_need"],
+            "source_cards": [{
+                "source_id": card["source_id"],
+                "candidate_key": card["candidate_key"],
+                "candidate_label": card["candidate_label"],
+                "source_role": card["source_role"],
+            } for card in grounding["source_cards"]],
+            "provenance": "source_bound_hypothetical_synthetic_only",
+        }
+    elif grounding and grounding.get("status") == "accepted":
         # LLM interpretation is *hypothetical synthetic* context. The
         # Critic may permit these labels, but it must not assert original
         # media/real-world verification or change the core operation.
