@@ -17,12 +17,15 @@ def reference_question(spec: dict) -> str:
         raise ValueError("invalid_spec:" + ",".join(problems))
     scene = spec["scenario"]
     topic = scene["topic"]
-    noun = scene["entity_kind"]
+    noun = " ".join(scene["entity_kind"].replace("_", " ").split())
     difficulty = spec["difficulty_target"]
     family = spec["family"]
+    purpose = re.sub(r"^(to\s+)+", "", scene["purpose"].strip(), flags=re.I)
+    purpose = purpose.strip().rstrip(".!;: ")
+    purpose = purpose[:1].lower() + purpose[1:]
     beginning = (
-        f"I'm working as a {scene['user_role']} on a fictional {topic} "
-        f"reference collection. I need to {scene['purpose']}."
+        f"As a {scene['user_role']} reviewing a fictional {topic} "
+        f"reference collection, I need to {purpose}."
     )
     if difficulty == "easy":
         condition = (
@@ -81,6 +84,19 @@ answer type (count, list, highest recorded priority, or earliest relative
 ordering). No fabricated additional filters. A hypothetical problem about
 a real topic does NOT assert historical facts.
 
+You are explicitly given a FROZEN REFERENCE QUESTION that contains all
+conditions and the required answer. It is newly authored from the fictional
+contract and is NOT a MultiModalQA question. Rewrite only its phrasing.
+Preserve the word "active" and the code-crosswalk and category approval for
+multi-source cases; preserve distinct entry-specific clearance for hard cases.
+Preserve counting, category grouping, priority MAXIMUM, or chronological
+EARLIEST directions when applicable.
+
+Return ONE complete, grammatical English question (55-1200 characters), with
+a question mark. Do not return a summary, classification, fragment, table,
+answer, explanation, or commentary. If unsure, closely paraphrase the frozen
+reference question without inventing facts. End with '?'.
+
 Output JSON only: {"question":"..."}."""
 
 CRITIC_SYSTEM = """Review the candidate user question against an immutable
@@ -106,8 +122,10 @@ def guard_question(question: str, spec: dict) -> list[str]:
         return ["question_not_string"]
     q = question.strip()
     errors = []
-    if len(q) < 55 or len(q) > 1200 or "?" not in q:
-        errors.append("question_out_of_bounds")
+    if len(q) < 55 or len(q) > 1200:
+        errors.append("question_length_out_of_bounds")
+    if "?" not in q:
+        errors.append("question_missing_interrogative")
     if spec["scenario"]["topic"].casefold() not in q.casefold():
         errors.append("topic_missing")
     if not re.search(r"\bactive\b", q, flags=re.I):
@@ -138,6 +156,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2) -> tup
     """Model cannot edit World, Program, TaskGraph, or Gold Answer."""
     initial = reference_question(spec)
     instruction = {
+        "frozen_reference_question": initial,
         "frozen_scenario": spec["scenario"],
         "required_source_roles": spec["sources"],
         "requirements": spec["requirements"],
@@ -150,15 +169,28 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2) -> tup
     for attempt in range(max_revisions + 1):
         user_text = json.dumps({
             "contract": instruction,
-            "previous_failures": failures[-2:],
-            "constraint": "Preserve all conditions; return a SINGLE question.",
+            "previous_failures": [{
+                "errors": entry.get("errors", []),
+                "critic_reason": entry.get("decision", {}).get("reason"),
+            } for entry in failures[-2:]],
+            "constraint": "Preserve ALL conditions in frozen_reference_question. "
+                          "Return a SINGLE fully formed question ending with '?'.",
         }, ensure_ascii=False)
         try:
             candidate = author.complete_json(AUTHOR_SYSTEM, user_text)
             q = candidate.get("question")
             surface = guard_question(q, spec)
             if surface:
-                failures.append({"stage": "guard", "errors": surface})
+                failures.append({
+                    "stage": "guard", "errors": surface,
+                    "candidate_length": len(q) if isinstance(q, str) else None,
+                    "candidate_has_question_mark": (
+                        "?" in q if isinstance(q, str) else False
+                    ),
+                    "candidate_preview": (
+                        q[:320] if isinstance(q, str) else repr(q)[:120]
+                    ),
+                })
                 continue
             decision = critic.complete_json(CRITIC_SYSTEM, json.dumps({
                 "frozen_contract": instruction,
@@ -173,7 +205,10 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2) -> tup
                     "review": decision,
                     "semantic_equivalence_proven": False,
                 }
-            failures.append({"stage": "critic", "decision": decision})
+            failures.append({
+                "stage": "critic", "decision": decision,
+                "candidate_preview": q[:320],
+            })
         except Exception as exc:
             # Do not invent acceptance; preserve the executable reference.
             failures.append({"stage": "backend",
