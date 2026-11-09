@@ -11,6 +11,7 @@ from difflib import SequenceMatcher
 
 from .spec import spec_issues, VERSION
 from .intent import intent_contract, style_contract
+from .macro_contract import macro_question_contract
 from .surface_quality import (question_language_warnings,
                               normalize_question_punctuation)
 
@@ -165,6 +166,11 @@ and frozen intent do not provide. Do not invent an additional eligibility
 criterion such as a funding tier or certification that is absent from
 the required predicates.
 
+The compiled Macro Task contract is the operational authority when
+provided. Its source roles, typed operators, dependency plan, and terminal
+output must agree with your question. Do not expose internal operator
+names, step numbers or TaskGraph mechanics in the user-facing question.
+
 For latest-version requests, you receive a STRUCTURED FROZEN USER INTENT:
 constraints, typed output, source roles and a style preference. Write an
 original user question from that contract. You may vary clause order,
@@ -207,6 +213,10 @@ Output JSON only:
  "same_answer_scope":true,
  "natural":true,
  "reason":"one sentence"}
+When a compiled Macro Task contract is supplied, check it rather than
+trusting the prose Goal alone. Confirm that the Question asks for the
+terminal result of the stated operator chain, not a broader inventory,
+all evidence, or an unrelated computation.
 Check substantive semantics independently: (a) required source mapping,
 (b) the exact comparator, including inclusive temporal endpoints,
 (c) hard entry-specific clearance if required, (d) exact output type,
@@ -279,7 +289,8 @@ def guard_question(question: str, spec: dict) -> list[str]:
     return sorted(set(errors))
 
 
-def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2) -> tuple[str, dict]:
+def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
+                   macro_graph: dict | None = None) -> tuple[str, dict]:
     """Model cannot edit World, Program, TaskGraph, or Gold Answer."""
     initial = reference_question(spec)
     latest = spec.get("version") == VERSION
@@ -297,6 +308,38 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2) -> tup
             "goal_family": spec["family"],
         }
     )
+    graph_contract = (
+        macro_question_contract(spec, macro_graph)
+        if macro_graph is not None else None
+    )
+    if graph_contract is not None:
+        # Never reveal private World values or Gold answers; the Author sees
+        # only source roles, operations, dependencies and final answer type.
+        instruction["compiled_macro_task_contract"] = {
+            key: graph_contract[key] for key in (
+                "semantic_pattern", "answer_kind", "output_fields",
+                "required_source_roles", "required_operations",
+                "macro_task_count", "macro_dependency_depth",
+                "no_extra_question_conditions",
+            )
+        }
+        instruction["macro_dependency_plan"] = [
+            {
+                "step": i,
+                "depends_on": [
+                    next(j for j, upstream in enumerate(macro_graph["tasks"])
+                         if upstream["task_id"] == parent)
+                    for parent in task["depends_on"]
+                ],
+                "source_roles": task["source_ids"],
+                "operations": [
+                    part["op"] for part in task.get(
+                        "operator_chain", [{"op": task["operation"]}]
+                    )
+                ],
+            }
+            for i, task in enumerate(macro_graph["tasks"])
+        ]
     if max_revisions < 0 or max_revisions > 8:
         raise ValueError("revisions must be 0..8")
     failures = []
