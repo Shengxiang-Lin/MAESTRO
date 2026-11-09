@@ -14,26 +14,10 @@ from pathlib import Path
 
 from envir.schema import normalize_label
 
-from .stages import construct_scenes, review_questions, read_jsonl
+from .stages import construct_scenes, review_questions, read_jsonl, _construction_identity
 from .quality import validate_replay
 from .macro_contract import macro_graph_profile, macro_question_contract
 from .surface_quality import question_language_warnings
-from envir.streaming import stable_signature
-
-
-def _construction_identity(args) -> str:
-    return stable_signature({
-        "target": args.target,
-        "max_records": args.max_records,
-        "seed": args.seed,
-        "difficulty_mix": args.difficulty_mix,
-        "mmqa": str(args.mmqa),
-        "scenario_model": args.scenario_model,
-        "scenario_api_base": args.scenario_api_base,
-        "scenario_critic_model": args.scenario_critic_model,
-        "scenario_critic_api_base": args.scenario_critic_api_base,
-        "scenario_max_revisions": args.scenario_max_revisions,
-    })
 
 
 
