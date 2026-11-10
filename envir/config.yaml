@@ -7,7 +7,7 @@ input:
   max_records: 1000
 
 generation:
-  output_dir: envir/data/maestro_question_final_100
+  output_dir: envir/data/maestro_current_100
   target: 100
   seed: 17
   macro_first_v2_share: 100  # current Macro-first generation (Easy uses approval baseline)
