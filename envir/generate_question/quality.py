@@ -186,7 +186,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
     if profile["necessary_structural_operator_depth"] < depth:
         issues.append("insufficient_operator_depth")
     if spec.get("reasoning_pattern") == "clue_chain":
-        if profile["keyed_lookup_count"] != 2:
+        if profile.get("keyed_lookup_count", 0) != 2:
             issues.append("clue_chain_requires_two_keyed_lookups")
         refs = {ref for row in macro["answer_with_provenance"]
                 for ref in row["source_fact_refs"]}
@@ -305,7 +305,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             clue_sensitive = False
             issues.append("clue_chain_missing_counterfactual_marker")
         acquisition_audit = {
-            "keyed_lookup_count": profile["keyed_lookup_count"],
+            "keyed_lookup_count": profile.get("keyed_lookup_count", 0),
             "evidence_acquisition_depth": profile["keyed_lookup_count"],
             "full_read_blocked": denied,
             "unauthorized_full_read_success_rate": (
@@ -321,7 +321,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
     # Full-World "oracle can compute" is expected for ANY deterministic
     # program; unlike one-source/one-step baseline, it is NOT a difficulty
     # rejection criterion.
-    return {
+    result = {
         "status": "valid" if not issues else "invalid",
         "issues": sorted(set(issues)),
         "difficulty_target": difficulty,
@@ -341,7 +341,6 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             "policy": "register_only_naive_filter_optional_sort_no_join",
         },
         "counterfactual_source_tests": counterfactual,
-        "evidence_acquisition": acquisition_audit,
         "replay_exact": True,
         "answer_provenance": macro["answer_with_provenance"],
         "limitations": [
@@ -352,6 +351,9 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             "Image, video and audio are simulated annotations, not real perception.",
         ],
     }
+    if spec.get("reasoning_pattern") == "clue_chain":
+        result["evidence_acquisition"] = acquisition_audit
+    return result
 
 
 def compile_and_validate(spec: dict, question: str) -> dict:
