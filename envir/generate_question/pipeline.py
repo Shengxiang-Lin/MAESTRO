@@ -61,6 +61,11 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     graph_contract_failures = Counter()
     semantic_language_warnings = Counter()
     semantic_warning_examples = []
+    semantic_evidence_checked = 0
+    semantic_evidence_enforced = 0
+    semantic_evidence_flagged = 0
+    semantic_evidence_flags = Counter()
+    semantic_evidence_examples = []
     modalities, scenario_reviews, question_reviews = Counter(), Counter(), Counter()
     one_source = Counter()
     cf_sensitive = Counter()
@@ -106,6 +111,28 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 exact_questions[text] += 1
             if spec:
                 if spec.get("reasoning_pattern") == "macro_first_v2":
+                    from .semantic_evidence import (
+                        compile_semantic_contract, semantic_text_issues,
+                        semantic_scenario_issues, has_semantic_contract,
+                    )
+                    semantic_evidence_checked += 1
+                    semantic_evidence_enforced += int(has_semantic_contract(spec))
+                    contract = compile_semantic_contract(
+                        spec, retrospective=True,
+                    )
+                    flags = sorted(set(
+                        semantic_text_issues(
+                            scene.get("question", ""), spec, contract,
+                        ) + semantic_scenario_issues(spec, contract)
+                    ))
+                    semantic_evidence_flagged += int(bool(flags))
+                    semantic_evidence_flags.update(flags)
+                    if flags and len(semantic_evidence_examples) < 20:
+                        semantic_evidence_examples.append({
+                            "task_id": scene.get("task_id"),
+                            "flags": flags,
+                            "enforcement_versioned": has_semantic_contract(spec),
+                        })
                     plan = spec["macro_plan"]
                     macro_v2_modes[plan["pattern"]] += 1
                     macro_v2_goals[plan["goal"]["answer_field"]] += 1
@@ -341,6 +368,18 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             "scope": (
                 "Naming-invariant fingerprint of executable Macro DAGs, "
                 "operator chains and source roles; not a semantic uniqueness proof."
+            ),
+        },
+        "semantic_evidence_diagnostics": {
+            "v2_scenes_checked": semantic_evidence_checked,
+            "versioned_contract_enforced_scenes": semantic_evidence_enforced,
+            "scenes_with_flags": semantic_evidence_flagged,
+            "flag_counts": dict(semantic_evidence_flags),
+            "first_examples": semantic_evidence_examples,
+            "scope": (
+                "High-confidence lexical and schema/predicate diagnostics. "
+                "Older unversioned V2 scenes are assessed read-only and "
+                "remain replay compatible; flags are not an NL equivalence proof."
             ),
         },
         "macro_first_v2": {
