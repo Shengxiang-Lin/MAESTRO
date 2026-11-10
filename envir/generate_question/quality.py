@@ -436,6 +436,13 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             **({"candidate_information_necessity": information_report}
                if information_report is not None else {}),
         }
+        if spec.get("scene_realism_version"):
+            from .difficulty_proxy import scene_difficulty_profile
+            result["macro_first_audit"]["structural_difficulty_profile"] = (
+                scene_difficulty_profile(
+                    scene, information_report=information_report
+                )
+            )
     if spec.get("reasoning_pattern") == "evidence_graph":
         result["evidence_graph_audit"] = {
             "archetype": spec["evidence_graph"]["archetype"],
