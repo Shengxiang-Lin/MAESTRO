@@ -22,6 +22,15 @@ Never substitute a founding, award, release or match year for a different
 year target. Do not add unsupported hard numbers, dates, historical facts,
 eligibility requirements, place names, or outcomes.
 
+The semantic_evidence_contract in frozen_contract is authoritative. Only
+necessary_question_clues and applied_predicates are answer-defining.
+Random clues absent from that contract must NOT be reintroduced. The
+presence of an index, final archive or Hard difficulty NEVER licenses
+clearance, approval, certification or active-only requirements. Do not
+name a clearance/approval register unless the executed predicates truly
+use that field. A video action-time threshold is NOT a time difference
+between footage and audio, nor a timestamp of the spoken cue.
+
 Make each source title fit its modality and purpose, e.g. footage review,
 commentary transcript, event log, case inventory, index or result register.
 Give the user a concrete motivation for cross-referencing the materials,
@@ -39,6 +48,12 @@ against facts on the public web. The source observations are intentionally
 constructed for this benchmark. A normal working scenario about those
 provided materials is permitted and is NOT an unsupported assertion that
 a corresponding historical event occurred.
+
+The compiled semantic_evidence_contract identifies source modalities,
+exact available fields, executed comparisons and absent filters. Treat it
+as decisive if a source title or setting introduces a clearance registry,
+audio absent from all sources, a fabricated emblem in video, or a temporal
+window that no Solver actually checks.
 
 Reject only when: the named topic is replaced, a real-world historical
 event or public source is invented, the typed Goal's meaning changes,
@@ -65,6 +80,18 @@ simulated, hypothetical, imaginary or synthetic. Do not make assertions
 about historical events, named people's actions or actual media files.
 You can describe the supplied working materials and ask what they show.
 
+The semantic_evidence_contract supplied with the user contract is the
+binding specification: use its necessary_question_clues, actual source
+modalities, applied_predicates and temporal_semantics, and NEVER assume
+other sampled plan features were used by the Gold Solver. A hard task
+does NOT imply clearance; an archive does NOT imply approved status.
+If footage has only action and timestamp fields, do not describe a
+colored emblem visible in the footage. If no audio source exists, do
+not ask for an audio cue. If video is filtered at or after 45 seconds,
+that does not imply speech is heard 45 seconds later.
+For a footage<=commentary constraint, express relative ordering only,
+never an exact elapsed time or arbitrary one-minute window.
+
 Preserve the exact type and MEANING of the requested field: e.g. match
 result is not a match year; venue is not a team name; review status is
 not a founding year. Express the answer field using natural words.
@@ -86,6 +113,13 @@ frozen contract. The underlying working materials are synthetic by
 design; describing their hypothetical contents is not a claim about
 real public historical events. The question must NOT tell the user that
 the benchmark is fictional or simulated.
+
+Use the frozen semantic_evidence_contract to reject ALL additional
+clearance, approval, audio, image, video, emblem color/shape, and
+numeric time claims that are absent from actual executed predicates.
+A timestamp on a video is not an audio timestamp, and a relative
+before/after comparison does not authorize an exact 45-second gap.
+Judge what the question says, not what a plausible source title suggests.
 
 Check that the topical subject remains exact, answer type and semantics
 are unchanged, image/video/audio cues and relevant time ordering remain,

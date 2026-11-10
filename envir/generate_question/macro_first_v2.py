@@ -78,6 +78,21 @@ def domain_hint(topic: str, hint: str) -> str:
     return "general"
 
 
+def domain_hint_v2(topic: str, hint: str) -> str:
+    """Use reliable MMQA category metadata before sparse name keywords.
+
+    This only applies to newly versioned semantic-contract scenes, so
+    previously frozen V2 plans continue using domain_hint unchanged.
+    Avoid speculative culture/civic remaps without a recognizable subject.
+    """
+    value = str(hint or "").strip().lower()
+    if value == "sports":
+        return "sports"
+    if value == "commerce":
+        return "business"
+    return domain_hint(topic, hint)
+
+
 def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                       difficulty: str, domain: str) -> tuple[dict, list[dict]]:
     if difficulty not in {"medium", "hard"}:
@@ -246,13 +261,15 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
 
 def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
               difficulty: str, topic: str, record_id: str, version: str) -> dict:
-    domain = domain_hint(topic, str(seed_record.get("domain_hint", "")))
+    domain = domain_hint_v2(topic, str(seed_record.get("domain_hint", "")))
     plan, roles = sample_macro_plan(
         seed=run_seed, ordinal=ordinal, record_id=record_id, topic=topic,
         difficulty=difficulty, domain=domain,
     )
+    from .semantic_evidence import CONTRACT_VERSION
     return {
         "version": version,
+        "semantic_evidence_contract_version": CONTRACT_VERSION,
         "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
         "scene_id": record_id,
         "source_anchor": {
@@ -289,15 +306,23 @@ def validate_spec(spec: dict) -> list[str]:
     plan = spec.get("macro_plan")
     if not isinstance(plan, dict) or plan.get("version") != VERSION:
         return ["invalid_macro_first_v2_plan"]
+    from .semantic_evidence import CONTRACT_VERSION
+    if spec.get("semantic_evidence_contract_version") not in {
+        None, CONTRACT_VERSION
+    }:
+        return ["invalid_semantic_evidence_contract_version"]
     try:
         expected, roles = sample_macro_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
             record_id=spec["source_anchor"]["source_record_id"],
             topic=spec["scenario"]["topic"],
             difficulty=spec["difficulty_target"],
-            domain=domain_hint(
+            domain=(
+                domain_hint_v2 if spec.get("semantic_evidence_contract_version")
+                else domain_hint
+            )(
                 spec["scenario"]["topic"],
-                spec["source_anchor"].get("domain_hint", "")
+                spec["source_anchor"].get("domain_hint", ""),
             ),
         )
         errors = []

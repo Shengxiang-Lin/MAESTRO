@@ -383,6 +383,13 @@ def guard_question(question: str, spec: dict,
         if re.search(r"\b(fictional|simulated|synthetic|hypothetical|imaginary)\b",
                      q, re.I):
             errors.append("macro_first_v2_meta_fiction_framing")
+        if spec.get("semantic_evidence_contract_version"):
+            from .semantic_evidence import (
+                compile_semantic_contract, semantic_text_issues
+            )
+            errors.extend(semantic_text_issues(
+                q, spec, compile_semantic_contract(spec),
+            ))
     elif pattern == "macro_first":
         plan = spec["macro_plan"]
         visual = plan["clues"]
@@ -546,6 +553,9 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             }
             for i, task in enumerate(macro_graph["tasks"])
         ]
+    if spec.get("semantic_evidence_contract_version"):
+        from .semantic_evidence import compile_semantic_contract
+        instruction["semantic_evidence_contract"] = compile_semantic_contract(spec)
     if max_revisions < 0 or max_revisions > 8:
         raise ValueError("revisions must be 0..8")
     failures = []
@@ -561,6 +571,10 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 for source in spec["sources"]
             ],
             "style": instruction["style"],
+            **({
+                "semantic_evidence_contract":
+                    instruction["semantic_evidence_contract"],
+            } if "semantic_evidence_contract" in instruction else {}),
         }
         if attempt > 0:
             author_contract["repair_reference_question"] = initial

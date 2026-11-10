@@ -128,6 +128,28 @@ def _narrative_issues(spec: dict, proposal: dict) -> list[str]:
             r"\b(founding year|release year)\b", phrase
         ):
             errors.append("v2_unsupported_goal_substitution")
+    if (spec.get("reasoning_pattern") == "macro_first_v2"
+            and spec.get("semantic_evidence_contract_version")):
+        from .semantic_evidence import (
+            compile_semantic_contract, semantic_scenario_issues,
+        )
+        # Validate the *proposed* narrative and source titles, before
+        # either LLM review or persistence; frozen Solver remains unchanged.
+        if (isinstance(titles, list) and
+                all(isinstance(x, dict)
+                    and isinstance(x.get("source_id"), str)
+                    and isinstance(x.get("title"), str) for x in titles)
+                and len({x["source_id"] for x in titles}) == len(titles)):
+            proposed = copy.deepcopy(spec)
+            if isinstance(narrative, dict):
+                proposed["scenario"].update(narrative)
+            title_by_id = {x["source_id"]: x["title"] for x in titles}
+            if all(role["source_id"] in title_by_id for role in proposed["sources"]):
+                for role in proposed["sources"]:
+                    role["title"] = title_by_id[role["source_id"]]
+                errors.extend(semantic_scenario_issues(
+                    proposed, compile_semantic_contract(spec)
+                ))
     source_ids = {s["source_id"] for s in spec["sources"]}
     if (len(titles) != len(source_ids) or
             any(not isinstance(x, dict) or set(x) != {"source_id", "title"}
@@ -147,6 +169,10 @@ def enrich_one(spec: dict, *, author, critic,
                max_revisions: int = 2) -> tuple[dict, dict]:
     if max_revisions < 0 or max_revisions > 8:
         raise ValueError("max revisions must be 0..8")
+    semantic_contract = None
+    if spec.get("semantic_evidence_contract_version"):
+        from .semantic_evidence import compile_semantic_contract
+        semantic_contract = compile_semantic_contract(spec)
     frozen = {
         "topic": spec["scenario"]["topic"],
         "difficulty": spec["difficulty_target"],
@@ -163,12 +189,16 @@ def enrich_one(spec: dict, *, author, critic,
         } for role in spec["sources"]],
         "requirements": spec["requirements"],
         **({
+            "semantic_evidence_contract": semantic_contract,
             "frozen_goal": spec["macro_plan"]["goal"],
             "macro_task_roles": [
                 {"role": t["role"], "source_scope": t["source_scope"]}
                 for t in spec["macro_plan"]["macro_tasks"]
             ],
-            "media_clues": spec["macro_plan"]["clues"],
+            "media_clues": (
+                semantic_contract["necessary_question_clues"]
+                if semantic_contract else spec["macro_plan"]["clues"]
+            ),
         } if spec.get("reasoning_pattern") == "macro_first_v2" else {}),
     }
     failures = []

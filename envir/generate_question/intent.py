@@ -148,14 +148,21 @@ def intent_contract(spec: dict) -> dict:
     if spec["difficulty_target"] == "easy":
         constraints = constraints[:1]
     if spec["difficulty_target"] == "hard" and pattern not in {
-        "evidence_graph", "macro_first"
+        "evidence_graph", "macro_first", "macro_first_v2"
     }:
         constraints.append(
             "Also require entry-specific clearance to be marked cleared "
             "in a separate source, not just group approval."
         )
+    applied_clues = None
+    if spec.get("semantic_evidence_contract_version"):
+        from .semantic_evidence import compile_semantic_contract
+        applied_clues = compile_semantic_contract(spec)[
+            "necessary_question_clues"
+        ]
     return {
         "visual_clue": (
+            applied_clues if applied_clues is not None else
             spec["macro_plan"]["clues"] if pattern in {
                 "macro_first", "macro_first_v2"
             }
