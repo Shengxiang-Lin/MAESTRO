@@ -39,6 +39,12 @@ def export_full_prompts(*, scenes_path: Path, turns_path: Path,
         "../../orchestra/base_main_agent.py",
         "../../orchestra/prompts/omnigaia.py",
         "../generate_question/evidence_tools.py",
+        "../../benchmark/omnigaia/tools/google_search.py",
+        "../../benchmark/omnigaia/tools/extract_url_jina.py",
+        "../../benchmark/omnigaia/tools/multimodal_toolkit.py",
+        "../../benchmark/omnigaia/tools/audio_analysis.py",
+        "../../benchmark/omnigaia/tools/video_analysis.py",
+        "../../benchmark/omnigaia/tools/execute_code.py",
     ):
         expected = meta["code_sha256"].get(source)
         if expected is None or expected != _digest(root / source):
