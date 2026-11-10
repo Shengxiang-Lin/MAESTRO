@@ -7,6 +7,7 @@ Teacher-World access is possible during execution.
 from __future__ import annotations
 
 from .dag import compile_waves
+from .evidence_tools import tools_from_primitive_steps
 from .program_ir import (
     MissingSourceError, ProgramError, Relation, _apply, _scan, _lookup_by_key,
     answer_values, evaluate_program, validate_program,
@@ -460,6 +461,10 @@ def compile_frozen_macro_plan(spec: dict, program: dict,
             if list(macro["input_contract"][parent]) != upstream:
                 raise ProgramError("macro_declared_input_type_mismatch")
         chain = [dict(by_node[nid]) for nid in ids]
+        tool_fields = (
+            {"required_tools": tools_from_primitive_steps(chain)}
+            if spec.get("evidence_tool_contract_version") else {}
+        )
         tasks.append({
             "task_id": "work_" + mid,
             "program_node_id": ids[-1],
@@ -478,6 +483,7 @@ def compile_frozen_macro_plan(spec: dict, program: dict,
             "dispatchable": True,
             "execution_policy": "frozen_macro_contract_local_gold_solver",
             "macro_role": macro["role"],
+            **tool_fields,
         })
         owned.update(local)
     if owned != set(by_node):
