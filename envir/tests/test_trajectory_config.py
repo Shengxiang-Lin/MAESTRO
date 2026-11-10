@@ -70,6 +70,8 @@ class TrajectoryConfigurationTests(TestCase):
             result = generate_from_config()
         self.assertEqual(result["status"], "done")
         self.assertEqual(backend.call_count, 2)
+        self.assertEqual(backend.call_args_list[0].kwargs["max_tokens"], 2800)
+        self.assertEqual(backend.call_args_list[1].kwargs["max_tokens"], 1200)
         kwargs = runner.call_args.kwargs
         self.assertEqual(kwargs["workers"], 4)
         self.assertEqual(kwargs["max_revisions"], 2)
@@ -104,6 +106,11 @@ class TrajectoryConfigurationTests(TestCase):
             invalid["generation"]["workers"] = 0
             target.write_text(yaml.safe_dump(invalid), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "invalid_workers"):
+                load_config(target)
+            invalid = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+            invalid["model"]["author_max_tokens"] = -1
+            target.write_text(yaml.safe_dump(invalid), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "invalid_author_max_tokens"):
                 load_config(target)
             invalid = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
             invalid["input"]["scenes"] = ""
