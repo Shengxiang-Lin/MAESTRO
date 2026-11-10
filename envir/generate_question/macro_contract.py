@@ -124,7 +124,7 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         raise ValueError("macro_question_missing_disagreement_operation")
     if pattern == "dynamic_threshold" and "gte" not in compares:
         raise ValueError("macro_question_missing_threshold_operation")
-    if pattern == "macro_first":
+    if pattern in {"macro_first", "macro_first_v2"}:
         plan = spec["macro_plan"]
         if (len(graph["tasks"]) != len(plan["macro_tasks"])
                 or graph.get("plan_origin") != "macro_first"):
