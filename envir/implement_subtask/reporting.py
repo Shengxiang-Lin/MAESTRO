@@ -738,3 +738,8 @@ def author_critic_report(
         "failures": failures,
         "exact_answer_immutable": True,
     }
+
+# Stage-local claims are checked against each Macro's own executed operations.
+# A source scan cannot assert cross-report disagreement merely because the
+# overall question mentions conflicting reports. A later compare_fields(ne)
+# Macro may establish it after the two sources are joined.
