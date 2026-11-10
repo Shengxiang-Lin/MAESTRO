@@ -348,6 +348,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         realism_v3=True,
     )
     from .semantic_evidence import CONTRACT_VERSION
+    from .question_fidelity import QUESTION_FIDELITY_VERSION
     from .source_title_contract import (
         SCENE_REALISM_VERSION, expected_source_titles, DOMAIN_FRAMES,
     )
@@ -357,6 +358,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         "semantic_evidence_contract_version": CONTRACT_VERSION,
         "macro_information_necessity_version": INFORMATION_NECESSITY_VERSION,
         "scene_realism_version": SCENE_REALISM_VERSION,
+        "question_fidelity_version": QUESTION_FIDELITY_VERSION,
         "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
         "scene_id": record_id,
         "source_anchor": {
@@ -410,6 +412,11 @@ def validate_spec(spec: dict) -> list[str]:
     from .source_title_contract import SCENE_REALISM_VERSION
     if spec.get("scene_realism_version") not in {None, SCENE_REALISM_VERSION}:
         return ["invalid_scene_realism_version"]
+    from .question_fidelity import QUESTION_FIDELITY_VERSION
+    if spec.get("question_fidelity_version") not in {
+        None, QUESTION_FIDELITY_VERSION,
+    }:
+        return ["invalid_question_fidelity_version"]
     try:
         expected, roles = sample_macro_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
