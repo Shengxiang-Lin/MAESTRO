@@ -135,12 +135,15 @@ def initial_public_view(spec: dict, world: dict, question: str) -> dict:
             "source_id": sid,
             "title": item["title"],
             "modality_hint": item["modality"],
-            "representation": item["representation"],
+            **({} if spec.get("reasoning_pattern") == "macro_first_v2"
+               else {"representation": item["representation"]}),
             **({"access_mode": item["access_policy"]["mode"]}
                if "access_policy" in item else {}),
         } for sid, item in sorted(world["sources"].items())],
         "max_concurrent_subagents": 10,
-        "status": "fictional_structured_multisource_world",
+        "status": ("ready_for_investigation"
+                   if spec.get("reasoning_pattern") == "macro_first_v2"
+                   else "fictional_structured_multisource_world"),
     }
 
 
