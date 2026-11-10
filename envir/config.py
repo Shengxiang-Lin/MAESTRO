@@ -12,9 +12,9 @@ DEFAULT_CONFIG = Path(__file__).with_name("config.yaml")
 SECTIONS = {
     "input": {"mmqa", "max_records"},
     "generation": {"output_dir", "target", "seed", "difficulty_mix",
-                   "overwrite", "no_progress", "flush_every", "clue_chain_share",
-                   "evidence_graph_share", "macro_first_share",
-                   "macro_first_v2_share"},
+                   "overwrite", "no_progress", "flush_every",
+                   "macro_first_v2_share", "quota_refill",
+                   "max_candidate_multiplier"},
     "scenario": {"api_base", "model", "critic_api_base", "critic_model",
                  "api_key_env", "critic_api_key_env", "workers",
                  "max_revisions", "timeout"},
@@ -85,17 +85,8 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     flush_every = generation.get("flush_every", 1)
     if type(flush_every) is not int or flush_every < 1:
         raise ValueError("generation.flush_every must be a positive integer")
-    clue_chain_share = generation.get("clue_chain_share", 0)
-    if (type(clue_chain_share) is not int
-            or not 0 <= clue_chain_share <= 100):
-        raise ValueError("generation.clue_chain_share must be 0..100")
-    evidence_graph_share = generation.get("evidence_graph_share", 0)
-    if (type(evidence_graph_share) is not int
-            or not 0 <= evidence_graph_share <= 100):
-        raise ValueError("generation.evidence_graph_share must be 0..100")
-    macro_first_share = generation.get("macro_first_share", 0)
-    if type(macro_first_share) is not int or not 0 <= macro_first_share <= 100:
-        raise ValueError("generation.macro_first_share must be 0..100")
+    # Deprecated generation experiments are no longer part of the
+    # supported public YAML; frozen historical scenes remain replayable.
     quota_refill = generation.get("quota_refill", False)
     if type(quota_refill) is not bool:
         raise ValueError("generation.quota_refill must be a boolean")
@@ -116,9 +107,7 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         difficulty_mix=",".join(map(str, mix)),
         overwrite=bool(generation.get("overwrite", False)),
         flush_every=flush_every,
-        clue_chain_share=clue_chain_share,
-        evidence_graph_share=evidence_graph_share,
-        macro_first_share=macro_first_share,
+        # Legacy share flags intentionally omitted from public args.
         macro_first_v2_share=macro_first_v2_share,
         quota_refill=quota_refill,
         max_candidate_multiplier=max_candidate_multiplier,
