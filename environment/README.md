@@ -27,6 +27,24 @@ root**. The default configs are wired together:
 `base_orchestration.yaml` reads that Scene file plus the reviewed
 `subtasks.jsonl` from the Sub-Agent report directory.
 
+## Migrating existing generated data
+
+Previously generated `envir/data/` outputs are ignored by Git and are **not**
+moved automatically by `git pull`. To reuse your accepted Scene/report/Base
+Episode files with the new default configurations, from the repository root
+run:
+
+```bash
+mkdir -p environment/data
+cp -a envir/data/. environment/data/
+```
+
+Then run the fourth workflow using
+`python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml`.
+The old *tracked* `environment/` implementation is deleted by the rename;
+local ignored/untracked files should be backed up separately. Do not resume
+old `envir` checkpoints after code-path/signature changes.
+
 ## Contract and publication boundaries
 
 **Question construction** generates exactly the requested initial candidate
