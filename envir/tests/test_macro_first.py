@@ -128,7 +128,7 @@ class MacroFirstTests(unittest.TestCase):
     def test_macro_contract_tampering_is_rejected(self):
         spec = make(4)
         altered = copy.deepcopy(spec)
-        altered["macro_plan"]["macro_tasks"][1]["depends_on"] = ["M1"]
+        altered["macro_plan"]["macro_tasks"][1]["depends_on"] = []
         self.assertIn("macro_plan_not_reproducible_from_frozen_seed",
                       spec_issues(altered))
         altered = copy.deepcopy(spec)
