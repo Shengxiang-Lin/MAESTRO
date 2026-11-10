@@ -73,6 +73,19 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
     def source(sid, modality, schema, purpose, key=None):
         item, fields = _source(sid, topic, modality, schema,
                                key=key, purpose=purpose)
+        kind = {
+            "visual": "image observations" if modality == "image"
+                      else "video segment annotations",
+            "caption": "written captions" if modality == "text"
+                       else "commentary utterances",
+            "footage": "event footage timeline",
+            "commentary": "audio commentary transcript",
+            "context": "event log excerpts",
+            "report_a": "first incident report",
+            "report_b": "independent incident register",
+            "archive": "verified outcome records",
+        }.get(sid, "cross-reference index")
+        item["title"] = f"{topic} — {kind}"
         sources.append(item)
         schemas[sid] = fields
 
@@ -80,9 +93,10 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         mid = "M" + str(len(tasks) + 1)
         grade = rng.choices(("simple", "moderate", "complex"),
                             weights=(3, 5, 2), k=1)[0]
-        targets = {sid: rng.randint(
-            4, 7 if grade == "simple" else 11 if grade == "moderate" else 17
-        ) for sid in scoped}
+        lo, hi = {
+            "simple": (4, 6), "moderate": (7, 11), "complex": (12, 17)
+        }[grade]
+        targets = {sid: rng.randint(lo, hi) for sid in scoped}
         tasks.append({
             "macro_id": mid,
             "role": role,
@@ -95,12 +109,10 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
             "source_scope": list(scoped),
             "solver_template": role,
             "evidence_plan": {
-                "grade": grade,
+                "evidence_volume_grade": grade,
                 "source_observation_targets": targets,
-                "local_search_budget": rng.randint(1, 3 if grade == "simple"
-                                                    else 7 if grade == "moderate"
-                                                    else 12),
-                "description": "internal Sub-Agent evidence budget, not Macro count",
+                "candidate_observations_to_examine": sum(targets.values()),
+                "description": "source-row examination volume; not calibrated reasoning difficulty",
             },
         })
         return mid
