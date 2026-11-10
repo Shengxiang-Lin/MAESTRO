@@ -315,6 +315,7 @@ def spec_issues(spec: dict) -> list[str]:
             "time_window": "window_alignment",
             "status_disagreement": "status_disagreement",
             "dynamic_threshold": "threshold_eligibility",
+            "clue_chain": "accession_year",
         }
         if pattern not in RELATION_PATTERNS:
             errors.append("invalid_reasoning_pattern")
