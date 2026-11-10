@@ -11,8 +11,9 @@ import random
 from envir.schema import digest
 from .macro_first import _source
 from .evidence_tools import (
-    EVIDENCE_TOOL_CONTRACT_VERSION, source_acquisition_policy,
-    acquisition_for_operator,
+    EVIDENCE_TOOL_CONTRACT_VERSION, LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION,
+    source_acquisition_policy, acquisition_for_operator,
+    synthetic_page_url, web_acquisition_route,
 )
 
 VERSION = "maestro.macro_plan.v2"
@@ -159,6 +160,7 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                       extended_grammar: bool = False,
                       goal_resolution_enabled: bool = False,
                       evidence_tools_enabled: bool = False,
+                      evidence_tools_version: str | None = None,
                       ) -> tuple[dict, list[dict]]:
     if difficulty not in {"medium", "hard"}:
         raise ValueError("macro_first_v2_requires_medium_or_hard")
@@ -220,6 +222,20 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         }.get(sid, "cross-reference index")
         item["title"] = f"{topic} — {kind}"
         if evidence_tools_enabled:
+            if evidence_tools_version == EVIDENCE_TOOL_CONTRACT_VERSION:
+                if modality in {"text", "table"}:
+                    route = web_acquisition_route(
+                        seed=seed, ordinal=ordinal, record_id=record_id,
+                        source_id=sid,
+                    )
+                    item["acquisition_route"] = route
+                    if route != "search_only":
+                        item["simulated_page_url"] = synthetic_page_url(
+                            seed=seed, ordinal=ordinal, record_id=record_id,
+                            source_id=sid,
+                        )
+                else:
+                    item["acquisition_route"] = "media_observation"
             item["evidence_access"] = source_acquisition_policy(item)
         sources.append(item)
         schemas[sid] = fields
@@ -442,6 +458,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         extended_grammar=True,
         goal_resolution_enabled=True,
         evidence_tools_enabled=True,
+        evidence_tools_version=EVIDENCE_TOOL_CONTRACT_VERSION,
     )
     from .goal_resolution import GOAL_RESOLUTION_VERSION
     from .semantic_evidence import CONTRACT_VERSION
@@ -532,7 +549,8 @@ def validate_spec(spec: dict) -> list[str]:
     }:
         return ["invalid_goal_resolution_version"]
     if spec.get("evidence_tool_contract_version") not in {
-        None, EVIDENCE_TOOL_CONTRACT_VERSION
+        None, LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION,
+        EVIDENCE_TOOL_CONTRACT_VERSION,
     }:
         return ["invalid_evidence_tool_contract_version"]
     try:
@@ -563,6 +581,7 @@ def validate_spec(spec: dict) -> list[str]:
             ),
             goal_resolution_enabled=bool(spec.get("goal_resolution_version")),
             evidence_tools_enabled=bool(spec.get("evidence_tool_contract_version")),
+            evidence_tools_version=spec.get("evidence_tool_contract_version"),
         )
         errors = []
         if plan != expected:
@@ -573,7 +592,13 @@ def validate_spec(spec: dict) -> list[str]:
             return (role.get("source_id"), role.get("modality"),
                     role.get("access_mode"), role.get("key_field"),
                     role.get("evidence_access")
-                    if spec.get("evidence_tool_contract_version") else None)
+                    if spec.get("evidence_tool_contract_version") else None,
+                    role.get("acquisition_route")
+                    if spec.get("evidence_tool_contract_version")
+                    == EVIDENCE_TOOL_CONTRACT_VERSION else None,
+                    role.get("simulated_page_url")
+                    if spec.get("evidence_tool_contract_version")
+                    == EVIDENCE_TOOL_CONTRACT_VERSION else None)
         if ([contract(role) for role in spec["sources"]]
                 != [contract(role) for role in roles]):
             errors.append("macro_first_v2_source_scope_changed")
