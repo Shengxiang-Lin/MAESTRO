@@ -25,7 +25,7 @@ def make(i: int, *, difficulty="hard"):
         seed_record={
             "record_id": f"semantic-{i}",
             "topic": "Premier League" if i % 2 else "The Office",
-            "domain_hint": "sports" if i % 2 else "film",
+            "classify_domain_from_keywords": "sports" if i % 2 else "film",
             "source_modalities": ["image", "video", "audio", "text"],
         },
         ordinal=i, run_seed=37, difficulty=difficulty,
@@ -189,12 +189,12 @@ class SemanticEvidenceTests(unittest.TestCase):
 
     def test_domain_hint_metadata_changes_only_versioned_goals(self):
         from envir.generate_question.macro_planning import (
-            domain_hint, domain_hint_v2,
+            classify_domain_from_keywords, classify_domain_from_metadata,
         )
-        self.assertEqual(domain_hint("Sports reference collection", "sports"), "general")
-        self.assertEqual(domain_hint_v2("Sports reference collection", "sports"), "sports")
-        self.assertEqual(domain_hint_v2("Generic company contract", "commerce"), "business")
-        self.assertEqual(domain_hint_v2("Unidentified cultural event", "culture"), "general")
+        self.assertEqual(classify_domain_from_keywords("Sports reference collection", "sports"), "general")
+        self.assertEqual(classify_domain_from_metadata("Sports reference collection", "sports"), "sports")
+        self.assertEqual(classify_domain_from_metadata("Generic company contract", "commerce"), "business")
+        self.assertEqual(classify_domain_from_metadata("Unidentified cultural event", "culture"), "general")
 
     def test_retrospective_quality_diagnostics_do_not_mutate_old_scene(self):
         from envir.generate_question.pipeline import quality_report
@@ -205,16 +205,16 @@ class SemanticEvidenceTests(unittest.TestCase):
         spec.pop("goal_resolution_version", None)
         spec.pop("evidence_tool_contract_version", None)
         from envir.generate_question.macro_planning import (
-            sample_macro_plan, domain_hint,
+            sample_macro_plan, classify_domain_from_keywords,
         )
         old_plan, old_roles = sample_macro_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
             record_id=spec["source_anchor"]["source_record_id"],
             topic=spec["scenario"]["topic"],
             difficulty=spec["difficulty_target"],
-            domain=domain_hint(
+            domain=classify_domain_from_keywords(
                 spec["scenario"]["topic"],
-                spec["source_anchor"]["domain_hint"],
+                spec["source_anchor"]["classify_domain_from_keywords"],
             ), information_need=False, realism_v3=False,
         )
         spec["macro_plan"] = old_plan
@@ -245,16 +245,16 @@ class SemanticEvidenceTests(unittest.TestCase):
         spec.pop("goal_resolution_version", None)
         spec.pop("evidence_tool_contract_version", None)
         from envir.generate_question.macro_planning import (
-            sample_macro_plan, domain_hint,
+            sample_macro_plan, classify_domain_from_keywords,
         )
         old_plan, old_roles = sample_macro_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
             record_id=spec["source_anchor"]["source_record_id"],
             topic=spec["scenario"]["topic"],
             difficulty=spec["difficulty_target"],
-            domain=domain_hint(
+            domain=classify_domain_from_keywords(
                 spec["scenario"]["topic"],
-                spec["source_anchor"]["domain_hint"],
+                spec["source_anchor"]["classify_domain_from_keywords"],
             ), information_need=False, realism_v3=False,
         )
         spec["macro_plan"] = old_plan
