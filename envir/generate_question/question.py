@@ -349,8 +349,11 @@ def guard_question(question: str, spec: dict,
     if pattern == "macro_first_v2":
         plan = spec["macro_plan"]
         mode, clues = plan["pattern"], plan["clues"]
+        from .macro_first_v2 import GOAL_PHRASES
         label = plan["goal"]["public_label"]
-        if label not in q.casefold():
+        goal_field = plan["goal"]["answer_field"]
+        if not any(phrase in q.casefold()
+                   for phrase in GOAL_PHRASES.get(goal_field, (label,))):
             errors.append("macro_first_v2_goal_semantics_missing")
         if mode == "disputed_reports" and not re.search(
             r"\b(disagree\w*|disput\w*|differ\w*|conflict\w*|"
