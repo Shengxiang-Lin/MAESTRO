@@ -225,15 +225,12 @@ class ExecutionState:
                 if value in shared:
                     continue
                 marker = str(row["values"].get("marker_code", value))
-                if (marker not in result_text or
-                    not all(
-                        str(value) in visible_parent_text[parents[0]]
-                        and any(str(k) in visible_parent_text[parents[1]]
-                                for k in shared)
-                        for _ in [0]
-                    )):
-                    # If Main could not have inferred this mismatch from
-                    # actual public reports, it is NOT a visible anomaly.
+                if (marker not in result_text
+                        or str(value) not in visible_parent_text[parents[0]]
+                        or not any(str(k) in visible_parent_text[parents[1]]
+                                   for k in shared)):
+                    # No teacher-only discrepancy: the identifier must be
+                    # inferable from earlier Main-visible Sub-Agent reports.
                     continue
                 return (
                     "The new joined result reports " + marker +
@@ -246,7 +243,12 @@ class ExecutionState:
     def scheduling_state(self) -> dict:
         disputed = []
         for tid, item in self.current.items():
-            if item.status == "stale" or self.visible_discrepancy(tid):
+            discrepancy = self.visible_discrepancy(tid)
+            if discrepancy and item.status == "done":
+                # Only *observable* contradictions block descendants.
+                item.status = "disputed"
+                item.runtime["visible_issue"] = discrepancy
+            if item.status in {"stale", "disputed", "missing", "partial"}:
                 disputed.append(tid)
         ready, blocked = [], []
         for tid in self.tasks:
