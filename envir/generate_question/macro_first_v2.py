@@ -137,7 +137,8 @@ def domain_hint_v3(topic: str, hint: str) -> str:
 
 def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                       difficulty: str, domain: str,
-                      information_need: bool = False) -> tuple[dict, list[dict]]:
+                      information_need: bool = False,
+                      realism_v3: bool = False) -> tuple[dict, list[dict]]:
     if difficulty not in {"medium", "hard"}:
         raise ValueError("macro_first_v2_requires_medium_or_hard")
     if domain not in DOMAIN_GOALS:
@@ -146,6 +147,19 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         seed, ordinal, record_id, "macro-first-v2-plan"
     )[:15], 16))
     pattern = rng.choice(PATTERNS)
+    candidate_profile = None
+    if realism_v3 and pattern == "multimodal_event":
+        # Independent branches have varied ambiguity, with Hard sampling
+        # larger disjoint false-positive sets than Medium on average.
+        low, high = ((3, 4) if difficulty == "hard" else (2, 3))
+        left_count = rng.randint(low, high)
+        right_count = rng.randint(low, high)
+        candidate_profile = {
+            "left_candidate_count": left_count,
+            "right_candidate_count": right_count,
+            "union_candidate_count": left_count + right_count - 1,
+            "intersection_candidate_count": 1,
+        }
     goal_field, goal_type = rng.choice(DOMAIN_GOALS[domain])
     color = rng.choice(("amber", "blue", "green", "red", "violet"))
     motif = rng.choice(("crescent", "spiral", "star", "wave", "triangle"))
@@ -180,7 +194,18 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         lo, hi = {
             "simple": (4, 6), "moderate": (7, 11), "complex": (12, 17)
         }[grade]
-        targets = {sid: rng.randint(lo, hi) for sid in scoped}
+        required_rows = (
+            candidate_profile["union_candidate_count"]
+            if candidate_profile is not None else 0
+        )
+        if required_rows > hi and grade == "simple":
+            grade = "moderate"
+            lo, hi = (7, 11)
+        if required_rows > hi:
+            grade = "complex"
+            lo, hi = (12, 17)
+        targets = {sid: rng.randint(max(lo, required_rows), hi)
+                   for sid in scoped}
         tasks.append({
             "macro_id": mid,
             "role": role,
@@ -301,8 +326,12 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
     }
     if information_need and pattern == "multimodal_event":
         plan["information_necessity_policy"] = (
+            "variable_nonunique_candidate_sets_single_intersection_v2"
+            if realism_v3 else
             "two_nonunique_candidate_sets_with_single_intersection_v1"
         )
+        if candidate_profile is not None:
+            plan["candidate_profile"] = candidate_profile
     return plan, sources
 
 
@@ -313,12 +342,18 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         seed=run_seed, ordinal=ordinal, record_id=record_id, topic=topic,
         difficulty=difficulty, domain=domain,
         information_need=True,
+        realism_v3=True,
     )
     from .semantic_evidence import CONTRACT_VERSION
-    return {
+    from .source_title_contract import (
+        SCENE_REALISM_VERSION, expected_source_titles, DOMAIN_FRAMES,
+    )
+    _, domain_materials = DOMAIN_FRAMES[domain]
+    spec = {
         "version": version,
         "semantic_evidence_contract_version": CONTRACT_VERSION,
         "macro_information_necessity_version": INFORMATION_NECESSITY_VERSION,
+        "scene_realism_version": SCENE_REALISM_VERSION,
         "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
         "scene_id": record_id,
         "source_anchor": {
@@ -332,11 +367,12 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         "difficulty_target": difficulty,
         "family": "macro_first_v2", "reasoning_pattern": "macro_first_v2",
         "scenario": {
-            "topic": topic, "setting": f"an information investigation about {topic}",
-            "user_role": "investigator",
-            "purpose": "resolve the requested fact by combining independent material",
-            "motivation": "check the result against relevant sources",
-            "entity_kind": "cases and events",
+            "topic": topic,
+            "setting": f"A source-based investigation of {topic} {domain_materials}",
+            "user_role": "research analyst",
+            "purpose": f"determine the confirmed {plan['goal']['public_label']}",
+            "motivation": "resolve the identity using independent working evidence",
+            "entity_kind": "events and records",
         },
         "sources": roles, "macro_plan": plan,
         "requirements": {
@@ -349,6 +385,10 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         },
         "seed": run_seed, "ordinal": ordinal,
     }
+    title_by_source = expected_source_titles(spec)
+    for source in spec["sources"]:
+        source["title"] = title_by_source[source["source_id"]]
+    return spec
 
 
 def validate_spec(spec: dict) -> list[str]:
@@ -364,6 +404,9 @@ def validate_spec(spec: dict) -> list[str]:
         None, INFORMATION_NECESSITY_VERSION
     }:
         return ["invalid_macro_information_necessity_version"]
+    from .source_title_contract import SCENE_REALISM_VERSION
+    if spec.get("scene_realism_version") not in {None, SCENE_REALISM_VERSION}:
+        return ["invalid_scene_realism_version"]
     try:
         expected, roles = sample_macro_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
@@ -379,6 +422,7 @@ def validate_spec(spec: dict) -> list[str]:
                 spec["source_anchor"].get("domain_hint", ""),
             ),
             information_need=bool(spec.get("macro_information_necessity_version")),
+            realism_v3=bool(spec.get("scene_realism_version")),
         )
         errors = []
         if plan != expected:
@@ -392,6 +436,12 @@ def validate_spec(spec: dict) -> list[str]:
         if (not plan.get("macro_tasks")
                 or plan["terminal_macro_id"] != plan["macro_tasks"][-1]["macro_id"]):
             errors.append("macro_first_v2_terminal_changed")
+        if spec.get("scene_realism_version"):
+            from .source_title_contract import expected_source_titles
+            titles = expected_source_titles(spec)
+            if any(source["title"] != titles[source["source_id"]]
+                   for source in spec["sources"]):
+                errors.append("scene_source_title_not_schema_frozen")
         return errors
     except (KeyError, TypeError, ValueError, IndexError) as exc:
         return ["invalid_macro_first_v2_contract:" + str(exc)[:120]]

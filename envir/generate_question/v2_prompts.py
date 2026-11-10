@@ -136,3 +136,54 @@ Return JSON only:
 "reason":"one sentence"}
 All four booleans must be true for pass.
 """
+
+
+SCENARIO_AUTHOR_SCHEMA_LOCKED = """Write ONLY the natural scenario narrative for a
+specific domain-grounded information task. You are NOT allowed to name,
+rename, invent, or select source files. All source titles, modalities,
+roles and field schemas are ALREADY FROZEN by the environment and will be
+provided to the Critic unchanged. Output exactly:
+{"scenario":{"setting":"...","user_role":"...","purpose":"...",
+"motivation":"...","entity_kind":"..."}}
+
+DOMAIN COHERENCE: Use frozen_contract.domain_context.domain and
+domain_context.activity, material_kind, source_modalities and goal_label.
+The main activity, user role and requested Goal must fit that domain:
+a football match-result request should involve a competition or match,
+not municipal vehicle depots; an exhibition-year request should concern
+an exhibition, not a fabricated match result. The topic is a proper name,
+not evidence that any claimed historical match or exhibition took place.
+
+Describe only a plausible task using supplied working evidence: why
+the user needs the exact domain-specific final Goal, which distinct
+working material roles are relevant, and why more than one source is
+needed. Do not introduce a second requested output field, alternate
+historical events, named real-world actions, dates, numeric values, false
+clearance statuses, or media content not present in the frozen contract.
+The internal world is synthetic, but DO NOT use words fictional, simulated,
+synthetic, hypothetical, or imaginary in the scenario.
+
+Use precise words for a video timeline, audio utterances, visual image
+observations, written notes and keyed indexes as applicable, without
+claiming to have actually watched media or opened a public website.
+No source_titles field is needed; any such field will be discarded.
+"""
+
+
+QUESTION_AUTHOR_SINGLE_SLOT = QUESTION_AUTHOR + """
+ONE-OUTPUT REQUIREMENT (V3): The Gold Answer provides exactly one
+typed field. If identity has to be found internally, phrase identity
+matching as a subordinate condition, not as a second answer requested
+from the user. Prefer 'For the item matching [clues], what is the
+confirmed [Goal]?' or 'What is the confirmed [Goal] of the event
+identified by [clues]?'.
+
+NEVER ask 'which case ... and what is the status?', 'which episode ...
+and what production year?', 'name the item and report its year', or
+any coordinated output list. The subject can be *internally* identified,
+but the question must request ONLY the final typed Goal. Keep the true
+source modalities and clues, and avoid 'case' or 'archive' boilerplate
+unless appropriate to the selected domain. A domain-specific scene is
+not a license to invent historical facts or new source requirements.
+Keep the exact required source conditions while varying surface syntax.
+"""

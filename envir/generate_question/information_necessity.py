@@ -8,13 +8,15 @@ from __future__ import annotations
 
 
 POLICY = "two_nonunique_candidate_sets_with_single_intersection_v1"
+VARIABLE_POLICY = "variable_nonunique_candidate_sets_single_intersection_v2"
 
 
 def audit_candidate_information(scene: dict) -> dict:
     """Require both independent branches to remove real alternatives."""
     spec = scene["problem_spec"]
     plan = spec["macro_plan"]
-    if plan.get("information_necessity_policy") != POLICY:
+    policy = plan.get("information_necessity_policy")
+    if policy not in {POLICY, VARIABLE_POLICY}:
         raise ValueError("information_necessity_policy_not_applicable")
     feedback = {r["task_id"]: r for r in scene["task_feedback"]}
     for mid in ("work_M1", "work_M2", "work_M3"):
@@ -64,9 +66,27 @@ def audit_candidate_information(scene: dict) -> dict:
         if len(matches) != 1:
             raise ValueError("information_necessity_archive_ambiguity")
         key_to_goal[candidate_id] = matches[0]
-    competing_goals_distinct = (
-        len(set(map(str, key_to_goal.values()))) == len(key_to_goal)
-    )
+    if policy == VARIABLE_POLICY:
+        # Distinct from the TARGET is sufficient for answer sensitivity.
+        # Multiple alternatives can share a legitimate status label.
+        target = next(iter(overlap), None)
+        competing_goals_distinct = (
+            target is not None
+            and all(key_to_goal[other] != key_to_goal[target]
+                    for other in (left | right) - overlap)
+        )
+        profile = plan["candidate_profile"]
+        candidate_count_matches_profile = (
+            len(left) == profile["left_candidate_count"]
+            and len(right) == profile["right_candidate_count"]
+            and len(left | right) == profile["union_candidate_count"]
+            and len(overlap) == profile["intersection_candidate_count"]
+        )
+    else:
+        competing_goals_distinct = (
+            len(set(map(str, key_to_goal.values()))) == len(key_to_goal)
+        )
+        candidate_count_matches_profile = True
     result = {
         "left_candidate_count": len(left),
         "right_candidate_count": len(right),
@@ -78,6 +98,8 @@ def audit_candidate_information(scene: dict) -> dict:
         "jointly_unique": len(overlap) == 1,
         "both_branches_discriminate": bool(left - right) and bool(right - left),
         "competing_goals_distinct": competing_goals_distinct,
+        "candidate_count_matches_profile": candidate_count_matches_profile,
+        "policy": policy,
         "fused_marker_count": feedback["work_M3"]["result_rows"],
         "interpretation": (
             "Candidate-set discrimination given the frozen working World; "
@@ -90,6 +112,7 @@ def audit_candidate_information(scene: dict) -> dict:
         and result["jointly_unique"]
         and result["both_branches_discriminate"]
         and result["competing_goals_distinct"]
+        and result["candidate_count_matches_profile"]
         and result["fused_marker_count"] == 1
     )
     return result

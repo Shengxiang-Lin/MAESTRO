@@ -25,10 +25,67 @@ def reference_question(spec: dict) -> str:
     return _intent_reference_question(spec)
 
 
+def _one_output_v2_question(spec: dict) -> str:
+    """Natural deterministic fallback, with one (and only one) answer slot."""
+    plan = spec["macro_plan"]
+    clues = plan["clues"]
+    topic = spec["scenario"]["topic"]
+    goal = plan["goal"]["public_label"]
+    domain = plan["domain"]
+    item = {
+        "sports": "match incident", "film": "episode or screening",
+        "music": "performance", "culture": "exhibition item",
+        "education": "academic item", "logistics": "shipment event",
+        "civic": "site record", "environment": "survey observation",
+        "science": "experiment observation", "business": "filing",
+    }.get(domain, "item")
+    if plan["pattern"] == "disputed_reports":
+        return (
+            f"Two independent {topic} records disagree about the year "
+            f"reported for one {item}. For the disputed {item}, "
+            f"what is the confirmed {goal}?"
+        )
+    if plan["pattern"] == "multimodal_event":
+        return (
+            f"In the {topic} materials, a video shows a "
+            f"{clues['scene_action']} action before a spoken "
+            f"{clues['spoken_cue']} cue. An independent event log marks "
+            f"the matching observation as {clues['case_tag']}. "
+            f"For that {item}, what is the confirmed {goal}?"
+        )
+    if clues["visual_modality"] == "video":
+        visual = (
+            f"a video frame with a {clues['scene_action']} action at or "
+            f"after the {clues['time_threshold_ms']//1000}-second mark"
+        )
+    else:
+        visual = f"an image with a {clues['emblem_color']} emblem"
+        if plan["pattern"] == "serial_identity":
+            visual += f" and a {clues['emblem_shape']} motif"
+    if plan["pattern"] == "parallel_cues":
+        second = (
+            f"spoken commentary with a {clues['spoken_cue']} cue"
+            if clues["caption_modality"] == "audio" else
+            f"written notes describing a {clues['emblem_shape']} motif"
+        )
+        return (
+            f"In the {topic} materials, {visual} and {second} "
+            f"identify the same {item}. For that item, "
+            f"what is the confirmed {goal}?"
+        )
+    return (
+        f"In the {topic} materials, {visual} identifies one {item}. "
+        f"For the matching item, what is the confirmed {goal}?"
+    )
+
+
 def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if (spec.get("reasoning_pattern") == "macro_first_v2"
+            and spec.get("scene_realism_version")):
+        return _one_output_v2_question(spec)
     if spec["reasoning_pattern"] == "macro_first_v2":
         plan = spec["macro_plan"]
         clues = plan["clues"]
@@ -371,7 +428,13 @@ def guard_question(question: str, spec: dict,
                 required.append(clues["emblem_shape"])
             if mode == "parallel_cues":
                 required.append(clues["emblem_shape"])
-            if any(cue.casefold() not in q.casefold() for cue in required):
+            def has_required_clue(cue: str) -> bool:
+                # "triangular emblem" is a legitimate paraphrase for a
+                # triangle motif; require the cue rather than exact stems.
+                if spec.get("scene_realism_version") and cue == "triangle":
+                    return bool(re.search(r"\b(?:triangle|triangular)\b", q, re.I))
+                return cue.casefold() in q.casefold()
+            if not all(has_required_clue(cue) for cue in required):
                 errors.append("macro_first_v2_clue_missing")
             if clues["visual_modality"] == "video" and mode != "multimodal_event":
                 if str(clues["time_threshold_ms"] // 1000) not in q:
@@ -580,7 +643,10 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             author_contract["repair_reference_question"] = initial
             if "topic_missing" in failures[-1].get("errors", ()):
                 author_contract["topic_repair"] = (
-                    "Mention the exact topic as the fictional collection title: "
+                    ("Mention the exact topic naturally in the supplied "
+                     "working materials: "
+                     if spec.get("scene_realism_version") else
+                     "Mention the exact topic as the fictional collection title: ")
                     + spec["scenario"]["topic"]
                 )
         user_text = json.dumps({
@@ -597,9 +663,14 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                           "exact grounded topic label and temporal direction.",
         }, ensure_ascii=False)
         try:
-            from .v2_prompts import QUESTION_AUTHOR, QUESTION_CRITIC
+            from .v2_prompts import (
+                QUESTION_AUTHOR, QUESTION_CRITIC, QUESTION_AUTHOR_SINGLE_SLOT,
+            )
             v2 = spec.get("reasoning_pattern") == "macro_first_v2"
-            system_prompt = QUESTION_AUTHOR if v2 else AUTHOR_SYSTEM
+            system_prompt = (
+                QUESTION_AUTHOR_SINGLE_SLOT if spec.get("scene_realism_version")
+                else QUESTION_AUTHOR if v2 else AUTHOR_SYSTEM
+            )
             candidate = author.complete_json(system_prompt, user_text)
             raw = candidate.get("question")
             q = (normalize_question_punctuation(raw)
