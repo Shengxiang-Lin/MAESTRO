@@ -96,6 +96,7 @@ class InformationNecessityTests(unittest.TestCase):
         old = copy.deepcopy(spec)
         from envir.generate_question.macro_first_v2 import sample_macro_plan
         old.pop("scene_realism_version")
+        old.pop("goal_resolution_version", None)
         plan, roles = sample_macro_plan(
             seed=old["seed"], ordinal=old["ordinal"],
             record_id=old["source_anchor"]["source_record_id"],
