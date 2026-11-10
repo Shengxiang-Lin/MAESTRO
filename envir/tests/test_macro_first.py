@@ -151,6 +151,26 @@ class MacroFirstTests(unittest.TestCase):
                 with self.assertRaises(MissingSourceError):
                     session.read_source(sid)
 
+    def test_full_quality_report_and_old_mode_coexistence(self):
+        from envir.generate_question.pipeline import quality_report
+        from envir.generate_question.spec import make_spec
+        scenes = []
+        for i in range(24):
+            spec = make(i)
+            scenes.append(compile_and_validate(spec, reference_question(spec)))
+        baseline_spec = make_spec(
+            seed_record={"record_id": "baseline", "topic": "Reference Audit"},
+            ordinal=67, run_seed=17, difficulty="easy",
+        )
+        scenes.append(compile_and_validate(
+            baseline_spec, reference_question(baseline_spec)
+        ))
+        report = quality_report(scenes, no_progress=True)
+        self.assertEqual(report["replay_pass"], 25)
+        self.assertEqual(report["macro_first"]["scenes"], 24)
+        self.assertEqual(report["macro_first"]["handoff_dependency_pass_rate"], 1.0)
+        self.assertEqual(sum(report["macro_first"]["pattern_distribution"].values()), 24)
+
     def test_direct_handoff_interventions_change_answer(self):
         for i in range(15):
             spec = make(i)
