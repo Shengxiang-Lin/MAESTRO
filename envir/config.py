@@ -99,6 +99,13 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     macro_first_v2_share = generation.get("macro_first_v2_share", 0)
     if type(macro_first_v2_share) is not int or not 0 <= macro_first_v2_share <= 100:
         raise ValueError("generation.macro_first_v2_share must be 0..100")
+    accepted_difficulty_quotas = generation.get("accepted_difficulty_quotas", False)
+    if type(accepted_difficulty_quotas) is not bool:
+        raise ValueError("generation.accepted_difficulty_quotas must be boolean")
+    quota_candidate_multiplier = generation.get("quota_candidate_multiplier", 1)
+    if (type(quota_candidate_multiplier) is not int
+            or not 1 <= quota_candidate_multiplier <= 4):
+        raise ValueError("generation.quota_candidate_multiplier must be 1..4")
     directory = output_dir or generation.get("output_dir")
     if not directory:
         raise ValueError("generation.output_dir is required")
@@ -107,6 +114,8 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         output_dir=_path(directory), target=chosen_target,
         max_records=max_records, seed=seed,
         difficulty_mix=",".join(map(str, mix)),
+        accepted_difficulty_quotas=accepted_difficulty_quotas,
+        quota_candidate_multiplier=quota_candidate_multiplier,
         overwrite=bool(generation.get("overwrite", False)),
         flush_every=flush_every,
         clue_chain_share=clue_chain_share,
