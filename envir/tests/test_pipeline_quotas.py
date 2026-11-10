@@ -138,6 +138,47 @@ class AcceptedQuotaTests(unittest.TestCase):
                     args, generate_batch=mock_batch, quality_report=fake_quality
                 )
 
+    def test_exhausted_budget_reports_unfilled_difficulty_quotas(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            raw = base / "fixture.jsonl"
+            raw.write_text('{"row":1}\n')
+            args = argparse.Namespace(
+                output_dir=base / "result", target=12, seed=17,
+                difficulty_mix="17,33,50", max_candidate_multiplier=2,
+                overwrite=False, no_progress=True, mmqa=raw,
+                scenario_model="mock", scenario_critic_model="mock",
+                question_model="mock", question_critic_model="mock",
+            )
+            def rejected(batch):
+                write_jsonl(
+                    batch.output_dir / "questions" / "scenes.jsonl", []
+                )
+                return {
+                    "attempted": batch.target, "generated": 0,
+                    "scenario_authoring": {"fallback": batch.target},
+                    "question_authoring": {},
+                }
+            def empty_quality(scenes, **kwargs):
+                return {
+                    "status": "invalid", "checked": 0, "replay_pass": 0,
+                    "replay_fail": 0, "macro_graph_diversity": {},
+                    "reasoning": {"unique_structural_program_signatures": 0},
+                    "question_surface": {"unique_abstract_shapes": 0},
+                    "interpretation_limits": [],
+                }
+            summary = generate_with_quotas(
+                args, generate_batch=rejected, quality_report=empty_quality
+            )
+            self.assertEqual(summary["status"], "failed")
+            self.assertEqual(summary["generated"], 0)
+            self.assertEqual(summary["attempted"], 24)
+            self.assertEqual(sum(
+                summary["difficulty_quotas"]["deficit"].values()
+            ), 12)
+            self.assertFalse(summary["difficulty_quotas"]["met"])
+
+
 
 if __name__ == "__main__":
     unittest.main()
