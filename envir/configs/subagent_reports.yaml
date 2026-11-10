@@ -1,11 +1,11 @@
-# MAESTRO Stage 2: derive answer + trace_summary for EVERY accepted Macro.
-# Uses the private accepted Stage-1 scene bank; no LLM API calls.
+# Materialize trusted evidence traces and naturalize Sub-Agent reports.
+# All paths are relative to the repository root.
 version: 1
 
 implementation:
-  # Change this to the "questions/scenes.jsonl" from your accepted Stage-1 run.
-  scenes: envir/data/maestro_question_final_100/questions/scenes.jsonl
-  output_dir: envir/data/maestro_subtask_teacher_100
+  # Must match questions.yaml generation.output_dir + /questions/scenes.jsonl.
+  scenes: envir/data/maestro_current_100/questions/scenes.jsonl
+  output_dir: envir/data/maestro_subtask_oracle_100
   max_records: null
   evidence_limit: 12
   strict_replay: true
@@ -13,12 +13,12 @@ implementation:
   no_progress: false
 
 
-# Second pass: naturalize the 529 frozen oracle Macro results in the style
+# Naturalize the frozen Oracle Macro results in the style
 # of a real Sub-Agent's finish(result/status/summary) to Main-Agent.
 # This NEVER changes structured answer or teacher evidence.
 reporting:
-  source_subtasks: envir/data/maestro_subtask_teacher_100/subtasks.jsonl
-  source_scene_index: envir/data/maestro_subtask_teacher_100/scene_index.jsonl
+  source_subtasks: envir/data/maestro_subtask_oracle_100/subtasks.jsonl
+  source_scene_index: envir/data/maestro_subtask_oracle_100/scene_index.jsonl
   output_dir: envir/data/maestro_subagent_reports_100
   api_base: http://127.0.0.1:8807/v1
   model: local-qwen3.5-9b

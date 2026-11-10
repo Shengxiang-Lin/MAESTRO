@@ -178,7 +178,7 @@ class CombinedStage2Tests(unittest.TestCase):
     def test_cli_scenes_dispatches_combined_and_rejects_double_inputs(self):
         parsed = parser().parse_args([
             "naturalize-subtasks", "--config",
-            "envir/implement_subtask/config.yaml",
+            "envir/configs/subagent_reports.yaml",
             "--scenes", "envir/data/example/questions/scenes.jsonl",
             "--output-dir", "envir/data/out",
         ])
@@ -187,13 +187,25 @@ class CombinedStage2Tests(unittest.TestCase):
                    return_value={"status": "done"}) as called:
             self.assertEqual(main([
                 "naturalize-subtasks",
-                "--config", "envir/implement_subtask/config.yaml",
+                "--config", "envir/configs/subagent_reports.yaml",
                 "--scenes", "envir/data/example/questions/scenes.jsonl",
                 "--output-dir", "envir/data/out",
             ]), 0)
             self.assertEqual(called.call_count, 1)
             self.assertEqual(
                 called.call_args.kwargs["evidence_limit"], 12
+            )
+        # A config-only command now takes implementation.scenes and
+        # performs both Oracle and Sub-Agent report generation.
+        from envir.implement_subtask.config import DEFAULT_CONFIG, load_config
+        with patch("envir.__main__.generate_subagent_reports",
+                   return_value={"status": "done"}) as from_config:
+            self.assertEqual(main([
+                "naturalize-subtasks", "--config", str(DEFAULT_CONFIG),
+            ]), 0)
+            self.assertEqual(
+                from_config.call_args.kwargs["scenes_path"],
+                load_config(DEFAULT_CONFIG)["scenes_path"],
             )
         with self.assertRaises(SystemExit):
             main([

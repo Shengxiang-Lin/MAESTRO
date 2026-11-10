@@ -425,7 +425,7 @@ def guard_question(question: str, spec: dict,
     if pattern == "macro_first_v2":
         plan = spec["macro_plan"]
         mode, clues = plan["pattern"], plan["clues"]
-        from .macro_first_v2 import GOAL_PHRASES
+        from .macro_planning import GOAL_PHRASES
         label = plan["goal"]["public_label"]
         goal_field = plan["goal"]["answer_field"]
         if not any(phrase in q.casefold()
@@ -684,7 +684,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                           "exact grounded topic label and temporal direction.",
         }, ensure_ascii=False)
         try:
-            from .v2_prompts import (
+            from .prompt_templates import (
                 QUESTION_AUTHOR, QUESTION_CRITIC, QUESTION_AUTHOR_SINGLE_SLOT,
             )
             v2 = spec.get("reasoning_pattern") == "macro_first_v2"

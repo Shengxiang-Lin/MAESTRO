@@ -40,14 +40,14 @@ def _construction_identity(args) -> str:
             for name in (
                 "spec.py", "clue_chain.py", "graph_grammar.py",
                 "world_synthesizer.py", "macro_first.py",
-                "macro_first_world.py", "macro_first_v2.py",
-                "macro_first_v2_world.py", "information_necessity.py",
+                "macro_first_world.py", "macro_planning.py",
+                "macro_evidence_world.py", "information_necessity.py",
                 "source_title_contract.py", "difficulty_proxy.py",
                 "scenario_fields.py", "topic_quality.py",
                 "topic_domain.py", "question_fidelity.py",
                 "goal_resolution.py",
                 "semantic_evidence.py",
-                "v2_prompts.py", "intent.py", "surface_quality.py",
+                "prompt_templates.py", "intent.py", "surface_quality.py",
                 "program_ir.py",
                 "compiler.py", "scenario.py", "world.py", "quality.py",
                 "backend.py", "stages.py",
@@ -80,8 +80,8 @@ def _question_signature(args, rows: list[dict]) -> str:
         "intent_code": file_digest(Path(__file__).with_name("intent.py")),
         "surface_quality_code": file_digest(
             Path(__file__).with_name("surface_quality.py")),
-        "v2_prompts_code": file_digest(
-            Path(__file__).with_name("v2_prompts.py")),
+        "prompt_templates_code": file_digest(
+            Path(__file__).with_name("prompt_templates.py")),
         "stage_code": file_digest(Path(__file__)),
         "backend_code": file_digest(Path(__file__).with_name("backend.py")),
     })
@@ -252,8 +252,8 @@ def construct_scenes(args) -> dict:
             "semantic_evidence_code": file_digest(
                 Path(__file__).with_name("semantic_evidence.py")),
             "intent_code": file_digest(Path(__file__).with_name("intent.py")),
-            "v2_prompts_code": file_digest(
-                Path(__file__).with_name("v2_prompts.py")),
+            "prompt_templates_code": file_digest(
+                Path(__file__).with_name("prompt_templates.py")),
             "stage_code": file_digest(Path(__file__)),
             "backend_code": file_digest(Path(__file__).with_name("backend.py")),
         })

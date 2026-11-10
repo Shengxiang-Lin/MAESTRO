@@ -37,7 +37,7 @@ def _mutate_answer_witness(sources: dict, source_id: str,
     if not refs:
         raise ValueError("missing_gold_source_witness:" + source_id)
     if (spec or {}).get("reasoning_pattern") == "macro_first_v2":
-        from .macro_first_v2_world import mutate_witness
+        from .macro_evidence_world import mutate_witness
         return mutate_witness(sources, source_id, gold_workproducts, spec)
     if (spec or {}).get("reasoning_pattern") == "macro_first":
         from .macro_first_world import mutate_macro_first_witness

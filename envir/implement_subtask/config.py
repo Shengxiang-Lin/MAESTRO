@@ -1,4 +1,4 @@
-"""Independent YAML configuration for MAESTRO Stage 2 Subtask execution oracle."""
+"""YAML settings for trusted Sub-Agent evidence and report generation."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG = Path(__file__).with_name("config.yaml")
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "subagent_reports.yaml"
 _ALLOWED = {
     "scenes", "output_dir", "max_records", "evidence_limit",
     "strict_replay", "no_progress", "overwrite",

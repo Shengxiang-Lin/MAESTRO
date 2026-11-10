@@ -39,7 +39,7 @@ class InformationNecessityTests(unittest.TestCase):
         from pathlib import Path
         import yaml
         config = yaml.safe_load(
-            (Path(__file__).resolve().parents[1] / "config.yaml").read_text()
+            (Path(__file__).resolve().parents[1] / "configs" / "questions.yaml").read_text()
         )
         mix = tuple(config["generation"]["difficulty_mix"])
         self.assertEqual(mix, (17, 33, 50))
@@ -94,7 +94,7 @@ class InformationNecessityTests(unittest.TestCase):
     def test_old_semantic_v2_scene_replays_without_changed_world(self):
         spec = sample_of("multimodal_event")
         old = copy.deepcopy(spec)
-        from envir.generate_question.macro_first_v2 import sample_macro_plan
+        from envir.generate_question.macro_planning import sample_macro_plan
         old.pop("scene_realism_version")
         old.pop("goal_resolution_version", None)
         old.pop("evidence_tool_contract_version", None)
@@ -167,15 +167,15 @@ class InformationNecessityTests(unittest.TestCase):
         self.assertEqual(contract["requested_entities"], [])
 
     def test_domain_metadata_only_changes_new_versioned_scenes(self):
-        from envir.generate_question.macro_first_v2 import (
-            domain_hint_v2, domain_hint_v3,
+        from envir.generate_question.macro_planning import (
+            classify_domain_from_metadata, classify_domain_from_taxonomy,
         )
-        self.assertEqual(domain_hint_v2("Swansea City", "sports"), "sports")
-        self.assertEqual(domain_hint_v2("Unidentified subject", "culture"),
+        self.assertEqual(classify_domain_from_metadata("Swansea City", "sports"), "sports")
+        self.assertEqual(classify_domain_from_metadata("Unidentified subject", "culture"),
                          "general")
-        self.assertEqual(domain_hint_v3("Unidentified subject", "culture"),
+        self.assertEqual(classify_domain_from_taxonomy("Unidentified subject", "culture"),
                          "culture")
-        self.assertEqual(domain_hint_v3("Unidentified subject", "environment"),
+        self.assertEqual(classify_domain_from_taxonomy("Unidentified subject", "environment"),
                          "environment")
         spec = spec_for(13, topic="Unknown civic event", hint="civic")
         self.assertEqual(spec["macro_plan"]["domain"], "civic")
