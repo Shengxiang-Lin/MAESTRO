@@ -278,6 +278,11 @@ def generate_world(spec: dict) -> dict:
             **_rows(sid, role["modality"], role["title"],
                     role["purpose"], rows),
             "access_policy": policy,
+            # A Direct-Extract URL is known before delegation; URLs discovered
+            # through Search -> Extract remain private until the simulated
+            # search observation returns them.
+            **({"resource_url": role["simulated_page_url"]}
+               if role.get("acquisition_route") == "direct_extract" else {}),
         }
     return {
         "version": WORLD_VERSION, "simulated_only": True,
