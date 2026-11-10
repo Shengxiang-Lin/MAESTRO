@@ -163,10 +163,6 @@ class MainTurnDatasetTests(unittest.TestCase):
                 payload = json.loads(request)
                 self_is_prose = payload["candidate_prose_only"]
                 self_assignment = payload["assignment_prose_goals_in_required_order"]
-                self.assert_true = all(
-                    "tools" not in task and "model" not in task
-                    for task in self_is_prose["tasks"]
-                )
                 seen.append((self_is_prose, self_assignment, payload))
                 return {"verdict": "pass", "grounded": True,
                         "assignment_fidelity": True, "o1_style": True}
@@ -433,6 +429,11 @@ class MainTurnDatasetTests(unittest.TestCase):
                 )
             self.assertTrue((out / "journal" / "000000.json").is_file())
             self.assertFalse((out / "journal" / "000001.json").exists())
+            live = json.loads((out / "summary.json").read_text())
+            self.assertEqual(live["status"], "running")
+            self.assertEqual(live["processed_scenes"], 1)
+            self.assertEqual(live["accepted_scenes"], 1)
+            self.assertEqual(live["rejected_scenes"], 0)
             turns = [
                 json.loads(x) for x in
                 (out / "main_turns.jsonl").read_text().splitlines()
