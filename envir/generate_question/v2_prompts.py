@@ -187,3 +187,20 @@ unless appropriate to the selected domain. A domain-specific scene is
 not a license to invent historical facts or new source requirements.
 Keep the exact required source conditions while varying surface syntax.
 """
+
+QUESTION_AUTHOR_SINGLE_SLOT += """
+STRICT QUESTION PREDICATE FIDELITY (new V2):
+- A frame_time_ms >= 60000 predicate means the relevant frame/action is
+  seen AT OR AFTER the 60-second timestamp. It does NOT say that the
+  action lasted for 60 seconds, started exactly at 60 seconds, or first
+  appeared at 60 seconds. Keep inclusive inequality semantics explicit.
+- footage_time_ms <= commentary_time_ms means the video event occurs NO
+  LATER THAN the spoken audio cue (simultaneity is allowed). Do not add
+  a fixed elapsed interval or claim the event happened strictly before.
+- Identity matching is a condition, not a second returned answer.
+  Do not ask which clip, which game, or which record AND what final goal.
+  Phrase instead: 'For the video clip matching [evidence], what is the
+  confirmed [single Goal]?'
+- Never change a source observation into a duration, first occurrence,
+  date, real media action, or an unverified additional filter.
+"""
