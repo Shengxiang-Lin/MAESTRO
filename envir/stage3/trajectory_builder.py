@@ -1,0 +1,358 @@
+"""Construct trusted Orchestra-o1 *per-decision* supervised examples.
+
+One wave of independent Macro Tasks -> one Main 'delegate_task' action;
+its reviewed Stage-2 responses become visible only in the NEXT round.
+An executable Main-local terminal calculation may become 'complete'
+without unnecessarily delegating another synthetic Sub-Agent.
+
+The full teacher alignment is returned separately and never embedded in
+a prompt or training label.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+import hashlib
+import json
+import re
+from typing import Any
+
+from envir.generate_question.quality import validate_replay
+from envir.implement_subtask.realize import realize_scene
+
+from .o1_compat import o1_prompt, o1_history, source_catalog
+from .action_author import _assignment, author_delegate_action
+
+
+def _hash(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def _strict_reports(scene: dict, rows: list[dict]) -> dict[str, dict]:
+    if validate_replay(scene)["status"] != "valid":
+        raise ValueError("stage3_invalid_frozen_scene")
+    expected = {row["macro_task_id"]: row for row in realize_scene(scene)[
+        "macro_tasks"
+    ]}
+    accepted = {}
+    for row in rows:
+        tid = row.get("macro_task_id")
+        if tid in accepted or tid not in expected:
+            raise ValueError("stage3_duplicate_or_unrecognized_macro")
+        if row.get("scene_task_id") != scene["task_id"]:
+            raise ValueError("stage3_report_wrong_scene")
+        if row.get("report_authoring", {}).get("status") != "accepted":
+            raise ValueError("stage3_report_not_reviewed")
+        oracle = expected[tid]
+        if any(row.get(key) != oracle[key] for key in (
+            "answer", "answer_with_provenance", "depends_on",
+            "authorized_source_ids", "output_schema",
+        )):
+            raise ValueError("stage3_report_not_grounded:" + tid)
+        finish = row.get("finish_result")
+        if not isinstance(finish, dict) or finish.get("status") != "done":
+            raise ValueError("stage3_report_not_done:" + tid)
+        if (not isinstance(finish.get("result"), str)
+                or not isinstance(finish.get("summary"), str)
+                or not finish["result"].strip()
+                or not finish["summary"].strip()):
+            raise ValueError("stage3_report_lacks_public_result:" + tid)
+        # Historical reports may omit narrative; the audited finish summary
+        # is still a legitimate public trace summarization.
+        narrative = row.get("trace_summary", {}).get("narrative")
+        if narrative is not None and not isinstance(narrative, str):
+            raise ValueError("stage3_invalid_public_trace_narrative")
+        accepted[tid] = deepcopy(row)
+    if set(accepted) != set(expected):
+        raise ValueError("stage3_requires_complete_accepted_scene")
+    return accepted
+
+
+def _main_local_terminal(graph: dict) -> bool:
+    terminal = next(row for row in graph["tasks"] if row["task_id"] ==
+                    graph["terminal_task_id"])
+    operations = [step["op"] for step in terminal["operator_chain"]]
+    return (
+        not terminal["source_ids"]
+        and bool(set(operations) & {"derive_comparison", "derive_percentage"})
+        and set(operations).issubset({
+            "join", "project", "unique",
+            "derive_comparison", "derive_percentage",
+        })
+    )
+
+
+def _can_derive_local_answer(scene: dict, delivered: dict,
+                             tasks: dict) -> bool:
+    """Use *delivered* trusted parent facts, not a private future result."""
+    if not _main_local_terminal(scene["macro_graph"]):
+        return False
+    terminal_id = scene["macro_graph"]["terminal_task_id"]
+    terminal = tasks[terminal_id]
+    parents = list(terminal["depends_on"])
+    if len(parents) != 2 or not all(p in delivered for p in parents):
+        return False
+    plan = scene["problem_spec"].get("macro_plan", {})
+    kind = plan.get("goal_resolution", {}).get("kind")
+    if kind not in ("comparison", "calculation"):
+        return False
+    values = {}
+    for parent in parents:
+        row = delivered[parent]
+        if len(row["answer"]) != 1:
+            return False
+        # A value in a private typed Oracle row is NOT sufficient to
+        # justify a Main-local calculation: the Sub-Agent must actually
+        # have communicated that value in the preceding visible message.
+        visible_text = (
+            row["finish_result"]["result"] + " " +
+            row["finish_result"]["summary"]
+        )
+        for value in row["answer"][0].values():
+            if type(value) is int and not re.search(
+                r"(?<!\d)" + re.escape(str(value)) + r"(?!\d)",
+                visible_text,
+            ):
+                return False
+        values.update(row["answer"][0])
+    first, second = (
+        ("metric_a", "metric_b") if kind == "comparison"
+        else ("completed_count", "total_count")
+    )
+    if first not in values or second not in values:
+        return False
+    from envir.generate_question.goal_resolution import goal_values
+    actual = goal_values(kind, values[first], values[second])
+    field = plan["goal"]["answer_field"]
+    return scene["gold_answer"] == [{field: actual}]
+
+
+def _answer_text(scene: dict) -> str:
+    rows = scene["gold_answer"]
+    if len(rows) == 1 and len(rows[0]) == 1:
+        field, value = next(iter(rows[0].items()))
+        if field == "completion_rate_percent":
+            return str(value) + "%"
+        return str(value)
+    return json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+
+
+def _main_report(record: dict, assigned: dict, index: int,
+                 *, model_alias: str) -> dict:
+    """Return the *public* delegate_task result, never Oracle structure."""
+    finish = deepcopy(record["finish_result"])
+    narrative = record.get("trace_summary", {}).get("narrative")
+    if not isinstance(narrative, str) or not narrative.strip():
+        narrative = finish["summary"]
+    return {
+        "subtask_index": index,
+        "task_instruction": assigned["task_instruction"],
+        "model": model_alias,
+        "steps_taken": len(record["trace_summary"]["steps"]),
+        "statistics": {"max_steps": 30},
+        "done": True,
+        "finish_result": finish,
+        "trace_summary": narrative,
+        "cost": 0.0,  # Offline replay, not a measured LLM/Tool bill.
+    }
+
+
+def _history_item(sub_result: dict) -> dict:
+    finish = sub_result["finish_result"]
+    return {
+        "status": finish["status"],
+        "instruction": sub_result["task_instruction"],
+        "model": sub_result["model"],
+        "steps_taken": sub_result["steps_taken"],
+        "max_steps": sub_result["statistics"]["max_steps"],
+        "cost": sub_result["cost"],
+        "result": finish["result"],
+        "summary": finish["summary"],
+        "trace_summary": sub_result["trace_summary"],
+    }
+
+
+def build_episode(
+    scene: dict, stage2_rows: list[dict], *, author=None, critic=None,
+    max_revisions: int = 2, max_attempts: int = 16,
+    sub_model: str = "qwen3-8b", model_alias: str = "model_1",
+) -> tuple[dict | None, list[dict], list[dict], dict]:
+    """Return (public Episode, SFT turns, PRIVATE alignments, status)."""
+    if max_attempts < 2:
+        raise ValueError("stage3_max_attempts_too_small")
+    if not isinstance(model_alias, str) or not model_alias:
+        raise ValueError("stage3_invalid_model_alias")
+    reports = _strict_reports(scene, stage2_rows)
+    graph = scene["macro_graph"]
+    tasks = {row["task_id"]: row for row in graph["tasks"]}
+    if len(tasks) != len(graph["tasks"]):
+        raise ValueError("stage3_duplicate_graph_task")
+    catalog = source_catalog(scene)
+    waves = graph["reference_waves"]
+    if not waves:
+        raise ValueError("stage3_empty_reference_schedule")
+    main_compute = (
+        _main_local_terminal(graph)
+        and _can_derive_local_answer(scene, reports, tasks)
+    )
+    if main_compute:
+        if waves[-1] != [graph["terminal_task_id"]]:
+            raise ValueError("stage3_terminal_not_separate_last_wave")
+        scheduled = waves[:-1]
+    else:
+        scheduled = waves
+    if len(scheduled) + 1 > max_attempts:
+        return None, [], [], {
+            "status": "rejected", "cause": "stage3_round_budget_insufficient",
+            "rounds_required": len(scheduled) + 1,
+        }
+
+    task_entries, delivered = [], {}
+    trajectory, examples, audit = [], [], []
+    for wave_number, wave in enumerate(scheduled, 1):
+        # Teacher uses the DAG to choose targets, but only existing
+        # user-visible feedback enters the actual Main input prompt.
+        if any(any(parent not in delivered for parent in tasks[tid]["depends_on"])
+               for tid in wave):
+            raise ValueError("stage3_wave_dependency_not_satisfied")
+        available_before = list(delivered)
+        history = o1_history(task_entries)
+        main_prompt = o1_prompt(
+            scene, task_entries, attempt=wave_number,
+            max_attempts=max_attempts, sub_model=sub_model,
+            model_alias=model_alias,
+        )
+        assignment = [
+            _assignment(
+                tasks[tid], catalog, delivered, model_alias=model_alias
+            ) for tid in wave
+        ]
+        action, status = author_delegate_action(
+            assignments=assignment, prompt=main_prompt,
+            author=author, critic=critic, max_revisions=max_revisions,
+        )
+        if action is None:
+            return None, [], [], {
+                "status": "rejected", "cause": "main_action_not_accepted",
+                "round": wave_number, "authoring": status,
+            }
+        sub_results = []
+        for index, (tid, sub_instruction) in enumerate(
+                zip(wave, action["params"]["tasks"])):
+            result = _main_report(reports[tid], sub_instruction, index,
+                                  model_alias=model_alias)
+            sub_results.append(result)
+        batch_result = {
+            "subtask_results": sub_results,
+            "total_subtasks": len(sub_results),
+            "total_cost": 0.0,
+            "total_steps": sum(row["steps_taken"] for row in sub_results),
+            "all_done": True,
+        }
+        action_record = {
+            "attempt": wave_number,
+            "action": "delegate_task",
+            "reasoning": action["reasoning"],
+            "params": deepcopy(action["params"]),
+            "result": batch_result,
+            "raw_response": json.dumps(action, ensure_ascii=False),
+        }
+        examples.append({
+            "sample_id": scene["task_id"] + f"-round-{wave_number:02d}",
+            "task_id": scene["task_id"], "round": wave_number,
+            "input": {"prompt": main_prompt},
+            "output": action,
+            "output_json": json.dumps(action, ensure_ascii=False),
+            "generation_mode": status["mode"],
+        })
+        audit.append({
+            "task_id": scene["task_id"],
+            "round": wave_number,
+            "action": "delegate_task",
+            "private_macro_alignment": list(wave),
+            "visible_macros_before_round": available_before,
+            "newly_delivered_macro_ids": list(wave),
+            "prompt_sha256": _hash(main_prompt),
+            "action_sha256": _hash(action),
+            "o1_history_sha256": _hash(history),
+            "dependencies_satisfied": True,
+            "authoring": status,
+            "private_only": True,
+        })
+        trajectory.append(action_record)
+        for tid in wave:
+            delivered[tid] = reports[tid]
+        task_entries.append({
+            "attempt": wave_number,
+            "is_parallel_batch": True,
+            "subtask_results": [_history_item(item) for item in sub_results],
+            "total_cost": 0.0,
+            "total_steps": batch_result["total_steps"],
+        })
+
+    if (set(delivered) != set(tasks)
+            and not (main_compute
+                     and set(delivered) == (
+                         set(tasks) - {graph["terminal_task_id"]}
+                     ))):
+        raise ValueError("stage3_incomplete_macro_schedule")
+    if main_compute and not _can_derive_local_answer(scene, delivered, tasks):
+        raise ValueError("stage3_local_resolution_not_derived_from_reports")
+    completion_round = len(scheduled) + 1
+    completion_prompt = o1_prompt(
+        scene, task_entries, attempt=completion_round,
+        max_attempts=max_attempts, sub_model=sub_model,
+        model_alias=model_alias,
+    )
+    final_action = {
+        "action": "complete",
+        "reasoning": (
+            "The prior Sub-Agent findings now provide the required "
+            "identification and supporting evidence. The answer can be "
+            "completed without another investigation."
+        ),
+        "params": {"answer": _answer_text(scene)},
+    }
+    examples.append({
+        "sample_id": scene["task_id"] + f"-round-{completion_round:02d}",
+        "task_id": scene["task_id"], "round": completion_round,
+        "input": {"prompt": completion_prompt},
+        "output": final_action,
+        "output_json": json.dumps(final_action, ensure_ascii=False),
+        "generation_mode": "teacher_verified_completion",
+    })
+    audit.append({
+        "task_id": scene["task_id"], "round": completion_round,
+        "action": "complete",
+        "private_macro_alignment": (
+            [graph["terminal_task_id"]] if main_compute else []
+        ),
+        "visible_macros_before_round": list(delivered),
+        "newly_delivered_macro_ids": [],
+        "prompt_sha256": _hash(completion_prompt),
+        "action_sha256": _hash(final_action),
+        "main_locally_computed": main_compute,
+        "dependencies_satisfied": True,
+        "private_only": True,
+    })
+    trajectory.append({
+        "attempt": completion_round,
+        "action": "complete",
+        "reasoning": final_action["reasoning"],
+        "params": final_action["params"],
+        "result": {"success": True, "done": True},
+        "raw_response": json.dumps(final_action, ensure_ascii=False),
+    })
+    return {
+        "task_id": scene["task_id"],
+        "question": scene["question"],
+        "format": "orchestra_o1_main_trajectory.v1",
+        "trajectory": trajectory,
+        "main_decision_rounds": len(trajectory),
+        "trusted_subagent_feedback": True,
+    }, examples, audit, {
+        "status": "accepted", "main_decision_rounds": len(trajectory),
+        "parallel_delegation_rounds": len(scheduled),
+        "main_local_goal_resolution": main_compute,
+    }
