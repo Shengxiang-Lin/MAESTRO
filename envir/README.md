@@ -328,3 +328,59 @@ not automatically the number of independently supporting facts. Neither
 the synthetic hard label nor a longer local evidence list proves
 difficulty for a live LLM Sub-Agent. A local Author/Critic pilot and
 independent blind-agent evaluation are needed.
+
+
+## Source-grounded Semantic Evidence Contract (Macro-first V2)
+
+Newly generated V2 ProblemSpecs now include
+`semantic_evidence_contract_version: maestro.semantic_evidence.v1`.
+The generator compiles a deterministic `semantic_evidence_contract`
+from the **actual Gold Solver's primitive predicates and source schemas**,
+including exact typed Goal semantics, image/video/audio fields, relevant
+filter constants, compare operations and time relations.
+
+This freezes semantic obligations *before* Scenario/Question Author. Their
+prompts receive only the source features that the program actually checks,
+not all randomly sampled unused media features. Deterministic gates
+reject clear high-confidence violations: fictitious clearance/approval,
+audio absent from the workspace, visual color/emblem predicates absent from
+video, audio timestamps not used by the Solver, exact seconds claimed for
+relative temporal order, and reversed video/audio ordering. Source titles
+must also match their local modality. The same checks run at Scenario
+draft review, Question draft review and strict Scene replay even when a
+question was accepted by the LLM Critic.
+
+The older Hard-intent heuristic incorrectly added an entry-specific
+clearance rule to V2; it is now excluded. That invented criterion was a
+real source of false Question conditions in prior experiments.
+
+New contracts are **version-gated**: previously frozen V2 scenes without
+the marker keep the same compilation/replay behavior. The read-only
+`python -m envir quality` report now includes
+`semantic_evidence_diagnostics` and can flag potentially unsupported
+claims in older V2 questions without modifying or automatically rejecting
+those historically published results.
+
+```bash
+# Re-audit older V2 scenes (read-only)
+python -m envir quality --config envir/config.yaml \
+  --scenes envir/data/maestro_macro_v2_100/questions/scenes.jsonl \
+  --output envir/data/maestro_macro_v2_100/semantic_recheck.json
+
+# New pilot: choose a fresh destination
+python -m envir generate-questions --config envir/config.yaml \
+  --target 100 --macro-first-v2-share 100 \
+  --output-dir envir/data/maestro_macro_v2_semantic_100
+
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --scenes envir/data/maestro_macro_v2_semantic_100/questions/scenes.jsonl \
+  --output-dir envir/data/maestro_macro_v2_semantic_reports_100
+```
+
+The new static check is **not** a proof of unrestricted natural-language
+entailment, open-world search, real image/video/audio perception or
+absence of all alternative solution paths. It is intentionally
+conservative and should be evaluated against an independent blind
+question reviewer. Do not compare revised Scenario acceptance rates
+without reporting the stricter validation criteria.
