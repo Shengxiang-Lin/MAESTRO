@@ -95,14 +95,20 @@ def generate_with_quotas(args, *, generate_batch, quality_report):
                                   "scenario_fields.py", "question.py",
                                   "spec.py")},
         })
-        if summary_path.exists() and not args.overwrite:
-            if (not manifest.exists()
-                    or json.loads(manifest.read_text())["signature"] != identity):
+        if manifest.exists() and not args.overwrite:
+            if json.loads(manifest.read_text())["signature"] != identity:
                 raise ValueError("quota_round_resume_identity_mismatch")
-            outcome = json.loads(summary_path.read_text())
+        elif summary_path.exists() and not args.overwrite:
+            raise ValueError("completed_quota_round_missing_identity")
         else:
-            outcome = generate_batch(sub)
+            # Commit the identity *before* the long-running LLM batch, so
+            # interruption after its completion cannot strand a checkpoint.
             write_json(manifest, {"signature": identity})
+        outcome = (
+            json.loads(summary_path.read_text())
+            if summary_path.exists() and not args.overwrite
+            else generate_batch(sub)
+        )
         attempted += outcome["attempted"]
         totals["scenario"].update(outcome.get("scenario_authoring", {}))
         totals["question"].update(outcome.get("question_authoring", {}))
