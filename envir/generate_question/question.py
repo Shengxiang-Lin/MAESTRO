@@ -29,6 +29,37 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if spec["reasoning_pattern"] == "evidence_graph":
+        graph = spec["evidence_graph"]
+        mode = graph["archetype"]
+        if mode == "conflict":
+            return (
+                f"In the fictional {topic} collection, two independent "
+                "inventories disagree about the reported year of one exhibit. "
+                "What accession year does the authoritative record give for "
+                "that disputed exhibit?"
+            )
+        visual = graph["visual_features"]
+        color, motif = visual["emblem_color"], visual["emblem_shape"]
+        if mode == "parallel":
+            return (
+                f"In the fictional {topic} collection, the illustration "
+                f"records a {color} emblem while the independent caption "
+                f"describes a {motif} motif. Which accession year belongs "
+                "to the exhibit identified by both clues?"
+            )
+        if mode == "disambiguation":
+            return (
+                f"In the fictional {topic} illustration, more than one "
+                f"exhibit has a {color} emblem. The independent identification "
+                f"notes describe a {motif} motif. What accession year belongs "
+                "to the exhibit matching both clues?"
+            )
+        return (
+            f"In the fictional {topic} exhibit illustration, an item has "
+            f"a {color} emblem and a {motif} motif. What accession year "
+            "belongs to that item in the accompanying collection records?"
+        )
     if spec["reasoning_pattern"] == "clue_chain":
         visual = spec["investigation"]["visual_features"]
         return (
@@ -148,6 +179,12 @@ deliverable. Distinguish active status from the reported status being compared.
 An independent approval applies to the category, not the glossary translation. Use the material titles as readable source handles. Keep
 simulated observations clearly fictional and avoid inventing a new clue.
 
+For evidence_graph tasks, describe the user need and the starting evidence
+clues without leaking the full retrieval algorithm. For a conflict task,
+identify the discrepancy but never invent factual years. For visual clues,
+retain BOTH stated features. The typed source graph is an internal contract,
+not a list of step-by-step instructions that must appear in the Question.
+
 For latest-version requests, you receive a STRUCTURED FROZEN USER INTENT:
 constraints, typed output, source roles and a style preference. Write an
 original user question from that contract. You may vary clause order,
@@ -218,6 +255,9 @@ MacroGraph projects entry_label. A well-formed imperative user request (e.g.
 For chronology, the compiled sort uses ascending relative_step: "earliest"
 or "first" is correct; "latest" or "most recent" is WRONG. Never hallucinate
 a reversed direction. Surface fluency alone is insufficient.
+For evidence_graph tasks, check all frozen starting clues, multi-source
+identification or conflict conditions and the accession-year deliverable.
+Do NOT require a user question to name every index or archive lookup.
 Only pass if all four booleans are true."""
 
 
@@ -236,7 +276,22 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
-    if pattern == "clue_chain":
+    if pattern == "evidence_graph":
+        graph = spec["evidence_graph"]
+        visual = graph["visual_features"]
+        if visual and not all(
+            str(visual[field]).lower() in q.lower()
+            for field in ("emblem_color", "emblem_shape")
+        ):
+            errors.append("evidence_graph_clues_missing")
+        if graph["archetype"] == "conflict" and not re.search(
+            r"\b(?:disagree|disagreement|disputed|discrepanc\w*|conflict\w*|"
+            r"differ\w*|mismatch\w*|inconsisten\w*)\b", q, re.I
+        ):
+            errors.append("evidence_graph_conflict_missing")
+        if not re.search(r"\byear\b", q, re.I):
+            errors.append("evidence_graph_answer_year_missing")
+    elif pattern == "clue_chain":
         visual = spec["investigation"]["visual_features"]
         if not all(
             str(visual[field]).lower() in q.lower()
@@ -259,7 +314,7 @@ def guard_question(question: str, spec: dict,
     else:
         if not re.search(r"\bactive\b", q, flags=re.I):
             errors.append("active_condition_missing")
-    if pattern not in {"approval", "clue_chain"}:
+    if pattern not in {"approval", "clue_chain", "evidence_graph"}:
         if not re.search(r"\b(codes?|glossary|map|mapped|mapping|crosswalk|translat\w*|resolv\w*)\b", q, re.I):
             errors.append("cross_source_code_mapping_missing")
         if pattern == "time_window":
@@ -286,7 +341,7 @@ def guard_question(question: str, spec: dict,
             errors.append("alias_resolution_not_expressed")
         if not re.search(r"\b(approv|review|annotat)", q, re.I):
             errors.append("review_condition_not_expressed")
-    if spec["difficulty_target"] == "hard" and pattern != "clue_chain":
+    if spec["difficulty_target"] == "hard" and pattern not in {"clue_chain", "evidence_graph"}:
         if not re.search(r"\b(clear|clearance|authoriz)", q, re.I):
             errors.append("clearance_condition_missing")
     family = spec["family"]
