@@ -148,7 +148,7 @@ def intent_contract(spec: dict) -> dict:
     if spec["difficulty_target"] == "easy":
         constraints = constraints[:1]
     if spec["difficulty_target"] == "hard" and pattern not in {
-        "evidence_graph", "macro_first"
+        "evidence_graph", "macro_first", "macro_first_v2"
     }:
         constraints.append(
             "Also require entry-specific clearance to be marked cleared "
