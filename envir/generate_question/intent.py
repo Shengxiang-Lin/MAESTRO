@@ -60,6 +60,7 @@ FAMILY_OUTPUTS = {
     "status_disagreement": "List entries with a genuine disagreement between the two reported statuses.",
     "threshold_eligibility": "List entries meeting the independently defined minimum value.",
     "accession_year": "Report the year in which the identified exhibit was accessioned.",
+    "evidence_answer": "Report the accession year justified by discovered evidence.",
 }
 STYLES = (
     ("direct_lookup", "Start with a concise direct question, not a job title."),
@@ -74,10 +75,32 @@ STYLES = (
 
 def intent_contract(spec: dict) -> dict:
     pattern = spec.get("reasoning_pattern", "approval")
-    constraints = list(PATTERN_CONSTRAINTS[pattern])
+    if pattern == "evidence_graph":
+        archetype = spec["evidence_graph"]["archetype"]
+        constraints = {
+            "chain": [
+                "Identify the pictured exhibit using BOTH emblem features.",
+                "Obtain its authoritative accession year from available records.",
+            ],
+            "parallel": [
+                "Use BOTH independent visual and caption clues to resolve one exhibit.",
+                "Find that exhibit's authoritative accession year.",
+            ],
+            "disambiguation": [
+                "The illustrated emblem color alone does not identify one exhibit.",
+                "Use the independent motif notes to disambiguate the candidates.",
+                "Find the resolved exhibit's authoritative accession year.",
+            ],
+            "conflict": [
+                "The two inventories disagree about the recorded year of one case.",
+                "Identify the disputed case and report its authoritative accession year.",
+            ],
+        }[archetype]
+    else:
+        constraints = list(PATTERN_CONSTRAINTS[pattern])
     if spec["difficulty_target"] == "easy":
         constraints = constraints[:1]
-    if spec["difficulty_target"] == "hard":
+    if spec["difficulty_target"] == "hard" and pattern != "evidence_graph":
         constraints.append(
             "Also require entry-specific clearance to be marked cleared "
             "in a separate source, not just group approval."
