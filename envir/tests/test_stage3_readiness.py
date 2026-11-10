@@ -170,6 +170,35 @@ class StageLocalClaimTests(unittest.TestCase):
         self.assertTrue(verified["reported_year_disagreement_established"])
         self.assertEqual(stage_local_claim_issues(error, verified), [])
 
+    def test_corroborated_dispute_requires_both_independent_branches(self):
+        from envir.generate_question.information_necessity import (
+            CORROBORATED_DISPUTE_POLICY, audit_candidate_information,
+        )
+        spec = pattern_spec("corroborated_dispute")
+        scene = compile_and_validate(spec, reference_question(spec))
+        report = audit_candidate_information(scene)
+        self.assertEqual(report["policy"], CORROBORATED_DISPUTE_POLICY)
+        self.assertTrue(report["passed"])
+        self.assertGreaterEqual(report["left_candidate_count"], 2)
+        self.assertGreaterEqual(report["right_candidate_count"], 2)
+        self.assertEqual(report["intersection_count"], 1)
+        self.assertTrue(report["competing_goals_distinct"])
+        self.assertEqual(scene["difficulty_audit"]["macro_first_audit"][
+            "candidate_information_necessity"], report)
+        q = scene["question"]
+        self.assertIn(spec["macro_plan"]["clues"]["case_tag"], q)
+        self.assertIn("disagree", q)
+        self.assertEqual(validate_replay(scene)["status"], "valid")
+        oracle = realize_scene(scene)
+        compared = next(row for row in oracle["macro_tasks"]
+                        if row["macro_task_id"] == "work_M3")
+        context = next(row for row in oracle["macro_tasks"]
+                       if row["macro_task_id"] == "work_M4")
+        self.assertTrue(compile_claim_contract(compared)[
+            "reported_year_disagreement_established"])
+        self.assertFalse(compile_claim_contract(context)[
+            "reported_year_disagreement_established"])
+
     def test_jargon_surface_rewrite_still_runs_critic(self):
         source = "The oracle output lists the cases supported by the evidence."
         transformed, edits = normalize_report_language(source)
