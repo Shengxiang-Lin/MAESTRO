@@ -330,6 +330,10 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
     hops = rng.choices((0, 1, 2), weights=(
         (2, 4, 3) if difficulty == "medium" else (1, 3, 5)
     ), k=1)[0]
+    if goal_kind != "direct_lookup" and pattern == "corroborated_dispute":
+        # Five discovery Macros + one keyed hop + three resolution Macros
+        # stays within the existing nine-Macro orchestration budget.
+        hops = min(hops, 1)
     for i in range(1, hops + 1):
         new_key = f"record_key_{i}"
         sid = f"index_{i}"
