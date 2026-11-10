@@ -1,6 +1,6 @@
 # MAESTRO dataset environment
 
-Three trusted workflows are runnable from the repository root. **Every input,
+Three trusted workflows and one untrusted recovery pilot are runnable from the repository root. **Every input,
 output path and LLM setting is configured in a YAML file** under
 `environment/configs/`. There are no mandatory `--scenes`, `--reports` or
 `--output-dir` command-line overrides.
@@ -9,6 +9,7 @@ output path and LLM setting is configured in a YAML file** under
 python -m environment generate-questions --config environment/configs/questions.yaml
 python -m environment naturalize-subtasks --config environment/configs/subagent_reports.yaml
 python -m environment generate-main-turns --config environment/configs/base_orchestration.yaml
+python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml
 ```
 
 | Workflow | Python package | Config | Published file |
@@ -16,6 +17,7 @@ python -m environment generate-main-turns --config environment/configs/base_orch
 | Construct Questions | `environment/generate_question/` | `questions.yaml` | `questions/scenes.jsonl` |
 | Report trusted Sub-Agents | `environment/implement_subtask/` | `subagent_reports.yaml` | `subtasks.jsonl` |
 | Generate base orchestration trajectories | `environment/base_orchestration/` | `base_orchestration.yaml` | `main_turns.jsonl` |
+| Untrusted recovery branches | `environment/untrusted_orchestration/` | `untrusted_orchestration.yaml` | `main_turns.jsonl` + private fault alignment |
 
 Edit the `input` and `generation` paths in each YAML to connect your
 experiment directories. YAML paths resolve relative to the **repository
@@ -63,7 +65,7 @@ python -m environment.base_orchestration.rebuild_prompts \
 For all workflows, `summary.json` and `failed.jsonl` (when relevant)
 hold diagnostic details. The terminal keeps concise live progress counters.
 
-## Organization and future untrusted workflow
+## Organization and untrusted recovery
 
 - `generate_question/macro_planning.py`: current Macro evidence DAG compiler
   and source access contracts (internal on-disk schema versions retained).
@@ -73,9 +75,9 @@ hold diagnostic details. The terminal keeps concise live progress counters.
   trusted evidence replay, report review and one-command integration.
 - `base_orchestration/trajectory_builder.py`, `action_author.py`,
   `o1_compat.py`: trusted Main decision supervision and real O1 formatting.
-- `untrusted_orchestration/`: **reserved for future design**, not an
-  implemented attack simulator. It will have a fourth independent config
-  when its attack/visibility/recovery contracts are specified.
+- `untrusted_orchestration/`: per-round fault injection, WorkProduct
+  propagation, targeted recovery, counterfactual execution and private
+  causal audit. See [implementation limits](untrusted_orchestration/README.md).
 
 The old quota-refill engine and the obsolete private simulator/demo have
 been removed. Legacy Macro Scene schema markers remain recognized to avoid
