@@ -9,7 +9,7 @@ input:
 generation:
   output_dir: envir/data/maestro_base_orchestration_100
   max_scenes: null    # null means every accepted Scene
-  workers: 4
+  workers: 8
   mode: llm           # llm or template
   max_revisions: 2
   max_attempts: 16
