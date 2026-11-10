@@ -79,6 +79,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     macro_v2_media_pairs = Counter()
     macro_v2_information_audits = []
     macro_v2_output_contracts = 0
+    macro_v2_difficulty_profiles = {"medium": [], "hard": []}
+    macro_v2_realism_scenes = 0
     macro_first_handoffs = 0
     macro_first_handoff_passes = 0
     macro_first_local_ops = []
@@ -136,6 +138,15 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                             "enforcement_versioned": has_semantic_contract(spec),
                         })
                     plan = spec["macro_plan"]
+                    if spec.get("scene_realism_version"):
+                        macro_v2_realism_scenes += 1
+                        proxy = scene.get("difficulty_audit", {}).get(
+                            "macro_first_audit", {}
+                        ).get("structural_difficulty_profile")
+                        if proxy is not None:
+                            macro_v2_difficulty_profiles[
+                                spec["difficulty_target"]
+                            ].append(proxy)
                     if spec.get("macro_information_necessity_version"):
                         macro_v2_output_contracts += 1
                         necessity = scene.get("difficulty_audit", {}).get(
@@ -405,6 +416,37 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "video_audio_in_one_macro"
             ],
             "versioned_output_contract_scenes": macro_v2_output_contracts,
+            "schema_locked_scene_count": macro_v2_realism_scenes,
+            "structural_difficulty_by_target": {
+                label: {
+                    "scenes": len(items),
+                    "mean_macro_tasks": (
+                        round(sum(p["macro_task_count"] for p in items)
+                              / len(items), 3) if items else None
+                    ),
+                    "mean_source_observations": (
+                        round(sum(p["source_observation_total"] for p in items)
+                              / len(items), 3) if items else None
+                    ),
+                    "mean_keyed_hops": (
+                        round(sum(p["keyed_index_hops"] for p in items)
+                              / len(items), 3) if items else None
+                    ),
+                    "mean_primitive_ops": (
+                        round(sum(p["primitive_ops_total"] for p in items)
+                              / len(items), 3) if items else None
+                    ),
+                    "mean_multimodal_alternatives": (
+                        round(sum(p.get("alternative_candidates", 0)
+                                  for p in items
+                                  if "alternative_candidates" in p)
+                              / sum("alternative_candidates" in p for p in items),
+                              3)
+                        if any("alternative_candidates" in p for p in items)
+                        else None
+                    ),
+                } for label, items in macro_v2_difficulty_profiles.items()
+            },
             "information_necessity": {
                 "audited_multimodal_scenes": len(macro_v2_information_audits),
                 "candidate_discrimination_passed": sum(
