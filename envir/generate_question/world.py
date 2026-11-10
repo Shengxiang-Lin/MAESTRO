@@ -136,9 +136,8 @@ def initial_public_view(spec: dict, world: dict, question: str) -> dict:
             "title": item["title"],
             "modality_hint": item["modality"],
             "representation": item["representation"],
-            "access_mode": item.get(
-                "access_policy", {}
-            ).get("mode", "browse"),
+            **({"access_mode": item["access_policy"]["mode"]}
+               if "access_policy" in item else {}),
         } for sid, item in sorted(world["sources"].items())],
         "max_concurrent_subagents": 10,
         "status": "fictional_structured_multisource_world",
