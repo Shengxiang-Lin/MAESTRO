@@ -6,7 +6,6 @@ import json
 import os
 import random
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from tqdm.auto import tqdm
@@ -49,7 +48,7 @@ def _construction_identity(args) -> str:
                 "macro_first_world.py", "macro_first_v2.py",
                 "macro_first_v2_world.py", "information_necessity.py",
                 "source_title_contract.py", "difficulty_proxy.py",
-                "scenario_repair.py",
+                "scenario_repair.py", "difficulty_quotas.py",
                 "semantic_evidence.py",
                 "v2_prompts.py", "intent.py", "surface_quality.py",
                 "program_ir.py",
@@ -87,21 +86,6 @@ def _question_signature(args, rows: list[dict]) -> str:
         "stage_code": file_digest(Path(__file__)),
         "backend_code": file_digest(Path(__file__).with_name("backend.py")),
     })
-
-
-def _parallel_ordered(items, job, *, workers: int, desc: str,
-                      no_progress: bool = False):
-    """Show *completed* futures immediately, but keep deterministic row order."""
-    results = [None] * len(items)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(job, item): index
-                   for index, item in enumerate(items)}
-        with tqdm(total=len(items), desc=desc, unit="task",
-                  disable=no_progress) as bar:
-            for future in as_completed(futures):
-                results[futures[future]] = future.result()
-                bar.update(1)
-    return results
 
 
 def _json(path: Path, value) -> None:
@@ -177,14 +161,14 @@ def construct_scenes(args) -> dict:
         raise ValueError(
             f"not enough scene/topic seeds: {len(seeds)} for target {args.target}"
         )
+    from .difficulty_quotas import candidate_budget, select_accepted_scenes
     quota_enabled = bool(
         getattr(args, "accepted_difficulty_quotas", False)
         and getattr(args, "scenario_model", None)
     )
-    candidate_cap = (
-        min(len(seeds), args.target * getattr(
-            args, "quota_candidate_multiplier", 1
-        )) if quota_enabled else args.target
+    candidate_cap = candidate_budget(
+        args.target, len(seeds), enabled=quota_enabled,
+        multiplier=getattr(args, "quota_candidate_multiplier", 1),
     )
     requested_counts = Counter(difficulty_sequence(
         target=args.target, mix=_parse_mix(args.difficulty_mix),
@@ -330,15 +314,9 @@ def construct_scenes(args) -> dict:
     if quota_enabled:
         # Select only independently reviewed, accepted scenes. Never turn
         # failed Scenario drafts into accepted results to meet a quota.
-        remaining = Counter(requested_counts)
-        accepted_by_quota = []
-        for spec in selected_to_compile:
-            level = spec["difficulty_target"]
-            if remaining[level] <= 0:
-                continue
-            accepted_by_quota.append(spec)
-            remaining[level] -= 1
-        selected_to_compile = accepted_by_quota
+        selected_to_compile, _ = select_accepted_scenes(
+            selected_to_compile, requested_counts,
+        )
     quota_selected = Counter(
         spec["difficulty_target"] for spec in selected_to_compile
     )
