@@ -48,7 +48,7 @@ def _intent_reference_question(spec: dict) -> str:
                 f"What is its confirmed {goal}?"
             )
         visual = (
-            f"a frame showing a {clues['scene_action']} action after the "
+            f"a frame showing a {clues['scene_action']} action at or after the "
             f"{clues['time_threshold_ms']//1000}-second mark"
             if clues["visual_modality"] == "video" else
             f"an image with a {clues['emblem_color']} emblem"
