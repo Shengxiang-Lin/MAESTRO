@@ -257,5 +257,176 @@ class MainTurnDatasetTests(unittest.TestCase):
                 )
 
 
+    def test_round_journal_resumes_without_reauthoring_completed_round(self):
+        """A process crash after round 1 must preserve round-1 O1 labels."""
+        scene = fixture(11)
+        rows = reviewed_rows(scene)
+
+        class Author:
+            def __init__(self, interrupt_at=None):
+                self.calls = 0
+                self.interrupt_at = interrupt_at
+
+            def complete_json(self, system, request):
+                self.calls += 1
+                if self.calls == self.interrupt_at:
+                    raise KeyboardInterrupt("simulated interruption")
+                return json.loads(request)["reference_action_for_structure_only"]
+
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        with TemporaryDirectory() as td:
+            folder = Path(td)
+            scenes = folder / "scenes.jsonl"
+            reports = folder / "reports.jsonl"
+            scenes.write_text(json.dumps(scene) + "\n", encoding="utf-8")
+            reports.write_text(
+                "".join(json.dumps(x) + "\n" for x in rows),
+                encoding="utf-8",
+            )
+            output = folder / "interrupted"
+            common = {
+                "scenes_path": scenes, "reports_path": reports,
+                "critic": Critic(), "author_model": "test-author",
+                "critic_model": "test-critic", "no_progress": True,
+            }
+            with self.assertRaises(KeyboardInterrupt):
+                generate_turns(
+                    **common, author=Author(interrupt_at=2),
+                    output_dir=output,
+                )
+            round_dir = output / "journal" / "000000.rounds"
+            first_round = round_dir / "round-0001.json"
+            self.assertTrue(first_round.is_file())
+            self.assertFalse((round_dir / "round-0002.json").exists())
+            self.assertFalse((output / "journal" / "000000.json").exists())
+            self.assertEqual(
+                (output / "main_turns.jsonl").read_text(), "",
+            )
+            first_before = first_round.read_bytes()
+            resumed_author = Author()
+            resumed = generate_turns(
+                **common, author=resumed_author, output_dir=output,
+            )
+            self.assertEqual(resumed["accepted_scenes"], 1)
+            self.assertEqual(first_before, first_round.read_bytes())
+            self.assertEqual(
+                resumed_author.calls,
+                resumed["actions"]["delegate_task"] - 1,
+            )
+            fresh = generate_turns(
+                **common, author=Author(), output_dir=folder / "fresh",
+            )
+            self.assertEqual(resumed["main_training_turns"],
+                             fresh["main_training_turns"])
+            self.assertEqual(
+                (output / "main_turns.jsonl").read_text(),
+                (folder / "fresh" / "main_turns.jsonl").read_text(),
+            )
+            # Repeating the command does not double-publish accepted turns.
+            again = generate_turns(
+                **common, author=Author(), output_dir=output,
+            )
+            self.assertEqual(resumed, again)
+            self.assertEqual(
+                len((output / "main_turns.jsonl").read_text().splitlines()),
+                resumed["main_training_turns"],
+            )
+
+    def test_only_finished_episodes_are_published_while_running(self):
+        first, second = fixture(13), fixture(14)
+        self.assertNotEqual(first["question"], second["question"])
+        class Author:
+            def complete_json(self, system, request):
+                data = json.loads(request)
+                if second["question"] in data["current_main_visible_prompt"]:
+                    raise KeyboardInterrupt("second scene interrupted")
+                return data["reference_action_for_structure_only"]
+
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes = root / "scenes.jsonl"
+            reports = root / "reports.jsonl"
+            scenes.write_text("".join(
+                json.dumps(x) + "\n" for x in (first, second)
+            ), encoding="utf-8")
+            reports.write_text("".join(
+                json.dumps(r) + "\n"
+                for sc in (first, second) for r in reviewed_rows(sc)
+            ), encoding="utf-8")
+            out = root / "output"
+            with self.assertRaises(KeyboardInterrupt):
+                generate_turns(
+                    scenes_path=scenes, reports_path=reports,
+                    output_dir=out, author=Author(), critic=Critic(),
+                    author_model="test-author", critic_model="test-critic",
+                    no_progress=True,
+                )
+            self.assertTrue((out / "journal" / "000000.json").is_file())
+            self.assertFalse((out / "journal" / "000001.json").exists())
+            turns = [
+                json.loads(x) for x in
+                (out / "main_turns.jsonl").read_text().splitlines()
+            ]
+            self.assertGreater(len(turns), 1)
+            self.assertEqual({row["task_id"] for row in turns},
+                             {first["task_id"]})
+            self.assertEqual(
+                len((out / "episodes.jsonl").read_text().splitlines()), 1,
+            )
+
+    def test_corrupt_partial_round_checkpoint_fails_closed(self):
+        scene = fixture(15)
+
+        class Interrupt:
+            def __init__(self):
+                self.calls = 0
+
+            def complete_json(self, system, request):
+                self.calls += 1
+                if self.calls == 2:
+                    raise KeyboardInterrupt("stop")
+                return json.loads(request)["reference_action_for_structure_only"]
+
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes, reports = root / "scenes.jsonl", root / "reports.jsonl"
+            scenes.write_text(json.dumps(scene) + "\n", encoding="utf-8")
+            reports.write_text("".join(
+                json.dumps(row) + "\n" for row in reviewed_rows(scene)
+            ), encoding="utf-8")
+            args = dict(scenes_path=scenes, reports_path=reports,
+                        output_dir=root / "out", critic=Critic(),
+                        author_model="test-author", critic_model="test-critic",
+                        no_progress=True)
+            with self.assertRaises(KeyboardInterrupt):
+                generate_turns(**args, author=Interrupt())
+            checkpoint = root / "out" / "journal" / "000000.rounds" / "round-0001.json"
+            content = json.loads(checkpoint.read_text())
+            content["turn"]["input"]["prompt"] = "tampered"
+            checkpoint.write_text(json.dumps(content), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "checkpoint_prompt_mismatch"):
+                generate_turns(**args, author=Interrupt())
+
+
 if __name__ == "__main__":
     unittest.main()
