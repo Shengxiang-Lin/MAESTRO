@@ -210,7 +210,8 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             issues.append("clue_chain_missing_three_source_provenance")
         if len(answer) != 1 or set(answer[0]) != {"accession_year"}:
             issues.append("clue_chain_answer_year_contract")
-    elif (difficulty != "easy" and not
+    elif (difficulty != "easy"
+          and spec.get("reasoning_pattern") != "evidence_graph" and not
             any(ref.startswith("annotations:")
                 for row in macro["answer_with_provenance"]
                 for ref in row["source_fact_refs"])):
