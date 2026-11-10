@@ -57,7 +57,7 @@ def _one_output_v2_question(spec: dict) -> str:
                 f"disagree about the reported year for some {item} records. "
                 f"An independent event log also marks the matching "
                 f"record as {clues['case_tag']}. For the record satisfying "
-                f"both conditions, what is the confirmed {goal}?"
+                f"both conditions, {goal_question}"
             )
         return (
             f"Two independent {topic} records disagree about the year "
@@ -70,7 +70,7 @@ def _one_output_v2_question(spec: dict) -> str:
             f"{clues['scene_action']} action no later than the spoken "
             f"{clues['spoken_cue']} cue. An independent event log marks "
             f"the matching observation as {clues['case_tag']}. "
-            f"For that {item}, what is the confirmed {goal}?"
+            f"For that {item}, {goal_question}"
         )
     if clues["visual_modality"] == "video":
         visual = (
@@ -94,7 +94,7 @@ def _one_output_v2_question(spec: dict) -> str:
         )
     return (
         f"In the {topic} materials, {visual} identifies one {item}. "
-        f"For the matching item, what is the confirmed {goal}?"
+        f"For the matching item, {goal_question}"
     )
 
 
