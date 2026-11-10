@@ -100,7 +100,11 @@ def _compile_compact_tasks(program: dict, execution_trace: list[dict]) -> dict:
         "macro_task_count": len(tasks),
         "primitive_operator_count": len(program["nodes"]),
         "critical_path_depth": _critical_path(tasks),
-        "source_scope_policy": "scan_or_keyed_lookup_only_explicit_source",
+        "source_scope_policy": (
+            "scan_or_keyed_lookup_only_explicit_source"
+            if any(node["op"] == "lookup_by_key" for node in program["nodes"])
+            else "only_scans_grant_explicit_source"
+        ),
         "coarsening": "bounded_linear_chain_fusion_max3",
     }
 
