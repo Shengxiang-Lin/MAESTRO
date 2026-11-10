@@ -181,6 +181,37 @@ class SemanticEvidenceTests(unittest.TestCase):
         self.assertIn("semantic_evidence_contract_not_frozen",
                       validate_replay(fake)["issues"])
 
+    def test_domain_hint_metadata_changes_only_versioned_goals(self):
+        from envir.generate_question.macro_first_v2 import (
+            domain_hint, domain_hint_v2,
+        )
+        self.assertEqual(domain_hint("Sports reference collection", "sports"), "general")
+        self.assertEqual(domain_hint_v2("Sports reference collection", "sports"), "sports")
+        self.assertEqual(domain_hint_v2("Generic company contract", "commerce"), "business")
+        self.assertEqual(domain_hint_v2("Unidentified cultural event", "culture"), "general")
+
+    def test_retrospective_quality_diagnostics_do_not_mutate_old_scene(self):
+        from envir.generate_question.pipeline import quality_report
+        spec = specimen("disputed_reports")
+        spec.pop("semantic_evidence_contract_version")
+        scene = compile_and_validate(spec, reference_question(spec))
+        scene = copy.deepcopy(scene)
+        scene["question"] = scene["question"].replace(
+            "?", ", provided a separate clearance table marks the case cleared?"
+        )
+        scene["public"]["question"] = scene["question"]
+        # Older V2 scenes were previously accepted through the model Critic;
+        # the new retrospective report must flag them without retroactively
+        # invalidating their frozen Gold World or replay path.
+        scene["question_origin"] = "llm_accepted"
+        metrics = quality_report([scene], no_progress=True)
+        self.assertEqual(metrics["replay_pass"], 1)
+        audit = metrics["semantic_evidence_diagnostics"]
+        self.assertEqual(audit["v2_scenes_checked"], 1)
+        self.assertEqual(audit["versioned_contract_enforced_scenes"], 0)
+        self.assertEqual(audit["scenes_with_flags"], 1)
+        self.assertIn("semantic_unlicensed_clearance", audit["flag_counts"])
+
     def test_older_v2_scenes_remain_replay_compatible(self):
         spec = specimen("disputed_reports")
         spec.pop("semantic_evidence_contract_version")
