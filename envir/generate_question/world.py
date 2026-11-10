@@ -186,6 +186,9 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 
 def compile_program(spec: dict) -> dict:
     """Compile semantic branches into source-scoped executable programs."""
+    if spec.get("reasoning_pattern") == "evidence_graph":
+        from .graph_grammar import compile_evidence_program
+        return compile_evidence_program(spec)
     if spec.get("reasoning_pattern") == "clue_chain":
         from .clue_chain import compile_clue_program
         return compile_clue_program(spec)
