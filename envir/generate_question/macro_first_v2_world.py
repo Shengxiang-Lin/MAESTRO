@@ -143,6 +143,23 @@ def generate_world(spec: dict) -> dict:
             item[f"record_key_{j}"] = f"KEY{j}-{keys[i]:05d}"
         objects.append(item)
 
+    if (spec.get("macro_information_necessity_version")
+            and plan["pattern"] == "multimodal_event"):
+        # Information necessity should matter to the ANSWER, not merely
+        # to a candidate label. The target and competing candidates must
+        # resolve to different final values (statuses, dates, titles, etc.).
+        values_seen = set()
+        for index, row in enumerate(objects[:3]):
+            for attempt in range(40):
+                if row[field] not in values_seen:
+                    break
+                row[field] = _goal_value(
+                    field, kind, entity_count + index + attempt, rng
+                )
+            if row[field] in values_seen:
+                raise ValueError("nonunique_competing_goal_values")
+            values_seen.add(row[field])
+
     kind_map = {
         "visual": ["candidate_id", "marker_code", "emblem_color"] + (
             ["emblem_shape"] if clues["visual_modality"] == "image"
