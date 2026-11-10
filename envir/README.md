@@ -212,3 +212,63 @@ This is a constrained graph grammar pilot, not unconstrained arbitrary-DAG
 search or true multimodal/web perception. Stage 2 reports are deterministic
 Oracle-derived results with LLM naturalization; Stage 3 autonomous
 Main-Agent action planning remains separate.
+
+
+## Opt-in Macro-first Stage 1 generation (frozen task boundaries)
+
+The recommended experimental path is now `--macro-first-share` (0..100).
+It samples a **Macro Task DAG before** any primitive Gold Program or World:
+Goal -> frozen Macro nodes/edges/typed handoff contracts -> independent
+local executable Gold Solver for each Macro -> global witness-first World ->
+strict answer/edge replay -> Question Author/Critic -> Stage 2 Oracle reports.
+
+Macro-first currently offers three bounded graph families:
+- serial_discovery: visual identification -> 1–2 separate keyed resolution
+  Macro tasks -> authoritative result
+- parallel_resolution: two independent visual/caption Macro tasks -> identity
+  fusion Macro -> optional keyed resolution Macro -> authoritative result
+- conflict_reconciliation: two independent inventories -> dispute resolution
+  Macro -> optional keyed resolution Macro -> authoritative result
+
+Each Macro has `macro_id`, `depends_on`, `input_contract`,
+`output_schema`, `source_scope`, and a `solver_template`. The
+`compile_frozen_macro_plan` path preserves these boundaries and verifies
+that the local solver only consumes declared upstream WorkProducts and
+permitted sources. It does not split a Macro due to its internal scans,
+filters, joins, or keyed searches. Global Gold Program nodes are retained
+only as a compatible deterministic execution/replay representation.
+
+The World is consistent across all Macro handoffs. Validation checks the
+exact final answer, frozen graph, execution and provenance, source-fact
+counterfactuals and **every Macro handoff** under an empty-input
+intervention. A reference DAG is an execution proof and dependency
+contract, not the unique possible optimal Main-Agent trajectory.
+
+To try the new path without changing older experiments:
+
+~~~bash
+python -m envir generate-questions \
+  --config envir/config.yaml --target 100 \
+  --macro-first-share 100 \
+  --output-dir envir/data/maestro_macro_first_100
+
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --scenes envir/data/maestro_macro_first_100/questions/scenes.jsonl \
+  --output-dir envir/data/maestro_macro_first_reports_100
+~~~
+
+`macro_first_share` applies only to Medium and Hard scenes; Easy stays on
+the historical baseline. With zero (default), generation behavior remains
+unchanged. If macro-first and evidence_graph shares overlap, macro-first
+takes precedence on the selected scenes. Observe
+`quality_report.json["macro_first"]` for graph pattern counts, necessary
+handoff edges, and local operator complexity.
+
+Limitations: current grammar uses three reference/record investigations and
+a small set of year-valued goals; this is a bounded Macro-first pilot, not
+arbitrary DAG composition. Local sources are synthetic structured
+observations, not real media or real tool searches. The Stage 2 Oracle
+provides reliable workproducts; it does not prove a real LLM Sub-Agent can
+perform arbitrary searches. Stage 3 adaptive orchestration, retries, and
+untrusted outcomes remain separate work.
