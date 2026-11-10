@@ -195,7 +195,22 @@ class SemanticEvidenceTests(unittest.TestCase):
         spec = specimen("disputed_reports")
         spec.pop("semantic_evidence_contract_version")
         spec.pop("macro_information_necessity_version", None)
-        spec["macro_plan"].pop("information_necessity_policy", None)
+        spec.pop("scene_realism_version", None)
+        from envir.generate_question.macro_first_v2 import (
+            sample_macro_plan, domain_hint,
+        )
+        old_plan, old_roles = sample_macro_plan(
+            seed=spec["seed"], ordinal=spec["ordinal"],
+            record_id=spec["source_anchor"]["source_record_id"],
+            topic=spec["scenario"]["topic"],
+            difficulty=spec["difficulty_target"],
+            domain=domain_hint(
+                spec["scenario"]["topic"],
+                spec["source_anchor"]["domain_hint"],
+            ), information_need=False, realism_v3=False,
+        )
+        spec["macro_plan"] = old_plan
+        spec["sources"] = old_roles
         scene = compile_and_validate(spec, reference_question(spec))
         scene = copy.deepcopy(scene)
         scene["question"] = scene["question"].replace(
@@ -218,7 +233,22 @@ class SemanticEvidenceTests(unittest.TestCase):
         spec = specimen("disputed_reports")
         spec.pop("semantic_evidence_contract_version")
         spec.pop("macro_information_necessity_version", None)
-        spec["macro_plan"].pop("information_necessity_policy", None)
+        spec.pop("scene_realism_version", None)
+        from envir.generate_question.macro_first_v2 import (
+            sample_macro_plan, domain_hint,
+        )
+        old_plan, old_roles = sample_macro_plan(
+            seed=spec["seed"], ordinal=spec["ordinal"],
+            record_id=spec["source_anchor"]["source_record_id"],
+            topic=spec["scenario"]["topic"],
+            difficulty=spec["difficulty_target"],
+            domain=domain_hint(
+                spec["scenario"]["topic"],
+                spec["source_anchor"]["domain_hint"],
+            ), information_need=False, realism_v3=False,
+        )
+        spec["macro_plan"] = old_plan
+        spec["sources"] = old_roles
         scene = compile_and_validate(spec, reference_question(spec))
         self.assertNotIn("semantic_evidence_contract", scene)
         self.assertEqual(validate_replay(scene)["status"], "valid")
