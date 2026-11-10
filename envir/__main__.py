@@ -30,6 +30,8 @@ def parser() -> argparse.ArgumentParser:
                           help="Override generation.output_dir from YAML")
     generate.add_argument("--target", type=int,
                           help="Override generation.target from YAML")
+    generate.add_argument("--clue-chain-share", type=int,
+                          help="Percent of medium scenes using visual clue -> keyed index -> keyed archive")
     generate.add_argument("--no-progress", action="store_true")
     generate.add_argument("--flush-every", type=int,
                           help="Commit a durable checkpoint every N LLM reports")
@@ -138,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         if cli.flush_every is not None:
             options.flush_every = cli.flush_every
+        if cli.clue_chain_share is not None:
+            if not 0 <= cli.clue_chain_share <= 100:
+                p.error("--clue-chain-share must be 0..100")
+            options.clue_chain_share = cli.clue_chain_share
         result = generate_questions(options)
     else:
         config_args = args_from_config(config)
