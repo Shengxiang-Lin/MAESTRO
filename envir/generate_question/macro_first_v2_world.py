@@ -14,26 +14,40 @@ from .macro_first_v2 import validate_spec
 
 
 def _goal_value(field: str, kind: str, i: int, rng: random.Random):
+    """Generate plausible within-workspace values, not real-world claims."""
     if kind == "int":
-        return 1975 + i * 3 + rng.randint(0, 2)
+        return rng.randint(1973, 2025)
     if field == "match_result":
-        return f"{i + 1}-{i % 3}"
+        return f"{rng.randint(0, 4)}-{rng.randint(0, 4)}"
+    places = ("Riverside", "Central", "North", "Harbor", "Union",
+              "Eastside", "Westport", "Garden", "Civic")
+    venue_types = ("Hall", "Arena", "Ground", "Auditorium", "Stage")
     if field in {"event_venue", "screening_venue", "performance_venue"}:
-        return f"{('Riverside', 'Central', 'Eastside', 'Harbor')[i % 4]} "
-        f"{('Arena', 'Hall', 'Ground', 'Stage')[i % 4]} {i + 1}"
-    if field.endswith("status"):
-        return f"{('confirmed', 'under review', 'revised', 'closed')[i % 4]} "
-        f"case {i + 1}"
-    if field in {"survey_site"}:
-        return f"Survey Sector {chr(65 + i % 26)}-{i + 1}"
-    if field.endswith("title"):
-        return f"Record {chr(65 + i % 26)}-{i + 1}"
+        return f"{rng.choice(places)} {rng.choice(venue_types)}"
+    if field in {"review_status", "resolution_status"}:
+        return rng.choice((
+            "confirmed", "under review", "resolved", "withdrawn", "revised"
+        ))
+    if field == "survey_site":
+        return f"{rng.choice(places)} survey sector {rng.randint(1, 12)}"
+    adjectives = ("Northern", "Hidden", "Second", "Distant", "Last",
+                  "Silver", "Quiet", "Crossing", "Open", "Early")
+    nouns = ("Signal", "Window", "Crossing", "Departure", "Echo",
+             "Record", "Return", "Journey", "Interval", "Horizon")
+    title = f"{rng.choice(adjectives)} {rng.choice(nouns)}"
     if field == "song_title":
-        return f"Performance Track {chr(65 + i % 26)}"
+        return title
+    if field == "episode_title":
+        return "The " + title
+    if field == "edition_title":
+        return f"{title}, {rng.choice(('revised', 'annotated', 'expanded'))} edition"
+    if field == "artifact_title":
+        return f"{title} exhibit"
+    if field == "case_title":
+        return f"{title} review file"
     if field == "experiment_label":
-        return f"Trial {chr(65 + i % 26)}-{i + 1}"
-    return f"Reference-{i + 1}"
-
+        return f"{rng.choice(('Phase', 'Trial', 'Protocol'))} {rng.choice(adjectives)}-{i+1:02d}"
+    return title
 
 def generate_world(spec: dict) -> dict:
     from .world import _rows, WORLD_VERSION
