@@ -44,6 +44,7 @@ def _construction_identity(args) -> str:
                 "macro_first_v2_world.py", "information_necessity.py",
                 "source_title_contract.py", "difficulty_proxy.py",
                 "scenario_fields.py", "topic_quality.py",
+                "topic_domain.py", "question_fidelity.py",
                 "semantic_evidence.py",
                 "v2_prompts.py", "intent.py", "surface_quality.py",
                 "program_ir.py",
@@ -73,6 +74,8 @@ def _question_signature(args, rows: list[dict]) -> str:
         "question_code": file_digest(Path(__file__).with_name("question.py")),
         "semantic_evidence_code": file_digest(
             Path(__file__).with_name("semantic_evidence.py")),
+        "question_fidelity_code": file_digest(
+            Path(__file__).with_name("question_fidelity.py")),
         "intent_code": file_digest(Path(__file__).with_name("intent.py")),
         "surface_quality_code": file_digest(
             Path(__file__).with_name("surface_quality.py")),
