@@ -178,8 +178,15 @@ class InformationNecessityTests(unittest.TestCase):
                          "environment")
         spec = spec_for(13, topic="Unknown civic event", hint="civic")
         self.assertEqual(spec["macro_plan"]["domain"], "civic")
-        self.assertIn(spec["macro_plan"]["goal"]["answer_field"],
-                      {"civic_site", "permit_status", "inspection_year"})
+        field = spec["macro_plan"]["goal"]["answer_field"]
+        if spec["macro_plan"]["goal_resolution"]["kind"] == "direct_lookup":
+            self.assertIn(field, {
+                "civic_site", "permit_status", "inspection_year"
+            })
+        else:
+            self.assertIn(field, {
+                "higher_count_source", "completion_rate_percent"
+            })
 
 
 if __name__ == "__main__":
