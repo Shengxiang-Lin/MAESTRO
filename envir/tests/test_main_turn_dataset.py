@@ -370,6 +370,74 @@ class MainTurnDatasetTests(unittest.TestCase):
                 )
 
 
+    def test_optional_export_rebuilds_exact_full_prompts_and_checks_identity(self):
+        from envir.stage3.rebuild_prompts import export_full_prompts
+        from hashlib import sha256
+
+        scene = fixture(9)
+        with TemporaryDirectory() as td:
+            folder = Path(td)
+            scenes = folder / "source_scenes.jsonl"
+            reports = folder / "stage2_reports.jsonl"
+            scenes.write_text(json.dumps(scene, ensure_ascii=False) + "\n",
+                              encoding="utf-8")
+            reports.write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n"
+                        for row in reviewed_rows(scene)), encoding="utf-8",
+            )
+            output = folder / "stage3"
+            summary = generate_turns(
+                scenes_path=scenes, reports_path=reports,
+                output_dir=output, no_progress=True,
+            )
+            self.assertEqual(summary["input_storage"],
+                             "cumulative_o1_subtask_history_only")
+            compact_path = output / "main_turns.jsonl"
+            original_compact = compact_path.read_bytes()
+            exported_path = folder / "rehydrated.jsonl"
+            exported = export_full_prompts(
+                scenes_path=scenes, turns_path=compact_path,
+                manifest_path=output / "manifest.json",
+                output_path=exported_path,
+            )
+            self.assertEqual(exported["exported_turns"],
+                             summary["main_training_turns"])
+            compact = [json.loads(line) for line in
+                       original_compact.decode("utf-8").splitlines()]
+            reconstructed = [json.loads(line) for line in
+                             exported_path.read_text().splitlines()]
+            audits = [json.loads(line) for line in
+                      (output / "private" / "teacher_alignment.jsonl")
+                      .read_text().splitlines()]
+            self.assertEqual(len(reconstructed), len(compact))
+            for short, full, audit in zip(compact, reconstructed, audits):
+                self.assertEqual(set(short["input"]), {"subtask_history"})
+                prompt = full["input"]["prompt"]
+                self.assertIn(short["input"]["subtask_history"], prompt)
+                self.assertEqual(full["output"], short["output"])
+                self.assertEqual(
+                    sha256(json.dumps(prompt, sort_keys=True,
+                                      ensure_ascii=False).encode("utf-8"))
+                    .hexdigest(),
+                    audit["prompt_sha256"],
+                )
+            # The exporter never mutates the compact source.
+            self.assertEqual(compact_path.read_bytes(), original_compact)
+            with self.assertRaisesRegex(ValueError, "must_not_replace_inputs"):
+                export_full_prompts(
+                    scenes_path=scenes, turns_path=compact_path,
+                    manifest_path=output / "manifest.json",
+                    output_path=compact_path,
+                )
+            # The manifest binds a particular frozen Stage-1 source.
+            scenes.write_text(scenes.read_text() + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "scene_manifest_mismatch"):
+                export_full_prompts(
+                    scenes_path=scenes, turns_path=compact_path,
+                    manifest_path=output / "manifest.json",
+                    output_path=folder / "should_not_exist.jsonl",
+                )
+
     def test_round_journal_resumes_without_reauthoring_completed_round(self):
         """A process crash after round 1 must preserve round-1 O1 labels."""
         scene = fixture(11)
