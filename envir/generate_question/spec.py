@@ -11,7 +11,7 @@ from envir.schema import digest
 
 VERSION = "maestro.problem_spec.v4"
 RELATION_PATTERNS = (
-    "approval", "time_window", "status_disagreement", "dynamic_threshold", "clue_chain", "evidence_graph", "macro_first",
+    "approval", "time_window", "status_disagreement", "dynamic_threshold", "clue_chain", "evidence_graph", "macro_first", "macro_first_v2",
 )
 
 FAMILIES = (
@@ -28,6 +28,7 @@ FAMILIES = (
     "accession_year",
     "evidence_answer",
     "macro_first",
+    "macro_first_v2",
 )
 DIFFICULTIES = ("easy", "medium", "hard")
 
@@ -88,7 +89,8 @@ def _choose_media(seed_record: dict, ordinal: int, rng: random.Random) -> str:
 def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
               difficulty: str, clue_chain_share: int = 0,
               evidence_graph_share: int = 0,
-              macro_first_share: int = 0) -> dict:
+              macro_first_share: int = 0,
+              macro_first_v2_share: int = 0) -> dict:
     if difficulty not in DIFFICULTIES:
         raise ValueError("difficulty must be easy, medium or hard")
     if (type(clue_chain_share) is not int
@@ -98,10 +100,23 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         raise ValueError("evidence_graph_share must be between 0 and 100")
     if type(macro_first_share) is not int or not 0 <= macro_first_share <= 100:
         raise ValueError("macro_first_share must be between 0 and 100")
+    if type(macro_first_v2_share) is not int or not 0 <= macro_first_v2_share <= 100:
+        raise ValueError("macro_first_v2_share must be between 0 and 100")
     topic = normalize_topic(seed_record.get("topic", ""))
     record_id = str(seed_record.get("record_id") or seed_record.get("scene_id")
                     or f"topic-{ordinal}")
     rng = random.Random(int(digest(run_seed, ordinal, record_id, "v2")[:15], 16))
+    # New heterogeneous Macro-first pilot takes precedence when selected.
+    # Frozen v1 scenes and the original --macro-first-share remain unchanged.
+    if (difficulty in {"medium", "hard"} and
+            int(digest(run_seed, ordinal, "macro-first-v2-mix")[:8], 16) % 100
+            < macro_first_v2_share):
+        from .macro_first_v2 import make_spec as make_macro_first_v2_spec
+        return make_macro_first_v2_spec(
+            seed_record=seed_record, ordinal=ordinal, run_seed=run_seed,
+            difficulty=difficulty, topic=topic, record_id=record_id,
+            version=VERSION,
+        )
     # Select the Macro-level DAG FIRST, before any primitive solver or
     # evidence World is sampled. This opt-in overrides the older
     # primitive-first evidence graph only for selected medium/hard scenes.
@@ -153,6 +168,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
             "clue_chain": "accession_year",
             "evidence_graph": "evidence_answer",
             "macro_first": "macro_first",
+            "macro_first_v2": "macro_first_v2",
         }[pattern]
     )
     if keyed:
@@ -371,7 +387,9 @@ def spec_issues(spec: dict) -> list[str]:
     sources = spec.get("sources", [])
     keyed = spec.get("reasoning_pattern") == "clue_chain"
     evidence = spec.get("reasoning_pattern") == "evidence_graph"
-    macro_first = spec.get("reasoning_pattern") == "macro_first"
+    macro_first = spec.get("reasoning_pattern") in {
+        "macro_first", "macro_first_v2"
+    }
     n = (len(sources) if (evidence or macro_first) else 3 if keyed else
          {"easy": 1, "medium": 3, "hard": 4}.get(
              spec.get("difficulty_target"), -1))
@@ -441,7 +459,10 @@ def spec_issues(spec: dict) -> list[str]:
             ("archive", "keyed_lookup", "accession_id", "accession_year"),
         ]:
             errors.append("clue_chain_acquisition_path_mismatch")
-    if macro_first:
+    if spec.get("reasoning_pattern") == "macro_first_v2":
+        from .macro_first_v2 import validate_spec
+        errors.extend(validate_spec(spec))
+    elif macro_first:
         from .macro_first import validate_macro_first_spec
         errors.extend(validate_macro_first_spec(spec))
     if evidence:
