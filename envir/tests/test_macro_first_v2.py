@@ -127,7 +127,8 @@ class DiverseMacroTests(unittest.TestCase):
                 self.assertEqual(first["source_ids"], ["footage", "commentary"])
                 self.assertIn("compare_fields", [x["op"]
                                 for x in first["operator_chain"]])
-                self.assertIn("before", q.lower() + " before")  # relative order in q
+                self.assertTrue(any(term in q.lower() for term in
+                                    ("followed by", "later", "after", "before")))  # explicit ordering
             if any(s["modality"] == "audio" for s in spec["sources"]):
                 has_audio = True
         self.assertEqual(modes, {
