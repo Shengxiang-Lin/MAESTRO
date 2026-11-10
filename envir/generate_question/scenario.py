@@ -118,6 +118,16 @@ def _narrative_issues(spec: dict, proposal: dict) -> list[str]:
         )
         if unlicensed_calendar_years(proposed_text, topic):
             errors.append("unlicensed_calendar_year_not_in_topic")
+    if spec.get("reasoning_pattern") == "macro_first_v2":
+        phrase = " ".join(str(narrative.get(k, "")) for k in keys).lower()
+        if re.search(r"\b(fictional|simulated|synthetic|hypothetical|imaginary)\b",
+                     phrase):
+            errors.append("v2_meta_fiction_in_public_scenario")
+        goal = spec["macro_plan"]["goal"]["public_label"]
+        if goal not in {"founding year", "release year"} and re.search(
+            r"\b(founding year|release year)\b", phrase
+        ):
+            errors.append("v2_unsupported_goal_substitution")
     source_ids = {s["source_id"] for s in spec["sources"]}
     if (len(titles) != len(source_ids) or
             any(not isinstance(x, dict) or set(x) != {"source_id", "title"}
@@ -152,11 +162,32 @@ def enrich_one(spec: dict, *, author, critic,
             "purpose": role["purpose"],
         } for role in spec["sources"]],
         "requirements": spec["requirements"],
+        **({
+            "frozen_goal": spec["macro_plan"]["goal"],
+            "macro_task_roles": [
+                {"role": t["role"], "source_scope": t["source_scope"]}
+                for t in spec["macro_plan"]["macro_tasks"]
+            ],
+            "media_clues": spec["macro_plan"]["clues"],
+        } if spec.get("reasoning_pattern") == "macro_first_v2" else {}),
     }
     failures = []
     for attempt in range(max_revisions + 1):
         try:
-            proposal = author.complete_json(AUTHOR_SYSTEM, json.dumps({
+            v2 = spec.get("reasoning_pattern") == "macro_first_v2"
+            scenario_author_system = (AUTHOR_SYSTEM + """
+V2 OVERRIDE: The synthetic dataset is an implementation detail, NOT a
+characteristic of the real-world-style scenario. Do not write fictional,
+simulated, hypothetical, or imaginary in any scenario field. Describe an
+ordinary request about supplied working materials without asserting
+external historical facts or real document publication.
+The frozen Goal is specific: do not substitute a founding/release year,
+real-world result or other output. The materials may represent video
+action/time, audio spoken cue/time, images, text or tables. Their modality
+must be reflected in source titles and their purpose. Distinct evidence
+requirements are valid without asserting those materials exist publicly.
+""" if v2 else AUTHOR_SYSTEM)
+            proposal = author.complete_json(scenario_author_system, json.dumps({
                 "frozen_contract": frozen,
                 "previous_errors": failures[-2:],
             }, ensure_ascii=False))
@@ -164,7 +195,16 @@ def enrich_one(spec: dict, *, author, critic,
             if issues:
                 failures.append({"stage": "schema_guard", "errors": issues})
                 continue
-            review = critic.complete_json(CRITIC_SYSTEM, json.dumps({
+            scenario_critic_system = (CRITIC_SYSTEM + """
+V2 OVERRIDE: Treat all source materials as internally constructed working
+evidence, not unlicensed real-world historical claims. Fictional facts
+inside this controlled working set are permitted. Only reject claims of
+real historical events, wrong final Goal semantics, swapped modalities,
+or added constraints. A realistic working-data context is not itself
+false historical evidence.
+""" if spec.get("reasoning_pattern") == "macro_first_v2"
+                else CRITIC_SYSTEM)
+            review = critic.complete_json(scenario_critic_system, json.dumps({
                 "frozen_contract": frozen,
                 "candidate": proposal,
             }, ensure_ascii=False))
