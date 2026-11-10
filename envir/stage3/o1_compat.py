@@ -27,12 +27,20 @@ def o1_history(task_entries: list[dict]) -> str:
     return BaseMainAgent._format_subtask_history(state)
 
 
-def o1_prompt(
-    scene: dict, task_entries: list[dict], *, attempt: int,
+def o1_prompt_from_history(
+    scene: dict, subtask_history: str, *, attempt: int,
     max_attempts: int, sub_model: str, model_alias: str = "model_1",
 ) -> str:
+    """Exactly reconstruct the O1 prompt from shared Scene + turn state.
+
+    The on-disk per-turn SFT input stores only the cumulative subtask
+    history. The fixed prompt template, Question and source catalog are
+    resolved from the Stage-1 Scene and these run-level rendering settings.
+    """
     if attempt < 1 or attempt > max_attempts:
         raise ValueError("stage3_attempt_exceeds_budget")
+    if not isinstance(subtask_history, str):
+        raise TypeError("stage3_subtask_history_must_be_string")
     sources = source_catalog(scene)
     meta = {
         "task_type": "Multi-source investigation",
@@ -67,7 +75,38 @@ def o1_prompt(
         attempt_index=attempt,
         max_attempts=max_attempts,
         sub_models=[model_alias],
-        subtask_history=o1_history(task_entries),
+        subtask_history=subtask_history,
         model_to_alias={sub_model: model_alias},
         tools=tool_objects,
+    )
+
+
+def o1_prompt(
+    scene: dict, task_entries: list[dict], *, attempt: int,
+    max_attempts: int, sub_model: str, model_alias: str = "model_1",
+) -> str:
+    """Render from live O1 structured history (Author/Critic inference)."""
+    return o1_prompt_from_history(
+        scene, o1_history(task_entries), attempt=attempt,
+        max_attempts=max_attempts, sub_model=sub_model,
+        model_alias=model_alias,
+    )
+
+
+def o1_prompt_from_turn(
+    scene: dict, turn: dict, *, max_attempts: int,
+    sub_model: str, model_alias: str = "model_1",
+) -> str:
+    """Rebuild a full baseline O1 prompt for an exported compact SFT turn."""
+    if turn.get("task_id") != scene.get("task_id"):
+        raise ValueError("stage3_turn_scene_mismatch")
+    if type(turn.get("round")) is not int:
+        raise ValueError("stage3_turn_round_invalid")
+    inputs = turn.get("input")
+    if not isinstance(inputs, dict) or set(inputs) != {"subtask_history"}:
+        raise ValueError("stage3_turn_input_not_compact_history")
+    return o1_prompt_from_history(
+        scene, inputs["subtask_history"], attempt=turn["round"],
+        max_attempts=max_attempts, sub_model=sub_model,
+        model_alias=model_alias,
     )
