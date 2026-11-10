@@ -425,7 +425,13 @@ def semantic_text_issues(text: str, spec: dict, contract: dict,
         )):
             issues.append("semantic_unlicensed_crossmodal_order")
     if time["footage_not_after_commentary"]:
-        if any(pattern.search(q) for pattern in _REVERSE_ORDER):
+        # "no later than" is the faithful rendering of <=, NOT the
+        # reversed relation "later than". Mask negated comparison phrases
+        # before applying the historical high-precision reversal guard.
+        ordering_text = re.sub(
+            r"\bno\s+later\s+than\b", "not_after", q
+        )
+        if any(pattern.search(ordering_text) for pattern in _REVERSE_ORDER):
             issues.append("semantic_reversed_multimodal_order")
         if re.search(r"\b(?:within|exactly|precisely|no more than|at most)\b"
                      r"[^.?!]{0,30}\b(?:time|seconds?|minutes?|interval|window)\b",
