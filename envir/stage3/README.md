@@ -6,14 +6,21 @@ supplies independently reviewed source-grounded Sub-Agent finishes. Stage 3
 uses the private DAG only to choose legal parallel batches and author the
 next O1-style **Main Prompt → Main Action** supervised sample. After a
 delegation, all of that batch's Stage-2 `finish_result` and public Trace
-Summary become visible in the **following** Main prompt.
+Summary become visible in the **following** Main prompt. On every
+subsequent Main decision, O1 replays the **entire cumulative history** of
+all earlier batches (not just the latest Sub-Agent response).
 
-The prompt is rendered by the actual
+The full inference-time Prompt is rendered by the actual
 `OmniGAIAMainAgentPrompt.build_prompt` and
 `BaseMainAgent._format_subtask_history` used in
 `baseline/orchestra-o1`. Its fields include user Question, simulated
-workspace modality inputs, tool/model catalog, Attempt budget and the
+source modality inputs, tool/model catalog, Attempt budget and the
 history of *prior* Sub-Agent tasks, results, summaries and trace summaries.
+The full Prompt is **NOT stored in each training row**: only the exact
+O1-formatted cumulative `input.subtask_history` is retained. The static
+prompt template is shared by all samples; Question/source metadata is
+looked up once per Scene, and Attempt/Remaining values are regenerated
+from `round` and the run manifest.
 The O1 `prior_context` argument is intentionally not used: the current
 O1 prompt template does not render it. The Main output remains the O1
 `delegate_task` JSON (possibly multiple independent tasks in one round)
@@ -131,13 +138,14 @@ A single output directory contains:
 
 | File | Meaning |
 | --- | --- |
-| `main_turns.jsonl` | Main **input.prompt** and **output** action (plus `output_json`) per decision |
+| `main_turns.jsonl` | Main **input.subtask_history** (full prior O1 feedback, no duplicated Prompt), plus **output** action (and `output_json`) per decision |
 | `episodes.jsonl` | Whole O1-style timeline for inspection, including the simulated Sub-Agent batch responses |
 | `private/teacher_alignment.jsonl` | Internal Macro IDs, visibility sets and Author/Critic audit; **never train on this** |
 | `failed.jsonl` | Rejected/incomplete scenes and explicit causes |
 | `journal/000000.rounds/round-0001.json` | Atomic Main-turn checkpoints, saved immediately after each decision |
 | `journal/000000.json` | Atomic complete-scene checkpoint (published or rejected) |
 | `summary.json` | Round counts, completed/rejected scenes, delegation versus completion counts |
+| `manifest.json` | Shared prompt settings (`max_attempts`, model aliases), original Scene hashes and frozen O1 renderer hashes |
 
 By default Stage 3 uses **4 concurrent Scene workers** (`--workers 4`).
 Each worker generates its assigned Question's Main rounds **serially**, so
@@ -148,17 +156,57 @@ handle concurrent requests, or increase it within `1..64` if capacity
 permits. Worker count affects throughput only and can change on resume
 without invalidating existing Scene/round checkpoints.
 
-The CLI displays one global Scene `tqdm` bar plus one reusable Main-round
-bar per worker (four with the default setting). Add `--no-progress` for
-batch logs and scripts.
+The CLI displays one global Scene `tqdm` bar by default. Add
+`--verbose-progress` for per-worker Main-round bars or `--no-progress`
+for batch logs and scripts.
+
+### Compact Main inputs and optional full-Prompt export
+
+A per-decision example stores **only dynamic history**, not a rendered O1
+Prompt repeated for every round:
+
+```json
+{
+  "task_id": "question-000001-...",
+  "round": 3,
+  "input": {"subtask_history": "[Attempt 1] ...\\n[Attempt 2] ..."},
+  "output": {"action": "delegate_task", "reasoning": "...", "params": {"tasks": []}}
+}
+```
+
+`input.subtask_history` is the **complete O1-formatted history of every
+previous batch**, including every parallel Sub-Agent's instruction,
+status, result, finish summary and trace summary. In the first round it
+is `No subtasks completed yet.`. Nothing from the *current* or future
+delegations enters that history. The public Stage-1 Scene provides the
+specific Question and source metadata, the O1 code provides the shared
+instruction/tool schemas, and `manifest.json` provides `max_attempts`,
+`sub_model` and `model_alias`. Progress text is regenerated from the
+sample's `round`. Therefore the correct full O1 Prompt is
+reconstructable **byte-for-byte** when the renderer hash matches.
+
+Only if a trainer requires complete Prompt text, export it separately:
+
+```bash
+python -m envir.stage3.rebuild_prompts \\
+  --scenes envir/data/maestro_web_v2_100/questions/scenes.jsonl \\
+  --turns envir/data/maestro_web_v2_main_turns_100/main_turns.jsonl \\
+  --output envir/data/maestro_web_v2_main_turns_100/full_prompts.jsonl
+```
+
+The exporter automatically reads `manifest.json` beside the turns,
+verifies frozen Scene and renderer signatures, then replaces the
+compact input with `input.prompt` in a **separate** file; it does not
+alter the original training labels or checkpoints.
 
 **Incremental persistence:** after each accepted Main decision (including
 `complete`), Stage 3 atomically writes a round checkpoint to
 `journal/<scene-index>.rounds/round-<round>.json`. If the process stops in
 round 4, the first three round decisions will be replayed from checkpoints
 and the LLM Author will only be called for unfinished rounds on restart.
-A saved decision is checked against the newly reconstructed O1 prompt,
-current DAG wave and assignment constraints before reuse.
+A saved decision is checked against its reconstructed, full O1 prompt
+hash, cumulative history, current DAG wave and assignment constraints
+before reuse.
 
 The published `main_turns.jsonl`, `episodes.jsonl` and private
 `teacher_alignment.jsonl` are **incrementally appended only when the
