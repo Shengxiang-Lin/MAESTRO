@@ -137,7 +137,7 @@ _TOOL_HALLUCINATION = re.compile(
 )
 _FACT_ID = re.compile(r"\b[A-Za-z][A-Za-z0-9_-]*:F[0-9A-Za-z_-]+\b")
 from .oracle_review import (
-    full_entry_list_matches, entry_fact_index,
+    full_entry_list_matches, entry_fact_index, positive_entry_provenance,
     mismatched_entry_refs, critic_oracle_contradiction,
 )
 
@@ -186,6 +186,7 @@ def _teacher_contract(record: dict, *, question: str | None,
         "terminal_output_schema_of_this_macro": record["output_schema"],
         "exact_oracle_answer": rows,
         "entry_fact_index": entry_fact_index(record),
+        "positive_entry_provenance": positive_entry_provenance(record),
         "executed_operations_in_this_macro": [
             step["operation"] for step in steps
         ],
@@ -506,7 +507,8 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
             for issue in _stage_scope_issues(value, contract)
         )
         if mismatched_entry_refs(
-            value, contract.get("entry_fact_index", {})
+            value, contract.get("entry_fact_index", {}),
+            contract.get("positive_entry_provenance"),
         ):
             errors.append(field + "_entry_fact_ref_mismatch")
         # Narrow, high-confidence check: claiming an archive was queried
@@ -640,6 +642,7 @@ def author_critic_report(
                     decision, normalized_result,
                     contract["exact_oracle_answer"],
                     contract["entry_fact_index"],
+                    contract["positive_entry_provenance"],
                 ) if verified_entry_list and decision.get("verdict") != "pass"
                 else None
             )
