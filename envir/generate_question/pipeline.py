@@ -64,6 +64,12 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     modalities, scenario_reviews, question_reviews = Counter(), Counter(), Counter()
     one_source = Counter()
     cf_sensitive = Counter()
+    acquisition_scenes = 0
+    keyed_lookup_total = 0
+    acquisition_depths = []
+    clue_counterfactual_pass = 0
+    full_read_bypass_count = 0
+    full_read_attempt_count = 0
     answer_signatures = Counter()
     answer_by_difficulty = {}
     question_failure_stages, question_guard_issues = Counter(), Counter()
@@ -164,6 +170,21 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 one_source[spec["difficulty_target"]] += int(
                     audit["one_source_baseline"]["exact_match"]
                 )
+                acquisition = audit.get("evidence_acquisition", {})
+                if acquisition:
+                    acquisition_scenes += 1
+                    keyed_lookup_total += acquisition["keyed_lookup_count"]
+                    acquisition_depths.append(
+                        acquisition["evidence_acquisition_depth"]
+                    )
+                    clue_counterfactual_pass += int(
+                        acquisition["clue_counterfactual_pass"]
+                    )
+                    denied = acquisition["full_read_blocked"]
+                    full_read_attempt_count += len(denied)
+                    full_read_bypass_count += sum(
+                        not status for status in denied.values()
+                    )
                 cf_sensitive[spec["difficulty_target"]] += int(
                     all(entry["changing_source_changes_answer"]
                         for entry in audit["counterfactual_source_tests"].values())
@@ -278,6 +299,26 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             "scope": (
                 "Naming-invariant fingerprint of executable Macro DAGs, "
                 "operator chains and source roles; not a semantic uniqueness proof."
+            ),
+        },
+        "evidence_acquisition": {
+            "scenes_with_keyed_clue_chain": acquisition_scenes,
+            "keyed_lookup_count": keyed_lookup_total,
+            "mean_evidence_acquisition_depth": (
+                round(sum(acquisition_depths) / len(acquisition_depths), 3)
+                if acquisition_depths else None
+            ),
+            "clue_counterfactual_pass_rate": (
+                round(clue_counterfactual_pass / acquisition_scenes, 4)
+                if acquisition_scenes else None
+            ),
+            "unauthorized_full_read_success_rate": (
+                round(full_read_bypass_count / full_read_attempt_count, 4)
+                if full_read_attempt_count else None
+            ),
+            "scope": (
+                "Verified synthetic key-dependent information access; "
+                "not open-web navigation or real-image perception."
             ),
         },
         "reasoning": {

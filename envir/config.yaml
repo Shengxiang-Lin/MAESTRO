@@ -10,6 +10,7 @@ generation:
   output_dir: envir/data/maestro_question_final_100
   target: 100
   seed: 17
+  clue_chain_share: 0  # opt-in percentage of MEDIUM scenes
   difficulty_mix: [20, 50, 30]  # Easy, Medium, Hard
   overwrite: false
   flush_every: 1   # persist every completed LLM decision (safe to resume)

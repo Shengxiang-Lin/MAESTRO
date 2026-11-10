@@ -48,6 +48,8 @@ def macro_graph_signature(graph: dict) -> str:
                 step.get("left_on"), step.get("right_on"),
                 step.get("left_field"), step.get("right_field"),
                 step.get("limit"),
+                step.get("source_id") if step["op"] == "lookup_by_key" else None,
+                step.get("input_key_field"), step.get("source_key_field"),
                 step.get("value") if step["op"] in {
                     "filter_eq", "filter_gte"
                 } else None,
@@ -77,6 +79,10 @@ def macro_graph_profile(graph: dict) -> dict:
         "edge_count": sum(len(t["depends_on"]) for t in tasks),
         "critical_path_depth": graph["critical_path_depth"],
         "source_task_count": sum(bool(t["source_ids"]) for t in tasks),
+        "keyed_acquisition_task_count": sum(
+            any(step["op"] == "lookup_by_key" for step in _primitive_steps(t))
+            for t in tasks
+        ),
         "parallel_wave_count": len(graph["reference_waves"]),
         "composite_task_count": sum(
             len(_primitive_steps(t)) > 1 for t in tasks
@@ -118,6 +124,19 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         raise ValueError("macro_question_missing_disagreement_operation")
     if pattern == "dynamic_threshold" and "gte" not in compares:
         raise ValueError("macro_question_missing_threshold_operation")
+    if pattern == "clue_chain":
+        lookups = [step for step in steps if step["op"] == "lookup_by_key"]
+        if len(lookups) != 2 or [
+            (x.get("source_id"), x.get("input_key_field"),
+             x.get("source_key_field")) for x in lookups
+        ] != [
+            ("index", "marker_code", "marker_code"),
+            ("archive", "accession_id", "accession_id"),
+        ]:
+            raise ValueError("macro_question_missing_keyed_acquisition_chain")
+        if (sum(step["op"] == "scan" for step in steps) != 1
+                or sum(step["op"] == "filter_eq" for step in steps) < 2):
+            raise ValueError("macro_question_missing_visual_identification")
     if family == "evidence_reconcile" and not ops["attach_evidence"]:
         raise ValueError("macro_question_missing_evidence_output")
     sorts = [step for step in steps if step["op"] == "sort"]
@@ -151,6 +170,8 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         {"entry_label", "evidence_refs"} <= set(output_fields)
     ):
         raise ValueError("macro_question_wrong_evidence_output_schema")
+    if answer_kind == "accession_year" and output_fields != ["accession_year"]:
+        raise ValueError("macro_question_wrong_accession_year_schema")
     if answer_kind == "count" and "count" not in output_fields:
         raise ValueError("macro_question_wrong_count_output_schema")
     if answer_kind == "category_counts" and "count" not in output_fields:

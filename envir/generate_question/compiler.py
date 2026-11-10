@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .dag import compile_waves
 from .program_ir import (
-    MissingSourceError, ProgramError, Relation, _apply, _scan,
+    MissingSourceError, ProgramError, Relation, _apply, _scan, _lookup_by_key,
     answer_values, evaluate_program, validate_program,
 )
 
@@ -42,7 +42,8 @@ def _compile_compact_tasks(program: dict, execution_trace: list[dict]) -> dict:
             merge = (
                 group[-1]["id"] == parent
                 and len(group) < 3
-                and node["op"] != "scan"
+                and node["op"] not in {"scan", "lookup_by_key"}
+                and group[-1]["op"] != "lookup_by_key"
             )
         if merge:
             groups[group_idx].append(node)
@@ -61,7 +62,8 @@ def _compile_compact_tasks(program: dict, execution_trace: list[dict]) -> dict:
                     external.append(parent)
             local.add(node["id"])
         terminal = group[-1]["id"]
-        sources = [node["source_id"] for node in group if node["op"] == "scan"]
+        sources = [node["source_id"] for node in group
+                   if node["op"] in {"scan", "lookup_by_key"}]
         # Fusion must never grant a source that an included scan does not use.
         if len(sources) > 1:
             raise ProgramError("compact_group_grants_multiple_sources")
@@ -98,7 +100,11 @@ def _compile_compact_tasks(program: dict, execution_trace: list[dict]) -> dict:
         "macro_task_count": len(tasks),
         "primitive_operator_count": len(program["nodes"]),
         "critical_path_depth": _critical_path(tasks),
-        "source_scope_policy": "only_scans_grant_explicit_source",
+        "source_scope_policy": (
+            "scan_or_keyed_lookup_only_explicit_source"
+            if any(node["op"] == "lookup_by_key" for node in program["nodes"])
+            else "only_scans_grant_explicit_source"
+        ),
         "coarsening": "bounded_linear_chain_fusion_max3",
     }
 
@@ -124,20 +130,27 @@ def execute_task(task: dict, *, input_products: list[Relation],
     if "operator_chain" in task:
         # The only information available is authorized scan data and
         # previously completed typed handoffs, never the private World.
-        scan_grants = {
+        grants = {
             step["source_id"] for step in task["operator_chain"]
-            if step["op"] == "scan"
+            if step["op"] in {"scan", "lookup_by_key"}
         }
-        if (set(task["source_ids"]) != scan_grants
-                or set(visible_sources) != scan_grants):
+        if (set(task["source_ids"]) != grants
+                or set(visible_sources) != grants):
             raise ProgramError("compact_source_scope_mismatch")
         results = dict(zip(task["external_inputs"], input_products))
         for step in task["operator_chain"]:
-            if step["op"] == "scan":
+            if step["op"] in {"scan", "lookup_by_key"}:
                 sid = step["source_id"]
                 if sid not in visible_sources:
-                    raise MissingSourceError("compact_scan_not_granted:" + sid)
-                product = _scan(sid, visible_sources[sid])
+                    raise MissingSourceError("compact_source_not_granted:" + sid)
+                product = (
+                    _scan(sid, visible_sources[sid])
+                    if step["op"] == "scan" else
+                    _lookup_by_key(
+                        step, results[step["inputs"][0]],
+                        visible_sources[sid],
+                    )
+                )
             else:
                 product = _apply(
                     step, [results[parent] for parent in step["inputs"]]
@@ -226,7 +239,7 @@ class QuestionSession:
     not a learned policy or an untrusted-subagent attack environment.
     """
 
-    COSTS = {"read_source": 2, "run_task": 1, "verify": 2}
+    COSTS = {"read_source": 2, "lookup_by_key": 2, "run_task": 1, "verify": 2}
 
     def __init__(self, scene: dict):
         self._scene = scene
@@ -234,6 +247,7 @@ class QuestionSession:
         self._tasks = {x["task_id"]: x for x in scene["macro_graph"]["tasks"]}
         self._products = {}
         self._acquired = set()
+        self._keyed_fact_refs = set()
         self.action_log = []
         self.total_cost = 0
 
@@ -250,6 +264,10 @@ class QuestionSession:
         from copy import deepcopy
         if source_id not in self._sources:
             raise MissingSourceError("unknown_source_id")
+        if self._sources[source_id].get("access_policy", {}).get(
+            "mode", "browse"
+        ) != "browse":
+            raise MissingSourceError("full_source_read_forbidden:" + source_id)
         self._acquired.add(source_id)
         self.total_cost += self.COSTS["read_source"]
         self.action_log.append({"action": "read_source", "source_id": source_id})
@@ -263,17 +281,43 @@ class QuestionSession:
         task = self._tasks[task_id]
         if any(parent not in self._products for parent in task["depends_on"]):
             raise ProgramError("missing_upstream_workproduct:" + task_id)
-        if any(sid not in self._acquired for sid in task["source_ids"]):
-            raise MissingSourceError("source_must_be_read_first:" + task_id)
+        for sid in task["source_ids"]:
+            mode = self._sources[sid].get(
+                "access_policy", {}
+            ).get("mode", "browse")
+            if mode == "browse" and sid not in self._acquired:
+                raise MissingSourceError("source_must_be_read_first:" + task_id)
+            if mode not in {"browse", "keyed_lookup"}:
+                raise MissingSourceError("unknown_source_access_mode:" + sid)
+        input_products = [
+            self._products[parent] for parent in task["depends_on"]
+        ]
         product = execute_task(
-            task, input_products=[
-                self._products[parent] for parent in task["depends_on"]
-            ],
+            task, input_products=input_products,
             visible_sources={
                 sid: self._sources[sid] for sid in task["source_ids"]
             },
         )
         self._products[task_id] = product
+        # Access is keyed by an actual upstream product and granted only
+        # for the requested records. Full keyed stores never enter memory.
+        for step in task.get("operator_chain", []):
+            if step["op"] != "lookup_by_key":
+                continue
+            sid = step["source_id"]
+            source_keys = [row["values"][step["input_key_field"]]
+                           for relation in input_products
+                           for row in relation.rows
+                           if step["input_key_field"] in relation.columns]
+            self.action_log.append({
+                "action": "lookup_by_key", "source_id": sid,
+                "keys": source_keys,
+            })
+            self.total_cost += self.COSTS["lookup_by_key"]
+            self._keyed_fact_refs.update({
+                ref for row in product.rows for ref in row["support"]
+                if ref.startswith(sid + ":")
+            })
         self.total_cost += self.COSTS["run_task"]
         self.action_log.append({"action": "run_task", "task_id": task_id})
         return {
@@ -296,6 +340,7 @@ class QuestionSession:
         }
         product = self._products[task_id]
         refs = {ref for row in product.rows for ref in row["support"]}
+        available.update(self._keyed_fact_refs)
         self.total_cost += self.COSTS["verify"]
         self.action_log.append({"action": "verify", "task_id": task_id})
         return {
@@ -321,7 +366,10 @@ def oracle_schedule(scene: dict) -> dict:
             task = next(t for t in scene["macro_graph"]["tasks"]
                         if t["task_id"] == tid)
             for sid in task["source_ids"]:
-                if sid not in session._acquired:
+                policy = session._sources[sid].get(
+                    "access_policy", {}
+                ).get("mode", "browse")
+                if policy == "browse" and sid not in session._acquired:
                     session.read_source(sid)
             session.run_task(tid)
     return {

@@ -42,7 +42,13 @@ def _mutate_answer_witness(sources: dict, source_id: str,
     if selected is None:
         raise ValueError("referenced_source_fact_not_found:" + source_id)
     fields = selected["values"]
-    if source_id == "register":
+    if source_id == "illustration":
+        fields["emblem_color"] = "__visual_clue_removed__"
+    elif source_id == "index":
+        fields["accession_id"] = "__unresolvable_accession__"
+    elif source_id == "archive":
+        fields["accession_year"] += 1
+    elif source_id == "register":
         fields["active"] = False
     elif source_id == "glossary":
         field = "group_id" if "group_id" in fields else "category_name"
@@ -72,6 +78,9 @@ def _mutate_answer_witness(sources: dict, source_id: str,
 
 def weak_single_source_baseline(scene: dict) -> list[dict]:
     """A measured shortcut attempt, NOT exhaustive program minimization."""
+    if scene["problem_spec"].get("reasoning_pattern") == "clue_chain":
+        # A visual clue is mandatory, neither keyed store is browsable.
+        return []
     rows = [
         observation["values"]
         for observation in scene["world"]["sources"]["register"]["observations"]
@@ -163,7 +172,11 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         "medium": (3, 2, 3),
         "hard": (4, 3, 4),
     }
-    source_count, joins, depth = levels[difficulty]
+    if spec.get("reasoning_pattern") == "clue_chain":
+        # Information-acquisition depth replaces the static-join quota.
+        source_count, joins, depth = 3, 0, 4
+    else:
+        source_count, joins, depth = levels[difficulty]
     if spec.get("version") == VERSION and graph["macro_task_count"] > 9:
         issues.append("macro_task_budget_exceeded")
     if profile["source_count"] < source_count:
@@ -172,7 +185,17 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         issues.append("insufficient_join_count")
     if profile["necessary_structural_operator_depth"] < depth:
         issues.append("insufficient_operator_depth")
-    if (difficulty != "easy" and not
+    if spec.get("reasoning_pattern") == "clue_chain":
+        if profile.get("keyed_lookup_count", 0) != 2:
+            issues.append("clue_chain_requires_two_keyed_lookups")
+        refs = {ref for row in macro["answer_with_provenance"]
+                for ref in row["source_fact_refs"]}
+        if not all(any(ref.startswith(sid + ":") for ref in refs)
+                   for sid in ("illustration", "index", "archive")):
+            issues.append("clue_chain_missing_three_source_provenance")
+        if len(answer) != 1 or set(answer[0]) != {"accession_year"}:
+            issues.append("clue_chain_answer_year_contract")
+    elif (difficulty != "easy" and not
             any(ref.startswith("annotations:")
                 for row in macro["answer_with_provenance"]
                 for ref in row["source_fact_refs"])):
@@ -220,10 +243,85 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             issues.append("missing_source_not_required:" + source_id)
         if difficulty != "easy" and not semantic_effect:
             issues.append("counterfactual_not_answer_sensitive:" + source_id)
+    acquisition_audit = {}
+    if spec.get("reasoning_pattern") == "clue_chain":
+        from .compiler import QuestionSession
+        from .program_ir import _scan
+        view = scene["public"]["available_source_descriptions"]
+        if {row["source_id"]: row["access_mode"] for row in view} != {
+            "archive": "keyed_lookup", "illustration": "browse",
+            "index": "keyed_lookup",
+        }:
+            issues.append("clue_chain_public_access_policy_mismatch")
+        denied = {}
+        session = QuestionSession(scene)
+        for sid in ("index", "archive"):
+            try:
+                session.read_source(sid)
+                denied[sid] = False
+            except MissingSourceError:
+                denied[sid] = True
+            if not denied[sid]:
+                issues.append("clue_chain_full_read_bypass:" + sid)
+            try:
+                _scan(sid, world["sources"][sid])
+                issues.append("clue_chain_scan_bypass:" + sid)
+            except MissingSourceError:
+                pass
+        illustration = [
+            row["values"] for row in
+            world["sources"]["illustration"]["observations"]
+        ]
+        features = spec["investigation"]["visual_features"]
+        target = [r for r in illustration if
+                  all(r[field] == value for field, value in features.items())]
+        if len(target) != 1:
+            issues.append("clue_chain_target_not_unique")
+        if any(
+            sum(row[field] == value for row in illustration) < 2
+            for field, value in features.items()
+        ):
+            issues.append("clue_chain_missing_visual_decoys")
+        # Replacing JUST the visual marker with another genuine marker
+        # must route retrieval to a different accession year.
+        rerouted = copy.deepcopy(world["sources"])
+        target_marker = target[0]["marker_code"] if target else None
+        alternative = next((
+            row["marker_code"] for row in illustration
+            if row["marker_code"] != target_marker
+        ), None)
+        if target_marker is not None and alternative is not None:
+            for row in rerouted["illustration"]["observations"]:
+                if row["values"]["marker_code"] == target_marker:
+                    row["values"]["marker_code"] = alternative
+                    break
+            rerouted_answer = answer_values(evaluate_program(
+                program, sources=rerouted
+            ))
+            clue_sensitive = rerouted_answer != answer
+            if not clue_sensitive:
+                issues.append("clue_chain_marker_reroute_does_not_change_answer")
+        else:
+            clue_sensitive = False
+            issues.append("clue_chain_missing_counterfactual_marker")
+        acquisition_audit = {
+            "keyed_lookup_count": profile.get("keyed_lookup_count", 0),
+            "evidence_acquisition_depth": profile["keyed_lookup_count"],
+            "full_read_blocked": denied,
+            "unauthorized_full_read_success_rate": (
+                sum(not value for value in denied.values())
+                / max(1, len(denied))
+            ),
+            "clue_counterfactual_pass": clue_sensitive,
+            "unique_visual_target_count": len(target),
+            "nontrivial_decoys": True if len(target) == 1 and
+            all(sum(r[field] == val for r in illustration) >= 2
+                for field, val in features.items()) else False,
+        }
     # Full-World "oracle can compute" is expected for ANY deterministic
     # program; unlike one-source/one-step baseline, it is NOT a difficulty
     # rejection criterion.
-    return {
+    result = {
         "status": "valid" if not issues else "invalid",
         "issues": sorted(set(issues)),
         "difficulty_target": difficulty,
@@ -253,6 +351,9 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             "Image, video and audio are simulated annotations, not real perception.",
         ],
     }
+    if spec.get("reasoning_pattern") == "clue_chain":
+        result["evidence_acquisition"] = acquisition_audit
+    return result
 
 
 def compile_and_validate(spec: dict, question: str) -> dict:

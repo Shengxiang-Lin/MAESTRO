@@ -113,3 +113,58 @@ The separate implement-subtasks command is still supported for
 Oracle-only inspection. The old naturalize-subtasks command without
 --scenes continues to consume pre-materialized Oracle files configured
 under reporting.source_subtasks and reporting.source_scene_index.
+
+
+## Opt-in clue-driven evidence acquisition (clean pilot)
+
+The normal generator defaults to the original static computation patterns.
+Use --clue-chain-share to replace a controlled percentage of MEDIUM
+scenes with a DIFFERENT information-acquisition dependency:
+
+- Browse a fictional simulated illustration. Two exhibit features
+  (emblem color + motif) are needed to distinguish the intended item;
+  decoys deliberately share one feature each
+- Read that item's marker code; use it as a typed, evidence-backed query
+  into a KEYED (non-browseable) catalog index
+- Use the accession identifier returned by the index to query a
+  second KEYED (non-browseable) archive
+- Answer the target's accession year; retain exact fact provenance from
+  illustration -> index -> archive
+
+The index and archive IDs/titles are advertised to Main-Agent, but
+their records are NOT returned by full read_source or scan. The
+lookup_by_key primitive requires an upstream typed WorkProduct and
+emits only matching records. The compiler preserves lookup operations
+as separate dispatchable Macros, each with a real dependency. The
+source observations remain synthetic; there is NO real media decoding.
+
+Pilot with 20 Stage-1 tasks, approx. 10 clue-chain tasks with the
+default 20/50/30 difficulty mix (all medium tasks become clue-chain):
+
+~~~bash
+python -m envir generate-questions \
+  --config envir/config.yaml \
+  --target 20 --clue-chain-share 100 \
+  --output-dir envir/data/maestro_clue_pilot_20
+~~~
+
+Then Stage 2A + Stage 2B via the existing unified one-command entry:
+
+~~~bash
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --scenes envir/data/maestro_clue_pilot_20/questions/scenes.jsonl \
+  --output-dir envir/data/maestro_clue_reports_20
+~~~
+
+Quality reports include evidence_acquisition keyed_lookup_count,
+mean_evidence_acquisition_depth, clue_counterfactual_pass_rate and
+unauthorized_full_read_success_rate. The last should be zero for
+synthetic keyed stores. Check the private source/answer/evidence data,
+and inspect several public questions for scenario variety before
+raising the clue share or introducing new retrieval motifs.
+
+The clue-chain pilot intentionally uses only MEDIUM tasks; Easy and Hard
+keep their existing programs for now. 100 means 100 percent of MEDIUM,
+not all difficulty levels. Defaults remain unchanged when the option is
+omitted (generation.clue_chain_share: 0).

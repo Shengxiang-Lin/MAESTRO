@@ -136,6 +136,8 @@ def initial_public_view(spec: dict, world: dict, question: str) -> dict:
             "title": item["title"],
             "modality_hint": item["modality"],
             "representation": item["representation"],
+            **({"access_mode": item["access_policy"]["mode"]}
+               if "access_policy" in item else {}),
         } for sid, item in sorted(world["sources"].items())],
         "max_concurrent_subagents": 10,
         "status": "fictional_structured_multisource_world",
@@ -184,6 +186,9 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 
 def compile_program(spec: dict) -> dict:
     """Compile semantic branches into source-scoped executable programs."""
+    if spec.get("reasoning_pattern") == "clue_chain":
+        from .clue_chain import compile_clue_program
+        return compile_clue_program(spec)
     if spec.get("reasoning_pattern") != "approval":
         from .pattern_world import compile_pattern_program
         return compile_pattern_program(spec)
@@ -301,6 +306,9 @@ def compile_program(spec: dict) -> dict:
 
 def generate_world(spec: dict) -> dict:
     """Versioned synthetic sources; never rewrite old private World facts."""
+    if spec.get("reasoning_pattern") == "clue_chain":
+        from .clue_chain import generate_clue_world
+        return generate_clue_world(spec)
     if spec.get("reasoning_pattern") != "approval":
         from .pattern_world import generate_pattern_world
         return generate_pattern_world(spec)

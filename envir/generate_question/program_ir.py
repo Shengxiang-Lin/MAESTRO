@@ -28,6 +28,7 @@ _ARITY = {
     "project": 1, "unique": 1, "join": 2, "count": 1,
     "sort": 1, "take": 1, "group_count": 1,
     "compare_fields": 1, "attach_evidence": 1,
+    "lookup_by_key": 1,
 }
 
 
@@ -50,6 +51,12 @@ def validate_program(program: dict) -> list[str]:
             not isinstance(parent, str) or parent not in seen for parent in parents
         ):
             issues.append("invalid_arity_or_non_topological_dependency")
+        if op == "lookup_by_key" and (
+            not isinstance(node.get("source_id"), str)
+            or not isinstance(node.get("input_key_field"), str)
+            or not isinstance(node.get("source_key_field"), str)
+        ):
+            issues.append("lookup_by_key_invalid_contract")
         if op == "scan" and not isinstance(node.get("source_id"), str):
             issues.append("scan_missing_source_id")
         if op in {"filter_eq", "filter_gte"} and not isinstance(node.get("field"), str):
@@ -112,6 +119,8 @@ def _check(relation: Relation, field: str):
 
 
 def _scan(sid: str, source: dict) -> Relation:
+    if source.get("access_policy", {}).get("mode", "browse") != "browse":
+        raise MissingSourceError("full_source_scan_forbidden:" + sid)
     columns, observations = source.get("schema"), source.get("observations")
     if not isinstance(columns, list) or not columns or not isinstance(observations, list):
         raise ProgramError("invalid_source_observation_schema:" + sid)
@@ -129,6 +138,60 @@ def _scan(sid: str, source: dict) -> Relation:
             raise ProgramError("invalid_source_fact_refs:" + sid)
         rows.append({"values": dict(values), "support": tuple(sorted(set(refs)))})
     return Relation(tuple(columns), tuple(rows))
+
+
+def _lookup_by_key(node: dict, key_product: Relation,
+                   source: dict) -> Relation:
+    """Acquire ONLY rows addressed by proven upstream keys, with evidence.
+
+    The caller cannot submit an arbitrary key literal: it must be carried
+    by the upstream typed WorkProduct and fact references. No full table
+    snapshot is ever returned to the running Main/Sub-Agent.
+    """
+    sid = node["source_id"]
+    policy = source.get("access_policy", {})
+    if (policy.get("mode") != "keyed_lookup"
+            or policy.get("key_field") != node["source_key_field"]):
+        raise MissingSourceError("unauthorized_keyed_source_access:" + sid)
+    _check(key_product, node["input_key_field"])
+    key_field = node["source_key_field"]
+    source_columns = source.get("schema", [])
+    if key_field not in source_columns:
+        raise ProgramError("lookup_source_key_missing:" + sid)
+    if (not isinstance(source.get("observations"), list)
+            or not source_columns):
+        raise ProgramError("invalid_lookup_source_schema:" + sid)
+    result_columns = tuple(dict.fromkeys(
+        (*key_product.columns, *source_columns)
+    ))
+    rows = []
+    observed = source["observations"]
+    source_keys = [item.get("values", {}).get(key_field) for item in observed]
+    if len(source_keys) != len(set(map(str, source_keys))):
+        raise ProgramError("ambiguous_lookup_source_key:" + sid)
+    for upstream in key_product.rows:
+        if not upstream.get("support"):
+            raise ProgramError("lookup_key_missing_upstream_provenance:" + sid)
+        key = upstream["values"][node["input_key_field"]]
+        if key is None or isinstance(key, (dict, list)):
+            raise ProgramError("invalid_lookup_key_value")
+        for item in observed:
+            if item["values"].get(key_field) != key:
+                continue
+            record = item["values"]
+            if any(upstream["values"][field] != record[field]
+                   for field in set(key_product.columns) & set(source_columns)):
+                raise ProgramError("lookup_conflicting_shared_columns:" + sid)
+            refs = item.get("fact_refs", [])
+            if (not refs or any(not isinstance(ref, str)
+                                or not ref.startswith(sid + ":")
+                                for ref in refs)):
+                raise ProgramError("invalid_lookup_evidence:" + sid)
+            rows.append({
+                "values": {**upstream["values"], **record},
+                "support": tuple(sorted(set(upstream["support"]) | set(refs))),
+            })
+    return Relation(result_columns, tuple(rows))
 
 
 def _apply(node: dict, inputs: list[Relation]) -> Relation:
@@ -256,11 +319,15 @@ def evaluate_program(program: dict, *, sources: dict) -> dict:
         raise ProgramError("invalid_program:" + ",".join(problems))
     products, trace = {}, []
     for node in program["nodes"]:
-        if node["op"] == "scan":
+        if node["op"] in {"scan", "lookup_by_key"}:
             sid = node["source_id"]
             if sid not in sources:
                 raise MissingSourceError("source_not_available:" + sid)
-            product = _scan(sid, sources[sid])
+            product = (
+                _scan(sid, sources[sid])
+                if node["op"] == "scan" else
+                _lookup_by_key(node, products[node["inputs"][0]], sources[sid])
+            )
         else:
             product = _apply(node, [products[key] for key in node["inputs"]])
         products[node["id"]] = product
@@ -297,14 +364,19 @@ def program_complexity(program: dict) -> dict:
             0 if node["op"] == "scan"
             else 1 + max(depth[parent] for parent in node["inputs"])
         )
-    return {
+    result = {
         "reasoning_depth": depth[program["output"]],
         "operator_count": sum(node["op"] != "scan" for node in program["nodes"]),
         "join_count": sum(node["op"] == "join" for node in program["nodes"]),
         "source_count": len({
-            node["source_id"] for node in program["nodes"] if node["op"] == "scan"
+            node["source_id"] for node in program["nodes"]
+            if node["op"] in {"scan", "lookup_by_key"}
         }),
         "operation_sequence": [
             node["op"] for node in program["nodes"] if node["op"] != "scan"
         ],
     }
+    keyed = sum(node["op"] == "lookup_by_key" for node in program["nodes"])
+    if keyed:
+        result["keyed_lookup_count"] = keyed
+    return result
