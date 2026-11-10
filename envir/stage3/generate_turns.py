@@ -53,6 +53,14 @@ def _signature(scenes: Path, reports: Path, *, max_scenes, sub_model,
         "trajectory_builder.py", "action_author.py",
         "o1_compat.py", "generate_turns.py",
         "../generate_question/evidence_tools.py",
+        "../../orchestra/base_main_agent.py",
+        "../../orchestra/prompts/omnigaia.py",
+        "../../benchmark/omnigaia/tools/google_search.py",
+        "../../benchmark/omnigaia/tools/extract_url_jina.py",
+        "../../benchmark/omnigaia/tools/multimodal_toolkit.py",
+        "../../benchmark/omnigaia/tools/audio_analysis.py",
+        "../../benchmark/omnigaia/tools/video_analysis.py",
+        "../../benchmark/omnigaia/tools/execute_code.py",
     )
     return {
         "scenes_sha256": _digest(scenes),
@@ -364,6 +372,8 @@ def generate_turns(
             output_dir / "private" / "teacher_alignment.jsonl"
         ),
         "failed": str(output_dir / "failed.jsonl"),
+        "input_storage": "cumulative_o1_subtask_history_only",
+        "prompt_reconstruction": "scene + round + manifest + baseline_o1_renderer",
         "checkpoint_granularity": "main_decision_round",
         "publication_granularity": "complete_episode",
         "limitations": [
