@@ -35,8 +35,8 @@ def reviewed_rows(scene):
             "finish_result": {
                 "status": "done",
                 "result": (
-                    "Visible result for " + row["macro_task_id"] +
-                    ": " + json.dumps(row["answer"], ensure_ascii=False)
+                    "Visible result from the assigned evidence: " +
+                    json.dumps(row["answer"], ensure_ascii=False)
                 ),
                 "summary": (
                     "Recorded source observations and their scoped "
