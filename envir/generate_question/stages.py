@@ -41,7 +41,9 @@ def _construction_identity(args) -> str:
                 "spec.py", "clue_chain.py", "graph_grammar.py",
                 "world_synthesizer.py", "macro_first.py",
                 "macro_first_world.py", "macro_first_v2.py",
-                "macro_first_v2_world.py", "program_ir.py",
+                "macro_first_v2_world.py", "semantic_evidence.py",
+                "v2_prompts.py", "intent.py", "surface_quality.py",
+                "program_ir.py",
                 "compiler.py", "scenario.py", "world.py", "quality.py",
                 "backend.py", "stages.py",
             )
@@ -66,6 +68,13 @@ def _question_signature(args, rows: list[dict]) -> str:
         "critic_api_base": args.question_critic_api_base,
         "max_revisions": args.max_revisions,
         "question_code": file_digest(Path(__file__).with_name("question.py")),
+        "semantic_evidence_code": file_digest(
+            Path(__file__).with_name("semantic_evidence.py")),
+        "intent_code": file_digest(Path(__file__).with_name("intent.py")),
+        "surface_quality_code": file_digest(
+            Path(__file__).with_name("surface_quality.py")),
+        "v2_prompts_code": file_digest(
+            Path(__file__).with_name("v2_prompts.py")),
         "stage_code": file_digest(Path(__file__)),
         "backend_code": file_digest(Path(__file__).with_name("backend.py")),
     })
@@ -227,6 +236,11 @@ def construct_scenes(args) -> dict:
             "critic_api_base": args.scenario_critic_api_base,
             "max_revisions": args.scenario_max_revisions,
             "scenario_code": file_digest(Path(__file__).with_name("scenario.py")),
+            "semantic_evidence_code": file_digest(
+                Path(__file__).with_name("semantic_evidence.py")),
+            "intent_code": file_digest(Path(__file__).with_name("intent.py")),
+            "v2_prompts_code": file_digest(
+                Path(__file__).with_name("v2_prompts.py")),
             "stage_code": file_digest(Path(__file__)),
             "backend_code": file_digest(Path(__file__).with_name("backend.py")),
         })
