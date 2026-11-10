@@ -127,7 +127,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     )
     legacy_families = FAMILIES[:7]
     family = (
-        "accession_year" if (keyed or evidence) else
+        "accession_year" if keyed else
         legacy_families[(ordinal + run_seed) % len(legacy_families)]
         if pattern == "approval" else
         {
@@ -370,7 +370,7 @@ def spec_issues(spec: dict) -> list[str]:
         errors.append("source_role_contract_mismatch")
     needs = spec.get("requirements", {})
     expected_answer = (
-        "accession_year" if keyed else
+        "accession_year" if (keyed or evidence) else
         "count" if spec.get("family") == "coverage_count"
         else "category_counts" if spec.get("family") == "category_distribution"
         else "single_entry" if spec.get("family") in {"priority", "chronology"}
