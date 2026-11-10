@@ -53,6 +53,7 @@ class TrajectoryConfigurationTests(TestCase):
         self.assertEqual(set(parser()._subparsers._group_actions[0].choices), {
             "generate-questions", "quality", "implement-subtasks",
             "naturalize-subtasks", "generate-main-turns",
+            "generate-untrusted-turns",
         })
 
     def test_cli_config_only_and_optional_overrides(self):
