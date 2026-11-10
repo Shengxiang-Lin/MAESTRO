@@ -513,8 +513,11 @@ def compile_macro_solvers(spec: dict) -> dict:
     plan = spec["macro_plan"]
     clues = plan["clues"]
     nodes, groups, outputs = [], [], {}
-    prior_key = ("case_id" if plan["pattern"] == "disputed_reports"
-                 else "marker_code")
+    prior_key = (
+        "case_id" if plan["pattern"] in {
+            "disputed_reports", "corroborated_dispute",
+        } else "marker_code"
+    )
     for task in plan["macro_tasks"]:
         mid, role = task["macro_id"], task["role"]
         local = []
