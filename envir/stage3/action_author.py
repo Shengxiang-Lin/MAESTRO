@@ -178,6 +178,9 @@ def action_issues(action: dict, assignments: list[dict],
         if (not isinstance(tools, list) or not tools
                 or any(not isinstance(x, str) for x in tools)
                 or not set(expected["tools"]).issubset(set(tools))
+                or not set(tools).issubset(
+                    set(expected["tools"]) | {"ExecuteCodeAction"}
+                )
                 or len(set(tools)) != len(tools)):
             errors.append(f"task_{i}_tool_scope_mismatch")
         if isinstance(instruction, str) and expected["source_ids"]:
@@ -231,13 +234,19 @@ def author_delegate_action(
         if errors:
             failures.append({"stage": "guard", "errors": errors})
             continue
-        review = critic.complete_json(
-            _CRITIC_SYSTEM, json.dumps({
+        try:
+            review = critic.complete_json(
+                _CRITIC_SYSTEM, json.dumps({
                 "current_main_visible_prompt": prompt,
                 "assigned_tasks_in_required_order": assignments,
                 "candidate_action": candidate,
             }, ensure_ascii=False)
-        )
+            )
+        except Exception as exc:
+            failures.append({
+                "stage": "critic_backend", "reason": str(exc)[:200],
+            })
+            continue
         if (review.get("verdict") == "pass"
                 and all(review.get(k) is True for k in (
                     "grounded", "assignment_fidelity", "o1_style",
