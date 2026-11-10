@@ -31,6 +31,15 @@ def _one_output_v2_question(spec: dict) -> str:
     clues = plan["clues"]
     topic = spec["scenario"]["topic"]
     goal = plan["goal"]["public_label"]
+    resolution = plan.get("goal_resolution", {}).get("kind", "direct_lookup")
+    goal_question = (
+        "which of the two independent sources has the higher count, first or second?"
+        if resolution == "comparison" else
+        "what is the completion rate in whole percent (rounded down) "
+        "from the independently recorded completed and total counts?"
+        if resolution == "calculation" else
+        f"what is the confirmed {goal}?"
+    )
     domain = plan["domain"]
     item = {
         "sports": "match incident", "film": "episode or screening",
@@ -53,7 +62,7 @@ def _one_output_v2_question(spec: dict) -> str:
         return (
             f"Two independent {topic} records disagree about the year "
             f"reported for one {item}. For the disputed {item}, "
-            f"what is the confirmed {goal}?"
+            f"{goal_question}"
         )
     if plan["pattern"] == "multimodal_event":
         return (
@@ -81,7 +90,7 @@ def _one_output_v2_question(spec: dict) -> str:
         return (
             f"In the {topic} materials, {visual} and {second} "
             f"identify the same {item}. For that item, "
-            f"what is the confirmed {goal}?"
+            f"{goal_question}"
         )
     return (
         f"In the {topic} materials, {visual} identifies one {item}. "
