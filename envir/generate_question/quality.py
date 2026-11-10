@@ -494,8 +494,14 @@ def validate_replay(scene: dict) -> dict:
     expected_program = compile_program(scene["problem_spec"])
     if expected_program != scene.get("gold_program"):
         errors.append("program_not_reproducible_from_frozen_spec")
-    report = audit_scene(scene, strict=False)
-    errors.extend(report.get("issues", []))
+    try:
+        report = audit_scene(scene, strict=False)
+        errors.extend(report.get("issues", []))
+    except (ValueError, TypeError, KeyError, IndexError) as exc:
+        # A tampered world/spec may have no surviving witness; replay
+        # must report invalid instead of raising inside counterfactuals.
+        report = {"status": "invalid", "issues": []}
+        errors.append("replay_audit_error:" + type(exc).__name__)
     if scene.get("difficulty_audit"):
         if report.get("status") == "valid" and report != scene["difficulty_audit"]:
             errors.append("stored_difficulty_audit_mismatch")
