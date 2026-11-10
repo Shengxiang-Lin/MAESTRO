@@ -18,7 +18,10 @@ PATTERNS = ("serial_identity", "parallel_cues",
 # High-precision paraphrases; a changed target (e.g. match year instead
 # of match result) is never a valid semantic variant.
 GOAL_PHRASES = {
-    "match_result": ("match result", "final score", "match score"),
+    "match_result": (
+        "match result", "final score", "match score", "match outcome",
+        "game result", "game score", "final scoreline",
+    ),
     "event_venue": ("event venue", "venue for the event", "event location"),
     "match_year": ("match year", "year of the match"),
     "episode_title": ("episode title", "title of the episode", "episode's title"),
