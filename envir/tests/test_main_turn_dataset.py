@@ -284,7 +284,14 @@ class MainTurnDatasetTests(unittest.TestCase):
         )
         episode, turns, audits, status = build_episode(chosen, rows)
         self.assertEqual(status["status"], "accepted")
-        self.assertTrue(status["visible_answer_shortcut"])
+        self.assertTrue(status["visible_answer_shortcut"], {
+            "gold_answer": chosen["gold_answer"],
+            "terminal_id": chosen["macro_graph"]["terminal_task_id"],
+            "terminal": chosen["macro_graph"]["tasks"][-1],
+            "parent": parent, "result": row["finish_result"]["result"],
+            "waves": chosen["macro_graph"]["reference_waves"],
+            "status": status,
+        })
         self.assertEqual([x["output"]["action"] for x in turns],
                          ["delegate_task", "complete"])
         self.assertEqual(turns[-1]["output"]["params"]["answer"], golden_entry)
