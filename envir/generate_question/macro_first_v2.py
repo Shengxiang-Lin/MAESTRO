@@ -568,9 +568,12 @@ def validate_spec(spec: dict) -> list[str]:
         if plan != expected:
             errors.append("macro_first_v2_plan_not_reproducible")
         def contract(role):
+            # Historical tests intentionally remove version markers from
+            # newer specs. Unmarked schemas must ignore new-only metadata.
             return (role.get("source_id"), role.get("modality"),
                     role.get("access_mode"), role.get("key_field"),
-                    role.get("evidence_access"))
+                    role.get("evidence_access")
+                    if spec.get("evidence_tool_contract_version") else None)
         if ([contract(role) for role in spec["sources"]]
                 != [contract(role) for role in roles]):
             errors.append("macro_first_v2_source_scope_changed")
