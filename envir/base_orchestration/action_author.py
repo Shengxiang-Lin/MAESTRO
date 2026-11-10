@@ -71,6 +71,85 @@ _FORBIDDEN = re.compile(
 )
 
 
+_GENERATION_META = re.compile(
+    r"\b(?:previous|earlier|last)\s+(?:draft|revision|generation|"
+    r"response|attempt)\b|"
+    r"\b(?:critic|reviewer)\s+(?:said|requested|feedback|rejected)\b|"
+    r"\b(?:in|from|per)\s+(?:the|this)\s+prompt\b|"
+    r"\b(?:my|the)\s+(?:tool|action)\s+(?:choice|selection)\s+"
+    r"(?:was|is)\s+(?:wrong|invalid)\b|"
+    r"\b(?:revision|repair)\s+(?:attempt|feedback)\b",
+    re.I,
+)
+
+
+def _critic_review_passes(review: dict) -> bool:
+    return (
+        isinstance(review, dict)
+        and review.get("verdict") == "pass"
+        and all(review.get(key) is True for key in (
+            "grounded", "assignment_fidelity", "o1_style",
+        ))
+    )
+
+
+def _review_only_frozen_tool_objection(review: dict) -> bool:
+    """An invalid tool critique is not a reason to reject reviewed prose.
+
+    Re-review from a tool-neutral view; do not auto-accept the action.
+    """
+    if not isinstance(review, dict) or review.get("verdict") != "fail":
+        return False
+    reason = str(review.get("reason", "")) + " " + str(
+        review.get("repair_hint", "")
+    )
+    return (
+        bool(re.search(
+            r"GoogleSearchAction|ExtractUrlContentAction|ExecuteCodeAction|"
+            r"tool\s+(?:choice|selection|feasibility|availability)|"
+            r"workspace://|simulated\s+source\s+tools", reason, re.I,
+        ))
+        and bool(re.search(
+            r"(?:inappropriate|invalid|should\s+(?:not|instead)|"
+            r"replace|cannot|violat|not\s+applicable|not\s+allowed|"
+            r"wrong\s+tool)", reason, re.I,
+        ))
+    )
+
+
+def _tool_neutral_review_payload(prompt: str, assignments: list[dict],
+                                 candidate: dict) -> dict:
+    # Remove tool-routing instructions only for the *second* reviewer
+    # perspective. The published Action itself is not modified.
+    question = prompt.split("==== QUESTION ====", 1)[-1].split(
+        "====", 1
+    )[0].strip()
+    return {
+        "current_user_question": question[:1800],
+        "assignment_prose_goals_in_required_order": [{
+            "expected_output_fields": a["output_fields"],
+            "needs_upstream": a["needs_upstream"],
+            "expected_context": a["context"],
+        } for a in assignments],
+        "candidate_prose_only": {
+            "reasoning": candidate["reasoning"],
+            "tasks": [{
+                "task_instruction": re.sub(
+                    r"(?:GoogleSearchAction|ExtractUrlContentAction|"
+                    r"ExecuteCodeAction)", "[authorized tool]",
+                    task["task_instruction"],
+                ),
+                "context": task["context"],
+            } for task in candidate["params"]["tasks"]],
+        },
+        "fixed_tool_feasibility_already_checked": True,
+        "review_rule": (
+            "Review semantic task goal, accuracy, and visible history only. "
+            "Tool choice and simulated source accessibility are outside scope."
+        ),
+    }
+
+
 def _short(value, limit=500) -> str:
     text = str(value).strip().replace("\n", " ")
     return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
@@ -227,6 +306,9 @@ def action_issues(action: dict, assignments: list[dict],
     all_action_text = json.dumps(action, ensure_ascii=False)
     if _FORBIDDEN.search(all_action_text):
         errors.append("internal_teacher_language")
+    # Author revision feedback is not part of the Main's O1 history.
+    if _GENERATION_META.search(all_action_text):
+        errors.append("generation_process_leak")
     for i, (task, expected) in enumerate(zip(tasks, assignments)):
         if not isinstance(task, dict):
             errors.append(f"task_{i}_not_an_object")
@@ -360,10 +442,24 @@ def author_delegate_action(
                 "stage": "critic_backend", "reason": str(exc)[:200],
             })
             continue
-        if (review.get("verdict") == "pass"
-                and all(review.get(k) is True for k in (
-                    "grounded", "assignment_fidelity", "o1_style",
-                ))):
+        if _review_only_frozen_tool_objection(review):
+            try:
+                review = critic.complete_json(
+                    _CRITIC_SYSTEM + "\nSECOND REVIEW: ignore all frozen tool "
+                    "routing, judge only grounded Task prose.\n",
+                    json.dumps(
+                        _tool_neutral_review_payload(
+                            prompt, assignments, candidate,
+                        ), ensure_ascii=False,
+                    ),
+                )
+            except Exception as exc:
+                failures.append({
+                    "stage": "critic_scope_rereview_backend",
+                    "reason": str(exc)[:200],
+                })
+                continue
+        if _critic_review_passes(review):
             return deepcopy(candidate), {
                 "status": "accepted", "mode": "llm_reviewed",
                 "attempts": revision + 1, "review": review,
