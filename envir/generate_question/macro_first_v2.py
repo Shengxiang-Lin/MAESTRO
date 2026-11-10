@@ -251,8 +251,10 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         seed=run_seed, ordinal=ordinal, record_id=record_id, topic=topic,
         difficulty=difficulty, domain=domain,
     )
+    from .semantic_evidence import CONTRACT_VERSION
     return {
         "version": version,
+        "semantic_evidence_contract_version": CONTRACT_VERSION,
         "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
         "scene_id": record_id,
         "source_anchor": {
@@ -289,6 +291,11 @@ def validate_spec(spec: dict) -> list[str]:
     plan = spec.get("macro_plan")
     if not isinstance(plan, dict) or plan.get("version") != VERSION:
         return ["invalid_macro_first_v2_plan"]
+    from .semantic_evidence import CONTRACT_VERSION
+    if spec.get("semantic_evidence_contract_version") not in {
+        None, CONTRACT_VERSION
+    }:
+        return ["invalid_semantic_evidence_contract_version"]
     try:
         expected, roles = sample_macro_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
