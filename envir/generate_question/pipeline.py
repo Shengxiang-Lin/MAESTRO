@@ -700,3 +700,19 @@ def _generate_batch(args) -> dict:
     }
     _dump(summary_path, summary)
     return summary
+
+
+def generate_questions(args) -> dict:
+    """Canonical Stage 1 entrypoint: accepted quota or one unrefilled batch.
+
+    Older synthetic programs and frozen scenes remain *readable*; only the
+    active generation interface is consolidated.
+    """
+    if (getattr(args, "quota_refill", False)
+            and getattr(args, "scenario_model", None)
+            and getattr(args, "question_model", None)):
+        from .quota_pipeline import generate_with_quotas
+        return generate_with_quotas(
+            args, generate_batch=_generate_batch, quality_report=quality_report
+        )
+    return _generate_batch(args)
