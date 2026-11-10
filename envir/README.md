@@ -384,3 +384,64 @@ absence of all alternative solution paths. It is intentionally
 conservative and should be evaluated against an independent blind
 question reviewer. Do not compare revised Scenario acceptance rates
 without reporting the stricter validation criteria.
+
+
+## Default 1:2:3 difficulty mix and answer-sensitive Macro audits
+
+Stage 1 now uses the default `generation.difficulty_mix: [17, 33, 50]`
+(Easy/Medium/Hard). For **100 attempted candidates**, this requests
+17 Easy, 33 Medium, 50 Hard (approximately **1:2:3**). The existing
+largest-remainder deterministic allocator also handles other targets,
+e.g. six candidates allocate 1, 2 and 3. This is a *candidate* mix:
+LLM Scene/Question rejections may slightly shift the accepted distribution.
+Prior experiment files are unchanged; set the old array explicitly to
+reproduce their initial sampling.
+
+New Macro-first V2 samples have an opt-in-on-new version marker:
+`macro_information_necessity_version`. In the video/audio + event-log
+template, the video/audio Macro and log Macro now each resolve a
+**different non-singleton candidate set**. Only their intersection
+selects the target. Competing candidate identities also have different
+final Goal values. `information_necessity.py` examines the actual
+materialized Macro workproducts and authoritative Goal lookup chains;
+it rejects scenes where either branch is already unique or the
+competing entities have the same answer. This is strictly stronger
+than removing DAG edges, but it is still not a proof against every
+possible alternative plan or live-agent shortcut.
+
+The typed semantic contract in new scenes contains
+`required_output_fields`, `semantic_goal_type`, and
+`requested_entities`; the Question Guard rejects obvious second
+requested outputs such as asking for *both* an episode name and a
+production year when the Gold Answer provides only the year.
+The additional domain taxonomy now uses reliable MMQA category metadata
+for culture, education, logistics, civic and environment scenarios
+without retroactively changing previously frozen V2 scenes.
+
+For Stage 2, a narrowly scoped second Critic pass may be requested
+only if a full Entry-list answer has been deterministically verified
+and the first Critic incorrectly claims a listed Entry is absent from
+the Oracle. The second review **must pass**; the application never
+silently converts a failed report into a success.
+
+New quality fields: `macro_first_v2.information_necessity` and
+`macro_first_v2.versioned_output_contract_scenes`.
+To test with your local Author/Critic model:
+
+```bash
+git pull origin main
+python -m envir generate-questions \
+  --config envir/config.yaml --target 100 \
+  --macro-first-v2-share 100 \
+  --output-dir envir/data/maestro_macro_v2_123_100
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --scenes envir/data/maestro_macro_v2_123_100/questions/scenes.jsonl \
+  --output-dir envir/data/maestro_macro_v2_123_reports_100
+```
+
+These changes improve controlled information dependence and semantic
+fidelity; they do not yet replace the bounded synthetic DAG grammar with
+a truly open-world browsing, real-media perception or optimal-cost agent
+benchmark. In particular the **Hard** label is an intended difficulty
+class, not independently calibrated solver failure probability.
