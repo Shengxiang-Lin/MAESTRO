@@ -14,7 +14,7 @@ from .implement_subtask.config import (
 from .implement_subtask.pipeline import materialize_subtasks
 from .implement_subtask.naturalize import naturalize_subtasks
 from .implement_subtask.combined import generate_subagent_reports
-from .main_trajectories.config import (
+from .base_orchestration.config import (
     DEFAULT_CONFIG as TRAJECTORY_CONFIG,
     load_config as load_trajectory_config,
     generate_from_config,
@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         target = overrides.get("output_dir") or load_trajectory_config(
             cli.config
         )["output_dir"]
-        print(f"main trajectories: {summary['status']} | details: "
+        print(f"base orchestration: {summary['status']} | details: "
               f"{target}/summary.json")
         return 0 if summary["status"] in {"done", "partial"} else 1
     config = load_config(cli.config)

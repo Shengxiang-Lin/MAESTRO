@@ -25,7 +25,7 @@ All paths, model endpoints, worker counts and output directories live in
 ```bash
 python -m envir generate-questions --config envir/configs/questions.yaml
 python -m envir naturalize-subtasks --config envir/configs/subagent_reports.yaml
-python -m envir generate-main-turns --config envir/configs/main_trajectories.yaml
+python -m envir generate-main-turns --config envir/configs/base_orchestration.yaml
 ```
 
 The first workflow constructs validated Questions and Macro DAGs from a fixed

@@ -8,15 +8,26 @@ from unittest.mock import patch
 import yaml
 
 from envir.__main__ import main, parser
-from envir.main_trajectories.config import (
+from envir.base_orchestration.config import (
     DEFAULT_CONFIG, generate_from_config, load_config,
 )
 
 
 class TrajectoryConfigurationTests(TestCase):
+    def test_functional_package_and_yaml_names(self):
+        from envir import base_orchestration
+        from envir.base_orchestration.config import DEFAULT_CONFIG
+        from envir.base_orchestration.trajectory_builder import build_episode
+        from envir.base_orchestration.generate_turns import generate_turns
+        self.assertIsNotNone(base_orchestration)
+        self.assertTrue(callable(build_episode))
+        self.assertTrue(callable(generate_turns))
+        self.assertEqual(DEFAULT_CONFIG.name, "base_orchestration.yaml")
+        self.assertTrue(DEFAULT_CONFIG.is_file())
+
     def test_configs_are_independent_and_root_relative(self):
         cfg = load_config()
-        self.assertEqual(DEFAULT_CONFIG.name, "main_trajectories.yaml")
+        self.assertEqual(DEFAULT_CONFIG.name, "base_orchestration.yaml")
         self.assertTrue(cfg["scenes_path"].is_absolute())
         self.assertTrue(cfg["reports_path"].is_absolute())
         self.assertTrue(cfg["output_dir"].is_absolute())
@@ -64,7 +75,7 @@ class TrajectoryConfigurationTests(TestCase):
         with patch(
             "envir.generate_question.backend.OpenAICompatibleBackend"
         ) as backend, patch(
-            "envir.main_trajectories.generate_turns.generate_turns",
+            "envir.base_orchestration.generate_turns.generate_turns",
             return_value={"status": "done"},
         ) as runner:
             result = generate_from_config()
@@ -84,7 +95,7 @@ class TrajectoryConfigurationTests(TestCase):
         with patch(
             "envir.generate_question.backend.OpenAICompatibleBackend"
         ) as backend, patch(
-            "envir.main_trajectories.generate_turns.generate_turns",
+            "envir.base_orchestration.generate_turns.generate_turns",
             return_value={"status": "done"},
         ) as runner:
             generate_from_config(mode="template", max_scenes=4)

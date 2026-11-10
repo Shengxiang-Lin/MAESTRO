@@ -12,7 +12,7 @@ import os
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG = ROOT / "envir" / "configs" / "main_trajectories.yaml"
+DEFAULT_CONFIG = ROOT / "envir" / "configs" / "base_orchestration.yaml"
 
 _FIELDS = {
     "input": {"scenes", "reports"},

@@ -1,7 +1,7 @@
 # Untrusted orchestration (future dataset workflow)
 
 This directory is **reserved for a separate, not-yet-implemented** dataset
-generator. Keep the existing trusted `envir/main_trajectories` pipeline
+generator. Keep the existing trusted `envir/base_orchestration` pipeline
 unchanged: it models correct feedback and gold-consistent scheduling.
 
 Planned inputs are the trusted Scene, Macro graph, reviewed report bank and
