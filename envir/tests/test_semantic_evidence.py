@@ -214,7 +214,7 @@ class SemanticEvidenceTests(unittest.TestCase):
             difficulty=spec["difficulty_target"],
             domain=classify_domain_from_keywords(
                 spec["scenario"]["topic"],
-                spec["source_anchor"]["classify_domain_from_keywords"],
+                spec["source_anchor"]["domain_hint"],
             ), information_need=False, realism_v3=False,
         )
         spec["macro_plan"] = old_plan
@@ -254,7 +254,7 @@ class SemanticEvidenceTests(unittest.TestCase):
             difficulty=spec["difficulty_target"],
             domain=classify_domain_from_keywords(
                 spec["scenario"]["topic"],
-                spec["source_anchor"]["classify_domain_from_keywords"],
+                spec["source_anchor"]["domain_hint"],
             ), information_need=False, realism_v3=False,
         )
         spec["macro_plan"] = old_plan
