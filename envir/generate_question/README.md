@@ -204,3 +204,34 @@ Question Author and Critic see the semantic requirements but must not
 reveal the internal Macro execution plan. Source data for images,
 video and audio are synthetic annotations only. Old `clue_chain` and
 `evidence_graph` settings remain supported and unchanged by default.
+
+
+### V2 Macro-first goal and evidence composition
+
+Use `--macro-first-v2-share 100` to enable the isolated
+`macro_first_v2.py` sampler and `macro_first_v2_world.py` synthesizer
+for Medium/Hard scenes. V1 remains available with
+`--macro-first-share 100`; both default to zero, and old frozen V1
+scenes still replay.
+
+Each V2 ProblemSpec freezes the domain and **typed final Goal** before
+any World values are sampled, as well as the Macro topology and each
+Macro's `evidence_plan` (source observation targets and evidence volume
+grade). Witness-first synthesis creates a consistent source-scoped World,
+then `compile_frozen_macro_plan` verifies local Gold Solvers against
+those explicit Macro boundaries. Macros with multiple internal source
+scans are legal: video/audio event alignment compares timestamp order
+in one Macro and passes a typed WorkProduct to a downstream fusion.
+
+The question is phrased as a natural working investigation without
+revealing the synthetic nature of the World, but the private scene
+retains `simulated_only=True` and does not assert actual historical
+facts. Question Guard rejects meta-fiction terms and missing Goal,
+modality or temporal clues. Scenario/Question LLM prompts are
+version-specific so V1 and legacy reference questions do not change.
+
+V2 is bounded: 4 topologies; variable 0–2 keyed index hops; typed
+image/video/audio/text/table observations; topic-conditioned year,
+string, status and venue/title goals. This improves variety but does
+not provide real video decoding, real-world search or formal optimal
+Macro decomposition.
