@@ -14,7 +14,9 @@ generation:
   evidence_graph_share: 0  # opt-in MEDIUM/HARD typed random evidence DAGs
   macro_first_share: 0  # v1: legacy frozen Macro DAG pilot
   macro_first_v2_share: 0  # v2: varied goals, per-Macro evidence and typed multimodal tasks
-  difficulty_mix: [17, 33, 50]  # Easy:Medium:Hard ≈ 1:2:3 (100 candidates: 17/33/50)
+  difficulty_mix: [17, 33, 50]  # Target accepted mix: easy/medium/hard ≈ 1:2:3
+  accepted_difficulty_quotas: true  # Limited surplus candidates to fill accepted slots
+  quota_candidate_multiplier: 2  # Up to 200 attempted for 100 requested; never unlimited
   overwrite: false
   flush_every: 1   # persist every completed LLM decision (safe to resume)
   no_progress: false
