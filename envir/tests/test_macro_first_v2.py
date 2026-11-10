@@ -59,7 +59,7 @@ class DiverseMacroTests(unittest.TestCase):
         self.assertNotEqual(easy["reasoning_pattern"], "macro_first_v2")
 
     def test_120_frozen_scenes_and_natural_questions(self):
-        modes, goals, macro_counts = set(), set(), set()
+        modes, goals, macro_counts, distinct_answers = set(), set(), set(), set()
         sizes, scopes, local_lengths, domains = set(), set(), set(), set()
         has_temporal, has_audio = False, False
         for i in range(120):
@@ -78,6 +78,7 @@ class DiverseMacroTests(unittest.TestCase):
             self.assertEqual(validate_replay(scene)["status"], "valid")
             self.assertEqual(oracle_schedule(scene)["answer"], scene["gold_answer"])
             self.assertEqual(len(scene["gold_answer"]), 1)
+            distinct_answers.add(str(scene["gold_answer"]))
             self.assertEqual(
                 set(scene["gold_answer"][0]), {plan["goal"]["answer_field"]}
             )
@@ -136,12 +137,27 @@ class DiverseMacroTests(unittest.TestCase):
             "multimodal_event",
         })
         self.assertGreaterEqual(len(goals), 8)
+        self.assertGreater(len(distinct_answers), 30)
         self.assertGreaterEqual(len(domains), 6)
         self.assertGreaterEqual(len(macro_counts), 4)
         self.assertGreaterEqual(len(sizes), 8)
         self.assertEqual(scopes, {0, 1, 2})
         self.assertGreaterEqual(max(local_lengths), 6)
         self.assertTrue(has_temporal and has_audio)
+
+    def test_natural_goal_paraphrase_does_not_change_answer_contract(self):
+        for i in range(150):
+            spec = spec_for(i)
+            if spec["macro_plan"]["goal"]["answer_field"] == "match_result":
+                q = reference_question(spec)
+                alternate = q.replace("match result", "final score")
+                self.assertEqual(guard_question(alternate, spec), [])
+                bad = q.replace("match result", "match year")
+                self.assertIn("macro_first_v2_goal_semantics_missing",
+                              guard_question(bad, spec))
+                break
+        else:
+            self.fail("no match-result test scene found")
 
     def test_stage_two_reports_and_quality_metrics(self):
         scenes = [compile_and_validate(spec_for(i), reference_question(spec_for(i)))
