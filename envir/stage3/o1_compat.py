@@ -9,62 +9,7 @@ from types import SimpleNamespace
 
 from orchestra.base_main_agent import BaseMainAgent
 from orchestra.prompts.omnigaia import OmniGAIAMainAgentPrompt
-
-TOOL_DEFINITIONS = {
-    "ImageAnalysisAction": (
-        "Inspect the task-provided image observation in the controlled "
-        "workspace; report identifiers and visual evidence.",
-        ["image"],
-    ),
-    "VideoAnalysisAction": (
-        "Inspect the task-provided video observations, including timestamped "
-        "events, from the controlled workspace.",
-        ["video"],
-    ),
-    "ParseAudioAction": (
-        "Inspect the supplied commentary or audio observations, including "
-        "spoken cues and timing, from the controlled workspace.",
-        ["audio"],
-    ),
-    "WorkspaceSearchAction": (
-        "Search the named text records and linked indices within the "
-        "controlled task workspace, not the public internet.",
-        ["text"],
-    ),
-    "TableLookupAction": (
-        "Look up an identified record in the supplied workspace table using "
-        "a key learned from earlier findings; do not scan a keyed table blindly.",
-        ["table"],
-    ),
-    "ExecuteCodeAction": (
-        "Cross-reference previously retrieved evidence or perform a "
-        "calculation using findings already returned by SubAgents.",
-        [],
-    ),
-}
-
-MODALITY_TOOL = {
-    "image": "ImageAnalysisAction",
-    "video": "VideoAnalysisAction",
-    "audio": "ParseAudioAction",
-    "text": "WorkspaceSearchAction",
-    "table": "TableLookupAction",
-}
-
-
-def tools_for_sources(source_ids: list[str], catalog: dict[str, dict]) -> list[str]:
-    if not source_ids:
-        return ["ExecuteCodeAction"]
-    names = []
-    for sid in source_ids:
-        source = catalog[sid]
-        tool = MODALITY_TOOL.get(source["modality_hint"])
-        if tool is None:
-            raise ValueError("stage3_unknown_source_modality:" + sid)
-        if tool not in names:
-            names.append(tool)
-    return names
-
+from envir.generate_question.evidence_tools import o1_tool_definitions
 
 def source_catalog(scene: dict) -> dict[str, dict]:
     entries = scene["public"]["available_source_descriptions"]
@@ -102,19 +47,9 @@ def o1_prompt(
             } for sid, source in sources.items()
         ],
     }
-    tool_objects = []
-    for name, (description, _) in TOOL_DEFINITIONS.items():
-        tool_objects.append(SimpleNamespace(
-            name=name,
-            description=description,
-            parameters={
-                "type": "object",
-                "properties": {
-                    "source_id": {"type": "string"},
-                    "query": {"type": "string"},
-                },
-            },
-        ))
+    # Exact descriptions and parameter schemas from baseline Action classes.
+    tool_objects = [SimpleNamespace(**definition)
+                    for definition in o1_tool_definitions()]
     return OmniGAIAMainAgentPrompt.build_prompt(
         instruction=scene["question"],
         meta=meta,
