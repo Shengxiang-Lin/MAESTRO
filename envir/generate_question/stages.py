@@ -43,7 +43,7 @@ def _construction_identity(args) -> str:
                 "macro_first_world.py", "macro_first_v2.py",
                 "macro_first_v2_world.py", "information_necessity.py",
                 "source_title_contract.py", "difficulty_proxy.py",
-                "semantic_evidence.py",
+                "scenario_fields.py", "semantic_evidence.py",
                 "v2_prompts.py", "intent.py", "surface_quality.py",
                 "program_ir.py",
                 "compiler.py", "scenario.py", "world.py", "quality.py",
