@@ -326,3 +326,16 @@ rejects direct assertions that the archive was queried by an upstream
 marker when the executed archive lookup used an accession ID. This is a
 narrow high-confidence error check, not a general proof of narrative
 entailment. All exact structured answers and fact references remain frozen.
+
+
+### Macro-first local solver compatibility
+
+Stage 2 reads the same frozen `macro_graph` and `gold_program`
+objects. For a Macro-first scene, each `work_Mi` is a whole independent
+Sub-Agent assignment, with one or more internal primitive operations and
+typed upstream WorkProducts. Oracle execution is deterministic, while
+the optional Author/Critic transforms those exact traces into a natural
+finish report without changing answers or provenance.
+
+Stage 2 does not split a Macro into separate Sub-Agent calls merely
+because the internal solver contains scans, filtering or keyed lookups.
