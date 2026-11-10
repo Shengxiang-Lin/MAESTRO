@@ -56,7 +56,11 @@ A join does NOT itself check active, measured_value, time windows, approval
 or clearance. Some candidate rows can have active=false or value=0.
 Later Macro Tasks perform those filters. NEVER alter, omit or pre-filter the
 EXACT Oracle output rows, even when they fail the overall question's later
-criteria. If a reviewer objects to a premature claim, correct ONLY the prose
+criteria. If this stage runs a keyed lookup, use the EXACT input key field and
+values in observed_operator_steps.lookup_keys. Do not claim that the archive
+was queried using an earlier-stage marker when the actual archive query
+used an accession identifier.
+If a reviewer objects to a premature claim, correct ONLY the prose
 summary, never the result rows.
 
 Prefer a concise grounded string for result. Exact structured answer rows
@@ -100,6 +104,9 @@ repair_hint must NEVER suggest deleting, filtering, adding or changing
 the frozen answer rows.
 
 For empty results, a genuine complete "no matches" is correct, not partial.
+For keyed retrievals, check observed_operator_steps.lookup_keys: the
+query key used against a source must be the one actually supplied to that
+source, not an earlier upstream marker.
 For judging a structured result, treat exact_oracle_answer as the
 COMPLETE authoritative relation. sampled_evidence_atoms is an abbreviated
 display for explanation, NOT an exhaustive list of records. NEVER call
@@ -184,6 +191,7 @@ def _teacher_contract(record: dict, *, question: str | None,
                 "output_row_count": step["output_row_count"],
                 "source_fact_refs": step["supporting_fact_refs"][:16],
                 "sampled_evidence_atoms": step["evidence_atoms"][:4],
+                "lookup_keys": step.get("lookup_keys"),
                 "remaining_atoms_omitted": max(
                     0, step["evidence_atoms_total"] - 4
                 ),
@@ -484,6 +492,25 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
             field + "_" + issue
             for issue in _stage_scope_issues(value, contract)
         )
+        # Narrow, high-confidence check: claiming an archive was queried
+        # *with the marker* is false when the verified lookup used a
+        # downstream accession key. A marker mentioned as historical
+        # context without this direct-query claim remains allowed.
+        if any(
+            step.get("lookup_keys")
+            and step["lookup_keys"]["source_id"] == "archive"
+            and step["lookup_keys"]["key_field"] != "marker_code"
+            for step in contract["observed_operator_steps"]
+        ):
+            direct_marker = (
+                r"\b(?:using|with|by)\s+(?:the\s+)?(?:upstream\s+)?"
+                r"marker(?:\s+code)?\b[^.!?]{0,70}"
+                r"\b(?:against|in|on)\s+(?:the\s+)?archive\b"
+                r"|\barchive\s+(?:lookup|query)\b[^.!?]{0,65}"
+                r"\b(?:using|with|by)\s+(?:the\s+)?(?:upstream\s+)?marker\b"
+            )
+            if re.search(direct_marker, value, re.I):
+                errors.append(field + "_wrong_archive_lookup_key")
     return sorted(set(errors))
 
 
