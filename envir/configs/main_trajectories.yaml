@@ -26,3 +26,5 @@ model:
   critic_model: null      # null: same as author
   api_key_env: OPENAI_API_KEY
   temperature: 0.4
+  author_max_tokens: 2800
+  critic_max_tokens: 1200
