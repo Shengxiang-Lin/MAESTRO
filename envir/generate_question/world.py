@@ -135,6 +135,8 @@ def initial_public_view(spec: dict, world: dict, question: str) -> dict:
             "source_id": sid,
             "title": item["title"],
             "modality_hint": item["modality"],
+            **({"resource_url": item["resource_url"]}
+               if "resource_url" in item else {}),
             **({} if spec.get("reasoning_pattern") == "macro_first_v2"
                else {"representation": item["representation"]}),
             **({"access_mode": item["access_policy"]["mode"]}

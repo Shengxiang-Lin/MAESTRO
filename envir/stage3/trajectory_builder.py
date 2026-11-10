@@ -66,6 +66,8 @@ def _strict_reports(scene: dict, rows: list[dict]) -> dict[str, dict]:
                     expected_step.get("evidence_acquisition")
                     or actual_step.get("tool_executed") !=
                     expected_step.get("tool_executed")
+                    or actual_step.get("simulated_tool_calls") !=
+                    expected_step.get("simulated_tool_calls")
                 ):
                     raise ValueError("stage3_report_acquisition_tool_drift:" + tid)
         finish = row.get("finish_result")

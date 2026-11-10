@@ -12,6 +12,7 @@ from copy import deepcopy
 from envir.generate_question.compiler import run_macro_tasks
 from envir.generate_question.program_ir import evaluate_program, answer_values
 from envir.generate_question.quality import validate_replay
+from envir.generate_question.evidence_tools import simulate_acquisition_trace
 
 
 def _fact_index(world: dict) -> dict[str, dict]:
@@ -99,6 +100,7 @@ def _reachable_source_ids(task_id: str, tasks: dict, memo: dict) -> set[str]:
 def _operator_evidence(
     node: dict, product, trace_row: dict, fact_index: dict,
     accessible_sources: set[str], *, evidence_limit: int,
+    source_roles: dict[str, dict] | None = None,
 ) -> dict:
     actual_refs = sorted({
         ref for row in product.rows for ref in row["support"]
@@ -111,6 +113,19 @@ def _operator_evidence(
             raise ValueError("unknown_fact_ref:" + fact_ref)
         if fact["source_id"] not in accessible_sources:
             raise ValueError("unauthorized_fact_source:" + fact_ref)
+    simulated_calls = []
+    if ("evidence_acquisition" in node and source_roles is not None
+            and node["source_id"] in source_roles):
+        key_values = (
+            sorted({
+                str(row["values"][node["input_key_field"]])
+                for row in product.rows
+            }) if node["op"] == "lookup_by_key" else None
+        )
+        simulated_calls = simulate_acquisition_trace(
+            node, source_roles[node["source_id"]],
+            actual_refs, key_values=key_values,
+        )
     return {
         "node_id": node["id"],
         "operation": node["op"],
@@ -133,7 +148,9 @@ def _operator_evidence(
             ))[:evidence_limit]
         ],
         **({"evidence_acquisition": deepcopy(node["evidence_acquisition"]),
-            "tool_executed": False}
+            "tool_executed": False,
+            **({"simulated_tool_calls": simulated_calls}
+               if simulated_calls else {})}
            if "evidence_acquisition" in node else {}),
         "lookup_keys": ({
             "source_id": node["source_id"],
@@ -168,6 +185,10 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
     )
     trace = {row["node_id"]: row for row in execution["trace"]}
     facts = _fact_index(scene["world"])
+    source_roles = {
+        item["source_id"]: item
+        for item in scene["problem_spec"]["sources"]
+    }
     oracle = run_macro_tasks(graph, sources=scene["world"]["sources"])
     if oracle["task_feedback"] != scene["task_feedback"]:
         raise ValueError("macro_task_feedback_drift")
@@ -188,7 +209,8 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
                 row = trace[op["id"]]
                 evidence_steps.append(_operator_evidence(
                     nodes[op["id"]], execution["products"][op["id"]],
-                    row, facts, accessible, evidence_limit=evidence_limit
+                    row, facts, accessible, evidence_limit=evidence_limit,
+                    source_roles=source_roles,
                 ))
             # Verified claims can be inherited only from actual dependency
             # parents, never from the overall Question or future Macros.

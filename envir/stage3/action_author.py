@@ -87,7 +87,10 @@ def _assignment(target: dict, catalog: dict[str, dict],
     output = ", ".join(target["outputs"]["typed_relation"])
     sources = [
         f"{sid} ({catalog[sid]['title']}; "
-        f"{catalog[sid]['modality_hint']})"
+        f"{catalog[sid]['modality_hint']}"
+        + (f"; known URL: {catalog[sid]['resource_url']}"
+           if catalog[sid].get("resource_url") else "")
+        + ")"
         for sid in source_ids
     ]
     source_intro = (
@@ -114,9 +117,32 @@ def _assignment(target: dict, catalog: dict[str, dict],
             "Combine the returned records by their matching identifiers; "
             "do not invent missing evidence or apply future-stage filters."
         )
+    workflows = []
+    for step in target["operator_chain"]:
+        contract = step.get("evidence_acquisition") or {}
+        strategy = contract.get("strategy")
+        if strategy == "search_then_extract":
+            workflows.append(
+                "First use GoogleSearchAction to locate a relevant page and "
+                "obtain its URL; then use ExtractUrlContentAction with that "
+                "returned URL and an evidence-specific browse_query. Do not "
+                "assume the URL before searching."
+            )
+        elif strategy == "direct_extract":
+            workflows.append(
+                "Use ExtractUrlContentAction to inspect the supplied known "
+                "source URL with a targeted browse_query."
+            )
+        elif strategy == "search_only":
+            workflows.append(
+                "Use GoogleSearchAction to retrieve supporting search "
+                "snippets; a separate page extraction is not required."
+            )
     instruction = (
-        f"{source_intro}. {action} Return {output} and briefly explain "
-        "which available observations support the finding."
+        f"{source_intro}. {action} "
+        + " ".join(dict.fromkeys(workflows))
+        + f" Return {output} and briefly explain "
+          "which available observations support the finding."
     )
     if "required_tools" in target:
         tools = list(target["required_tools"])

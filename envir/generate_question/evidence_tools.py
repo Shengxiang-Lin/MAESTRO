@@ -14,9 +14,11 @@ from __future__ import annotations
 import ast
 from copy import deepcopy
 from functools import lru_cache
+from urllib.parse import urlparse
 from pathlib import Path
 
-EVIDENCE_TOOL_CONTRACT_VERSION = "maestro.evidence_acquisition.o1.v1"
+EVIDENCE_TOOL_CONTRACT_VERSION = "maestro.evidence_acquisition.o1.v2"
+LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION = "maestro.evidence_acquisition.o1.v1"
 
 # These are the exact Action classes registered by
 # benchmark.omnigaia.tools.build_omnigaia_tools, not invented workspace tools.
@@ -75,13 +77,25 @@ def registered_o1_tool_names() -> tuple[str, ...]:
     return tuple(tool["name"] for tool in o1_tool_definitions())
 
 
-def source_acquisition_policy(source: dict) -> dict:
-    """Choose an access strategy for a *source*, not for a whole Macro.
+def synthetic_page_url(*, seed: int, ordinal: int,
+                       record_id: str, source_id: str) -> str:
+    """A stable *non-routable* HTTP-shaped fixture; never a live website."""
+    from envir.schema import digest
+    token = digest(seed, ordinal, record_id, source_id, "virtual-web-page")[:16]
+    return f"https://evidence-{token}.example.invalid/{source_id}/record"
 
-    Web documents without a real URL use O1 search-by-query semantics. The
-    URL extraction Action is only appropriate when a usable real URL is
-    actually supplied, which current synthetic worlds do not provide.
-    """
+
+def web_acquisition_route(*, seed: int, ordinal: int,
+                          record_id: str, source_id: str) -> str:
+    """Select three real O1 access patterns without perturbing the World RNG."""
+    from envir.schema import digest
+    choices = ("search_only", "direct_extract", "search_then_extract")
+    val = int(digest(seed, ordinal, record_id, source_id, "web-route")[:8], 16)
+    return choices[val % len(choices)]
+
+
+def _legacy_source_acquisition_policy(source: dict) -> dict:
+    """Preserve old v1 Scene regeneration and deterministic Replay."""
     modality = source["modality"]
     access_mode = source["access_mode"]
     if access_mode not in {"browse", "keyed_lookup"}:
@@ -90,40 +104,191 @@ def source_acquisition_policy(source: dict) -> dict:
         if access_mode != "browse":
             raise ValueError("evidence_media_keyed_lookup_unsupported")
         tool = _MEDIA_ACTIONS[modality]
-        strategy = "media_observation"
-        binding = "source_media"
+        strategy, binding = "media_observation", "source_media"
     elif modality in {"text", "table"}:
         url = source.get("resource_url")
         if url is not None:
-            if (not isinstance(url, str)
-                    or not url.startswith(("https://", "http://"))):
+            if not isinstance(url, str) or not url.startswith(("https://", "http://")):
                 raise ValueError("evidence_invalid_real_url")
             tool = "ExtractUrlContentAction"
             strategy = "url_content_extraction"
             binding = "upstream_url" if access_mode == "keyed_lookup" else "source_url"
         else:
             tool = "GoogleSearchAction"
-            strategy = (
-                "keyed_search" if access_mode == "keyed_lookup"
-                else "search_discovery"
-            )
-            binding = (
-                "upstream_key_query" if access_mode == "keyed_lookup"
-                else "question_cues_query"
-            )
+            strategy = "keyed_search" if access_mode == "keyed_lookup" else "search_discovery"
+            binding = "upstream_key_query" if access_mode == "keyed_lookup" else "question_cues_query"
     else:
         raise ValueError("evidence_unsupported_modality:" + str(modality))
     if tool not in registered_o1_tool_names():
         raise ValueError("evidence_unregistered_o1_tool:" + tool)
     return {
-        "version": EVIDENCE_TOOL_CONTRACT_VERSION,
-        "modality": modality,
-        "access_mode": access_mode,
-        "strategy": strategy,
-        "tool": tool,
-        "input_binding": binding,
+        "version": LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION,
+        "modality": modality, "access_mode": access_mode,
+        "strategy": strategy, "tool": tool, "input_binding": binding,
         "execution_mode": "simulated_no_tool_execution",
     }
+
+
+def source_acquisition_policy(source: dict) -> dict:
+    """Freeze real O1 tools at *individual evidence acquisition*, not Macro.
+
+    For v2 synthetic web sources, a query can be sufficient, a known URL
+    can be extracted directly, or a query can discover a URL that must be
+    extracted in a subsequent local Sub-Agent step. A search result is not
+    an Extract call, and a discovered URL is not available before search.
+    """
+    route = source.get("acquisition_route")
+    if route is None:
+        return _legacy_source_acquisition_policy(source)
+    modality, access_mode = source["modality"], source["access_mode"]
+    if access_mode not in {"browse", "keyed_lookup"}:
+        raise ValueError("evidence_unknown_access_mode:" + str(access_mode))
+    if modality in _MEDIA_ACTIONS:
+        if route != "media_observation" or access_mode != "browse":
+            raise ValueError("evidence_media_route_invalid")
+        if source.get("simulated_page_url") is not None:
+            raise ValueError("evidence_media_must_not_have_url")
+        calls = [{
+            "step_id": "analyze", "tool": _MEDIA_ACTIONS[modality],
+            "depends_on": [], "input_binding": "source_media",
+            "output": "source_observations",
+        }]
+        binding, primary = "source_media", _MEDIA_ACTIONS[modality]
+    elif modality in {"text", "table"}:
+        if route not in {"search_only", "direct_extract", "search_then_extract"}:
+            raise ValueError("evidence_unknown_web_route:" + str(route))
+        query_binding = ("upstream_key_query" if access_mode == "keyed_lookup"
+                         else "question_cues_query")
+        if route == "search_only":
+            if source.get("simulated_page_url") is not None:
+                raise ValueError("evidence_search_only_has_hidden_page")
+            calls = [{
+                "step_id": "search", "tool": "GoogleSearchAction",
+                "depends_on": [], "input_binding": query_binding,
+                "output": "search_snippet_with_fact_refs",
+            }]
+            primary, binding = "GoogleSearchAction", query_binding
+        else:
+            url = source.get("simulated_page_url")
+            if not isinstance(url, str) or not url.startswith("https://"):
+                raise ValueError("evidence_extraction_page_url_missing")
+            parsed = urlparse(url)
+            if (not parsed.hostname or not parsed.hostname.endswith(".example.invalid")
+                    or parsed.username or parsed.password or parsed.port
+                    or parsed.fragment or parsed.query or not parsed.path):
+                raise ValueError("evidence_not_a_reserved_synthetic_url")
+            calls = []
+            if route == "search_then_extract":
+                calls.append({
+                    "step_id": "discover", "tool": "GoogleSearchAction",
+                    "depends_on": [], "input_binding": query_binding,
+                    "output": "search_result_with_selected_url",
+                })
+                url_binding = "discover.selected_result.url"
+            else:
+                url_binding = "known_source_url"
+            calls.append({
+                "step_id": "extract", "tool": "ExtractUrlContentAction",
+                "depends_on": ["discover"] if route == "search_then_extract" else [],
+                "input_binding": url_binding,
+                "output": "page_facts_with_refs",
+            })
+            primary, binding = "ExtractUrlContentAction", url_binding
+    else:
+        raise ValueError("evidence_unsupported_modality:" + str(modality))
+    if any(c["tool"] not in registered_o1_tool_names() for c in calls):
+        raise ValueError("evidence_unregistered_tool")
+    return {
+        "version": EVIDENCE_TOOL_CONTRACT_VERSION,
+        "modality": modality, "access_mode": access_mode,
+        "strategy": route, "tool": primary, "input_binding": binding,
+        "tool_steps": calls,
+        "execution_mode": "simulated_no_tool_execution",
+    }
+
+
+def simulate_acquisition_trace(node: dict, source: dict,
+                               supporting_fact_refs: list[str],
+                               key_values: list[str] | None = None) -> list[dict]:
+    """Produce an *offline fixture*, never an observed network tool trace.
+
+    Search->Extract passes exactly the URL returned by the immediately
+    preceding synthetic search result. An acquired FactRef first appears in
+    Search-only or Extract's observation, not the discovery URL result.
+    """
+    contract = node["evidence_acquisition"]
+    if contract["version"] != EVIDENCE_TOOL_CONTRACT_VERSION:
+        return []  # v1 preserved without inventing a historical call history.
+    steps = contract["tool_steps"]
+    source_id = node["source_id"]
+    if source_id != source["source_id"]:
+        raise ValueError("simulated_trace_source_mismatch")
+    query = (f"Find {source['purpose']} in {source['title']}."
+             if node["op"] == "scan" else
+             f"Find {source['purpose']} in {source['title']} using "
+             f"{node['input_key_field']}={','.join(key_values or [])}.")
+    url = source.get("simulated_page_url")
+    calls = []
+    for step in steps:
+        call_id = node["id"] + "." + step["step_id"]
+        params = {}
+        observation = {"synthetic": True, "source_id": source_id}
+        if step["tool"] == "GoogleSearchAction":
+            params = {"query": query}
+            if step["output"] == "search_result_with_selected_url":
+                observation["selected_result"] = {
+                    "url": url, "title": source["title"],
+                    "source_id": source_id,
+                }
+            else:
+                observation["content"] = (
+                    "Simulated search snippet for " + source["title"]
+                )
+                observation["source_fact_refs"] = list(supporting_fact_refs)
+        elif step["tool"] == "ExtractUrlContentAction":
+            if step["input_binding"] == "discover.selected_result.url":
+                if not calls or calls[-1]["tool"] != "GoogleSearchAction":
+                    raise ValueError("simulated_extract_missing_discovery")
+                selected_url = calls[-1]["observation"]["selected_result"]["url"]
+                if selected_url != url:
+                    raise ValueError("simulated_extraction_url_mismatch")
+                params = {"url": selected_url, "browse_query": query}
+            else:
+                params = {"url": url, "browse_query": query}
+            observation["url"] = params["url"]
+            observation["source_fact_refs"] = list(supporting_fact_refs)
+            observation["content"] = (
+                "Simulated extracted page evidence for " + source["title"]
+            )
+        else:
+            # Synthetic media annotations are not real decoding.
+            path_field = {
+                "ImageAnalysisAction": "image_path",
+                "VideoAnalysisAction": "video_path",
+                "ParseAudioAction": "audio_path",
+            }.get(step["tool"])
+            if path_field is None:
+                raise ValueError("simulated_unsupported_tool:" + step["tool"])
+            params = {"query": query, path_field: "workspace://" + source_id}
+            observation["source_fact_refs"] = list(supporting_fact_refs)
+        tool_schema = next(
+            x["parameters"] for x in o1_tool_definitions()
+            if x["name"] == step["tool"]
+        )
+        if not set(tool_schema.get("required", [])).issubset(params):
+            raise ValueError("simulated_tool_missing_required_params")
+        if set(params) - set(tool_schema.get("properties", {})):
+            raise ValueError("simulated_tool_has_invalid_params")
+        calls.append({
+            "call_id": call_id, "tool": step["tool"],
+            "params": params,
+            "depends_on": [node["id"] + "." + x
+                           for x in step["depends_on"]],
+            "observation": observation,
+            "execution_mode": "simulated_no_tool_execution",
+            "tool_executed": False,
+        })
+    return calls
 
 
 def acquisition_for_operator(node: dict, source: dict) -> dict:
@@ -164,11 +329,14 @@ def tools_from_primitive_steps(steps: list[dict]) -> list[str]:
             continue
         if step.get("op") not in _ACQUISITION_OPS:
             raise ValueError("evidence_contract_on_non_acquisition")
-        name = acquisition.get("tool")
-        if name not in registered_o1_tool_names():
-            raise ValueError("evidence_unknown_step_tool")
-        if name not in tools:
-            tools.append(name)
+        names = [item["tool"] for item in acquisition.get("tool_steps", [])]
+        if not names:
+            names = [acquisition.get("tool")]
+        for name in names:
+            if name not in registered_o1_tool_names():
+                raise ValueError("evidence_unknown_step_tool")
+            if name not in tools:
+                tools.append(name)
     return tools
 
 
@@ -203,7 +371,9 @@ def validate_scene_evidence_tools(scene: dict) -> list[str]:
     if not spec.get("evidence_tool_contract_version"):
         return []  # Legacy source snapshots intentionally have no tool metadata.
     issues = []
-    if spec["evidence_tool_contract_version"] != EVIDENCE_TOOL_CONTRACT_VERSION:
+    if spec["evidence_tool_contract_version"] not in {
+        LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION, EVIDENCE_TOOL_CONTRACT_VERSION,
+    }:
         return ["evidence_tool_contract_version_mismatch"]
     sources = {role["source_id"]: role for role in spec["sources"]}
     for sid, source in sources.items():

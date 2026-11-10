@@ -43,7 +43,10 @@ def o1_prompt(
             {
                 "type": source["modality_hint"],
                 "id": sid,
-                "path": "workspace://" + sid,
+                # Known URL is visible from the outset only for Direct
+                # Extract. Search-discovered URLs are absent until the
+                # Sub-Agent's own simulated Search observation.
+                "path": source.get("resource_url", "workspace://" + sid),
             } for sid, source in sources.items()
         ],
     }
