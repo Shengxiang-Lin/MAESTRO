@@ -338,6 +338,7 @@ class StageAndQualityTests(unittest.TestCase):
             root = Path(td)
             args.output_dir = root / "constructed"
             args.target = 4
+            args.macro_first_v2_share = 0  # legacy checkpoint fixture
             args.scenario_workers = 1
             records = [{
                 "record_id": f"item-{i}",
@@ -407,6 +408,8 @@ class StageAndQualityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             args.output_dir = Path(td) / "pipeline"
             args.target = 4
+            args.macro_first_v2_share = 0  # legacy replay fixture
+            args.quota_refill = False
             args.no_progress = True
             records = [{
                 "record_id": f"new-{i}",
