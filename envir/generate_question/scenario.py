@@ -201,16 +201,30 @@ def enrich_one(spec: dict, *, author, critic,
             ),
         } if spec.get("reasoning_pattern") == "macro_first_v2" else {}),
     }
+    from .source_title_contract import (
+        has_scene_realism, canonicalize_scenario_proposal,
+        scenario_domain_context,
+    )
+    if has_scene_realism(spec):
+        frozen["domain_context"] = scenario_domain_context(spec)
     failures = []
     for attempt in range(max_revisions + 1):
         try:
-            from .v2_prompts import SCENARIO_AUTHOR, SCENARIO_CRITIC
+            from .v2_prompts import (
+                SCENARIO_AUTHOR, SCENARIO_CRITIC, SCENARIO_AUTHOR_SCHEMA_LOCKED,
+            )
             v2 = spec.get("reasoning_pattern") == "macro_first_v2"
-            scenario_author_system = SCENARIO_AUTHOR if v2 else AUTHOR_SYSTEM
+            scenario_author_system = (
+                SCENARIO_AUTHOR_SCHEMA_LOCKED if has_scene_realism(spec)
+                else SCENARIO_AUTHOR if v2 else AUTHOR_SYSTEM
+            )
             proposal = author.complete_json(scenario_author_system, json.dumps({
                 "frozen_contract": frozen,
                 "previous_errors": failures[-2:],
             }, ensure_ascii=False))
+            # In new V2 scenes, source titles are always regenerated from
+            # the frozen modality/schema; LLM-authored titles are ignored.
+            proposal = canonicalize_scenario_proposal(spec, proposal)
             issues = _narrative_issues(spec, proposal)
             if issues:
                 failures.append({"stage": "schema_guard", "errors": issues})
