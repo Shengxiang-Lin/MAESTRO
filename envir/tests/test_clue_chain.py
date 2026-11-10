@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from envir.generate_question.spec import make_spec, spec_issues
 from envir.generate_question.question import reference_question, guard_question
@@ -40,6 +41,52 @@ def clue_scene(i=2):
 
 
 class ClueChainContracts(unittest.TestCase):
+    def test_stage1_config_cli_and_batch_construction(self):
+        from envir.config import load_config, args_from_config, DEFAULT_CONFIG
+        from envir.__main__ import parser
+        from envir.generate_question.stages import construct_scenes, read_jsonl
+        cfg = load_config(DEFAULT_CONFIG)
+        self.assertEqual(args_from_config(cfg).clue_chain_share, 0)
+        parsed = parser().parse_args([
+            "generate-questions", "--config", str(DEFAULT_CONFIG),
+            "--target", "10", "--clue-chain-share", "100",
+            "--output-dir", "envir/data/clue-pilot-test",
+        ])
+        self.assertEqual(parsed.clue_chain_share, 100)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            args = args_from_config(cfg, output_dir=root / "constructed",
+                                    target=10, no_progress=True)
+            args.difficulty_mix = "0,100,0"
+            args.clue_chain_share = 100
+            args.scenario_model = None
+            args.scenario_api_base = None
+            args.mmqa = root / "source-not-required-by-mock.jsonl"
+            records = [{
+                "record_id": f"fresh-clue-{i}",
+                "topic": f"Fictional Museum {i}",
+                "domain_hint": "history",
+                "source_modalities": ["image", "table", "text"],
+            } for i in range(10)]
+            with patch(
+                "envir.generate_question.sources.load_scenario_seeds",
+                return_value=(records, {}),
+            ):
+                summary = construct_scenes(args)
+            self.assertEqual(summary["status"], "done")
+            self.assertEqual(summary["generated"], 10)
+            scenes = read_jsonl(root / "constructed/scenes.jsonl")
+            self.assertEqual(len(scenes), 10)
+            self.assertTrue(all(
+                s["problem_spec"]["reasoning_pattern"] == "clue_chain"
+                for s in scenes
+            ))
+            self.assertTrue(all(
+                s["difficulty_audit"]["evidence_acquisition"][
+                    "clue_counterfactual_pass"
+                ] for s in scenes
+            ))
+
     def test_new_pattern_is_opt_in_and_existing_specs_unchanged(self):
         legacy = make_spec(
             seed_record={
