@@ -54,7 +54,7 @@ class GoalResolutionTests(unittest.TestCase):
                 self.assertIn(expected_op, program_ops)
                 self.assertEqual(program_ops.count("lookup_by_key") >= 2, True)
                 oracle = realize_scene(scene)
-                self.assertEqual(oracle["answer"], scene["gold_answer"])
+                self.assertEqual(oracle["macro_tasks"][-1]["answer"], scene["gold_answer"])
                 self.assertTrue(all(
                     entry["source_fact_refs"]
                     for entry in oracle["macro_tasks"][-1][
