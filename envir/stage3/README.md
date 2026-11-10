@@ -1,4 +1,88 @@
-# Stage 3 — Trusted Orchestration Simulator (MVP)
+# Stage 3 — Per-Round Main-Agent Trajectory Dataset (primary workflow)
+
+**Training unit = one Main-Agent decision round, not one Macro Task.**
+Stage 1 supplies Question and a private executable Macro DAG; Stage 2
+supplies independently reviewed source-grounded Sub-Agent finishes. Stage 3
+uses the private DAG only to choose legal parallel batches and author the
+next O1-style **Main Prompt → Main Action** supervised sample. After a
+delegation, all of that batch's Stage-2 `finish_result` and public Trace
+Summary become visible in the **following** Main prompt.
+
+The prompt is rendered by the actual
+`OmniGAIAMainAgentPrompt.build_prompt` and
+`BaseMainAgent._format_subtask_history` used in
+`baseline/orchestra-o1`. Its fields include user Question, simulated
+workspace modality inputs, tool/model catalog, Attempt budget and the
+history of *prior* Sub-Agent tasks, results, summaries and trace summaries.
+The O1 `prior_context` argument is intentionally not used: the current
+O1 prompt template does not render it. The Main output remains the O1
+`delegate_task` JSON (possibly multiple independent tasks in one round)
+or `complete` JSON. No `work_M*`, complete Gold DAG or Oracle is exposed
+in the training sample.
+
+## Try 20 reviewed Main-turn trajectories using local Qwen
+
+```bash
+git pull origin main
+python -m envir.stage3.generate_turns \
+  --scenes envir/data/maestro_current_100/questions/scenes.jsonl \
+  --reports envir/data/maestro_current_reports_100/subtasks.jsonl \
+  --output-dir envir/data/maestro_main_turns_20 \
+  --max-scenes 20 \
+  --mode llm \
+  --author-api-base http://127.0.0.1:8807/v1 \
+  --author-model local-qwen3.5-9b \
+  --critic-model local-qwen3.5-9b
+```
+
+The model endpoint is the default in the Stage-2 sample config; change
+it if your local server uses a different port/model. Critic is a separate
+call and must pass the independent grounding/style review. There is NO
+silent acceptance of a template when Qwen Author/Critic rejects an action.
+
+To smoke-test the format without an API, use
+`--mode template` instead of the three LLM flags. **Template-mode
+actions are deterministic baselines, not independently reviewed
+realistic training labels.**
+
+A single output directory contains:
+
+| File | Meaning |
+| --- | --- |
+| `main_turns.jsonl` | Main **input.prompt** and **output** action (plus `output_json`) per decision |
+| `episodes.jsonl` | Whole O1-style timeline for inspection, including the simulated Sub-Agent batch responses |
+| `private/teacher_alignment.jsonl` | Internal Macro IDs, visibility sets and Author/Critic audit; **never train on this** |
+| `failed.jsonl` | Rejected/incomplete scenes and explicit causes |
+| `journal/*.json` | Atomic per-scene checkpoints for safe restart |
+| `summary.json` | Round counts, completed/rejected scenes, delegation versus completion counts |
+
+To resume after interruption, rerun the exact same command; the
+generation signature covers the source files, model options and relevant
+code. `--overwrite` discards the old output and starts a new run. Source
+files remain unchanged.
+
+**Important contracts**: a single Main `delegate_task` delegates all
+currently independent Macro slots within the teacher's approved wave,
+but each Sub-Agent instruction/context is natural O1 prose; Macro IDs
+exist only in private alignment. The history is accumulated strictly in
+delivery order. Current/future reports and Gold answers are never used
+in the Main input or in action authoring. For pure comparison/percentage
+goals, Main may `complete` after both earlier Sub-Agent reports actually
+communicate the required counts and the teacher verifies the arithmetic;
+otherwise the last Macro is delegated. All factual source observations
+remain simulated, with no real web/video access and no independent
+Agent-solving benchmark.
+
+## Older Stage-3 trusted simulator (mechanics test only)
+
+The following trusted `TrustedSimulator` implementation is preserved as
+a state-machine smoke-test tool. It is **not** the primary dataset generation
+entrypoint and its actions (`{"type":"delegate","macro_task_id":"..."}`)
+are **not** Main-Agent supervised labels.
+
+---
+
+### Legacy simulator API
 
 This is a **synthetic, cost-sensitive decision environment**, not an
 independent external question-answering benchmark. Stage 1 owns the frozen
