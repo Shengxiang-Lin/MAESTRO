@@ -51,7 +51,7 @@ def _short(value, limit=500) -> str:
 
 
 def _prior_context(
-    target: dict, delivered: dict[str, dict], *, max_chars: int = 900,
+    target: dict, delivered: dict[str, dict], *, max_chars: int = 3200,
 ) -> str:
     parents = target["depends_on"]
     if not parents:
@@ -64,8 +64,8 @@ def _prior_context(
         item = delivered[parent]
         result = item["finish_result"]
         fragments.append(
-            "Previously returned result: " + _short(result["result"], 360)
-            + "; Sub-Agent summary: " + _short(result["summary"], 220)
+            "Previously returned result: " + _short(result["result"], 1400)
+            + "; Sub-Agent summary: " + _short(result["summary"], 280)
         )
     return _short(" ".join(fragments), max_chars)
 
@@ -171,7 +171,7 @@ def action_issues(action: dict, assignments: list[dict],
         tools = task.get("tools")
         if not isinstance(instruction, str) or not 35 <= len(instruction) <= 1500:
             errors.append(f"task_{i}_invalid_instruction")
-        if not isinstance(context, str) or not 10 <= len(context) <= 1400:
+        if not isinstance(context, str) or not 10 <= len(context) <= 3500:
             errors.append(f"task_{i}_invalid_context")
         if model != expected["model"]:
             errors.append(f"task_{i}_model_mismatch")
@@ -188,16 +188,17 @@ def action_issues(action: dict, assignments: list[dict],
                        for sid in expected["source_ids"]):
                 errors.append(f"task_{i}_source_identifiers_missing")
         if expected["needs_upstream"] and isinstance(context, str):
-            # The Author must pass a concrete previous result, not just
-            # claim that earlier work happened. The deterministic template
-            # passes the actual Main-visible finish result verbatim.
-            if (not any(
-                    fragment in context
-                    for fragment in re.findall(
-                        r"(?:Case-\d+|MK-\d+|RK-\d+|Entry-\d+)",
-                        expected["context"],
-                    )
-                ) and "Previously returned result:" not in context):
+            # Include at least one real upstream identity when available;
+            # generic references to "earlier findings" are insufficient.
+            identifiers = set(re.findall(
+                r"(?:Case-\d+|MK-\d+|RK-\d+|Entry-\d+)",
+                expected["context"],
+            ))
+            if identifiers and not any(
+                token in context for token in identifiers
+            ):
+                errors.append(f"task_{i}_upstream_identifier_missing")
+            elif not identifiers and "Previously returned result:" not in context:
                 errors.append(f"task_{i}_upstream_result_not_transmitted")
     return errors
 
