@@ -169,6 +169,10 @@ def enrich_one(spec: dict, *, author, critic,
                max_revisions: int = 2) -> tuple[dict, dict]:
     if max_revisions < 0 or max_revisions > 8:
         raise ValueError("max revisions must be 0..8")
+    semantic_contract = None
+    if spec.get("semantic_evidence_contract_version"):
+        from .semantic_evidence import compile_semantic_contract
+        semantic_contract = compile_semantic_contract(spec)
     frozen = {
         "topic": spec["scenario"]["topic"],
         "difficulty": spec["difficulty_target"],
@@ -185,18 +189,16 @@ def enrich_one(spec: dict, *, author, critic,
         } for role in spec["sources"]],
         "requirements": spec["requirements"],
         **({
-            "semantic_evidence_contract": (
-                __import__(
-                    "envir.generate_question.semantic_evidence",
-                    fromlist=["compile_semantic_contract"],
-                ).compile_semantic_contract(spec)
-            ) if spec.get("semantic_evidence_contract_version") else None,
+            "semantic_evidence_contract": semantic_contract,
             "frozen_goal": spec["macro_plan"]["goal"],
             "macro_task_roles": [
                 {"role": t["role"], "source_scope": t["source_scope"]}
                 for t in spec["macro_plan"]["macro_tasks"]
             ],
-            "media_clues": spec["macro_plan"]["clues"],
+            "media_clues": (
+                semantic_contract["necessary_question_clues"]
+                if semantic_contract else spec["macro_plan"]["clues"]
+            ),
         } if spec.get("reasoning_pattern") == "macro_first_v2" else {}),
     }
     failures = []
