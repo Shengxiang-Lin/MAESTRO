@@ -280,3 +280,29 @@ Legacy V2 plans, Worlds and semantic contracts without this marker
 retain their older deterministic replay behavior. This check is a
 bounded output-slot guard, not a full natural-language entailment
 proof.
+
+
+### Schema-constrained Scenario + one-output Goal (new V2 marker)
+
+`source_title_contract.py` compiles each public source title from the
+frozen `source_id`, `modality` and domain; LLM output cannot silently
+relabel text captions as audio or image observations as video. The
+domain-context Goal and evidence roles are provided to the Scenario
+Author, which only drafts narrative fields.
+
+`semantic_evidence.py` has a versioned single-answer-slot guard for
+explicit conjunctive output requests (e.g. asking *which case* AND
+*what status* when the Gold Answer has only status). The deterministic
+reference Question for newly marked V2 scenes also asks for exactly
+one output field, with case identity only as a qualifying clue.
+Supported morphological paraphrases such as triangle/triangular are
+accepted.
+
+`macro_first_v2.py` samples a frozen `candidate_profile` for the
+multimodal family; `macro_first_v2_world.py` realizes variable branch
+ambiguity and ensures alternatives can lead to other final answers.
+`information_necessity.py` audits these candidate sets from actual
+WorkProducts. `difficulty_proxy.py` reports interpretable structural
+workload features by target label. No claims of measured Sub-Agent
+accuracy, open-web retrieval or video/audio perception are implied.
+Older frozen V2 ProblemSpecs are not retroactively changed.
