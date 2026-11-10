@@ -48,14 +48,10 @@ def _audit_corroborated_dispute(scene: dict) -> dict:
             f"record_key_{plan['index_hops']}"
             if plan["index_hops"] else "case_id"
         )
-        options = [
-            row["values"][goal_field]
-            for row in sources["archive"]["observations"]
-            if row["values"][final_field] == key
-        ]
-        if len(options) != 1:
-            raise ValueError("corroborated_dispute_archive_not_unique")
-        resolved[case_id] = options[0]
+        from .goal_resolution import materialized_answer
+        resolved[case_id] = materialized_answer(
+            plan, sources, final_field, key,
+        )
     target = next(iter(overlap), None)
     profile = plan["candidate_profile"]
     profile_matches = (
@@ -147,14 +143,10 @@ def audit_candidate_information(scene: dict) -> dict:
             f"record_key_{plan['index_hops']}"
             if plan["index_hops"] else "marker_code"
         )
-        matches = [
-            row["values"][goal_field]
-            for row in sources["archive"]["observations"]
-            if row["values"][final_key] == key
-        ]
-        if len(matches) != 1:
-            raise ValueError("information_necessity_archive_ambiguity")
-        key_to_goal[candidate_id] = matches[0]
+        from .goal_resolution import materialized_answer
+        key_to_goal[candidate_id] = materialized_answer(
+            plan, sources, final_key, key,
+        )
     if policy == VARIABLE_POLICY:
         # Distinct from the TARGET is sufficient for answer sensitivity.
         # Multiple alternatives can share a legitimate status label.
