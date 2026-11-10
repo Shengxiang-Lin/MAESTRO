@@ -29,6 +29,30 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if spec["reasoning_pattern"] == "macro_first":
+        plan = spec["macro_plan"]
+        pattern = plan["pattern"]
+        goal = plan["goal"]["answer_field"].replace("_", " ")
+        if pattern == "conflict_reconciliation":
+            return (
+                f"Two independent inventories in a fictional {topic} "
+                "reference collection disagree about one case. "
+                f"What is the authoritative {goal} for that disputed case?"
+            )
+        visual = plan["clues"]
+        color, motif = visual["emblem_color"], visual["emblem_shape"]
+        if pattern == "parallel_resolution":
+            return (
+                f"In a fictional {topic} reference collection, an illustration "
+                f"shows a {color} emblem and separate notes mention a "
+                f"{motif} motif. What is the authoritative {goal} for "
+                "the item identified by both clues?"
+            )
+        return (
+            f"A fictional {topic} reference collection has an illustrated "
+            f"item with a {color} emblem and a {motif} motif. "
+            f"What is its authoritative {goal}?"
+        )
     if spec["reasoning_pattern"] == "evidence_graph":
         graph = spec["evidence_graph"]
         mode = graph["archetype"]
@@ -255,6 +279,11 @@ MacroGraph projects entry_label. A well-formed imperative user request (e.g.
 For chronology, the compiled sort uses ascending relative_step: "earliest"
 or "first" is correct; "latest" or "most recent" is WRONG. Never hallucinate
 a reversed direction. Surface fluency alone is insufficient.
+For macro_first tasks, the frozen Macro DAG is an internal reference;
+check the initial distinguishing clues, the exact authoritative year
+deliverable and, for conflict tasks, the dispute condition. Do not
+require the question to list Macro operations, retrieved keys or the
+intermediate source traversal.
 For evidence_graph tasks, check all frozen starting clues, multi-source
 identification or conflict conditions and the accession-year deliverable.
 Do NOT require a user question to name every index or archive lookup.
@@ -276,7 +305,25 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
-    if pattern == "evidence_graph":
+    if pattern == "macro_first":
+        plan = spec["macro_plan"]
+        visual = plan["clues"]
+        if visual and not all(
+            str(visual[key]).lower() in q.lower()
+            for key in ("emblem_color", "emblem_shape")
+        ):
+            errors.append("macro_first_missing_distinguishing_clues")
+        if plan["pattern"] == "conflict_reconciliation" and not re.search(
+            r"\b(disagree\w*|disput\w*|differ\w*|conflict\w*|"
+            r"discrepanc\w*|mismatch\w*)\b", q, re.I
+        ):
+            errors.append("macro_first_missing_dispute_intent")
+        if not re.search(r"\byear\b", q, re.I):
+            errors.append("macro_first_missing_year_answer")
+        required_name = plan["goal"]["answer_field"].replace("_", " ")
+        if required_name not in q.lower():
+            errors.append("macro_first_wrong_goal_field")
+    elif pattern == "evidence_graph":
         graph = spec["evidence_graph"]
         visual = graph["visual_features"]
         if visual and not all(
@@ -314,7 +361,7 @@ def guard_question(question: str, spec: dict,
     else:
         if not re.search(r"\bactive\b", q, flags=re.I):
             errors.append("active_condition_missing")
-    if pattern not in {"approval", "clue_chain", "evidence_graph"}:
+    if pattern not in {"approval", "clue_chain", "evidence_graph", "macro_first"}:
         if not re.search(r"\b(codes?|glossary|map|mapped|mapping|crosswalk|translat\w*|resolv\w*)\b", q, re.I):
             errors.append("cross_source_code_mapping_missing")
         if pattern == "time_window":
@@ -341,7 +388,9 @@ def guard_question(question: str, spec: dict,
             errors.append("alias_resolution_not_expressed")
         if not re.search(r"\b(approv|review|annotat)", q, re.I):
             errors.append("review_condition_not_expressed")
-    if spec["difficulty_target"] == "hard" and pattern not in {"clue_chain", "evidence_graph"}:
+    if spec["difficulty_target"] == "hard" and pattern not in {
+        "clue_chain", "evidence_graph", "macro_first"
+    }:
         if not re.search(r"\b(clear|clearance|authoriz)", q, re.I):
             errors.append("clearance_condition_missing")
     family = spec["family"]

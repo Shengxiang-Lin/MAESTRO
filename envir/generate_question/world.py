@@ -186,6 +186,9 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 
 def compile_program(spec: dict) -> dict:
     """Compile semantic branches into source-scoped executable programs."""
+    if spec.get("reasoning_pattern") == "macro_first":
+        from .macro_first import compile_macro_solvers
+        return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "evidence_graph":
         from .graph_grammar import compile_evidence_program
         return compile_evidence_program(spec)
@@ -309,6 +312,9 @@ def compile_program(spec: dict) -> dict:
 
 def generate_world(spec: dict) -> dict:
     """Versioned synthetic sources; never rewrite old private World facts."""
+    if spec.get("reasoning_pattern") == "macro_first":
+        from .macro_first_world import generate_macro_first_world
+        return generate_macro_first_world(spec)
     if spec.get("reasoning_pattern") == "evidence_graph":
         from .world_synthesizer import generate_evidence_world
         return generate_evidence_world(spec)

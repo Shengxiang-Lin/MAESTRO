@@ -124,6 +124,20 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         raise ValueError("macro_question_missing_disagreement_operation")
     if pattern == "dynamic_threshold" and "gte" not in compares:
         raise ValueError("macro_question_missing_threshold_operation")
+    if pattern == "macro_first":
+        plan = spec["macro_plan"]
+        if (len(graph["tasks"]) != len(plan["macro_tasks"])
+                or graph.get("plan_origin") != "macro_first"):
+            raise ValueError("macro_first_dag_not_frozen")
+        if [(t["task_id"], t["depends_on"], t["source_ids"]) for t in graph["tasks"]] != [
+            ("work_" + t["macro_id"],
+             ["work_" + parent for parent in t["depends_on"]],
+             t["source_scope"]) for t in plan["macro_tasks"]
+        ]:
+            raise ValueError("macro_first_macro_contract_mismatch")
+        if (graph["terminal_task_id"] != "work_" + plan["terminal_macro_id"]
+                or not ops["lookup_by_key"]):
+            raise ValueError("macro_first_terminal_or_lookup_missing")
     if pattern == "evidence_graph":
         expected_lookups = spec["evidence_graph"]["lookup_hops"]
         if ops["lookup_by_key"] != expected_lookups:
@@ -179,6 +193,10 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         {"entry_label", "evidence_refs"} <= set(output_fields)
     ):
         raise ValueError("macro_question_wrong_evidence_output_schema")
+    if answer_kind == "macro_value" and output_fields != [
+        spec["macro_plan"]["goal"]["answer_field"]
+    ]:
+        raise ValueError("macro_first_wrong_goal_output")
     if answer_kind == "accession_year" and output_fields != ["accession_year"]:
         raise ValueError("macro_question_wrong_accession_year_schema")
     if answer_kind == "count" and "count" not in output_fields:

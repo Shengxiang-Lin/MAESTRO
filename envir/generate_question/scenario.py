@@ -28,6 +28,12 @@ difficulty, solution operation, constraints, field mapping or answer.
 The sources have FROZEN roles. They may describe (depending on the pattern):
 approved category labels, time-window intervals for tracked events,
 a binary-status disagreement, or per-group numerical thresholds.
+For macro_first patterns, each pre-defined Macro Task has its own
+independently executable local evidence search. Preserve the frozen
+Macro-level dependencies and sources. Do not reveal the internal Gold
+Solver operations in the user-facing question. The final objective
+is the authoritative year named in the frozen Goal; do not invent an
+extra eligibility condition or assume original media was inspected.
 For evidence_graph patterns, the source topology is frozen in a typed
 information-acquisition graph. Preserve its distinct observable inputs and
 keyed-only stores. A conflict graph starts from two disagreeing independent

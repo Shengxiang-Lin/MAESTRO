@@ -176,3 +176,31 @@ envir/data/evidence_graph_pilot_100
 Limitations: the grammar is intentionally bounded; media are simulated
 structured observations; structurally valid DAGs are not necessarily
 hard for a blind Main-Agent. No unsupported original MMQA facts are used.
+
+
+## Macro-first generator
+
+Use `--macro-first-share 100` or `generation.macro_first_share: 100`
+to select a Macro-first generator for eligible medium/hard cases. The
+frozen `problem_spec.macro_plan` is sampled before any local solver:
+each Macro declares its goal role, dependencies, typed upstream input
+contract, typed output, and private source scope.
+
+`macro_first.compile_macro_solvers` builds a local primitive operator
+chain for each frozen Macro. Primitive nodes are topologically flattened
+into `gold_program` only to reuse existing Oracle, trace and replay
+infrastructure. `compiler.compile_frozen_macro_plan` preserves every
+original Macro ID and edge and rejects cross-Macro primitive access that
+is not explicitly declared. It is deliberately distinct from the old
+`compile_macro_tasks`, which fuses primitive nodes after the fact.
+
+`macro_first_world` synthesizes globally consistent source facts,
+dependent keys and overlapping decoys. Strict replay re-samples the
+World and local solvers from the frozen Spec and checks all source and
+Macro handoff counterfactuals. `difficulty_audit.macro_first_audit`
+contains the preserved-boundary and per-edge dependency diagnostics.
+
+Question Author and Critic see the semantic requirements but must not
+reveal the internal Macro execution plan. Source data for images,
+video and audio are synthetic annotations only. Old `clue_chain` and
+`evidence_graph` settings remain supported and unchanged by default.

@@ -66,6 +66,10 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     cf_sensitive = Counter()
     acquisition_scenes = 0
     graph_modes = Counter()
+    macro_first_modes = Counter()
+    macro_first_handoffs = 0
+    macro_first_handoff_passes = 0
+    macro_first_local_ops = []
     graph_lookup_total = 0
     graph_counterfactual_pass = 0
     graph_parallel_widths = []
@@ -96,6 +100,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             if text:
                 exact_questions[text] += 1
             if spec:
+                if spec.get("reasoning_pattern") == "macro_first":
+                    macro_first_modes[spec["macro_plan"]["pattern"]] += 1
                 if spec.get("reasoning_pattern") == "evidence_graph":
                     graph_modes[spec["evidence_graph"]["archetype"]] += 1
                 difficulties[spec["difficulty_target"]] += 1
@@ -176,6 +182,13 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 one_source[spec["difficulty_target"]] += int(
                     audit["one_source_baseline"]["exact_match"]
                 )
+                macro_audit = audit.get("macro_first_audit", {})
+                if macro_audit:
+                    handoffs = macro_audit["handoff_counterfactuals"]
+                    macro_first_handoffs += handoffs["edge_count"]
+                    macro_first_handoff_passes += handoffs["sensitive_edges"]
+                    macro_first_local_ops.extend(
+                        macro_audit["primitive_ops_inside_macros"])
                 graph_audit = audit.get("evidence_graph_audit", {})
                 if graph_audit:
                     graph_lookup_total += graph_audit["keyed_lookup_count"]
@@ -313,6 +326,21 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "Naming-invariant fingerprint of executable Macro DAGs, "
                 "operator chains and source roles; not a semantic uniqueness proof."
             ),
+        },
+        "macro_first": {
+            "scenes": sum(macro_first_modes.values()),
+            "pattern_distribution": dict(macro_first_modes),
+            "cross_macro_handoff_count": macro_first_handoffs,
+            "sensitive_cross_macro_handoff_count": macro_first_handoff_passes,
+            "handoff_dependency_pass_rate": (
+                round(macro_first_handoff_passes / macro_first_handoffs, 4)
+                if macro_first_handoffs else None
+            ),
+            "mean_primitive_ops_per_macro": (
+                round(sum(macro_first_local_ops) / len(macro_first_local_ops), 3)
+                if macro_first_local_ops else None
+            ),
+            "scope": "Frozen Macro DAGs with deterministic local Gold Solvers, not autonomous subagent runs.",
         },
         "evidence_graph": {
             "scenes": sum(graph_modes.values()),
