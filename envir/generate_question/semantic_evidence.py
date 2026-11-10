@@ -298,9 +298,20 @@ def semantic_text_issues(text: str, spec: dict, contract: dict,
     if ("audio" in modalities and "video" in modalities
             and not time["footage_not_after_commentary"]):
         # Parallel branches do not implement a cross-modal time comparison.
-        if re.search(r"\b(?:footage|video|frame|action)\b[^.?!]{0,95}"
-                     r"\b(?:before|after|followed by)\b[^.?!]{0,90}"
-                     r"\b(?:spoken|audio|commentary|cue)\b", q):
+        if (re.search(
+            r"\b(?:footage|video|frame|action)\b[^.?!]{0,45}"
+            r"\b(?:happens|occurs|appears|takes place|is shown|"
+            r"was shown|is seen)\s+(?:before|after|following)\s+"
+            r"(?:the\s+)?(?:spoken|audio|commentary|cue)\b", q,
+        ) or re.search(
+            r"\b(?:footage|video|frame|action)\b[^.?!]{0,40}"
+            r"\b(?:before|after)\s+(?:the\s+)?"
+            r"(?:spoken|audio|commentary|cue)\b", q,
+        ) or re.search(
+            r"\b(?:spoken|audio|commentary|cue)\b[^.?!]{0,40}"
+            r"\b(?:before|after)\s+(?:the\s+)?"
+            r"(?:video|footage|frame|action)\b", q,
+        )):
             issues.append("semantic_unlicensed_crossmodal_order")
     if time["footage_not_after_commentary"]:
         if any(pattern.search(q) for pattern in _REVERSE_ORDER):
