@@ -62,6 +62,8 @@ class ConfigAndCliTests(unittest.TestCase):
         args = args_from_config(values)
         self.assertEqual(args.target, 100)
         self.assertEqual(args.difficulty_mix, "17,33,50")
+        self.assertFalse(hasattr(args, "quota_refill"))
+        self.assertFalse(hasattr(args, "max_candidate_multiplier"))
         self.assertTrue(args.mmqa.is_absolute())
         self.assertEqual(args.scenario_workers, 8)
         self.assertEqual(args.question_workers, 8)
@@ -467,6 +469,91 @@ class StageAndQualityTests(unittest.TestCase):
             self.assertEqual(recovered["status"], "done")
             self.assertEqual(first["question_authoring"],
                              recovered["question_authoring"])
+
+    def test_single_candidate_batch_keeps_all_valid_without_refill(self):
+        args = args_from_config(load_config(DEFAULT_CONFIG))
+        with tempfile.TemporaryDirectory() as td:
+            args.output_dir = Path(td) / "fixed_candidates"
+            args.target = 6
+            args.macro_first_v2_share = 0  # deterministic lightweight fixture
+            args.no_progress = True
+            records = [{
+                "record_id": f"fixed-pool-{i}",
+                "topic": f"Fictional Collection {i}",
+                "domain_hint": "science",
+                "source_modalities": ["image", "text", "table"],
+            } for i in range(6)]
+            submitted_scenarios, submitted_questions = [], []
+
+            def scenario_author(specification, **_):
+                submitted_scenarios.append(specification["task_id"])
+                row = copy.deepcopy(specification)
+                row["scenario_authoring"] = {
+                    "status": (
+                        "fallback" if specification["ordinal"] == 1
+                        else "accepted"
+                    ),
+                    "attempts": 1,
+                }
+                return row, {}
+
+            def question_author(specification, **_):
+                submitted_questions.append(specification["task_id"])
+                return reference_question(specification), {
+                    "status": (
+                        "fallback" if specification["ordinal"] == 3
+                        else "accepted"
+                    ),
+                    "attempts": 1,
+                }
+
+            with patch(
+                "envir.generate_question.sources.load_scenario_seeds",
+                return_value=(records, {}),
+            ), patch(
+                "envir.generate_question.stages._scenario_clients",
+                return_value=(object(), object()),
+            ), patch(
+                "envir.generate_question.stages._llm_clients",
+                return_value=(object(), object()),
+            ), patch(
+                "envir.generate_question.scenario.enrich_one",
+                side_effect=scenario_author,
+            ), patch(
+                "envir.generate_question.stages.naturalize_one",
+                side_effect=question_author,
+            ):
+                result = generate_questions(args)
+
+            # Exactly six initial candidates were reviewed; no candidate
+            # replacement after either rejection and no difficulty quota gate.
+            self.assertEqual(len(submitted_scenarios), 6)
+            self.assertEqual(len(submitted_questions), 5)
+            self.assertEqual(result["attempted"], 6)
+            self.assertEqual(result["generated"], 4)
+            self.assertEqual(result["accepted"], 4)
+            self.assertEqual(result["rejected"], 2)
+            self.assertEqual(result["failed_scenario"], 1)
+            self.assertEqual(result["failed_question"], 1)
+            self.assertAlmostEqual(result["acceptance_rate"], 4 / 6, places=4)
+            self.assertEqual(result["status"], "done")
+            self.assertEqual(
+                result["selection_policy"],
+                "fixed_initial_candidates_no_refill_no_quota_filter",
+            )
+            self.assertFalse((args.output_dir / "rounds").exists())
+            self.assertEqual(
+                len(read_jsonl(args.output_dir / "questions" / "scenes.jsonl")),
+                4,
+            )
+            self.assertEqual(
+                len(read_jsonl(args.output_dir / "constructed" / "failed.jsonl")),
+                1,
+            )
+            self.assertEqual(
+                len(read_jsonl(args.output_dir / "questions" / "failed.jsonl")),
+                1,
+            )
 
     def test_scenario_fallback_not_a_success(self):
         args = args_from_config(load_config(DEFAULT_CONFIG))

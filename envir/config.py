@@ -13,8 +13,7 @@ SECTIONS = {
     "input": {"mmqa", "max_records"},
     "generation": {"output_dir", "target", "seed", "difficulty_mix",
                    "overwrite", "no_progress", "flush_every",
-                   "macro_first_v2_share", "quota_refill",
-                   "max_candidate_multiplier"},
+                   "macro_first_v2_share"},
     "scenario": {"api_base", "model", "critic_api_base", "critic_model",
                  "api_key_env", "critic_api_key_env", "workers",
                  "max_revisions", "timeout"},
@@ -85,15 +84,6 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     flush_every = generation.get("flush_every", 1)
     if type(flush_every) is not int or flush_every < 1:
         raise ValueError("generation.flush_every must be a positive integer")
-    # Deprecated generation experiments are no longer part of the
-    # supported public YAML; frozen historical scenes remain replayable.
-    quota_refill = generation.get("quota_refill", False)
-    if type(quota_refill) is not bool:
-        raise ValueError("generation.quota_refill must be a boolean")
-    max_candidate_multiplier = generation.get("max_candidate_multiplier", 3)
-    if (type(max_candidate_multiplier) is not int
-            or not 1 <= max_candidate_multiplier <= 10):
-        raise ValueError("generation.max_candidate_multiplier must be 1..10")
     macro_first_v2_share = generation.get("macro_first_v2_share", 0)
     if type(macro_first_v2_share) is not int or not 0 <= macro_first_v2_share <= 100:
         raise ValueError("generation.macro_first_v2_share must be 0..100")
@@ -109,8 +99,6 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         flush_every=flush_every,
         # Legacy share flags intentionally omitted from public args.
         macro_first_v2_share=macro_first_v2_share,
-        quota_refill=quota_refill,
-        max_candidate_multiplier=max_candidate_multiplier,
         no_progress=no_progress or bool(generation.get("no_progress", False)),
         scenario_api_base=scenario["api_base"],
         scenario_model=scenario["model"],
