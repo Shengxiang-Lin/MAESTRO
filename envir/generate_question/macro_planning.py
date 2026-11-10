@@ -92,7 +92,7 @@ DOMAIN_GOALS = {
                     ("survey_year", "int")),
 }
 
-def domain_hint(topic: str, hint: str) -> str:
+def classify_domain_from_keywords(topic: str, hint: str) -> str:
     blob = (topic + " " + hint).lower()
     aliases = {
         "sports": ("football", "soccer", "league", "nba", "tennis",
@@ -114,11 +114,11 @@ def domain_hint(topic: str, hint: str) -> str:
     return "general"
 
 
-def domain_hint_v2(topic: str, hint: str) -> str:
+def classify_domain_from_metadata(topic: str, hint: str) -> str:
     """Use reliable MMQA category metadata before sparse name keywords.
 
     This only applies to newly versioned semantic-contract scenes, so
-    previously frozen V2 plans continue using domain_hint unchanged.
+    previously frozen V2 plans continue using classify_domain_from_keywords unchanged.
     Avoid speculative culture/civic remaps without a recognizable subject.
     """
     value = str(hint or "").strip().lower()
@@ -126,13 +126,13 @@ def domain_hint_v2(topic: str, hint: str) -> str:
         return "sports"
     if value == "commerce":
         return "business"
-    return domain_hint(topic, hint)
+    return classify_domain_from_keywords(topic, hint)
 
 
-def domain_hint_v3(topic: str, hint: str) -> str:
+def classify_domain_from_taxonomy(topic: str, hint: str) -> str:
     """More faithful domain taxonomy for NEW information-contract scenes.
 
-    Keep domain_hint_v2 unchanged: the older semantic V2 scenes must replay
+    Keep classify_domain_from_metadata unchanged: the older semantic V2 scenes must replay
     against their original topic/Goal mapping.
     """
     value = str(hint or "").strip().lower()
@@ -142,15 +142,15 @@ def domain_hint_v3(topic: str, hint: str) -> str:
         "civic": "civic", "environment": "environment",
         "science": "science", "sports": "sports",
     }
-    named = domain_hint(topic, "")
+    named = classify_domain_from_keywords(topic, "")
     return named if named != "general" else by_metadata.get(
-        value, domain_hint_v2(topic, hint)
+        value, classify_domain_from_metadata(topic, hint)
     )
 
 
-def domain_hint_v4(topic: str, hint: str, cue: str | None) -> str:
+def classify_domain_from_explicit_cue(topic: str, hint: str, cue: str | None) -> str:
     """Prefer unambiguous topic-category cues over unrelated broad metadata."""
-    return cue if cue in DOMAIN_GOALS else domain_hint_v3(topic, hint)
+    return cue if cue in DOMAIN_GOALS else classify_domain_from_taxonomy(topic, hint)
 
 
 def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
@@ -447,8 +447,8 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
               difficulty: str, topic: str, record_id: str, version: str) -> dict:
     from .topic_domain import infer_topic_domain, TOPIC_DOMAIN_VERSION
     category_cue = infer_topic_domain(seed_record)
-    domain = domain_hint_v4(
-        topic, str(seed_record.get("domain_hint", "")), category_cue
+    domain = classify_domain_from_explicit_cue(
+        topic, str(seed_record.get("classify_domain_from_keywords", "")), category_cue
     )
     plan, roles = sample_macro_plan(
         seed=run_seed, ordinal=ordinal, record_id=record_id, topic=topic,
@@ -485,7 +485,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
             "original_question_reused": False,
             "original_answer_reused": False,
             "original_media_used": False,
-            "domain_hint": str(seed_record.get("domain_hint", "")),
+            "classify_domain_from_keywords": str(seed_record.get("classify_domain_from_keywords", "")),
             "topic_domain_cue": category_cue,
         },
         "difficulty_target": difficulty,
@@ -560,17 +560,17 @@ def validate_spec(spec: dict) -> list[str]:
             topic=spec["scenario"]["topic"],
             difficulty=spec["difficulty_target"],
             domain=(
-                domain_hint_v4(
+                classify_domain_from_explicit_cue(
                     spec["scenario"]["topic"],
-                    spec["source_anchor"].get("domain_hint", ""),
+                    spec["source_anchor"].get("classify_domain_from_keywords", ""),
                     spec["source_anchor"].get("topic_domain_cue"),
                 ) if (spec.get("topic_domain_version")
                       and spec.get("scene_realism_version")) else
-                (domain_hint_v3 if spec.get("macro_information_necessity_version")
-                 else domain_hint_v2 if spec.get("semantic_evidence_contract_version")
-                 else domain_hint)(
+                (classify_domain_from_taxonomy if spec.get("macro_information_necessity_version")
+                 else classify_domain_from_metadata if spec.get("semantic_evidence_contract_version")
+                 else classify_domain_from_keywords)(
                     spec["scenario"]["topic"],
-                    spec["source_anchor"].get("domain_hint", ""),
+                    spec["source_anchor"].get("classify_domain_from_keywords", ""),
                 )
             ),
             information_need=bool(spec.get("macro_information_necessity_version")),

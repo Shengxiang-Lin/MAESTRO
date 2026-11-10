@@ -94,7 +94,7 @@ class InformationNecessityTests(unittest.TestCase):
     def test_old_semantic_v2_scene_replays_without_changed_world(self):
         spec = sample_of("multimodal_event")
         old = copy.deepcopy(spec)
-        from envir.generate_question.macro_first_v2 import sample_macro_plan
+        from envir.generate_question.macro_planning import sample_macro_plan
         old.pop("scene_realism_version")
         old.pop("goal_resolution_version", None)
         old.pop("evidence_tool_contract_version", None)
@@ -167,7 +167,7 @@ class InformationNecessityTests(unittest.TestCase):
         self.assertEqual(contract["requested_entities"], [])
 
     def test_domain_metadata_only_changes_new_versioned_scenes(self):
-        from envir.generate_question.macro_first_v2 import (
+        from envir.generate_question.macro_planning import (
             domain_hint_v2, domain_hint_v3,
         )
         self.assertEqual(domain_hint_v2("Swansea City", "sports"), "sports")

@@ -215,7 +215,7 @@ def enrich_one(spec: dict, *, author, critic,
     repair_history = []
     for attempt in range(max_revisions + 1):
         try:
-            from .v2_prompts import (
+            from .prompt_templates import (
                 SCENARIO_AUTHOR, SCENARIO_CRITIC, SCENARIO_AUTHOR_SCHEMA_LOCKED,
             )
             v2 = spec.get("reasoning_pattern") == "macro_first_v2"

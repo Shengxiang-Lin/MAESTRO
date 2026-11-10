@@ -188,7 +188,7 @@ class SemanticEvidenceTests(unittest.TestCase):
                       validate_replay(fake)["issues"])
 
     def test_domain_hint_metadata_changes_only_versioned_goals(self):
-        from envir.generate_question.macro_first_v2 import (
+        from envir.generate_question.macro_planning import (
             domain_hint, domain_hint_v2,
         )
         self.assertEqual(domain_hint("Sports reference collection", "sports"), "general")
@@ -204,7 +204,7 @@ class SemanticEvidenceTests(unittest.TestCase):
         spec.pop("scene_realism_version", None)
         spec.pop("goal_resolution_version", None)
         spec.pop("evidence_tool_contract_version", None)
-        from envir.generate_question.macro_first_v2 import (
+        from envir.generate_question.macro_planning import (
             sample_macro_plan, domain_hint,
         )
         old_plan, old_roles = sample_macro_plan(
@@ -244,7 +244,7 @@ class SemanticEvidenceTests(unittest.TestCase):
         spec.pop("scene_realism_version", None)
         spec.pop("goal_resolution_version", None)
         spec.pop("evidence_tool_contract_version", None)
-        from envir.generate_question.macro_first_v2 import (
+        from envir.generate_question.macro_planning import (
             sample_macro_plan, domain_hint,
         )
         old_plan, old_roles = sample_macro_plan(

@@ -15,11 +15,11 @@ from envir.generate_question.evidence_tools import (
     tools_from_primitive_steps, validate_scene_evidence_tools,
 )
 from envir.implement_subtask.realize import realize_scene
-from envir.stage3.o1_compat import o1_prompt, source_catalog
-from envir.stage3.action_author import (
+from envir.main_trajectories.o1_compat import o1_prompt, source_catalog
+from envir.main_trajectories.action_author import (
     _assignment, author_delegate_action, proposed_template_action,
 )
-from envir.stage3.trajectory_builder import build_episode
+from envir.main_trajectories.trajectory_builder import build_episode
 
 
 def fresh_scene(seed=0):
@@ -336,7 +336,7 @@ class FrozenO1EvidenceTests(unittest.TestCase):
             build_episode(scene, reports)
 
     def test_v1_contract_remains_regenerable(self):
-        from envir.generate_question.macro_first_v2 import sample_macro_plan
+        from envir.generate_question.macro_planning import sample_macro_plan
         from envir.generate_question.evidence_tools import (
             LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION,
         )

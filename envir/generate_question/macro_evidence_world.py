@@ -10,7 +10,7 @@ import copy
 import random
 
 from envir.schema import digest
-from .macro_first_v2 import validate_spec
+from .macro_planning import validate_spec
 
 
 def _goal_value(field: str, kind: str, i: int, rng: random.Random):

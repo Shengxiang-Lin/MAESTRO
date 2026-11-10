@@ -83,7 +83,7 @@ class GoalResolutionTests(unittest.TestCase):
             goal_values("comparison", True, 3)
 
     def test_unmarked_historical_plan_stays_direct(self):
-        from envir.generate_question.macro_first_v2 import sample_macro_plan
+        from envir.generate_question.macro_planning import sample_macro_plan
         old = case(7)
         old.pop("goal_resolution_version")
         plan, roles = sample_macro_plan(

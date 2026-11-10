@@ -1,4 +1,4 @@
-# MAESTRO / Stage 1 — Generate Question.
+# Question construction, frozen evidence DAG, and natural-language Question review.
 # Paths are relative to the repository root; secrets must be environment vars.
 version: 1
 
@@ -10,7 +10,7 @@ generation:
   output_dir: envir/data/maestro_current_100
   target: 100
   seed: 17
-  macro_first_v2_share: 100  # current Macro-first generation (Easy uses approval baseline)
+  macro_planning_share: 100  # use the current Macro planning grammar for medium/hard tasks
   difficulty_mix: [17, 33, 50]  # Initial candidate mix only; never an accepted quota
   overwrite: false
   flush_every: 1   # persist every completed LLM decision (safe to resume)

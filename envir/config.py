@@ -1,4 +1,4 @@
-"""Configuration for the only supported MAESTRO Stage-1 question generator."""
+"""YAML settings for question generation and deterministic Replay."""
 from __future__ import annotations
 
 import argparse
@@ -7,13 +7,13 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = Path(__file__).with_name("config.yaml")
+DEFAULT_CONFIG = Path(__file__).with_name("configs") / "questions.yaml"
 
 SECTIONS = {
     "input": {"mmqa", "max_records"},
     "generation": {"output_dir", "target", "seed", "difficulty_mix",
                    "overwrite", "no_progress", "flush_every",
-                   "macro_first_v2_share"},
+                   "macro_planning_share", "macro_first_v2_share"},
     "scenario": {"api_base", "model", "critic_api_base", "critic_model",
                  "api_key_env", "critic_api_key_env", "workers",
                  "max_revisions", "timeout"},
@@ -84,7 +84,11 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     flush_every = generation.get("flush_every", 1)
     if type(flush_every) is not int or flush_every < 1:
         raise ValueError("generation.flush_every must be a positive integer")
-    macro_first_v2_share = generation.get("macro_first_v2_share", 0)
+    if "macro_planning_share" in generation and "macro_first_v2_share" in generation:
+        raise ValueError("Specify only one of macro_planning_share or legacy macro_first_v2_share")
+    macro_first_v2_share = generation.get(
+        "macro_planning_share", generation.get("macro_first_v2_share", 0)
+    )
     if type(macro_first_v2_share) is not int or not 0 <= macro_first_v2_share <= 100:
         raise ValueError("generation.macro_first_v2_share must be 0..100")
     directory = output_dir or generation.get("output_dir")

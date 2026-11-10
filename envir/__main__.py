@@ -1,4 +1,4 @@
-"""MAESTRO Stage 1: generate and validate MacroGraph-grounded Questions."""
+"""MAESTRO configuration-driven evidence and orchestration workflows."""
 from __future__ import annotations
 
 import argparse
@@ -15,12 +15,17 @@ from .implement_subtask.config import (
 from .implement_subtask.pipeline import materialize_subtasks
 from .implement_subtask.naturalize import naturalize_subtasks
 from .implement_subtask.combined import generate_subagent_reports
+from .main_trajectories.config import (
+    DEFAULT_CONFIG as TRAJECTORY_CONFIG,
+    load_config as load_trajectory_config,
+    generate_from_config,
+)
 
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
         prog="python -m envir",
-        description="Stage 1: construct Macro TaskGraphs and generate aligned Questions",
+        description="Generate Questions, trusted Sub-Agent reports and Main trajectories",
     )
     sub = root.add_subparsers(dest="command", required=True)
     generate = sub.add_parser("generate-questions",
@@ -30,8 +35,9 @@ def parser() -> argparse.ArgumentParser:
                           help="Override generation.output_dir from YAML")
     generate.add_argument("--target", type=int,
                           help="Override generation.target from YAML")
-    generate.add_argument("--macro-first-v2-share", type=int,
-                          help="Percent of medium/hard scenes using diverse goals and per-Macro evidence planning")
+    generate.add_argument("--macro-planning-share", "--macro-first-v2-share",
+                          dest="macro_first_v2_share", type=int,
+                          help="Percent of medium/hard tasks using the current Macro planning grammar")
     generate.add_argument("--no-progress", action="store_true")
     generate.add_argument("--verbose-progress", action="store_true",
                           help="Also show auxiliary validation and Replay audit progress")
@@ -80,6 +86,20 @@ def parser() -> argparse.ArgumentParser:
         "--reuse-from", type=Path,
         help="Completed prior reporting directory: reuse accepted Macros, retry only rejected ones in a NEW output folder",
     )
+    trajectories = sub.add_parser(
+        "generate-main-turns",
+        help="Generate trusted Main-Agent decision trajectories",
+    )
+    trajectories.add_argument("--config", type=Path, default=TRAJECTORY_CONFIG)
+    trajectories.add_argument("--scenes", type=Path)
+    trajectories.add_argument("--reports", type=Path)
+    trajectories.add_argument("--output-dir", type=Path)
+    trajectories.add_argument("--max-scenes", type=int)
+    trajectories.add_argument("--workers", type=int)
+    trajectories.add_argument("--mode", choices=("llm", "template"))
+    trajectories.add_argument("--overwrite", action="store_true")
+    trajectories.add_argument("--no-progress", action="store_true")
+    trajectories.add_argument("--verbose-progress", action="store_true")
     return root
 
 
@@ -114,7 +134,8 @@ def main(argv: list[str] | None = None) -> int:
             options["flush_every"] = cli.flush_every
         if cli.reuse_from is not None:
             options["reuse_from"] = cli.reuse_from
-        if cli.scenes is not None:
+        if (cli.scenes is not None or
+                (cli.source_subtasks is None and cli.source_scene_index is None)):
             if (cli.source_subtasks is not None
                     or cli.source_scene_index is not None):
                 p.error(
@@ -123,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             impl = load_stage2_config(cli.config)
             result = generate_subagent_reports(
-                scenes_path=cli.scenes,
+                scenes_path=cli.scenes or impl["scenes_path"],
                 output_dir=options["output_dir"],
                 reporting_options=options,
                 evidence_limit=impl["evidence_limit"],
@@ -133,8 +154,32 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             result = naturalize_subtasks(**options)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(f"subagent reports: {result['status']} | details: "
+              f"{options['output_dir']}/summary.json")
         return 0 if result["status"] in {"done", "partial"} else 1
+    if cli.command == "generate-main-turns":
+        overrides = {}
+        for cli_name, option_name in (
+            ("scenes", "scenes_path"),
+            ("reports", "reports_path"),
+            ("output_dir", "output_dir"),
+            ("max_scenes", "max_scenes"),
+            ("workers", "workers"),
+            ("mode", "mode"),
+        ):
+            value = getattr(cli, cli_name)
+            if value is not None:
+                overrides[option_name] = value
+        for flag in ("overwrite", "no_progress", "verbose_progress"):
+            if getattr(cli, flag):
+                overrides[flag] = True
+        summary = generate_from_config(cli.config, **overrides)
+        target = overrides.get("output_dir") or load_trajectory_config(
+            cli.config
+        )["output_dir"]
+        print(f"main trajectories: {summary['status']} | details: "
+              f"{target}/summary.json")
+        return 0 if summary["status"] in {"done", "partial"} else 1
     config = load_config(cli.config)
     if cli.command == "generate-questions":
         options = args_from_config(

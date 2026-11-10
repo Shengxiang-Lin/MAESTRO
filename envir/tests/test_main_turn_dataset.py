@@ -13,10 +13,10 @@ from envir.generate_question.spec import make_spec
 from envir.generate_question.question import reference_question
 from envir.generate_question.quality import compile_and_validate
 from envir.implement_subtask.realize import realize_scene
-from envir.stage3.trajectory_builder import build_episode
-from envir.stage3.generate_turns import generate_turns
-from envir.stage3.o1_compat import o1_prompt, o1_history, o1_prompt_from_turn
-from envir.stage3.action_author import action_issues
+from envir.main_trajectories.trajectory_builder import build_episode
+from envir.main_trajectories.generate_turns import generate_turns
+from envir.main_trajectories.o1_compat import o1_prompt, o1_history, o1_prompt_from_turn
+from envir.main_trajectories.action_author import action_issues
 
 
 def fixture(i=0):
@@ -264,10 +264,10 @@ class MainTurnDatasetTests(unittest.TestCase):
             build_episode(scene, altered)
 
     def test_dependent_instruction_must_reuse_visible_upstream_identity(self):
-        from envir.stage3.action_author import (
+        from envir.main_trajectories.action_author import (
             _assignment, proposed_template_action,
         )
-        from envir.stage3.o1_compat import source_catalog
+        from envir.main_trajectories.o1_compat import source_catalog
         scene = fixture(0)
         graph = scene["macro_graph"]
         target = next(t for t in graph["tasks"] if t["depends_on"])
@@ -371,7 +371,7 @@ class MainTurnDatasetTests(unittest.TestCase):
 
 
     def test_optional_export_rebuilds_exact_full_prompts_and_checks_identity(self):
-        from envir.stage3.rebuild_prompts import export_full_prompts
+        from envir.main_trajectories.rebuild_prompts import export_full_prompts
         from hashlib import sha256
 
         scene = fixture(9)
@@ -483,7 +483,7 @@ class MainTurnDatasetTests(unittest.TestCase):
                 "scenes_path": scenes_path, "reports_path": reports_path,
                 "output_dir": root / "out", "workers": 1,
             }
-            with patch("envir.stage3.generate_turns.tqdm", RecordingBar):
+            with patch("envir.main_trajectories.generate_turns.tqdm", RecordingBar):
                 summary = generate_turns(**kwargs)
                 resumed = generate_turns(**kwargs)
 

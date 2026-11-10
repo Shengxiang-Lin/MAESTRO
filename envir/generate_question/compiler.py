@@ -391,7 +391,7 @@ def compile_frozen_macro_plan(spec: dict, program: dict,
     primitive dependency fails closed.
     """
     if spec.get("reasoning_pattern") == "macro_first_v2":
-        from .macro_first_v2 import (
+        from .macro_planning import (
             validate_spec as validate_macro_first_spec,
             compile_macro_solvers,
         )

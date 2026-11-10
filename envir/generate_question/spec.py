@@ -111,7 +111,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     if (difficulty in {"medium", "hard"} and
             int(digest(run_seed, ordinal, "macro-first-v2-mix")[:8], 16) % 100
             < macro_first_v2_share):
-        from .macro_first_v2 import make_spec as make_macro_first_v2_spec
+        from .macro_planning import make_spec as make_macro_first_v2_spec
         return make_macro_first_v2_spec(
             seed_record=seed_record, ordinal=ordinal, run_seed=run_seed,
             difficulty=difficulty, topic=topic, record_id=record_id,
@@ -461,7 +461,7 @@ def spec_issues(spec: dict) -> list[str]:
         ]:
             errors.append("clue_chain_acquisition_path_mismatch")
     if spec.get("reasoning_pattern") == "macro_first_v2":
-        from .macro_first_v2 import validate_spec
+        from .macro_planning import validate_spec
         errors.extend(validate_spec(spec))
     elif macro_first:
         from .macro_first import validate_macro_first_spec
