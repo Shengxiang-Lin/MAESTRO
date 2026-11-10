@@ -24,6 +24,7 @@ _FIELDS = {
     "model": {
         "author_api_base", "author_model", "critic_api_base",
         "critic_model", "api_key_env", "temperature",
+        "author_max_tokens", "critic_max_tokens",
     },
 }
 
@@ -79,6 +80,8 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
         "critic_model": models.get("critic_model"),
         "api_key_env": models.get("api_key_env", "OPENAI_API_KEY"),
         "temperature": models.get("temperature", 0.4),
+        "author_max_tokens": models.get("author_max_tokens", 2800),
+        "critic_max_tokens": models.get("critic_max_tokens", 1200),
     }
     if config["mode"] not in {"llm", "template"}:
         raise ValueError("trajectory_mode_must_be_llm_or_template")
@@ -105,6 +108,9 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
     if (type(temperature) not in (int, float)
             or not 0 <= temperature <= 2):
         raise ValueError("trajectory_invalid_temperature")
+    for key in ("author_max_tokens", "critic_max_tokens"):
+        if type(config[key]) is not int or config[key] < 1:
+            raise ValueError("trajectory_invalid_" + key)
     if (config["api_key_env"] is not None
             and (not isinstance(config["api_key_env"], str)
                  or not config["api_key_env"].strip())):
@@ -139,12 +145,14 @@ def generate_from_config(path: str | Path = DEFAULT_CONFIG,
         author = OpenAICompatibleBackend(
             base_url=options["author_api_base"],
             model=options["author_model"], api_key=api_key,
-            temperature=options["temperature"], max_tokens=2800,
+            temperature=options["temperature"],
+            max_tokens=options["author_max_tokens"],
         )
         critic = OpenAICompatibleBackend(
             base_url=options["critic_api_base"] or options["author_api_base"],
             model=options["critic_model"] or options["author_model"],
-            api_key=api_key, temperature=0.0, max_tokens=1200,
+            api_key=api_key, temperature=0.0,
+            max_tokens=options["critic_max_tokens"],
         )
     return generate_turns(
         scenes_path=options["scenes_path"],
