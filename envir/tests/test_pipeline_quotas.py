@@ -105,6 +105,9 @@ class AcceptedQuotaTests(unittest.TestCase):
                     })
                 write_jsonl(batch.output_dir / "questions" / "scenes.jsonl",
                             rows)
+                write_jsonl(batch.output_dir / "constructed" / "scenes.jsonl",
+                            [{k: v for k, v in row.items()
+                              if k != "question_authoring"} for row in rows])
                 return {
                     "attempted": batch.target, "generated": len(rows),
                     "scenario_authoring": {"accepted": len(rows)},
