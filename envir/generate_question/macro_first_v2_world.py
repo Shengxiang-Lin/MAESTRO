@@ -76,8 +76,14 @@ def generate_world(spec: dict) -> dict:
         # i=2 matches the second cue but misses the visual cue.
         color = clues["emblem_color"] if i in (0, 1) else other_color
         motif = clues["emblem_shape"] if i in (0, 2) else other_motif
-        action = clues["scene_action"] if i in (0, 1, 3) else other_action
-        timestamp = clues["time_threshold_ms"] + 10000 if i in (0, 1, 3) else 20000
+        action = clues["scene_action"] if i in (0, 1) else other_action
+        timestamp = clues["time_threshold_ms"] + 10000 if i in (0, 1) else 20000
+        if (plan["pattern"] == "serial_identity"
+                and clues["visual_modality"] == "video" and i == 1):
+            timestamp = clues["time_threshold_ms"] - 10000
+        if plan["pattern"] == "multimodal_event" and i == 3:
+            action = clues["scene_action"]
+            timestamp = clues["time_threshold_ms"] + 10000
         # For multimodal_event, candidate 1 has both cues but wrong ordering.
         if plan["pattern"] == "multimodal_event":
             motif = clues["emblem_shape"] if i in (0, 1, 2) else other_motif
