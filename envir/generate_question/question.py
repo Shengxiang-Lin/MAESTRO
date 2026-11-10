@@ -42,7 +42,7 @@ def _one_output_v2_question(spec: dict) -> str:
     if plan["pattern"] == "disputed_reports":
         return (
             f"Two independent {topic} records disagree about the year "
-            f"reported for an {item}. For the disputed {item}, "
+            f"reported for one {item}. For the disputed {item}, "
             f"what is the confirmed {goal}?"
         )
     if plan["pattern"] == "multimodal_event":
@@ -74,7 +74,7 @@ def _one_output_v2_question(spec: dict) -> str:
             f"what is the confirmed {goal}?"
         )
     return (
-        f"In the {topic} materials, {visual} identifies an {item}. "
+        f"In the {topic} materials, {visual} identifies one {item}. "
         f"For the matching item, what is the confirmed {goal}?"
     )
 
