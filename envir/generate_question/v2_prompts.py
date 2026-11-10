@@ -168,3 +168,22 @@ observations, written notes and keyed indexes as applicable, without
 claiming to have actually watched media or opened a public website.
 No source_titles field is needed; any such field will be discarded.
 """
+
+
+QUESTION_AUTHOR_SINGLE_SLOT = QUESTION_AUTHOR + """
+ONE-OUTPUT REQUIREMENT (V3): The Gold Answer provides exactly one
+typed field. If identity has to be found internally, phrase identity
+matching as a subordinate condition, not as a second answer requested
+from the user. Prefer 'For the item matching [clues], what is the
+confirmed [Goal]?' or 'What is the confirmed [Goal] of the event
+identified by [clues]?'.
+
+NEVER ask 'which case ... and what is the status?', 'which episode ...
+and what production year?', 'name the item and report its year', or
+any coordinated output list. The subject can be *internally* identified,
+but the question must request ONLY the final typed Goal. Keep the true
+source modalities and clues, and avoid 'case' or 'archive' boilerplate
+unless appropriate to the selected domain. A domain-specific scene is
+not a license to invent historical facts or new source requirements.
+Keep the exact required source conditions while varying surface syntax.
+"""
