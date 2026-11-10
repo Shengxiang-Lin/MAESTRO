@@ -463,7 +463,18 @@ def compile_frozen_macro_plan(spec: dict, program: dict,
             upstream = available[parent]["outputs"]["typed_relation"]
             if list(trace[nid]["schema"]) != upstream:
                 raise ProgramError("macro_input_type_contract_mismatch")
-            if list(macro["input_contract"][parent]) != upstream:
+            # Frozen typed relation contracts are mappings; JSON object
+            # ordering is not meaningful. Verify *both* the field names and
+            # their declared types against the frozen parent output schema,
+            # not only a list of ordered keys.
+            declared = macro["input_contract"][parent]
+            frozen_parent = next(
+                prior["output_schema"] for prior in plan["macro_tasks"]
+                if prior["macro_id"] == parent
+            )
+            if (not isinstance(declared, dict)
+                    or declared != frozen_parent
+                    or set(declared) != set(upstream)):
                 raise ProgramError("macro_declared_input_type_mismatch")
         chain = [dict(by_node[nid]) for nid in ids]
         tool_fields = (
