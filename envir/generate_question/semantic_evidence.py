@@ -81,7 +81,10 @@ def has_semantic_contract(spec: dict) -> bool:
     )
 
 
-def compile_semantic_contract(spec: dict, *, program: dict | None = None) -> dict:
+def compile_semantic_contract(
+    spec: dict, *, program: dict | None = None,
+    retrospective: bool = False,
+) -> dict:
     """Build one reproducible, non-LLM semantic contract from frozen Solver.
 
     The plan provides the typed Goal; actual primitive predicates and
@@ -89,7 +92,9 @@ def compile_semantic_contract(spec: dict, *, program: dict | None = None) -> dic
     and the frozen source schemas, not from the LLM's scenario narration.
     """
     if not has_semantic_contract(spec):
-        raise ValueError("semantic_evidence_contract_not_enabled")
+        if not (retrospective
+                and spec.get("reasoning_pattern") == "macro_first_v2"):
+            raise ValueError("semantic_evidence_contract_not_enabled")
     if program is None:
         from .macro_first_v2 import compile_macro_solvers
         program = compile_macro_solvers(spec)
