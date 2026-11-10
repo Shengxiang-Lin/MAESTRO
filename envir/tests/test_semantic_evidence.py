@@ -196,6 +196,7 @@ class SemanticEvidenceTests(unittest.TestCase):
         spec.pop("semantic_evidence_contract_version")
         spec.pop("macro_information_necessity_version", None)
         spec.pop("scene_realism_version", None)
+        spec.pop("goal_resolution_version", None)
         from envir.generate_question.macro_first_v2 import (
             sample_macro_plan, domain_hint,
         )
@@ -234,6 +235,7 @@ class SemanticEvidenceTests(unittest.TestCase):
         spec.pop("semantic_evidence_contract_version")
         spec.pop("macro_information_necessity_version", None)
         spec.pop("scene_realism_version", None)
+        spec.pop("goal_resolution_version", None)
         from envir.generate_question.macro_first_v2 import (
             sample_macro_plan, domain_hint,
         )
