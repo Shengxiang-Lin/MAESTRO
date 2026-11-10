@@ -73,6 +73,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     graph_modes = Counter()
     macro_first_modes = Counter()
     macro_v2_modes = Counter()
+    macro_v2_resolution_modes = Counter()
     macro_v2_goals = Counter()
     macro_v2_evidence_sizes = []
     macro_v2_local_source_counts = []
