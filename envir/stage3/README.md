@@ -29,6 +29,7 @@ python -m envir.stage3.generate_turns \
   --reports envir/data/maestro_current_reports_100/subtasks.jsonl \
   --output-dir envir/data/maestro_main_turns_20 \
   --max-scenes 20 \
+  --workers 4 \
   --mode llm \
   --author-api-base http://127.0.0.1:8807/v1 \
   --author-model local-qwen3.5-9b \
@@ -57,9 +58,18 @@ A single output directory contains:
 | `journal/000000.json` | Atomic complete-scene checkpoint (published or rejected) |
 | `summary.json` | Round counts, completed/rejected scenes, delegation versus completion counts |
 
-The default command displays two nested `tqdm` progress bars: overall
-Scenes and Main decision rounds for the active Scene. Add `--no-progress`
-for batch logs or scripts.
+By default Stage 3 uses **4 concurrent Scene workers** (`--workers 4`).
+Each worker generates its assigned Question's Main rounds **serially**, so
+prior Sub-Agent results still become visible only in later rounds. Author
+and Critic requests for *different* Scenes may overlap on the same local
+model server. Reduce to `--workers 1` if the serving endpoint cannot
+handle concurrent requests, or increase it within `1..64` if capacity
+permits. Worker count affects throughput only and can change on resume
+without invalidating existing Scene/round checkpoints.
+
+The CLI displays one global Scene `tqdm` bar plus one reusable Main-round
+bar per worker (four with the default setting). Add `--no-progress` for
+batch logs and scripts.
 
 **Incremental persistence:** after each accepted Main decision (including
 `complete`), Stage 3 atomically writes a round checkpoint to
@@ -72,10 +82,13 @@ current DAG wave and assignment constraints before reuse.
 The published `main_turns.jsonl`, `episodes.jsonl` and private
 `teacher_alignment.jsonl` are **incrementally appended only when the
 whole Scene succeeds**. An incomplete Episode is never part of the
-training set. The atomic `journal/<scene-index>.json` remains the
-publication source of truth: a restart first rebuilds the JSONL outputs
-from all complete scene journals, repairing an interrupted append without
-duplicate samples.
+training set. Workers write to separate round/Scene journal paths;
+the coordinator alone appends the shared JSONL files, so workers never
+interleave records. During generation, completed Scenes can be appended
+in *completion order*. At successful shutdown or restart, the coordinator
+rebuilds the canonical JSONL files in original Scene order from the atomic
+`journal/<scene-index>.json` records. This also repairs interrupted
+appends without duplicate samples.
 
 To resume, rerun the **exact same command**. The generation manifest
 locks source-file hashes, model parameters and relevant code. Use
