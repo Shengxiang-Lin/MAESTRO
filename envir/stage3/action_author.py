@@ -71,7 +71,8 @@ def _prior_context(
 
 
 def _assignment(target: dict, catalog: dict[str, dict],
-                delivered: dict[str, dict]) -> dict:
+                delivered: dict[str, dict], *,
+                model_alias: str = "model_1") -> dict:
     source_ids = list(target["source_ids"])
     output = ", ".join(target["outputs"]["typed_relation"])
     sources = [
@@ -110,7 +111,7 @@ def _assignment(target: dict, catalog: dict[str, dict],
     return {
         "target_instruction": instruction,
         "context": _prior_context(target, delivered),
-        "model": "model_1",
+        "model": model_alias,
         "tools": tools_for_sources(source_ids, catalog),
         "source_ids": source_ids,
         "output_fields": list(target["outputs"]["typed_relation"]),
