@@ -217,5 +217,160 @@ class FrozenO1EvidenceTests(unittest.TestCase):
             break
 
 
+    def test_all_web_routes_and_search_to_extract_url_handoff(self):
+        covered = set()
+        seen_search_extract = False
+        for seed in range(20):
+            scene = fresh_scene(seed)
+            sources = {x["source_id"]: x for x in scene["problem_spec"]["sources"]}
+            public = source_catalog(scene)
+            reports = {row["macro_task_id"]: row for row
+                       in realize_scene(scene)["macro_tasks"]}
+            self.assertEqual(validate_replay(scene)["status"], "valid")
+            for macro in scene["macro_graph"]["tasks"]:
+                trace = reports[macro["task_id"]]["trace_summary"]["steps"]
+                for step, observed in zip(macro["operator_chain"], trace):
+                    if "evidence_acquisition" not in step:
+                        continue
+                    source = sources[step["source_id"]]
+                    if source["modality"] not in {"text", "table"}:
+                        continue
+                    route = step["evidence_acquisition"]["strategy"]
+                    covered.add(route)
+                    calls = observed["simulated_tool_calls"]
+                    self.assertEqual(
+                        [call["tool"] for call in calls],
+                        [req["tool"] for req
+                         in step["evidence_acquisition"]["tool_steps"]],
+                    )
+                    self.assertTrue(all(
+                        call["tool_executed"] is False
+                        and call["execution_mode"] == "simulated_no_tool_execution"
+                        for call in calls
+                    ))
+                    self.assertEqual(
+                        macro["required_tools"],
+                        tools_from_primitive_steps(macro["operator_chain"]),
+                    )
+                    if route == "search_only":
+                        self.assertEqual(len(calls), 1)
+                        self.assertEqual(calls[0]["tool"], "GoogleSearchAction")
+                        self.assertNotIn("resource_url", public[step["source_id"]])
+                        self.assertEqual(
+                            calls[0]["observation"]["source_fact_refs"],
+                            observed["supporting_fact_refs"],
+                        )
+                    elif route == "direct_extract":
+                        self.assertEqual(len(calls), 1)
+                        self.assertEqual(calls[0]["tool"], "ExtractUrlContentAction")
+                        self.assertEqual(
+                            calls[0]["params"]["url"],
+                            public[step["source_id"]]["resource_url"],
+                        )
+                        self.assertIn("resource_url", scene["public"]["available_source_descriptions"][
+                            next(i for i, x in enumerate(
+                                scene["public"]["available_source_descriptions"]
+                            ) if x["source_id"] == step["source_id"])
+                        ])
+                    else:
+                        seen_search_extract = True
+                        self.assertEqual(route, "search_then_extract")
+                        self.assertEqual(
+                            [x["tool"] for x in calls],
+                            ["GoogleSearchAction", "ExtractUrlContentAction"],
+                        )
+                        self.assertNotIn("resource_url", public[step["source_id"]])
+                        discovered = calls[0]["observation"]["selected_result"]["url"]
+                        self.assertEqual(calls[1]["params"]["url"], discovered)
+                        self.assertEqual(calls[1]["depends_on"], [calls[0]["call_id"]])
+                        self.assertNotIn("source_fact_refs", calls[0]["observation"])
+                        self.assertEqual(
+                            calls[1]["observation"]["source_fact_refs"],
+                            observed["supporting_fact_refs"],
+                        )
+                        self.assertTrue(discovered.endswith(
+                            "/" + step["source_id"] + "/record"
+                        ))
+                        self.assertIn(".example.invalid/", discovered)
+        self.assertEqual(
+            covered, {"search_only", "direct_extract", "search_then_extract"}
+        )
+        self.assertTrue(seen_search_extract)
+
+    def test_direct_url_visible_but_unsearched_url_not_visible_to_main(self):
+        scene = next(
+            fresh_scene(seed) for seed in range(20)
+            if any(x.get("acquisition_route") == "search_then_extract"
+                   for x in fresh_scene(seed)["problem_spec"]["sources"])
+        )
+        public = scene["public"]["available_source_descriptions"]
+        public_catalog = source_catalog(scene)
+        prompt = o1_prompt(scene, [], attempt=1, max_attempts=16,
+                           sub_model="qwen3-8b")
+        for source in scene["problem_spec"]["sources"]:
+            url = source.get("simulated_page_url")
+            if source.get("acquisition_route") == "direct_extract":
+                self.assertEqual(public_catalog[source["source_id"]]["resource_url"],
+                                 url)
+                self.assertIn(url, prompt)
+            if source.get("acquisition_route") == "search_then_extract":
+                self.assertNotIn("resource_url", public_catalog[source["source_id"]])
+                self.assertNotIn(url, prompt)
+        self.assertTrue(public)
+
+    def test_tampered_search_extract_observation_rejected(self):
+        scene = next(
+            fresh_scene(seed) for seed in range(20)
+            if any(source.get("acquisition_route") == "search_then_extract"
+                   for source in fresh_scene(seed)["problem_spec"]["sources"])
+        )
+        reports = reviewed_rows(scene)
+        target = next(
+            step for record in reports
+            for step in record["trace_summary"]["steps"]
+            if len(step.get("simulated_tool_calls", [])) == 2
+        )
+        calls = target["simulated_tool_calls"]
+        calls[1]["params"]["url"] = "https://unrelated.example.invalid/"
+        with self.assertRaisesRegex(ValueError, "acquisition_tool_drift"):
+            build_episode(scene, reports)
+
+    def test_v1_contract_remains_regenerable(self):
+        from envir.generate_question.macro_first_v2 import sample_macro_plan
+        from envir.generate_question.evidence_tools import (
+            LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION,
+        )
+        base = fresh_scene(8)
+        spec = deepcopy(base["problem_spec"])
+        plan, roles = sample_macro_plan(
+            seed=spec["seed"], ordinal=spec["ordinal"],
+            record_id=spec["source_anchor"]["source_record_id"],
+            topic=spec["scenario"]["topic"],
+            difficulty=spec["difficulty_target"],
+            domain=spec["macro_plan"]["domain"],
+            information_need=True, realism_v3=True,
+            extended_grammar=True, goal_resolution_enabled=True,
+            evidence_tools_enabled=True,
+            evidence_tools_version=LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION,
+        )
+        spec["macro_plan"] = plan
+        spec["evidence_tool_contract_version"] = (
+            LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION
+        )
+        from envir.generate_question.source_title_contract import expected_source_titles
+        titles = expected_source_titles(spec)
+        for role in roles:
+            role["title"] = titles[role["source_id"]]
+        spec["sources"] = roles
+        legacy = compile_and_validate(spec, reference_question(spec))
+        self.assertEqual(validate_replay(legacy)["status"], "valid")
+        self.assertTrue(all(
+            "tool_steps" not in op["evidence_acquisition"]
+            for task in legacy["macro_graph"]["tasks"]
+            for op in task["operator_chain"]
+            if "evidence_acquisition" in op
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()
