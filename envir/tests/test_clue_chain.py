@@ -208,6 +208,18 @@ class ClueChainContracts(unittest.TestCase):
                                                    sources=sources))
         self.assertNotEqual(rerouted, scene["gold_answer"])
 
+    def test_quality_report_exposes_evidence_acquisition_metrics(self):
+        from envir.generate_question.pipeline import quality_report
+        scenes = [clue_scene(2), clue_scene(3)]
+        report = quality_report(scenes, no_progress=True)
+        self.assertEqual(report["status"], "valid")
+        metrics = report["evidence_acquisition"]
+        self.assertEqual(metrics["scenes_with_keyed_clue_chain"], 2)
+        self.assertEqual(metrics["keyed_lookup_count"], 4)
+        self.assertEqual(metrics["mean_evidence_acquisition_depth"], 2)
+        self.assertEqual(metrics["clue_counterfactual_pass_rate"], 1.0)
+        self.assertEqual(metrics["unauthorized_full_read_success_rate"], 0.0)
+
     def test_subtask_oracle_includes_keyed_evidence(self):
         scene = clue_scene()
         realized = realize_scene(scene)
