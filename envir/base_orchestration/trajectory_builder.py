@@ -551,7 +551,7 @@ def build_episode(
     return {
         "task_id": scene["task_id"],
         "question": scene["question"],
-        "format": "orchestra_o1_main_trajectory.v2",
+        "format": "orchestra_o1_main_trajectory.v3",
         "trajectory": trajectory,
         "main_decision_rounds": len(trajectory),
         "trusted_subagent_feedback": True,
