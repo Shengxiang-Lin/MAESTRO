@@ -13,6 +13,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 from typing import Any
 
 from envir.generate_question.quality import validate_replay
@@ -101,6 +102,19 @@ def _can_derive_local_answer(scene: dict, delivered: dict,
         row = delivered[parent]
         if len(row["answer"]) != 1:
             return False
+        # A value in a private typed Oracle row is NOT sufficient to
+        # justify a Main-local calculation: the Sub-Agent must actually
+        # have communicated that value in the preceding visible message.
+        visible_text = (
+            row["finish_result"]["result"] + " " +
+            row["finish_result"]["summary"]
+        )
+        for value in row["answer"][0].values():
+            if type(value) is int and not re.search(
+                r"(?<!\\d)" + re.escape(str(value)) + r"(?!\\d)",
+                visible_text,
+            ):
+                return False
         values.update(row["answer"][0])
     first, second = (
         ("metric_a", "metric_b") if kind == "comparison"
@@ -178,7 +192,10 @@ def build_episode(
     waves = graph["reference_waves"]
     if not waves:
         raise ValueError("stage3_empty_reference_schedule")
-    main_compute = _main_local_terminal(graph)
+    main_compute = (
+        _main_local_terminal(graph)
+        and _can_derive_local_answer(scene, reports, tasks)
+    )
     if main_compute:
         if waves[-1] != [graph["terminal_task_id"]]:
             raise ValueError("stage3_terminal_not_separate_last_wave")
