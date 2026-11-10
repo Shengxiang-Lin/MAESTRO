@@ -24,6 +24,39 @@ The authoritative CLI, artifact layout and running instructions are in
 | `quota_pipeline.py` | Accepted-level quotas, bounded retries and final publication |
 | `pipeline.py` | Canonical API composition and read-only quality report |
 
+### Web evidence paths (v2)
+
+Fresh Macro-first V2 Scenes freeze one of three **source-acquisition**
+routes for each text/table source, before World/Question realization:
+
+| Route | Per-acquisition O1 tool sequence | When URL becomes available |
+| --- | --- | --- |
+| \`search_only\` | \`GoogleSearchAction\` | No page extraction needed |
+| \`direct_extract\` | \`ExtractUrlContentAction\` | Known in the Main-visible source catalog |
+| \`search_then_extract\` | \`GoogleSearchAction\` → \`ExtractUrlContentAction\` | Discovered by the first Sub-Agent search step |
+
+The route is deterministic for the sampled Scene/source, and does not
+change the private Gold Solver or the Macro DAG. A multi-tool sequence is
+**inside the source acquisition**, not an additional Macro or Main round.
+Stage 1 compiles each sequence into \`evidence_acquisition.tool_steps\`
+with ordered \`depends_on\` edges. Macro \`required_tools\` remains the
+deduplicated union over all its source-acquisition steps.
+
+URLs in these offline scenarios use the reserved \`.example.invalid\` TLD:
+they are explicitly synthetic, never browsed and never evidence about real
+websites. Search → Extract supplies precisely its synthetic search-selected
+URL as the Extract \`url\` parameter; the URL must not leak into Main's
+initial prompt. Search-only snippets, page extraction and media observations
+are simulated and carry the existing Oracle-supported FactRefs. Stage 2
+stores this lineage in \`trace_summary.steps[].simulated_tool_calls\`,
+each marked \`tool_executed: false\`; Stage 3 validates it before generating
+Main turn labels.
+
+The v2 marker is \`maestro.evidence_acquisition.o1.v2\`.
+Historical v1 scenes remain supported under
+\`maestro.evidence_acquisition.o1.v1\`. Existing Stage 1 / Stage 2
+datasets should **not** be mixed with new-generation v2 scenes.
+
 ### O1 tools are frozen at the evidence-acquisition level
 
 New Macro-first V2 scenes now freeze an \`evidence_access\` policy on
