@@ -580,18 +580,9 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                           "exact grounded topic label and temporal direction.",
         }, ensure_ascii=False)
         try:
+            from .v2_prompts import QUESTION_AUTHOR, QUESTION_CRITIC
             v2 = spec.get("reasoning_pattern") == "macro_first_v2"
-            system_prompt = (AUTHOR_SYSTEM + """
-V2 OVERRIDE: The DATASET is internally synthetic, but the USER QUESTION
-must read as an ordinary open-world investigation. Never say fictional,
-simulated, hypothetical, synthetic or imaginary. Do not claim that any real
-historical event happened: describe a question about supplied materials,
-not an asserted external fact. Preserve the exact requested outcome
-(e.g. match result is not match year; review status is not a founding year).
-For video, use its action and time clue; for audio, use its spoken cue;
-for cross-modal events, preserve the footage-before-commentary ordering.
-Do not reveal Macro IDs, source key field names, or the solver DAG.
-""" if v2 else AUTHOR_SYSTEM)
+            system_prompt = QUESTION_AUTHOR if v2 else AUTHOR_SYSTEM
             candidate = author.complete_json(system_prompt, user_text)
             raw = candidate.get("question")
             q = (normalize_question_punctuation(raw)
@@ -616,15 +607,7 @@ Do not reveal Macro IDs, source key field names, or the solver DAG.
                     ),
                 })
                 continue
-            critic_prompt = (CRITIC_SYSTEM + """
-V2 OVERRIDE: Judge against the supplied frozen Goal and media-specific
-clues. The underlying materials are synthetic benchmark evidence,
-but natural user questions should not label them fictional. Describing
-the hypothetical supplied materials is ALLOWED and is not an assertion
-about real-world historical facts. Reject substituted goal meanings,
-changed temporal ordering, or added historical facts.
-""" if spec.get("reasoning_pattern") == "macro_first_v2"
-                else CRITIC_SYSTEM)
+            critic_prompt = QUESTION_CRITIC if v2 else CRITIC_SYSTEM
             decision = critic.complete_json(critic_prompt, json.dumps({
                 "frozen_contract": {
                     **instruction,
