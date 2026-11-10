@@ -1,498 +1,130 @@
-# MAESTRO Environment — Stage 1: Generate Question
+# MAESTRO Environment
 
-This directory contains the **single maintained Question-generation pipeline**
-for MAESTRO. The obsolete Task-First, V2 experiment and separate naturalize
-commands have been removed; no old command compatibility is maintained.
+Current supported workflow: **generate validated questions with frozen Macro
+plans, then produce grounded Sub-Agent reports**. Every World and media
+observation is synthetic. A successful Replay verifies internal evidence
+consistency, not independent multimodal perception or Agent performance.
 
-## Usage
+## Generate questions (Stage 1)
 
-Edit [config.yaml](config.yaml) for input, output, difficulty mix, Author,
-Critic, concurrency and revision settings. Then:
+Configure `envir/config.yaml`, then run:
 
-~~~bash
-python -m envir generate-questions --config envir/config.yaml
-~~~
-
-For a read-only audit:
-
-~~~bash
-python -m envir quality --config envir/config.yaml
-~~~
-
-The implementation and detailed output contract are documented in
-[generate_question/README.md](generate_question/README.md).
-
-Stage 2, **Implement Subtask**, now materializes the frozen Macro
-execution into per-Subtask `answer` + evidence-grounded `trace_summary`.
-It reuses accepted Stage-1 private scenes and does not call a model:
-
-~~~bash
-python -m envir implement-subtasks \
-  --config envir/implement_subtask/config.yaml
-~~~
-
-See [implement_subtask/README.md](implement_subtask/README.md).
-
-A separate Stage-2 language pass rewrites the frozen Oracle responses into
-realistic Sub-Agent `finish_result.result/status/summary` messages with
-an LLM Author and independent Critic. The typed answer, primitive evidence
-steps, and fact refs are never regenerated or edited:
-
-~~~bash
-python -m envir naturalize-subtasks \
-  --config envir/implement_subtask/config.yaml
-~~~
-
-Stage 3, Subtask scheduling and composition, remains separate and is not
-implemented here.
-
-Stage 1 remains Generate Question.
-Stage 2 (implement Subtask) and Stage 3 (compose/schedule Subtasks) have
-distinct future interfaces. They do not belong in this generator.
-
-The accepted public Question bank never contains a Scenario/Question
-fallback. Every successful Question is audited against the compiled
-source-scoped Macro TaskGraph and terminal answer fields. Failed candidates
-are private diagnostics. All media evidence is fictional structured
-simulation, not perception of original images/audio/videos.
-
-
-### Streaming and checkpoint recovery
-
-Scenario Author/Critic and Question Author/Critic now append reviewed
-decisions to dedicated accepted/rejected/audit JSONL journals AS THEY
-FINISH, in stable input order. The live progress bar shows accepted,
-rejected, and written (the committed ordered prefix).
-
-Accepted Questions also appear immediately in the ordinary files
-questions/scenes.jsonl and questions/questions.jsonl; rejected
-Questions appear in questions/failed.jsonl.
-
-Each stage has a signed, SHA256-verified checkpoint and a writer lock.
-Interrupting and rerunning the SAME command and output directory
-(with unchanged frozen inputs/model/prompt code) skips completed LLM
-decisions. Uncommitted tails are discarded and published files are
-reconstructed from the durable journal.
-
-The config key generation.flush_every defaults to 1 (fsync every
-decision); the CLI may override this:
-
-~~~bash
-python -m envir generate-questions \
-  --config envir/config.yaml --flush-every 5
-~~~
-
-A different model, input scene bank, generator contract or code must
-use a new output directory or explicitly overwrite the old run.
-Completed legacy outputs from the old all-at-once implementation have
-no checkpoint and cannot be resumed retrospectively.
-
-
-### Single-command Stage 2 (Oracle + naturalized Sub-Agent reports)
-
-The recommended new-run entrypoint can now execute both Stage-2 passes
-without an intermediate manual command:
-
-~~~bash
-python -m envir naturalize-subtasks \
-  --config envir/implement_subtask/config.yaml \
-  --scenes envir/data/maestro_question_fresh_100/questions/scenes.jsonl \
-  --output-dir envir/data/maestro_subagent_reports_all_in_one_100
-~~~
-
-The CLI creates a PRIVATE deterministic Oracle bank in
-<report-output>/oracle/{subtasks.jsonl,scene_index.jsonl,...}, then
-generates normal Sub-Agent finish reports in <report-output>/
-with the existing Author/Critic and streaming journal. An Oracle
-manifest locks the scene input hash, execution implementation, and
-teacher output hashes. On interruption, the SAME command/directory
-reuses this valid Oracle; the report checkpoint skips already
-committed Macro reviews. Incorrect or changed inputs fail closed.
-
-The separate implement-subtasks command is still supported for
-Oracle-only inspection. The old naturalize-subtasks command without
---scenes continues to consume pre-materialized Oracle files configured
-under reporting.source_subtasks and reporting.source_scene_index.
-
-
-## Opt-in clue-driven evidence acquisition (clean pilot)
-
-The normal generator defaults to the original static computation patterns.
-Use --clue-chain-share to replace a controlled percentage of MEDIUM
-scenes with a DIFFERENT information-acquisition dependency:
-
-- Browse a fictional simulated illustration. Two exhibit features
-  (emblem color + motif) are needed to distinguish the intended item;
-  decoys deliberately share one feature each
-- Read that item's marker code; use it as a typed, evidence-backed query
-  into a KEYED (non-browseable) catalog index
-- Use the accession identifier returned by the index to query a
-  second KEYED (non-browseable) archive
-- Answer the target's accession year; retain exact fact provenance from
-  illustration -> index -> archive
-
-The index and archive IDs/titles are advertised to Main-Agent, but
-their records are NOT returned by full read_source or scan. The
-lookup_by_key primitive requires an upstream typed WorkProduct and
-emits only matching records. The compiler preserves lookup operations
-as separate dispatchable Macros, each with a real dependency. The
-source observations remain synthetic; there is NO real media decoding.
-
-Pilot with 20 Stage-1 tasks, approx. 10 clue-chain tasks with the
-default 20/50/30 difficulty mix (all medium tasks become clue-chain):
-
-~~~bash
+```bash
 python -m envir generate-questions \
   --config envir/config.yaml \
-  --target 20 --clue-chain-share 100 \
-  --output-dir envir/data/maestro_clue_pilot_20
-~~~
+  --target 100 \
+  --output-dir envir/data/maestro_current_100
+```
 
-Then Stage 2A + Stage 2B via the existing unified one-command entry:
+Active settings under `generation`:
 
-~~~bash
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `macro_first_v2_share` | 100 | Use the current Macro-first World for Medium/Hard; Easy keeps the approval baseline |
+| `difficulty_mix` | `[17, 33, 50]` | Easy/Medium/Hard desired **accepted** counts for a 100-item dataset |
+| `quota_refill` | `true` | Refill missing difficulty groups after both Scenario and Question review |
+| `max_candidate_multiplier` | `3` | Hard upper limit: attempted candidates ≤ target × multiplier |
+| `seed` | 17 | Reproducible seed for dataset sampling and frozen World construction |
+
+You may set `--max-candidate-multiplier 4` to raise the budget without
+changing the requested difficulty ratio. A quota is never filled by relabeling
+a problem, duplicating an answer, or inventing an accepted Critic decision.
+If the budget is exhausted, `status=partial` and
+`summary.json.difficulty_quotas.deficit` reports the shortfall.
+
+Completed batches are saved under `rounds/01`, `rounds/02`, etc.
+with independent Scenario/Question checkpoints. Runs interrupted between
+batches can reuse already verified batches if their signatures match.
+Use a **new output directory** when changing generation settings.
+
+### Canonical Stage 1 outputs
+
+```text
+maestro_current_100/
+├── summary.json                   # achieved quotas and accepted counts
+├── quality_report.json            # strict Replay and difficulty proxies
+├── constructed/
+│   ├── scenes.jsonl                # selected frozen scenes
+│   └── failed.jsonl                # Scenario failures across rounds
+├── questions/
+│   ├── scenes.jsonl                # accepted final Questions + frozen evidence
+│   ├── questions.jsonl             # Main-visible Question records
+│   ├── difficulty_audit.jsonl
+│   └── failed.jsonl                # Question failures across rounds
+└── rounds/
+    ├── 01/                         # full intermediate stage output
+    └── 02/                         # as many bounded rounds as necessary
+```
+
+The `constructed/scenes.jsonl` root file represents selected scenes after
+quota selection; intermediate attempted/fallback records remain in each
+round's folder. The accepted `questions/scenes.jsonl` is the authoritative
+input for Stage 2. Its records include typed Goal, scoped Macro DAG,
+deterministic Gold Solvers, evidence World, provenance and final Question.
+
+## Build Sub-Agent reports (Stage 2)
+
+```bash
 python -m envir naturalize-subtasks \
   --config envir/implement_subtask/config.yaml \
-  --scenes envir/data/maestro_clue_pilot_20/questions/scenes.jsonl \
-  --output-dir envir/data/maestro_clue_reports_20
-~~~
+  --scenes envir/data/maestro_current_100/questions/scenes.jsonl \
+  --output-dir envir/data/maestro_current_reports_100
+```
 
-Quality reports include evidence_acquisition keyed_lookup_count,
-mean_evidence_acquisition_depth, clue_counterfactual_pass_rate and
-unauthorized_full_read_success_rate. The last should be zero for
-synthetic keyed stores. Check the private source/answer/evidence data,
-and inspect several public questions for scenario variety before
-raising the clue share or introducing new retrieval motifs.
+This creates exact Oracle WorkProducts and checked natural-language
+Sub-Agent finishes. Stage 2 never changes the underlying Gold Answer.
+The deterministic `oracle_review.py` maps Entry IDs to cited FactRefs
+and their observed Active status, including full answer provenance when
+evidence atom samples are truncated. A provably mistaken Critic assessment
+may trigger one targeted independent re-review; it **never** auto-passes.
+A wrong citation in an Author summary is rejected.
 
-The clue-chain pilot intentionally uses only MEDIUM tasks; Easy and Hard
-keep their existing programs for now. 100 means 100 percent of MEDIUM,
-not all difficulty levels. Defaults remain unchanged when the option is
-omitted (generation.clue_chain_share: 0).
+Reports are published under `complete_scene_only`: one rejected Macro
+prevents publishing an incomplete scene.
 
+## Contracts, validation and complexity
 
-## Opt-in typed Evidence Acquisition Graph grammar
+The current generation pipeline is organized around:
 
-The new --evidence-graph-share percentage applies to MEDIUM and HARD
-scenes, independently from the earlier clue-chain pilot. It defaults to
-zero, so historical generation remains unchanged. When both shares are
-enabled, evidence_graph takes precedence on selected medium tasks.
+- `macro_first_v2.py`, `macro_first_v2_world.py`: frozen Macro DAG,
+  typed Goal, synthetic, modality-sensitive observations and witness generation.
+- `semantic_evidence.py`, `question.py`: executable predicate and
+  **single-answer-slot** contracts. Question text may paraphrase, not add
+  unlicensed outputs, time windows or media requirements.
+- `source_title_contract.py`, `scenario_fields.py`, `scenario.py`:
+  immutable source modality/title contract; audited, field-level repair
+  of overlong/missing narrative fields; independent semantic Critic.
+- `information_necessity.py`: check that independent multimodal branches
+  each retain ambiguity and the intersection uniquely identifies a target
+  with a distinct possible final answer.
+- `difficulty_proxy.py`: observe Macro depth, evidence volume, primitive
+  operation count, index hops and candidate ambiguity. Structural proxies
+  **do not** establish true Hard-vs-Medium Agent failure rates.
+- `quota_pipeline.py`, `stages.py`, `pipeline.py`: bounded,
+  checkpointed generation rounds and final accepted-quota publication.
+- `implement_subtask/oracle_review.py`, `implement_subtask/reporting.py`:
+  deterministic Oracle evidence checks and independently reviewed prose.
 
-The seeded grammar currently samples four semantically distinct plans:
+The active CLI/config no longer exposes superseded
+`clue_chain_share`, `evidence_graph_share` or `macro_first_share`
+generation experiments. Frozen historical scene readers and underlying
+operators remain because they are still necessary to audit prior
+experiments. They are not part of the current user-facing generation API.
 
-- chain: 2–3 dependent keyed lookups after an illustrated two-feature clue
-- parallel: independent illustration and caption sources join before the
-  keyed retrieval
-- disambiguation: multiple visually matching candidates require separate
-  motif notes to eliminate a false identity before the final archive lookup
-- conflict: two inventories are reconciled to find the single disputed
-  record before an authoritative keyed retrieval
+Run a read-only audit of an accepted or historical scene bank:
 
-The sampler varies archetype, identity labels, relation values, decoys
-and key-chain depth while respecting typed source contracts. Worlds are
-constructed witness-first, and each required source is subjected to a
-grounded answer-changing counterfactual. The public question supplies the
-initial clue and target result, not the hardcoded sequence of retrievals.
-
-A small dry run (Easy tasks still use their baseline family):
-
-~~~bash
-python -m envir generate-questions \
+```bash
+python -m envir quality \
   --config envir/config.yaml \
-  --target 100 --evidence-graph-share 100 \
-  --output-dir envir/data/maestro_evidence_graph_pilot_100
-~~~
-
-The normal naturalize-subtasks --scenes entry can be applied to accepted
-scenes from this run. Inspect quality_report.json -> evidence_graph for the
-archetype distribution, keyed lookup count, source-counterfactual pass rate,
-and independent-wave width. Test your actual local LLM Author/Critic rates
-before expanding to large batches.
-
-This is a constrained graph grammar pilot, not unconstrained arbitrary-DAG
-search or true multimodal/web perception. Stage 2 reports are deterministic
-Oracle-derived results with LLM naturalization; Stage 3 autonomous
-Main-Agent action planning remains separate.
-
-
-## Opt-in Macro-first Stage 1 generation (frozen task boundaries)
-
-The recommended experimental path is now `--macro-first-share` (0..100).
-It samples a **Macro Task DAG before** any primitive Gold Program or World:
-Goal -> frozen Macro nodes/edges/typed handoff contracts -> independent
-local executable Gold Solver for each Macro -> global witness-first World ->
-strict answer/edge replay -> Question Author/Critic -> Stage 2 Oracle reports.
-
-Macro-first currently offers three bounded graph families:
-- serial_discovery: visual identification -> 1–2 separate keyed resolution
-  Macro tasks -> authoritative result
-- parallel_resolution: two independent visual/caption Macro tasks -> identity
-  fusion Macro -> optional keyed resolution Macro -> authoritative result
-- conflict_reconciliation: two independent inventories -> dispute resolution
-  Macro -> optional keyed resolution Macro -> authoritative result
-
-Each Macro has `macro_id`, `depends_on`, `input_contract`,
-`output_schema`, `source_scope`, and a `solver_template`. The
-`compile_frozen_macro_plan` path preserves these boundaries and verifies
-that the local solver only consumes declared upstream WorkProducts and
-permitted sources. It does not split a Macro due to its internal scans,
-filters, joins, or keyed searches. Global Gold Program nodes are retained
-only as a compatible deterministic execution/replay representation.
-
-The World is consistent across all Macro handoffs. Validation checks the
-exact final answer, frozen graph, execution and provenance, source-fact
-counterfactuals and **every Macro handoff** under an empty-input
-intervention. A reference DAG is an execution proof and dependency
-contract, not the unique possible optimal Main-Agent trajectory.
-
-To try the new path without changing older experiments:
-
-~~~bash
-python -m envir generate-questions \
-  --config envir/config.yaml --target 100 \
-  --macro-first-share 100 \
-  --output-dir envir/data/maestro_macro_first_100
-
-python -m envir naturalize-subtasks \
-  --config envir/implement_subtask/config.yaml \
-  --scenes envir/data/maestro_macro_first_100/questions/scenes.jsonl \
-  --output-dir envir/data/maestro_macro_first_reports_100
-~~~
-
-`macro_first_share` applies only to Medium and Hard scenes; Easy stays on
-the historical baseline. With zero (default), generation behavior remains
-unchanged. If macro-first and evidence_graph shares overlap, macro-first
-takes precedence on the selected scenes. Observe
-`quality_report.json["macro_first"]` for graph pattern counts, necessary
-handoff edges, and local operator complexity.
-
-Limitations: current grammar uses three reference/record investigations and
-a small set of year-valued goals; this is a bounded Macro-first pilot, not
-arbitrary DAG composition. Local sources are synthetic structured
-observations, not real media or real tool searches. The Stage 2 Oracle
-provides reliable workproducts; it does not prove a real LLM Sub-Agent can
-perform arbitrary searches. Stage 3 adaptive orchestration, retries, and
-untrusted outcomes remain separate work.
-
-
-## Macro-first V2: varied goals and local evidence (opt-in)
-
-The newer, isolated pilot `--macro-first-v2-share` changes task **content**
-while retaining the frozen Macro-first task-first architecture. It is
-independent of `--macro-first-share` (V1); existing V1 ProblemSpecs and
-scenes continue to replay unchanged. V2 takes precedence only on its
-selected Medium/Hard scenes. Easy remains the older baseline.
-
-```bash
-python -m envir generate-questions \
-  --config envir/config.yaml --target 100 --macro-first-v2-share 100 \
-  --output-dir envir/data/maestro_macro_v2_100
-
-python -m envir naturalize-subtasks \
-  --config envir/implement_subtask/config.yaml \
-  --scenes envir/data/maestro_macro_v2_100/questions/scenes.jsonl \
-  --output-dir envir/data/maestro_macro_v2_reports_100
+  --scenes envir/data/maestro_current_100/questions/scenes.jsonl \
+  --output envir/data/maestro_current_100/quality_recheck.json
 ```
 
-The sampled `macro_plan` freezes each Macro's role, typed handoff,
-source scope, and independently sampled `evidence_plan`. Four bounded
-DAG families include serial identification, parallel cue resolution,
-disputed-report reconciliation and joint **video/audio temporal alignment
-inside one Macro**. Optional keyed index hops vary 0–2; these do not
-change the Macro-local evidence budgets.
+## Limits
 
-Goals depend on the topic's inferred domain (e.g. match result,
-performance venue, publication year, review status, case title). Source
-observations have 4–17 candidate rows, depending on independently
-sampled evidence volume, with controlled ambiguity. Video observations
-include action and timestamps, audio includes spoken cues/timestamps,
-and the temporal Macro checks footage time <= commentary time.
-Media are **typed synthetic observations**, not real decoded files.
-
-V2 questions use ordinary investigation wording and should not disclose
-fictional/synthetic benchmark framing. This presentation requirement is
-different from the private metadata: every source remains explicitly
-marked synthetic for the researcher. Question/Scenario Author and Critic
-use separate V2 prompts to prevent goal substitution and unsupported
-historical claims about real named entities.
-
-`quality_report.json["macro_first_v2"]` records goal families, graph
-families, source observation volume, direct sources per Macro, and
-video/audio joint tasks. Internally exact replay checks frozen goals,
-the global answer, provenance, controlled source interventions and
-every explicit cross-Macro handoff.
-
-**Boundaries:** This is still a bounded, self-contained synthetic
-investigation workspace, not full web browsing or original media
-perception. Candidate observation count is an evidence-search volume,
-not automatically the number of independently supporting facts. Neither
-the synthetic hard label nor a longer local evidence list proves
-difficulty for a live LLM Sub-Agent. A local Author/Critic pilot and
-independent blind-agent evaluation are needed.
-
-
-## Source-grounded Semantic Evidence Contract (Macro-first V2)
-
-Newly generated V2 ProblemSpecs now include
-`semantic_evidence_contract_version: maestro.semantic_evidence.v1`.
-The generator compiles a deterministic `semantic_evidence_contract`
-from the **actual Gold Solver's primitive predicates and source schemas**,
-including exact typed Goal semantics, image/video/audio fields, relevant
-filter constants, compare operations and time relations.
-
-This freezes semantic obligations *before* Scenario/Question Author. Their
-prompts receive only the source features that the program actually checks,
-not all randomly sampled unused media features. Deterministic gates
-reject clear high-confidence violations: fictitious clearance/approval,
-audio absent from the workspace, visual color/emblem predicates absent from
-video, audio timestamps not used by the Solver, exact seconds claimed for
-relative temporal order, and reversed video/audio ordering. Source titles
-must also match their local modality. The same checks run at Scenario
-draft review, Question draft review and strict Scene replay even when a
-question was accepted by the LLM Critic.
-
-The older Hard-intent heuristic incorrectly added an entry-specific
-clearance rule to V2; it is now excluded. That invented criterion was a
-real source of false Question conditions in prior experiments.
-
-New contracts are **version-gated**: previously frozen V2 scenes without
-the marker keep the same compilation/replay behavior. The read-only
-`python -m envir quality` report now includes
-`semantic_evidence_diagnostics` and can flag potentially unsupported
-claims in older V2 questions without modifying or automatically rejecting
-those historically published results.
-
-```bash
-# Re-audit older V2 scenes (read-only)
-python -m envir quality --config envir/config.yaml \
-  --scenes envir/data/maestro_macro_v2_100/questions/scenes.jsonl \
-  --output envir/data/maestro_macro_v2_100/semantic_recheck.json
-
-# New pilot: choose a fresh destination
-python -m envir generate-questions --config envir/config.yaml \
-  --target 100 --macro-first-v2-share 100 \
-  --output-dir envir/data/maestro_macro_v2_semantic_100
-
-python -m envir naturalize-subtasks \
-  --config envir/implement_subtask/config.yaml \
-  --scenes envir/data/maestro_macro_v2_semantic_100/questions/scenes.jsonl \
-  --output-dir envir/data/maestro_macro_v2_semantic_reports_100
-```
-
-The new static check is **not** a proof of unrestricted natural-language
-entailment, open-world search, real image/video/audio perception or
-absence of all alternative solution paths. It is intentionally
-conservative and should be evaluated against an independent blind
-question reviewer. Do not compare revised Scenario acceptance rates
-without reporting the stricter validation criteria.
-
-
-## Default 1:2:3 difficulty mix and answer-sensitive Macro audits
-
-Stage 1 now uses the default `generation.difficulty_mix: [17, 33, 50]`
-(Easy/Medium/Hard). For **100 attempted candidates**, this requests
-17 Easy, 33 Medium, 50 Hard (approximately **1:2:3**). The existing
-largest-remainder deterministic allocator also handles other targets,
-e.g. six candidates allocate 1, 2 and 3. This is a *candidate* mix:
-LLM Scene/Question rejections may slightly shift the accepted distribution.
-Prior experiment files are unchanged; set the old array explicitly to
-reproduce their initial sampling.
-
-New Macro-first V2 samples have an opt-in-on-new version marker:
-`macro_information_necessity_version`. In the video/audio + event-log
-template, the video/audio Macro and log Macro now each resolve a
-**different non-singleton candidate set**. Only their intersection
-selects the target. Competing candidate identities also have different
-final Goal values. `information_necessity.py` examines the actual
-materialized Macro workproducts and authoritative Goal lookup chains;
-it rejects scenes where either branch is already unique or the
-competing entities have the same answer. This is strictly stronger
-than removing DAG edges, but it is still not a proof against every
-possible alternative plan or live-agent shortcut.
-
-The typed semantic contract in new scenes contains
-`required_output_fields`, `semantic_goal_type`, and
-`requested_entities`; the Question Guard rejects obvious second
-requested outputs such as asking for *both* an episode name and a
-production year when the Gold Answer provides only the year.
-The additional domain taxonomy now uses reliable MMQA category metadata
-for culture, education, logistics, civic and environment scenarios
-without retroactively changing previously frozen V2 scenes.
-
-For Stage 2, a narrowly scoped second Critic pass may be requested
-only if a full Entry-list answer has been deterministically verified
-and the first Critic incorrectly claims a listed Entry is absent from
-the Oracle. The second review **must pass**; the application never
-silently converts a failed report into a success.
-
-New quality fields: `macro_first_v2.information_necessity` and
-`macro_first_v2.versioned_output_contract_scenes`.
-To test with your local Author/Critic model:
-
-```bash
-git pull origin main
-python -m envir generate-questions \
-  --config envir/config.yaml --target 100 \
-  --macro-first-v2-share 100 \
-  --output-dir envir/data/maestro_macro_v2_123_100
-python -m envir naturalize-subtasks \
-  --config envir/implement_subtask/config.yaml \
-  --scenes envir/data/maestro_macro_v2_123_100/questions/scenes.jsonl \
-  --output-dir envir/data/maestro_macro_v2_123_reports_100
-```
-
-These changes improve controlled information dependence and semantic
-fidelity; they do not yet replace the bounded synthetic DAG grammar with
-a truly open-world browsing, real-media perception or optimal-cost agent
-benchmark. In particular the **Hard** label is an intended difficulty
-class, not independently calibrated solver failure probability.
-
-
-## Source-locked V2 investigations and variable branch difficulty
-
-For new Medium/Hard V2 samples (`--macro-first-v2-share 100`) the
-`scene_realism_version` marker freezes **domain- and schema-derived
-source titles**. The Scenario Author is only allowed to provide
-`setting`, `user_role`, `purpose`, `motivation` and
-`entity_kind`. Any source_titles it tries to supply are replaced by
-the exact modality/role/domain contract BEFORE deterministic validation
-or Critic review; the accepted Scene never publishes a title for a
-nonexistent video/audio/image source. Older frozen scenes without the
-marker preserve their original titles, plans and World observations.
-
-The public Question Author now sees a one-output template: identifying
-the matching item is an **internal condition**, not a second output.
-A deterministic semantic guard rejects explicit coordinated questions
-such as "which case ... and what is the permit status?" when Gold only
-returns `permit_status`. Legitimate surface variants such as
-"triangular motif" for "triangle motif" remain allowed. These checks
-are conservative: they do not prove arbitrary natural-language
-equivalence.
-
-For new multimodal_event scenes, independent video+audio and event-log
-candidate sets have variable lengths (Medium: 2–3 per branch; Hard:
-3–4 per branch), with unique intersection and differing target-vs-
-alternative Goal values. Sources are materialized with enough rows to
-actually hold all competing candidates. The existing PR106 2/2/1
-candidate policy remains replayable on older scenes. The information
-necessity audit checks the **actual** branch WorkProducts and
-authoritative outcome values rather than only frozen DAG edges.
-
-New `difficulty_audit.macro_first_audit.structural_difficulty_profile`
-and `quality_report.macro_first_v2.structural_difficulty_by_target`
-report observation volume, Macro count, internal operation count, index
-hops and branch alternatives. These are **structural diagnostics**, not
-a measured live-Agent success rate: a Hard label is not yet empirically
-calibrated. The global Easy/Medium/Hard target mix remains 17/33/50.
-
-```bash
-git pull origin main
-python -m envir generate-questions \
-  --config envir/config.yaml --target 100 \
-  --macro-first-v2-share 100 \
-  --output-dir envir/data/maestro_macro_v2_realism_100
-
-python -m envir naturalize-subtasks \
-  --config envir/implement_subtask/config.yaml \
-  --scenes envir/data/maestro_macro_v2_realism_100/questions/scenes.jsonl \
-  --output-dir envir/data/maestro_macro_v2_realism_reports_100
-```
+The current Media World uses synthetic structured observations, not
+original decoded audio, images, video or external web browsing. Macro
+information necessity is checked for the frozen candidate World, not
+against every imaginable independent plan. Scene/Question Author-Critic
+acceptance and 100% Oracle replay do **not** measure real Main-Agent
+solving difficulty, cost, accuracy or user-perceived naturalness.
