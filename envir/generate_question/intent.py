@@ -61,6 +61,7 @@ FAMILY_OUTPUTS = {
     "threshold_eligibility": "List entries meeting the independently defined minimum value.",
     "accession_year": "Report the year in which the identified exhibit was accessioned.",
     "evidence_answer": "Report the accession year justified by discovered evidence.",
+    "macro_first": "Return the authoritative year for the uniquely resolved case.",
 }
 STYLES = (
     ("direct_lookup", "Start with a concise direct question, not a job title."),
@@ -75,7 +76,24 @@ STYLES = (
 
 def intent_contract(spec: dict) -> dict:
     pattern = spec.get("reasoning_pattern", "approval")
-    if pattern == "evidence_graph":
+    if pattern == "macro_first":
+        mode = spec["macro_plan"]["pattern"]
+        constraints = {
+            "serial_discovery": [
+                "Identify the relevant fictional item using both visual emblem features.",
+                "Return its authoritative year as specified by the final source.",
+            ],
+            "parallel_resolution": [
+                "Resolve one identity using BOTH an independent visual color"
+                " and a separate motif description.",
+                "Return the authoritative year for that uniquely resolved identity.",
+            ],
+            "conflict_reconciliation": [
+                "Locate the case where two independent inventories disagree.",
+                "Return the authoritative year for the disputed case.",
+            ],
+        }[mode]
+    elif pattern == "evidence_graph":
         archetype = spec["evidence_graph"]["archetype"]
         constraints = {
             "chain": [
@@ -100,14 +118,17 @@ def intent_contract(spec: dict) -> dict:
         constraints = list(PATTERN_CONSTRAINTS[pattern])
     if spec["difficulty_target"] == "easy":
         constraints = constraints[:1]
-    if spec["difficulty_target"] == "hard" and pattern != "evidence_graph":
+    if spec["difficulty_target"] == "hard" and pattern not in {
+        "evidence_graph", "macro_first"
+    }:
         constraints.append(
             "Also require entry-specific clearance to be marked cleared "
             "in a separate source, not just group approval."
         )
     return {
         "visual_clue": (
-            spec.get("investigation", {}).get("visual_features")
+            spec["macro_plan"]["clues"] if pattern == "macro_first"
+            else spec.get("investigation", {}).get("visual_features")
         ),
         "acquisition_chain": (
             spec.get("investigation", {}).get("acquisition_chain")
@@ -122,7 +143,12 @@ def intent_contract(spec: dict) -> dict:
         "reasoning_pattern": pattern,
         "difficulty": spec["difficulty_target"],
         "nonnegotiable_conditions": constraints,
-        "output_contract": FAMILY_OUTPUTS[spec["family"]],
+        "output_contract": (
+            "Report the authoritative " +
+            spec["macro_plan"]["goal"]["answer_field"].replace("_", " ") +
+            " for the uniquely identified case."
+            if pattern == "macro_first" else FAMILY_OUTPUTS[spec["family"]]
+        ),
         "sources": [{
             "source_id": role["source_id"],
             "modality": role["modality"],
