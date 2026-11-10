@@ -94,6 +94,13 @@ def intent_contract(spec: dict) -> dict:
                 "Find the case for which the two independent reports disagree"
                 " on a reported year; do not confuse this with the final answer field."
             ],
+            "corroborated_dispute": [
+                "First identify cases with conflicting reported years across"
+                " two independent reports.",
+                "Independently identify cases with the specified event log tag.",
+                "Only the intersection of these two candidate sets identifies"
+                " the case whose final goal is requested.",
+            ],
             "multimodal_event": [
                 "Match a video action to a spoken cue from later commentary.",
                 "Also match the independent event log tag.",
