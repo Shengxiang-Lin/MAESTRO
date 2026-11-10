@@ -12,6 +12,7 @@ generation:
   seed: 17
   clue_chain_share: 0  # opt-in percentage of MEDIUM scenes
   evidence_graph_share: 0  # opt-in MEDIUM/HARD typed random evidence DAGs
+  macro_first_share: 0  # opt-in MEDIUM/HARD frozen Macro DAGs with local solvers
   difficulty_mix: [20, 50, 30]  # Easy, Medium, Hard
   overwrite: false
   flush_every: 1   # persist every completed LLM decision (safe to resume)
