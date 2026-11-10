@@ -58,6 +58,36 @@ class DiverseMacroTests(unittest.TestCase):
                          difficulty="easy", macro_first_v2_share=100)
         self.assertNotEqual(easy["reasoning_pattern"], "macro_first_v2")
 
+    def test_frozen_output_schema_key_order_is_semantically_irrelevant(self):
+        # Scenario round-trip serialization may sort JSON object keys; a
+        # typed relation's field *set* must not depend on dict insertion order.
+        found = False
+        for i in range(60):
+            spec = spec_for(i)
+            target = next((
+                task for task in spec["macro_plan"]["macro_tasks"]
+                if task["role"] == "metric_a_lookup"
+            ), None)
+            if target is None:
+                continue
+            schema = target["output_schema"]
+            altered = dict(reversed(list(schema.items())))
+            if list(altered) == list(schema):
+                continue
+            target["output_schema"] = altered
+            scene = compile_and_validate(spec, reference_question(spec))
+            self.assertEqual(validate_replay(scene)["status"], "valid")
+            self.assertEqual(
+                set(scene["macro_graph"]["tasks"][
+                    next(j for j, t in enumerate(scene["macro_graph"]["tasks"])
+                         if t["macro_role"] == "metric_a_lookup")
+                ]["outputs"]["typed_relation"]),
+                set(schema),
+            )
+            found = True
+            break
+        self.assertTrue(found, "test must exercise a two-column metric Macro")
+
     def test_120_frozen_scenes_and_natural_questions(self):
         modes, goals, macro_counts, distinct_answers = set(), set(), set(), set()
         sizes, scopes, local_lengths, domains = set(), set(), set(), set()

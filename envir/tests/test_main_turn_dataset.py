@@ -137,6 +137,58 @@ class MainTurnDatasetTests(unittest.TestCase):
             matched += 1
         self.assertGreater(matched, 10)
 
+    def test_critic_reviews_prose_without_second_guessing_frozen_tools(self):
+        scene = fixture(4)
+        rows = reviewed_rows(scene)
+        seen = []
+
+        class Author:
+            def complete_json(self, system, request):
+                payload = json.loads(request)
+                result = deepcopy(payload["reference_action_for_structure_only"])
+                for task in result["params"]["tasks"]:
+                    # Deliberately omit required source IDs and previous
+                    # handoff marker; the deterministic compiler restores
+                    # the already-visible public evidence context.
+                    task["task_instruction"] = (
+                        "Review the assigned evidence carefully, identify "
+                        "the applicable records, and report the verified "
+                        "intermediate result with concrete supporting details."
+                    )
+                    task["context"] = "Use already available prior findings."
+                return result
+
+        class Critic:
+            def complete_json(self, system, request):
+                payload = json.loads(request)
+                self_is_prose = payload["candidate_prose_only"]
+                self_assignment = payload["assignment_prose_goals_in_required_order"]
+                seen.append((self_is_prose, self_assignment, payload))
+                return {"verdict": "pass", "grounded": True,
+                        "assignment_fidelity": True, "o1_style": True}
+
+        critic = Critic()
+        episode, turns, _, status = build_episode(
+            scene, rows, author=Author(), critic=critic,
+            max_revisions=0,
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertTrue(seen)
+        self.assertTrue(all(
+            "tools" not in task and "model" not in task
+            for prose, _, _ in seen for task in prose["tasks"]
+        ))
+        self.assertTrue(all(
+            item["fixed_tool_and_model_fields_checked_by_code"]
+            for _, _, item in seen
+        ))
+        self.assertTrue(any(
+            "Previously returned result:" in task["context"]
+            for turn in turns
+            if turn["output"]["action"] == "delegate_task"
+            for task in turn["output"]["params"]["tasks"]
+        ))
+
     def test_missing_tampered_unreviewed_records_fail_closed(self):
         scene = fixture(1)
         rows = reviewed_rows(scene)
@@ -377,6 +429,11 @@ class MainTurnDatasetTests(unittest.TestCase):
                 )
             self.assertTrue((out / "journal" / "000000.json").is_file())
             self.assertFalse((out / "journal" / "000001.json").exists())
+            live = json.loads((out / "summary.json").read_text())
+            self.assertEqual(live["status"], "running")
+            self.assertEqual(live["processed_scenes"], 1)
+            self.assertEqual(live["accepted_scenes"], 1)
+            self.assertEqual(live["rejected_scenes"], 0)
             turns = [
                 json.loads(x) for x in
                 (out / "main_turns.jsonl").read_text().splitlines()

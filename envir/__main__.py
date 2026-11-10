@@ -35,6 +35,8 @@ def parser() -> argparse.ArgumentParser:
     generate.add_argument("--max-candidate-multiplier", type=int,
                           help="Cap attempts to target × multiplier (default: config)")
     generate.add_argument("--no-progress", action="store_true")
+    generate.add_argument("--verbose-progress", action="store_true",
+                          help="Show per-round internal Scenario/Question/Replay bars")
     generate.add_argument("--flush-every", type=int,
                           help="Commit a durable checkpoint every N LLM reports")
     audit = sub.add_parser("quality",
@@ -97,7 +99,8 @@ def main(argv: list[str] | None = None) -> int:
         if cli.no_progress:
             options["no_progress"] = True
         result = materialize_subtasks(**options)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(f"Stage 2: {result['status']} | summary: "
+              f"{options['output_dir']}/summary.json")
         return 0 if result["status"] in {"done", "partial"} else 1
     if cli.command == "naturalize-subtasks":
         options = load_reporting_config(cli.config)
@@ -150,7 +153,9 @@ def main(argv: list[str] | None = None) -> int:
             if not 1 <= cli.max_candidate_multiplier <= 10:
                 p.error("--max-candidate-multiplier must be 1..10")
             options.max_candidate_multiplier = cli.max_candidate_multiplier
+        options.verbose_progress = cli.verbose_progress
         result = generate_questions(options)
+        report_location = options.output_dir / "summary.json"
     else:
         config_args = args_from_config(config)
         directory = config_args.output_dir
@@ -160,7 +165,8 @@ def main(argv: list[str] | None = None) -> int:
             scenes=scenes, max_records=None, output=output,
             no_progress=cli.no_progress,
         ))
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+        report_location = output
+    print(f"{cli.command}: {result['status']} | details: {report_location}")
     return 0 if result["status"] in {"done", "partial", "valid"} else 1
 
 

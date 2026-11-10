@@ -20,6 +20,9 @@ using action='delegate_task', params.tasks with task_instruction, context, model
 and tools. Only write reasoning, task_instruction and context prose.
 The model/tools fields are IMMUTABLE teacher-owned fields, not your choices.
 The deterministic compiler will supply them to the final O1 action.
+This is an offline evidence simulator: workspace:// is a source handle,
+not a physical file, and GoogleSearchAction/ExtractUrlContentAction are
+valid simulated access tools for synthetic text/table evidence.
 Never change the number or order of assigned tasks. Do not write Macro IDs.
 Reflect previous Sub-Agent findings accurately. Include concrete identifiers
 from *already returned* results when they are needed for keyed lookups.
@@ -30,22 +33,35 @@ Use JSON only with action, reasoning, params. The reasoning should explain
 why these particular tasks can run together now and what remains unresolved.
 """
 
-_CRITIC_SYSTEM = """Independently assess the proposed Orchestra-o1 Main
-decision against the teacher's assignment contract and the precise O1 visible
-prompt. Never use a current or future Sub-Agent answer as prior evidence.
-Verify that each instruction is specific, respects its source scope,
-includes necessary upstream identifiers, describes the correct goal, and
-does not introduce unsupported facts or private Macro IDs. Parallel tasks
-must remain mutually independent and must be exactly the assigned ones.
-The tool list and task cardinality are FROZEN and are NOT review choices.
-Do NOT demand different tools, add new tasks, or demand private source_ids
-fields in the Main-Agent O1 JSON action. A task with no tools is valid when
-it only reasons over prior Sub-Agent feedback.
-Reject generic empty task instructions, unsupported evidence claims or
-invented conclusions. Return JSON only:
+_CRITIC_SYSTEM = """Independently assess ONLY THE GENERATED PROSE for
+an Orchestra-o1 Main decision in an OFFLINE simulated evidence environment.
+
+All action structure, task count/order, model routing, source permissions and
+O1 tool names have already been validated by deterministic code. They are
+FROZEN: You MUST NOT evaluate, modify, or reject tools, model, cardinality,
+tool necessity, or extra hidden source_ids fields. Your candidate payload
+intentionally OMITS them. A task that only synthesizes previously returned
+facts needs no tools and is fully legal.
+
+Environment semantics: workspace:// tokens are SIMULATED source handles,
+NOT physical files that the agent must open. GoogleSearchAction and
+ExtractUrlContentAction can denote simulated search/extract evidence access
+in the teacher trace, including reserved *.example.invalid URL fixtures.
+No actual network access is performed. You MUST NOT reject a task merely
+because a synthetic source is not an actual website or because it uses
+GoogleSearchAction on simulated text/table observations. All tool
+feasibility has ALREADY been fixed by the source-access contract.
+
+Review only: Is the instruction specific, natural and semantically aligned
+with the provided assignment? Does the context accurately reuse previously
+returned Sub-Agent findings, without inventing facts from the future?
+Does the reasoning respect the current independence/dependency situation?
+An internal Macro ID or fabricated result is an error. Do not demand
+identifiers which are private metadata rather than part of O1 output.
+Return JSON only:
 {"verdict":"pass"|"fail","grounded":true|false,
 "assignment_fidelity":true|false,"o1_style":true|false,
-"reason":"short reason","repair_hint":"specific change"}
+"reason":"short reason","repair_hint":"specific prose-only change"}
 """
 
 _FORBIDDEN = re.compile(
@@ -284,18 +300,36 @@ def author_delegate_action(
             if (isinstance(generated, list)
                     and len(generated) == len(assignments)
                     and all(isinstance(task, dict) for task in generated)):
+                compiled_tasks = []
+                for task, expected in zip(generated, assignments):
+                    instruction = task.get("task_instruction")
+                    context = task.get("context")
+                    # The source scope and previously delivered results are
+                    # facts known to Main. Preserve them programmatically;
+                    # a prose author must not accidentally erase handoffs.
+                    if isinstance(instruction, str) and expected["source_ids"]:
+                        missing = [
+                            sid for sid in expected["source_ids"]
+                            if sid not in instruction + " " + str(context)
+                        ]
+                        if missing:
+                            instruction = (instruction.rstrip()
+                                + " Examine source(s): " + ", ".join(missing) + ".")
+                    if isinstance(context, str) and expected["needs_upstream"]:
+                        upstream = expected["context"]
+                        if "Previously returned result:" not in context:
+                            context = upstream + " " + context
+                        context = context[:3500]
+                    compiled_tasks.append({
+                        "task_instruction": instruction,
+                        "context": context,
+                        "model": expected["model"],
+                        "tools": list(expected["tools"]),
+                    })
                 candidate = {
                     "action": "delegate_task",
                     "reasoning": candidate.get("reasoning"),
-                    "params": {"tasks": [
-                        {
-                            "task_instruction": task.get("task_instruction"),
-                            "context": task.get("context"),
-                            "model": expected["model"],
-                            "tools": list(expected["tools"]),
-                        }
-                        for task, expected in zip(generated, assignments)
-                    ]},
+                    "params": {"tasks": compiled_tasks},
                 }
         errors = action_issues(candidate, assignments, prompt=prompt)
         if errors:
@@ -305,8 +339,20 @@ def author_delegate_action(
             review = critic.complete_json(
                 _CRITIC_SYSTEM, json.dumps({
                 "current_main_visible_prompt": prompt,
-                "assigned_tasks_in_required_order": assignments,
-                "candidate_action": candidate,
+                "assignment_prose_goals_in_required_order": [{
+                    "target_instruction": item["target_instruction"],
+                    "expected_context": item["context"],
+                    "needs_upstream": item["needs_upstream"],
+                    "output_fields": item["output_fields"],
+                } for item in assignments],
+                "candidate_prose_only": {
+                    "reasoning": candidate["reasoning"],
+                    "tasks": [{
+                        "task_instruction": task["task_instruction"],
+                        "context": task["context"],
+                    } for task in candidate["params"]["tasks"]],
+                },
+                "fixed_tool_and_model_fields_checked_by_code": True,
             }, ensure_ascii=False)
             )
         except Exception as exc:
