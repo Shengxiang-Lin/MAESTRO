@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 import json
+from threading import Barrier, BrokenBarrierError, Lock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -372,7 +373,7 @@ class MainTurnDatasetTests(unittest.TestCase):
                     scenes_path=scenes, reports_path=reports,
                     output_dir=out, author=Author(), critic=Critic(),
                     author_model="test-author", critic_model="test-critic",
-                    no_progress=True,
+                    no_progress=True, workers=1,
                 )
             self.assertTrue((out / "journal" / "000000.json").is_file())
             self.assertFalse((out / "journal" / "000001.json").exists())
@@ -426,6 +427,160 @@ class MainTurnDatasetTests(unittest.TestCase):
             checkpoint.write_text(json.dumps(content), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "checkpoint_prompt_mismatch"):
                 generate_turns(**args, author=Interrupt())
+
+
+    def test_four_workers_overlap_and_reconstruct_stable_order(self):
+        """Different scenes overlap; their Main rounds stay sequential."""
+        scenes = [fixture(i) for i in (21, 22, 23, 24)]
+
+        class Author:
+            def __init__(self, parallel=False):
+                self.lock = Lock()
+                self.barrier = Barrier(2) if parallel else None
+                self.calls = 0
+                self.overlap_observed = False
+
+            def complete_json(self, system, request):
+                with self.lock:
+                    self.calls += 1
+                    number = self.calls
+                if self.barrier is not None and number <= 2:
+                    try:
+                        self.barrier.wait(timeout=8)
+                        self.overlap_observed = True
+                    except BrokenBarrierError as exc:
+                        raise AssertionError(
+                            "independent Scene Author calls did not overlap"
+                        ) from exc
+                return json.loads(request)["reference_action_for_structure_only"]
+
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes_path = root / "scenes.jsonl"
+            reports_path = root / "reports.jsonl"
+            scenes_path.write_text(
+                "".join(json.dumps(x) + "\n" for x in scenes),
+                encoding="utf-8",
+            )
+            reports_path.write_text(
+                "".join(
+                    json.dumps(r) + "\n"
+                    for sc in scenes for r in reviewed_rows(sc)
+                ), encoding="utf-8",
+            )
+            common = {
+                "scenes_path": scenes_path, "reports_path": reports_path,
+                "critic": Critic(), "no_progress": True,
+                "author_model": "test", "critic_model": "test",
+            }
+            author = Author(parallel=True)
+            parallel = generate_turns(
+                **common, author=author, workers=4,
+                output_dir=root / "parallel",
+            )
+            self.assertTrue(author.overlap_observed)
+            self.assertEqual(parallel["accepted_scenes"], 4)
+            self.assertEqual(parallel["workers"], 4)
+            serial = generate_turns(
+                **common, author=Author(), workers=1,
+                output_dir=root / "serial",
+            )
+            self.assertEqual(serial["workers"], 1)
+            for filename in ("main_turns.jsonl", "episodes.jsonl",
+                             "private/teacher_alignment.jsonl"):
+                self.assertEqual(
+                    (root / "parallel" / filename).read_bytes(),
+                    (root / "serial" / filename).read_bytes(),
+                    filename,
+                )
+            rows = [
+                json.loads(line) for line in
+                (root / "parallel" / "main_turns.jsonl").read_text().splitlines()
+            ]
+            for scene in scenes:
+                rounds = [row["round"] for row in rows
+                          if row["task_id"] == scene["task_id"]]
+                self.assertEqual(rounds, list(range(1, len(rounds) + 1)))
+            # Worker count is orchestration-only, not a dataset signature.
+            resumed = generate_turns(
+                **common, author=Author(), workers=1,
+                output_dir=root / "parallel",
+            )
+            self.assertEqual(resumed["accepted_scenes"], 4)
+            self.assertEqual(
+                (root / "parallel" / "main_turns.jsonl").read_bytes(),
+                (root / "serial" / "main_turns.jsonl").read_bytes(),
+            )
+
+    def test_parallel_rejection_never_publishes_partial_scene(self):
+        scenes = [fixture(i) for i in (25, 26, 27)]
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes_path = root / "scenes.jsonl"
+            reports_path = root / "reports.jsonl"
+            scenes_path.write_text(
+                "".join(json.dumps(sc) + "\n" for sc in scenes),
+                encoding="utf-8",
+            )
+            reports_path.write_text(
+                "".join(
+                    json.dumps(row) + "\n"
+                    for sc in (scenes[0], scenes[2])
+                    for row in reviewed_rows(sc)
+                ), encoding="utf-8",
+            )
+            kwargs = {
+                "scenes_path": scenes_path,
+                "reports_path": reports_path,
+                "output_dir": root / "output",
+                "no_progress": True,
+            }
+            result = generate_turns(**kwargs, workers=3)
+            self.assertEqual(result["accepted_scenes"], 2)
+            self.assertEqual(result["rejected_scenes"], 1)
+            self.assertEqual(result["status"], "partial")
+            rows = [
+                json.loads(x) for x in
+                (root / "output" / "main_turns.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(
+                {row["task_id"] for row in rows},
+                {scenes[0]["task_id"], scenes[2]["task_id"]},
+            )
+            rerun = generate_turns(**kwargs, workers=1)
+            self.assertEqual(rerun["main_training_turns"],
+                             result["main_training_turns"])
+            self.assertEqual(
+                len((root / "output" / "main_turns.jsonl").read_text().splitlines()),
+                len(rows),
+            )
+
+    def test_invalid_worker_counts_fail_before_output_creation(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes_path = root / "scenes.jsonl"
+            reports_path = root / "reports.jsonl"
+            scenes_path.write_text(json.dumps(fixture(28)) + "\n")
+            reports_path.write_text("")
+            for value in (0, -1, 65, 2.0, True):
+                with self.subTest(workers=value):
+                    with self.assertRaisesRegex(
+                        ValueError, "stage3_workers_must_be_between"
+                    ):
+                        generate_turns(
+                            scenes_path=scenes_path,
+                            reports_path=reports_path,
+                            output_dir=root / "output",
+                            workers=value,
+                        )
+                    self.assertFalse((root / "output").exists())
 
 
 if __name__ == "__main__":

@@ -7,11 +7,13 @@ No scenario failed by an LLM Critic is silently turned into a pass.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+from threading import current_thread
 
 from tqdm import tqdm
 
@@ -145,6 +147,7 @@ def generate_turns(
     author_model: str | None = None,
     critic_model: str | None = None,
     overwrite: bool = False, no_progress: bool = False,
+    workers: int = 4,
 ) -> dict:
     scenes_path, reports_path = Path(scenes_path), Path(reports_path)
     output_dir = Path(output_dir)
@@ -158,6 +161,8 @@ def generate_turns(
         raise ValueError("stage3_max_revisions_must_be_0_to_8")
     if bool(author) != bool(critic):
         raise ValueError("stage3_requires_both_author_and_critic")
+    if type(workers) is not int or not 1 <= workers <= 64:
+        raise ValueError("stage3_workers_must_be_between_1_and_64")
     mode = "llm_reviewed" if author is not None else "template"
     signature = _signature(
         scenes_path, reports_path, max_scenes=max_scenes,
@@ -191,85 +196,115 @@ def generate_turns(
     for row in read_jsonl(reports_path):
         reports[row["scene_task_id"]].append(row)
 
-    # Reconcile any interruption between the atomic scene journal and its
-    # published JSONL append. This prevents missing or duplicate training turns.
+    # Only the coordinator writes shared public JSONL files. Each worker
+    # owns one Scene's round checkpoints and final atomic Scene journal.
+    # This isolates concurrent generation from publication, and preserves
+    # the prior restart contract for partially completed episodes.
     old_episodes, _, _, old_failures = _rebuild_publication(
         scene_rows, journal, output_dir,
     )
     counts = Counter({"accepted": len(old_episodes),
                       "rejected": len(old_failures)})
-    with tqdm(total=len(scene_rows), desc="Stage 3 scenes",
-              unit="scene", disable=no_progress) as outer:
-        for i, scene in enumerate(scene_rows):
-            task_id = scene["task_id"]
-            filename = journal / f"{i:06d}.json"
-            if filename.exists():
-                outer.update(1)
-                continue
+    pending = [
+        (i, scene) for i, scene in enumerate(scene_rows)
+        if not (journal / f"{i:06d}.json").is_file()
+    ]
 
-            rounds_dir = _round_directory(journal, i)
-            saved_rounds = _load_rounds(rounds_dir, task_id=task_id)
-            round_bar = None
+    def process_scene(i: int, scene: dict):
+        """Execute a whole Scene serially inside one independent worker."""
+        task_id = scene["task_id"]
+        filename = journal / f"{i:06d}.json"
+        rounds_dir = _round_directory(journal, i)
+        saved_rounds = _load_rounds(rounds_dir, task_id=task_id)
+        round_bar = None
 
-            def on_episode_start(total: int, restored: int) -> None:
-                nonlocal round_bar
-                round_bar = tqdm(
-                    total=total, initial=restored,
-                    desc=f"  Main rounds {i + 1}/{len(scene_rows)}",
-                    unit="round", position=1, leave=False,
-                    disable=no_progress,
-                )
-
-            def on_round(checkpoint: dict) -> None:
-                # The checkpoint is persisted before starting the next LLM call.
-                _save_round(rounds_dir, checkpoint)
-                if round_bar is not None:
-                    round_bar.update(1)
-
-            try:
-                try:
-                    episode, turns, alignments, status = build_episode(
-                        scene, reports[task_id],
-                        author=author, critic=critic,
-                        max_revisions=max_revisions, max_attempts=max_attempts,
-                        sub_model=sub_model, model_alias=model_alias,
-                        resume_rounds=saved_rounds, on_round=on_round,
-                        on_episode_start=on_episode_start,
-                    )
-                except (ValueError, KeyError, TypeError) as exc:
-                    episode, turns, alignments = None, [], []
-                    status = {
-                        "status": "rejected",
-                        "cause": "validation_error",
-                        "error": str(exc)[:250],
-                    }
-            finally:
-                if round_bar is not None:
-                    round_bar.close()
-
-            data = {
-                "task_id": task_id, "status": status,
-                "episode": episode, "turns": turns,
-                "private_audit": alignments,
-            }
-            # Publish only *complete* accepted episodes, never open rounds.
-            _dump_json(filename, data)
-            if status["status"] == "accepted":
-                _append_jsonl(output_dir / "episodes.jsonl", [episode])
-                _append_jsonl(output_dir / "main_turns.jsonl", turns)
-                _append_jsonl(
-                    output_dir / "private" / "teacher_alignment.jsonl",
-                    alignments,
-                )
-            else:
-                _append_jsonl(output_dir / "failed.jsonl", [
-                    {"task_id": task_id, **status},
-                ])
-            counts[status["status"]] += 1
-            outer.update(1)
-            outer.set_postfix(
-                accepted=counts["accepted"], rejected=counts["rejected"],
+        def on_episode_start(total: int, restored: int) -> None:
+            nonlocal round_bar
+            # Distinct ThreadPoolExecutor worker threads keep stable tqdm
+            # positions; previous scenes can reuse the same line.
+            slot = int(current_thread().name.rsplit("_", 1)[1])
+            round_bar = tqdm(
+                total=total, initial=restored,
+                desc=f"  Worker {slot + 1}: scene {i + 1}/{len(scene_rows)}",
+                unit="round", position=slot + 1, leave=False,
+                disable=no_progress,
             )
+
+        def on_round(checkpoint: dict) -> None:
+            # Persist before issuing any subsequent Author/Critic requests.
+            _save_round(rounds_dir, checkpoint)
+            if round_bar is not None:
+                round_bar.update(1)
+
+        try:
+            try:
+                episode, turns, alignments, status = build_episode(
+                    scene, reports[task_id],
+                    author=author, critic=critic,
+                    max_revisions=max_revisions, max_attempts=max_attempts,
+                    sub_model=sub_model, model_alias=model_alias,
+                    resume_rounds=saved_rounds, on_round=on_round,
+                    on_episode_start=on_episode_start,
+                )
+            except (ValueError, KeyError, TypeError) as exc:
+                episode, turns, alignments = None, [], []
+                status = {
+                    "status": "rejected",
+                    "cause": "validation_error",
+                    "error": str(exc)[:250],
+                }
+        finally:
+            if round_bar is not None:
+                round_bar.close()
+
+        data = {
+            "task_id": task_id, "status": status,
+            "episode": episode, "turns": turns,
+            "private_audit": alignments,
+        }
+        # Crash-safe per-scene commit. Nothing incomplete is published.
+        _dump_json(filename, data)
+        return i, data
+
+    with tqdm(total=len(scene_rows), initial=len(scene_rows) - len(pending),
+              desc="Stage 3 scenes", unit="scene", position=0,
+              disable=no_progress) as outer:
+        outer.set_postfix(accepted=counts["accepted"],
+                          rejected=counts["rejected"])
+        # LLM calls in different Scenes overlap; rounds within one Scene do not.
+        # The standard OpenAICompatibleBackend keeps no per-request mutable
+        # state and can be shared between workers.
+        with ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="stage3-scene",
+        ) as pool:
+            futures = {
+                pool.submit(process_scene, i, scene): i
+                for i, scene in pending
+            }
+            for future in as_completed(futures):
+                i, data = future.result()  # Surface corrupt journals/fatal errors.
+                status = data["status"]
+                if status["status"] == "accepted":
+                    _append_jsonl(
+                        output_dir / "episodes.jsonl", [data["episode"]],
+                    )
+                    _append_jsonl(
+                        output_dir / "main_turns.jsonl", data["turns"],
+                    )
+                    _append_jsonl(
+                        output_dir / "private" / "teacher_alignment.jsonl",
+                        data["private_audit"],
+                    )
+                else:
+                    _append_jsonl(output_dir / "failed.jsonl", [
+                        {"task_id": data["task_id"], **status},
+                    ])
+                counts[status["status"]] += 1
+                outer.update(1)
+                outer.set_postfix(
+                    accepted=counts["accepted"],
+                    rejected=counts["rejected"],
+                )
 
     # Normalize all published outputs from atomic scene journals. A restart
     # does this on entry too, so torn appends cannot duplicate any samples.
@@ -281,6 +316,7 @@ def generate_turns(
         "status": "done" if not failures else "partial",
         "pipeline": "maestro_stage3_main_turn_dataset_v1",
         "mode": mode,
+        "workers": workers,
         "requested_scenes": len(scene_rows),
         "accepted_scenes": len(episodes),
         "rejected_scenes": len(failures),
@@ -323,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--reports", type=Path, required=True)
     p.add_argument("--output-dir", type=Path, required=True)
     p.add_argument("--max-scenes", type=int)
+    p.add_argument("--workers", type=int, default=4,
+                   help="Concurrent independent Scenes (default: 4)")
     p.add_argument("--mode", choices=("template", "llm"), default="template")
     p.add_argument("--author-api-base")
     p.add_argument("--author-model")
@@ -360,6 +398,7 @@ def main(argv: list[str] | None = None) -> int:
         model_alias=args.model_alias,
         author_model=args.author_model, critic_model=args.critic_model,
         overwrite=args.overwrite, no_progress=args.no_progress,
+        workers=args.workers,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary["status"] == "done" else 1
