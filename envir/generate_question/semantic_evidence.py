@@ -96,7 +96,7 @@ def compile_semantic_contract(
                 and spec.get("reasoning_pattern") == "macro_first_v2"):
             raise ValueError("semantic_evidence_contract_not_enabled")
     if program is None:
-        from .macro_first_v2 import compile_macro_solvers
+        from .macro_planning import compile_macro_solvers
         program = compile_macro_solvers(spec)
     source_by_id = {x["source_id"]: x for x in spec["sources"]}
     schema_by_id = spec["macro_plan"]["source_schemas"]
