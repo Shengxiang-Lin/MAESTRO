@@ -115,6 +115,14 @@ def _operator_evidence(
         "evidence_atoms": [
             fact_index[ref] for ref in actual_refs[:evidence_limit]
         ],
+        "lookup_keys": ({
+            "source_id": node["source_id"],
+            "key_field": node["input_key_field"],
+            "key_values": sorted({
+                str(row["values"][node["input_key_field"]])
+                for row in product.rows
+            }),
+        } if node["op"] == "lookup_by_key" else None),
         "evidence_atoms_total": len(actual_refs),
         "evidence_atoms_truncated": len(actual_refs) > evidence_limit,
     }
