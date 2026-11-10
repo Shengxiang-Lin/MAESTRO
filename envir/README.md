@@ -272,3 +272,59 @@ observations, not real media or real tool searches. The Stage 2 Oracle
 provides reliable workproducts; it does not prove a real LLM Sub-Agent can
 perform arbitrary searches. Stage 3 adaptive orchestration, retries, and
 untrusted outcomes remain separate work.
+
+
+## Macro-first V2: varied goals and local evidence (opt-in)
+
+The newer, isolated pilot `--macro-first-v2-share` changes task **content**
+while retaining the frozen Macro-first task-first architecture. It is
+independent of `--macro-first-share` (V1); existing V1 ProblemSpecs and
+scenes continue to replay unchanged. V2 takes precedence only on its
+selected Medium/Hard scenes. Easy remains the older baseline.
+
+```bash
+python -m envir generate-questions \
+  --config envir/config.yaml --target 100 --macro-first-v2-share 100 \
+  --output-dir envir/data/maestro_macro_v2_100
+
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --scenes envir/data/maestro_macro_v2_100/questions/scenes.jsonl \
+  --output-dir envir/data/maestro_macro_v2_reports_100
+```
+
+The sampled `macro_plan` freezes each Macro's role, typed handoff,
+source scope, and independently sampled `evidence_plan`. Four bounded
+DAG families include serial identification, parallel cue resolution,
+disputed-report reconciliation and joint **video/audio temporal alignment
+inside one Macro**. Optional keyed index hops vary 0–2; these do not
+change the Macro-local evidence budgets.
+
+Goals depend on the topic's inferred domain (e.g. match result,
+performance venue, publication year, review status, case title). Source
+observations have 4–17 candidate rows, depending on independently
+sampled evidence volume, with controlled ambiguity. Video observations
+include action and timestamps, audio includes spoken cues/timestamps,
+and the temporal Macro checks footage time <= commentary time.
+Media are **typed synthetic observations**, not real decoded files.
+
+V2 questions use ordinary investigation wording and should not disclose
+fictional/synthetic benchmark framing. This presentation requirement is
+different from the private metadata: every source remains explicitly
+marked synthetic for the researcher. Question/Scenario Author and Critic
+use separate V2 prompts to prevent goal substitution and unsupported
+historical claims about real named entities.
+
+`quality_report.json["macro_first_v2"]` records goal families, graph
+families, source observation volume, direct sources per Macro, and
+video/audio joint tasks. Internally exact replay checks frozen goals,
+the global answer, provenance, controlled source interventions and
+every explicit cross-Macro handoff.
+
+**Boundaries:** This is still a bounded, self-contained synthetic
+investigation workspace, not full web browsing or original media
+perception. Candidate observation count is an evidence-search volume,
+not automatically the number of independently supporting facts. Neither
+the synthetic hard label nor a longer local evidence list proves
+difficulty for a live LLM Sub-Agent. A local Author/Critic pilot and
+independent blind-agent evaluation are needed.
