@@ -252,6 +252,49 @@ def validate_evidence_spec(spec: dict) -> list[str]:
         errors.append("unknown_evidence_graph_archetype")
     if graph.get("answer_field") != "accession_year":
         errors.append("wrong_evidence_graph_output")
+    # Freeze the sampled grammar program itself, not only its type shape.
+    # Scenario Author may rename human-facing titles but may never replace
+    # an approved acquisition plan, key field or source topology.
+    archetype = graph.get("archetype")
+    hops = graph.get("lookup_hops")
+    difficulty = spec.get("difficulty_target")
+    allowed_hops = {
+        "chain": (2, 3) if difficulty == "medium" else (3,),
+        "parallel": (1,) if difficulty == "medium" else (2,),
+        "disambiguation": (2,),
+        "conflict": (1,) if difficulty == "medium" else (2,),
+    }.get(archetype, ())
+    if type(hops) is not int or hops not in allowed_hops:
+        errors.append("invalid_evidence_graph_hop_count")
+    visual = graph.get("visual_features")
+    if archetype == "conflict":
+        if visual is not None:
+            errors.append("unexpected_conflict_visual_clue")
+    elif (not isinstance(visual, dict)
+          or visual.get("emblem_color") not in COLORS
+          or visual.get("emblem_shape") not in MOTIFS):
+        errors.append("invalid_evidence_visual_clue")
+    if not errors:
+        expected_nodes, expected_output = _program(
+            archetype, hops,
+            (visual or {}).get("emblem_color", ""),
+            (visual or {}).get("emblem_shape", ""),
+        )
+        if (graph.get("nodes") != expected_nodes
+                or graph.get("output") != expected_output):
+            errors.append("evidence_graph_program_not_from_grammar")
+        expected_roles, expected_schemas = _roles(
+            spec["scenario"]["topic"], archetype, hops)
+        if graph.get("source_schemas") != expected_schemas:
+            errors.append("evidence_graph_source_schema_not_from_grammar")
+        supplied_roles = spec.get("sources", [])
+        source_contract = lambda r: (
+            r.get("source_id"), r.get("modality"),
+            r.get("access_mode"), r.get("key_field")
+        )
+        if ([source_contract(role) for role in supplied_roles]
+                != [source_contract(role) for role in expected_roles]):
+            errors.append("evidence_graph_source_policy_not_from_grammar")
     sources = spec.get("sources", [])
     schemas = graph.get("source_schemas", {})
     ids = [s.get("source_id") for s in sources if isinstance(s, dict)]
