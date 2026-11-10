@@ -172,6 +172,31 @@ def tools_from_primitive_steps(steps: list[dict]) -> list[str]:
     return tools
 
 
+def legacy_tools_from_task(task: dict, public_catalog: dict) -> list[str]:
+    """Read-only compatibility for pre-contract Stage-1 Scene snapshots.
+
+    This is NOT a new frozen Scene contract. Old Scenes have no acquisition
+    metadata; regenerate with Stage 1 for a fully audited contract.
+    """
+    result = []
+    for step in task["operator_chain"]:
+        if step["op"] not in _ACQUISITION_OPS:
+            continue
+        sid = step["source_id"]
+        modality = public_catalog[sid]["modality_hint"]
+        if modality in _MEDIA_ACTIONS:
+            tool = _MEDIA_ACTIONS[modality]
+        elif modality in {"text", "table"}:
+            # Synthetic records expose no real URL, so an O1 search-by-query
+            # affordance is closer than pretending URL extraction is possible.
+            tool = "GoogleSearchAction"
+        else:
+            raise ValueError("evidence_legacy_unknown_modality:" + str(modality))
+        if tool not in result:
+            result.append(tool)
+    return result
+
+
 def validate_scene_evidence_tools(scene: dict) -> list[str]:
     """Fail closed on source, primitive and Macro aggregation drift."""
     spec = scene["problem_spec"]
