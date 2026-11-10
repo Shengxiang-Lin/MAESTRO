@@ -438,6 +438,77 @@ class MainTurnDatasetTests(unittest.TestCase):
                     output_path=folder / "should_not_exist.jsonl",
                 )
 
+    def test_stage3_live_progress_counts_and_resume(self):
+        """Scene-level totals and SFT turn counts stay correct on restart."""
+        from unittest.mock import patch
+
+        scenes = [fixture(17), fixture(18)]
+        # First Scene has a complete reviewed Stage-2 bank and is accepted;
+        # second has no reports, so it is correctly rejected.
+        reports = reviewed_rows(scenes[0])
+        bars = []
+
+        class RecordingBar:
+            def __init__(self, *args, **kwargs):
+                self.initial = kwargs.get("initial", 0)
+                self.total = kwargs["total"]
+                self.states = []
+                self.completed = self.initial
+                bars.append(self)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def update(self, count):
+                self.completed += count
+
+            def set_postfix(self, values):
+                self.states.append(dict(values))
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes_path, reports_path = root / "scenes.jsonl", root / "reports.jsonl"
+            scenes_path.write_text(
+                "".join(json.dumps(scene) + "\n" for scene in scenes),
+                encoding="utf-8",
+            )
+            reports_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in reports),
+                encoding="utf-8",
+            )
+            kwargs = {
+                "scenes_path": scenes_path, "reports_path": reports_path,
+                "output_dir": root / "out", "workers": 1,
+            }
+            with patch("envir.stage3.generate_turns.tqdm", RecordingBar):
+                summary = generate_turns(**kwargs)
+                resumed = generate_turns(**kwargs)
+
+            self.assertEqual(summary, resumed)
+            self.assertEqual(summary["accepted_scenes"], 1)
+            self.assertEqual(summary["rejected_scenes"], 1)
+            self.assertGreater(summary["main_training_turns"], 1)
+            self.assertEqual(len(bars), 2)
+            self.assertEqual(bars[0].initial, 0)
+            self.assertEqual(bars[0].total, 2)
+            self.assertEqual(bars[0].completed, 2)
+            self.assertEqual(bars[0].states[0], {
+                "accepted": 0, "rejected": 0,
+                "written": 0, "turns": 0,
+            })
+            self.assertEqual(bars[0].states[-1], {
+                "accepted": 1, "rejected": 1,
+                "written": 2, "turns": summary["main_training_turns"],
+            })
+            self.assertEqual(bars[1].initial, 2)
+            self.assertEqual(bars[1].states[0], bars[0].states[-1])
+            saved = json.loads((root / "out" / "summary.json").read_text())
+            self.assertEqual(saved["main_training_turns"], summary["main_training_turns"])
+            self.assertEqual(saved["accepted_scenes"] + saved["rejected_scenes"], 2)
+
     def test_round_journal_resumes_without_reauthoring_completed_round(self):
         """A process crash after round 1 must preserve round-1 O1 labels."""
         scene = fixture(11)

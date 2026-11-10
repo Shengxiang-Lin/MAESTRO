@@ -209,11 +209,13 @@ def generate_turns(
     # owns one Scene's round checkpoints and final atomic Scene journal.
     # This isolates concurrent generation from publication, and preserves
     # the prior restart contract for partially completed episodes.
-    old_episodes, _, _, old_failures = _rebuild_publication(
+    old_episodes, old_turns, _, old_failures = _rebuild_publication(
         scene_rows, journal, output_dir,
     )
     counts = Counter({"accepted": len(old_episodes),
                       "rejected": len(old_failures)})
+    # Only turns from fully accepted Episodes are public SFT samples.
+    published_turns = len(old_turns)
     pending = [
         (i, scene) for i, scene in enumerate(scene_rows)
         if not (journal / f"{i:06d}.json").is_file()
@@ -288,6 +290,8 @@ def generate_turns(
             "processed_scenes": current,
             "accepted_scenes": counts["accepted"],
             "rejected_scenes": counts["rejected"],
+            "written_scenes": counts["accepted"] + counts["rejected"],
+            "main_training_turns": published_turns,
             "public_turns": str(output_dir / "main_turns.jsonl"),
             "failed": str(output_dir / "failed.jsonl"),
         })
@@ -296,7 +300,19 @@ def generate_turns(
     write_live_summary()
     with tqdm(total=len(scene_rows), initial=len(scene_rows) - len(pending),
               desc="Stage 3 scenes", unit="scene", position=0,
-              disable=no_progress) as outer:
+              dynamic_ncols=True, disable=no_progress) as outer:
+        def update_progress() -> None:
+            # Match Stage 2's live accepted/rejected/written counters.
+            # "written" counts committed Scenes, while "turns" counts
+            # publishable Main decisions from accepted complete Episodes.
+            outer.set_postfix({
+                "accepted": counts["accepted"],
+                "rejected": counts["rejected"],
+                "written": counts["accepted"] + counts["rejected"],
+                "turns": published_turns,
+            })
+
+        update_progress()
         # LLM calls in different Scenes overlap; rounds within one Scene do not.
         # The standard OpenAICompatibleBackend keeps no per-request mutable
         # state and can be shared between workers.
@@ -321,6 +337,7 @@ def generate_turns(
                         output_dir / "private" / "teacher_alignment.jsonl",
                         data["private_audit"],
                     )
+                    published_turns += len(data["turns"])
                 else:
                     _append_jsonl(output_dir / "failed.jsonl", [
                         {"task_id": data["task_id"], **status},
@@ -328,6 +345,7 @@ def generate_turns(
                 counts[status["status"]] += 1
                 completed_now += 1
                 outer.update(1)
+                update_progress()
                 write_live_summary()
 
     # Normalize all published outputs from atomic scene journals. A restart
