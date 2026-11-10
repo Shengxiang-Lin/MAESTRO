@@ -21,7 +21,7 @@ output path, and resume behavior. Internal status, failure reasons and
 source-preservation checks are written to summary and failure JSONL files.
 Nothing here represents an actual Web/media tool invocation.
 
-For research/recovery you can separately materialize the Oracle bank with:
+For research/recovery you can separately materialize an Oracle bank to the **independent** `implementation.output_dir` (by default `envir/data/maestro_subtask_oracle_100`) with:
 
 ```bash
 python -m envir implement-subtasks --config envir/configs/subagent_reports.yaml
