@@ -264,11 +264,16 @@ def semantic_text_issues(text: str, spec: dict, contract: dict,
           and mode in {"parallel_cues", "multimodal_event"}):
         # Avoid falsely attributing the independent audio/text cue to the
         # image itself. The LLM Critic handles subtler attribution variants.
-        if re.search(
+        if (re.search(
             r"\b(?:image|photo|picture)\b[^.?!]{0,70}"
-            r"\b(?:emblem|symbol)\b[^.?!]{0,36}"
-            r"\b(?:star|spiral|crescent|triangle|wave)\b", q,
-        ):
+            r"\b(?:star|spiral|crescent|triangle|wave)\s+"
+            r"(?:shaped\s+)?(?:emblem|symbol)\b", q,
+        ) or re.search(
+            r"\b(?:image|photo|picture)\b[^.?!]{0,70}"
+            r"\b(?:emblem|symbol)\s+"
+            r"(?:with|showing|shaped|depicting)\s+(?:a\s+)?"
+            r"(?:star|spiral|crescent|triangle|wave)\b", q,
+        )):
             issues.append("semantic_unapplied_visual_shape")
 
     amounts = [(_normalized_time_ms(m.group("value"), m.group("unit")), m)
