@@ -117,6 +117,53 @@ class EvidenceGraphGrammarTests(unittest.TestCase):
                 )
         self.assertTrue(True)
 
+    def test_program_mutation_is_rejected_even_if_types_still_match(self):
+        spec = graph_spec(4, "medium")
+        modified = copy.deepcopy(spec)
+        # This is a valid typed filter operation, but changes the frozen
+        # semantic program without going through the grammar sampler.
+        modified["evidence_graph"]["nodes"][-2]["fields"] = ["accession_year"]
+        modified["evidence_graph"]["nodes"].append({
+            "id": "extra_no_op", "op": "unique",
+            "inputs": [modified["evidence_graph"]["output"]],
+        })
+        self.assertIn("evidence_graph_program_not_from_grammar",
+                      spec_issues(modified))
+
+    def test_archive_lookup_key_claim_is_checked_against_executed_field(self):
+        from envir.implement_subtask.reporting import _teacher_contract, _guard
+        clue = make_spec(
+            seed_record={"record_id": "key-check", "topic": "Fictional Museum"},
+            ordinal=2, run_seed=17, difficulty="medium",
+            clue_chain_share=100,
+        )
+        scene = compile_and_validate(clue, reference_question(clue))
+        records = realize_scene(scene)["macro_tasks"]
+        archive = next(row for row in records if row["authorized_source_ids"]
+                       == ["archive"])
+        contract = _teacher_contract(
+            archive, question=scene["question"], is_terminal=False
+        )
+        contract["all_evidence_refs"] = sorted({
+            ref for step in archive["trace_summary"]["steps"]
+            for ref in step["supporting_fact_refs"]
+        })
+        lookup = next(step["lookup_keys"] for step in
+                      contract["observed_operator_steps"]
+                      if step["lookup_keys"] is not None)
+        self.assertEqual(lookup["source_id"], "archive")
+        self.assertEqual(lookup["key_field"], "accession_id")
+        candidate = {
+            "status": "done",
+            "result": archive["answer"],
+            "summary": (
+                "I executed a keyed lookup using the upstream marker code "
+                "M-55 against the archive and returned the matching record."
+            ),
+        }
+        self.assertIn("summary_wrong_archive_lookup_key",
+                      _guard(candidate, contract))
+
     def test_one_oracle_stage2_scene_from_each_archetype(self):
         found = {}
         for i in range(64):
