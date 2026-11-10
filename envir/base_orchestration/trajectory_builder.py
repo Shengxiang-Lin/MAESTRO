@@ -21,7 +21,8 @@ from envir.implement_subtask.realize import realize_scene
 
 from .o1_compat import o1_prompt, o1_history, o1_prompt_from_turn, source_catalog
 from .action_author import (
-    _assignment, action_issues, completion_issues, author_delegate_action,
+    _assignment, action_issues, completion_issues,
+    author_delegate_action, author_complete_action,
 )
 
 
@@ -464,7 +465,7 @@ def build_episode(
         max_attempts=max_attempts, sub_model=sub_model,
         model_alias=model_alias,
     )
-    final_action = {
+    completion_template = {
         "action": "complete",
         "reasoning": _grounded_completion_reasoning(
             delivered, shortcut=visible_answer_shortcut,
@@ -472,6 +473,31 @@ def build_episode(
         ),
         "params": {"answer": _answer_text(scene)},
     }
+    prior_final = (saved_rounds[completion_round - 1]
+                   if completion_round <= len(saved_rounds) else None)
+    if prior_final is not None:
+        prior_turn = prior_final.get("turn", {})
+        prior_audit = prior_final.get("private_audit", {})
+        completion_status = prior_audit.get("authoring")
+        final_action = deepcopy(prior_turn.get("output"))
+        if (not isinstance(completion_status, dict)
+                or completion_status.get("status") != "accepted"
+                or prior_turn.get("input") != {
+                    "subtask_history": o1_history(task_entries)}
+                or prior_audit.get("prompt_sha256") != _hash(completion_prompt)
+                or prior_turn.get("generation_mode")
+                   != completion_status.get("mode")
+                or o1_prompt_from_turn(
+                    scene, prior_turn, max_attempts=max_attempts,
+                    sub_model=sub_model, model_alias=model_alias,
+                ) != completion_prompt):
+            raise RuntimeError("stage3_checkpoint_completion_prompt_mismatch")
+    else:
+        final_action, completion_status = author_complete_action(
+            template=completion_template, prompt=completion_prompt,
+            delivered=delivered, author=author, critic=critic,
+            max_revisions=max_revisions,
+        )
     completion_errors = completion_issues(
         final_action, expected_answer=_answer_text(scene),
         delivered=delivered,
@@ -485,7 +511,7 @@ def build_episode(
         "task_id": scene["task_id"], "round": completion_round,
         "input": {"subtask_history": o1_history(task_entries)},
         "output": final_action,
-        "generation_mode": "teacher_verified_completion",
+        "generation_mode": completion_status["mode"],
     }
     final_audit = {
         "task_id": scene["task_id"], "round": completion_round,
@@ -499,6 +525,7 @@ def build_episode(
         "action_sha256": _hash(final_action),
         "main_locally_computed": main_compute,
         "visible_answer_shortcut": visible_answer_shortcut,
+        "authoring": completion_status,
         "dependencies_satisfied": True,
         "private_only": True,
     }
@@ -533,4 +560,5 @@ def build_episode(
         "parallel_delegation_rounds": len(scheduled),
         "main_local_goal_resolution": main_compute,
         "visible_answer_shortcut": visible_answer_shortcut,
+        "completion_generation_mode": completion_status["mode"],
     }
