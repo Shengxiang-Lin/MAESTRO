@@ -15,7 +15,7 @@ from envir.generate_question.quality import compile_and_validate
 from envir.implement_subtask.realize import realize_scene
 from envir.stage3.trajectory_builder import build_episode
 from envir.stage3.generate_turns import generate_turns
-from envir.stage3.o1_compat import o1_prompt, o1_history
+from envir.stage3.o1_compat import o1_prompt, o1_history, o1_prompt_from_turn
 from envir.stage3.action_author import action_issues
 
 
@@ -72,7 +72,11 @@ class MainTurnDatasetTests(unittest.TestCase):
             ), scene["macro_graph"]["macro_task_count"] -
                 int(status["main_local_goal_resolution"]))
             for turn in turns:
-                prompt = turn["input"]["prompt"]
+                self.assertEqual(set(turn["input"]), {"subtask_history"})
+                self.assertNotIn("prompt", turn["input"])
+                prompt = o1_prompt_from_turn(
+                    scene, turn, max_attempts=16, sub_model="qwen3-8b",
+                )
                 action = turn["output"]
                 self.assertIn("==== QUESTION ====", prompt)
                 self.assertIn("==== SUBTASK HISTORY ====", prompt)
@@ -92,11 +96,15 @@ class MainTurnDatasetTests(unittest.TestCase):
         rows = reviewed_rows(scene)
         by_id = {r["macro_task_id"]: r for r in rows}
         _, turns, audit, _ = build_episode(scene, rows)
-        first_prompt = turns[0]["input"]["prompt"]
+        first_prompt = o1_prompt_from_turn(
+            scene, turns[0], max_attempts=16, sub_model="qwen3-8b",
+        )
         self.assertIn("No subtasks completed yet.", first_prompt)
         self.assertNotIn("PUBLIC_SUMMARY_", first_prompt)
         for turn, record in zip(turns, audit):
-            prompt = turn["input"]["prompt"]
+            prompt = o1_prompt_from_turn(
+                scene, turn, max_attempts=16, sub_model="qwen3-8b",
+            )
             visible = set(record["visible_macros_before_round"])
             for tid, row in by_id.items():
                 marker = "PUBLIC_SUMMARY_" + tid.replace("work_M", "S")
@@ -104,11 +112,63 @@ class MainTurnDatasetTests(unittest.TestCase):
                     self.assertIn(marker, prompt)
                 else:
                     self.assertNotIn(marker, prompt)
-        self.assertIn("Parallel Batch", turns[1]["input"]["prompt"])
+        self.assertIn("Parallel Batch", turns[1]["input"]["subtask_history"])
         self.assertTrue(any(
             len(t["output"]["params"]["tasks"]) > 1
             for t in turns if t["output"]["action"] == "delegate_task"
         ))
+
+    def test_every_main_round_sees_all_previous_subagent_feedback(self):
+        scene = fixture(2)
+        rows = reviewed_rows(scene)
+        episode, turns, audits, status = build_episode(scene, rows)
+        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(turns[0]["input"]["subtask_history"],
+                         "No subtasks completed yet.")
+        prior_feedback = []
+        for i, turn in enumerate(turns):
+            history = turn["input"]["subtask_history"]
+            # Each turn's history contains *every previous* Sub-Agent
+            # result (including all parallel subtasks), but never the current
+            # round's future Sub-Agent results.
+            for previous in prior_feedback:
+                self.assertIn(previous, history)
+            if i == 0:
+                self.assertNotIn("PUBLIC_SUMMARY_", history)
+            self.assertEqual(turn["round"], i + 1)
+            if i < len(episode["trajectory"]):
+                trajectory_round = episode["trajectory"][i]
+                if trajectory_round["action"] == "delegate_task":
+                    for result in trajectory_round["result"]["subtask_results"]:
+                        marker = result["finish_result"]["summary"]
+                        self.assertNotIn(marker, history)
+                        prior_feedback.append(marker)
+        self.assertTrue(prior_feedback)
+        self.assertEqual(audits[-1]["action"], "complete")
+        for marker in prior_feedback:
+            self.assertIn(marker, turns[-1]["input"]["subtask_history"])
+
+    def test_compact_input_renders_identical_o1_prompts(self):
+        scene = fixture(7)
+        _, turns, private, status = build_episode(
+            scene, reviewed_rows(scene), max_attempts=18,
+            sub_model="other-model", model_alias="model_custom",
+        )
+        self.assertEqual(status["status"], "accepted")
+        import hashlib
+        for turn, audit in zip(turns, private):
+            rendered = o1_prompt_from_turn(
+                scene, turn, max_attempts=18,
+                sub_model="other-model", model_alias="model_custom",
+            )
+            actual_hash = hashlib.sha256(
+                json.dumps(rendered, sort_keys=True, ensure_ascii=False)
+                .encode("utf-8")
+            ).hexdigest()
+            self.assertEqual(actual_hash, audit["prompt_sha256"])
+            self.assertIn(f"[Attempt {turn['round']}/18]", rendered)
+            self.assertIn(turn["input"]["subtask_history"], rendered)
+            self.assertNotIn("prompt", turn["input"])
 
     def test_frozen_goal_resolution_may_finish_from_known_counts(self):
         matched = 0
@@ -480,7 +540,7 @@ class MainTurnDatasetTests(unittest.TestCase):
                 generate_turns(**args, author=Interrupt())
             checkpoint = root / "out" / "journal" / "000000.rounds" / "round-0001.json"
             content = json.loads(checkpoint.read_text())
-            content["turn"]["input"]["prompt"] = "tampered"
+            content["turn"]["input"]["subtask_history"] = "tampered"
             checkpoint.write_text(json.dumps(content), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "checkpoint_prompt_mismatch"):
                 generate_turns(**args, author=Interrupt())
