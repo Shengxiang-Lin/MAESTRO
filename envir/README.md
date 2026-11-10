@@ -445,3 +445,54 @@ fidelity; they do not yet replace the bounded synthetic DAG grammar with
 a truly open-world browsing, real-media perception or optimal-cost agent
 benchmark. In particular the **Hard** label is an intended difficulty
 class, not independently calibrated solver failure probability.
+
+
+## Source-locked V2 investigations and variable branch difficulty
+
+For new Medium/Hard V2 samples (`--macro-first-v2-share 100`) the
+`scene_realism_version` marker freezes **domain- and schema-derived
+source titles**. The Scenario Author is only allowed to provide
+`setting`, `user_role`, `purpose`, `motivation` and
+`entity_kind`. Any source_titles it tries to supply are replaced by
+the exact modality/role/domain contract BEFORE deterministic validation
+or Critic review; the accepted Scene never publishes a title for a
+nonexistent video/audio/image source. Older frozen scenes without the
+marker preserve their original titles, plans and World observations.
+
+The public Question Author now sees a one-output template: identifying
+the matching item is an **internal condition**, not a second output.
+A deterministic semantic guard rejects explicit coordinated questions
+such as "which case ... and what is the permit status?" when Gold only
+returns `permit_status`. Legitimate surface variants such as
+"triangular motif" for "triangle motif" remain allowed. These checks
+are conservative: they do not prove arbitrary natural-language
+equivalence.
+
+For new multimodal_event scenes, independent video+audio and event-log
+candidate sets have variable lengths (Medium: 2–3 per branch; Hard:
+3–4 per branch), with unique intersection and differing target-vs-
+alternative Goal values. Sources are materialized with enough rows to
+actually hold all competing candidates. The existing PR106 2/2/1
+candidate policy remains replayable on older scenes. The information
+necessity audit checks the **actual** branch WorkProducts and
+authoritative outcome values rather than only frozen DAG edges.
+
+New `difficulty_audit.macro_first_audit.structural_difficulty_profile`
+and `quality_report.macro_first_v2.structural_difficulty_by_target`
+report observation volume, Macro count, internal operation count, index
+hops and branch alternatives. These are **structural diagnostics**, not
+a measured live-Agent success rate: a Hard label is not yet empirically
+calibrated. The global Easy/Medium/Hard target mix remains 17/33/50.
+
+```bash
+git pull origin main
+python -m envir generate-questions \
+  --config envir/config.yaml --target 100 \
+  --macro-first-v2-share 100 \
+  --output-dir envir/data/maestro_macro_v2_realism_100
+
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --scenes envir/data/maestro_macro_v2_realism_100/questions/scenes.jsonl \
+  --output-dir envir/data/maestro_macro_v2_realism_reports_100
+```
