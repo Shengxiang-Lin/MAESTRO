@@ -1,1 +1,1 @@
-"""Reserved interface area for future untrusted-orchestration dataset generation."""
+"""Round-local unreliable evidence and dynamic Main orchestration training data."""
