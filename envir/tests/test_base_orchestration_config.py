@@ -38,7 +38,10 @@ class TrajectoryConfigurationTests(TestCase):
             "/subtasks.jsonl"
         ))
         self.assertEqual(cfg["mode"], "llm")
-        self.assertEqual(cfg["workers"], 4)
+        self.assertEqual(
+            cfg["workers"],
+            yaml.safe_load(DEFAULT_CONFIG.read_text())["generation"]["workers"],
+        )
         self.assertEqual(cfg["author_model"], "local-qwen3.5-9b")
 
         from envir.config import DEFAULT_CONFIG as QUESTIONS
@@ -84,7 +87,10 @@ class TrajectoryConfigurationTests(TestCase):
         self.assertEqual(backend.call_args_list[0].kwargs["max_tokens"], 2800)
         self.assertEqual(backend.call_args_list[1].kwargs["max_tokens"], 1200)
         kwargs = runner.call_args.kwargs
-        self.assertEqual(kwargs["workers"], 4)
+        self.assertEqual(
+            kwargs["workers"],
+            yaml.safe_load(DEFAULT_CONFIG.read_text())["generation"]["workers"],
+        )
         self.assertEqual(kwargs["max_revisions"], 2)
         self.assertEqual(kwargs["max_attempts"], 16)
         self.assertEqual(kwargs["author_model"], "local-qwen3.5-9b")
