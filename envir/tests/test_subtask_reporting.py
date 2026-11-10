@@ -414,6 +414,46 @@ class EntryEvidenceMappingRegressions(unittest.TestCase):
             "Entry-01 (register:F007)", facts
         ))
 
+    def test_wrong_author_entry_fact_ref_is_rejected_by_guard(self):
+        from envir.implement_subtask.reporting import (
+            _guard, _teacher_contract,
+        )
+        from envir.implement_subtask.oracle_review import (
+            positive_entry_provenance,
+        )
+        frozen = scene(25, "medium")
+        realized = realize_scene(frozen)
+        teacher = next(
+            r for r in realized["macro_tasks"]
+            if r["macro_task_id"] == realized["terminal_macro_task_id"]
+        )
+        positive = positive_entry_provenance(teacher)
+        if not positive:
+            self.skipTest("no register provenance in sampled teacher")
+        label, refs = next((k, v) for k, v in positive.items() if v)
+        wrong = "register:F999"
+        text = (
+            "Checked the register entries and validated the output "
+            f"with the incorrectly attributed {label} ({wrong})."
+        )
+        from envir.implement_subtask.reporting import _normalize_author_result
+        rows = teacher["answer"]
+        contract = _teacher_contract(teacher, question=frozen["question"],
+                                     is_terminal=True)
+        contract["all_evidence_refs"] = {
+            wrong, *(
+                ref for step in teacher["trace_summary"]["steps"]
+                for ref in step["supporting_fact_refs"]
+            ),
+        }
+        candidate = {
+            "status": "done", "result": rows, "summary": text,
+        }
+        self.assertIn(
+            "summary_entry_fact_ref_mismatch",
+            _guard(candidate, contract),
+        )
+
     def test_real_oracle_facts_map_to_correct_entries(self):
         from envir.implement_subtask.oracle_review import entry_fact_index
         frozen = scene(25, "medium")
