@@ -76,6 +76,16 @@ def generate_world(spec: dict) -> dict:
     if set(source_targets) != set(plan["source_schemas"]):
         raise ValueError("local_evidence_plan_source_coverage_mismatch")
     entity_count = max(source_targets.values())
+    variable_profile = (
+        plan.get("candidate_profile")
+        if spec.get("scene_realism_version")
+        and plan["pattern"] == "multimodal_event" else None
+    )
+    if variable_profile and any(
+        target < variable_profile["union_candidate_count"]
+        for target in source_targets.values()
+    ):
+        raise ValueError("branch_candidates_not_materialized_in_all_sources")
     colors = ("amber", "blue", "green", "red", "violet")
     motifs = ("crescent", "spiral", "star", "wave", "triangle")
     actions = ("entrance", "handoff", "turn", "signal", "departure")
@@ -120,6 +130,21 @@ def generate_world(spec: dict) -> dict:
             case_tag = clues["case_tag"] if i in (0, 2) else other_tag
         else:
             case_tag = clues["case_tag"] if i in (0, 1, 2) else other_tag
+        if variable_profile:
+            left_count = variable_profile["left_candidate_count"]
+            union_count = variable_profile["union_candidate_count"]
+            left_member = i < left_count
+            right_member = i == 0 or left_count <= i < union_count
+            # The video/audio branch keeps the target plus left decoys;
+            # the independent event log keeps the target plus right
+            # decoys. Both are non-singleton; only the join is unique.
+            action = clues["scene_action"] if left_member else other_action
+            motif = clues["emblem_shape"] if left_member else other_motif
+            timestamp = (
+                clues["time_threshold_ms"] + 10000
+                if left_member else 20000
+            )
+            case_tag = clues["case_tag"] if right_member else other_tag
         item = {
             "candidate_id": labels[i], "case_id": labels[i],
             "marker_code": f"MK-{marker_codes[i]:04d}",
@@ -128,6 +153,7 @@ def generate_world(spec: dict) -> dict:
             "frame_time_ms": timestamp,
             "footage_time_ms": timestamp,
             "commentary_time_ms": (
+                timestamp + 5000 if variable_profile else
                 timestamp + 5000 if (i != 1 or (
                     information_necessary and
                     plan["pattern"] == "multimodal_event"
@@ -143,7 +169,23 @@ def generate_world(spec: dict) -> dict:
             item[f"record_key_{j}"] = f"KEY{j}-{keys[i]:05d}"
         objects.append(item)
 
-    if (spec.get("macro_information_necessity_version")
+    if variable_profile:
+        # Every candidate that survives either branch must lead to a
+        # different final answer from the target; alternative candidates
+        # may share a value (e.g. one of five possible statuses).
+        target_value = objects[0][field]
+        for index, row in enumerate(
+            objects[1:variable_profile["union_candidate_count"]], 1
+        ):
+            for attempt in range(60):
+                if row[field] != target_value:
+                    break
+                row[field] = _goal_value(
+                    field, kind, entity_count + index + attempt, rng
+                )
+            if row[field] == target_value:
+                raise ValueError("alternative_has_same_goal_as_target")
+    elif (spec.get("macro_information_necessity_version")
             and plan["pattern"] == "multimodal_event"):
         # Information necessity should matter to the ANSWER, not merely
         # to a candidate label. The target and competing candidates must
