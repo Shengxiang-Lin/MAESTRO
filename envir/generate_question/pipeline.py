@@ -567,8 +567,8 @@ def audit_questions(args) -> dict:
     return result
 
 
-def generate_questions(args) -> dict:
-    """One command from MMQA/topic seeds to validated Question quality."""
+def _generate_batch(args) -> dict:
+    """One independently reproducible Scenario/Question generation round."""
     if bool(args.question_model) != bool(args.question_api_base):
         raise ValueError(
             "For optional Question Author/Critic, supply both "
