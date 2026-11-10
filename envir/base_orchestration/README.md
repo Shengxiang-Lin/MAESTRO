@@ -21,6 +21,37 @@ replayed as successful Sub-Agent feedback, but are **not executed** as real
 tools. The next Main decision sees the full cumulative *already returned*
 history, including all parallel subtasks.
 
+### Evidence-grounded terminal decisions and quality control
+
+The Teacher DAG is still the default dependency-safe schedule. A new
+**visible-answer shortcut** may omit a terminal Sub-Agent delegation only
+when it is an evidence-free `take/project/unique` transformation and the
+preceding *public* reviewed Sub-Agent Finish Result explicitly identifies
+the **entire** required `Entry-XX` answer set. Arithmetic terminal
+calculation uses the existing independently verified input-value rule.
+New sources, ambiguous observations and joins are never bypassed.
+`summary.json` records `visible_answer_shortcuts`.
+
+The `complete` answer remains frozen to the validated Scene. Its rationale
+now quotes the already-visible public Finish Results, rather than using
+one shared sentence. In LLM mode, the Author may also add a concise
+natural-language introduction, which an independent Critic reviews.
+If this language review cannot pass, the output explicitly uses
+`teacher_grounded_completion_fallback` (a deterministic, Guard-checked
+evidence quotation; **not** reported as LLM-reviewed). Mode counts appear
+in `summary.json` under `completion_generation_modes`.
+
+A second independent Critic review is possible if the first critic
+rejects prose *solely* by second-guessing tools already validated by the
+frozen O1 tool contract. No such objection is automatically accepted.
+The Guard also rejects text that leaks Author revision or Critic feedback.
+
+The public `main_turns.jsonl` contains `input.subtask_history` and
+`output` (dict) per round, **without duplicated `output_json`**;
+serialize `output` to JSON at training/export time when needed.
+Revised run signatures reject incompatible old checkpoints; use a
+new output directory for regenerated data.
+
 Main-format compatibility is implemented in `o1_compat.py` by calling
 the real Orchestra-o1 Prompt Builder and history formatter. Public training
 labels store only `input.subtask_history` and `output`; the full Prompt is

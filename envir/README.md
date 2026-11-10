@@ -42,11 +42,15 @@ advanced reuse of a separately materialized Oracle bank. No real media
 or Web tools are executed by dataset synthesis.
 
 **Base orchestration** read the accepted Stage-1 Scenes and complete
-reviewed Sub-Agent reports, dispatch exactly the dependency-unblocked Macro
-waves, insert already delivered feedback into O1's cumulative
+reviewed Sub-Agent reports, dispatch dependency-unblocked Macro
+waves (skipping evidence-free terminal extraction only when all answer
+identities are already explicitly present in public reviewed results),
+insert already delivered feedback into O1's cumulative
 `subtask_history`, and use LLM Author/Critic for natural Main
 `delegate_task` prose. Only finished accepted Episodes contribute
-`main_turns.jsonl` labels. The final `complete` is teacher verified.
+`main_turns.jsonl` labels. The final `complete` answer is teacher verified; its public-evidence
+rationale is independently LLM-reviewed when possible, with a clearly
+labeled deterministic fallback if the prose review fails.
 Main-turn examples omit the repeated full O1 prompt; use:
 
 ```bash
@@ -67,7 +71,7 @@ hold diagnostic details. The terminal keeps concise live progress counters.
 - `generate_question/prompt_templates.py`: live Author/Critic text templates.
 - `implement_subtask/realize.py`, `reporting.py`, `combined.py`:
   trusted evidence replay, report review and one-command integration.
-- `main_trajectories/trajectory_builder.py`, `action_author.py`,
+- `base_orchestration/trajectory_builder.py`, `action_author.py`,
   `o1_compat.py`: trusted Main decision supervision and real O1 formatting.
 - `untrusted_orchestration/`: **reserved for future design**, not an
   implemented attack simulator. It will have a fourth independent config

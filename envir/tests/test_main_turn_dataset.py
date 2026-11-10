@@ -61,6 +61,8 @@ class MainTurnDatasetTests(unittest.TestCase):
             self.assertEqual(len(turns), len(episode["trajectory"]))
             self.assertEqual(len(turns), len(private))
             self.assertEqual(turns[-1]["output"]["action"], "complete")
+            self.assertEqual(episode["format"],
+                             "orchestra_o1_main_trajectory.v3")
             self.assertEqual([t["round"] for t in turns],
                              list(range(1, len(turns)+1)))
             self.assertEqual(sum(
@@ -85,9 +87,7 @@ class MainTurnDatasetTests(unittest.TestCase):
                 self.assertNotIn("macro_task_id", prompt)
                 self.assertNotIn("gold_program", prompt)
                 self.assertNotIn("work_M", json.dumps(action))
-                self.assertEqual(
-                    json.loads(turn["output_json"]), action,
-                )
+                self.assertNotIn("output_json", turn)
             self.assertTrue(all(x["private_only"] for x in private))
             self.assertNotIn("private_macro_alignment", json.dumps(turns))
 
@@ -249,6 +249,166 @@ class MainTurnDatasetTests(unittest.TestCase):
             for task in turn["output"]["params"]["tasks"]
         ))
 
+    def test_visible_answer_shortcut_skips_only_evidence_free_easy_terminal(self):
+        # Frozen Easy Scene has 2 Macro waves; a first, reviewed Sub-Agent
+        # can visibly report the exact top Entry, making the terminal
+        # take/project/unique wave redundant.
+        chosen = None
+        for i in range(40):
+            spec = make_spec(
+                seed_record={
+                    "record_id": f"easy-shortcut-{i}",
+                    "topic": "Museum registry", "domain_hint": "history",
+                    "source_modalities": ["table", "text"],
+                },
+                ordinal=i, run_seed=17, difficulty="easy",
+            )
+            sc = compile_and_validate(spec, reference_question(spec))
+            tasks = sc["macro_graph"]["tasks"]
+            terminal = tasks[-1]
+            if (len(sc["macro_graph"]["reference_waves"]) == 2
+                    and len(terminal["depends_on"]) == 1
+                    and not terminal["source_ids"]
+                    and set(step["op"] for step in terminal["operator_chain"])
+                    .issubset({"take", "project", "unique"})
+                    and len(sc["gold_answer"]) == 1
+                    and set(sc["gold_answer"][0]) == {"entry_label"}):
+                chosen = sc
+                break
+        self.assertIsNotNone(chosen)
+        rows = reviewed_rows(chosen)
+        golden_entry = chosen["gold_answer"][0]["entry_label"]
+        parent = chosen["macro_graph"]["tasks"][0]["task_id"]
+        row = next(x for x in rows if x["macro_task_id"] == parent)
+        row["finish_result"]["result"] = (
+            f"{golden_entry} is the active entry ranked first by the "
+            "requested ordering; all necessary evidence was checked."
+        )
+        episode, turns, audits, status = build_episode(chosen, rows)
+        self.assertEqual(status["status"], "accepted")
+        self.assertTrue(status["visible_answer_shortcut"], {
+            "gold_answer": chosen["gold_answer"],
+            "terminal_id": chosen["macro_graph"]["terminal_task_id"],
+            "terminal": chosen["macro_graph"]["tasks"][-1],
+            "parent": parent, "result": row["finish_result"]["result"],
+            "waves": chosen["macro_graph"]["reference_waves"],
+            "status": status,
+        })
+        self.assertEqual([x["output"]["action"] for x in turns],
+                         ["delegate_task", "complete"])
+        self.assertEqual(turns[-1]["output"]["params"]["answer"], golden_entry)
+        self.assertIn(golden_entry, turns[-1]["output"]["reasoning"])
+        self.assertNotIn(parent, turns[0]["input"]["subtask_history"])
+        self.assertTrue(audits[-1]["visible_answer_shortcut"])
+
+        # Ambiguous or incomplete visible report is NOT licensed to skip
+        # a pending terminal; private Oracle correctness alone is insufficient.
+        vague = deepcopy(rows)
+        match = next(x for x in vague if x["macro_task_id"] == parent)
+        match["finish_result"]["result"] = (
+            f"The sorted register includes {golden_entry}, Entry-99 and others."
+        )
+        _, cautious, _, cautious_status = build_episode(chosen, vague)
+        self.assertEqual(cautious_status["status"], "accepted")
+        self.assertFalse(cautious_status["visible_answer_shortcut"])
+        self.assertEqual(
+            [x["output"]["action"] for x in cautious],
+            ["delegate_task", "delegate_task", "complete"],
+        )
+
+    def test_metadata_leak_rejected_and_tool_only_critic_gets_second_review(self):
+        from envir.base_orchestration.action_author import (
+            _assignment, proposed_template_action, author_delegate_action,
+            completion_issues,
+        )
+        from envir.base_orchestration.o1_compat import source_catalog
+        scene = fixture(1)
+        target = scene["macro_graph"]["tasks"][0]
+        rows = {r["macro_task_id"]: r for r in reviewed_rows(scene)}
+        assignment = _assignment(target, source_catalog(scene), rows)
+        action = proposed_template_action([assignment])
+        action["reasoning"] += (
+            " In my previous draft I chose the wrong tool."
+        )
+        self.assertIn(
+            "generation_process_leak",
+            action_issues(action, [assignment], prompt=""),
+        )
+        action["reasoning"] = (
+            "I will investigate the assigned source independently, "
+            "then use the evidence to guide the next decision."
+        )
+
+        class Author:
+            def complete_json(self, system, payload):
+                return json.loads(payload)["reference_action_for_structure_only"]
+
+        class Critic:
+            def __init__(self):
+                self.calls = 0
+
+            def complete_json(self, system, payload):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "verdict": "fail", "grounded": False,
+                        "assignment_fidelity": False, "o1_style": True,
+                        "reason": (
+                            "Using GoogleSearchAction for simulated workspace "
+                            "sources is invalid; replace the tool choice."
+                        ),
+                        "repair_hint": "Use a different tool instead.",
+                    }
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        critic = Critic()
+        result, info = author_delegate_action(
+            assignments=[assignment], prompt="==== QUESTION ==== Find record",
+            author=Author(), critic=critic, max_revisions=0,
+        )
+        self.assertEqual(info["status"], "accepted")
+        self.assertEqual(critic.calls, 2)
+        self.assertEqual(result["params"]["tasks"][0]["tools"],
+                         assignment["tools"])
+        class StillRejectingCritic:
+            def __init__(self):
+                self.calls = 0
+
+            def complete_json(self, system, payload):
+                self.calls += 1
+                return {
+                    "verdict": "fail", "grounded": False,
+                    "assignment_fidelity": False, "o1_style": False,
+                    "reason": (
+                        "GoogleSearchAction is not valid for workspace:// "
+                        "sources; the tool must be replaced."
+                    ),
+                    "repair_hint": "Replace the tool.",
+                }
+
+        rejecting = StillRejectingCritic()
+        refused, info = author_delegate_action(
+            assignments=[assignment], prompt="==== QUESTION ==== Find record",
+            author=Author(), critic=rejecting, max_revisions=0,
+        )
+        self.assertIsNone(refused)
+        self.assertEqual(info["status"], "failed")
+        self.assertEqual(rejecting.calls, 2)
+        completion = {
+            "action": "complete", "reasoning": "Generic statement without evidence.",
+            "params": {"answer": "wrong"},
+        }
+        self.assertIn(
+            "completion_answer_not_teacher_verified",
+            completion_issues(
+                completion, expected_answer="correct",
+                delivered={target["task_id"]: rows[target["task_id"]]},
+            ),
+        )
+
     def test_missing_tampered_unreviewed_records_fail_closed(self):
         scene = fixture(1)
         rows = reviewed_rows(scene)
@@ -317,7 +477,9 @@ class MainTurnDatasetTests(unittest.TestCase):
         self.assertGreater(author.calls, 0)
         self.assertTrue(all(
             t["generation_mode"] in {
-                "llm_reviewed", "teacher_verified_completion",
+                "llm_reviewed", "llm_reviewed_completion",
+                "teacher_grounded_completion_fallback",
+                "teacher_verified_completion",
             } for t in turns
         ))
         bad, critic = Author(bad=True), Critic()
@@ -327,6 +489,74 @@ class MainTurnDatasetTests(unittest.TestCase):
         self.assertIsNone(rejected)
         self.assertEqual(status["status"], "rejected")
         self.assertEqual(critic.calls, 0)
+
+    def test_completion_author_review_and_explicit_fallback(self):
+        scene = fixture(4)
+        rows = reviewed_rows(scene)
+
+        class TemplateAuthor:
+            def complete_json(self, system, request):
+                return json.loads(request)["reference_action_for_structure_only"]
+
+        class GoodCritic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        _, turns, audit, status = build_episode(
+            scene, rows, author=TemplateAuthor(), critic=GoodCritic(),
+            max_revisions=0,
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(status["completion_generation_mode"],
+                         "llm_reviewed_completion")
+        self.assertEqual(turns[-1]["generation_mode"],
+                         "llm_reviewed_completion")
+        self.assertEqual(audit[-1]["authoring"]["status"], "accepted")
+        self.assertIn("The returned finding states:",
+                      turns[-1]["output"]["reasoning"])
+
+        class BadFinalAuthor:
+            def complete_json(self, system, request):
+                data = json.loads(request)
+                template = data["reference_action_for_structure_only"]
+                if template["action"] == "complete":
+                    return {"reasoning":
+                            "As the Critic said about my previous draft, "
+                            "I invented future evidence."}
+                return template
+
+        _, turns, audit, status = build_episode(
+            scene, rows, author=BadFinalAuthor(), critic=GoodCritic(),
+            max_revisions=1,
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(
+            turns[-1]["generation_mode"],
+            "teacher_grounded_completion_fallback",
+        )
+        self.assertFalse(audit[-1]["authoring"]["reviewed"])
+        self.assertNotIn("previous draft",
+                         turns[-1]["output"]["reasoning"])
+        self.assertTrue(audit[-1]["authoring"]["failures"])
+
+    def test_all_completions_use_their_own_visible_evidence(self):
+        reasons = set()
+        for i in (0, 1, 2, 3, 4):
+            scene = fixture(i)
+            episode, turns, _, status = build_episode(
+                scene, reviewed_rows(scene),
+            )
+            self.assertEqual(status["status"], "accepted")
+            reason = turns[-1]["output"]["reasoning"]
+            previous_history = turns[-1]["input"]["subtask_history"]
+            # No private or future outcome is used to create the rationale.
+            self.assertIn("The returned finding states:", reason)
+            self.assertIn("PUBLIC_SUMMARY_", previous_history)
+            reasons.add(reason)
+        self.assertGreaterEqual(len(reasons), 4)
 
     def test_atomic_journal_resume_and_public_private_outputs(self):
         scene = fixture(8)
@@ -569,7 +799,7 @@ class MainTurnDatasetTests(unittest.TestCase):
             self.assertEqual(first_before, first_round.read_bytes())
             self.assertEqual(
                 resumed_author.calls,
-                resumed["actions"]["delegate_task"] - 1,
+                resumed["actions"]["delegate_task"],
             )
             fresh = generate_turns(
                 **common, author=Author(), output_dir=folder / "fresh",

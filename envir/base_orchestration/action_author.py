@@ -71,6 +71,85 @@ _FORBIDDEN = re.compile(
 )
 
 
+_GENERATION_META = re.compile(
+    r"\b(?:previous|earlier|last)\s+(?:draft|revision|generation|"
+    r"response|attempt)\b|"
+    r"\b(?:critic|reviewer)\s+(?:said|requested|feedback|rejected)\b|"
+    r"\b(?:in|from|per)\s+(?:the|this)\s+prompt\b|"
+    r"\b(?:my|the)\s+(?:tool|action)\s+(?:choice|selection)\s+"
+    r"(?:was|is)\s+(?:wrong|invalid)\b|"
+    r"\b(?:revision|repair)\s+(?:attempt|feedback)\b",
+    re.I,
+)
+
+
+def _critic_review_passes(review: dict) -> bool:
+    return (
+        isinstance(review, dict)
+        and review.get("verdict") == "pass"
+        and all(review.get(key) is True for key in (
+            "grounded", "assignment_fidelity", "o1_style",
+        ))
+    )
+
+
+def _review_only_frozen_tool_objection(review: dict) -> bool:
+    """An invalid tool critique is not a reason to reject reviewed prose.
+
+    Re-review from a tool-neutral view; do not auto-accept the action.
+    """
+    if not isinstance(review, dict) or review.get("verdict") != "fail":
+        return False
+    reason = str(review.get("reason", "")) + " " + str(
+        review.get("repair_hint", "")
+    )
+    return (
+        bool(re.search(
+            r"GoogleSearchAction|ExtractUrlContentAction|ExecuteCodeAction|"
+            r"tool\s+(?:choice|selection|feasibility|availability)|"
+            r"workspace://|simulated\s+source\s+tools", reason, re.I,
+        ))
+        and bool(re.search(
+            r"(?:inappropriate|invalid|should\s+(?:not|instead)|"
+            r"replace|cannot|violat|not\s+applicable|not\s+allowed|"
+            r"wrong\s+tool)", reason, re.I,
+        ))
+    )
+
+
+def _tool_neutral_review_payload(prompt: str, assignments: list[dict],
+                                 candidate: dict) -> dict:
+    # Remove tool-routing instructions only for the *second* reviewer
+    # perspective. The published Action itself is not modified.
+    question = prompt.split("==== QUESTION ====", 1)[-1].split(
+        "====", 1
+    )[0].strip()
+    return {
+        "current_user_question": question[:1800],
+        "assignment_prose_goals_in_required_order": [{
+            "expected_output_fields": a["output_fields"],
+            "needs_upstream": a["needs_upstream"],
+            "expected_context": a["context"],
+        } for a in assignments],
+        "candidate_prose_only": {
+            "reasoning": candidate["reasoning"],
+            "tasks": [{
+                "task_instruction": re.sub(
+                    r"(?:GoogleSearchAction|ExtractUrlContentAction|"
+                    r"ExecuteCodeAction)", "[authorized tool]",
+                    task["task_instruction"],
+                ),
+                "context": task["context"],
+            } for task in candidate["params"]["tasks"]],
+        },
+        "fixed_tool_feasibility_already_checked": True,
+        "review_rule": (
+            "Review semantic task goal, accuracy, and visible history only. "
+            "Tool choice and simulated source accessibility are outside scope."
+        ),
+    }
+
+
 def _short(value, limit=500) -> str:
     text = str(value).strip().replace("\n", " ")
     return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
@@ -227,6 +306,9 @@ def action_issues(action: dict, assignments: list[dict],
     all_action_text = json.dumps(action, ensure_ascii=False)
     if _FORBIDDEN.search(all_action_text):
         errors.append("internal_teacher_language")
+    # Author revision feedback is not part of the Main's O1 history.
+    if _GENERATION_META.search(all_action_text):
+        errors.append("generation_process_leak")
     for i, (task, expected) in enumerate(zip(tasks, assignments)):
         if not isinstance(task, dict):
             errors.append(f"task_{i}_not_an_object")
@@ -261,6 +343,162 @@ def action_issues(action: dict, assignments: list[dict],
             elif not identifiers and "Previously returned result:" not in context:
                 errors.append(f"task_{i}_upstream_result_not_transmitted")
     return errors
+
+
+def completion_issues(action: dict, *, expected_answer: str,
+                      delivered: dict) -> list[str]:
+    """Guard teacher-verified completion against unsupported prose.
+
+    The final answer stays frozen by the trusted Scene. Only preceding
+    public Finish Results can justify the completion rationale.
+    """
+    if not isinstance(action, dict) or action.get("action") != "complete":
+        return ["invalid_completion_action"]
+    if action.get("params") != {"answer": expected_answer}:
+        return ["completion_answer_not_teacher_verified"]
+    reasoning = action.get("reasoning")
+    if not isinstance(reasoning, str) or not 45 <= len(reasoning) <= 1600:
+        return ["invalid_completion_reasoning"]
+    issues = []
+    if _FORBIDDEN.search(reasoning) or _GENERATION_META.search(reasoning):
+        issues.append("completion_generation_or_private_leak")
+    visible_result_quotes = [
+        row["finish_result"]["result"].strip().replace("\n", " ")[:360].rstrip()
+        for row in delivered.values()
+    ]
+    if not any(quote and quote in reasoning
+               for quote in visible_result_quotes):
+        issues.append("completion_not_grounded_in_visible_result")
+    return issues
+
+
+_COMPLETE_AUTHOR_SYSTEM = """Write one concise, naturally phrased
+Orchestra-o1 Main-Agent COMPLETE rationale. The final answer is already
+teacher-verified and must NOT be changed. Only use earlier public Sub-Agent
+Finish Results; never mention private Oracle, revision feedback, a Critic,
+or future observations. Explain why those results are sufficient to answer.
+Return JSON: {"reasoning": "one or two evidence-grounded sentences"}.
+"""
+
+
+_COMPLETE_CRITIC_SYSTEM = """Review ONLY the final Main-Agent completion
+reasoning for factual support and O1 style. The final answer and all earlier
+public Sub-Agent results have been independently verified. Do NOT review
+tools, source-access routes, model choices, or hidden Macro metadata.
+Reject invented evidence, generator revisions or unsupported conclusions.
+Return JSON only: {"verdict":"pass"|"fail","grounded":true|false,
+"assignment_fidelity":true|false,"o1_style":true|false,
+"reason":"brief reason","repair_hint":"concrete prose-only change"}.
+"""
+
+
+def author_complete_action(*, template: dict, prompt: str,
+                           delivered: dict, author=None, critic=None,
+                           max_revisions: int = 2) -> tuple[dict, dict]:
+    """Naturalize a grounded completion; never weaken the frozen answer.
+
+    An explicitly labeled deterministic evidence-quoting completion is a
+    safe fallback if the language author/reviewer cannot agree. The fallback
+    is NOT represented as independent LLM-reviewed language.
+    """
+    correct_answer = template["params"]["answer"]
+    template_errors = completion_issues(
+        template, expected_answer=correct_answer, delivered=delivered,
+    )
+    if template_errors:
+        raise ValueError("invalid_grounded_complete_template:" +
+                         ",".join(template_errors))
+    if author is None:
+        return deepcopy(template), {
+            "status": "accepted", "mode": "teacher_verified_completion",
+            "attempts": 0,
+        }
+    if critic is None:
+        raise ValueError("stage3_completion_author_requires_critic")
+    public_evidence = [{
+        "result": report["finish_result"]["result"],
+        "summary": report["finish_result"]["summary"],
+    } for report in delivered.values()]
+    failures = []
+    for attempt in range(max_revisions + 1):
+        request = {
+            "current_main_visible_prompt": prompt,
+            "public_evidence_from_previously_completed_subtasks":
+                public_evidence,
+            "reference_action_for_structure_only": template,
+            "previous_prose_feedback": failures[-2:],
+        }
+        try:
+            proposed = author.complete_json(
+                _COMPLETE_AUTHOR_SYSTEM,
+                json.dumps(request, ensure_ascii=False),
+            )
+        except Exception as exc:
+            failures.append({"stage": "completion_author",
+                             "reason": str(exc)[:200]})
+            continue
+        if (not isinstance(proposed, dict)
+                or proposed.get("action", "complete") != "complete"
+                or not isinstance(proposed.get("reasoning"), str)):
+            failures.append({"stage": "completion_shape"})
+            continue
+        authored = proposed["reasoning"].strip()
+        if _GENERATION_META.search(authored) or _FORBIDDEN.search(authored):
+            failures.append({"stage": "completion_guard",
+                             "errors": ["generation_process_leak"]})
+            continue
+        # Always attach the exact prior public result quotation so that a
+        # paraphrase alone cannot invent completion evidence.
+        if authored == template["reasoning"]:
+            full_reason = authored
+        else:
+            full_reason = authored[:420].rstrip() + " " + template["reasoning"]
+        candidate = {
+            "action": "complete", "reasoning": full_reason,
+            "params": {"answer": correct_answer},
+        }
+        errors = completion_issues(
+            candidate, expected_answer=correct_answer, delivered=delivered,
+        )
+        if errors:
+            failures.append({"stage": "completion_guard", "errors": errors})
+            continue
+        try:
+            review = critic.complete_json(
+                _COMPLETE_CRITIC_SYSTEM,
+                json.dumps({
+                    "current_main_visible_prompt": prompt,
+                    "public_evidence_from_previously_completed_subtasks":
+                        public_evidence,
+                    "candidate_prose_only": {
+                        "reasoning": candidate["reasoning"],
+                        "tasks": [],
+                    },
+                    "assignment_prose_goals_in_required_order": [],
+                    "fixed_answer_verified_by_code": True,
+                }, ensure_ascii=False),
+            )
+        except Exception as exc:
+            failures.append({"stage": "completion_critic_backend",
+                             "reason": str(exc)[:200]})
+            continue
+        if _critic_review_passes(review):
+            return candidate, {
+                "status": "accepted", "mode": "llm_reviewed_completion",
+                "attempts": attempt + 1, "review": review,
+            }
+        failures.append({
+            "stage": "completion_critic",
+            "reason": str(review.get("reason", ""))[:250]
+                      if isinstance(review, dict) else "invalid_review",
+            "repair_hint": str(review.get("repair_hint", ""))[:250]
+                           if isinstance(review, dict) else "",
+        })
+    return deepcopy(template), {
+        "status": "accepted", "mode": "teacher_grounded_completion_fallback",
+        "attempts": max_revisions + 1, "failures": failures,
+        "reviewed": False,
+    }
 
 
 def author_delegate_action(
@@ -360,10 +598,24 @@ def author_delegate_action(
                 "stage": "critic_backend", "reason": str(exc)[:200],
             })
             continue
-        if (review.get("verdict") == "pass"
-                and all(review.get(k) is True for k in (
-                    "grounded", "assignment_fidelity", "o1_style",
-                ))):
+        if _review_only_frozen_tool_objection(review):
+            try:
+                review = critic.complete_json(
+                    _CRITIC_SYSTEM + "\nSECOND REVIEW: ignore all frozen tool "
+                    "routing, judge only grounded Task prose.\n",
+                    json.dumps(
+                        _tool_neutral_review_payload(
+                            prompt, assignments, candidate,
+                        ), ensure_ascii=False,
+                    ),
+                )
+            except Exception as exc:
+                failures.append({
+                    "stage": "critic_scope_rereview_backend",
+                    "reason": str(exc)[:200],
+                })
+                continue
+        if _critic_review_passes(review):
             return deepcopy(candidate), {
                 "status": "accepted", "mode": "llm_reviewed",
                 "attempts": revision + 1, "review": review,

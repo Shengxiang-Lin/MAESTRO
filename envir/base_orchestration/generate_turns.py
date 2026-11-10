@@ -363,6 +363,14 @@ def generate_turns(
         for attempt in failure.get("authoring", {}).get("failures", []):
             failure_stages[attempt.get("stage", "unknown")] += 1
             guard_issues.update(attempt.get("errors") or [])
+    completion_modes = Counter(
+        row.get("authoring", {}).get("mode", "unknown")
+        for row in private if row.get("action") == "complete"
+    )
+    shortcut_count = sum(
+        bool(row.get("visible_answer_shortcut"))
+        for row in private if row.get("action") == "complete"
+    )
     summary = {
         "status": "done" if not failures else "partial",
         "pipeline": "maestro_stage3_main_turn_dataset_v1",
@@ -376,6 +384,8 @@ def generate_turns(
         "guard_errors_across_attempts": dict(guard_issues),
         "main_training_turns": len(turns),
         "actions": dict(action_counts),
+        "completion_generation_modes": dict(completion_modes),
+        "visible_answer_shortcuts": shortcut_count,
         "mean_turns_per_scene": round(
             len(turns) / max(1, len(episodes)), 3
         ),
