@@ -84,7 +84,7 @@ def intent_contract(spec: dict) -> dict:
             "serial_identity": (
                 ["Identify the same case using BOTH visual image features."]
                 if clues["visual_modality"] == "image" else
-                ["Identify the video event by the named action AFTER the specified time threshold."]
+                ["Identify the video event by the named action at or after the specified time threshold."]
             ),
             "parallel_cues": [
                 "Resolve the identity using an independent visual clue and"
