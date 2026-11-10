@@ -19,6 +19,11 @@ from .base_orchestration.config import (
     load_config as load_trajectory_config,
     generate_from_config,
 )
+from .untrusted_orchestration.config import (
+    DEFAULT_CONFIG as UNTRUSTED_CONFIG,
+    load_config as load_untrusted_config,
+    generate_from_config as generate_untrusted_from_config,
+)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -99,6 +104,21 @@ def parser() -> argparse.ArgumentParser:
     trajectories.add_argument("--overwrite", action="store_true")
     trajectories.add_argument("--no-progress", action="store_true")
     trajectories.add_argument("--verbose-progress", action="store_true")
+    untrusted = sub.add_parser(
+        "generate-untrusted-turns",
+        help="Branch trusted Main history at a returned Sub-Agent batch and simulate evidence failures",
+    )
+    untrusted.add_argument("--config", type=Path, default=UNTRUSTED_CONFIG)
+    untrusted.add_argument("--scenes", type=Path)
+    untrusted.add_argument("--reports", type=Path)
+    untrusted.add_argument("--base-episodes", type=Path)
+    untrusted.add_argument("--output-dir", type=Path)
+    untrusted.add_argument("--max-scenes", type=int)
+    untrusted.add_argument("--branches-per-scene", type=int)
+    untrusted.add_argument("--workers", type=int)
+    untrusted.add_argument("--mode", choices=("template", "llm"))
+    untrusted.add_argument("--overwrite", action="store_true")
+    untrusted.add_argument("--no-progress", action="store_true")
     return root
 
 
@@ -178,6 +198,29 @@ def main(argv: list[str] | None = None) -> int:
         )["output_dir"]
         print(f"base orchestration: {summary['status']} | details: "
               f"{target}/summary.json")
+        return 0 if summary["status"] in {"done", "partial"} else 1
+    if cli.command == "generate-untrusted-turns":
+        overrides = {}
+        for cli_name, option in (
+            ("scenes", "scenes_path"), ("reports", "reports_path"),
+            ("base_episodes", "base_episodes_path"),
+            ("output_dir", "output_dir"), ("max_scenes", "max_scenes"),
+            ("branches_per_scene", "branches_per_scene"),
+            ("workers", "workers"), ("mode", "mode"),
+        ):
+            value = getattr(cli, cli_name)
+            if value is not None:
+                overrides[option] = value
+        if cli.overwrite:
+            overrides["overwrite"] = True
+        if cli.no_progress:
+            overrides["no_progress"] = True
+        summary = generate_untrusted_from_config(cli.config, **overrides)
+        out = overrides.get("output_dir") or load_untrusted_config(
+            cli.config
+        )["output_dir"]
+        print(f"untrusted orchestration: {summary['status']} | details: "
+              f"{out}/summary.json")
         return 0 if summary["status"] in {"done", "partial"} else 1
     config = load_config(cli.config)
     if cli.command == "generate-questions":
