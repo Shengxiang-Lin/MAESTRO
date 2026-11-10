@@ -331,16 +331,14 @@ def construct_scenes(args) -> dict:
         # Select only independently reviewed, accepted scenes. Never turn
         # failed Scenario drafts into accepted results to meet a quota.
         remaining = Counter(requested_counts)
-        selected_to_compile = [
-            spec for spec in selected_to_compile
-            if remaining[spec["difficulty_target"]] > 0
-            and not (
-                remaining.__setitem__(
-                    spec["difficulty_target"],
-                    remaining[spec["difficulty_target"]] - 1,
-                )
-            )
-        ]
+        accepted_by_quota = []
+        for spec in selected_to_compile:
+            level = spec["difficulty_target"]
+            if remaining[level] <= 0:
+                continue
+            accepted_by_quota.append(spec)
+            remaining[level] -= 1
+        selected_to_compile = accepted_by_quota
     quota_selected = Counter(
         spec["difficulty_target"] for spec in selected_to_compile
     )
