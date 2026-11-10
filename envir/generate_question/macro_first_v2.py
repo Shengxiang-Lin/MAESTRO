@@ -346,8 +346,9 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     )
     from .semantic_evidence import CONTRACT_VERSION
     from .source_title_contract import (
-        SCENE_REALISM_VERSION, expected_source_titles,
+        SCENE_REALISM_VERSION, expected_source_titles, DOMAIN_FRAMES,
     )
+    _, domain_materials = DOMAIN_FRAMES[domain]
     spec = {
         "version": version,
         "semantic_evidence_contract_version": CONTRACT_VERSION,
@@ -366,11 +367,12 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         "difficulty_target": difficulty,
         "family": "macro_first_v2", "reasoning_pattern": "macro_first_v2",
         "scenario": {
-            "topic": topic, "setting": f"an information investigation about {topic}",
-            "user_role": "investigator",
-            "purpose": "resolve the requested fact by combining independent material",
-            "motivation": "check the result against relevant sources",
-            "entity_kind": "cases and events",
+            "topic": topic,
+            "setting": f"A source-based investigation of {topic} {domain_materials}",
+            "user_role": "research analyst",
+            "purpose": f"determine the confirmed {plan['goal']['public_label']}",
+            "motivation": "resolve the identity using independent working evidence",
+            "entity_kind": "events and records",
         },
         "sources": roles, "macro_plan": plan,
         "requirements": {
