@@ -5,6 +5,7 @@ import json
 import math
 from collections import Counter
 from pathlib import Path
+from tqdm.auto import tqdm
 
 from envir.schema import normalize_label
 from envir.streaming import stable_signature, file_digest
@@ -66,77 +67,86 @@ def generate_with_quotas(args, *, generate_batch, quality_report):
     totals = {"scenario": Counter(), "question": Counter()}
     attempted = overflow = 0
 
-    for round_index in range(1, 20):
-        counts = Counter(x["problem_spec"]["difficulty_target"]
-                         for x in selected)
-        missing = deficits(targets, counts)
-        need = sum(missing.values())
-        if need == 0 or attempted >= budget:
-            break
-        count = min(args.target, budget - attempted,
-                    args.target if round_index == 1
-                    else max(need, math.ceil(need * 1.45)))
-        mix = percentage_mix(missing)
-        sub = copy.copy(args)
-        sub.output_dir = root / "rounds" / f"{round_index:02d}"
-        sub.target = count
-        sub.seed = args.seed + 104729 * (round_index - 1)
-        sub.difficulty_mix = ",".join(map(str, mix))
-        sub.quota_refill = False
-        manifest = sub.output_dir / "quota_request.json"
-        summary_path = sub.output_dir / "summary.json"
-        identity = stable_signature({
-            "index": round_index, "count": count, "mix": mix, "seed": sub.seed,
-            "models": [sub.scenario_model, sub.scenario_critic_model,
-                       sub.question_model, sub.question_critic_model],
-            "input": str(sub.mmqa), "input_sha": file_digest(sub.mmqa),
-            "code": {name: file_digest(Path(__file__).with_name(name))
-                     for name in ("quota_pipeline.py", "scenario.py",
-                                  "scenario_fields.py", "question.py",
-                                  "spec.py")},
-        })
-        if manifest.exists() and not args.overwrite:
-            if json.loads(manifest.read_text())["signature"] != identity:
-                raise ValueError("quota_round_resume_identity_mismatch")
-        elif summary_path.exists() and not args.overwrite:
-            raise ValueError("completed_quota_round_missing_identity")
-        else:
-            # Commit the identity *before* the long-running LLM batch, so
-            # interruption after its completion cannot strand a checkpoint.
-            write_json(manifest, {"signature": identity})
-        outcome = (
-            json.loads(summary_path.read_text())
-            if summary_path.exists() and not args.overwrite
-            else generate_batch(sub)
-        )
-        attempted += outcome["attempted"]
-        totals["scenario"].update(outcome.get("scenario_authoring", {}))
-        totals["question"].update(outcome.get("question_authoring", {}))
-        for kind, path in (
-            ("scenario", sub.output_dir / "constructed" / "failed.jsonl"),
-            ("question", sub.output_dir / "questions" / "failed.jsonl"),
-        ):
-            if path.exists():
-                failures[kind].extend(read_jsonl(path))
-        scenes_path = sub.output_dir / "questions" / "scenes.jsonl"
-        if not scenes_path.exists():
-            scenes_path = sub.output_dir / "constructed" / "scenes.jsonl"
-        rows = read_jsonl(scenes_path) if scenes_path.exists() else []
-        before = len(selected)
-        for scene in rows:
-            level = scene["problem_spec"]["difficulty_target"]
-            key = normalize_label(scene["question"])
-            if (counts[level] < targets[level] and key and key not in seen
-                    and scene.get("question_authoring", {}).get("status")
-                    in {"accepted", "off", None}):
-                selected.append(scene)
-                seen.add(key)
-                counts[level] += 1
+    with tqdm(total=args.target, desc="Stage 1 accepted Questions",
+              unit="scene", dynamic_ncols=True,
+              disable=getattr(args, "no_progress", False)) as overall:
+        for round_index in range(1, 20):
+            counts = Counter(x["problem_spec"]["difficulty_target"]
+                             for x in selected)
+            missing = deficits(targets, counts)
+            need = sum(missing.values())
+            if need == 0 or attempted >= budget:
+                break
+            count = min(args.target, budget - attempted,
+                        args.target if round_index == 1
+                        else max(need, math.ceil(need * 1.45)))
+            mix = percentage_mix(missing)
+            sub = copy.copy(args)
+            sub.output_dir = root / "rounds" / f"{round_index:02d}"
+            sub.target = count
+            sub.seed = args.seed + 104729 * (round_index - 1)
+            sub.difficulty_mix = ",".join(map(str, mix))
+            sub.quota_refill = False
+            # Nested Scenario/Critic, compilation, Question/Critic and Replay bars
+            # are for diagnostics. They are suppressed during quota refill unless
+            # explicitly requested, so users see one stable end-to-end counter.
+            sub.no_progress = (getattr(args, "no_progress", False)
+                               or not getattr(args, "verbose_progress", False))
+            manifest = sub.output_dir / "quota_request.json"
+            summary_path = sub.output_dir / "summary.json"
+            identity = stable_signature({
+                "index": round_index, "count": count, "mix": mix, "seed": sub.seed,
+                "models": [sub.scenario_model, sub.scenario_critic_model,
+                           sub.question_model, sub.question_critic_model],
+                "input": str(sub.mmqa), "input_sha": file_digest(sub.mmqa),
+                "code": {name: file_digest(Path(__file__).with_name(name))
+                         for name in ("quota_pipeline.py", "scenario.py",
+                                      "scenario_fields.py", "question.py",
+                                      "spec.py")},
+            })
+            if manifest.exists() and not args.overwrite:
+                if json.loads(manifest.read_text())["signature"] != identity:
+                    raise ValueError("quota_round_resume_identity_mismatch")
+            elif summary_path.exists() and not args.overwrite:
+                raise ValueError("completed_quota_round_missing_identity")
             else:
-                overflow += 1
-        rounds.append({"round": round_index, "attempted": outcome["attempted"],
-                       "accepted": len(selected) - before,
-                       "mix": list(mix), "batch": str(sub.output_dir)})
+                # Commit the identity *before* the long-running LLM batch, so
+                # interruption after its completion cannot strand a checkpoint.
+                write_json(manifest, {"signature": identity})
+            outcome = (
+                json.loads(summary_path.read_text())
+                if summary_path.exists() and not args.overwrite
+                else generate_batch(sub)
+            )
+            attempted += outcome["attempted"]
+            totals["scenario"].update(outcome.get("scenario_authoring", {}))
+            totals["question"].update(outcome.get("question_authoring", {}))
+            for kind, path in (
+                ("scenario", sub.output_dir / "constructed" / "failed.jsonl"),
+                ("question", sub.output_dir / "questions" / "failed.jsonl"),
+            ):
+                if path.exists():
+                    failures[kind].extend(read_jsonl(path))
+            scenes_path = sub.output_dir / "questions" / "scenes.jsonl"
+            if not scenes_path.exists():
+                scenes_path = sub.output_dir / "constructed" / "scenes.jsonl"
+            rows = read_jsonl(scenes_path) if scenes_path.exists() else []
+            before = len(selected)
+            for scene in rows:
+                level = scene["problem_spec"]["difficulty_target"]
+                key = normalize_label(scene["question"])
+                if (counts[level] < targets[level] and key and key not in seen
+                        and scene.get("question_authoring", {}).get("status")
+                        in {"accepted", "off", None}):
+                    selected.append(scene)
+                    seen.add(key)
+                    counts[level] += 1
+                else:
+                    overflow += 1
+            rounds.append({"round": round_index, "attempted": outcome["attempted"],
+                           "accepted": len(selected) - before,
+                           "mix": list(mix), "batch": str(sub.output_dir)})
+            overall.update(len(selected) - before)
     final_counts = Counter(x["problem_spec"]["difficulty_target"] for x in selected)
     remaining = deficits(targets, final_counts)
     private = root / "questions"
@@ -171,7 +181,12 @@ def generate_with_quotas(args, *, generate_batch, quality_report):
     ])
     write_jsonl(constructed / "failed.jsonl", failures["scenario"])
     write_jsonl(private / "failed.jsonl", failures["question"])
-    report = quality_report(selected, no_progress=getattr(args, "no_progress", False))
+    report = quality_report(
+        selected, no_progress=(
+            getattr(args, "no_progress", False)
+            or not getattr(args, "verbose_progress", False)
+        ),
+    )
     write_json(root / "quality_report.json", report)
     summary = {
         "status": ("done" if not sum(remaining.values())
