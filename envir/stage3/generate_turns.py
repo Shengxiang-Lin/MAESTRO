@@ -148,7 +148,7 @@ def generate_turns(
     author_model: str | None = None,
     critic_model: str | None = None,
     overwrite: bool = False, no_progress: bool = False,
-    workers: int = 4,
+    verbose_progress: bool = False, workers: int = 4,
 ) -> dict:
     scenes_path, reports_path = Path(scenes_path), Path(reports_path)
     output_dir = Path(output_dir)
@@ -224,12 +224,12 @@ def generate_turns(
             # Distinct ThreadPoolExecutor worker threads keep stable tqdm
             # positions; previous scenes can reuse the same line.
             slot = int(current_thread().name.rsplit("_", 1)[1])
-            round_bar = tqdm(
-                total=total, initial=restored,
-                desc=f"  Worker {slot + 1}: scene {i + 1}/{len(scene_rows)}",
-                unit="round", position=slot + 1, leave=False,
-                disable=no_progress,
-            )
+            if verbose_progress and not no_progress:
+                round_bar = tqdm(
+                    total=total, initial=restored,
+                    desc=f"  Worker {slot + 1}: scene {i + 1}/{len(scene_rows)}",
+                    unit="round", position=slot + 1, leave=False,
+                )
 
         def on_round(checkpoint: dict) -> None:
             # Persist before issuing any subsequent Author/Critic requests.
@@ -267,11 +267,28 @@ def generate_turns(
         _dump_json(filename, data)
         return i, data
 
+    def write_live_summary() -> None:
+        # Persist compact run-level counters after *each* completed Scene,
+        # including while other workers are still generating round decisions.
+        current = len(scene_rows) - len(pending) + completed_now
+        _dump_json(output_dir / "summary.json", {
+            "status": "running" if current < len(scene_rows) else "finalizing",
+            "pipeline": "maestro_stage3_main_turn_dataset_v1",
+            "mode": mode,
+            "workers": workers,
+            "requested_scenes": len(scene_rows),
+            "processed_scenes": current,
+            "accepted_scenes": counts["accepted"],
+            "rejected_scenes": counts["rejected"],
+            "public_turns": str(output_dir / "main_turns.jsonl"),
+            "failed": str(output_dir / "failed.jsonl"),
+        })
+
+    completed_now = 0
+    write_live_summary()
     with tqdm(total=len(scene_rows), initial=len(scene_rows) - len(pending),
               desc="Stage 3 scenes", unit="scene", position=0,
               disable=no_progress) as outer:
-        outer.set_postfix(accepted=counts["accepted"],
-                          rejected=counts["rejected"])
         # LLM calls in different Scenes overlap; rounds within one Scene do not.
         # The standard OpenAICompatibleBackend keeps no per-request mutable
         # state and can be shared between workers.
@@ -301,11 +318,9 @@ def generate_turns(
                         {"task_id": data["task_id"], **status},
                     ])
                 counts[status["status"]] += 1
+                completed_now += 1
                 outer.update(1)
-                outer.set_postfix(
-                    accepted=counts["accepted"],
-                    rejected=counts["rejected"],
-                )
+                write_live_summary()
 
     # Normalize all published outputs from atomic scene journals. A restart
     # does this on entry too, so torn appends cannot duplicate any samples.
@@ -313,6 +328,15 @@ def generate_turns(
         scene_rows, journal, output_dir,
     )
     action_counts = Counter(row["output"]["action"] for row in turns)
+    failure_causes = Counter(
+        row.get("cause", "unknown") for row in failures
+    )
+    failure_stages = Counter()
+    guard_issues = Counter()
+    for failure in failures:
+        for attempt in failure.get("authoring", {}).get("failures", []):
+            failure_stages[attempt.get("stage", "unknown")] += 1
+            guard_issues.update(attempt.get("errors") or [])
     summary = {
         "status": "done" if not failures else "partial",
         "pipeline": "maestro_stage3_main_turn_dataset_v1",
@@ -321,6 +345,9 @@ def generate_turns(
         "requested_scenes": len(scene_rows),
         "accepted_scenes": len(episodes),
         "rejected_scenes": len(failures),
+        "rejection_causes": dict(failure_causes),
+        "rejection_attempt_stages": dict(failure_stages),
+        "guard_errors_across_attempts": dict(guard_issues),
         "main_training_turns": len(turns),
         "actions": dict(action_counts),
         "mean_turns_per_scene": round(
@@ -375,7 +402,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model-alias", default="model_1")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--no-progress", action="store_true",
-                   help="Disable nested Scene/Main-round tqdm progress bars")
+                   help="Disable progress bars")
+    p.add_argument("--verbose-progress", action="store_true",
+                   help="Show per-worker Main-round progress bars (default: off)")
     args = p.parse_args(argv)
     author = critic = None
     if args.mode == "llm":
@@ -399,9 +428,10 @@ def main(argv: list[str] | None = None) -> int:
         model_alias=args.model_alias,
         author_model=args.author_model, critic_model=args.critic_model,
         overwrite=args.overwrite, no_progress=args.no_progress,
-        workers=args.workers,
+        verbose_progress=args.verbose_progress, workers=args.workers,
     )
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print(f"Stage 3: {summary['status']} | details: "
+          f"{args.output_dir}/summary.json")
     return 0 if summary["status"] == "done" else 1
 
 
