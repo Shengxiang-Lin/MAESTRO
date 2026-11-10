@@ -364,11 +364,10 @@ def program_complexity(program: dict) -> dict:
             0 if node["op"] == "scan"
             else 1 + max(depth[parent] for parent in node["inputs"])
         )
-    return {
+    result = {
         "reasoning_depth": depth[program["output"]],
         "operator_count": sum(node["op"] != "scan" for node in program["nodes"]),
         "join_count": sum(node["op"] == "join" for node in program["nodes"]),
-        "keyed_lookup_count": sum(node["op"] == "lookup_by_key" for node in program["nodes"]),
         "source_count": len({
             node["source_id"] for node in program["nodes"]
             if node["op"] in {"scan", "lookup_by_key"}
@@ -377,3 +376,7 @@ def program_complexity(program: dict) -> dict:
             node["op"] for node in program["nodes"] if node["op"] != "scan"
         ],
     }
+    keyed = sum(node["op"] == "lookup_by_key" for node in program["nodes"])
+    if keyed:
+        result["keyed_lookup_count"] = keyed
+    return result
