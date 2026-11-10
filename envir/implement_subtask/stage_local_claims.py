@@ -31,6 +31,57 @@ _DEFERRED = re.compile(
     r"(?:\w+\s+){0,3}(?:check|verify|compare|reconcile|"
     r"determine|assess|whether)\b", re.I,
 )
+_UNKNOWN_DISAGREEMENT = re.compile(
+    r"\b(?:no|not|never|without|cannot|can't|hasn't|haven't|isn't|aren't)\b"
+    r"[^.!?]{0,100}\b(?:disagreement|conflict|discrepancy|difference|"
+    r"discrepant|contradiction|differ|disagree|mismatch|verified|"
+    r"confirmed|established|checked|compared)\b"
+    r"|\b(?:disagreement|conflict|discrepancy|difference|"
+    r"contradiction)\b[^.!?]{0,80}"
+    r"\b(?:not\s+yet|unverified|unchecked|pending|unknown)\b"
+    r"|\b(?:yet\s+to|still\s+need(?:s)?\s+to)\s+"
+    r"(?:compare|verify|check|establish|confirm)\b",
+    re.I,
+)
+_REFUTED_DISAGREEMENT = re.compile(
+    r"\b(?:the\s+)?(?:two\s+)?(?:reports?|years?|sources?)\b"
+    r"[^.!?]{0,65}\b(?:agree|match|coincide|are\s+equal)\b",
+    re.I,
+)
+
+
+def classify_disagreement_claim(sentence: str) -> str:
+    """Distinguish asserted fact from explicit uncertainty or negation.
+
+    Conservative: a mixed contradictory sentence remains an assertion
+    unless its complete disagreement claim is explicitly scoped as unknown.
+    """
+    if not (_REPORT_CONFLICT.search(sentence)
+            and _REPORT_CONTEXT.search(sentence)):
+        return "none"
+    if _DEFERRED.search(sentence):
+        return "pending"
+    if _UNKNOWN_DISAGREEMENT.search(sentence):
+        # A later separate clause can still assert actual disagreement.
+        pieces = re.split(r"\s*[;:]\s*|\bbut\b|\bhowever\b", sentence, flags=re.I)
+        if len(pieces) > 1 and any(
+            _REPORT_CONFLICT.search(piece) and _ASSERTION.search(piece)
+            and not _UNKNOWN_DISAGREEMENT.search(piece)
+            for piece in pieces
+        ):
+            return "established"
+        return "unknown"
+    if _REFUTED_DISAGREEMENT.search(sentence):
+        return "refuted"
+    if _ASSERTION.search(sentence) or re.search(
+        r"\b(?:reports?|years?|accounts?|sources?)\b"
+        r"[^.!?]{0,65}\b(?:disagree|conflict|differ|mismatch)\b",
+        sentence, re.I,
+    ):
+        return "established"
+    return "none"
+
+
 _JARGON_REPLACEMENTS = (
     (re.compile(r"\boracle\s+(?:answer|output|result)\b", re.I),
      "verified source result"),
@@ -81,16 +132,9 @@ def compile_claim_contract(record: dict) -> dict:
 
 
 def _asserts_report_disagreement(sentence: str) -> bool:
-    if not (_REPORT_CONFLICT.search(sentence)
-            and _REPORT_CONTEXT.search(sentence)):
-        return False
-    if _DEFERRED.search(sentence):
-        return False
-    return bool(_ASSERTION.search(sentence) or re.search(
-        r"\b(?:reports?|years?|accounts?|sources?)\b"
-        r"[^.!?]{0,65}\b(?:disagree|conflict|differ|mismatch)\b",
-        sentence, re.I,
-    ))
+    return classify_disagreement_claim(sentence) in {
+        "established", "refuted",
+    }
 
 
 def stage_local_claim_issues(text: str, contract: dict) -> list[str]:
