@@ -147,8 +147,28 @@ def generate_with_quotas(args, *, generate_batch, quality_report):
         {"task_id": x["task_id"], "difficulty": x["difficulty_audit"],
          "question_authoring": x.get("question_authoring")} for x in selected
     ])
-    write_jsonl(constructed / "scenes.jsonl", selected)
-    write_jsonl(constructed / "questions.jsonl", [x["public"] for x in selected])
+    # Reconstruct the *pre-Question* frozen scene bank separately from
+    # accepted naturalized Questions: these are distinct pipeline stages.
+    selected_ids = {scene["task_id"] for scene in selected}
+    frozen_by_id = {}
+    for round_info in rounds:
+        bank = Path(round_info["batch"]) / "constructed" / "scenes.jsonl"
+        if bank.exists():
+            for frozen in read_jsonl(bank):
+                if frozen["task_id"] in selected_ids:
+                    frozen_by_id[frozen["task_id"]] = frozen
+    if any(scene_id not in frozen_by_id for scene_id in selected_ids):
+        raise ValueError("selected_scene_missing_frozen_constructed_record")
+    compiled_scenes = [frozen_by_id[scene["task_id"]] for scene in selected]
+    write_jsonl(constructed / "scenes.jsonl", compiled_scenes)
+    write_jsonl(constructed / "questions.jsonl",
+                [scene["public"] for scene in compiled_scenes])
+    write_jsonl(constructed / "difficulty_audit.jsonl", [
+        {"task_id": scene["task_id"],
+         "scenario_authoring": scene["problem_spec"].get("scenario_authoring"),
+         **scene["difficulty_audit"]}
+        for scene in compiled_scenes
+    ])
     write_jsonl(constructed / "failed.jsonl", failures["scenario"])
     write_jsonl(private / "failed.jsonl", failures["question"])
     report = quality_report(selected, no_progress=getattr(args, "no_progress", False))
