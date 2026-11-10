@@ -56,6 +56,15 @@ def classify_disagreement_claim(sentence: str) -> str:
     Conservative: a mixed contradictory sentence remains an assertion
     unless its complete disagreement claim is explicitly scoped as unknown.
     """
+    pieces = re.split(
+        r"\s*[;:]\s*|\bbut\b|\bhowever\b", sentence, flags=re.I,
+    )
+    if len(pieces) > 1:
+        labels = [classify_disagreement_claim(piece) for piece in pieces]
+        return next(
+            (label for label in ("established", "refuted", "unknown", "pending")
+             if label in labels), "none",
+        )
     if not (_REPORT_CONFLICT.search(sentence)
             and _REPORT_CONTEXT.search(sentence)):
         return "none"
