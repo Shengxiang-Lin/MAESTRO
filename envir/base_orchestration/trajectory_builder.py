@@ -148,6 +148,88 @@ def _can_derive_local_answer(scene: dict, delivered: dict,
     return scene["gold_answer"] == [{field: actual}]
 
 
+def _visible_terminal_answer(scene: dict, delivered: dict,
+                             tasks: dict) -> bool:
+    """Allow only answer-preserving terminal transforms over visible results.
+
+    In archived Easy plans, an initial Sub-Agent may already identify all
+    active Entry labels or the unique top-ranked Entry; a separate
+    take/project/unique delegation adds no evidence. Do not generalize this
+    to new-source, join, arithmetic, or otherwise nontrivial terminals.
+    The comparison uses the *public finish result*, not a private Oracle
+    value in the Sub-Agent's structured answer. Gold is only a verifier.
+    """
+    graph = scene["macro_graph"]
+    terminal_id = graph["terminal_task_id"]
+    if terminal_id in delivered:
+        return False
+    terminal = tasks[terminal_id]
+    if terminal["source_ids"] or len(terminal["depends_on"]) != 1:
+        return False
+    operators = [step["op"] for step in terminal["operator_chain"]]
+    if not operators or not set(operators).issubset(
+        {"take", "project", "unique"}
+    ):
+        return False
+    upstream = terminal["depends_on"][0]
+    if upstream not in delivered:
+        return False
+    answer = scene["gold_answer"]
+    if not answer or any(
+        set(row) != {"entry_label"} or
+        not isinstance(row["entry_label"], str) or
+        not re.fullmatch(r"Entry-\\d+", row["entry_label"])
+        for row in answer
+    ):
+        return False
+    public_result = delivered[upstream]["finish_result"]["result"]
+    observed = set(re.findall(r"\\bEntry-\\d+\\b", public_result))
+    expected = {row["entry_label"] for row in answer}
+    return bool(observed) and observed == expected
+
+
+def _grounded_completion_reasoning(delivered: dict, *,
+                                   shortcut: bool,
+                                   main_compute: bool) -> str:
+    """Phrase completion only from delivered Sub-Agent public feedback."""
+    if not delivered:
+        raise ValueError("completion_requires_visible_feedback")
+    recent = list(delivered.values())[-2:] if main_compute else [
+        list(delivered.values())[-1]
+    ]
+    excerpts = []
+    for report in recent:
+        finish = report["finish_result"]
+        statement = finish["result"].strip().replace("\\n", " ")
+        # This is a quoted, already-visible Sub-Agent response, not the
+        # private target answer or an imagined tool result.
+        if statement:
+            excerpts.append(statement[:360].rstrip())
+    if not excerpts:
+        raise ValueError("completion_lacks_public_evidence")
+    cited = " ".join('The returned finding states: "' + part + '".'
+                     for part in excerpts)
+    if shortcut:
+        conclusion = (
+            "These observations already identify every requested entry. "
+            "A further extraction or deduplication delegation would not "
+            "add evidence, so I can finish using the reported result."
+        )
+    elif main_compute:
+        conclusion = (
+            "The required numerical inputs are now available in the "
+            "earlier feedback. Their verified comparison or calculation "
+            "determines the requested answer without another lookup."
+        )
+    else:
+        conclusion = (
+            "The completed investigation has supplied the requested "
+            "finding with its supporting evidence. No additional "
+            "Sub-Agent delegation is needed to answer."
+        )
+    return cited + " " + conclusion
+
+
 def _answer_text(scene: dict) -> str:
     rows = scene["gold_answer"]
     if len(rows) == 1 and len(rows[0]) == 1:
@@ -218,12 +300,17 @@ def build_episode(
         _main_local_terminal(graph)
         and _can_derive_local_answer(scene, reports, tasks)
     )
-    if main_compute:
-        if waves[-1] != [graph["terminal_task_id"]]:
-            raise ValueError("stage3_terminal_not_separate_last_wave")
-        scheduled = waves[:-1]
-    else:
-        scheduled = waves
+    if main_compute and waves[-1] != [graph["terminal_task_id"]]:
+        raise ValueError("stage3_terminal_not_separate_last_wave")
+    # A teacher shortcut is legal only if its exact public upstream report
+    # will have returned before the terminal wave. Check again against
+    # actually delivered history before emitting the final completion.
+    visible_answer_shortcut = (
+        waves[-1] == [graph["terminal_task_id"]]
+        and _visible_terminal_answer(scene, reports, tasks)
+    )
+    scheduled = (waves[:-1] if (main_compute or visible_answer_shortcut)
+                 else waves)
     if len(scheduled) + 1 > max_attempts:
         return None, [], [], {
             "status": "rejected", "cause": "stage3_round_budget_insufficient",
@@ -319,8 +406,7 @@ def build_episode(
             "task_id": scene["task_id"], "round": wave_number,
             "input": {"subtask_history": history},
             "output": action,
-            "output_json": json.dumps(action, ensure_ascii=False),
-            "generation_mode": status["mode"],
+                "generation_mode": status["mode"],
         }
         audit_row = {
             "task_id": scene["task_id"],
@@ -357,14 +443,16 @@ def build_episode(
         elif on_round is not None:
             on_round(checkpoint)
 
-    if (set(delivered) != set(tasks)
-            and not (main_compute
-                     and set(delivered) == (
-                         set(tasks) - {graph["terminal_task_id"]}
-                     ))):
+    shortened = main_compute or visible_answer_shortcut
+    required = (set(tasks) - {graph["terminal_task_id"]}
+                if shortened else set(tasks))
+    if set(delivered) != required:
         raise ValueError("stage3_incomplete_macro_schedule")
     if main_compute and not _can_derive_local_answer(scene, delivered, tasks):
         raise ValueError("stage3_local_resolution_not_derived_from_reports")
+    if visible_answer_shortcut and not _visible_terminal_answer(
+            scene, delivered, tasks):
+        raise ValueError("stage3_visible_answer_shortcut_not_justified")
     completion_round = len(scheduled) + 1
     completion_prompt = o1_prompt(
         scene, task_entries, attempt=completion_round,
@@ -373,10 +461,9 @@ def build_episode(
     )
     final_action = {
         "action": "complete",
-        "reasoning": (
-            "The prior Sub-Agent findings now provide the required "
-            "identification and supporting evidence. The answer can be "
-            "completed without another investigation."
+        "reasoning": _grounded_completion_reasoning(
+            delivered, shortcut=visible_answer_shortcut,
+            main_compute=main_compute,
         ),
         "params": {"answer": _answer_text(scene)},
     }
@@ -385,20 +472,20 @@ def build_episode(
         "task_id": scene["task_id"], "round": completion_round,
         "input": {"subtask_history": o1_history(task_entries)},
         "output": final_action,
-        "output_json": json.dumps(final_action, ensure_ascii=False),
         "generation_mode": "teacher_verified_completion",
     }
     final_audit = {
         "task_id": scene["task_id"], "round": completion_round,
         "action": "complete",
         "private_macro_alignment": (
-            [graph["terminal_task_id"]] if main_compute else []
+            [graph["terminal_task_id"]] if shortened else []
         ),
         "visible_macros_before_round": list(delivered),
         "newly_delivered_macro_ids": [],
         "prompt_sha256": _hash(completion_prompt),
         "action_sha256": _hash(final_action),
         "main_locally_computed": main_compute,
+        "visible_answer_shortcut": visible_answer_shortcut,
         "dependencies_satisfied": True,
         "private_only": True,
     }
@@ -432,4 +519,5 @@ def build_episode(
         "status": "accepted", "main_decision_rounds": len(trajectory),
         "parallel_delegation_rounds": len(scheduled),
         "main_local_goal_resolution": main_compute,
+        "visible_answer_shortcut": visible_answer_shortcut,
     }
