@@ -11,7 +11,7 @@ from envir.schema import digest
 
 VERSION = "maestro.problem_spec.v4"
 RELATION_PATTERNS = (
-    "approval", "time_window", "status_disagreement", "dynamic_threshold", "clue_chain", "evidence_graph",
+    "approval", "time_window", "status_disagreement", "dynamic_threshold", "clue_chain", "evidence_graph", "macro_first",
 )
 
 FAMILIES = (
@@ -27,6 +27,7 @@ FAMILIES = (
     "threshold_eligibility",
     "accession_year",
     "evidence_answer",
+    "macro_first",
 )
 DIFFICULTIES = ("easy", "medium", "hard")
 
@@ -86,7 +87,8 @@ def _choose_media(seed_record: dict, ordinal: int, rng: random.Random) -> str:
 
 def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
               difficulty: str, clue_chain_share: int = 0,
-              evidence_graph_share: int = 0) -> dict:
+              evidence_graph_share: int = 0,
+              macro_first_share: int = 0) -> dict:
     if difficulty not in DIFFICULTIES:
         raise ValueError("difficulty must be easy, medium or hard")
     if (type(clue_chain_share) is not int
@@ -94,10 +96,24 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         raise ValueError("clue_chain_share must be between 0 and 100")
     if type(evidence_graph_share) is not int or not 0 <= evidence_graph_share <= 100:
         raise ValueError("evidence_graph_share must be between 0 and 100")
+    if type(macro_first_share) is not int or not 0 <= macro_first_share <= 100:
+        raise ValueError("macro_first_share must be between 0 and 100")
     topic = normalize_topic(seed_record.get("topic", ""))
     record_id = str(seed_record.get("record_id") or seed_record.get("scene_id")
                     or f"topic-{ordinal}")
     rng = random.Random(int(digest(run_seed, ordinal, record_id, "v2")[:15], 16))
+    # Select the Macro-level DAG FIRST, before any primitive solver or
+    # evidence World is sampled. This opt-in overrides the older
+    # primitive-first evidence graph only for selected medium/hard scenes.
+    if (difficulty in {"medium", "hard"} and
+            int(digest(run_seed, ordinal, "macro-first-mix-v1")[:8], 16) % 100
+            < macro_first_share):
+        from .macro_first import make_macro_first_spec
+        return make_macro_first_spec(
+            seed_record=seed_record, ordinal=ordinal, run_seed=run_seed,
+            difficulty=difficulty, topic=topic, record_id=record_id,
+            version=VERSION,
+        )
     # Opt-in seeded graph grammar. Legacy specs and clue-chain remain
     # byte-identical when this flag is zero.
     if (difficulty in {"medium", "hard"} and
@@ -136,6 +152,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
             "dynamic_threshold": "threshold_eligibility",
             "clue_chain": "accession_year",
             "evidence_graph": "evidence_answer",
+            "macro_first": "macro_first",
         }[pattern]
     )
     if keyed:
@@ -353,7 +370,8 @@ def spec_issues(spec: dict) -> list[str]:
     sources = spec.get("sources", [])
     keyed = spec.get("reasoning_pattern") == "clue_chain"
     evidence = spec.get("reasoning_pattern") == "evidence_graph"
-    n = (len(sources) if evidence else 3 if keyed else
+    macro_first = spec.get("reasoning_pattern") == "macro_first"
+    n = (len(sources) if (evidence or macro_first) else 3 if keyed else
          {"easy": 1, "medium": 3, "hard": 4}.get(
              spec.get("difficulty_target"), -1))
     if len(sources) != n:
@@ -361,16 +379,18 @@ def spec_issues(spec: dict) -> list[str]:
     ids = [s.get("source_id") for s in sources]
     if len(ids) != len(set(ids)):
         errors.append("duplicate_source_id")
-    expected_ids = ([s.get("source_id") for s in sources] if evidence else
+    expected_ids = ([s.get("source_id") for s in sources]
+                    if (evidence or macro_first) else
                     ["illustration", "index", "archive"] if keyed else ["register"])
-    if not keyed and not evidence and spec.get("difficulty_target") in {"medium", "hard"}:
+    if not keyed and not (evidence or macro_first) and spec.get("difficulty_target") in {"medium", "hard"}:
         expected_ids.extend(["glossary", "annotations"])
-    if not keyed and not evidence and spec.get("difficulty_target") == "hard":
+    if not keyed and not (evidence or macro_first) and spec.get("difficulty_target") == "hard":
         expected_ids.append("clearance")
     if ids != expected_ids:
         errors.append("source_role_contract_mismatch")
     needs = spec.get("requirements", {})
     expected_answer = (
+        "macro_value" if macro_first else
         "accession_year" if (keyed or evidence) else
         "count" if spec.get("family") == "coverage_count"
         else "category_counts" if spec.get("family") == "category_distribution"
@@ -382,13 +402,13 @@ def spec_issues(spec: dict) -> list[str]:
     )
     if needs.get("answer_kind") != expected_answer:
         errors.append("answer_kind_contract_mismatch")
-    required_aliases = False if (keyed or evidence) else spec.get("difficulty_target") != "easy"
+    required_aliases = False if (keyed or evidence or macro_first) else spec.get("difficulty_target") != "easy"
     if needs.get("must_resolve_aliases") is not required_aliases:
         errors.append("alias_requirement_contract_mismatch")
     if needs.get("must_match_independent_reviews") is not required_aliases:
         errors.append("review_requirement_contract_mismatch")
     if needs.get("must_check_independent_clearance") is not (
-        spec.get("difficulty_target") == "hard" and not (keyed or evidence)
+        spec.get("difficulty_target") == "hard" and not (keyed or evidence or macro_first)
     ):
         errors.append("clearance_requirement_contract_mismatch")
     if needs.get("must_preserve_source_provenance") is not True:
@@ -420,6 +440,9 @@ def spec_issues(spec: dict) -> list[str]:
             ("archive", "keyed_lookup", "accession_id", "accession_year"),
         ]:
             errors.append("clue_chain_acquisition_path_mismatch")
+    if macro_first:
+        from .macro_first import validate_macro_first_spec
+        errors.extend(validate_macro_first_spec(spec))
     if evidence:
         from .graph_grammar import validate_evidence_spec
         errors.extend(validate_evidence_spec(spec))
