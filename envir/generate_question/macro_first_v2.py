@@ -444,7 +444,8 @@ def validate_spec(spec: dict) -> list[str]:
                     spec["scenario"]["topic"],
                     spec["source_anchor"].get("domain_hint", ""),
                     spec["source_anchor"].get("topic_domain_cue"),
-                ) if spec.get("topic_domain_version") else
+                ) if (spec.get("topic_domain_version")
+                      and spec.get("scene_realism_version")) else
                 (domain_hint_v3 if spec.get("macro_information_necessity_version")
                  else domain_hint_v2 if spec.get("semantic_evidence_contract_version")
                  else domain_hint)(
