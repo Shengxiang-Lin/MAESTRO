@@ -10,10 +10,9 @@ generation:
   output_dir: envir/data/maestro_question_final_100
   target: 100
   seed: 17
-  clue_chain_share: 0  # opt-in percentage of MEDIUM scenes
-  evidence_graph_share: 0  # opt-in MEDIUM/HARD typed random evidence DAGs
-  macro_first_share: 0  # v1: legacy frozen Macro DAG pilot
-  macro_first_v2_share: 0  # v2: varied goals, per-Macro evidence and typed multimodal tasks
+  macro_first_v2_share: 100  # current Macro-first generation (Easy uses approval baseline)
+  quota_refill: true  # refill Easy/Medium/Hard after actual Author/Critic acceptance
+  max_candidate_multiplier: 3  # bounded candidate budget = target * multiplier
   difficulty_mix: [17, 33, 50]  # Easy:Medium:Hard ≈ 1:2:3 (100 candidates: 17/33/50)
   overwrite: false
   flush_every: 1   # persist every completed LLM decision (safe to resume)
