@@ -96,6 +96,13 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     macro_first_share = generation.get("macro_first_share", 0)
     if type(macro_first_share) is not int or not 0 <= macro_first_share <= 100:
         raise ValueError("generation.macro_first_share must be 0..100")
+    quota_refill = generation.get("quota_refill", False)
+    if type(quota_refill) is not bool:
+        raise ValueError("generation.quota_refill must be a boolean")
+    max_candidate_multiplier = generation.get("max_candidate_multiplier", 3)
+    if (type(max_candidate_multiplier) is not int
+            or not 1 <= max_candidate_multiplier <= 10):
+        raise ValueError("generation.max_candidate_multiplier must be 1..10")
     macro_first_v2_share = generation.get("macro_first_v2_share", 0)
     if type(macro_first_v2_share) is not int or not 0 <= macro_first_v2_share <= 100:
         raise ValueError("generation.macro_first_v2_share must be 0..100")
@@ -113,6 +120,8 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         evidence_graph_share=evidence_graph_share,
         macro_first_share=macro_first_share,
         macro_first_v2_share=macro_first_v2_share,
+        quota_refill=quota_refill,
+        max_candidate_multiplier=max_candidate_multiplier,
         no_progress=no_progress or bool(generation.get("no_progress", False)),
         scenario_api_base=scenario["api_base"],
         scenario_model=scenario["model"],
