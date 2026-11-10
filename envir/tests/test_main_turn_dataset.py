@@ -150,6 +150,26 @@ class MainTurnDatasetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not_reviewed"):
             build_episode(scene, altered)
 
+    def test_dependent_instruction_must_reuse_visible_upstream_identity(self):
+        from envir.stage3.action_author import (
+            _assignment, proposed_template_action,
+        )
+        from envir.stage3.o1_compat import source_catalog
+        scene = fixture(0)
+        graph = scene["macro_graph"]
+        target = next(t for t in graph["tasks"] if t["depends_on"])
+        rows = {r["macro_task_id"]: r for r in reviewed_rows(scene)}
+        expected = _assignment(target, source_catalog(scene), rows)
+        action = proposed_template_action([expected])
+        self.assertEqual(action_issues(action, [expected], prompt=""), [])
+        action["params"]["tasks"][0]["context"] = (
+            "Please proceed based on unspecified earlier findings."
+        )
+        issues = action_issues(action, [expected], prompt="")
+        self.assertTrue(any(
+            "upstream_" in issue for issue in issues
+        ), issues)
+
     def test_llm_author_and_critic_are_checked_not_replaced(self):
         scene = fixture(3)
         rows = reviewed_rows(scene)
