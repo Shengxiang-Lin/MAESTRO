@@ -134,7 +134,7 @@ class DiverseMacroTests(unittest.TestCase):
                 has_audio = True
         self.assertEqual(modes, {
             "serial_identity", "parallel_cues", "disputed_reports",
-            "multimodal_event",
+            "multimodal_event", "corroborated_dispute",
         })
         self.assertGreaterEqual(len(goals), 8)
         self.assertGreater(len(distinct_answers), 30)
