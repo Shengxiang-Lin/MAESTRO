@@ -44,7 +44,7 @@ _TIME_AMOUNT = re.compile(
 )
 _TIME_EXACT = re.compile(
     r"\b(?:exactly|precisely|within|no more than|at most|"
-    r"less than|more than|at least)\b.{0,45}"
+    r"less than|more than)\b.{0,45}"
     r"(?:\d+|one|two|half)[ -]?(?:seconds?|secs?|minutes?|mins?)\b",
     re.I,
 )
@@ -71,7 +71,7 @@ _GOAL_MISMATCH = re.compile(
     r"\b(?:founding year|year of founding|release year|award year|"
     r"year of release|graduation year)\b", re.I,
 )
-_EMBLEM = re.compile(r"\b(?:emblem|symbol|colou?r|colored|colour|motif)\b", re.I)
+_EMBLEM = re.compile(r"\b(?:emblem|symbol|colou?r|colored|colour)\b", re.I)
 
 
 def has_semantic_contract(spec: dict) -> bool:
