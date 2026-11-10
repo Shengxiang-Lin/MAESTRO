@@ -26,6 +26,13 @@ PATTERN_CONSTRAINTS = {
         "Use the glossary to align each entry's code with the annotation group.",
         "Keep entries where the entry's reported binary status differs from the independently observed group status.",
     ),
+    "clue_chain": (
+        "Identify the pictured exhibit using BOTH given emblem features.",
+        "Read the marker code shown on the matching illustrated exhibit.",
+        "Use that discovered marker to obtain its accession identifier from the keyed index.",
+        "Use that accession identifier to retrieve ONLY its matching archive record.",
+        "Report the exhibit's accession year. The image is a simulated observation.",
+    ),
     "dynamic_threshold": (
         "Only active entries in the register are eligible.",
         "Use the glossary to map each entry's policy code to a policy group.",
@@ -52,6 +59,7 @@ FAMILY_OUTPUTS = {
     "window_alignment": "List the entries whose recorded events fit the allowed time windows.",
     "status_disagreement": "List entries with a genuine disagreement between the two reported statuses.",
     "threshold_eligibility": "List entries meeting the independently defined minimum value.",
+    "accession_year": "Report the year in which the identified exhibit was accessioned.",
 }
 STYLES = (
     ("direct_lookup", "Start with a concise direct question, not a job title."),
@@ -75,6 +83,12 @@ def intent_contract(spec: dict) -> dict:
             "in a separate source, not just group approval."
         )
     return {
+        "visual_clue": (
+            spec.get("investigation", {}).get("visual_features")
+        ),
+        "acquisition_chain": (
+            spec.get("investigation", {}).get("acquisition_chain")
+        ),
         "topic": spec["scenario"]["topic"],
         "hypothetical": True,
         "setting": spec["scenario"]["setting"],
