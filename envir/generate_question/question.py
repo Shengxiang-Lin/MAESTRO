@@ -48,7 +48,7 @@ def _one_output_v2_question(spec: dict) -> str:
     if plan["pattern"] == "multimodal_event":
         return (
             f"In the {topic} materials, a video shows a "
-            f"{clues['scene_action']} action before a spoken "
+            f"{clues['scene_action']} action no later than the spoken "
             f"{clues['spoken_cue']} cue. An independent event log marks "
             f"the matching observation as {clues['case_tag']}. "
             f"For that {item}, what is the confirmed {goal}?"
