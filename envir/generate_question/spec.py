@@ -11,7 +11,7 @@ from envir.schema import digest
 
 VERSION = "maestro.problem_spec.v4"
 RELATION_PATTERNS = (
-    "approval", "time_window", "status_disagreement", "dynamic_threshold", "clue_chain",
+    "approval", "time_window", "status_disagreement", "dynamic_threshold", "clue_chain", "evidence_graph",
 )
 
 FAMILIES = (
@@ -26,6 +26,7 @@ FAMILIES = (
     "status_disagreement",
     "threshold_eligibility",
     "accession_year",
+    "evidence_answer",
 )
 DIFFICULTIES = ("easy", "medium", "hard")
 
@@ -84,16 +85,30 @@ def _choose_media(seed_record: dict, ordinal: int, rng: random.Random) -> str:
 
 
 def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
-              difficulty: str, clue_chain_share: int = 0) -> dict:
+              difficulty: str, clue_chain_share: int = 0,
+              evidence_graph_share: int = 0) -> dict:
     if difficulty not in DIFFICULTIES:
         raise ValueError("difficulty must be easy, medium or hard")
     if (type(clue_chain_share) is not int
             or not 0 <= clue_chain_share <= 100):
         raise ValueError("clue_chain_share must be between 0 and 100")
+    if type(evidence_graph_share) is not int or not 0 <= evidence_graph_share <= 100:
+        raise ValueError("evidence_graph_share must be between 0 and 100")
     topic = normalize_topic(seed_record.get("topic", ""))
     record_id = str(seed_record.get("record_id") or seed_record.get("scene_id")
                     or f"topic-{ordinal}")
     rng = random.Random(int(digest(run_seed, ordinal, record_id, "v2")[:15], 16))
+    # Opt-in seeded graph grammar. Legacy specs and clue-chain remain
+    # byte-identical when this flag is zero.
+    if (difficulty in {"medium", "hard"} and
+            int(digest(run_seed, ordinal, "evidence-graph-mix-v1")[:8], 16) % 100
+            < evidence_graph_share):
+        from .graph_grammar import make_evidence_spec
+        return make_evidence_spec(
+            seed_record=seed_record, ordinal=ordinal, run_seed=run_seed,
+            difficulty=difficulty, topic=topic, record_id=record_id,
+            version=VERSION,
+        )
     # Semantic families change the actual relations/predicates, not only
     # the execution order. Easy remains a one-source independent task.
     # Opt-in: a bounded share of MEDIUM tasks uses real keyed evidence
@@ -120,6 +135,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
             "status_disagreement": "status_disagreement",
             "dynamic_threshold": "threshold_eligibility",
             "clue_chain": "accession_year",
+            "evidence_graph": "evidence_answer",
         }[pattern]
     )
     if keyed:
@@ -316,6 +332,7 @@ def spec_issues(spec: dict) -> list[str]:
             "status_disagreement": "status_disagreement",
             "dynamic_threshold": "threshold_eligibility",
             "clue_chain": "accession_year",
+            "evidence_graph": "evidence_answer",
         }
         if pattern not in RELATION_PATTERNS:
             errors.append("invalid_reasoning_pattern")
@@ -335,24 +352,26 @@ def spec_issues(spec: dict) -> list[str]:
             errors.append("missing_scenario_" + key)
     sources = spec.get("sources", [])
     keyed = spec.get("reasoning_pattern") == "clue_chain"
-    n = 3 if keyed else {"easy": 1, "medium": 3, "hard": 4}.get(
-        spec.get("difficulty_target"), -1
-    )
+    evidence = spec.get("reasoning_pattern") == "evidence_graph"
+    n = (len(sources) if evidence else 3 if keyed else
+         {"easy": 1, "medium": 3, "hard": 4}.get(
+             spec.get("difficulty_target"), -1))
     if len(sources) != n:
         errors.append("wrong_source_count")
     ids = [s.get("source_id") for s in sources]
     if len(ids) != len(set(ids)):
         errors.append("duplicate_source_id")
-    expected_ids = ["illustration", "index", "archive"] if keyed else ["register"]
-    if not keyed and spec.get("difficulty_target") in {"medium", "hard"}:
+    expected_ids = ([s.get("source_id") for s in sources] if evidence else
+                    ["illustration", "index", "archive"] if keyed else ["register"])
+    if not keyed and not evidence and spec.get("difficulty_target") in {"medium", "hard"}:
         expected_ids.extend(["glossary", "annotations"])
-    if not keyed and spec.get("difficulty_target") == "hard":
+    if not keyed and not evidence and spec.get("difficulty_target") == "hard":
         expected_ids.append("clearance")
     if ids != expected_ids:
         errors.append("source_role_contract_mismatch")
     needs = spec.get("requirements", {})
     expected_answer = (
-        "accession_year" if keyed else
+        "accession_year" if (keyed or evidence) else
         "count" if spec.get("family") == "coverage_count"
         else "category_counts" if spec.get("family") == "category_distribution"
         else "single_entry" if spec.get("family") in {"priority", "chronology"}
@@ -363,13 +382,13 @@ def spec_issues(spec: dict) -> list[str]:
     )
     if needs.get("answer_kind") != expected_answer:
         errors.append("answer_kind_contract_mismatch")
-    required_aliases = False if keyed else spec.get("difficulty_target") != "easy"
+    required_aliases = False if (keyed or evidence) else spec.get("difficulty_target") != "easy"
     if needs.get("must_resolve_aliases") is not required_aliases:
         errors.append("alias_requirement_contract_mismatch")
     if needs.get("must_match_independent_reviews") is not required_aliases:
         errors.append("review_requirement_contract_mismatch")
     if needs.get("must_check_independent_clearance") is not (
-        spec.get("difficulty_target") == "hard" and not keyed
+        spec.get("difficulty_target") == "hard" and not (keyed or evidence)
     ):
         errors.append("clearance_requirement_contract_mismatch")
     if needs.get("must_preserve_source_provenance") is not True:
@@ -401,6 +420,9 @@ def spec_issues(spec: dict) -> list[str]:
             ("archive", "keyed_lookup", "accession_id", "accession_year"),
         ]:
             errors.append("clue_chain_acquisition_path_mismatch")
+    if evidence:
+        from .graph_grammar import validate_evidence_spec
+        errors.extend(validate_evidence_spec(spec))
     if spec.get("requirements", {}).get("simulation_only") is not True:
         errors.append("non_simulated_spec")
     return sorted(set(errors))

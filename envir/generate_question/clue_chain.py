@@ -88,6 +88,10 @@ def generate_clue_world(spec: dict) -> dict:
         {"emblem_color": wrong_color, "emblem_shape": shape},
         {"emblem_color": wrong_color, "emblem_shape": wrong_shape},
     ]
+    # Randomize public labels independently from target placement.
+    # Row shuffling alone left the true target always named Exhibit-01.
+    exhibit_labels = [f"Exhibit-{j:02d}" for j in range(1, 5)]
+    rng.shuffle(exhibit_labels)
     marker_numbers = rng.sample(range(10, 90), 4)
     accession_numbers = rng.sample(range(100, 900), 4)
     accession_years = rng.sample(range(1960, 2020), 4)
@@ -96,7 +100,7 @@ def generate_clue_world(spec: dict) -> dict:
         marker = f"M-{marker_numbers[ix]:02d}"
         accession = f"AC-{accession_numbers[ix]:03d}"
         illustrations.append({
-            "display_label": f"Exhibit-{ix+1:02d}",
+            "display_label": exhibit_labels[ix],
             **descriptor,
             "marker_code": marker,
         })

@@ -124,6 +124,15 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         raise ValueError("macro_question_missing_disagreement_operation")
     if pattern == "dynamic_threshold" and "gte" not in compares:
         raise ValueError("macro_question_missing_threshold_operation")
+    if pattern == "evidence_graph":
+        expected_lookups = spec["evidence_graph"]["lookup_hops"]
+        if ops["lookup_by_key"] != expected_lookups:
+            raise ValueError("macro_question_wrong_evidence_lookup_count")
+        mode = spec["evidence_graph"]["archetype"]
+        if mode in {"parallel", "disambiguation", "conflict"} and not ops["join"]:
+            raise ValueError("macro_question_missing_evidence_fusion")
+        if mode == "conflict" and "ne" not in compares:
+            raise ValueError("macro_question_missing_conflict_comparison")
     if pattern == "clue_chain":
         lookups = [step for step in steps if step["op"] == "lookup_by_key"]
         if len(lookups) != 2 or [

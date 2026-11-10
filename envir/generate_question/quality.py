@@ -34,6 +34,9 @@ def _mutate_answer_witness(sources: dict, source_id: str,
             if ref.startswith(source_id + ":")}
     if not refs:
         raise ValueError("missing_gold_source_witness:" + source_id)
+    if (spec or {}).get("reasoning_pattern") == "evidence_graph":
+        from .world_synthesizer import mutate_evidence_witness
+        return mutate_evidence_witness(sources, source_id, gold_workproducts, spec)
     revised = copy.deepcopy(sources)
     rows = revised[source_id]["observations"]
     selected = next((
@@ -78,7 +81,7 @@ def _mutate_answer_witness(sources: dict, source_id: str,
 
 def weak_single_source_baseline(scene: dict) -> list[dict]:
     """A measured shortcut attempt, NOT exhaustive program minimization."""
-    if scene["problem_spec"].get("reasoning_pattern") == "clue_chain":
+    if scene["problem_spec"].get("reasoning_pattern") in {"clue_chain", "evidence_graph"}:
         # A visual clue is mandatory, neither keyed store is browsable.
         return []
     rows = [
@@ -175,6 +178,8 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
     if spec.get("reasoning_pattern") == "clue_chain":
         # Information-acquisition depth replaces the static-join quota.
         source_count, joins, depth = 3, 0, 4
+    elif spec.get("reasoning_pattern") == "evidence_graph":
+        source_count, joins, depth = (3 if difficulty == "medium" else 4), 0, 3
     else:
         source_count, joins, depth = levels[difficulty]
     if spec.get("version") == VERSION and graph["macro_task_count"] > 9:
@@ -185,6 +190,16 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         issues.append("insufficient_join_count")
     if profile["necessary_structural_operator_depth"] < depth:
         issues.append("insufficient_operator_depth")
+    if spec.get("reasoning_pattern") == "evidence_graph":
+        if profile.get("keyed_lookup_count", 0) < 1:
+            issues.append("evidence_graph_no_keyed_acquisition")
+        if (len(answer) != 1 or set(answer[0]) != {"accession_year"}):
+            issues.append("evidence_graph_answer_contract")
+        refs = {ref for row in macro["answer_with_provenance"]
+                for ref in row["source_fact_refs"]}
+        if not all(any(ref.startswith(sid + ":") for ref in refs)
+                   for sid in world["sources"]):
+            issues.append("evidence_graph_missing_source_witness")
     if spec.get("reasoning_pattern") == "clue_chain":
         if profile.get("keyed_lookup_count", 0) != 2:
             issues.append("clue_chain_requires_two_keyed_lookups")
@@ -195,7 +210,8 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             issues.append("clue_chain_missing_three_source_provenance")
         if len(answer) != 1 or set(answer[0]) != {"accession_year"}:
             issues.append("clue_chain_answer_year_contract")
-    elif (difficulty != "easy" and not
+    elif (difficulty != "easy"
+          and spec.get("reasoning_pattern") != "evidence_graph" and not
             any(ref.startswith("annotations:")
                 for row in macro["answer_with_provenance"]
                 for ref in row["source_fact_refs"])):
@@ -353,6 +369,19 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
     }
     if spec.get("reasoning_pattern") == "clue_chain":
         result["evidence_acquisition"] = acquisition_audit
+    if spec.get("reasoning_pattern") == "evidence_graph":
+        result["evidence_graph_audit"] = {
+            "archetype": spec["evidence_graph"]["archetype"],
+            "lookup_hops": spec["evidence_graph"]["lookup_hops"],
+            "keyed_lookup_count": profile.get("keyed_lookup_count", 0),
+            "source_counterfactuals_pass": all(
+                x["changing_source_changes_answer"]
+                for x in counterfactual.values()
+            ),
+            "effective_parallel_wave_width": max(
+                map(len, graph["reference_waves"]), default=0
+            ),
+        }
     return result
 
 

@@ -144,3 +144,35 @@ marker to redirect the archive answer.
 The Stage-1 CLI accepts --clue-chain-share 0..100 for MEDIUM difficulty.
 This is an isolated clean pilot with simulated image annotations, not
 yet open-web source discovery, video decoding or adversarial feedback.
+
+
+## Seeded typed graph grammar (optional)
+
+For evidence-acquisition investigations, use --evidence-graph-share 0..100
+(or generation.evidence_graph_share in envir/config.yaml). Medium and Hard
+tasks are eligible. This supplements, rather than replaces, the legacy
+static computation families and the older fixed clue_chain pilot.
+
+GraphSpec is frozen before any synthetic World is sampled:
+typed source schemas and policies + legal topological Program IR +
+answer-field contract. The sampler chooses one of four information
+acquisition motifs (variable-depth chain, parallel evidence fusion,
+candidate disambiguation, conflicting-inventory reconciliation). The
+World synthesizer first creates an answer-supporting witness, then
+overlapping distractors with random public identity labels. Downstream
+keyed stores cannot be browsed or scanned in the QuestionSession.
+
+Strict replay checks World regeneration, compiled Program, exact answers,
+source provenance, Source Scope, mandatory-source counterfactuals,
+and Macro schedule. Graph validation rejects type-mismatched or
+non-grammar operator mutations. Read-only quality reports include
+evidence_graph.archetype_distribution and
+evidence_graph.source_counterfactual_full_pass_rate.
+
+Example: python -m envir generate-questions --config envir/config.yaml
+--target 100 --evidence-graph-share 100 --output-dir
+envir/data/evidence_graph_pilot_100
+
+Limitations: the grammar is intentionally bounded; media are simulated
+structured observations; structurally valid DAGs are not necessarily
+hard for a blind Main-Agent. No unsupported original MMQA facts are used.

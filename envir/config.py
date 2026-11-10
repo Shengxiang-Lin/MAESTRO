@@ -12,7 +12,8 @@ DEFAULT_CONFIG = Path(__file__).with_name("config.yaml")
 SECTIONS = {
     "input": {"mmqa", "max_records"},
     "generation": {"output_dir", "target", "seed", "difficulty_mix",
-                   "overwrite", "no_progress", "flush_every", "clue_chain_share"},
+                   "overwrite", "no_progress", "flush_every", "clue_chain_share",
+                   "evidence_graph_share"},
     "scenario": {"api_base", "model", "critic_api_base", "critic_model",
                  "api_key_env", "critic_api_key_env", "workers",
                  "max_revisions", "timeout"},
@@ -87,6 +88,10 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     if (type(clue_chain_share) is not int
             or not 0 <= clue_chain_share <= 100):
         raise ValueError("generation.clue_chain_share must be 0..100")
+    evidence_graph_share = generation.get("evidence_graph_share", 0)
+    if (type(evidence_graph_share) is not int
+            or not 0 <= evidence_graph_share <= 100):
+        raise ValueError("generation.evidence_graph_share must be 0..100")
     directory = output_dir or generation.get("output_dir")
     if not directory:
         raise ValueError("generation.output_dir is required")
@@ -98,6 +103,7 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         overwrite=bool(generation.get("overwrite", False)),
         flush_every=flush_every,
         clue_chain_share=clue_chain_share,
+        evidence_graph_share=evidence_graph_share,
         no_progress=no_progress or bool(generation.get("no_progress", False)),
         scenario_api_base=scenario["api_base"],
         scenario_model=scenario["model"],

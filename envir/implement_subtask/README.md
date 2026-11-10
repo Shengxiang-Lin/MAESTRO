@@ -315,3 +315,14 @@ Oracle data, and naturalize-subtasks without --scenes consumes already
 materialized Oracle JSONL files. The combined mode forbids mixing
 --scenes with --source-subtasks/--source-scene-index. Use a NEW output
 directory when switching generation modes.
+
+
+### Keyed retrieval narrative fidelity
+
+The Oracle now retains lookup_keys per primitive lookup step: source ID,
+actual input key field, and observed key values. The Author and Critic
+receive this immutable metadata; a focused deterministic Guard also
+rejects direct assertions that the archive was queried by an upstream
+marker when the executed archive lookup used an accession ID. This is a
+narrow high-confidence error check, not a general proof of narrative
+entailment. All exact structured answers and fact references remain frozen.
