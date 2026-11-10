@@ -136,6 +136,54 @@ _TOOL_HALLUCINATION = re.compile(
     re.I,
 )
 _FACT_ID = re.compile(r"\b[A-Za-z][A-Za-z0-9_-]*:F[0-9A-Za-z_-]+\b")
+_ENTRY_ID = re.compile(r"\bEntry-\d+\b", re.I)
+
+# A second pass is only available when the proposed enumerated result has
+# ALREADY been independently verified against every Oracle entry. It asks
+# the Critic to reassess stage-local prose, not to re-evaluate structured
+# record membership from truncated evidence atom examples.
+VERIFIED_ENTRY_CRITIC_SYSTEM = CRITIC_SYSTEM + """
+DETERMINISTIC RESULT VERIFICATION: The application checked the complete
+enumerated Entry list against exact_oracle_answer and established exact
+multiset equality BEFORE this request. The result is not to be
+re-adjudicated. Evidence samples are partial; never claim that a verified
+entry is absent merely because it is missing from sampled_evidence_atoms.
+Review only the summary for unsupported filtering, other-stage claims,
+source misuse, hallucinated facts, and naturalness. Fail if the summary
+actually asserts an unsupported fact, not because of the verified list.
+Return the usual strict JSON verdict and four boolean axes.
+"""
+
+
+def _verified_enumerated_entries(result: str, rows: list[dict]) -> bool:
+    if not rows or not all(
+        set(row) == {"entry_label"}
+        and _ENTRY_ID.fullmatch(str(row["entry_label"]))
+        for row in rows
+    ):
+        return False
+    from collections import Counter
+    expected = Counter(str(row["entry_label"]).lower() for row in rows)
+    found = Counter(label.lower() for label in _ENTRY_ID.findall(result))
+    return bool(found) and found == expected
+
+
+def _critic_oracle_membership_false_negative(
+    decision: dict, normalized_result: str, rows: list[dict],
+) -> bool:
+    if not _verified_enumerated_entries(normalized_result, rows):
+        return False
+    reason = str(decision.get("reason", "")).lower()
+    if "oracle" not in reason:
+        return False
+    if not re.search(
+        r"\b(?:not\s+in|not\s+included|absent|missing|"
+        r"does\s+not\s+contain|doesn.?t\s+contain)\b", reason,
+    ):
+        return False
+    correct = {str(row["entry_label"]).lower() for row in rows}
+    mentioned = {match.lower() for match in _ENTRY_ID.findall(reason)}
+    return bool(mentioned) and mentioned.issubset(correct)
 
 
 def _canonical(value) -> str:
@@ -613,6 +661,27 @@ def author_critic_report(
                 "grounded", "answer_scope_preserved",
                 "evidence_scope_respected", "natural",
             )
+            corrected_false_negative = False
+            if (decision.get("verdict") != "pass"
+                    and _critic_oracle_membership_false_negative(
+                        decision, normalized_result, contract["exact_oracle_answer"]
+                    )):
+                # Keep the first review in the private audit trail. A second
+                # independent judgment is required; no automatic pass.
+                initial_decision = decision
+                decision = critic.complete_json(
+                    VERIFIED_ENTRY_CRITIC_SYSTEM, json.dumps({
+                        "frozen_task_and_evidence": contract,
+                        "result_was_deterministically_verified": True,
+                        "verified_full_result": normalized_result,
+                        "candidate_summary_for_review": candidate["summary"],
+                        "previous_critic_error": initial_decision.get("reason"),
+                    }, ensure_ascii=False)
+                )
+                corrected_false_negative = (
+                    decision.get("verdict") == "pass"
+                    and all(decision.get(axis) is True for axis in axes)
+                )
             if (decision.get("verdict") == "pass"
                     and all(decision.get(axis) is True for axis in axes)):
                 summary_text = candidate["summary"].strip()
@@ -630,6 +699,8 @@ def author_critic_report(
                     "status": "accepted",
                     "attempts": revision + 1,
                     "review": decision,
+                    "critic_membership_false_negative_rechecked":
+                        corrected_false_negative,
                     "exact_answer_immutable": True,
                     "presentation": PRESENTATION,
                     "grounding_note": (
