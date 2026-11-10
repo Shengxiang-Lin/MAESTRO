@@ -194,10 +194,20 @@ class StageLocalClaimTests(unittest.TestCase):
                         if row["macro_task_id"] == "work_M3")
         context = next(row for row in oracle["macro_tasks"]
                        if row["macro_task_id"] == "work_M4")
+        fused = next(row for row in oracle["macro_tasks"]
+                     if row["macro_task_id"] == "work_M5")
         self.assertTrue(compile_claim_contract(compared)[
             "reported_year_disagreement_established"])
         self.assertFalse(compile_claim_contract(context)[
             "reported_year_disagreement_established"])
+        inherited = compile_claim_contract(fused)
+        self.assertTrue(inherited["reported_year_disagreement_established"])
+        self.assertFalse(inherited["reported_year_disagreement_checked_locally"])
+        self.assertIn("independent_report_year_disagreement",
+                      inherited["verified_inherited_claims"])
+        self.assertEqual(stage_local_claim_issues(
+            "Combined records for which the independent report years disagree "
+            "with the separately matching log entries.", inherited), [])
 
     def test_jargon_surface_rewrite_still_runs_critic(self):
         source = "The oracle output lists the cases supported by the evidence."
