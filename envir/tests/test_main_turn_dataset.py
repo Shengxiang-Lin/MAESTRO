@@ -41,7 +41,7 @@ def reviewed_rows(scene):
                 "summary": (
                     "Recorded source observations and their scoped "
                     "intermediate output. PUBLIC_SUMMARY_"
-                    + row["macro_task_id"]
+                    + row["macro_task_id"].replace("work_M", "S")
                 ),
             },
             "report_authoring": {"status": "accepted"},
@@ -98,7 +98,7 @@ class MainTurnDatasetTests(unittest.TestCase):
             prompt = turn["input"]["prompt"]
             visible = set(record["visible_macros_before_round"])
             for tid, row in by_id.items():
-                marker = "PUBLIC_SUMMARY_" + tid
+                marker = "PUBLIC_SUMMARY_" + tid.replace("work_M", "S")
                 if tid in visible:
                     self.assertIn(marker, prompt)
                 else:
