@@ -20,6 +20,34 @@ O1 prompt template does not render it. The Main output remains the O1
 or `complete` JSON. No `work_M*`, complete Gold DAG or Oracle is exposed
 in the training sample.
 
+## Frozen primitive evidence tools (Orchestra-o1 compatible)
+
+Each fresh Stage-1 V2 Scene fixes an evidence-access policy on each
+source and a corresponding **actual O1 Action** on each primitive
+\`scan\`/\`lookup_by_key\` step. Macro \`required_tools\` are aggregated
+from those primitives; Stage 2 trace steps preserve this contract as
+\`evidence_acquisition\` plus \`tool_executed: false\`. Stage 3 only
+inherits and verifies the frozen tools; the Author may write task-specific
+reasoning/instructions/context, but **cannot select additional tools**.
+A source-free evidence-composition Macro can legitimately have \`tools: []\`.
+
+The O1 Main prompt lists actual
+\`GoogleSearchAction\`, \`ExtractUrlContentAction\`,
+\`ImageAnalysisAction\`, \`VideoAnalysisAction\`,
+\`ParseAudioAction\`, \`ExecuteCodeAction\`, using their original parameter
+schemas from \`benchmark/omnigaia/tools\`. No fake
+\`WorkspaceSearchAction\` / \`TableLookupAction\` names remain.
+The current synthetic text/table sources are query-addressed, so they
+map to \`GoogleSearchAction\`, **not** URL extraction; real URLs are
+required before assigning \`ExtractUrlContentAction\`.
+
+Legacy Scene files without acquisition contracts remain supported
+through an explicit compatibility adapter, but this cannot retroactively
+certify that their original Stage-1 source/tool choices were frozen.
+Regenerate Scene and Stage-2 files for the new audited tool contract.
+The offline pipeline still never actually executes network, media or
+code tools, even though it uses their real O1 interface names.
+
 ## Try 20 reviewed Main-turn trajectories using local Qwen
 
 ```bash
