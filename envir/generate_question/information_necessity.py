@@ -9,6 +9,93 @@ from __future__ import annotations
 
 POLICY = "two_nonunique_candidate_sets_with_single_intersection_v1"
 VARIABLE_POLICY = "variable_nonunique_candidate_sets_single_intersection_v2"
+CORROBORATED_DISPUTE_POLICY = "reported_year_disagreement_plus_context_v1"
+
+
+def _audit_corroborated_dispute(scene: dict) -> dict:
+    """Two-source disagreement and an independent log each leave ambiguity.
+
+    The final answer must be unique only after both branches are combined.
+    """
+    plan = scene["problem_spec"]["macro_plan"]
+    feedback = {row["task_id"]: row for row in scene["task_feedback"]}
+    left = {
+        row["values"]["case_id"]
+        for row in feedback["work_M3"]["workproduct"]
+    }
+    right = {
+        row["values"]["case_id"]
+        for row in feedback["work_M4"]["workproduct"]
+    }
+    overlap = left & right
+    sources = scene["world"]["sources"]
+    goal_field = plan["goal"]["answer_field"]
+    resolved = {}
+    for case_id in left | right:
+        key = case_id
+        for i in range(1, plan["index_hops"] + 1):
+            prior = "case_id" if i == 1 else f"record_key_{i-1}"
+            next_key = f"record_key_{i}"
+            options = [
+                row["values"][next_key]
+                for row in sources[f"index_{i}"]["observations"]
+                if row["values"][prior] == key
+            ]
+            if len(options) != 1:
+                raise ValueError("corroborated_dispute_index_not_unique")
+            key = options[0]
+        final_field = (
+            f"record_key_{plan['index_hops']}"
+            if plan["index_hops"] else "case_id"
+        )
+        options = [
+            row["values"][goal_field]
+            for row in sources["archive"]["observations"]
+            if row["values"][final_field] == key
+        ]
+        if len(options) != 1:
+            raise ValueError("corroborated_dispute_archive_not_unique")
+        resolved[case_id] = options[0]
+    target = next(iter(overlap), None)
+    profile = plan["candidate_profile"]
+    profile_matches = (
+        len(left) == profile["left_candidate_count"]
+        and len(right) == profile["right_candidate_count"]
+        and len(left | right) == profile["union_candidate_count"]
+        and len(overlap) == profile["intersection_candidate_count"]
+    )
+    distinct = (
+        target is not None and all(
+            resolved[key] != resolved[target]
+            for key in (left | right) - overlap
+        )
+    )
+    passed = (
+        len(left) >= 2 and len(right) >= 2 and len(overlap) == 1
+        and bool(left - right) and bool(right - left)
+        and feedback["work_M5"]["result_rows"] == 1
+        and profile_matches and distinct
+    )
+    return {
+        "policy": CORROBORATED_DISPUTE_POLICY,
+        "left_candidate_count": len(left),
+        "right_candidate_count": len(right),
+        "intersection_count": len(overlap),
+        "left_unique_candidates": len(left - right),
+        "right_unique_candidates": len(right - left),
+        "both_branches_discriminate": bool(left - right) and bool(right - left),
+        "left_alone_insufficient": len(left) >= 2,
+        "right_alone_insufficient": len(right) >= 2,
+        "jointly_unique": len(overlap) == 1,
+        "competing_goals_distinct": distinct,
+        "candidate_count_matches_profile": profile_matches,
+        "fused_marker_count": feedback["work_M5"]["result_rows"],
+        "passed": passed,
+        "interpretation": (
+            "Actual report-disagreement versus independent context-log "
+            "candidate discrimination, not a globally optimal search proof."
+        ),
+    }
 
 
 def audit_candidate_information(scene: dict) -> dict:
@@ -16,6 +103,8 @@ def audit_candidate_information(scene: dict) -> dict:
     spec = scene["problem_spec"]
     plan = spec["macro_plan"]
     policy = plan.get("information_necessity_policy")
+    if policy == CORROBORATED_DISPUTE_POLICY:
+        return _audit_corroborated_dispute(scene)
     if policy not in {POLICY, VARIABLE_POLICY}:
         raise ValueError("information_necessity_policy_not_applicable")
     feedback = {r["task_id"]: r for r in scene["task_feedback"]}
