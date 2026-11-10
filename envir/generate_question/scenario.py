@@ -174,19 +174,9 @@ def enrich_one(spec: dict, *, author, critic,
     failures = []
     for attempt in range(max_revisions + 1):
         try:
+            from .v2_prompts import SCENARIO_AUTHOR, SCENARIO_CRITIC
             v2 = spec.get("reasoning_pattern") == "macro_first_v2"
-            scenario_author_system = (AUTHOR_SYSTEM + """
-V2 OVERRIDE: The synthetic dataset is an implementation detail, NOT a
-characteristic of the real-world-style scenario. Do not write fictional,
-simulated, hypothetical, or imaginary in any scenario field. Describe an
-ordinary request about supplied working materials without asserting
-external historical facts or real document publication.
-The frozen Goal is specific: do not substitute a founding/release year,
-real-world result or other output. The materials may represent video
-action/time, audio spoken cue/time, images, text or tables. Their modality
-must be reflected in source titles and their purpose. Distinct evidence
-requirements are valid without asserting those materials exist publicly.
-""" if v2 else AUTHOR_SYSTEM)
+            scenario_author_system = SCENARIO_AUTHOR if v2 else AUTHOR_SYSTEM
             proposal = author.complete_json(scenario_author_system, json.dumps({
                 "frozen_contract": frozen,
                 "previous_errors": failures[-2:],
@@ -195,15 +185,7 @@ requirements are valid without asserting those materials exist publicly.
             if issues:
                 failures.append({"stage": "schema_guard", "errors": issues})
                 continue
-            scenario_critic_system = (CRITIC_SYSTEM + """
-V2 OVERRIDE: Treat all source materials as internally constructed working
-evidence, not unlicensed real-world historical claims. Fictional facts
-inside this controlled working set are permitted. Only reject claims of
-real historical events, wrong final Goal semantics, swapped modalities,
-or added constraints. A realistic working-data context is not itself
-false historical evidence.
-""" if spec.get("reasoning_pattern") == "macro_first_v2"
-                else CRITIC_SYSTEM)
+            scenario_critic_system = SCENARIO_CRITIC if v2 else CRITIC_SYSTEM
             review = critic.complete_json(scenario_critic_system, json.dumps({
                 "frozen_contract": frozen,
                 "candidate": proposal,
