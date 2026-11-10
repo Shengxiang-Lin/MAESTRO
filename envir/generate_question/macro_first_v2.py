@@ -185,10 +185,10 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                     weights=(4, 3, 3), k=1)[0]
         if goal_resolution_enabled else "direct_lookup"
     )
+    from .goal_resolution import LABELS
     if goal_kind == "direct_lookup":
         goal_field, goal_type = rng.choice(DOMAIN_GOALS[domain])
     else:
-        from .goal_resolution import LABELS
         goal_field = LABELS[goal_kind]["answer_field"]
         goal_type = LABELS[goal_kind]["answer_type"]
     color = rng.choice(("amber", "blue", "green", "red", "violet"))
@@ -372,19 +372,13 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
             "answer_type": goal_type,
             "public_label": (
                 goal_field.replace("_", " ") if goal_kind == "direct_lookup"
-                else __import__(
-                    "envir.generate_question.goal_resolution",
-                    fromlist=["LABELS"],
-                ).LABELS[goal_kind]["public_label"]
+                else LABELS[goal_kind]["public_label"]
             ),
             "cardinality": "exactly_one",
             "meaning": (
                 f"confirmed {goal_field.replace('_', ' ')} for the matching item"
                 if goal_kind == "direct_lookup"
-                else __import__(
-                    "envir.generate_question.goal_resolution",
-                    fromlist=["LABELS"],
-                ).LABELS[goal_kind]["meaning"]
+                else LABELS[goal_kind]["meaning"]
             ),
         },
         "clues": {
