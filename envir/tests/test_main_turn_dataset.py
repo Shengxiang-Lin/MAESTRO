@@ -451,7 +451,9 @@ class MainTurnDatasetTests(unittest.TestCase):
         self.assertGreater(author.calls, 0)
         self.assertTrue(all(
             t["generation_mode"] in {
-                "llm_reviewed", "teacher_verified_completion",
+                "llm_reviewed", "llm_reviewed_completion",
+                "teacher_grounded_completion_fallback",
+                "teacher_verified_completion",
             } for t in turns
         ))
         bad, critic = Author(bad=True), Critic()
@@ -461,6 +463,74 @@ class MainTurnDatasetTests(unittest.TestCase):
         self.assertIsNone(rejected)
         self.assertEqual(status["status"], "rejected")
         self.assertEqual(critic.calls, 0)
+
+    def test_completion_author_review_and_explicit_fallback(self):
+        scene = fixture(4)
+        rows = reviewed_rows(scene)
+
+        class TemplateAuthor:
+            def complete_json(self, system, request):
+                return json.loads(request)["reference_action_for_structure_only"]
+
+        class GoodCritic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        _, turns, audit, status = build_episode(
+            scene, rows, author=TemplateAuthor(), critic=GoodCritic(),
+            max_revisions=0,
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(status["completion_generation_mode"],
+                         "llm_reviewed_completion")
+        self.assertEqual(turns[-1]["generation_mode"],
+                         "llm_reviewed_completion")
+        self.assertEqual(audit[-1]["authoring"]["status"], "accepted")
+        self.assertIn("The returned finding states:",
+                      turns[-1]["output"]["reasoning"])
+
+        class BadFinalAuthor:
+            def complete_json(self, system, request):
+                data = json.loads(request)
+                template = data["reference_action_for_structure_only"]
+                if template["action"] == "complete":
+                    return {"reasoning":
+                            "As the Critic said about my previous draft, "
+                            "I invented future evidence."}
+                return template
+
+        _, turns, audit, status = build_episode(
+            scene, rows, author=BadFinalAuthor(), critic=GoodCritic(),
+            max_revisions=1,
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(
+            turns[-1]["generation_mode"],
+            "teacher_grounded_completion_fallback",
+        )
+        self.assertFalse(audit[-1]["authoring"]["reviewed"])
+        self.assertNotIn("previous draft",
+                         turns[-1]["output"]["reasoning"])
+        self.assertTrue(audit[-1]["authoring"]["failures"])
+
+    def test_all_completions_use_their_own_visible_evidence(self):
+        reasons = set()
+        for i in (0, 1, 2, 3, 4):
+            scene = fixture(i)
+            episode, turns, _, status = build_episode(
+                scene, reviewed_rows(scene),
+            )
+            self.assertEqual(status["status"], "accepted")
+            reason = turns[-1]["output"]["reasoning"]
+            previous_history = turns[-1]["input"]["subtask_history"]
+            # No private or future outcome is used to create the rationale.
+            self.assertIn("The returned finding states:", reason)
+            self.assertIn("PUBLIC_SUMMARY_", previous_history)
+            reasons.add(reason)
+        self.assertGreaterEqual(len(reasons), 4)
 
     def test_atomic_journal_resume_and_public_private_outputs(self):
         scene = fixture(8)
@@ -703,7 +773,7 @@ class MainTurnDatasetTests(unittest.TestCase):
             self.assertEqual(first_before, first_round.read_bytes())
             self.assertEqual(
                 resumed_author.calls,
-                resumed["actions"]["delegate_task"] - 1,
+                resumed["actions"]["delegate_task"],
             )
             fresh = generate_turns(
                 **common, author=Author(), output_dir=folder / "fresh",
