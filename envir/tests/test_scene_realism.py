@@ -99,6 +99,40 @@ class SceneRealismTests(unittest.TestCase):
         self.assertIn("scene_source_title_not_schema_frozen",
                       spec_issues(tampered))
 
+    def test_overlong_motivation_is_repaired_and_rechecked(self):
+        spec = sample(2)
+        class OverlongAuthor(SchemaAuthor):
+            def complete_json(self, prompt, request):
+                proposal = super().complete_json(prompt, request)
+                proposal["scenario"]["motivation"] = (
+                    "Cross-check independent working materials for the "
+                    "specified result. " * 18
+                )
+                proposal["scenario"]["setting"] = (
+                    "A research review of available working materials"
+                )
+                return proposal
+        critic = GroundedCritic()
+        reviewed, decision = enrich_one(
+            spec, author=OverlongAuthor(), critic=critic,
+            max_revisions=0,
+        )
+        self.assertEqual(decision["status"], "accepted")
+        self.assertIn(spec["scenario"]["topic"],
+                      reviewed["scenario"]["setting"])
+        self.assertLessEqual(len(reviewed["scenario"]["motivation"]), 250)
+        all_repairs = [
+            action for attempt in decision["field_repair_history"]
+            for action in attempt["field_repairs"]
+        ]
+        self.assertIn("too_long", {x["reason"] for x in all_repairs})
+        self.assertIn("topic_prefix", {x["reason"] for x in all_repairs})
+        self.assertEqual(
+            {x["source_id"]: x["title"] for x in reviewed["sources"]},
+            expected_source_titles(spec),
+        )
+        self.assertEqual(spec_issues(reviewed), [])
+
     def test_explicit_second_answer_is_rejected(self):
         for i in range(15):
             spec = sample(i, topic="The Office", domain="film")
