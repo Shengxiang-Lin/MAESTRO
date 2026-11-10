@@ -56,6 +56,26 @@ class ScenarioFieldRepairTests(unittest.TestCase):
                             for x in flags))
 
 
+class TopicQualityTests(unittest.TestCase):
+    def test_reject_placeholder_not_real_topic(self):
+        from envir.generate_question.topic_quality import topic_seed_issues
+        self.assertIn(
+            "topic_generated_placeholder",
+            topic_seed_issues({
+                "topic": "sports reference collection 7b56ebb",
+                "scene_topic_policy": "original_mmqa_source_bundle_fallback",
+            }),
+        )
+        self.assertIn(
+            "topic_ambiguous_subject",
+            topic_seed_issues({"topic": "the man"}),
+        )
+        self.assertEqual(topic_seed_issues({
+            "topic": "Premier League",
+            "scene_topic_policy": "original_mmqa_entity_metadata",
+        }), [])
+
+
 class AcceptedQuotaTests(unittest.TestCase):
     def test_quota_allocation_exact_one_two_three(self):
         goals = quota_targets(100, (17, 33, 50), seed=17)
