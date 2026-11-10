@@ -42,6 +42,8 @@ SOURCE_KIND = {
     "report_a": {"text": "first reported-year account"},
     "report_b": {"table": "independent reported-year table"},
     "archive": {"table": "verified result table"},
+    "stat_a": {"table": "first independently recorded count"},
+    "stat_b": {"table": "second independently recorded count"},
 }
  
 def has_scene_realism(spec: dict) -> bool:

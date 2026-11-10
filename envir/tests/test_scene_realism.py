@@ -137,9 +137,10 @@ class SceneRealismTests(unittest.TestCase):
         for i in range(15):
             spec = sample(i, topic="The Office", domain="film")
             q = reference_question(spec)
-            bad = q.replace(
-                "what is the confirmed",
-                "which case is this, and what is the confirmed",
+            bad = (
+                f"Which case in {spec['scenario']['topic']} matches the "
+                f"evidence, and what is the confirmed "
+                f"{spec['macro_plan']['goal']['public_label']}?"
             )
             self.assertNotEqual(q, bad)
             self.assertIn("semantic_additional_output_requested",

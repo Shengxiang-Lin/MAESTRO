@@ -84,9 +84,12 @@ class SemanticEvidenceTests(unittest.TestCase):
         q = q.replace("?", ", provided the entry-specific clearance is marked cleared?")
         self.assertIn("semantic_unlicensed_clearance", guard_question(q, spec))
         contract = compile_semantic_contract(spec)
+        terminal_source = spec["macro_plan"].get(
+            "goal_resolution", {}
+        ).get("input_source_ids", ["archive"])[0]
         self.assertIn("semantic_unlicensed_clearance",
                       semantic_source_title_issues(
-                          "archive", "Final Clearance and Review Register",
+                          terminal_source, "Final Clearance and Review Register",
                           spec, contract))
 
         original = spec["scenario"]
@@ -97,7 +100,7 @@ class SemanticEvidenceTests(unittest.TestCase):
             "source_titles": [
                 {"source_id": source["source_id"],
                  "title": ("Final Clearance and Review Register"
-                           if source["source_id"] == "archive"
+                           if source["source_id"] == terminal_source
                            else source["title"])}
                 for source in spec["sources"]
             ],
@@ -177,7 +180,10 @@ class SemanticEvidenceTests(unittest.TestCase):
         self.assertIn("semantic_unlicensed_clearance", result["issues"])
 
         fake = copy.deepcopy(scene)
-        fake["semantic_evidence_contract"]["goal"]["answer_type"] = "str"
+        before = fake["semantic_evidence_contract"]["goal"]["answer_type"]
+        fake["semantic_evidence_contract"]["goal"]["answer_type"] = (
+            "int" if before == "str" else "str"
+        )
         self.assertIn("semantic_evidence_contract_not_frozen",
                       validate_replay(fake)["issues"])
 
@@ -196,6 +202,7 @@ class SemanticEvidenceTests(unittest.TestCase):
         spec.pop("semantic_evidence_contract_version")
         spec.pop("macro_information_necessity_version", None)
         spec.pop("scene_realism_version", None)
+        spec.pop("goal_resolution_version", None)
         from envir.generate_question.macro_first_v2 import (
             sample_macro_plan, domain_hint,
         )
@@ -234,6 +241,7 @@ class SemanticEvidenceTests(unittest.TestCase):
         spec.pop("semantic_evidence_contract_version")
         spec.pop("macro_information_necessity_version", None)
         spec.pop("scene_realism_version", None)
+        spec.pop("goal_resolution_version", None)
         from envir.generate_question.macro_first_v2 import (
             sample_macro_plan, domain_hint,
         )

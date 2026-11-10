@@ -73,6 +73,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     graph_modes = Counter()
     macro_first_modes = Counter()
     macro_v2_modes = Counter()
+    macro_v2_resolution_modes = Counter()
     macro_v2_goals = Counter()
     macro_v2_evidence_sizes = []
     macro_v2_local_source_counts = []
@@ -157,6 +158,11 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                         if necessity:
                             macro_v2_information_audits.append(necessity)
                     macro_v2_modes[plan["pattern"]] += 1
+                    macro_v2_resolution_modes[
+                        plan.get("goal_resolution", {}).get(
+                            "kind", "direct_lookup"
+                        )
+                    ] += 1
                     n_lookups = sum(
                         node["op"] == "lookup_by_key"
                         for node in scene["gold_program"]["nodes"]
@@ -413,6 +419,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
         "macro_first_v2": {
             "scenes": sum(macro_v2_modes.values()),
             "pattern_distribution": dict(macro_v2_modes),
+            "goal_resolution_distribution": dict(macro_v2_resolution_modes),
             "goal_field_distribution": dict(macro_v2_goals),
             "source_observation_count_histogram": dict(
                 sorted(Counter(macro_v2_evidence_sizes).items())

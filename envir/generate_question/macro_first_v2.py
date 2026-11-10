@@ -44,6 +44,9 @@ GOAL_PHRASES = {
     "filing_year": ("filing year", "year of filing"),
     "case_title": ("case title", "title of the case"),
     "review_year": ("review year", "year of the review"),
+    "higher_count_source": ("higher count", "larger count", "which source"),
+    "completion_rate_percent": ("completion rate", "percentage completed",
+                                "completion percentage"),
     "exhibition_title": ("exhibition title", "title of the exhibition"),
     "exhibition_year": ("exhibition year", "year of the exhibition"),
     "course_title": ("course title", "title of the course"),
@@ -149,7 +152,9 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                       difficulty: str, domain: str,
                       information_need: bool = False,
                       realism_v3: bool = False,
-                      extended_grammar: bool = False) -> tuple[dict, list[dict]]:
+                      extended_grammar: bool = False,
+                      goal_resolution_enabled: bool = False,
+                      ) -> tuple[dict, list[dict]]:
     if difficulty not in {"medium", "hard"}:
         raise ValueError("macro_first_v2_requires_medium_or_hard")
     if domain not in DOMAIN_GOALS:
@@ -175,7 +180,17 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
             "union_candidate_count": left_count + right_count - 1,
             "intersection_candidate_count": 1,
         }
-    goal_field, goal_type = rng.choice(DOMAIN_GOALS[domain])
+    goal_kind = (
+        rng.choices(("direct_lookup", "comparison", "calculation"),
+                    weights=(4, 3, 3), k=1)[0]
+        if goal_resolution_enabled else "direct_lookup"
+    )
+    from .goal_resolution import LABELS
+    if goal_kind == "direct_lookup":
+        goal_field, goal_type = rng.choice(DOMAIN_GOALS[domain])
+    else:
+        goal_field = LABELS[goal_kind]["answer_field"]
+        goal_type = LABELS[goal_kind]["answer_type"]
     color = rng.choice(("amber", "blue", "green", "red", "violet"))
     motif = rng.choice(("crescent", "spiral", "star", "wave", "triangle"))
     action = rng.choice(("entrance", "handoff", "turn", "signal", "departure"))
@@ -315,6 +330,10 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
     hops = rng.choices((0, 1, 2), weights=(
         (2, 4, 3) if difficulty == "medium" else (1, 3, 5)
     ), k=1)[0]
+    if goal_kind != "direct_lookup" and pattern == "corroborated_dispute":
+        # Five discovery Macros + one keyed hop + three resolution Macros
+        # stays within the existing nine-Macro orchestration budget.
+        hops = min(hops, 1)
     for i in range(1, hops + 1):
         new_key = f"record_key_{i}"
         sid = f"index_{i}"
@@ -324,18 +343,48 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         prior = macro(f"key_resolution_{i}", [prior],
                       {new_key: "str"}, [sid])
         key_field = new_key
-    source("archive", "table", {key_field: "str", goal_field: goal_type},
-           "confirm the requested detail for a discovered case",
-           key=key_field)
-    terminal = macro("authoritative_result", [prior],
-                     {goal_field: goal_type}, ["archive"])
+    if goal_kind == "direct_lookup":
+        source("archive", "table", {key_field: "str", goal_field: goal_type},
+               "confirm the requested detail for a discovered case",
+               key=key_field)
+        terminal = macro("authoritative_result", [prior],
+                         {goal_field: goal_type}, ["archive"])
+    else:
+        a_field, b_field = (
+            ("metric_a", "metric_b") if goal_kind == "comparison"
+            else ("completed_count", "total_count")
+        )
+        source("stat_a", "table", {key_field: "str", a_field: "int"},
+               "first independent observation count for identified event",
+               key=key_field)
+        source("stat_b", "table", {key_field: "str", b_field: "int"},
+               "second independent observation count for identified event",
+               key=key_field)
+        first_count = macro("metric_a_lookup", [prior],
+                            {key_field: "str", a_field: "int"}, ["stat_a"])
+        second_count = macro("metric_b_lookup", [prior],
+                             {key_field: "str", b_field: "int"}, ["stat_b"])
+        terminal = macro(
+            "goal_resolution", [first_count, second_count],
+            {goal_field: goal_type},
+        )
     plan = {
         "version": VERSION, "pattern": pattern, "difficulty": difficulty,
         "domain": domain,
-        "goal": {"answer_field": goal_field, "answer_type": goal_type,
-                 "public_label": goal_field.replace("_", " "),
-                 "cardinality": "exactly_one",
-                 "meaning": f"confirmed {goal_field.replace('_', ' ')} for the matching item"},
+        "goal": {
+            "answer_field": goal_field,
+            "answer_type": goal_type,
+            "public_label": (
+                goal_field.replace("_", " ") if goal_kind == "direct_lookup"
+                else LABELS[goal_kind]["public_label"]
+            ),
+            "cardinality": "exactly_one",
+            "meaning": (
+                f"confirmed {goal_field.replace('_', ' ')} for the matching item"
+                if goal_kind == "direct_lookup"
+                else LABELS[goal_kind]["meaning"]
+            ),
+        },
         "clues": {
             "emblem_color": color, "emblem_shape": motif,
             "scene_action": action, "spoken_cue": motif,
@@ -347,6 +396,15 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         "source_schemas": schemas, "index_hops": hops,
         "media_interpretation": "simulated_typed_observations_not_media_decoding",
     }
+    if goal_resolution_enabled:
+        from .goal_resolution import GOAL_RESOLUTION_VERSION
+        plan["goal_resolution"] = {
+            "version": GOAL_RESOLUTION_VERSION, "kind": goal_kind,
+            "input_source_ids": (
+                ["archive"] if goal_kind == "direct_lookup"
+                else ["stat_a", "stat_b"]
+            ),
+        }
     if information_need and pattern in {
         "multimodal_event", "corroborated_dispute",
     }:
@@ -375,7 +433,9 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         information_need=True,
         realism_v3=True,
         extended_grammar=True,
+        goal_resolution_enabled=True,
     )
+    from .goal_resolution import GOAL_RESOLUTION_VERSION
     from .semantic_evidence import CONTRACT_VERSION
     from .question_fidelity import QUESTION_FIDELITY_VERSION
     from .source_title_contract import (
@@ -390,6 +450,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         "question_fidelity_version": QUESTION_FIDELITY_VERSION,
         "topic_domain_version": TOPIC_DOMAIN_VERSION,
         "macro_grammar_version": GRAMMAR_VERSION,
+        "goal_resolution_version": GOAL_RESOLUTION_VERSION,
         "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
         "scene_id": record_id,
         "source_anchor": {
@@ -456,6 +517,11 @@ def validate_spec(spec: dict) -> list[str]:
         return ["invalid_topic_domain_version"]
     if spec.get("macro_grammar_version") not in {None, GRAMMAR_VERSION}:
         return ["invalid_macro_grammar_version"]
+    from .goal_resolution import GOAL_RESOLUTION_VERSION
+    if spec.get("goal_resolution_version") not in {
+        None, GOAL_RESOLUTION_VERSION
+    }:
+        return ["invalid_goal_resolution_version"]
     try:
         expected, roles = sample_macro_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
@@ -482,6 +548,7 @@ def validate_spec(spec: dict) -> list[str]:
                 spec.get("macro_grammar_version")
                 and spec.get("scene_realism_version")
             ),
+            goal_resolution_enabled=bool(spec.get("goal_resolution_version")),
         )
         errors = []
         if plan != expected:
@@ -609,6 +676,40 @@ def compile_macro_solvers(spec: dict) -> dict:
             projected = add("project", key,
                             fields=[plan["goal"]["answer_field"]])
             last = add("unique", projected)
+        elif role in {"metric_a_lookup", "metric_b_lookup"}:
+            sid = "stat_a" if role == "metric_a_lookup" else "stat_b"
+            kind = plan["goal_resolution"]["kind"]
+            metric_field = (
+                "metric_a" if sid == "stat_a" else "metric_b"
+            ) if kind == "comparison" else (
+                "completed_count" if sid == "stat_a" else "total_count"
+            )
+            acquired = add(
+                "lookup_by_key", *parents, source_id=sid,
+                input_key_field=prior_key, source_key_field=prior_key,
+            )
+            last = add("project", acquired,
+                       fields=[prior_key, metric_field])
+        elif role == "goal_resolution":
+            kind = plan["goal_resolution"]["kind"]
+            paired = add("join", *parents, left_on=prior_key,
+                         right_on=prior_key)
+            if kind == "comparison":
+                resolved = add(
+                    "derive_comparison", paired, left_field="metric_a",
+                    right_field="metric_b",
+                    output_field=plan["goal"]["answer_field"],
+                )
+            elif kind == "calculation":
+                resolved = add(
+                    "derive_percentage", paired,
+                    left_field="completed_count",
+                    right_field="total_count",
+                    output_field=plan["goal"]["answer_field"],
+                )
+            else:
+                raise ValueError("unsupported_goal_resolution_kind:" + kind)
+            last = add("unique", resolved)
         else:
             raise ValueError("unknown_macro_first_v2_solver:" + role)
         nodes.extend(local)

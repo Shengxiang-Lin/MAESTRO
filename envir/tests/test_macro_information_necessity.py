@@ -96,6 +96,7 @@ class InformationNecessityTests(unittest.TestCase):
         old = copy.deepcopy(spec)
         from envir.generate_question.macro_first_v2 import sample_macro_plan
         old.pop("scene_realism_version")
+        old.pop("goal_resolution_version", None)
         plan, roles = sample_macro_plan(
             seed=old["seed"], ordinal=old["ordinal"],
             record_id=old["source_anchor"]["source_record_id"],
@@ -177,8 +178,15 @@ class InformationNecessityTests(unittest.TestCase):
                          "environment")
         spec = spec_for(13, topic="Unknown civic event", hint="civic")
         self.assertEqual(spec["macro_plan"]["domain"], "civic")
-        self.assertIn(spec["macro_plan"]["goal"]["answer_field"],
-                      {"civic_site", "permit_status", "inspection_year"})
+        field = spec["macro_plan"]["goal"]["answer_field"]
+        if spec["macro_plan"]["goal_resolution"]["kind"] == "direct_lookup":
+            self.assertIn(field, {
+                "civic_site", "permit_status", "inspection_year"
+            })
+        else:
+            self.assertIn(field, {
+                "higher_count_source", "completion_rate_percent"
+            })
 
 
 if __name__ == "__main__":

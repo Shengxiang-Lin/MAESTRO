@@ -29,6 +29,7 @@ _ARITY = {
     "sort": 1, "take": 1, "group_count": 1,
     "compare_fields": 1, "attach_evidence": 1,
     "lookup_by_key": 1,
+    "derive_comparison": 1, "derive_percentage": 1,
 }
 
 
@@ -79,6 +80,12 @@ def validate_program(program: dict) -> list[str]:
             or node.get("comparison") not in {"eq", "ne", "gte", "lte"}
         ):
             issues.append("compare_fields_invalid")
+        if op in {"derive_comparison", "derive_percentage"} and (
+            not isinstance(node.get("left_field"), str)
+            or not isinstance(node.get("right_field"), str)
+            or not isinstance(node.get("output_field"), str)
+        ):
+            issues.append("derived_goal_invalid_fields")
         if op == "group_count" and not isinstance(node.get("field"), str):
             issues.append("group_count_invalid_field")
         if op == "sort" and (not isinstance(node.get("field"), str) or
@@ -248,6 +255,24 @@ def _apply(node: dict, inputs: list[Relation]) -> Relation:
             return left >= right if comparison == "gte" else left <= right
         return Relation(src.columns, tuple(row for row in src.rows
                                            if matches(row)))
+    if op in {"derive_comparison", "derive_percentage"}:
+        from .goal_resolution import goal_values
+        src = inputs[0]
+        left_field, right_field = node["left_field"], node["right_field"]
+        output_field = node["output_field"]
+        _check(src, left_field)
+        _check(src, right_field)
+        kind = "comparison" if op == "derive_comparison" else "calculation"
+        return Relation((output_field,), tuple({
+            "values": {
+                output_field: goal_values(
+                    kind,
+                    row["values"][left_field],
+                    row["values"][right_field],
+                )
+            },
+            "support": row["support"],
+        } for row in src.rows))
     if op == "attach_evidence":
         src = inputs[0]
         if "evidence_refs" in src.columns:

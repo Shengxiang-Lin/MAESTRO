@@ -45,6 +45,7 @@ def _construction_identity(args) -> str:
                 "source_title_contract.py", "difficulty_proxy.py",
                 "scenario_fields.py", "topic_quality.py",
                 "topic_domain.py", "question_fidelity.py",
+                "goal_resolution.py",
                 "semantic_evidence.py",
                 "v2_prompts.py", "intent.py", "surface_quality.py",
                 "program_ir.py",

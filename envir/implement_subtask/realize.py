@@ -69,6 +69,16 @@ def _describe_operation(node: dict) -> str:
         return "Count the remaining rows"
     if op == "group_count":
         return f"Count rows within each {node['field']} group"
+    if op == "derive_comparison":
+        return (
+            f"Compare {node['left_field']} with {node['right_field']} "
+            "and identify the independent source with the higher count"
+        )
+    if op == "derive_percentage":
+        return (
+            f"Compute 100 * {node['left_field']} / {node['right_field']} "
+            "as a whole percentage rounded down"
+        )
     if op == "attach_evidence":
         return "Attach the source fact references supporting each result"
     raise ValueError("unsupported_subtask_operation:" + op)
