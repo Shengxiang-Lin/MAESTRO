@@ -39,6 +39,26 @@ not silently accepted or replaced to hit a quota.
 
 Implementation details: [environment/README.md](environment/README.md).
 
+## Migrating existing generated data
+
+Previously generated `envir/data/` outputs are ignored by Git and are **not**
+moved automatically by `git pull`. To reuse your accepted Scene/report/Base
+Episode files with the new default configurations, from the repository root
+run:
+
+```bash
+mkdir -p environment/data
+cp -a envir/data/. environment/data/
+```
+
+Then run the fourth workflow using
+`python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml`.
+The old *tracked* `environment/` implementation is deleted by the rename;
+local ignored/untracked files should be backed up separately. Do not resume
+old `envir` checkpoints after code-path/signature changes.
+
+
+
 ## Repository layout
 
 ```text
