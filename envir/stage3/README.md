@@ -156,9 +156,16 @@ handle concurrent requests, or increase it within `1..64` if capacity
 permits. Worker count affects throughput only and can change on resume
 without invalidating existing Scene/round checkpoints.
 
-The CLI displays one global Scene `tqdm` bar by default. Add
-`--verbose-progress` for per-worker Main-round bars or `--no-progress`
-for batch logs and scripts.
+The CLI displays one global Scene `tqdm` bar by default with **live
+`accepted`, `rejected`, `written`, `turns` counters**:
+`written` counts finished Scene journals (including rejected Scenes),
+whereas `turns` counts publishable Main-decision examples from fully
+accepted Episodes. The bar's speed and ETA are in **scenes/s**, not
+individual Sub-Agent macros or Main rounds. These counters update when a
+Scene completes; the first Scene can take several Main rounds before the
+first update. Run `--verbose-progress` for additional per-worker
+Main-round bars, or `--no-progress` to suppress all bars. Detailed
+failure reasons remain in `summary.json` and `failed.jsonl`.
 
 ### Compact Main inputs and optional full-Prompt export
 
