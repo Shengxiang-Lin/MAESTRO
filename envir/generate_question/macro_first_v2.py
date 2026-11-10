@@ -14,6 +14,32 @@ from .macro_first import _source
 VERSION = "maestro.macro_plan.v2"
 PATTERNS = ("serial_identity", "parallel_cues",
             "disputed_reports", "multimodal_event")
+# High-precision paraphrases; a changed target (e.g. match year instead
+# of match result) is never a valid semantic variant.
+GOAL_PHRASES = {
+    "match_result": ("match result", "final score", "match score"),
+    "event_venue": ("event venue", "venue for the event", "event location"),
+    "match_year": ("match year", "year of the match"),
+    "episode_title": ("episode title", "title of the episode", "episode's title"),
+    "screening_venue": ("screening venue", "screening location"),
+    "production_year": ("production year", "year of production"),
+    "performance_venue": ("performance venue", "performance location"),
+    "song_title": ("song title", "title of the song"),
+    "performance_year": ("performance year", "year of the performance"),
+    "edition_title": ("edition title", "title of the edition"),
+    "publication_year": ("publication year", "year of publication"),
+    "artifact_title": ("artifact title", "title of the artifact"),
+    "record_year": ("record year", "year of the record"),
+    "survey_site": ("survey site", "site of the survey"),
+    "survey_year": ("survey year", "year of the survey"),
+    "experiment_label": ("experiment label", "experiment identifier"),
+    "review_status": ("review status", "status of the review"),
+    "resolution_status": ("resolution status", "status of the resolution"),
+    "filing_year": ("filing year", "year of filing"),
+    "case_title": ("case title", "title of the case"),
+    "review_year": ("review year", "year of the review"),
+}
+
 DOMAIN_GOALS = {
     "sports": (("match_result", "str"), ("event_venue", "str"),
                ("match_year", "int")),
