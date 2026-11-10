@@ -20,6 +20,58 @@ O1 prompt template does not render it. The Main output remains the O1
 or `complete` JSON. No `work_M*`, complete Gold DAG or Oracle is exposed
 in the training sample.
 
+## From-scratch experiment: three Web evidence acquisition routes
+
+Use **new directories** to avoid manifest/signature mismatch with old
+Stage-1 and Stage-3 checkpoints. The default YAML configs already point
+to the local OpenAI-compatible model server on port 8807.
+
+\`\`\`bash
+git pull origin main
+
+# Stage 1: fresh 100 accepted scenes, including the new v2 web contracts
+python -m envir generate-questions \
+  --config envir/config.yaml \
+  --target 100 \
+  --output-dir envir/data/maestro_web_v2_100
+
+# Stage 1 Replay verification (do not proceed if invalid)
+python -m envir quality \
+  --config envir/config.yaml \
+  --scenes envir/data/maestro_web_v2_100/questions/scenes.jsonl \
+  --output envir/data/maestro_web_v2_100/replay_check.json
+
+# Stage 2: materialize and naturalize the full new Macro report bank
+python -m envir naturalize-subtasks \
+  --config envir/implement_subtask/config.yaml \
+  --scenes envir/data/maestro_web_v2_100/questions/scenes.jsonl \
+  --output-dir envir/data/maestro_web_v2_reports_100
+
+# Stage 3: author one training sample per Main decision round
+python -m envir.stage3.generate_turns \
+  --scenes envir/data/maestro_web_v2_100/questions/scenes.jsonl \
+  --reports envir/data/maestro_web_v2_reports_100/subtasks.jsonl \
+  --output-dir envir/data/maestro_web_v2_main_turns_100 \
+  --workers 4 --max-scenes 100 \
+  --mode llm \
+  --author-api-base http://127.0.0.1:8807/v1 \
+  --author-model local-qwen3.5-9b \
+  --critic-model local-qwen3.5-9b
+\`\`\`
+
+For a cheaper pilot, run Stage 2 with \`--max-scenes 20\` into its own
+new directory, then Stage 3 with \`--max-scenes 20\` and that pilot's
+\`subtasks.jsonl\` into another new directory. Once accepted, run the
+full generation with the fresh output paths above.
+
+Every source acquiring from synthetic Web evidence independently freezes
+\`search_only\`, \`direct_extract\`, or \`search_then_extract\`.
+In the third route, Stage 2's \`simulated_tool_calls\` show a local
+Search result URL feeding Extract's \`url\` parameter, with fact references
+attached only to the evidence-producing call. Stage 3 keeps the same
+tools in a Main decision's \`delegate_task\`; **there are no actual
+HTTP requests**, and a multi-tool Sub-Agent trace is not a new Main turn.
+
 ## Frozen primitive evidence tools (Orchestra-o1 compatible)
 
 Each fresh Stage-1 V2 Scene fixes an evidence-access policy on each
