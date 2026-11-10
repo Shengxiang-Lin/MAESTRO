@@ -178,12 +178,12 @@ def _visible_terminal_answer(scene: dict, delivered: dict,
     if not answer or any(
         set(row) != {"entry_label"} or
         not isinstance(row["entry_label"], str) or
-        not re.fullmatch(r"Entry-\\d+", row["entry_label"])
+        not re.fullmatch(r"Entry-\d+", row["entry_label"])
         for row in answer
     ):
         return False
     public_result = delivered[upstream]["finish_result"]["result"]
-    observed = set(re.findall(r"\\bEntry-\\d+\\b", public_result))
+    observed = set(re.findall(r"\bEntry-\d+\b", public_result))
     expected = {row["entry_label"] for row in answer}
     return bool(observed) and observed == expected
 
@@ -200,7 +200,7 @@ def _grounded_completion_reasoning(delivered: dict, *,
     excerpts = []
     for report in recent:
         finish = report["finish_result"]
-        statement = finish["result"].strip().replace("\\n", " ")
+        statement = finish["result"].strip().replace("\n", " ")
         # This is a quoted, already-visible Sub-Agent response, not the
         # private target answer or an imagined tool result.
         if statement:
