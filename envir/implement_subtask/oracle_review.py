@@ -51,6 +51,20 @@ def entry_fact_index(teacher_record: dict) -> dict:
                 if ref in result and result[ref] != record:
                     raise ValueError("conflicting_oracle_fact_ref:" + ref)
                 result[ref] = record
+    # Answer provenance is complete even when the evidence samples from a
+    # long register scan contain only the first few atoms.
+    for output in teacher_record.get("answer_with_provenance", []):
+        label = output.get("values", {}).get("entry_label")
+        if not isinstance(label, str):
+            continue
+        for ref in output.get("source_fact_refs", []):
+            if not ref.startswith("register:"):
+                continue
+            previous = result.get(ref)
+            if previous is not None and previous["entry_label"] != label:
+                raise ValueError("oracle_answer_provenance_conflicts_with_register")
+            if previous is None:
+                result[ref] = {"entry_label": label, "active": None}
     return result
 
 
