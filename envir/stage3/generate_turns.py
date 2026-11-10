@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 import shutil
 
+from tqdm import tqdm
+
 from envir.generate_question.stages import read_jsonl
 from .trajectory_builder import build_episode
 
@@ -64,6 +66,76 @@ def _signature(scenes: Path, reports: Path, *, max_scenes, sub_model,
     }
 
 
+def _round_directory(journal: Path, index: int) -> Path:
+    """Incomplete rounds never enter the published training dataset."""
+    return journal / f"{index:06d}.rounds"
+
+
+def _load_rounds(directory: Path, *, task_id: str) -> list[dict]:
+    if not directory.exists():
+        return []
+    if not directory.is_dir():
+        raise RuntimeError("stage3_checkpoint_path_not_directory")
+    paths = sorted(directory.glob("round-*.json"))
+    saved = []
+    for number, path in enumerate(paths, 1):
+        if path.name != f"round-{number:04d}.json":
+            raise RuntimeError("stage3_checkpoint_round_gap_or_bad_name")
+        row = json.loads(path.read_text(encoding="utf-8"))
+        if (row.get("round") != number
+                or row.get("turn", {}).get("task_id") != task_id):
+            raise RuntimeError("stage3_checkpoint_wrong_round_or_scene")
+        saved.append(row)
+    return saved
+
+
+def _save_round(directory: Path, checkpoint: dict) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"round-{checkpoint['round']:04d}.json"
+    if path.exists():
+        raise RuntimeError("stage3_checkpoint_would_overwrite_existing_round")
+    _dump_json(path, checkpoint)
+
+
+def _append_jsonl(path: Path, records: list[dict]) -> None:
+    """Publish complete episodes incrementally; journals repair torn appends."""
+    if not records:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        for item in records:
+            stream.write(json.dumps(item, ensure_ascii=False) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _rebuild_publication(
+    scenes: list[dict], journal: Path, output_dir: Path,
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """Scene journals are authoritative across interrupted multi-file appends."""
+    episodes, turns, private, failures = [], [], [], []
+    for index, scene in enumerate(scenes):
+        file = journal / f"{index:06d}.json"
+        if not file.is_file():
+            continue
+        saved = json.loads(file.read_text(encoding="utf-8"))
+        if saved.get("task_id") != scene["task_id"]:
+            raise RuntimeError("stage3_journal_scene_order_changed")
+        if saved["status"]["status"] == "accepted":
+            episodes.append(saved["episode"])
+            turns.extend(saved["turns"])
+            private.extend(saved["private_audit"])
+        else:
+            failures.append({
+                "task_id": scene["task_id"], **saved["status"],
+            })
+    _write_jsonl(output_dir / "episodes.jsonl", episodes)
+    _write_jsonl(output_dir / "main_turns.jsonl", turns)
+    _write_jsonl(output_dir / "private" / "teacher_alignment.jsonl", private)
+    _write_jsonl(output_dir / "failed.jsonl", failures)
+    return episodes, turns, private, failures
+
+
 def generate_turns(
     *, scenes_path: Path, reports_path: Path, output_dir: Path,
     max_scenes: int | None = None,
@@ -72,7 +144,7 @@ def generate_turns(
     model_alias: str = "model_1",
     author_model: str | None = None,
     critic_model: str | None = None,
-    overwrite: bool = False,
+    overwrite: bool = False, no_progress: bool = False,
 ) -> dict:
     scenes_path, reports_path = Path(scenes_path), Path(reports_path)
     output_dir = Path(output_dir)
@@ -112,61 +184,98 @@ def generate_turns(
     journal = output_dir / "journal"
     journal.mkdir(exist_ok=True)
     scene_rows = read_jsonl(scenes_path, limit=max_scenes)
+    ids = [row["task_id"] for row in scene_rows]
+    if len(set(ids)) != len(ids):
+        raise ValueError("stage3_duplicate_scene_task_id")
     reports = defaultdict(list)
     for row in read_jsonl(reports_path):
         reports[row["scene_task_id"]].append(row)
-    seen = set()
-    counts = Counter()
-    for i, scene in enumerate(scene_rows):
-        task_id = scene["task_id"]
-        if task_id in seen:
-            raise ValueError("stage3_duplicate_scene_task_id")
-        seen.add(task_id)
-        filename = journal / f"{i:06d}.json"
-        if filename.exists():
-            data = json.loads(filename.read_text(encoding="utf-8"))
-            if data["task_id"] != task_id:
-                raise ValueError("stage3_journal_scene_order_changed")
-            counts[data["status"]["status"]] += 1
-            continue
-        try:
-            episode, turns, alignments, status = build_episode(
-                scene, reports[task_id],
-                author=author, critic=critic,
-                max_revisions=max_revisions, max_attempts=max_attempts,
-                sub_model=sub_model, model_alias=model_alias,
-            )
-        except (ValueError, KeyError, TypeError) as exc:
-            episode, turns, alignments = None, [], []
-            status = {
-                "status": "rejected",
-                "cause": "validation_error",
-                "error": str(exc)[:250],
-            }
-        data = {
-            "task_id": task_id, "status": status,
-            "episode": episode, "turns": turns, "private_audit": alignments,
-        }
-        _dump_json(filename, data)
-        counts[status["status"]] += 1
 
-    episodes, turns, private, failures = [], [], [], []
-    for i, scene in enumerate(scene_rows):
-        data = json.loads((journal / f"{i:06d}.json").read_text(
-            encoding="utf-8"
-        ))
-        if data["task_id"] != scene["task_id"]:
-            raise ValueError("stage3_journal_mismatch_at_merge")
-        if data["status"]["status"] == "accepted":
-            episodes.append(data["episode"])
-            turns.extend(data["turns"])
-            private.extend(data["private_audit"])
-        else:
-            failures.append({"task_id": scene["task_id"], **data["status"]})
-    _write_jsonl(output_dir / "episodes.jsonl", episodes)
-    _write_jsonl(output_dir / "main_turns.jsonl", turns)
-    _write_jsonl(output_dir / "private" / "teacher_alignment.jsonl", private)
-    _write_jsonl(output_dir / "failed.jsonl", failures)
+    # Reconcile any interruption between the atomic scene journal and its
+    # published JSONL append. This prevents missing or duplicate training turns.
+    old_episodes, _, _, old_failures = _rebuild_publication(
+        scene_rows, journal, output_dir,
+    )
+    counts = Counter({"accepted": len(old_episodes),
+                      "rejected": len(old_failures)})
+    with tqdm(total=len(scene_rows), desc="Stage 3 scenes",
+              unit="scene", disable=no_progress) as outer:
+        for i, scene in enumerate(scene_rows):
+            task_id = scene["task_id"]
+            filename = journal / f"{i:06d}.json"
+            if filename.exists():
+                outer.update(1)
+                continue
+
+            rounds_dir = _round_directory(journal, i)
+            saved_rounds = _load_rounds(rounds_dir, task_id=task_id)
+            round_bar = None
+
+            def on_episode_start(total: int, restored: int) -> None:
+                nonlocal round_bar
+                round_bar = tqdm(
+                    total=total, initial=restored,
+                    desc=f"  Main rounds {i + 1}/{len(scene_rows)}",
+                    unit="round", position=1, leave=False,
+                    disable=no_progress,
+                )
+
+            def on_round(checkpoint: dict) -> None:
+                # The checkpoint is persisted before starting the next LLM call.
+                _save_round(rounds_dir, checkpoint)
+                if round_bar is not None:
+                    round_bar.update(1)
+
+            try:
+                try:
+                    episode, turns, alignments, status = build_episode(
+                        scene, reports[task_id],
+                        author=author, critic=critic,
+                        max_revisions=max_revisions, max_attempts=max_attempts,
+                        sub_model=sub_model, model_alias=model_alias,
+                        resume_rounds=saved_rounds, on_round=on_round,
+                        on_episode_start=on_episode_start,
+                    )
+                except (ValueError, KeyError, TypeError) as exc:
+                    episode, turns, alignments = None, [], []
+                    status = {
+                        "status": "rejected",
+                        "cause": "validation_error",
+                        "error": str(exc)[:250],
+                    }
+            finally:
+                if round_bar is not None:
+                    round_bar.close()
+
+            data = {
+                "task_id": task_id, "status": status,
+                "episode": episode, "turns": turns,
+                "private_audit": alignments,
+            }
+            # Publish only *complete* accepted episodes, never open rounds.
+            _dump_json(filename, data)
+            if status["status"] == "accepted":
+                _append_jsonl(output_dir / "episodes.jsonl", [episode])
+                _append_jsonl(output_dir / "main_turns.jsonl", turns)
+                _append_jsonl(
+                    output_dir / "private" / "teacher_alignment.jsonl",
+                    alignments,
+                )
+            else:
+                _append_jsonl(output_dir / "failed.jsonl", [
+                    {"task_id": task_id, **status},
+                ])
+            counts[status["status"]] += 1
+            outer.update(1)
+            outer.set_postfix(
+                accepted=counts["accepted"], rejected=counts["rejected"],
+            )
+
+    # Normalize all published outputs from atomic scene journals. A restart
+    # does this on entry too, so torn appends cannot duplicate any samples.
+    episodes, turns, private, failures = _rebuild_publication(
+        scene_rows, journal, output_dir,
+    )
     action_counts = Counter(row["output"]["action"] for row in turns)
     summary = {
         "status": "done" if not failures else "partial",
@@ -191,6 +300,8 @@ def generate_turns(
             output_dir / "private" / "teacher_alignment.jsonl"
         ),
         "failed": str(output_dir / "failed.jsonl"),
+        "checkpoint_granularity": "main_decision_round",
+        "publication_granularity": "complete_episode",
         "limitations": [
             "Teacher-controlled, successful trusted trajectories are not Main-Agent online rollouts.",
             "Template mode is a deterministic format baseline, not independently reviewed natural language.",
@@ -224,6 +335,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--sub-model", default="qwen3-8b")
     p.add_argument("--model-alias", default="model_1")
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--no-progress", action="store_true",
+                   help="Disable nested Scene/Main-round tqdm progress bars")
     args = p.parse_args(argv)
     author = critic = None
     if args.mode == "llm":
@@ -246,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
         max_attempts=args.max_attempts, sub_model=args.sub_model,
         model_alias=args.model_alias,
         author_model=args.author_model, critic_model=args.critic_model,
-        overwrite=args.overwrite,
+        overwrite=args.overwrite, no_progress=args.no_progress,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary["status"] == "done" else 1
