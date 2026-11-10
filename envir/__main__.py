@@ -32,6 +32,8 @@ def parser() -> argparse.ArgumentParser:
                           help="Override generation.target from YAML")
     generate.add_argument("--clue-chain-share", type=int,
                           help="Percent of medium scenes using visual clue -> keyed index -> keyed archive")
+    generate.add_argument("--macro-first-v2-share", type=int,
+                          help="Percent of medium/hard scenes using diverse goals and per-Macro evidence planning")
     generate.add_argument("--macro-first-share", type=int,
                           help="Percent of medium/hard scenes using Macro-first DAGs and local Gold Solvers")
     generate.add_argument("--evidence-graph-share", type=int,
@@ -156,6 +158,10 @@ def main(argv: list[str] | None = None) -> int:
             if not 0 <= cli.macro_first_share <= 100:
                 p.error("--macro-first-share must be 0..100")
             options.macro_first_share = cli.macro_first_share
+        if cli.macro_first_v2_share is not None:
+            if not 0 <= cli.macro_first_v2_share <= 100:
+                p.error("--macro-first-v2-share must be 0..100")
+            options.macro_first_v2_share = cli.macro_first_v2_share
         result = generate_questions(options)
     else:
         config_args = args_from_config(config)

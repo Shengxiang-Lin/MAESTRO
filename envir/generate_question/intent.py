@@ -62,6 +62,7 @@ FAMILY_OUTPUTS = {
     "accession_year": "Report the year in which the identified exhibit was accessioned.",
     "evidence_answer": "Report the accession year justified by discovered evidence.",
     "macro_first": "Return the authoritative year for the uniquely resolved case.",
+    "macro_first_v2": "Return the confirmed domain-specific fact for the identified case.",
 }
 STYLES = (
     ("direct_lookup", "Start with a concise direct question, not a job title."),
@@ -76,7 +77,35 @@ STYLES = (
 
 def intent_contract(spec: dict) -> dict:
     pattern = spec.get("reasoning_pattern", "approval")
-    if pattern == "macro_first":
+    if pattern == "macro_first_v2":
+        mode = spec["macro_plan"]["pattern"]
+        clues = spec["macro_plan"]["clues"]
+        constraints = {
+            "serial_identity": (
+                ["Identify the same case using BOTH visual image features."]
+                if clues["visual_modality"] == "image" else
+                ["Identify the video event by the named action at or after the specified time threshold."]
+            ),
+            "parallel_cues": [
+                "Resolve the identity using an independent visual clue and"
+                " a spoken or written second cue."
+            ],
+            "disputed_reports": [
+                "Find the case for which the two independent reports disagree"
+                " on a reported year; do not confuse this with the final answer field."
+            ],
+            "multimodal_event": [
+                "Match a video action to a spoken cue from later commentary.",
+                "Also match the independent event log tag.",
+                "Preserve footage-before-commentary temporal ordering."
+            ],
+        }[mode]
+        constraints.append(
+            "Return the confirmed " +
+            spec["macro_plan"]["goal"]["public_label"] +
+            " for exactly the identified case."
+        )
+    elif pattern == "macro_first":
         mode = spec["macro_plan"]["pattern"]
         constraints = {
             "serial_discovery": [
@@ -127,14 +156,16 @@ def intent_contract(spec: dict) -> dict:
         )
     return {
         "visual_clue": (
-            spec["macro_plan"]["clues"] if pattern == "macro_first"
+            spec["macro_plan"]["clues"] if pattern in {
+                "macro_first", "macro_first_v2"
+            }
             else spec.get("investigation", {}).get("visual_features")
         ),
         "acquisition_chain": (
             spec.get("investigation", {}).get("acquisition_chain")
         ),
         "topic": spec["scenario"]["topic"],
-        "hypothetical": True,
+        "hypothetical": pattern != "macro_first_v2",
         "setting": spec["scenario"]["setting"],
         "entity_kind": " ".join(
             spec["scenario"]["entity_kind"].replace("_", " ").split()
@@ -147,7 +178,11 @@ def intent_contract(spec: dict) -> dict:
             "Report the authoritative " +
             spec["macro_plan"]["goal"]["answer_field"].replace("_", " ") +
             " for the uniquely identified case."
-            if pattern == "macro_first" else FAMILY_OUTPUTS[spec["family"]]
+            if pattern == "macro_first" else
+            ("Return the confirmed " +
+             spec["macro_plan"]["goal"]["public_label"] +
+             " for the identified case." if pattern == "macro_first_v2"
+             else FAMILY_OUTPUTS[spec["family"]])
         ),
         "sources": [{
             "source_id": role["source_id"],

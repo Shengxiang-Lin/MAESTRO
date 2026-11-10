@@ -135,12 +135,15 @@ def initial_public_view(spec: dict, world: dict, question: str) -> dict:
             "source_id": sid,
             "title": item["title"],
             "modality_hint": item["modality"],
-            "representation": item["representation"],
+            **({} if spec.get("reasoning_pattern") == "macro_first_v2"
+               else {"representation": item["representation"]}),
             **({"access_mode": item["access_policy"]["mode"]}
                if "access_policy" in item else {}),
         } for sid, item in sorted(world["sources"].items())],
         "max_concurrent_subagents": 10,
-        "status": "fictional_structured_multisource_world",
+        "status": ("ready_for_investigation"
+                   if spec.get("reasoning_pattern") == "macro_first_v2"
+                   else "fictional_structured_multisource_world"),
     }
 
 
@@ -186,6 +189,9 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 
 def compile_program(spec: dict) -> dict:
     """Compile semantic branches into source-scoped executable programs."""
+    if spec.get("reasoning_pattern") == "macro_first_v2":
+        from .macro_first_v2 import compile_macro_solvers
+        return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "macro_first":
         from .macro_first import compile_macro_solvers
         return compile_macro_solvers(spec)
@@ -312,6 +318,9 @@ def compile_program(spec: dict) -> dict:
 
 def generate_world(spec: dict) -> dict:
     """Versioned synthetic sources; never rewrite old private World facts."""
+    if spec.get("reasoning_pattern") == "macro_first_v2":
+        from .macro_first_v2_world import generate_world as generate_v2_world
+        return generate_v2_world(spec)
     if spec.get("reasoning_pattern") == "macro_first":
         from .macro_first_world import generate_macro_first_world
         return generate_macro_first_world(spec)

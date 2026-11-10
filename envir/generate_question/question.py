@@ -29,6 +29,47 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if spec["reasoning_pattern"] == "macro_first_v2":
+        plan = spec["macro_plan"]
+        clues = plan["clues"]
+        goal = plan["goal"]["public_label"]
+        mode = plan["pattern"]
+        if mode == "disputed_reports":
+            return (
+                f"Two independent {topic} event records disagree about the "
+                f"year reported for one case. What is its confirmed {goal}?"
+            )
+        if mode == "multimodal_event":
+            return (
+                f"In the {topic} coverage, footage shows a "
+                f"{clues['scene_action']} action followed by commentary "
+                f"mentioning a {clues['spoken_cue']} cue. The event log "
+                f"tags the corresponding case as {clues['case_tag']}. "
+                f"What is its confirmed {goal}?"
+            )
+        visual = (
+            f"a frame showing a {clues['scene_action']} action at or after the "
+            f"{clues['time_threshold_ms']//1000}-second mark"
+            if clues["visual_modality"] == "video" else
+            f"an image with a {clues['emblem_color']} emblem"
+        )
+        if mode == "parallel_cues":
+            second = (
+                f"audio commentary mentioning a {clues['spoken_cue']} cue"
+                if clues["caption_modality"] == "audio" else
+                f"written notes describing a {clues['emblem_shape']} motif"
+            )
+            return (
+                f"While reviewing {topic} materials, {visual} and {second} "
+                f"point to the same item. What is the confirmed {goal} "
+                "for that item?"
+            )
+        if clues["visual_modality"] == "image":
+            visual += f" and a {clues['emblem_shape']} motif"
+        return (
+            f"Among the {topic} materials, which confirmed {goal} belongs "
+            f"to the item identified by {visual}?"
+        )
     if spec["reasoning_pattern"] == "macro_first":
         plan = spec["macro_plan"]
         pattern = plan["pattern"]
@@ -305,7 +346,44 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
-    if pattern == "macro_first":
+    if pattern == "macro_first_v2":
+        plan = spec["macro_plan"]
+        mode, clues = plan["pattern"], plan["clues"]
+        from .macro_first_v2 import GOAL_PHRASES
+        label = plan["goal"]["public_label"]
+        goal_field = plan["goal"]["answer_field"]
+        if not any(phrase in q.casefold()
+                   for phrase in GOAL_PHRASES.get(goal_field, (label,))):
+            errors.append("macro_first_v2_goal_semantics_missing")
+        if mode == "disputed_reports" and not re.search(
+            r"\b(disagree\w*|disput\w*|differ\w*|conflict\w*|"
+            r"discrepanc\w*|mismatch\w*)\b", q, re.I
+        ):
+            errors.append("macro_first_v2_disagreement_missing")
+        if mode != "disputed_reports":
+            required = ([clues["scene_action"], clues["spoken_cue"],
+                         clues["case_tag"]]
+                        if mode == "multimodal_event"
+                        else [clues["scene_action"]] if
+                        clues["visual_modality"] == "video"
+                        else [clues["emblem_color"]])
+            if mode == "serial_identity" and clues["visual_modality"] == "image":
+                required.append(clues["emblem_shape"])
+            if mode == "parallel_cues":
+                required.append(clues["emblem_shape"])
+            if any(cue.casefold() not in q.casefold() for cue in required):
+                errors.append("macro_first_v2_clue_missing")
+            if clues["visual_modality"] == "video" and mode != "multimodal_event":
+                if str(clues["time_threshold_ms"] // 1000) not in q:
+                    errors.append("macro_first_v2_video_time_missing")
+            if mode == "multimodal_event" and not re.search(
+                r"\b(before|after|follow\w*|later|preced\w*)\b", q, re.I
+            ):
+                errors.append("macro_first_v2_temporal_order_missing")
+        if re.search(r"\b(fictional|simulated|synthetic|hypothetical|imaginary)\b",
+                     q, re.I):
+            errors.append("macro_first_v2_meta_fiction_framing")
+    elif pattern == "macro_first":
         plan = spec["macro_plan"]
         visual = plan["clues"]
         if visual and not all(
@@ -361,7 +439,7 @@ def guard_question(question: str, spec: dict,
     else:
         if not re.search(r"\bactive\b", q, flags=re.I):
             errors.append("active_condition_missing")
-    if pattern not in {"approval", "clue_chain", "evidence_graph", "macro_first"}:
+    if pattern not in {"approval", "clue_chain", "evidence_graph", "macro_first", "macro_first_v2"}:
         if not re.search(r"\b(codes?|glossary|map|mapped|mapping|crosswalk|translat\w*|resolv\w*)\b", q, re.I):
             errors.append("cross_source_code_mapping_missing")
         if pattern == "time_window":
@@ -389,7 +467,7 @@ def guard_question(question: str, spec: dict,
         if not re.search(r"\b(approv|review|annotat)", q, re.I):
             errors.append("review_condition_not_expressed")
     if spec["difficulty_target"] == "hard" and pattern not in {
-        "clue_chain", "evidence_graph", "macro_first"
+        "clue_chain", "evidence_graph", "macro_first", "macro_first_v2"
     }:
         if not re.search(r"\b(clear|clearance|authoriz)", q, re.I):
             errors.append("clearance_condition_missing")
@@ -505,7 +583,10 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                           "exact grounded topic label and temporal direction.",
         }, ensure_ascii=False)
         try:
-            candidate = author.complete_json(AUTHOR_SYSTEM, user_text)
+            from .v2_prompts import QUESTION_AUTHOR, QUESTION_CRITIC
+            v2 = spec.get("reasoning_pattern") == "macro_first_v2"
+            system_prompt = QUESTION_AUTHOR if v2 else AUTHOR_SYSTEM
+            candidate = author.complete_json(system_prompt, user_text)
             raw = candidate.get("question")
             q = (normalize_question_punctuation(raw)
                  if isinstance(raw, str) else raw)
@@ -529,7 +610,8 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                     ),
                 })
                 continue
-            decision = critic.complete_json(CRITIC_SYSTEM, json.dumps({
+            critic_prompt = QUESTION_CRITIC if v2 else CRITIC_SYSTEM
+            decision = critic.complete_json(critic_prompt, json.dumps({
                 "frozen_contract": {
                     **instruction,
                     "frozen_reference_question": initial,

@@ -67,6 +67,11 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     acquisition_scenes = 0
     graph_modes = Counter()
     macro_first_modes = Counter()
+    macro_v2_modes = Counter()
+    macro_v2_goals = Counter()
+    macro_v2_evidence_sizes = []
+    macro_v2_local_source_counts = []
+    macro_v2_media_pairs = Counter()
     macro_first_handoffs = 0
     macro_first_handoff_passes = 0
     macro_first_local_ops = []
@@ -100,6 +105,17 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             if text:
                 exact_questions[text] += 1
             if spec:
+                if spec.get("reasoning_pattern") == "macro_first_v2":
+                    plan = spec["macro_plan"]
+                    macro_v2_modes[plan["pattern"]] += 1
+                    macro_v2_goals[plan["goal"]["answer_field"]] += 1
+                    for macro in plan["macro_tasks"]:
+                        macro_v2_local_source_counts.append(len(macro["source_scope"]))
+                        macro_v2_evidence_sizes.extend(
+                            macro["evidence_plan"]["source_observation_targets"].values()
+                        )
+                    if plan["pattern"] == "multimodal_event":
+                        macro_v2_media_pairs["video_audio_in_one_macro"] += 1
                 if spec.get("reasoning_pattern") == "macro_first":
                     macro_first_modes[spec["macro_plan"]["pattern"]] += 1
                 if spec.get("reasoning_pattern") == "evidence_graph":
@@ -326,6 +342,21 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "Naming-invariant fingerprint of executable Macro DAGs, "
                 "operator chains and source roles; not a semantic uniqueness proof."
             ),
+        },
+        "macro_first_v2": {
+            "scenes": sum(macro_v2_modes.values()),
+            "pattern_distribution": dict(macro_v2_modes),
+            "goal_field_distribution": dict(macro_v2_goals),
+            "source_observation_count_histogram": dict(
+                sorted(Counter(macro_v2_evidence_sizes).items())
+            ),
+            "source_count_per_macro_histogram": dict(
+                sorted(Counter(macro_v2_local_source_counts).items())
+            ),
+            "video_audio_joint_macros": macro_v2_media_pairs[
+                "video_audio_in_one_macro"
+            ],
+            "scope": "Synthetic heterogeneous observations, no real media decoding or open-web tools.",
         },
         "macro_first": {
             "scenes": sum(macro_first_modes.values()),

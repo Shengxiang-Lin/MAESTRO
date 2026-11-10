@@ -13,7 +13,8 @@ SECTIONS = {
     "input": {"mmqa", "max_records"},
     "generation": {"output_dir", "target", "seed", "difficulty_mix",
                    "overwrite", "no_progress", "flush_every", "clue_chain_share",
-                   "evidence_graph_share", "macro_first_share"},
+                   "evidence_graph_share", "macro_first_share",
+                   "macro_first_v2_share"},
     "scenario": {"api_base", "model", "critic_api_base", "critic_model",
                  "api_key_env", "critic_api_key_env", "workers",
                  "max_revisions", "timeout"},
@@ -95,6 +96,9 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     macro_first_share = generation.get("macro_first_share", 0)
     if type(macro_first_share) is not int or not 0 <= macro_first_share <= 100:
         raise ValueError("generation.macro_first_share must be 0..100")
+    macro_first_v2_share = generation.get("macro_first_v2_share", 0)
+    if type(macro_first_v2_share) is not int or not 0 <= macro_first_v2_share <= 100:
+        raise ValueError("generation.macro_first_v2_share must be 0..100")
     directory = output_dir or generation.get("output_dir")
     if not directory:
         raise ValueError("generation.output_dir is required")
@@ -108,6 +112,7 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         clue_chain_share=clue_chain_share,
         evidence_graph_share=evidence_graph_share,
         macro_first_share=macro_first_share,
+        macro_first_v2_share=macro_first_v2_share,
         no_progress=no_progress or bool(generation.get("no_progress", False)),
         scenario_api_base=scenario["api_base"],
         scenario_model=scenario["model"],
