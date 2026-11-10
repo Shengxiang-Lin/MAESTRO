@@ -53,13 +53,36 @@ A single output directory contains:
 | `episodes.jsonl` | Whole O1-style timeline for inspection, including the simulated Sub-Agent batch responses |
 | `private/teacher_alignment.jsonl` | Internal Macro IDs, visibility sets and Author/Critic audit; **never train on this** |
 | `failed.jsonl` | Rejected/incomplete scenes and explicit causes |
-| `journal/*.json` | Atomic per-scene checkpoints for safe restart |
+| `journal/000000.rounds/round-0001.json` | Atomic Main-turn checkpoints, saved immediately after each decision |
+| `journal/000000.json` | Atomic complete-scene checkpoint (published or rejected) |
 | `summary.json` | Round counts, completed/rejected scenes, delegation versus completion counts |
 
-To resume after interruption, rerun the exact same command; the
-generation signature covers the source files, model options and relevant
-code. `--overwrite` discards the old output and starts a new run. Source
-files remain unchanged.
+The default command displays two nested `tqdm` progress bars: overall
+Scenes and Main decision rounds for the active Scene. Add `--no-progress`
+for batch logs or scripts.
+
+**Incremental persistence:** after each accepted Main decision (including
+`complete`), Stage 3 atomically writes a round checkpoint to
+`journal/<scene-index>.rounds/round-<round>.json`. If the process stops in
+round 4, the first three round decisions will be replayed from checkpoints
+and the LLM Author will only be called for unfinished rounds on restart.
+A saved decision is checked against the newly reconstructed O1 prompt,
+current DAG wave and assignment constraints before reuse.
+
+The published `main_turns.jsonl`, `episodes.jsonl` and private
+`teacher_alignment.jsonl` are **incrementally appended only when the
+whole Scene succeeds**. An incomplete Episode is never part of the
+training set. The atomic `journal/<scene-index>.json` remains the
+publication source of truth: a restart first rebuilds the JSONL outputs
+from all complete scene journals, repairing an interrupted append without
+duplicate samples.
+
+To resume, rerun the **exact same command**. The generation manifest
+locks source-file hashes, model parameters and relevant code. Use
+`--overwrite` to discard all checkpoints and start a new run. Source files
+remain unchanged. Rejected Scenes remain rejected unless regenerated in a
+new output directory; partial rounds from a process interruption are
+resumable.
 
 **Important contracts**: a single Main `delegate_task` delegates all
 currently independent Macro slots within the teacher's approved wave,
