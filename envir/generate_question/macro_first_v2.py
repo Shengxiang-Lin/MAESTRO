@@ -10,6 +10,10 @@ import random
 
 from envir.schema import digest
 from .macro_first import _source
+from .evidence_tools import (
+    EVIDENCE_TOOL_CONTRACT_VERSION, source_acquisition_policy,
+    acquisition_for_operator,
+)
 
 VERSION = "maestro.macro_plan.v2"
 INFORMATION_NECESSITY_VERSION = "maestro.cross_branch_candidates.v1"
@@ -154,6 +158,7 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                       realism_v3: bool = False,
                       extended_grammar: bool = False,
                       goal_resolution_enabled: bool = False,
+                      evidence_tools_enabled: bool = False,
                       ) -> tuple[dict, list[dict]]:
     if difficulty not in {"medium", "hard"}:
         raise ValueError("macro_first_v2_requires_medium_or_hard")
@@ -214,6 +219,8 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
             "archive": "verified outcome records",
         }.get(sid, "cross-reference index")
         item["title"] = f"{topic} — {kind}"
+        if evidence_tools_enabled:
+            item["evidence_access"] = source_acquisition_policy(item)
         sources.append(item)
         schemas[sid] = fields
 
@@ -434,6 +441,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         realism_v3=True,
         extended_grammar=True,
         goal_resolution_enabled=True,
+        evidence_tools_enabled=True,
     )
     from .goal_resolution import GOAL_RESOLUTION_VERSION
     from .semantic_evidence import CONTRACT_VERSION
@@ -451,6 +459,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         "topic_domain_version": TOPIC_DOMAIN_VERSION,
         "macro_grammar_version": GRAMMAR_VERSION,
         "goal_resolution_version": GOAL_RESOLUTION_VERSION,
+        "evidence_tool_contract_version": EVIDENCE_TOOL_CONTRACT_VERSION,
         "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
         "scene_id": record_id,
         "source_anchor": {
@@ -522,6 +531,10 @@ def validate_spec(spec: dict) -> list[str]:
         None, GOAL_RESOLUTION_VERSION
     }:
         return ["invalid_goal_resolution_version"]
+    if spec.get("evidence_tool_contract_version") not in {
+        None, EVIDENCE_TOOL_CONTRACT_VERSION
+    }:
+        return ["invalid_evidence_tool_contract_version"]
     try:
         expected, roles = sample_macro_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
@@ -549,13 +562,15 @@ def validate_spec(spec: dict) -> list[str]:
                 and spec.get("scene_realism_version")
             ),
             goal_resolution_enabled=bool(spec.get("goal_resolution_version")),
+            evidence_tools_enabled=bool(spec.get("evidence_tool_contract_version")),
         )
         errors = []
         if plan != expected:
             errors.append("macro_first_v2_plan_not_reproducible")
         def contract(role):
             return (role.get("source_id"), role.get("modality"),
-                    role.get("access_mode"), role.get("key_field"))
+                    role.get("access_mode"), role.get("key_field"),
+                    role.get("evidence_access"))
         if ([contract(role) for role in spec["sources"]]
                 != [contract(role) for role in roles]):
             errors.append("macro_first_v2_source_scope_changed")
@@ -579,6 +594,8 @@ def compile_macro_solvers(spec: dict) -> dict:
         raise ValueError("invalid_macro_first_v2_spec:" + ",".join(errors))
     plan = spec["macro_plan"]
     clues = plan["clues"]
+    source_roles = {row["source_id"]: row for row in spec["sources"]}
+    has_evidence_contract = bool(spec.get("evidence_tool_contract_version"))
     nodes, groups, outputs = [], [], {}
     prior_key = (
         "case_id" if plan["pattern"] in {
@@ -590,7 +607,12 @@ def compile_macro_solvers(spec: dict) -> dict:
         local = []
         def add(op, *inputs, **fields):
             nid = f"{mid.lower()}_op{len(local)+1:02d}"
-            local.append({"id": nid, "op": op, "inputs": list(inputs), **fields})
+            node = {"id": nid, "op": op, "inputs": list(inputs), **fields}
+            if has_evidence_contract and op in {"scan", "lookup_by_key"}:
+                node["evidence_acquisition"] = acquisition_for_operator(
+                    node, source_roles[node["source_id"]]
+                )
+            local.append(node)
             return nid
 
         parents = [outputs[pid] for pid in task["depends_on"]]
