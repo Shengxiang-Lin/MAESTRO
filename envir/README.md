@@ -37,11 +37,15 @@ fixed_initial_candidates_no_refill_no_quota_filter`. These counters
 are persisted to `summary.json`, while detailed failed cases remain
 in the respective `failed.jsonl` files.
 
-The default CLI displays one compact Stage-1 **phase** progress bar
-(construct → Question review → Replay). Use `--verbose-progress`
-to see inner per-candidate Scenario/Question/Replay bars, or
-`--no-progress` for non-interactive runs. There are no quota-refill
-rounds. The deterministic compiler and independent reviewing standards
+The default CLI displays **three meaningful item-level progress bars**:
+`Scenario Author/Critic` (reviewed Scenario candidates),
+`Compile & difficulty audit` (compiled Scenes with accepted/rejected
+counters), and `Question Author/Critic` (reviewed Questions, also with
+accepted/rejected counters). Each appears once; there are **no quota-refill
+rounds**. Fast preliminary validation and the final quality/Replay audit
+still run but do not add redundant progress bars. Use
+`--verbose-progress` to display these auxiliary checks, or
+`--no-progress` to suppress all progress bars for batch logs. The deterministic compiler and independent reviewing standards
 remain unchanged; genuine failures do not become accepted automatically.
 
 ### Canonical Stage 1 outputs
