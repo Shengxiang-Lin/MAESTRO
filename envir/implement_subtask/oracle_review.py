@@ -54,28 +54,53 @@ def entry_fact_index(teacher_record: dict) -> dict:
     return result
 
 
-def mismatched_entry_refs(text: str, fact_index: dict) -> list[dict]:
+def positive_entry_provenance(teacher_record: dict) -> dict[str, list[str]]:
+    """Complete register refs for listed Oracle rows, even if atoms truncate."""
+    output = {}
+    for row in teacher_record.get("answer_with_provenance", []):
+        label = row.get("values", {}).get("entry_label")
+        if isinstance(label, str):
+            output[label.casefold()] = [
+                ref for ref in row.get("source_fact_refs", [])
+                if ref.startswith("register:")
+            ]
+    return output
+
+
+def mismatched_entry_refs(
+    text: str, fact_index: dict, positive_provenance: dict | None = None,
+) -> list[dict]:
     if not isinstance(text, str):
         return []
     pairs = [(a, b) for a, b in _NEAR.findall(text)]
     pairs.extend((entry, ref) for ref, entry in _REVERSE.findall(text))
-    return [
-        {"stated_entry": entry, "cited_ref": ref,
-         "actual_entry": fact_index[ref]["entry_label"]}
-        for entry, ref in pairs
-        if ref in fact_index
-        and fact_index[ref]["entry_label"].casefold() != entry.casefold()
-    ]
+    result = []
+    positive_provenance = positive_provenance or {}
+    for entry, ref in pairs:
+        actual = fact_index.get(ref, {}).get("entry_label")
+        confirmed_refs = positive_provenance.get(entry.casefold(), [])
+        if (actual is not None and actual.casefold() != entry.casefold()
+                or (ref.startswith("register:")
+                    and confirmed_refs and ref not in confirmed_refs)):
+            result.append({
+                "stated_entry": entry, "cited_ref": ref,
+                "actual_entry": actual,
+                "expected_register_refs": confirmed_refs,
+            })
+    return result
 
 
 def critic_oracle_contradiction(
-    review: dict, result_text: str, rows: list[dict], fact_index: dict
+    review: dict, result_text: str, rows: list[dict], fact_index: dict,
+    positive_provenance: dict | None = None,
 ) -> dict | None:
     """Return a confirmed Critic factual error; never auto-accept the report."""
     if not full_entry_list_matches(result_text, rows):
         return None
     reason = str(review.get("reason", ""))
-    mismatches = mismatched_entry_refs(reason, fact_index)
+    mismatches = mismatched_entry_refs(
+        reason, fact_index, positive_provenance
+    )
     if mismatches:
         return {"type": "critic_entry_fact_ref_mismatch",
                 "mismatches": mismatches}
