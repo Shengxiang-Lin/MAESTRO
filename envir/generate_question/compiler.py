@@ -452,7 +452,12 @@ def compile_frozen_macro_plan(spec: dict, program: dict,
         if (accessed != macro["source_scope"]
                 or any(sid not in source_ids for sid in accessed)):
             raise ProgramError("macro_local_source_scope_mismatch")
-        if list(trace[ids[-1]]["schema"]) != list(macro["output_schema"]):
+        # A typed relation schema is a map, not an ordered field list.
+        # Frozen Spec JSON can normalize dict key order (for example:
+        # {"metric_a": "int", "record_key_2": "str"}), while the program
+        # projects ["record_key_2", "metric_a"]. Comparing list(dict)
+        # silently rejected valid computation Macros and drove quota refill.
+        if set(trace[ids[-1]]["schema"]) != set(macro["output_schema"]):
             raise ProgramError("macro_output_type_contract_mismatch:" + mid)
         for parent, nid in zip(parent_tasks, external):
             upstream = available[parent]["outputs"]["typed_relation"]
