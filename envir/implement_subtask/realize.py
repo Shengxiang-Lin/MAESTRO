@@ -112,8 +112,14 @@ def _operator_evidence(
         "output_schema": list(product.columns),
         "output_row_count": len(product.rows),
         "supporting_fact_refs": actual_refs,
+        # Prioritize support from the earliest *output rows*, rather than
+        # lexicographically smallest fact IDs. For sorted/take Macros this
+        # keeps the highest-ranked case in abbreviated evidence samples.
+        # The complete authoritative relation and fact-ref set are unchanged.
         "evidence_atoms": [
-            fact_index[ref] for ref in actual_refs[:evidence_limit]
+            fact_index[ref] for ref in list(dict.fromkeys(
+                ref for row in product.rows for ref in row["support"]
+            ))[:evidence_limit]
         ],
         "lookup_keys": ({
             "source_id": node["source_id"],
