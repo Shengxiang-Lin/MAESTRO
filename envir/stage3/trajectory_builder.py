@@ -45,11 +45,29 @@ def _strict_reports(scene: dict, rows: list[dict]) -> dict[str, dict]:
         if row.get("report_authoring", {}).get("status") != "accepted":
             raise ValueError("stage3_report_not_reviewed")
         oracle = expected[tid]
-        if any(row.get(key) != oracle[key] for key in (
+        frozen_keys = [
             "answer", "answer_with_provenance", "depends_on",
             "authorized_source_ids", "output_schema",
-        )):
+        ]
+        if "required_tools" in oracle:
+            frozen_keys.append("required_tools")
+        if any(row.get(key) != oracle[key] for key in frozen_keys):
             raise ValueError("stage3_report_not_grounded:" + tid)
+        if "required_tools" in oracle:
+            expected_steps = oracle["trace_summary"]["steps"]
+            reported_steps = row.get("trace_summary", {}).get("steps")
+            if not isinstance(reported_steps, list) or len(
+                reported_steps
+            ) != len(expected_steps):
+                raise ValueError("stage3_report_tool_trace_missing:" + tid)
+            for actual_step, expected_step in zip(reported_steps, expected_steps):
+                if (
+                    actual_step.get("evidence_acquisition") !=
+                    expected_step.get("evidence_acquisition")
+                    or actual_step.get("tool_executed") !=
+                    expected_step.get("tool_executed")
+                ):
+                    raise ValueError("stage3_report_acquisition_tool_drift:" + tid)
         finish = row.get("finish_result")
         if not isinstance(finish, dict) or finish.get("status") != "done":
             raise ValueError("stage3_report_not_done:" + tid)
