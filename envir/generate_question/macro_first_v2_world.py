@@ -236,8 +236,11 @@ def generate_world(spec: dict) -> dict:
         "report_a": ["case_id", "reported_year_a"],
         "report_b": ["case_id", "reported_year_b"],
     }
-    key_field = ("case_id" if plan["pattern"] == "disputed_reports"
-                 else "marker_code")
+    key_field = (
+        "case_id" if plan["pattern"] in {
+            "disputed_reports", "corroborated_dispute",
+        } else "marker_code"
+    )
     for i in range(1, plan["index_hops"] + 1):
         next_key = f"record_key_{i}"
         kind_map[f"index_{i}"] = [key_field, next_key]
