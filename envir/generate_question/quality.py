@@ -35,6 +35,9 @@ def _mutate_answer_witness(sources: dict, source_id: str,
             if ref.startswith(source_id + ":")}
     if not refs:
         raise ValueError("missing_gold_source_witness:" + source_id)
+    if (spec or {}).get("reasoning_pattern") == "macro_first_v2":
+        from .macro_first_v2_world import mutate_witness
+        return mutate_witness(sources, source_id, gold_workproducts, spec)
     if (spec or {}).get("reasoning_pattern") == "macro_first":
         from .macro_first_world import mutate_macro_first_witness
         return mutate_macro_first_witness(sources, source_id, gold_workproducts, spec)
@@ -85,7 +88,7 @@ def _mutate_answer_witness(sources: dict, source_id: str,
 
 def weak_single_source_baseline(scene: dict) -> list[dict]:
     """A measured shortcut attempt, NOT exhaustive program minimization."""
-    if scene["problem_spec"].get("reasoning_pattern") in {"clue_chain", "evidence_graph", "macro_first"}:
+    if scene["problem_spec"].get("reasoning_pattern") in {"clue_chain", "evidence_graph", "macro_first", "macro_first_v2"}:
         # A visual clue is mandatory, neither keyed store is browsable.
         return []
     rows = [
@@ -150,7 +153,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             issues.append("gold_execution_trace_mismatch")
         graph = (
             compile_frozen_macro_plan(spec, program, execution["trace"])
-            if spec.get("reasoning_pattern") == "macro_first"
+            if spec.get("reasoning_pattern") in {"macro_first", "macro_first_v2"}
             else compile_macro_tasks(program, execution["trace"])
         )
         if graph != scene["macro_graph"]:
@@ -188,6 +191,10 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         source_count, joins, depth = (3 if difficulty == "medium" else 4), 0, 3
     elif spec.get("reasoning_pattern") == "macro_first":
         source_count, joins, depth = (3 if difficulty == "medium" else 4), 0, 2
+    elif spec.get("reasoning_pattern") == "macro_first_v2":
+        # Do not equate a hard Macro with having more source tables:
+        # complexity is driven by local evidence budgets and temporal logic.
+        source_count, joins, depth = 2, 0, 2
     else:
         source_count, joins, depth = levels[difficulty]
     if spec.get("version") == VERSION and graph["macro_task_count"] > 9:
@@ -198,7 +205,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         issues.append("insufficient_join_count")
     if profile["necessary_structural_operator_depth"] < depth:
         issues.append("insufficient_operator_depth")
-    if spec.get("reasoning_pattern") == "macro_first":
+    if spec.get("reasoning_pattern") in {"macro_first", "macro_first_v2"}:
         if (len(answer) != 1 or set(answer[0]) != {
             spec["macro_plan"]["goal"]["answer_field"]
         }):
@@ -235,7 +242,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             issues.append("clue_chain_answer_year_contract")
     elif (difficulty != "easy"
           and spec.get("reasoning_pattern") not in {
-              "evidence_graph", "macro_first"
+              "evidence_graph", "macro_first", "macro_first_v2"
           } and not
             any(ref.startswith("annotations:")
                 for row in macro["answer_with_provenance"]
@@ -394,7 +401,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
     }
     if spec.get("reasoning_pattern") == "clue_chain":
         result["evidence_acquisition"] = acquisition_audit
-    if spec.get("reasoning_pattern") == "macro_first":
+    if spec.get("reasoning_pattern") in {"macro_first", "macro_first_v2"}:
         result["macro_first_audit"] = {
             "pattern": spec["macro_plan"]["pattern"],
             "frozen_macro_count": len(spec["macro_plan"]["macro_tasks"]),
@@ -430,7 +437,7 @@ def compile_and_validate(spec: dict, question: str) -> dict:
     program = scene["gold_program"]
     graph = (
         compile_frozen_macro_plan(spec, program, scene["gold_trace"])
-        if spec.get("reasoning_pattern") == "macro_first"
+        if spec.get("reasoning_pattern") in {"macro_first", "macro_first_v2"}
         else compile_macro_tasks(program, scene["gold_trace"])
     )
     scene["macro_graph"] = graph
