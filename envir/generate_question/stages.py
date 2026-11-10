@@ -29,6 +29,7 @@ def _construction_identity(args) -> str:
         "difficulty_mix": args.difficulty_mix,
         "clue_chain_share": getattr(args, "clue_chain_share", 0),
         "evidence_graph_share": getattr(args, "evidence_graph_share", 0),
+        "macro_first_share": getattr(args, "macro_first_share", 0),
         "mmqa": str(args.mmqa),
         "mmqa_sha256": (
             file_digest(args.mmqa) if Path(args.mmqa).is_file() else None
@@ -37,7 +38,8 @@ def _construction_identity(args) -> str:
             name: file_digest(Path(__file__).with_name(name))
             for name in (
                 "spec.py", "clue_chain.py", "graph_grammar.py",
-                "world_synthesizer.py", "program_ir.py",
+                "world_synthesizer.py", "macro_first.py",
+                "macro_first_world.py", "program_ir.py",
                 "compiler.py", "scenario.py", "world.py", "quality.py",
                 "backend.py", "stages.py",
             )
@@ -182,6 +184,7 @@ def construct_scenes(args) -> dict:
                 run_seed=args.seed, difficulty=sequence[ordinal],
                 clue_chain_share=getattr(args, "clue_chain_share", 0),
                 evidence_graph_share=getattr(args, "evidence_graph_share", 0),
+                macro_first_share=getattr(args, "macro_first_share", 0),
             )
             q = reference_question(spec)
             normalized = normalize_label(q)
