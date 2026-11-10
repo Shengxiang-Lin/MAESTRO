@@ -107,7 +107,7 @@ class DiverseMacroTests(unittest.TestCase):
             self.assertEqual(validate_replay(scene)["status"], "valid")
             compiled += 1
             if compiled == 1:
-                bad = deepcopy(spec)
+                bad = copy.deepcopy(spec)
                 dep = next(task for task in bad["macro_plan"]["macro_tasks"]
                            if task["macro_id"] == dependent["macro_id"])
                 parent = next(iter(dep["input_contract"]))
