@@ -111,7 +111,7 @@ def _can_derive_local_answer(scene: dict, delivered: dict,
         )
         for value in row["answer"][0].values():
             if type(value) is int and not re.search(
-                r"(?<!\\d)" + re.escape(str(value)) + r"(?!\\d)",
+                r"(?<!\d)" + re.escape(str(value)) + r"(?!\d)",
                 visible_text,
             ):
                 return False
