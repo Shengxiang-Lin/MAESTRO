@@ -177,6 +177,12 @@ def generate_world(spec: dict) -> dict:
                 or i == 0
             ) else base_years[i],
             field: _goal_value(field, kind, i, rng),
+            # Each branch is a separate synthetic observation. The target
+            # and alternate identities imply different final outcomes.
+            "metric_a": 90 if i == 0 else 20 + i,
+            "metric_b": 25 if i == 0 else 90 + i,
+            "completed_count": 36 if i == 0 else 10 + i,
+            "total_count": 48 if i == 0 else 60 + i,
         }
         for j, keys in enumerate(index_codes, 1):
             item[f"record_key_{j}"] = f"KEY{j}-{keys[i]:05d}"
@@ -245,7 +251,16 @@ def generate_world(spec: dict) -> dict:
         next_key = f"record_key_{i}"
         kind_map[f"index_{i}"] = [key_field, next_key]
         key_field = next_key
-    kind_map["archive"] = [key_field, field]
+    goal_kind = plan.get("goal_resolution", {}).get("kind", "direct_lookup")
+    if goal_kind == "direct_lookup":
+        kind_map["archive"] = [key_field, field]
+    else:
+        left_name, right_name = (
+            ("metric_a", "metric_b") if goal_kind == "comparison"
+            else ("completed_count", "total_count")
+        )
+        kind_map["stat_a"] = [key_field, left_name]
+        kind_map["stat_b"] = [key_field, right_name]
     world_sources = {}
     for role in spec["sources"]:
         sid = role["source_id"]
@@ -317,6 +332,38 @@ def mutate_witness(sources: dict, sid: str, gold_rows: list[dict],
             values[field] += 1
         else:
             values[field] += " (revised)"
+    elif sid in {"stat_a", "stat_b"}:
+        plan = spec["macro_plan"]
+        kind = plan["goal_resolution"]["kind"]
+        key = plan["macro_tasks"][-2]["output_schema"]
+        key_field = next(iter(key))
+        peer_id = "stat_b" if sid == "stat_a" else "stat_a"
+        peer = next(
+            row["values"] for row in revised[peer_id]["observations"]
+            if row["values"][key_field] == values[key_field]
+        )
+        if kind == "comparison":
+            left = values if sid == "stat_a" else peer
+            right = values if sid == "stat_b" else peer
+            if sid == "stat_a":
+                values["metric_a"] = (
+                    right["metric_b"] - 1000
+                    if values["metric_a"] > right["metric_b"]
+                    else right["metric_b"] + 1000
+                )
+            else:
+                values["metric_b"] = (
+                    left["metric_a"] - 1000
+                    if values["metric_b"] > left["metric_a"]
+                    else left["metric_a"] + 1000
+                )
+        elif kind == "calculation":
+            if sid == "stat_a":
+                values["completed_count"] = 0
+            else:
+                values["total_count"] = peer["completed_count"]
+        else:
+            raise ValueError("unknown_mutation_goal_kind")
     else:
         raise ValueError("unknown_macro_first_v2_source:" + sid)
     return revised
