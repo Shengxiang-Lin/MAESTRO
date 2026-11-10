@@ -607,135 +607,152 @@ def _generate_batch(args) -> dict:
             "Unified generation already completed; choose a new directory "
             "or enable overwrite"
         )
-    staged = copy.copy(args)
-    staged.output_dir = root / "constructed"
-    constructed_done = staged.output_dir / "summary.json"
-    if constructed_done.is_file() and not args.overwrite:
-        constructed_summary = json.loads(
-            constructed_done.read_text(encoding="utf-8")
-        )
-        constructed_bank = staged.output_dir / "scenes.jsonl"
-        if not constructed_bank.is_file():
-            raise ValueError("constructed_summary_without_scene_bank")
-        # Never silently reuse an unrelated frozen bank when a run was
-        # interrupted AFTER construction but BEFORE final quality.
-        previous_identity = constructed_summary.get("run_identity")
-        current_identity = _construction_identity(staged)
-        if previous_identity != current_identity:
-            raise ValueError(
-                "constructed bank belongs to different generation settings; "
-                "choose another output directory or enable overwrite"
+    from tqdm.auto import tqdm
+    with tqdm(
+        total=3 if args.question_model else 2,
+        desc="Stage 1", unit="phase", dynamic_ncols=True,
+        disable=getattr(args, "no_progress", False),
+    ) as progress:
+        staged = copy.copy(args)
+        staged.no_progress = (getattr(args, "no_progress", False)
+                              or not getattr(args, "verbose_progress", False))
+        staged.output_dir = root / "constructed"
+        constructed_done = staged.output_dir / "summary.json"
+        if constructed_done.is_file() and not args.overwrite:
+            constructed_summary = json.loads(
+                constructed_done.read_text(encoding="utf-8")
             )
-    else:
-        constructed_summary = construct_scenes(staged)
-    scene_path = staged.output_dir / "scenes.jsonl"
-    question_summary = None
-    if args.question_model and constructed_summary["generated"] > 0:
-        authored = copy.copy(args)
-        authored.scenes = scene_path
-        authored.output_dir = root / "questions"
-        # Constructed bank is exactly the scene set; do not truncate.
-        authored.max_records = None
-        question_done = authored.output_dir / "summary.json"
-        previous = (
-            json.loads(question_done.read_text(encoding="utf-8"))
-            if question_done.is_file() and not args.overwrite else {}
-        )
-        if (previous
-                and previous.get("status") in {"done", "partial", "failed"}):
-            if previous.get("source_scenes") != str(scene_path):
-                raise ValueError("question_summary_source_mismatch")
-            if not (authored.output_dir / "scenes.jsonl").exists():
-                raise ValueError("question_summary_missing_scene_bank")
-            prior_state = authored.output_dir / "question_authoring_progress.json"
-            if not prior_state.is_file():
+            constructed_bank = staged.output_dir / "scenes.jsonl"
+            if not constructed_bank.is_file():
+                raise ValueError("constructed_summary_without_scene_bank")
+            # Never silently reuse an unrelated frozen bank when a run was
+            # interrupted AFTER construction but BEFORE final quality.
+            previous_identity = constructed_summary.get("run_identity")
+            current_identity = _construction_identity(staged)
+            if previous_identity != current_identity:
                 raise ValueError(
-                    "completed_legacy_question_bank_has_no_resume_checkpoint"
+                    "constructed bank belongs to different generation settings; "
+                    "choose another output directory or enable overwrite"
                 )
-            previous_signature = json.loads(
-                prior_state.read_text(encoding="utf-8")
-            ).get("signature")
-            current_signature = _question_signature(
-                authored, read_jsonl(scene_path)
-            )
-            if previous_signature != current_signature:
-                raise ValueError(
-                    "Question model, frozen input, or prompt code changed; "
-                    "choose a new output directory or enable overwrite"
-                )
-            question_summary = previous
         else:
-            question_summary = review_questions(authored)
-        scene_path = authored.output_dir / "scenes.jsonl"
-    # The quality report also performs strict independent replay from the
-    # frozen Program/World (not simply accepting stored difficulty flags).
-    audit_args = copy.copy(args)
-    audit_args.scenes = scene_path
-    audit_args.max_records = None
-    audit_args.output = report_path
-    report = audit_questions(audit_args)
-    final_count = report["question_publishable"]
-    failed_question_count = (
-        question_summary.get("failed", 0) if question_summary else 0
-    )
-    summary = {
-        "status": (
-            "done" if (
-                final_count == args.target and report["status"] == "valid"
-            ) else "failed" if final_count == 0 else "partial"
-        ),
-        "pipeline": "maestro_generate_question_v1",
-        "source": constructed_summary["seed_source"],
-        "requested": args.target,
-        "attempted": constructed_summary.get("attempted", args.target),
-        "generated": final_count,
-        "failed": args.target - final_count,
-        "failed_scenario": constructed_summary.get("failed", 0),
-        "failed_question": failed_question_count,
-        "failed_case_files": {
-            "scenario": constructed_summary["failed_file"],
-            "question": (
-                str(root / "questions" / "failed.jsonl")
-                if question_summary else None
+            constructed_summary = construct_scenes(staged)
+        progress.update(1)
+        scene_path = staged.output_dir / "scenes.jsonl"
+        question_summary = None
+        if args.question_model and constructed_summary["generated"] > 0:
+            authored = copy.copy(args)
+            authored.no_progress = (getattr(args, "no_progress", False)
+                                    or not getattr(args, "verbose_progress", False))
+            authored.scenes = scene_path
+            authored.output_dir = root / "questions"
+            # Constructed bank is exactly the scene set; do not truncate.
+            authored.max_records = None
+            question_done = authored.output_dir / "summary.json"
+            previous = (
+                json.loads(question_done.read_text(encoding="utf-8"))
+                if question_done.is_file() and not args.overwrite else {}
+            )
+            if (previous
+                    and previous.get("status") in {"done", "partial", "failed"}):
+                if previous.get("source_scenes") != str(scene_path):
+                    raise ValueError("question_summary_source_mismatch")
+                if not (authored.output_dir / "scenes.jsonl").exists():
+                    raise ValueError("question_summary_missing_scene_bank")
+                prior_state = authored.output_dir / "question_authoring_progress.json"
+                if not prior_state.is_file():
+                    raise ValueError(
+                        "completed_legacy_question_bank_has_no_resume_checkpoint"
+                    )
+                previous_signature = json.loads(
+                    prior_state.read_text(encoding="utf-8")
+                ).get("signature")
+                current_signature = _question_signature(
+                    authored, read_jsonl(scene_path)
+                )
+                if previous_signature != current_signature:
+                    raise ValueError(
+                        "Question model, frozen input, or prompt code changed; "
+                        "choose a new output directory or enable overwrite"
+                    )
+                question_summary = previous
+            else:
+                question_summary = review_questions(authored)
+            scene_path = authored.output_dir / "scenes.jsonl"
+            progress.update(1)
+        # The quality report also performs strict independent replay from the
+        # frozen Program/World (not simply accepting stored difficulty flags).
+        audit_args = copy.copy(args)
+        audit_args.no_progress = (getattr(args, "no_progress", False)
+                                  or not getattr(args, "verbose_progress", False))
+        audit_args.scenes = scene_path
+        audit_args.max_records = None
+        audit_args.output = report_path
+        report = audit_questions(audit_args)
+        progress.update(1)
+        final_count = report["question_publishable"]
+        failed_question_count = (
+            question_summary.get("failed", 0) if question_summary else 0
+        )
+        summary = {
+            # A completed fixed candidate batch is DONE even when legitimate
+            # validation rejects some candidates. Acceptance is an outcome,
+            # never a quota to be refilled or a reason to discard valid Scenes.
+            "status": (
+                "done" if final_count > 0 and report["status"] == "valid"
+                else "failed" if final_count == 0 else "partial"
             ),
-        },
-        "constructed_scenes": str(root / "constructed" / "scenes.jsonl"),
-        "final_scenes": str(scene_path),
-        "final_public_questions": str(scene_path.parent / "questions.jsonl"),
-        "scenario_authoring": constructed_summary["scenario_authoring"],
-        "question_authoring": (
-            question_summary["question_results"] if question_summary
-            else {"off": constructed_summary["generated"]}
-        ),
-        "difficulty_distribution": report["difficulty_distribution"],
-        "quality": {
-            "checked": report["checked"],
-            "macro_graph_diversity": report["macro_graph_diversity"],
-            "replay_pass": report["replay_pass"],
-            "replay_fail": report["replay_fail"],
-            "distinct_program_signatures": report["reasoning"][
-                "unique_structural_program_signatures"],
-            "distinct_question_shapes": report["question_surface"][
-                "unique_abstract_shapes"],
-        },
-        "quality_report": str(report_path),
-        "limitations": report["interpretation_limits"],
-    }
-    _dump(summary_path, summary)
-    return summary
+            "pipeline": "maestro_generate_question_v1",
+            "source": constructed_summary["seed_source"],
+            "requested": args.target,
+            "candidate_count": args.target,
+            "attempted": constructed_summary.get("attempted", args.target),
+            "generated": final_count,
+            "accepted": final_count,
+            "rejected": args.target - final_count,
+            "failed": args.target - final_count,
+            "acceptance_rate": round(final_count / args.target, 4),
+            "selection_policy": "fixed_initial_candidates_no_refill_no_quota_filter",
+            "difficulty_mix_policy": "initial_candidate_sampling_only",
+            "failed_scenario": constructed_summary.get("failed", 0),
+            "failed_question": failed_question_count,
+            "failed_case_files": {
+                "scenario": constructed_summary["failed_file"],
+                "question": (
+                    str(root / "questions" / "failed.jsonl")
+                    if question_summary else None
+                ),
+            },
+            "constructed_scenes": str(root / "constructed" / "scenes.jsonl"),
+            "final_scenes": str(scene_path),
+            "final_public_questions": str(scene_path.parent / "questions.jsonl"),
+            "scenario_authoring": constructed_summary["scenario_authoring"],
+            "question_authoring": (
+                question_summary["question_results"] if question_summary
+                else {"off": constructed_summary["generated"]}
+            ),
+            "difficulty_distribution": report["difficulty_distribution"],
+            "quality": {
+                "checked": report["checked"],
+                "macro_graph_diversity": report["macro_graph_diversity"],
+                "replay_pass": report["replay_pass"],
+                "replay_fail": report["replay_fail"],
+                "distinct_program_signatures": report["reasoning"][
+                    "unique_structural_program_signatures"],
+                "distinct_question_shapes": report["question_surface"][
+                    "unique_abstract_shapes"],
+            },
+            "quality_report": str(report_path),
+            "limitations": report["interpretation_limits"],
+        }
+        _dump(summary_path, summary)
+        return summary
 
 
 def generate_questions(args) -> dict:
-    """Canonical Stage 1 entrypoint: accepted quota or one unrefilled batch.
+    """Review exactly one fixed candidate batch; retain every valid Scene.
 
-    Older synthetic programs and frozen scenes remain *readable*; only the
-    active generation interface is consolidated.
+    Candidate count and difficulty mix describe the *initial* proposed
+    pool. No additional candidates are sampled to refill rejection losses,
+    and no accepted Scene is withheld to satisfy a difficulty quota.
     """
-    if (getattr(args, "quota_refill", False)
-            and getattr(args, "scenario_model", None)
-            and getattr(args, "question_model", None)):
-        from .quota_pipeline import generate_with_quotas
-        return generate_with_quotas(
-            args, generate_batch=_generate_batch, quality_report=quality_report
-        )
     return _generate_batch(args)
