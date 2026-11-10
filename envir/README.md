@@ -168,3 +168,47 @@ The clue-chain pilot intentionally uses only MEDIUM tasks; Easy and Hard
 keep their existing programs for now. 100 means 100 percent of MEDIUM,
 not all difficulty levels. Defaults remain unchanged when the option is
 omitted (generation.clue_chain_share: 0).
+
+
+## Opt-in typed Evidence Acquisition Graph grammar
+
+The new --evidence-graph-share percentage applies to MEDIUM and HARD
+scenes, independently from the earlier clue-chain pilot. It defaults to
+zero, so historical generation remains unchanged. When both shares are
+enabled, evidence_graph takes precedence on selected medium tasks.
+
+The seeded grammar currently samples four semantically distinct plans:
+
+- chain: 2–3 dependent keyed lookups after an illustrated two-feature clue
+- parallel: independent illustration and caption sources join before the
+  keyed retrieval
+- disambiguation: multiple visually matching candidates require separate
+  motif notes to eliminate a false identity before the final archive lookup
+- conflict: two inventories are reconciled to find the single disputed
+  record before an authoritative keyed retrieval
+
+The sampler varies archetype, identity labels, relation values, decoys
+and key-chain depth while respecting typed source contracts. Worlds are
+constructed witness-first, and each required source is subjected to a
+grounded answer-changing counterfactual. The public question supplies the
+initial clue and target result, not the hardcoded sequence of retrievals.
+
+A small dry run (Easy tasks still use their baseline family):
+
+~~~bash
+python -m envir generate-questions \
+  --config envir/config.yaml \
+  --target 100 --evidence-graph-share 100 \
+  --output-dir envir/data/maestro_evidence_graph_pilot_100
+~~~
+
+The normal naturalize-subtasks --scenes entry can be applied to accepted
+scenes from this run. Inspect quality_report.json -> evidence_graph for the
+archetype distribution, keyed lookup count, source-counterfactual pass rate,
+and independent-wave width. Test your actual local LLM Author/Critic rates
+before expanding to large batches.
+
+This is a constrained graph grammar pilot, not unconstrained arbitrary-DAG
+search or true multimodal/web perception. Stage 2 reports are deterministic
+Oracle-derived results with LLM naturalization; Stage 3 autonomous
+Main-Agent action planning remains separate.
