@@ -18,7 +18,7 @@ The reference platform is Linux x86_64, with PyTorch's CUDA 13.0 build (`2.13.0+
 
 ## MAESTRO dataset workflows
 
-Three trusted dataset workflows share the frozen Scene and evidence contracts.
+Three trusted workflows and an independent round-local untrusted orchestration workflow share frozen Scene and evidence contracts.
 All paths, model endpoints, worker counts and output directories live in
 [environment/configs](environment/configs/README.md).
 
@@ -26,15 +26,16 @@ All paths, model endpoints, worker counts and output directories live in
 python -m environment generate-questions --config environment/configs/questions.yaml
 python -m environment naturalize-subtasks --config environment/configs/subagent_reports.yaml
 python -m environment generate-main-turns --config environment/configs/base_orchestration.yaml
+python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml
 ```
 
 The first workflow constructs validated Questions and Macro DAGs from a fixed
 candidate pool; the second materializes exact evidence traces and reviewed
 Sub-Agent responses; the third generates trusted, cumulative-history
-Main-Agent decision trajectories. Rejected cases are not silently accepted
-or replaced to hit a quota. A future independent
-`environment/untrusted_orchestration` workflow will produce adversarial scenarios
-without changing the semantics of trusted data generation.
+Main-Agent decision trajectories. The fourth workflow branches from an accepted
+Main decision round, injects a last-batch primitive evidence fault, and
+executes dynamic recovery and no-repair counterfactuals. Rejected cases are
+not silently accepted or replaced to hit a quota.
 
 Implementation details: [environment/README.md](environment/README.md).
 
