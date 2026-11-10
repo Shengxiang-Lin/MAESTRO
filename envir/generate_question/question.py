@@ -29,6 +29,15 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if spec["reasoning_pattern"] == "clue_chain":
+        visual = spec["investigation"]["visual_features"]
+        return (
+            f"In the fictional {topic} exhibit illustration, a pictured item "
+            f"has a {visual['emblem_color']} emblem and a "
+            f"{visual['emblem_shape']} motif. What year was that exhibit "
+            "accessioned? Use the marker visible in the illustration to "
+            "locate its index entry and then its archive record."
+        )
     pattern = spec["reasoning_pattern"]
     constraints = {
         "approval": (
@@ -226,10 +235,31 @@ def guard_question(question: str, spec: dict,
     errors.extend(question_language_warnings(q, spec, macro_graph))
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
-    if not re.search(r"\bactive\b", q, flags=re.I):
-        errors.append("active_condition_missing")
     pattern = spec.get("reasoning_pattern", "approval")
-    if pattern != "approval":
+    if pattern == "clue_chain":
+        visual = spec["investigation"]["visual_features"]
+        if not all(
+            str(visual[field]).lower() in q.lower()
+            for field in ("emblem_color", "emblem_shape")
+        ):
+            errors.append("visual_clue_features_missing")
+        if not re.search(r"\b(?:image|illustrat\w*|diagram|picture\w*|pictured)\b",
+                         q, re.I):
+            errors.append("visual_source_not_expressed")
+        if not re.search(r"\b(?:marker|symbol|label)\b", q, re.I):
+            errors.append("marker_acquisition_missing")
+        if not re.search(r"\bindex\b", q, re.I):
+            errors.append("keyed_index_step_missing")
+        if not re.search(r"\barchiv\w*\b", q, re.I):
+            errors.append("keyed_archive_step_missing")
+        if not re.search(r"\b(?:accession\w*|acquir\w*)\b", q, re.I):
+            errors.append("accession_output_intent_missing")
+        if not re.search(r"\byear\b", q, re.I):
+            errors.append("accession_year_output_missing")
+    else:
+        if not re.search(r"\bactive\b", q, flags=re.I):
+            errors.append("active_condition_missing")
+    if pattern not in {"approval", "clue_chain"}:
         if not re.search(r"\b(codes?|glossary|map|mapped|mapping|crosswalk|translat\w*|resolv\w*)\b", q, re.I):
             errors.append("cross_source_code_mapping_missing")
         if pattern == "time_window":
@@ -251,12 +281,12 @@ def guard_question(question: str, spec: dict,
             if not re.search(r"\b(measur\w*|value\w*|rating\w*|score\w*|"
             r"metric\w*|amount\w*|quantity|reading\w*|level\w*)\b", q, re.I):
                 errors.append("measured_value_missing")
-    elif spec["difficulty_target"] != "easy":
+    elif pattern == "approval" and spec["difficulty_target"] != "easy":
         if not re.search(r"\b(code|codes|abbreviat|glossary|mapped|mapping|translat|resolv)", q, re.I):
             errors.append("alias_resolution_not_expressed")
         if not re.search(r"\b(approv|review|annotat)", q, re.I):
             errors.append("review_condition_not_expressed")
-    if spec["difficulty_target"] == "hard":
+    if spec["difficulty_target"] == "hard" and pattern != "clue_chain":
         if not re.search(r"\b(clear|clearance|authoriz)", q, re.I):
             errors.append("clearance_condition_missing")
     family = spec["family"]
