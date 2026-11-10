@@ -144,6 +144,17 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         issues.append("unknown_question_origin")
     if scene["question_origin"] == "deterministic_frozen_problem_spec":
         issues.extend(guard_question(scene["question"], spec, scene.get("macro_graph")))
+    if spec.get("semantic_evidence_contract_version"):
+        from .semantic_evidence import (
+            compile_semantic_contract, semantic_scenario_issues
+        )
+        expected_contract = compile_semantic_contract(spec, program=program)
+        if scene.get("semantic_evidence_contract") != expected_contract:
+            issues.append("semantic_evidence_contract_not_frozen")
+        # Recheck *every* LLM-authored question, not only deterministic
+        # references; the Critic alone is not a formal equivalence proof.
+        issues.extend(guard_question(scene["question"], spec, scene.get("macro_graph")))
+        issues.extend(semantic_scenario_issues(spec, expected_contract))
     try:
         execution = evaluate_program(program, sources=world["sources"])
         answer = answer_values(execution)
@@ -441,6 +452,11 @@ def compile_and_validate(spec: dict, question: str) -> dict:
         else compile_macro_tasks(program, scene["gold_trace"])
     )
     scene["macro_graph"] = graph
+    if spec.get("semantic_evidence_contract_version"):
+        from .semantic_evidence import compile_semantic_contract
+        scene["semantic_evidence_contract"] = compile_semantic_contract(
+            spec, program=program
+        )
     scene["task_feedback"] = run_macro_tasks(
         graph, sources=scene["world"]["sources"]
     )["task_feedback"]
