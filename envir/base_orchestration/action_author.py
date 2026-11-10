@@ -345,6 +345,33 @@ def action_issues(action: dict, assignments: list[dict],
     return errors
 
 
+def completion_issues(action: dict, *, expected_answer: str,
+                      delivered: dict) -> list[str]:
+    """Guard teacher-verified completion against unsupported prose.
+
+    The final answer stays frozen by the trusted Scene. Only preceding
+    public Finish Results can justify the completion rationale.
+    """
+    if not isinstance(action, dict) or action.get("action") != "complete":
+        return ["invalid_completion_action"]
+    if action.get("params") != {"answer": expected_answer}:
+        return ["completion_answer_not_teacher_verified"]
+    reasoning = action.get("reasoning")
+    if not isinstance(reasoning, str) or not 45 <= len(reasoning) <= 1600:
+        return ["invalid_completion_reasoning"]
+    issues = []
+    if _FORBIDDEN.search(reasoning) or _GENERATION_META.search(reasoning):
+        issues.append("completion_generation_or_private_leak")
+    visible_result_quotes = [
+        row["finish_result"]["result"].strip().replace("\n", " ")[:360].rstrip()
+        for row in delivered.values()
+    ]
+    if not any(quote and quote in reasoning
+               for quote in visible_result_quotes):
+        issues.append("completion_not_grounded_in_visible_result")
+    return issues
+
+
 def author_delegate_action(
     *, assignments: list[dict], prompt: str, author=None, critic=None,
     max_revisions: int = 2,
