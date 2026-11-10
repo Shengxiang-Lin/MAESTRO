@@ -52,6 +52,7 @@ def _signature(scenes: Path, reports: Path, *, max_scenes, sub_model,
     tracked = (
         "trajectory_builder.py", "action_author.py",
         "o1_compat.py", "generate_turns.py",
+        "../generate_question/evidence_tools.py",
     )
     return {
         "scenes_sha256": _digest(scenes),
