@@ -59,6 +59,7 @@ class ClueChainContracts(unittest.TestCase):
                                     target=10, no_progress=True)
             args.difficulty_mix = "0,100,0"
             args.clue_chain_share = 100
+            args.macro_first_v2_share = 0  # explicit archived pilot mode
             args.scenario_model = None
             args.scenario_api_base = None
             args.mmqa = root / "source-not-required-by-mock.jsonl"
