@@ -448,7 +448,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     from .topic_domain import infer_topic_domain, TOPIC_DOMAIN_VERSION
     category_cue = infer_topic_domain(seed_record)
     domain = classify_domain_from_explicit_cue(
-        topic, str(seed_record.get("classify_domain_from_keywords", "")), category_cue
+        topic, str(seed_record.get("domain_hint", "")), category_cue
     )
     plan, roles = sample_macro_plan(
         seed=run_seed, ordinal=ordinal, record_id=record_id, topic=topic,
@@ -485,7 +485,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
             "original_question_reused": False,
             "original_answer_reused": False,
             "original_media_used": False,
-            "classify_domain_from_keywords": str(seed_record.get("classify_domain_from_keywords", "")),
+            "domain_hint": str(seed_record.get("domain_hint", "")),
             "topic_domain_cue": category_cue,
         },
         "difficulty_target": difficulty,
@@ -562,7 +562,7 @@ def validate_spec(spec: dict) -> list[str]:
             domain=(
                 classify_domain_from_explicit_cue(
                     spec["scenario"]["topic"],
-                    spec["source_anchor"].get("classify_domain_from_keywords", ""),
+                    spec["source_anchor"].get("domain_hint", ""),
                     spec["source_anchor"].get("topic_domain_cue"),
                 ) if (spec.get("topic_domain_version")
                       and spec.get("scene_realism_version")) else
@@ -570,7 +570,7 @@ def validate_spec(spec: dict) -> list[str]:
                  else classify_domain_from_metadata if spec.get("semantic_evidence_contract_version")
                  else classify_domain_from_keywords)(
                     spec["scenario"]["topic"],
-                    spec["source_anchor"].get("classify_domain_from_keywords", ""),
+                    spec["source_anchor"].get("domain_hint", ""),
                 )
             ),
             information_need=bool(spec.get("macro_information_necessity_version")),
