@@ -27,6 +27,12 @@ def _construction_identity(args) -> str:
         "max_records": args.max_records,
         "seed": args.seed,
         "difficulty_mix": args.difficulty_mix,
+        "accepted_difficulty_quotas": getattr(
+            args, "accepted_difficulty_quotas", False
+        ),
+        "quota_candidate_multiplier": getattr(
+            args, "quota_candidate_multiplier", 1
+        ),
         "clue_chain_share": getattr(args, "clue_chain_share", 0),
         "evidence_graph_share": getattr(args, "evidence_graph_share", 0),
         "macro_first_share": getattr(args, "macro_first_share", 0),
@@ -43,6 +49,7 @@ def _construction_identity(args) -> str:
                 "macro_first_world.py", "macro_first_v2.py",
                 "macro_first_v2_world.py", "information_necessity.py",
                 "source_title_contract.py", "difficulty_proxy.py",
+                "scenario_repair.py",
                 "semantic_evidence.py",
                 "v2_prompts.py", "intent.py", "surface_quality.py",
                 "program_ir.py",
@@ -170,6 +177,19 @@ def construct_scenes(args) -> dict:
         raise ValueError(
             f"not enough scene/topic seeds: {len(seeds)} for target {args.target}"
         )
+    quota_enabled = bool(
+        getattr(args, "accepted_difficulty_quotas", False)
+        and getattr(args, "scenario_model", None)
+    )
+    candidate_cap = (
+        min(len(seeds), args.target * getattr(
+            args, "quota_candidate_multiplier", 1
+        )) if quota_enabled else args.target
+    )
+    requested_counts = Counter(difficulty_sequence(
+        target=args.target, mix=_parse_mix(args.difficulty_mix),
+        run_seed=args.seed,
+    ))
     files = _out_files(args.output_dir)
     checkpoint = args.output_dir / "scenario_authoring_progress.json"
     if not args.overwrite and any(p.exists() for p in files.values()):
@@ -179,7 +199,7 @@ def construct_scenes(args) -> dict:
                 "choose a new directory or enable overwrite"
             )
     sequence = difficulty_sequence(
-        target=args.target, mix=_parse_mix(args.difficulty_mix),
+        target=candidate_cap, mix=_parse_mix(args.difficulty_mix),
         run_seed=args.seed,
     )
     order = list(seeds)
@@ -188,7 +208,7 @@ def construct_scenes(args) -> dict:
     # Freeze Goal, structure, source permissions and all substantive
     # constraints before calling any optional LLM or sampling World values.
     for seed_record in order:
-        if len(chosen) >= args.target:
+        if len(chosen) >= candidate_cap:
             break
         try:
             ordinal = len(chosen)
@@ -209,9 +229,9 @@ def construct_scenes(args) -> dict:
             chosen.append(spec)
         except (ValueError, TypeError, KeyError) as exc:
             rejected[type(exc).__name__ + ":" + str(exc)[:140]] += 1
-    if len(chosen) != args.target:
+    if len(chosen) != candidate_cap:
         raise ValueError(
-            f"only {len(chosen)}/{args.target} ProblemSpecs passed "
+            f"only {len(chosen)}/{candidate_cap} ProblemSpecs passed "
             f"pre-World checks; rejected={dict(rejected)}"
         )
 
@@ -238,6 +258,9 @@ def construct_scenes(args) -> dict:
             "critic_api_base": args.scenario_critic_api_base,
             "max_revisions": args.scenario_max_revisions,
             "scenario_code": file_digest(Path(__file__).with_name("scenario.py")),
+            "scenario_repair_code": file_digest(
+                Path(__file__).with_name("scenario_repair.py")
+            ),
             "semantic_evidence_code": file_digest(
                 Path(__file__).with_name("semantic_evidence.py")),
             "intent_code": file_digest(Path(__file__).with_name("intent.py")),
@@ -301,6 +324,30 @@ def construct_scenes(args) -> dict:
         selected_to_compile = valid_specs
     else:
         selected_to_compile = selected
+    quota_available = Counter(
+        spec["difficulty_target"] for spec in selected_to_compile
+    )
+    if quota_enabled:
+        # Select only independently reviewed, accepted scenes. Never turn
+        # failed Scenario drafts into accepted results to meet a quota.
+        remaining = Counter(requested_counts)
+        selected_to_compile = [
+            spec for spec in selected_to_compile
+            if remaining[spec["difficulty_target"]] > 0
+            and not (
+                remaining.__setitem__(
+                    spec["difficulty_target"],
+                    remaining[spec["difficulty_target"]] - 1,
+                )
+            )
+        ]
+    quota_selected = Counter(
+        spec["difficulty_target"] for spec in selected_to_compile
+    )
+    quota_deficits = {
+        level: max(0, requested_counts[level] - quota_selected[level])
+        for level in ("easy", "medium", "hard")
+    }
     # Compilation is fast/deterministic, so rerun it from the committed
     # Scenario journal on resume; expensive LLM Scenario calls are reused.
     # Unlike before, even compiled scenes and failures are written immediately.
@@ -357,6 +404,12 @@ def construct_scenes(args) -> dict:
         "seed_source": seed_source,
         "target": args.target,
         "attempted": len(chosen),
+        "candidate_cap": candidate_cap,
+        "accepted_difficulty_quotas_enabled": quota_enabled,
+        "difficulty_quotas": dict(requested_counts),
+        "difficulty_available_after_scenario": dict(quota_available),
+        "difficulty_selected_after_scenario": dict(quota_selected),
+        "difficulty_deficits_after_scenario": quota_deficits,
         "generated": len(generated),
         "failed": len(failed_cases),
         "failed_file": str(files["failed"]),
