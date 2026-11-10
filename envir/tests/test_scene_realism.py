@@ -146,6 +146,27 @@ class SceneRealismTests(unittest.TestCase):
                           guard_question(bad, spec))
             self.assertEqual(guard_question(q, spec), [])
 
+    def test_game_identity_and_match_result_cannot_both_be_requested(self):
+        for i in range(150):
+            spec = sample(i, topic="Premier League", domain="sports")
+            if spec["macro_plan"]["goal"]["answer_field"] != "match_result":
+                continue
+            bad = (
+                "In the Premier League evidence, which specific game "
+                "matches the records, and what is the confirmed "
+                "match result for that game?"
+            )
+            self.assertIn("semantic_additional_output_requested",
+                          guard_question(bad, spec))
+            good = reference_question(spec).replace(
+                "match result", "match outcome"
+            )
+            self.assertNotIn("macro_first_v2_goal_semantics_missing",
+                             guard_question(good, spec))
+            break
+        else:
+            self.fail("No match-result Goal among 150 seeded sports scenes")
+
     def test_triangle_and_triangular_are_equivalent(self):
         for i in range(450):
             spec = sample(i)
