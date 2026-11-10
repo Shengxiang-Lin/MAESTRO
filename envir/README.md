@@ -198,3 +198,34 @@ python -m unittest discover -s envir/tests
 
 Local Qwen Author/Critic acceptance still requires a fresh generation pilot;
 passing programmatic tests is NOT a proof of unrestricted language entailment.
+
+## Versioned Goal Resolution: direct, comparison and calculation
+
+New V2 scenarios freeze `goal_resolution_version = maestro.goal_resolution.v1`.
+The sampler selects among:
+- `direct_lookup`: retrieve the authoritative Goal value from the keyed
+  archive (legacy V2 behavior)
+- `comparison`: obtain `metric_a` and `metric_b` from two independently
+  keyed count sources, join their proven identity keys, and derive
+  `higher_count_source` (first, second or equal)
+- `calculation`: obtain `completed_count` and `total_count` from two
+  independently keyed count sources and derive
+  `completion_rate_percent = floor(100 * completed_count / total_count)`.
+  The operator rejects zero denominators and invalid count domains.
+
+All three variants preserve the earlier visual/temporal/parallel/dispute
+identity-discovery DAG. The two derived variants **do not** store the
+answer directly in an archive table. Each source is accessible only
+through a previously established upstream key, and the derived Goal
+retains both branches' source provenance. Counterfactual audit checks
+that changing each cited count-source witness changes the final answer.
+The `macro_first_v2.goal_resolution_distribution` report shows the
+actual mix. Source roles remain simulated observations; no original
+MMQA answer or YAGO facts are used to populate the counts.
+
+Frozen old V2 specs without `goal_resolution_version` reproduce
+the previous direct-lookup plan and World without migration. Unit tests
+cover 100 new specs, replay, all three modalities, independent evidence
+dependencies, impossible denominator rejection and old marker-less replay.
+These data are intended for downstream orchestration policy training,
+not external-benchmark model question answering.
