@@ -20,7 +20,7 @@ from envir.generate_question.quality import validate_replay
 from envir.implement_subtask.realize import realize_scene
 
 from .o1_compat import o1_prompt, o1_history, source_catalog
-from .action_author import _assignment, author_delegate_action
+from .action_author import _assignment, action_issues, author_delegate_action
 
 
 def _hash(value: Any) -> str:
@@ -177,6 +177,8 @@ def build_episode(
     scene: dict, stage2_rows: list[dict], *, author=None, critic=None,
     max_revisions: int = 2, max_attempts: int = 16,
     sub_model: str = "qwen3-8b", model_alias: str = "model_1",
+    resume_rounds: list[dict] | None = None,
+    on_round=None, on_episode_start=None,
 ) -> tuple[dict | None, list[dict], list[dict], dict]:
     """Return (public Episode, SFT turns, PRIVATE alignments, status)."""
     if max_attempts < 2:
@@ -208,6 +210,16 @@ def build_episode(
             "rounds_required": len(scheduled) + 1,
         }
 
+    saved_rounds = list(resume_rounds or [])
+    total_rounds = len(scheduled) + 1
+    if len(saved_rounds) > total_rounds:
+        raise RuntimeError("stage3_checkpoint_has_extra_rounds")
+    for index, saved in enumerate(saved_rounds, 1):
+        if not isinstance(saved, dict) or saved.get("round") != index:
+            raise RuntimeError("stage3_checkpoint_round_order_invalid")
+    if on_episode_start is not None:
+        on_episode_start(total_rounds, len(saved_rounds))
+
     task_entries, delivered = [], {}
     trajectory, examples, audit = [], [], []
     for wave_number, wave in enumerate(scheduled, 1):
@@ -228,15 +240,34 @@ def build_episode(
                 tasks[tid], catalog, delivered, model_alias=model_alias
             ) for tid in wave
         ]
-        action, status = author_delegate_action(
-            assignments=assignment, prompt=main_prompt,
-            author=author, critic=critic, max_revisions=max_revisions,
-        )
-        if action is None:
-            return None, [], [], {
-                "status": "rejected", "cause": "main_action_not_accepted",
-                "round": wave_number, "authoring": status,
-            }
+        saved = (saved_rounds[wave_number - 1]
+                 if wave_number <= len(saved_rounds) else None)
+        if saved is not None:
+            prior_turn = saved.get("turn", {})
+            prior_audit = saved.get("private_audit", {})
+            if (not isinstance(prior_turn, dict)
+                    or not isinstance(prior_audit, dict)
+                    or prior_turn.get("input", {}).get("prompt") != main_prompt):
+                raise RuntimeError("stage3_checkpoint_prompt_mismatch")
+            action = deepcopy(prior_turn.get("output"))
+            expected_mode = "llm_reviewed" if author is not None else "template"
+            status = prior_audit.get("authoring")
+            if (prior_turn.get("generation_mode") != expected_mode
+                    or not isinstance(status, dict)
+                    or status.get("mode") != expected_mode
+                    or status.get("status") != "accepted"
+                    or action_issues(action, assignment, prompt=main_prompt)):
+                raise RuntimeError("stage3_checkpoint_action_invalid")
+        else:
+            action, status = author_delegate_action(
+                assignments=assignment, prompt=main_prompt,
+                author=author, critic=critic, max_revisions=max_revisions,
+            )
+            if action is None:
+                return None, [], [], {
+                    "status": "rejected", "cause": "main_action_not_accepted",
+                    "round": wave_number, "authoring": status,
+                }
         sub_results = []
         for index, (tid, sub_instruction) in enumerate(
                 zip(wave, action["params"]["tasks"])):
@@ -258,15 +289,15 @@ def build_episode(
             "result": batch_result,
             "raw_response": json.dumps(action, ensure_ascii=False),
         }
-        examples.append({
+        example = {
             "sample_id": scene["task_id"] + f"-round-{wave_number:02d}",
             "task_id": scene["task_id"], "round": wave_number,
             "input": {"prompt": main_prompt},
             "output": action,
             "output_json": json.dumps(action, ensure_ascii=False),
             "generation_mode": status["mode"],
-        })
-        audit.append({
+        }
+        audit_row = {
             "task_id": scene["task_id"],
             "round": wave_number,
             "action": "delegate_task",
@@ -279,7 +310,9 @@ def build_episode(
             "dependencies_satisfied": True,
             "authoring": status,
             "private_only": True,
-        })
+        }
+        examples.append(example)
+        audit.append(audit_row)
         trajectory.append(action_record)
         for tid in wave:
             delivered[tid] = reports[tid]
@@ -290,6 +323,14 @@ def build_episode(
             "total_cost": 0.0,
             "total_steps": batch_result["total_steps"],
         })
+        checkpoint = {
+            "round": wave_number, "turn": example, "private_audit": audit_row,
+        }
+        if saved is not None:
+            if saved != checkpoint:
+                raise RuntimeError("stage3_checkpoint_round_content_mismatch")
+        elif on_round is not None:
+            on_round(checkpoint)
 
     if (set(delivered) != set(tasks)
             and not (main_compute
@@ -314,15 +355,15 @@ def build_episode(
         ),
         "params": {"answer": _answer_text(scene)},
     }
-    examples.append({
+    final_example = {
         "sample_id": scene["task_id"] + f"-round-{completion_round:02d}",
         "task_id": scene["task_id"], "round": completion_round,
         "input": {"prompt": completion_prompt},
         "output": final_action,
         "output_json": json.dumps(final_action, ensure_ascii=False),
         "generation_mode": "teacher_verified_completion",
-    })
-    audit.append({
+    }
+    final_audit = {
         "task_id": scene["task_id"], "round": completion_round,
         "action": "complete",
         "private_macro_alignment": (
@@ -335,7 +376,18 @@ def build_episode(
         "main_locally_computed": main_compute,
         "dependencies_satisfied": True,
         "private_only": True,
-    })
+    }
+    examples.append(final_example)
+    audit.append(final_audit)
+    final_checkpoint = {
+        "round": completion_round, "turn": final_example,
+        "private_audit": final_audit,
+    }
+    if len(saved_rounds) >= completion_round:
+        if saved_rounds[completion_round - 1] != final_checkpoint:
+            raise RuntimeError("stage3_checkpoint_completion_mismatch")
+    elif on_round is not None:
+        on_round(final_checkpoint)
     trajectory.append({
         "attempt": completion_round,
         "action": "complete",
