@@ -224,7 +224,9 @@ def build_episode(
             model_alias=model_alias,
         )
         assignment = [
-            _assignment(tasks[tid], catalog, delivered) for tid in wave
+            _assignment(
+                tasks[tid], catalog, delivered, model_alias=model_alias
+            ) for tid in wave
         ]
         action, status = author_delegate_action(
             assignments=assignment, prompt=main_prompt,
