@@ -18,10 +18,42 @@ The authoritative CLI, artifact layout and running instructions are in
 | `semantic_evidence.py` | Applied Gold-Solver predicate and answer-slot contract |
 | `question.py` | Question Author/Critic and conservative output guards |
 | `compiler.py`, `program_ir.py` | Executable Gold Program and Macro WorkProducts |
+| `evidence_tools.py` | Actual O1 tool registry, primitive acquisition policies and Replay validation |
 | `difficulty_proxy.py`, `quality.py` | Structural workload features and strict Replay |
 | `stages.py` | Durable per-round Scenario/Question stage execution |
 | `quota_pipeline.py` | Accepted-level quotas, bounded retries and final publication |
 | `pipeline.py` | Canonical API composition and read-only quality report |
+
+### O1 tools are frozen at the evidence-acquisition level
+
+New Macro-first V2 scenes now freeze an \`evidence_access\` policy on
+**each source** and an \`evidence_acquisition\` contract on **each primitive
+\`scan\` or \`lookup_by_key\` node**. An ordered union of the primitive tool
+names becomes each Macro's \`required_tools\`. Intermediate join/filter/
+project reasoning nodes have **no automatic tool assignment**: in
+particular, a source-free Macro is not automatically granted Python.
+
+All six Action descriptions and parameter schemas are read from the
+actual classes registered in \`benchmark/omnigaia/tools\`; they are not
+redeclared as \`WorkspaceSearchAction\` / \`TableLookupAction\`.
+Images/videos/audio map to their corresponding O1 media tools. Synthetic
+text/table searches and upstream-key lookups map to
+\`GoogleSearchAction\` by query (the O1 tool supports a \`query\` argument).
+\`ExtractUrlContentAction\` requires an actual URL; it is intentionally
+**not** assigned to invented \`workspace://\` identifiers. When future
+sources contain real, valid HTTP(S) URLs, the access policy can select the
+O1 URL extraction tool.
+
+**No O1 tools are executed during dataset synthesis.** The contracts
+describe what a real O1 Sub-Agent *would need*, and Stage 2 records
+\`tool_executed: false\`. Stage 1 Replay validates the frozen source
+policy, every lower-level acquisition and Macro tool aggregation.
+
+Pre-contract Scene files stay replayable using their legacy schema;
+Stage 3 has an explicitly marked compatibility mapping for them.
+For a fully audited primitive tool contract, regenerate Stage 1
+questions and Stage 2 reports into **new output directories**. Existing
+Stage 3 run signatures cannot be reused with modified code.
 
 ### Invariants
 

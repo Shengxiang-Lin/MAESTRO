@@ -19,6 +19,7 @@ from .world import build_scene, generate_world, compile_program
 from .question import guard_question
 from .spec import spec_issues, VERSION
 from .macro_contract import macro_question_contract
+from .evidence_tools import validate_scene_evidence_tools
 
 
 def _mutate_answer_witness(sources: dict, source_id: str,
@@ -169,6 +170,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         )
         if graph != scene["macro_graph"]:
             issues.append("macro_graph_not_program_compiled")
+        issues.extend(validate_scene_evidence_tools(scene))
         if spec.get("version") == VERSION:
             try:
                 macro_question_contract(spec, graph)

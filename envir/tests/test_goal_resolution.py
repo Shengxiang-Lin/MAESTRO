@@ -96,6 +96,7 @@ class GoalResolutionTests(unittest.TestCase):
             extended_grammar=True,
             goal_resolution_enabled=False,
         )
+        old.pop("evidence_tool_contract_version", None)
         old["macro_plan"] = plan
         old["sources"] = roles
         from envir.generate_question.source_title_contract import expected_source_titles

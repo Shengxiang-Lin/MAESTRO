@@ -7,6 +7,7 @@ every trace step is constructed from the exact deterministic Program run.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 from envir.generate_question.compiler import run_macro_tasks
 from envir.generate_question.program_ir import evaluate_program, answer_values
@@ -131,6 +132,9 @@ def _operator_evidence(
                 ref for row in product.rows for ref in row["support"]
             ))[:evidence_limit]
         ],
+        **({"evidence_acquisition": deepcopy(node["evidence_acquisition"]),
+            "tool_executed": False}
+           if "evidence_acquisition" in node else {}),
         "lookup_keys": ({
             "source_id": node["source_id"],
             "key_field": node["input_key_field"],
@@ -231,6 +235,8 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
                 "macro_task_id": macro_id,
                 "depends_on": list(macro["depends_on"]),
                 "authorized_source_ids": list(macro["source_ids"]),
+                **({"required_tools": list(macro["required_tools"])}
+                   if "required_tools" in macro else {}),
                 "output_schema": terminal_schema,
                 "answer": [
                     dict(item["values"]) for item in answer_with_provenance

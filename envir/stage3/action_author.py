@@ -9,12 +9,18 @@ import json
 import re
 from copy import deepcopy
 
-from .o1_compat import tools_for_sources
+from envir.generate_question.evidence_tools import (
+    legacy_tools_from_task, registered_o1_tool_names,
+    tools_from_primitive_steps,
+)
 
 _AUTHOR_SYSTEM = """Write one realistic Orchestra-o1 Main-Agent decision.
 The action MUST delegate exactly the supplied independent tasks in this round,
 using action='delegate_task', params.tasks with task_instruction, context, model,
-and tools. Write actionable investigative instructions, not code or Macro IDs.
+and tools. Only write reasoning, task_instruction and context prose.
+The model/tools fields are IMMUTABLE teacher-owned fields, not your choices.
+The deterministic compiler will supply them to the final O1 action.
+Never change the number or order of assigned tasks. Do not write Macro IDs.
 Reflect previous Sub-Agent findings accurately. Include concrete identifiers
 from *already returned* results when they are needed for keyed lookups.
 Do not mention Oracle, Teacher, Gold DAG, synthetic, or hidden future evidence.
@@ -31,7 +37,11 @@ Verify that each instruction is specific, respects its source scope,
 includes necessary upstream identifiers, describes the correct goal, and
 does not introduce unsupported facts or private Macro IDs. Parallel tasks
 must remain mutually independent and must be exactly the assigned ones.
-Reject generic empty task instructions, misplaced source modalities or
+The tool list and task cardinality are FROZEN and are NOT review choices.
+Do NOT demand different tools, add new tasks, or demand private source_ids
+fields in the Main-Agent O1 JSON action. A task with no tools is valid when
+it only reasons over prior Sub-Agent feedback.
+Reject generic empty task instructions, unsupported evidence claims or
 invented conclusions. Return JSON only:
 {"verdict":"pass"|"fail","grounded":true|false,
 "assignment_fidelity":true|false,"o1_style":true|false,
@@ -108,11 +118,24 @@ def _assignment(target: dict, catalog: dict[str, dict],
         f"{source_intro}. {action} Return {output} and briefly explain "
         "which available observations support the finding."
     )
+    if "required_tools" in target:
+        tools = list(target["required_tools"])
+        if tools != tools_from_primitive_steps(target["operator_chain"]):
+            raise ValueError("stage3_macro_acquisition_tool_drift")
+    else:
+        if any("evidence_acquisition" in step
+               for step in target["operator_chain"]):
+            raise ValueError("stage3_frozen_acquisition_tools_missing")
+        # Pre-contract Scene snapshots remain usable, but should be
+        # regenerated at Stage 1 for fully audited tool requirements.
+        tools = legacy_tools_from_task(target, catalog)
+    if any(name not in registered_o1_tool_names() for name in tools):
+        raise ValueError("stage3_unknown_o1_tool_in_assignment")
     return {
         "target_instruction": instruction,
         "context": _prior_context(target, delivered),
         "model": model_alias,
-        "tools": tools_for_sources(source_ids, catalog),
+        "tools": tools,
         "source_ids": source_ids,
         "output_fields": list(target["outputs"]["typed_relation"]),
         "needs_upstream": bool(target["depends_on"]),
@@ -176,13 +199,7 @@ def action_issues(action: dict, assignments: list[dict],
             errors.append(f"task_{i}_invalid_context")
         if model != expected["model"]:
             errors.append(f"task_{i}_model_mismatch")
-        if (not isinstance(tools, list) or not tools
-                or any(not isinstance(x, str) for x in tools)
-                or not set(expected["tools"]).issubset(set(tools))
-                or not set(tools).issubset(
-                    set(expected["tools"]) | {"ExecuteCodeAction"}
-                )
-                or len(set(tools)) != len(tools)):
+        if tools != expected["tools"]:
             errors.append(f"task_{i}_tool_scope_mismatch")
         if isinstance(instruction, str) and expected["source_ids"]:
             if not all(sid in instruction + " " + str(context)
@@ -232,6 +249,28 @@ def author_delegate_action(
         except Exception as exc:
             failures.append({"stage": "author", "reason": str(exc)[:200]})
             continue
+        # This LLM writes only surface-form language. Tool selection and
+        # routing are frozen by the primitive acquisition contracts.
+        if isinstance(candidate, dict) and candidate.get("action") == "delegate_task":
+            parameters = candidate.get("params")
+            generated = (parameters.get("tasks")
+                         if isinstance(parameters, dict) else None)
+            if (isinstance(generated, list)
+                    and len(generated) == len(assignments)
+                    and all(isinstance(task, dict) for task in generated)):
+                candidate = {
+                    "action": "delegate_task",
+                    "reasoning": candidate.get("reasoning"),
+                    "params": {"tasks": [
+                        {
+                            "task_instruction": task.get("task_instruction"),
+                            "context": task.get("context"),
+                            "model": expected["model"],
+                            "tools": list(expected["tools"]),
+                        }
+                        for task, expected in zip(generated, assignments)
+                    ]},
+                }
         errors = action_issues(candidate, assignments, prompt=prompt)
         if errors:
             failures.append({"stage": "guard", "errors": errors})
