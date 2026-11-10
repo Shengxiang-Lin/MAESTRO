@@ -34,7 +34,7 @@ def parser() -> argparse.ArgumentParser:
                           help="Percent of medium/hard scenes using diverse goals and per-Macro evidence planning")
     generate.add_argument("--no-progress", action="store_true")
     generate.add_argument("--verbose-progress", action="store_true",
-                          help="Show per-round internal Scenario/Question/Replay bars")
+                          help="Also show auxiliary validation and Replay audit progress")
     generate.add_argument("--flush-every", type=int,
                           help="Commit a durable checkpoint every N LLM reports")
     audit = sub.add_parser("quality",

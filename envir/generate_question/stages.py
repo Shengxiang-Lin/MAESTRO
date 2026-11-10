@@ -490,8 +490,11 @@ def review_questions(args) -> dict:
     rows = read_jsonl(args.scenes, limit=args.max_records)
     if not rows:
         raise ValueError("no scenes loaded")
+    # This cheap deterministic preflight is not a separate user-facing
+    # generation step. Keep it visible only for explicit verbose diagnostics.
     with tqdm(rows, desc="Validate frozen scenes", unit="task",
-              disable=getattr(args, "no_progress", False),
+              disable=(getattr(args, "no_progress", False)
+                       or not getattr(args, "verbose_progress", False)),
               dynamic_ncols=True) as bar:
         for ix, scene in enumerate(bar, 1):
             result = validate_replay(scene)
