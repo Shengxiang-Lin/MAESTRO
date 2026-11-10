@@ -88,6 +88,38 @@ class DiverseMacroTests(unittest.TestCase):
             break
         self.assertTrue(found, "test must exercise a two-column metric Macro")
 
+    def test_declared_input_schema_ignores_order_but_checks_types(self):
+        # Regresses 41 genuine candidate examples incorrectly rejected as
+        # macro_declared_input_type_mismatch when JSON sorted schema keys.
+        from envir.generate_question.program_ir import ProgramError
+        compiled = 0
+        for i in range(100):
+            spec = spec_for(i)
+            plan = spec["macro_plan"]["macro_tasks"]
+            dependent = next((task for task in plan
+                              if task["input_contract"]
+                              and any(len(fields) > 1 for fields in
+                                      task["input_contract"].values())), None)
+            if dependent is None:
+                continue
+            reference = reference_question(spec)
+            scene = compile_and_validate(spec, reference)
+            self.assertEqual(validate_replay(scene)["status"], "valid")
+            compiled += 1
+            if compiled == 1:
+                bad = deepcopy(spec)
+                dep = next(task for task in bad["macro_plan"]["macro_tasks"]
+                           if task["macro_id"] == dependent["macro_id"])
+                parent = next(iter(dep["input_contract"]))
+                field = next(iter(dep["input_contract"][parent]))
+                before = dep["input_contract"][parent][field]
+                dep["input_contract"][parent][field] = (
+                    "int" if before != "int" else "str"
+                )
+                with self.assertRaises(Exception):
+                    compile_and_validate(bad, reference)
+        self.assertGreater(compiled, 15)
+
     def test_120_frozen_scenes_and_natural_questions(self):
         modes, goals, macro_counts, distinct_answers = set(), set(), set(), set()
         sizes, scopes, local_lengths, domains = set(), set(), set(), set()
