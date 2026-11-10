@@ -470,6 +470,76 @@ class StageAndQualityTests(unittest.TestCase):
             self.assertEqual(first["question_authoring"],
                              recovered["question_authoring"])
 
+    def test_stage1_progress_shows_real_work_by_default(self):
+        """The default CLI must not freeze at a 0/3 Phase counter.
+
+        Scenario and Question review get their per-candidate tqdm bars.
+        Optional validation and quality-audit bars remain opt-in.
+        """
+        from envir.generate_question.pipeline import generate_questions
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as td:
+            calls = []
+            args = args_from_config(load_config(DEFAULT_CONFIG))
+            args.target = 2
+            args.no_progress = False
+
+            def constructed(options):
+                calls.append(("scenario_compile", options.no_progress))
+                (options.output_dir / "scenes.jsonl").parent.mkdir(
+                    parents=True, exist_ok=True
+                )
+                (options.output_dir / "scenes.jsonl").write_text(
+                    '{"task_id":"fixture"}\n', encoding="utf-8"
+                )
+                return {
+                    "generated": 1, "attempted": 2,
+                    "seed_source": "fixture", "failed": 1,
+                    "failed_file": str(options.output_dir / "failed.jsonl"),
+                    "scenario_authoring": {"accepted": 1, "rejected": 1},
+                }
+
+            def reviewed(options):
+                calls.append(("question_review", options.no_progress))
+                self.assertEqual(options.verbose_progress, args.verbose_progress)
+                return {"failed": 0, "question_results": {"accepted": 1}}
+
+            def audited(options):
+                calls.append(("quality_audit", options.no_progress))
+                return {
+                    "status": "valid", "question_publishable": 1,
+                    "difficulty_distribution": {"medium": 1},
+                    "checked": 1, "macro_graph_diversity": {},
+                    "replay_pass": 1, "replay_fail": 0,
+                    "reasoning": {"unique_structural_program_signatures": 1},
+                    "question_surface": {"unique_abstract_shapes": 1},
+                    "interpretation_limits": [],
+                }
+
+            with patch("envir.generate_question.pipeline.construct_scenes",
+                       side_effect=constructed), patch(
+                "envir.generate_question.pipeline.review_questions",
+                side_effect=reviewed,
+            ), patch(
+                "envir.generate_question.pipeline.audit_questions",
+                side_effect=audited,
+            ):
+                for i, (quiet, verbose) in enumerate((
+                    (False, False), (False, True), (True, True),
+                )):
+                    args.output_dir = Path(td) / f"run_{i}"
+                    args.no_progress = quiet
+                    args.verbose_progress = verbose
+                    calls.clear()
+                    result = generate_questions(args)
+                    self.assertEqual(result["status"], "done")
+                    self.assertEqual(calls, [
+                        ("scenario_compile", quiet),
+                        ("question_review", quiet),
+                        ("quality_audit", quiet or not verbose),
+                    ])
+
     def test_single_candidate_batch_keeps_all_valid_without_refill(self):
         args = args_from_config(load_config(DEFAULT_CONFIG))
         with tempfile.TemporaryDirectory() as td:
