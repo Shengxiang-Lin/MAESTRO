@@ -28,6 +28,13 @@ difficulty, solution operation, constraints, field mapping or answer.
 The sources have FROZEN roles. They may describe (depending on the pattern):
 approved category labels, time-window intervals for tracked events,
 a binary-status disagreement, or per-group numerical thresholds.
+For evidence_graph patterns, the source topology is frozen in a typed
+information-acquisition graph. Preserve its distinct observable inputs and
+keyed-only stores. A conflict graph starts from two disagreeing independent
+inventories; a parallel graph combines visual and caption clues; a
+candidate-disambiguation graph requires independent notes. Do not imply
+that any keyed source can be fully browsed or that the public question must
+reveal the entire source traversal.
 For clue_chain patterns, the image is a browsable illustration that yields
 a marker only after feature identification, the second is a KEYED index
 that reveals an accession identifier for that marker only, and the third
