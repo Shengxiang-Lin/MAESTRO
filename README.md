@@ -20,12 +20,12 @@ The reference platform is Linux x86_64, with PyTorch's CUDA 13.0 build (`2.13.0+
 
 Three trusted dataset workflows share the frozen Scene and evidence contracts.
 All paths, model endpoints, worker counts and output directories live in
-[envir/configs](envir/configs/README.md).
+[environment/configs](environment/configs/README.md).
 
 ```bash
-python -m envir generate-questions --config envir/configs/questions.yaml
-python -m envir naturalize-subtasks --config envir/configs/subagent_reports.yaml
-python -m envir generate-main-turns --config envir/configs/base_orchestration.yaml
+python -m environment generate-questions --config environment/configs/questions.yaml
+python -m environment naturalize-subtasks --config environment/configs/subagent_reports.yaml
+python -m environment generate-main-turns --config environment/configs/base_orchestration.yaml
 ```
 
 The first workflow constructs validated Questions and Macro DAGs from a fixed
@@ -33,10 +33,10 @@ candidate pool; the second materializes exact evidence traces and reviewed
 Sub-Agent responses; the third generates trusted, cumulative-history
 Main-Agent decision trajectories. Rejected cases are not silently accepted
 or replaced to hit a quota. A future independent
-`envir/untrusted_orchestration` workflow will produce adversarial scenarios
+`environment/untrusted_orchestration` workflow will produce adversarial scenarios
 without changing the semantics of trusted data generation.
 
-Implementation details: [envir/README.md](envir/README.md).
+Implementation details: [environment/README.md](environment/README.md).
 
 ## Repository layout
 

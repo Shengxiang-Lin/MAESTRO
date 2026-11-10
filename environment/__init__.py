@@ -1,3 +1,3 @@
-"""Synthetic task, question and trajectory generation for MAESTRO."""
+"""Dataset-driven Task-First MAESTRO environment."""
 
-__all__ = ["task_construction", "question_generation", "trajectory_simulation"]
+__version__ = "0.5.0"
