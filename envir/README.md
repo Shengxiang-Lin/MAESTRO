@@ -8,21 +8,21 @@ output path and LLM setting is configured in a YAML file** under
 ```bash
 python -m envir generate-questions --config envir/configs/questions.yaml
 python -m envir naturalize-subtasks --config envir/configs/subagent_reports.yaml
-python -m envir generate-main-turns --config envir/configs/main_trajectories.yaml
+python -m envir generate-main-turns --config envir/configs/base_orchestration.yaml
 ```
 
 | Workflow | Python package | Config | Published file |
 | --- | --- | --- | --- |
 | Construct Questions | `envir/generate_question/` | `questions.yaml` | `questions/scenes.jsonl` |
 | Report trusted Sub-Agents | `envir/implement_subtask/` | `subagent_reports.yaml` | `subtasks.jsonl` |
-| Generate trusted Main trajectories | `envir/main_trajectories/` | `main_trajectories.yaml` | `main_turns.jsonl` |
+| Generate base orchestration trajectories | `envir/base_orchestration/` | `base_orchestration.yaml` | `main_turns.jsonl` |
 
 Edit the `input` and `generation` paths in each YAML to connect your
 experiment directories. YAML paths resolve relative to the **repository
 root**. The default configs are wired together:
 `questions.yaml` publishes to `envir/data/maestro_current_100`,
 `subagent_reports.yaml` reads its `questions/scenes.jsonl`, and
-`main_trajectories.yaml` reads that Scene file plus the reviewed
+`base_orchestration.yaml` reads that Scene file plus the reviewed
 `subtasks.jsonl` from the Sub-Agent report directory.
 
 ## Contract and publication boundaries
@@ -41,7 +41,7 @@ independently reviews source-grounded Finish Results. Explicit
 advanced reuse of a separately materialized Oracle bank. No real media
 or Web tools are executed by dataset synthesis.
 
-**Trusted Main trajectories** read the accepted Stage-1 Scenes and complete
+**Base orchestration** read the accepted Stage-1 Scenes and complete
 reviewed Sub-Agent reports, dispatch exactly the dependency-unblocked Macro
 waves, insert already delivered feedback into O1's cumulative
 `subtask_history`, and use LLM Author/Critic for natural Main
@@ -50,10 +50,10 @@ waves, insert already delivered feedback into O1's cumulative
 Main-turn examples omit the repeated full O1 prompt; use:
 
 ```bash
-python -m envir.main_trajectories.rebuild_prompts \
+python -m envir.base_orchestration.rebuild_prompts \
   --scenes envir/data/maestro_current_100/questions/scenes.jsonl \
-  --turns envir/data/maestro_main_trajectories_100/main_turns.jsonl \
-  --output envir/data/maestro_main_trajectories_100/full_prompts.jsonl
+  --turns envir/data/maestro_base_orchestration_100/main_turns.jsonl \
+  --output envir/data/maestro_base_orchestration_100/full_prompts.jsonl
 ```
 
 For all workflows, `summary.json` and `failed.jsonl` (when relevant)

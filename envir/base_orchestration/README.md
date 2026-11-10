@@ -1,9 +1,9 @@
-# Trusted Main-Agent decision trajectories
+# Base orchestration: trusted Main-Agent decision trajectories
 
 Run from the repository root:
 
 ```bash
-python -m envir generate-main-turns --config envir/configs/main_trajectories.yaml
+python -m envir generate-main-turns --config envir/configs/base_orchestration.yaml
 ```
 
 All Scene/report inputs, output directories, model endpoints, token/attempt
@@ -28,10 +28,10 @@ reconstructible from the Stage-1 Scene, `round`, the run manifest, and the
 version-pinned O1 renderer.
 
 ```bash
-python -m envir.main_trajectories.rebuild_prompts \
+python -m envir.base_orchestration.rebuild_prompts \
   --scenes envir/data/maestro_current_100/questions/scenes.jsonl \
-  --turns envir/data/maestro_main_trajectories_100/main_turns.jsonl \
-  --output envir/data/maestro_main_trajectories_100/full_prompts.jsonl
+  --turns envir/data/maestro_base_orchestration_100/main_turns.jsonl \
+  --output envir/data/maestro_base_orchestration_100/full_prompts.jsonl
 ```
 
 A Scene may need several **sequential Main decisions**; separate Scenes run

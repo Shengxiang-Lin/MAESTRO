@@ -1,4 +1,4 @@
-# Trusted Main-Agent decision trajectories from reviewed Sub-Agent reports.
+# Base orchestration: trusted Main-Agent decisions from reviewed Sub-Agent reports.
 # All paths are relative to the MAESTRO repository root.
 version: 1
 
@@ -7,7 +7,7 @@ input:
   reports: envir/data/maestro_subagent_reports_100/subtasks.jsonl
 
 generation:
-  output_dir: envir/data/maestro_main_trajectories_100
+  output_dir: envir/data/maestro_base_orchestration_100
   max_scenes: null    # null means every accepted Scene
   workers: 4
   mode: llm           # llm or template

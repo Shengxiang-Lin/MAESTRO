@@ -15,11 +15,11 @@ from envir.generate_question.evidence_tools import (
     tools_from_primitive_steps, validate_scene_evidence_tools,
 )
 from envir.implement_subtask.realize import realize_scene
-from envir.main_trajectories.o1_compat import o1_prompt, source_catalog
-from envir.main_trajectories.action_author import (
+from envir.base_orchestration.o1_compat import o1_prompt, source_catalog
+from envir.base_orchestration.action_author import (
     _assignment, author_delegate_action, proposed_template_action,
 )
-from envir.main_trajectories.trajectory_builder import build_episode
+from envir.base_orchestration.trajectory_builder import build_episode
 
 
 def fresh_scene(seed=0):

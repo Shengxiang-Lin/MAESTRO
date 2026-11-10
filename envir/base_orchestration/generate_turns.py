@@ -299,7 +299,7 @@ def generate_turns(
     completed_now = 0
     write_live_summary()
     with tqdm(total=len(scene_rows), initial=len(scene_rows) - len(pending),
-              desc="Stage 3 scenes", unit="scene", position=0,
+              desc="Base orchestration scenes", unit="scene", position=0,
               dynamic_ncols=True, disable=no_progress) as outer:
         def update_progress() -> None:
             # Match Stage 2's live accepted/rejected/written counters.
@@ -317,7 +317,7 @@ def generate_turns(
         # The standard OpenAICompatibleBackend keeps no per-request mutable
         # state and can be shared between workers.
         with ThreadPoolExecutor(
-            max_workers=workers, thread_name_prefix="stage3-scene",
+            max_workers=workers, thread_name_prefix="base-orchestration",
         ) as pool:
             futures = {
                 pool.submit(process_scene, i, scene): i
@@ -458,7 +458,7 @@ def main(argv: list[str] | None = None) -> int:
         overwrite=args.overwrite, no_progress=args.no_progress,
         verbose_progress=args.verbose_progress, workers=args.workers,
     )
-    print(f"Stage 3: {summary['status']} | details: "
+    print(f"Base orchestration: {summary['status']} | details: "
           f"{args.output_dir}/summary.json")
     return 0 if summary["status"] == "done" else 1
 
