@@ -49,7 +49,7 @@ def compile_claim_contract(record: dict) -> dict:
         step["action"] for step in steps
         if step.get("operation") == "compare_fields"
     ]
-    year_disagreement = (
+    local_year_disagreement = (
         {"report_a", "report_b"}.issubset(sources)
         and any(
             "reported_year_a" in action
@@ -58,11 +58,18 @@ def compile_claim_contract(record: dict) -> dict:
             for action in comparisons
         )
     )
+    inherited = set(record["trace_summary"].get("verified_stage_claims", []))
+    year_disagreement = (
+        local_year_disagreement
+        or "independent_report_year_disagreement" in inherited
+    )
     return {
         "version": CLAIM_CONTRACT_VERSION,
         "available_source_ids": sorted(sources),
         "executed_operations": [step["operation"] for step in steps],
         "reported_year_disagreement_established": year_disagreement,
+        "reported_year_disagreement_checked_locally": local_year_disagreement,
+        "verified_inherited_claims": sorted(inherited),
         "comparison_descriptions": comparisons,
         "output_row_count": len(record["answer"]),
         "source_scope_rule": (
