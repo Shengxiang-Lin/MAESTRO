@@ -85,8 +85,10 @@ def question_fidelity_issues(question: str, contract: dict) -> list[str]:
             problems.append("semantic_frame_lower_bound_as_exact_time")
         # A bare timestamp number without a comparison is ambiguous, so
         # ask the Author to state the actual inclusive lower bound.
-        if _NUMERIC_TIME.search(question) and not _LOWER_BOUND.search(question):
-            problems.append("semantic_frame_lower_bound_not_expressed")
+        for sentence in re.split(r"(?<=[.!?])\s+", question):
+            if (_NUMERIC_TIME.search(sentence)
+                    and not _LOWER_BOUND.search(sentence)):
+                problems.append("semantic_frame_lower_bound_not_expressed")
     if (temporal.get("footage_not_after_commentary")
             and _STRICT_ORDER.search(question)):
         problems.append("semantic_non_strict_order_claimed_strict")
