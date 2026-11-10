@@ -218,6 +218,15 @@ def compile_semantic_contract(
         contract["output_policy"] = "one_typed_answer_field_no_additional_output"
         if spec.get("scene_realism_version"):
             contract["output_scope_version"] = "maestro.one_response_slot.v2"
+    if (spec.get("question_fidelity_version")
+            and spec.get("scene_realism_version")):
+        contract["question_fidelity_version"] = spec["question_fidelity_version"]
+        contract["temporal_predicate_types"] = (
+            [{"type": "frame_timestamp_inclusive_lower_bound", "seconds": n}
+             for n in time_thresholds]
+            + ([{"type": "video_event_not_after_audio_commentary"}]
+               if temporal_ordering else [])
+        )
     return contract
 
 
@@ -334,6 +343,9 @@ def semantic_text_issues(text: str, spec: dict, contract: dict,
 
     if context == "question":
         issues.extend(semantic_output_issues(q, contract))
+        if contract.get("question_fidelity_version"):
+            from .question_fidelity import question_fidelity_issues
+            issues.extend(question_fidelity_issues(text, contract))
 
     if "clearance" in contract["prohibited_new_filters"] and _CLEARANCE.search(q):
         issues.append("semantic_unlicensed_clearance")
@@ -413,7 +425,13 @@ def semantic_text_issues(text: str, spec: dict, contract: dict,
         )):
             issues.append("semantic_unlicensed_crossmodal_order")
     if time["footage_not_after_commentary"]:
-        if any(pattern.search(q) for pattern in _REVERSE_ORDER):
+        # "no later than" is the faithful rendering of <=, NOT the
+        # reversed relation "later than". Mask negated comparison phrases
+        # before applying the historical high-precision reversal guard.
+        ordering_text = re.sub(
+            r"\bno\s+later\s+than\b", "not_after", q
+        )
+        if any(pattern.search(ordering_text) for pattern in _REVERSE_ORDER):
             issues.append("semantic_reversed_multimodal_order")
         if re.search(r"\b(?:within|exactly|precisely|no more than|at most)\b"
                      r"[^.?!]{0,30}\b(?:time|seconds?|minutes?|interval|window)\b",

@@ -163,6 +163,7 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
     feedback = {item["task_id"]: item for item in oracle["task_feedback"]}
     memo = {}
     records = []
+    verified_claims_by_macro = {}
     for wave in graph["reference_waves"]:
         for macro_id in wave:
             macro = tasks[macro_id]
@@ -175,6 +176,24 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
                     nodes[op["id"]], execution["products"][op["id"]],
                     row, facts, accessible, evidence_limit=evidence_limit
                 ))
+            # Verified claims can be inherited only from actual dependency
+            # parents, never from the overall Question or future Macros.
+            claims = set().union(*(
+                verified_claims_by_macro[parent]
+                for parent in macro["depends_on"]
+            )) if macro["depends_on"] else set()
+            if (
+                {"report_a", "report_b"}.issubset(accessible)
+                and any(
+                    step["operation"] == "compare_fields"
+                    and "reported_year_a" in step["action"]
+                    and "reported_year_b" in step["action"]
+                    and "differs from" in step["action"]
+                    for step in evidence_steps
+                )
+            ):
+                claims.add("independent_report_year_disagreement")
+            verified_claims_by_macro[macro_id] = claims
             terminal_schema = list(macro["outputs"]["typed_relation"])
             if result["output_schema"] != terminal_schema:
                 raise ValueError("subtask_output_schema_mismatch:" + macro_id)
@@ -215,6 +234,10 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
                     "direct_source_ids": list(macro["source_ids"]),
                     "available_evidence_source_ids": sorted(accessible),
                     "answer_supporting_fact_refs": refs,
+                    **({"verified_stage_claims": sorted(claims)}
+                       if scene["problem_spec"].get(
+                           "question_fidelity_version"
+                       ) else {}),
                 },
                 "grounding": "exact_deterministic_oracle_not_llm_subagent",
             })

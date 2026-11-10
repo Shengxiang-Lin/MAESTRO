@@ -79,7 +79,9 @@ def generate_world(spec: dict) -> dict:
     variable_profile = (
         plan.get("candidate_profile")
         if spec.get("scene_realism_version")
-        and plan["pattern"] == "multimodal_event" else None
+        and plan["pattern"] in {
+            "multimodal_event", "corroborated_dispute",
+        } else None
     )
     if variable_profile and any(
         target < variable_profile["union_candidate_count"]
@@ -130,7 +132,13 @@ def generate_world(spec: dict) -> dict:
             case_tag = clues["case_tag"] if i in (0, 2) else other_tag
         else:
             case_tag = clues["case_tag"] if i in (0, 1, 2) else other_tag
-        if variable_profile:
+        if variable_profile and plan["pattern"] == "corroborated_dispute":
+            left_count = variable_profile["left_candidate_count"]
+            union_count = variable_profile["union_candidate_count"]
+            disputed = i < left_count
+            log_match = i == 0 or left_count <= i < union_count
+            case_tag = clues["case_tag"] if log_match else other_tag
+        if variable_profile and plan["pattern"] == "multimodal_event":
             left_count = variable_profile["left_candidate_count"]
             union_count = variable_profile["union_candidate_count"]
             left_member = i < left_count
@@ -162,7 +170,12 @@ def generate_world(spec: dict) -> dict:
             "spoken_cue": motif, "caption_motif": motif,
             "utterance_time_ms": timestamp + 5000,
             "case_tag": case_tag, "reported_year_a": base_years[i],
-            "reported_year_b": base_years[i] + 1 if i == 0 else base_years[i],
+            "reported_year_b": base_years[i] + 1 if (
+                (variable_profile
+                 and plan["pattern"] == "corroborated_dispute"
+                 and i < variable_profile["left_candidate_count"])
+                or i == 0
+            ) else base_years[i],
             field: _goal_value(field, kind, i, rng),
         }
         for j, keys in enumerate(index_codes, 1):
@@ -215,12 +228,19 @@ def generate_world(spec: dict) -> dict:
         "footage": ["candidate_id", "marker_code", "scene_action",
                     "footage_time_ms"],
         "commentary": ["candidate_id", "spoken_cue", "commentary_time_ms"],
-        "context": ["candidate_id", "case_tag"],
+        "context": (
+            ["case_id", "case_tag"]
+            if plan["pattern"] == "corroborated_dispute"
+            else ["candidate_id", "case_tag"]
+        ),
         "report_a": ["case_id", "reported_year_a"],
         "report_b": ["case_id", "reported_year_b"],
     }
-    key_field = ("case_id" if plan["pattern"] == "disputed_reports"
-                 else "marker_code")
+    key_field = (
+        "case_id" if plan["pattern"] in {
+            "disputed_reports", "corroborated_dispute",
+        } else "marker_code"
+    )
     for i in range(1, plan["index_hops"] + 1):
         next_key = f"record_key_{i}"
         kind_map[f"index_{i}"] = [key_field, next_key]

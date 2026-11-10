@@ -13,8 +13,10 @@ from .macro_first import _source
 
 VERSION = "maestro.macro_plan.v2"
 INFORMATION_NECESSITY_VERSION = "maestro.cross_branch_candidates.v1"
+GRAMMAR_VERSION = "maestro.macro_grammar.v3"
 PATTERNS = ("serial_identity", "parallel_cues",
             "disputed_reports", "multimodal_event")
+EXTENDED_PATTERNS = PATTERNS + ("corroborated_dispute",)
 # High-precision paraphrases; a changed target (e.g. match year instead
 # of match result) is never a valid semantic variant.
 GOAL_PHRASES = {
@@ -138,10 +140,16 @@ def domain_hint_v3(topic: str, hint: str) -> str:
     )
 
 
+def domain_hint_v4(topic: str, hint: str, cue: str | None) -> str:
+    """Prefer unambiguous topic-category cues over unrelated broad metadata."""
+    return cue if cue in DOMAIN_GOALS else domain_hint_v3(topic, hint)
+
+
 def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                       difficulty: str, domain: str,
                       information_need: bool = False,
-                      realism_v3: bool = False) -> tuple[dict, list[dict]]:
+                      realism_v3: bool = False,
+                      extended_grammar: bool = False) -> tuple[dict, list[dict]]:
     if difficulty not in {"medium", "hard"}:
         raise ValueError("macro_first_v2_requires_medium_or_hard")
     if domain not in DOMAIN_GOALS:
@@ -149,9 +157,13 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
     rng = random.Random(int(digest(
         seed, ordinal, record_id, "macro-first-v2-plan"
     )[:15], 16))
-    pattern = rng.choice(PATTERNS)
+    pattern = rng.choice(
+        EXTENDED_PATTERNS if extended_grammar else PATTERNS
+    )
     candidate_profile = None
-    if realism_v3 and pattern == "multimodal_event":
+    if realism_v3 and pattern in {
+        "multimodal_event", "corroborated_dispute",
+    }:
         # Independent branches have varied ambiguity, with Hard sampling
         # larger disjoint false-positive sets than Medium on average.
         low, high = ((3, 4) if difficulty == "hard" else (2, 3))
@@ -288,6 +300,14 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         second = macro("second_report", [],
                        {"case_id": "str", "reported_year_b": "int"}, ["report_b"])
         prior = macro("dispute_resolution", [first, second], {"case_id": "str"})
+        if pattern == "corroborated_dispute":
+            source("context", "text", {
+                "case_id": "str", "case_tag": "str",
+            }, "independent log corroborating a disputed case")
+            log = macro("dispute_context_candidates", [],
+                        {"case_id": "str"}, ["context"])
+            prior = macro("dispute_context_fusion", [prior, log],
+                          {"case_id": "str"})
         key_field = "case_id"
 
     # Macro count is sampled independently of each Macro's evidence budget.
@@ -327,8 +347,12 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         "source_schemas": schemas, "index_hops": hops,
         "media_interpretation": "simulated_typed_observations_not_media_decoding",
     }
-    if information_need and pattern == "multimodal_event":
+    if information_need and pattern in {
+        "multimodal_event", "corroborated_dispute",
+    }:
         plan["information_necessity_policy"] = (
+            "reported_year_disagreement_plus_context_v1"
+            if pattern == "corroborated_dispute" else
             "variable_nonunique_candidate_sets_single_intersection_v2"
             if realism_v3 else
             "two_nonunique_candidate_sets_with_single_intersection_v1"
@@ -340,14 +364,20 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
 
 def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
               difficulty: str, topic: str, record_id: str, version: str) -> dict:
-    domain = domain_hint_v3(topic, str(seed_record.get("domain_hint", "")))
+    from .topic_domain import infer_topic_domain, TOPIC_DOMAIN_VERSION
+    category_cue = infer_topic_domain(seed_record)
+    domain = domain_hint_v4(
+        topic, str(seed_record.get("domain_hint", "")), category_cue
+    )
     plan, roles = sample_macro_plan(
         seed=run_seed, ordinal=ordinal, record_id=record_id, topic=topic,
         difficulty=difficulty, domain=domain,
         information_need=True,
         realism_v3=True,
+        extended_grammar=True,
     )
     from .semantic_evidence import CONTRACT_VERSION
+    from .question_fidelity import QUESTION_FIDELITY_VERSION
     from .source_title_contract import (
         SCENE_REALISM_VERSION, expected_source_titles, DOMAIN_FRAMES,
     )
@@ -357,6 +387,9 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         "semantic_evidence_contract_version": CONTRACT_VERSION,
         "macro_information_necessity_version": INFORMATION_NECESSITY_VERSION,
         "scene_realism_version": SCENE_REALISM_VERSION,
+        "question_fidelity_version": QUESTION_FIDELITY_VERSION,
+        "topic_domain_version": TOPIC_DOMAIN_VERSION,
+        "macro_grammar_version": GRAMMAR_VERSION,
         "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
         "scene_id": record_id,
         "source_anchor": {
@@ -366,6 +399,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
             "original_answer_reused": False,
             "original_media_used": False,
             "domain_hint": str(seed_record.get("domain_hint", "")),
+            "topic_domain_cue": category_cue,
         },
         "difficulty_target": difficulty,
         "family": "macro_first_v2", "reasoning_pattern": "macro_first_v2",
@@ -410,6 +444,18 @@ def validate_spec(spec: dict) -> list[str]:
     from .source_title_contract import SCENE_REALISM_VERSION
     if spec.get("scene_realism_version") not in {None, SCENE_REALISM_VERSION}:
         return ["invalid_scene_realism_version"]
+    from .question_fidelity import QUESTION_FIDELITY_VERSION
+    if spec.get("question_fidelity_version") not in {
+        None, QUESTION_FIDELITY_VERSION,
+    }:
+        return ["invalid_question_fidelity_version"]
+    from .topic_domain import TOPIC_DOMAIN_VERSION
+    if spec.get("topic_domain_version") not in {
+        None, TOPIC_DOMAIN_VERSION,
+    }:
+        return ["invalid_topic_domain_version"]
+    if spec.get("macro_grammar_version") not in {None, GRAMMAR_VERSION}:
+        return ["invalid_macro_grammar_version"]
     try:
         expected, roles = sample_macro_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
@@ -417,15 +463,25 @@ def validate_spec(spec: dict) -> list[str]:
             topic=spec["scenario"]["topic"],
             difficulty=spec["difficulty_target"],
             domain=(
-                domain_hint_v3 if spec.get("macro_information_necessity_version")
-                else domain_hint_v2 if spec.get("semantic_evidence_contract_version")
-                else domain_hint
-            )(
-                spec["scenario"]["topic"],
-                spec["source_anchor"].get("domain_hint", ""),
+                domain_hint_v4(
+                    spec["scenario"]["topic"],
+                    spec["source_anchor"].get("domain_hint", ""),
+                    spec["source_anchor"].get("topic_domain_cue"),
+                ) if (spec.get("topic_domain_version")
+                      and spec.get("scene_realism_version")) else
+                (domain_hint_v3 if spec.get("macro_information_necessity_version")
+                 else domain_hint_v2 if spec.get("semantic_evidence_contract_version")
+                 else domain_hint)(
+                    spec["scenario"]["topic"],
+                    spec["source_anchor"].get("domain_hint", ""),
+                )
             ),
             information_need=bool(spec.get("macro_information_necessity_version")),
             realism_v3=bool(spec.get("scene_realism_version")),
+            extended_grammar=bool(
+                spec.get("macro_grammar_version")
+                and spec.get("scene_realism_version")
+            ),
         )
         errors = []
         if plan != expected:
@@ -457,8 +513,11 @@ def compile_macro_solvers(spec: dict) -> dict:
     plan = spec["macro_plan"]
     clues = plan["clues"]
     nodes, groups, outputs = [], [], {}
-    prior_key = ("case_id" if plan["pattern"] == "disputed_reports"
-                 else "marker_code")
+    prior_key = (
+        "case_id" if plan["pattern"] in {
+            "disputed_reports", "corroborated_dispute",
+        } else "marker_code"
+    )
     for task in plan["macro_tasks"]:
         mid, role = task["macro_id"], task["role"]
         local = []
@@ -510,6 +569,15 @@ def compile_macro_solvers(spec: dict) -> dict:
                            left_field="reported_year_a",
                            right_field="reported_year_b", comparison="ne")
             last = add("project", selected, fields=["case_id"])
+        elif role == "dispute_context_candidates":
+            rows = add("scan", source_id="context")
+            matching = add("filter_eq", rows, field="case_tag",
+                           value=clues["case_tag"])
+            last = add("project", matching, fields=["case_id"])
+        elif role == "dispute_context_fusion":
+            aligned = add("join", *parents, left_on="case_id",
+                          right_on="case_id")
+            last = add("project", aligned, fields=["case_id"])
         elif role == "video_audio_alignment":
             video = add("scan", source_id="footage")
             event = add("filter_eq", video, field="scene_action",

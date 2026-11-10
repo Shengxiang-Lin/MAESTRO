@@ -10,6 +10,10 @@ import json
 import re
 
 from envir.generate_question.surface_quality import SCHEMA_LABELS
+from .stage_local_claims import (
+    compile_claim_contract, stage_local_claim_issues,
+    normalize_report_language,
+)
 
 PRESENTATION = "clean_finish_v2"
 
@@ -177,6 +181,7 @@ def _teacher_contract(record: dict, *, question: str | None,
                for atom in step["evidence_atoms"]):
             raise ValueError("oracle_atom_reference_inconsistent")
     return {
+        "stage_local_claim_contract": compile_claim_contract(record),
         "overall_question_for_context_only": question,
         "macro_task_id": record["macro_task_id"],
         "macro_is_terminal": is_terminal,
@@ -506,6 +511,12 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
             field + "_" + issue
             for issue in _stage_scope_issues(value, contract)
         )
+        errors.extend(
+            field + "_" + issue
+            for issue in stage_local_claim_issues(
+                value, contract.get("stage_local_claim_contract", {})
+            )
+        )
         if mismatched_entry_refs(
             value, contract.get("entry_fact_index", {}),
             contract.get("positive_entry_provenance"),
@@ -580,6 +591,7 @@ def author_critic_report(
             candidate = author.complete_json(
                 AUTHOR_SYSTEM, json.dumps(request, ensure_ascii=False)
             )
+            surface_rewrites = []
             if isinstance(candidate, dict):
                 fields = {
                     field for step in teacher_record["trace_summary"]["steps"]
@@ -592,6 +604,19 @@ def author_critic_report(
                     if key in {"result", "summary"} and isinstance(value, str) else value
                     for key, value in candidate.items()
                 }
+                # Surface-only repair of known internal jargon. Preserve
+                # claims, rows and provenance; all subsequent guards and
+                # Critic review still run on the revised prose.
+                for field in ("result", "summary"):
+                    if isinstance(candidate.get(field), str):
+                        revised, replacements = normalize_report_language(
+                            candidate[field]
+                        )
+                        candidate[field] = revised
+                        surface_rewrites.extend(
+                            {"field": field, "pattern": x}
+                            for x in replacements
+                        )
             problems = _guard(candidate, contract)
             if problems:
                 failures.append({
@@ -678,6 +703,7 @@ def author_critic_report(
                 row["report_authoring"] = {
                     "status": "accepted",
                     "attempts": revision + 1,
+                    "surface_rewrites": surface_rewrites,
                     "review": decision,
                     "critic_oracle_contradiction_rechecked":
                         corrected_false_negative,
@@ -712,3 +738,8 @@ def author_critic_report(
         "failures": failures,
         "exact_answer_immutable": True,
     }
+
+# Stage-local claims are checked against each Macro's own executed operations.
+# A source scan cannot assert cross-report disagreement merely because the
+# overall question mentions conflicting reports. A later compare_fields(ne)
+# Macro may establish it after the two sources are joined.
