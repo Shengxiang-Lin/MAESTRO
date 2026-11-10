@@ -39,7 +39,7 @@ class InformationNecessityTests(unittest.TestCase):
         from pathlib import Path
         import yaml
         config = yaml.safe_load(
-            (Path(__file__).resolve().parents[1] / "config.yaml").read_text()
+            (Path(__file__).resolve().parents[1] / "configs" / "questions.yaml").read_text()
         )
         mix = tuple(config["generation"]["difficulty_mix"])
         self.assertEqual(mix, (17, 33, 50))
@@ -168,14 +168,14 @@ class InformationNecessityTests(unittest.TestCase):
 
     def test_domain_metadata_only_changes_new_versioned_scenes(self):
         from envir.generate_question.macro_planning import (
-            domain_hint_v2, domain_hint_v3,
+            classify_domain_from_metadata, classify_domain_from_taxonomy,
         )
-        self.assertEqual(domain_hint_v2("Swansea City", "sports"), "sports")
-        self.assertEqual(domain_hint_v2("Unidentified subject", "culture"),
+        self.assertEqual(classify_domain_from_metadata("Swansea City", "sports"), "sports")
+        self.assertEqual(classify_domain_from_metadata("Unidentified subject", "culture"),
                          "general")
-        self.assertEqual(domain_hint_v3("Unidentified subject", "culture"),
+        self.assertEqual(classify_domain_from_taxonomy("Unidentified subject", "culture"),
                          "culture")
-        self.assertEqual(domain_hint_v3("Unidentified subject", "environment"),
+        self.assertEqual(classify_domain_from_taxonomy("Unidentified subject", "environment"),
                          "environment")
         spec = spec_for(13, topic="Unknown civic event", hint="civic")
         self.assertEqual(spec["macro_plan"]["domain"], "civic")
