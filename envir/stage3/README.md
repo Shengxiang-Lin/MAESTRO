@@ -26,7 +26,7 @@ Use **new directories** to avoid manifest/signature mismatch with old
 Stage-1 and Stage-3 checkpoints. The default YAML configs already point
 to the local OpenAI-compatible model server on port 8807.
 
-\`\`\`bash
+```bash
 git pull origin main
 
 # Stage 1: fresh 100 accepted scenes, including the new v2 web contracts
@@ -57,41 +57,42 @@ python -m envir.stage3.generate_turns \
   --author-api-base http://127.0.0.1:8807/v1 \
   --author-model local-qwen3.5-9b \
   --critic-model local-qwen3.5-9b
-\`\`\`
+```
 
-For a cheaper pilot, run Stage 2 with \`--max-scenes 20\` into its own
-new directory, then Stage 3 with \`--max-scenes 20\` and that pilot's
-\`subtasks.jsonl\` into another new directory. Once accepted, run the
+For a cheaper pilot, run Stage 2 with `--max-scenes 20` into its own
+new directory, then Stage 3 with `--max-scenes 20` and that pilot's
+`subtasks.jsonl` into another new directory. Once accepted, run the
 full generation with the fresh output paths above.
 
 Every source acquiring from synthetic Web evidence independently freezes
-\`search_only\`, \`direct_extract\`, or \`search_then_extract\`.
-In the third route, Stage 2's \`simulated_tool_calls\` show a local
-Search result URL feeding Extract's \`url\` parameter, with fact references
+`search_only`, `direct_extract`, or `search_then_extract`.
+In the third route, Stage 2's `simulated_tool_calls` show a local
+Search result URL feeding Extract's `url` parameter, with fact references
 attached only to the evidence-producing call. Stage 3 keeps the same
-tools in a Main decision's \`delegate_task\`; **there are no actual
+tools in a Main decision's `delegate_task`; **there are no actual
 HTTP requests**, and a multi-tool Sub-Agent trace is not a new Main turn.
 
 ## Frozen primitive evidence tools (Orchestra-o1 compatible)
 
 Each fresh Stage-1 V2 Scene fixes an evidence-access policy on each
 source and a corresponding **actual O1 Action** on each primitive
-\`scan\`/\`lookup_by_key\` step. Macro \`required_tools\` are aggregated
+`scan`/`lookup_by_key` step. Macro `required_tools` are aggregated
 from those primitives; Stage 2 trace steps preserve this contract as
-\`evidence_acquisition\` plus \`tool_executed: false\`. Stage 3 only
+`evidence_acquisition` plus `tool_executed: false`. Stage 3 only
 inherits and verifies the frozen tools; the Author may write task-specific
 reasoning/instructions/context, but **cannot select additional tools**.
-A source-free evidence-composition Macro can legitimately have \`tools: []\`.
+A source-free evidence-composition Macro can legitimately have `tools: []`.
 
 The O1 Main prompt lists actual
-\`GoogleSearchAction\`, \`ExtractUrlContentAction\`,
-\`ImageAnalysisAction\`, \`VideoAnalysisAction\`,
-\`ParseAudioAction\`, \`ExecuteCodeAction\`, using their original parameter
-schemas from \`benchmark/omnigaia/tools\`. No fake
-\`WorkspaceSearchAction\` / \`TableLookupAction\` names remain.
-The current synthetic text/table sources are query-addressed, so they
-map to \`GoogleSearchAction\`, **not** URL extraction; real URLs are
-required before assigning \`ExtractUrlContentAction\`.
+`GoogleSearchAction`, `ExtractUrlContentAction`,
+`ImageAnalysisAction`, `VideoAnalysisAction`,
+`ParseAudioAction`, `ExecuteCodeAction`, using their original parameter
+schemas from `benchmark/omnigaia/tools`. No fake
+`WorkspaceSearchAction` / `TableLookupAction` names remain.
+New v2 synthetic Web sources support query-only, URL-first extraction,
+and two-step search-then-extract workflows. All fixture URLs end in
+`.example.invalid` and are never fetched; earlier v1 sources remain
+query-addressed under their old frozen contracts.
 
 Legacy Scene files without acquisition contracts remain supported
 through an explicit compatibility adapter, but this cannot retroactively
