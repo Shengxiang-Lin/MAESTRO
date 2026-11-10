@@ -61,6 +61,8 @@ class MainTurnDatasetTests(unittest.TestCase):
             self.assertEqual(len(turns), len(episode["trajectory"]))
             self.assertEqual(len(turns), len(private))
             self.assertEqual(turns[-1]["output"]["action"], "complete")
+            self.assertEqual(episode["format"],
+                             "orchestra_o1_main_trajectory.v3")
             self.assertEqual([t["round"] for t in turns],
                              list(range(1, len(turns)+1)))
             self.assertEqual(sum(
@@ -371,6 +373,30 @@ class MainTurnDatasetTests(unittest.TestCase):
         self.assertEqual(critic.calls, 2)
         self.assertEqual(result["params"]["tasks"][0]["tools"],
                          assignment["tools"])
+        class StillRejectingCritic:
+            def __init__(self):
+                self.calls = 0
+
+            def complete_json(self, system, payload):
+                self.calls += 1
+                return {
+                    "verdict": "fail", "grounded": False,
+                    "assignment_fidelity": False, "o1_style": False,
+                    "reason": (
+                        "GoogleSearchAction is not valid for workspace:// "
+                        "sources; the tool must be replaced."
+                    ),
+                    "repair_hint": "Replace the tool.",
+                }
+
+        rejecting = StillRejectingCritic()
+        refused, info = author_delegate_action(
+            assignments=[assignment], prompt="==== QUESTION ==== Find record",
+            author=Author(), critic=rejecting, max_revisions=0,
+        )
+        self.assertIsNone(refused)
+        self.assertEqual(info["status"], "failed")
+        self.assertEqual(rejecting.calls, 2)
         completion = {
             "action": "complete", "reasoning": "Generic statement without evidence.",
             "params": {"answer": "wrong"},
