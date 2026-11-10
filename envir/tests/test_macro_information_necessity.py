@@ -10,7 +10,7 @@ from envir.generate_question.spec import make_spec, difficulty_sequence
 from envir.generate_question.question import reference_question, guard_question
 from envir.generate_question.quality import compile_and_validate, validate_replay
 from envir.generate_question.information_necessity import (
-    POLICY, audit_candidate_information,
+    POLICY, VARIABLE_POLICY, audit_candidate_information,
 )
 from envir.generate_question.pipeline import quality_report
 
@@ -71,9 +71,15 @@ class InformationNecessityTests(unittest.TestCase):
                 continue
             proof = audit_candidate_information(scene)
             self.assertEqual(spec["macro_plan"]["information_necessity_policy"],
-                             POLICY)
-            self.assertEqual(proof["left_candidate_count"], 2)
-            self.assertEqual(proof["right_candidate_count"], 2)
+                             VARIABLE_POLICY)
+            profile = spec["macro_plan"]["candidate_profile"]
+            self.assertEqual(proof["left_candidate_count"],
+                             profile["left_candidate_count"])
+            self.assertEqual(proof["right_candidate_count"],
+                             profile["right_candidate_count"])
+            self.assertTrue(proof["candidate_count_matches_profile"])
+            self.assertGreaterEqual(proof["left_candidate_count"], 2)
+            self.assertGreaterEqual(proof["right_candidate_count"], 2)
             self.assertEqual(proof["intersection_count"], 1)
             self.assertTrue(proof["passed"])
             self.assertEqual(scene["difficulty_audit"][
@@ -88,9 +94,17 @@ class InformationNecessityTests(unittest.TestCase):
     def test_old_semantic_v2_scene_replays_without_changed_world(self):
         spec = sample_of("multimodal_event")
         old = copy.deepcopy(spec)
-        old.pop("macro_information_necessity_version")
-        old["macro_plan"].pop("information_necessity_policy", None)
-        # For named sports topics the original v2 metadata inference is same.
+        from envir.generate_question.macro_first_v2 import sample_macro_plan
+        old.pop("scene_realism_version")
+        plan, roles = sample_macro_plan(
+            seed=old["seed"], ordinal=old["ordinal"],
+            record_id=old["source_anchor"]["source_record_id"],
+            topic=old["scenario"]["topic"], difficulty=old["difficulty_target"],
+            domain="sports", information_need=True, realism_v3=False,
+        )
+        old["macro_plan"] = plan
+        old["sources"] = roles
+        # Reconstruct a PR106-style frozen V2 scene without the new marker.
         scene = compile_and_validate(old, reference_question(old))
         self.assertEqual(validate_replay(scene)["status"], "valid")
         self.assertNotIn("candidate_information_necessity",
