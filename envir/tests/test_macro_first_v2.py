@@ -162,6 +162,35 @@ class DiverseMacroTests(unittest.TestCase):
         self.assertGreater(len(metrics["macro_first_v2"][
             "source_observation_count_histogram"]), 5)
 
+    def test_ranked_oracle_evidence_sampling_prioritizes_top_row(self):
+        from envir.implement_subtask.realize import _operator_evidence
+        from envir.generate_question.program_ir import Relation
+        product = Relation(("entry_label", "priority"), (
+            {"values": {"entry_label": "Entry-09", "priority": 915},
+             "support": ("register:F009",)},
+            {"values": {"entry_label": "Entry-01", "priority": 300},
+             "support": ("register:F001",)},
+        ))
+        facts = {
+            "register:F001": {"fact_ref": "register:F001",
+                              "source_id": "register", "values": {"priority": 300}},
+            "register:F009": {"fact_ref": "register:F009",
+                              "source_id": "register", "values": {"priority": 915}},
+        }
+        result = _operator_evidence(
+            {"id": "ranked", "op": "sort", "inputs": ["rows"],
+             "field": "priority", "descending": True},
+            product,
+            {"source_fact_refs": ["register:F001", "register:F009"]},
+            facts,
+            {"register"},
+            evidence_limit=1,
+        )
+        self.assertEqual(result["evidence_atoms"][0]["fact_ref"],
+                         "register:F009")
+        self.assertEqual(result["supporting_fact_refs"],
+                         ["register:F001", "register:F009"])
+
     def test_tampered_local_plan_and_world_fail_closed(self):
         spec = spec_for(4)
         changed = copy.deepcopy(spec)
