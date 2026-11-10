@@ -29,6 +29,44 @@ def audit_candidate_information(scene: dict) -> dict:
         for row in feedback["work_M2"]["workproduct"]
     }
     overlap = left & right
+
+    # The competing identities must also have distinguishable answers,
+    # otherwise bypassing one branch could still yield the same scalar.
+    sources = scene["world"]["sources"]
+    markers = {
+        r["values"]["candidate_id"]: r["values"]["marker_code"]
+        for r in sources["footage"]["observations"]
+    }
+    key_to_goal = {}
+    goal_field = plan["goal"]["answer_field"]
+    for candidate_id in left | right:
+        key = markers[candidate_id]
+        for i in range(1, plan["index_hops"] + 1):
+            key_field = "marker_code" if i == 1 else f"record_key_{i-1}"
+            next_field = f"record_key_{i}"
+            matches = [
+                row["values"][next_field]
+                for row in sources[f"index_{i}"]["observations"]
+                if row["values"][key_field] == key
+            ]
+            if len(matches) != 1:
+                raise ValueError("information_necessity_index_ambiguity")
+            key = matches[0]
+        final_key = (
+            f"record_key_{plan['index_hops']}"
+            if plan["index_hops"] else "marker_code"
+        )
+        matches = [
+            row["values"][goal_field]
+            for row in sources["archive"]["observations"]
+            if row["values"][final_key] == key
+        ]
+        if len(matches) != 1:
+            raise ValueError("information_necessity_archive_ambiguity")
+        key_to_goal[candidate_id] = matches[0]
+    competing_goals_distinct = (
+        len(set(map(str, key_to_goal.values()))) == len(key_to_goal)
+    )
     result = {
         "left_candidate_count": len(left),
         "right_candidate_count": len(right),
@@ -39,6 +77,7 @@ def audit_candidate_information(scene: dict) -> dict:
         "right_alone_insufficient": len(right) >= 2,
         "jointly_unique": len(overlap) == 1,
         "both_branches_discriminate": bool(left - right) and bool(right - left),
+        "competing_goals_distinct": competing_goals_distinct,
         "fused_marker_count": feedback["work_M3"]["result_rows"],
         "interpretation": (
             "Candidate-set discrimination given the frozen working World; "
@@ -50,6 +89,7 @@ def audit_candidate_information(scene: dict) -> dict:
         and result["right_alone_insufficient"]
         and result["jointly_unique"]
         and result["both_branches_discriminate"]
+        and result["competing_goals_distinct"]
         and result["fused_marker_count"] == 1
     )
     return result
