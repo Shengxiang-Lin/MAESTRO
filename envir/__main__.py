@@ -30,9 +30,9 @@ def parser() -> argparse.ArgumentParser:
                           help="Override generation.output_dir from YAML")
     generate.add_argument("--target", type=int,
                           help="Override generation.target from YAML")
-      generate.add_argument("--macro-first-v2-share", type=int,
+    generate.add_argument("--macro-first-v2-share", type=int,
                           help="Percent of medium/hard scenes using diverse goals and per-Macro evidence planning")
-      generate.add_argument("--max-candidate-multiplier", type=int,
+    generate.add_argument("--max-candidate-multiplier", type=int,
                           help="Cap attempts to target × multiplier (default: config)")
     generate.add_argument("--no-progress", action="store_true")
     generate.add_argument("--flush-every", type=int,
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if cli.flush_every is not None:
             options.flush_every = cli.flush_every
-          if cli.macro_first_v2_share is not None:
+        if cli.macro_first_v2_share is not None:
             if not 0 <= cli.macro_first_v2_share <= 100:
                 p.error("--macro-first-v2-share must be 0..100")
             options.macro_first_v2_share = cli.macro_first_v2_share
