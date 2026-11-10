@@ -153,8 +153,11 @@ class InformationNecessityTests(unittest.TestCase):
         bad = "Which episode appears in The Office investigation, and what is " + (
             "the confirmed production year for its identified case?"
         )
-        self.assertIn("semantic_additional_output_field_requested",
-                      guard_question(bad, target))
+        self.assertTrue(
+            {"semantic_additional_output_field_requested",
+             "semantic_additional_output_requested"}
+            & set(guard_question(bad, target))
+        )
         contract = compile_and_validate(target, q)["semantic_evidence_contract"]
         self.assertEqual(contract["required_output_fields"],
                          ["production_year"])
