@@ -178,7 +178,7 @@ class TrustedSimulator:
         verb = action.get("type")
         if verb not in PUBLIC_ACTIONS:
             raise ValueError("stage3_invalid_action")
-        if len(self._history) >= self._max_turns:
+        if len(self._history) >= self._max_turns and verb != "terminate":
             raise ValueError("stage3_max_turns_exhausted")
         tid = action.get("macro_task_id")
         if verb != "terminate":
