@@ -65,6 +65,10 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     one_source = Counter()
     cf_sensitive = Counter()
     acquisition_scenes = 0
+    graph_modes = Counter()
+    graph_lookup_total = 0
+    graph_counterfactual_pass = 0
+    graph_parallel_widths = []
     keyed_lookup_total = 0
     acquisition_depths = []
     clue_counterfactual_pass = 0
@@ -92,6 +96,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             if text:
                 exact_questions[text] += 1
             if spec:
+                if spec.get("reasoning_pattern") == "evidence_graph":
+                    graph_modes[spec["evidence_graph"]["archetype"]] += 1
                 difficulties[spec["difficulty_target"]] += 1
                 families[spec["family"]] += 1
                 patterns[spec.get("reasoning_pattern", "approval_legacy")] += 1
@@ -170,6 +176,13 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 one_source[spec["difficulty_target"]] += int(
                     audit["one_source_baseline"]["exact_match"]
                 )
+                graph_audit = audit.get("evidence_graph_audit", {})
+                if graph_audit:
+                    graph_lookup_total += graph_audit["keyed_lookup_count"]
+                    graph_counterfactual_pass += int(
+                        graph_audit["source_counterfactuals_pass"])
+                    graph_parallel_widths.append(
+                        graph_audit["effective_parallel_wave_width"])
                 acquisition = audit.get("evidence_acquisition", {})
                 if acquisition:
                     acquisition_scenes += 1
@@ -300,6 +313,20 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "Naming-invariant fingerprint of executable Macro DAGs, "
                 "operator chains and source roles; not a semantic uniqueness proof."
             ),
+        },
+        "evidence_graph": {
+            "scenes": sum(graph_modes.values()),
+            "archetype_distribution": dict(graph_modes),
+            "keyed_lookup_count": graph_lookup_total,
+            "source_counterfactual_full_pass_rate": (
+                round(graph_counterfactual_pass / sum(graph_modes.values()), 4)
+                if graph_modes else None
+            ),
+            "mean_max_parallel_wave_width": (
+                round(sum(graph_parallel_widths) / len(graph_parallel_widths), 3)
+                if graph_parallel_widths else None
+            ),
+            "scope": "Frozen synthetic typed graphs, not independently solved agent tasks.",
         },
         "evidence_acquisition": {
             "scenes_with_keyed_clue_chain": acquisition_scenes,
