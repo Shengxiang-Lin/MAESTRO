@@ -20,7 +20,9 @@ from envir.generate_question.quality import validate_replay
 from envir.implement_subtask.realize import realize_scene
 
 from .o1_compat import o1_prompt, o1_history, o1_prompt_from_turn, source_catalog
-from .action_author import _assignment, action_issues, author_delegate_action
+from .action_author import (
+    _assignment, action_issues, completion_issues, author_delegate_action,
+)
 
 
 def _hash(value: Any) -> str:
@@ -467,6 +469,14 @@ def build_episode(
         ),
         "params": {"answer": _answer_text(scene)},
     }
+    completion_errors = completion_issues(
+        final_action, expected_answer=_answer_text(scene),
+        delivered=delivered,
+    )
+    if completion_errors:
+        raise ValueError(
+            "stage3_invalid_visible_completion:" + ",".join(completion_errors)
+        )
     final_example = {
         "sample_id": scene["task_id"] + f"-round-{completion_round:02d}",
         "task_id": scene["task_id"], "round": completion_round,
