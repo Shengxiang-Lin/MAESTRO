@@ -309,6 +309,9 @@ def compile_program(spec: dict) -> dict:
 
 def generate_world(spec: dict) -> dict:
     """Versioned synthetic sources; never rewrite old private World facts."""
+    if spec.get("reasoning_pattern") == "evidence_graph":
+        from .world_synthesizer import generate_evidence_world
+        return generate_evidence_world(spec)
     if spec.get("reasoning_pattern") == "clue_chain":
         from .clue_chain import generate_clue_world
         return generate_clue_world(spec)
