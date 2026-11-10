@@ -235,3 +235,27 @@ image/video/audio/text/table observations; topic-conditioned year,
 string, status and venue/title goals. This improves variety but does
 not provide real video decoding, real-world search or formal optimal
 Macro decomposition.
+
+
+### V2 semantic answer/source fidelity
+
+`semantic_evidence.py` generates an internal, frozen semantic contract
+directly from the true local Solver operators (scan/filter/join/compare/
+lookup) and the source schemas. A field's presence alone is not evidence
+that the Solver uses that field as a filter. In particular, videos do not
+acquire image-only emblem properties and audio utterance timestamps do
+not become exact footage-to-audio intervals.
+
+`scenario._narrative_issues` validates proposed source titles and
+narrative goals against the contract before LLM Critic. `question.guard_question`
+rejects explicit unsupported predicates and modality/time assertions,
+while authoring receives only used features. `quality.audit_scene`
+rechecks all LLM-authored Questions and ensures the stored semantic
+contract exactly matches regenerated Gold Program, so a passing LLM
+Critic does not bypass it.
+
+The additional version marker is opt-in for newly generated V2 specs.
+Old V2 snapshots remain replayable; the read-only quality report
+`semantic_evidence_diagnostics` can assess them retrospectively.
+Conservative regex diagnostics are high-confidence guards, not complete
+logical entailment and not a replacement for independent Agent tests.
