@@ -378,3 +378,117 @@ def oracle_schedule(scene: dict) -> dict:
         "total_cost": session.total_cost,
         "completed_tasks": len(session.completed_ids),
     }
+
+
+def compile_frozen_macro_plan(spec: dict, program: dict,
+                              execution_trace: list[dict]) -> dict:
+    """Compile pre-sampled Macro contracts WITHOUT re-partitioning operations.
+
+    This function preserves every task ID and edge from macro_plan.
+    Primitive nodes may only read an explicitly granted local source or
+    a declared parent Macro's terminal WorkProduct. Any hidden cross-Macro
+    primitive dependency fails closed.
+    """
+    from .macro_first import validate_macro_first_spec, compile_macro_solvers
+
+    errors = validate_macro_first_spec(spec)
+    if errors:
+        raise ProgramError("invalid_frozen_macro_plan:" + ",".join(errors))
+    if program != compile_macro_solvers(spec):
+        raise ProgramError("macro_solver_not_frozen")
+    problems = validate_program(program)
+    if problems:
+        raise ProgramError("invalid_local_macro_solvers:" + ",".join(problems))
+    plan = spec["macro_plan"]
+    groups = program["macro_solver_groups"]
+    source_ids = {role["source_id"] for role in spec["sources"]}
+    by_node = {node["id"]: node for node in program["nodes"]}
+    trace = {entry["node_id"]: entry for entry in execution_trace}
+    if len(groups) != len(plan["macro_tasks"]):
+        raise ProgramError("macro_solver_group_count_mismatch")
+
+    tasks, owned = [], set()
+    for macro, group in zip(plan["macro_tasks"], groups):
+        mid = macro["macro_id"]
+        if group["macro_id"] != mid:
+            raise ProgramError("macro_group_order_mismatch")
+        ids = group["node_ids"]
+        if not ids or any(nid in owned or nid not in by_node for nid in ids):
+            raise ProgramError("macro_solver_node_partition_invalid")
+        if group["output_node_id"] != ids[-1]:
+            raise ProgramError("macro_solver_terminal_invalid")
+        parent_tasks = macro["depends_on"]
+        available = {
+            previous["task_id"].removeprefix("work_"): previous
+            for previous in tasks
+        }
+        if any(pid not in available for pid in parent_tasks):
+            raise ProgramError("macro_dependency_not_topological")
+        prior_output_ids = {
+            previous["task_id"].removeprefix("work_"): previous["program_node_id"]
+            for previous in tasks
+        }
+        external = [prior_output_ids[parent] for parent in parent_tasks]
+        if group["external_input_nodes"] != external:
+            raise ProgramError("macro_external_input_mismatch")
+        local = set()
+        for nid in ids:
+            node = by_node[nid]
+            for parent in node["inputs"]:
+                if parent not in local and parent not in external:
+                    raise ProgramError("undeclared_cross_macro_primitive_dependency")
+            local.add(nid)
+        accessed = [
+            by_node[nid]["source_id"] for nid in ids
+            if by_node[nid]["op"] in {"scan", "lookup_by_key"}
+        ]
+        if (accessed != macro["source_scope"]
+                or any(sid not in source_ids for sid in accessed)):
+            raise ProgramError("macro_local_source_scope_mismatch")
+        if list(trace[ids[-1]]["schema"]) != list(macro["output_schema"]):
+            raise ProgramError("macro_output_type_contract_mismatch:" + mid)
+        for parent, nid in zip(parent_tasks, external):
+            upstream = available[parent]["outputs"]["typed_relation"]
+            if list(trace[nid]["schema"]) != upstream:
+                raise ProgramError("macro_input_type_contract_mismatch")
+            if list(macro["input_contract"][parent]) != upstream:
+                raise ProgramError("macro_declared_input_type_mismatch")
+        chain = [dict(by_node[nid]) for nid in ids]
+        tasks.append({
+            "task_id": "work_" + mid,
+            "program_node_id": ids[-1],
+            "operation": "composite" if len(ids) > 1 else chain[0]["op"],
+            "operation_args": {},
+            "operator_chain": chain,
+            "external_inputs": external,
+            "depends_on": ["work_" + p for p in parent_tasks],
+            "source_ids": accessed,
+            "input_schema": {
+                "input_" + str(i): list(trace[nid]["schema"])
+                for i, nid in enumerate(external)
+            },
+            "outputs": {"typed_relation": list(trace[ids[-1]]["schema"])},
+            "handoff_type": "SourceScopedRelationWithFactRefs",
+            "dispatchable": True,
+            "execution_policy": "frozen_macro_contract_local_gold_solver",
+            "macro_role": macro["role"],
+        })
+        owned.update(local)
+    if owned != set(by_node):
+        raise ProgramError("orphan_primitive_not_owned_by_macro")
+    if (tasks[-1]["task_id"] != "work_" + plan["terminal_macro_id"]
+            or tasks[-1]["program_node_id"] != program["output"]):
+        raise ProgramError("macro_final_output_mismatch")
+    waves = compile_waves(tasks)
+    return {
+        "version": "maestro.dependency_macro_graph.v4",
+        "tasks": tasks,
+        "reference_waves": waves,
+        "terminal_task_id": tasks[-1]["task_id"],
+        "macro_task_count": len(tasks),
+        "primitive_operator_count": len(program["nodes"]),
+        "critical_path_depth": _critical_path(tasks),
+        "source_scope_policy": "frozen_macro_local_source_permissions",
+        "coarsening": "none_predefined_macro_boundaries",
+        "plan_origin": "macro_first",
+    }
