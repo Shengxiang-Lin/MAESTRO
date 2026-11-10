@@ -46,7 +46,14 @@ def o1_prompt(
                 # Known URL is visible from the outset only for Direct
                 # Extract. Search-discovered URLs are absent until the
                 # Sub-Agent's own simulated Search observation.
-                "path": source.get("resource_url", "workspace://" + sid),
+                "path": source.get("resource_url") or (
+                    "simulated-web-index://" + sid
+                    if (scene.get("problem_spec", {}).get(
+                            "evidence_tool_contract_version", ""
+                        ).endswith(".v2")
+                        and source["modality_hint"] in {"text", "table"})
+                    else "workspace://" + sid
+                ),
             } for sid, source in sources.items()
         ],
     }
