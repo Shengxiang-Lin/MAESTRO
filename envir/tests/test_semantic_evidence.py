@@ -194,6 +194,8 @@ class SemanticEvidenceTests(unittest.TestCase):
         from envir.generate_question.pipeline import quality_report
         spec = specimen("disputed_reports")
         spec.pop("semantic_evidence_contract_version")
+        spec.pop("macro_information_necessity_version", None)
+        spec["macro_plan"].pop("information_necessity_policy", None)
         scene = compile_and_validate(spec, reference_question(spec))
         scene = copy.deepcopy(scene)
         scene["question"] = scene["question"].replace(
@@ -215,6 +217,8 @@ class SemanticEvidenceTests(unittest.TestCase):
     def test_older_v2_scenes_remain_replay_compatible(self):
         spec = specimen("disputed_reports")
         spec.pop("semantic_evidence_contract_version")
+        spec.pop("macro_information_necessity_version", None)
+        spec["macro_plan"].pop("information_necessity_policy", None)
         scene = compile_and_validate(spec, reference_question(spec))
         self.assertNotIn("semantic_evidence_contract", scene)
         self.assertEqual(validate_replay(scene)["status"], "valid")

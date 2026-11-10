@@ -181,7 +181,7 @@ def compile_semantic_contract(
         for p in predicates
     ):
         necessary_clues["independent_report_year_disagreement"] = True
-    return {
+    contract = {
         "version": CONTRACT_VERSION,
         "goal": dict(spec["macro_plan"]["goal"]),
         "sources": schemas,
@@ -209,6 +209,14 @@ def compile_semantic_contract(
         ),
         "program_digest": digest(program["nodes"], program["output"]),
     }
+    if spec.get("macro_information_necessity_version"):
+        contract["required_output_fields"] = [
+            spec["macro_plan"]["goal"]["answer_field"]
+        ]
+        contract["semantic_goal_type"] = spec["macro_plan"]["goal"]["answer_type"]
+        contract["requested_entities"] = []
+        contract["output_policy"] = "one_typed_answer_field_no_additional_output"
+    return contract
 
 
 def _normalized_time_ms(value: str, unit: str) -> int:
@@ -223,6 +231,59 @@ def _remove_topic(text: str, spec: dict) -> str:
     """Avoid treating words in proper names (e.g. Blue...) as new clues."""
     topic = spec.get("scenario", {}).get("topic", "")
     return re.sub(re.escape(topic), " TOPIC ", text, flags=re.I) if topic else text
+
+
+_OUTPUT_QUESTION_PATTERNS = {
+    "episode_title": (
+        r"\bwhich episode\b", r"\bidentify (?:the )?episode\b",
+        r"\bname (?:the )?episode\b",
+    ),
+    "song_title": (r"\bwhich song\b", r"\bname (?:the )?song\b"),
+    "match_result": (
+        r"\bwhat (?:was|is) the (?:final )?(?:score|match result)\b",
+        r"\bgive (?:the )?(?:final )?score\b",
+    ),
+    "event_venue": (
+        r"\bwhich venue\b", r"\bwhere (?:was|is) the event held\b",
+    ),
+    "screening_venue": (
+        r"\bwhich (?:screening )?venue\b",
+        r"\bwhere (?:was|is) the screening held\b",
+    ),
+    "performance_venue": (
+        r"\bwhich (?:performance )?venue\b",
+        r"\bwhere (?:was|is) the performance held\b",
+    ),
+    "production_year": (r"\bwhat (?:is|was) (?:the )?production year\b",),
+    "publication_year": (r"\bwhat (?:is|was) (?:the )?publication year\b",),
+}
+
+
+def semantic_output_issues(text: str, contract: dict) -> list[str]:
+    """Conservative check for clearly requested second output slots.
+
+    Descriptive mentions of entities are NOT treated as outputs; a direct
+    question or an imperative to name a second entity is.
+    """
+    required = contract.get("required_output_fields")
+    if not required:
+        return []
+    expected = required[0]
+    requested = set()
+    for field, expressions in _OUTPUT_QUESTION_PATTERNS.items():
+        if any(re.search(expression, text, re.I) for expression in expressions):
+            requested.add(field)
+    extra = requested - {expected}
+    if extra:
+        return ["semantic_additional_output_field_requested"]
+    # Direct two-part requests that may not name a known ontology slot.
+    if re.search(
+        r"\b(?:also|as well as|along with)\s+"
+        r"(?:identify|name|list|return|report|give|provide)\b",
+        text, re.I,
+    ):
+        return ["semantic_additional_output_requested"]
+    return []
 
 
 def semantic_text_issues(text: str, spec: dict, contract: dict,
@@ -240,6 +301,9 @@ def semantic_text_issues(text: str, spec: dict, contract: dict,
     modalities = set(contract["available_modalities"])
     time = contract["temporal_semantics"]
     mode = spec["macro_plan"]["pattern"]
+
+    if context == "question":
+        issues.extend(semantic_output_issues(q, contract))
 
     if "clearance" in contract["prohibited_new_filters"] and _CLEARANCE.search(q):
         issues.append("semantic_unlicensed_clearance")

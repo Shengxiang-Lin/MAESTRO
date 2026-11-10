@@ -77,6 +77,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     macro_v2_evidence_sizes = []
     macro_v2_local_source_counts = []
     macro_v2_media_pairs = Counter()
+    macro_v2_information_audits = []
+    macro_v2_output_contracts = 0
     macro_first_handoffs = 0
     macro_first_handoff_passes = 0
     macro_first_local_ops = []
@@ -134,6 +136,13 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                             "enforcement_versioned": has_semantic_contract(spec),
                         })
                     plan = spec["macro_plan"]
+                    if spec.get("macro_information_necessity_version"):
+                        macro_v2_output_contracts += 1
+                        necessity = scene.get("difficulty_audit", {}).get(
+                            "macro_first_audit", {}
+                        ).get("candidate_information_necessity")
+                        if necessity:
+                            macro_v2_information_audits.append(necessity)
                     macro_v2_modes[plan["pattern"]] += 1
                     macro_v2_goals[plan["goal"]["answer_field"]] += 1
                     for macro in plan["macro_tasks"]:
@@ -395,6 +404,26 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             "video_audio_joint_macros": macro_v2_media_pairs[
                 "video_audio_in_one_macro"
             ],
+            "versioned_output_contract_scenes": macro_v2_output_contracts,
+            "information_necessity": {
+                "audited_multimodal_scenes": len(macro_v2_information_audits),
+                "candidate_discrimination_passed": sum(
+                    r["passed"] for r in macro_v2_information_audits
+                ),
+                "mean_left_candidates": (
+                    round(sum(r["left_candidate_count"]
+                              for r in macro_v2_information_audits)
+                          / len(macro_v2_information_audits), 3)
+                    if macro_v2_information_audits else None
+                ),
+                "mean_right_candidates": (
+                    round(sum(r["right_candidate_count"]
+                              for r in macro_v2_information_audits)
+                          / len(macro_v2_information_audits), 3)
+                    if macro_v2_information_audits else None
+                ),
+                "scope": "Actual candidate-set discrimination, not an optimal search lower bound",
+            },
             "scope": "Synthetic heterogeneous observations, no real media decoding or open-web tools.",
         },
         "macro_first": {

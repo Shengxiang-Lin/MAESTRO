@@ -61,7 +61,7 @@ class ConfigAndCliTests(unittest.TestCase):
         values = load_config(DEFAULT_CONFIG)
         args = args_from_config(values)
         self.assertEqual(args.target, 100)
-        self.assertEqual(args.difficulty_mix, "20,50,30")
+        self.assertEqual(args.difficulty_mix, "17,33,50")
         self.assertTrue(args.mmqa.is_absolute())
         self.assertEqual(args.scenario_workers, 8)
         self.assertEqual(args.question_workers, 8)

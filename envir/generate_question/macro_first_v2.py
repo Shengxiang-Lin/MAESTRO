@@ -12,6 +12,7 @@ from envir.schema import digest
 from .macro_first import _source
 
 VERSION = "maestro.macro_plan.v2"
+INFORMATION_NECESSITY_VERSION = "maestro.cross_branch_candidates.v1"
 PATTERNS = ("serial_identity", "parallel_cues",
             "disputed_reports", "multimodal_event")
 # High-precision paraphrases; a changed target (e.g. match year instead
@@ -38,6 +39,18 @@ GOAL_PHRASES = {
     "filing_year": ("filing year", "year of filing"),
     "case_title": ("case title", "title of the case"),
     "review_year": ("review year", "year of the review"),
+    "exhibition_title": ("exhibition title", "title of the exhibition"),
+    "exhibition_year": ("exhibition year", "year of the exhibition"),
+    "course_title": ("course title", "title of the course"),
+    "campus_site": ("campus site", "campus location"),
+    "academic_year": ("academic year", "year of the academic record"),
+    "delivery_status": ("delivery status", "status of the delivery"),
+    "arrival_site": ("arrival site", "arrival location"),
+    "shipment_year": ("shipment year", "year of the shipment"),
+    "civic_site": ("civic site", "civic location"),
+    "permit_status": ("permit status", "status of the permit"),
+    "inspection_year": ("inspection year", "year of the inspection"),
+    "species_label": ("species label", "species name"),
 }
 
 DOMAIN_GOALS = {
@@ -54,6 +67,16 @@ DOMAIN_GOALS = {
     "business": (("resolution_status", "str"), ("filing_year", "int")),
     "general": (("case_title", "str"), ("review_status", "str"),
                 ("review_year", "int")),
+    "culture": (("exhibition_title", "str"), ("performance_venue", "str"),
+                ("exhibition_year", "int")),
+    "education": (("course_title", "str"), ("campus_site", "str"),
+                  ("academic_year", "int")),
+    "logistics": (("delivery_status", "str"), ("arrival_site", "str"),
+                  ("shipment_year", "int")),
+    "civic": (("civic_site", "str"), ("permit_status", "str"),
+              ("inspection_year", "int")),
+    "environment": (("survey_site", "str"), ("species_label", "str"),
+                    ("survey_year", "int")),
 }
 
 def domain_hint(topic: str, hint: str) -> str:
@@ -93,8 +116,28 @@ def domain_hint_v2(topic: str, hint: str) -> str:
     return domain_hint(topic, hint)
 
 
+def domain_hint_v3(topic: str, hint: str) -> str:
+    """More faithful domain taxonomy for NEW information-contract scenes.
+
+    Keep domain_hint_v2 unchanged: the older semantic V2 scenes must replay
+    against their original topic/Goal mapping.
+    """
+    value = str(hint or "").strip().lower()
+    by_metadata = {
+        "commerce": "business", "culture": "culture",
+        "education": "education", "logistics": "logistics",
+        "civic": "civic", "environment": "environment",
+        "science": "science", "sports": "sports",
+    }
+    named = domain_hint(topic, "")
+    return named if named != "general" else by_metadata.get(
+        value, domain_hint_v2(topic, hint)
+    )
+
+
 def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
-                      difficulty: str, domain: str) -> tuple[dict, list[dict]]:
+                      difficulty: str, domain: str,
+                      information_need: bool = False) -> tuple[dict, list[dict]]:
     if difficulty not in {"medium", "hard"}:
         raise ValueError("macro_first_v2_requires_medium_or_hard")
     if domain not in DOMAIN_GOALS:
@@ -256,20 +299,26 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         "source_schemas": schemas, "index_hops": hops,
         "media_interpretation": "simulated_typed_observations_not_media_decoding",
     }
+    if information_need and pattern == "multimodal_event":
+        plan["information_necessity_policy"] = (
+            "two_nonunique_candidate_sets_with_single_intersection_v1"
+        )
     return plan, sources
 
 
 def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
               difficulty: str, topic: str, record_id: str, version: str) -> dict:
-    domain = domain_hint_v2(topic, str(seed_record.get("domain_hint", "")))
+    domain = domain_hint_v3(topic, str(seed_record.get("domain_hint", "")))
     plan, roles = sample_macro_plan(
         seed=run_seed, ordinal=ordinal, record_id=record_id, topic=topic,
         difficulty=difficulty, domain=domain,
+        information_need=True,
     )
     from .semantic_evidence import CONTRACT_VERSION
     return {
         "version": version,
         "semantic_evidence_contract_version": CONTRACT_VERSION,
+        "macro_information_necessity_version": INFORMATION_NECESSITY_VERSION,
         "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
         "scene_id": record_id,
         "source_anchor": {
@@ -311,6 +360,10 @@ def validate_spec(spec: dict) -> list[str]:
         None, CONTRACT_VERSION
     }:
         return ["invalid_semantic_evidence_contract_version"]
+    if spec.get("macro_information_necessity_version") not in {
+        None, INFORMATION_NECESSITY_VERSION
+    }:
+        return ["invalid_macro_information_necessity_version"]
     try:
         expected, roles = sample_macro_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
@@ -318,12 +371,14 @@ def validate_spec(spec: dict) -> list[str]:
             topic=spec["scenario"]["topic"],
             difficulty=spec["difficulty_target"],
             domain=(
-                domain_hint_v2 if spec.get("semantic_evidence_contract_version")
+                domain_hint_v3 if spec.get("macro_information_necessity_version")
+                else domain_hint_v2 if spec.get("semantic_evidence_contract_version")
                 else domain_hint
             )(
                 spec["scenario"]["topic"],
                 spec["source_anchor"].get("domain_hint", ""),
             ),
+            information_need=bool(spec.get("macro_information_necessity_version")),
         )
         errors = []
         if plan != expected:

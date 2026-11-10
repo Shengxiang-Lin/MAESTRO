@@ -323,6 +323,72 @@ class StageLocalScopeRegressions(unittest.TestCase):
         )
         self.assertEqual(len(critic.calls), 2)
 
+class VerifiedListCriticRegressions(unittest.TestCase):
+    def test_second_critic_can_correct_oracle_membership_hallucination(self):
+        from envir.implement_subtask.reporting import (
+            _critic_oracle_membership_false_negative,
+        )
+        frozen = scene(25, "medium")
+        realized = realize_scene(frozen)
+        final = next(
+            row for row in realized["macro_tasks"]
+            if row["macro_task_id"] == realized["terminal_macro_task_id"]
+        )
+        self.assertTrue(final["answer"])
+        self.assertTrue(all(set(x) == {"entry_label"} for x in final["answer"]))
+
+        class OracleMistakenCritic:
+            def __init__(self):
+                self.calls = []
+
+            def complete_json(self, system_prompt, user_prompt):
+                payload = json.loads(user_prompt)
+                self.calls.append((system_prompt, payload))
+                if len(self.calls) == 1:
+                    label = final["answer"][0]["entry_label"]
+                    return {
+                        "verdict": "fail", "grounded": False,
+                        "answer_scope_preserved": False,
+                        "evidence_scope_respected": True,
+                        "natural": True,
+                        "reason": f"{label} is absent from exact_oracle_answer",
+                        "repair_hint": "remove that entry",
+                    }
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "answer_scope_preserved": True,
+                    "evidence_scope_respected": True,
+                    "natural": True,
+                    "reason": "The exact enumerated list is verified; summary is grounded.",
+                    "repair_hint": "",
+                }
+
+        author = StructuredResultAuthor()
+        critic = OracleMistakenCritic()
+        reviewed, result = author_critic_report(
+            final, question=frozen["question"], author=author,
+            critic=critic, is_terminal=True, max_revisions=0,
+        )
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(len(critic.calls), 2)
+        self.assertTrue(
+            result["critic_membership_false_negative_rechecked"]
+        )
+        self.assertEqual(reviewed["answer"], final["answer"])
+        self.assertEqual(reviewed["answer_with_provenance"],
+                         final["answer_with_provenance"])
+        self.assertTrue(_critic_oracle_membership_false_negative(
+            {"reason": "Entry-01 is absent from exact_oracle_answer"},
+            "Entries: Entry-01, Entry-02.",
+            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}],
+        ))
+        self.assertFalse(_critic_oracle_membership_false_negative(
+            {"reason": "Entry-99 is absent from exact_oracle_answer"},
+            "Entries: Entry-01, Entry-02.",
+            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}],
+        ))
+
+
 class ActiveStatusPrecisionRegressions(unittest.TestCase):
     """Examples sampled from 42 false-positive 'all...active' rejections."""
 

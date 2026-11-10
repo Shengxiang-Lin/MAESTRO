@@ -231,6 +231,13 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         handoff_report = validate_handoffs(scene)
         if not handoff_report["all_handoffs_necessary"]:
             issues.append("macro_first_redundant_macro_handoffs")
+    information_report = None
+    if (spec.get("macro_information_necessity_version")
+            and spec.get("macro_plan", {}).get("information_necessity_policy")):
+        from .information_necessity import audit_candidate_information
+        information_report = audit_candidate_information(scene)
+        if not information_report["passed"]:
+            issues.append("macro_branches_not_informationally_necessary")
     if spec.get("reasoning_pattern") == "evidence_graph":
         if profile.get("keyed_lookup_count", 0) < 1:
             issues.append("evidence_graph_no_keyed_acquisition")
@@ -426,6 +433,8 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
                 x["changing_source_changes_answer"]
                 for x in counterfactual.values()
             ),
+            **({"candidate_information_necessity": information_report}
+               if information_report is not None else {}),
         }
     if spec.get("reasoning_pattern") == "evidence_graph":
         result["evidence_graph_audit"] = {

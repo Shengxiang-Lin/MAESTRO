@@ -259,3 +259,24 @@ Old V2 snapshots remain replayable; the read-only quality report
 `semantic_evidence_diagnostics` can assess them retrospectively.
 Conservative regex diagnostics are high-confidence guards, not complete
 logical entailment and not a replacement for independent Agent tests.
+
+
+### Macro-first information necessity (new versioned scenes)
+
+New specs freeze `macro_information_necessity_version` on the
+`macro_plan`. For `multimodal_event`, video+audio yields at least
+two valid candidate IDs and the independent context log yields at
+least two; each contains a different false positive, and the overlap
+is exactly one. Competitors' authoritative final answer values are
+distinct. The private `information_necessity.audit_candidate_information`
+walks Macro WorkProducts and the keyed index/archive chain to ensure
+that dropping a branch loses needed identity/answer discrimination,
+and stores its finding in the Scenario difficulty audit.
+
+New scenes' `semantic_evidence_contract` also freezes a single
+typed output field and applies conservative checks against explicit
+additional response targets (e.g. asking for a title AND a year).
+Legacy V2 plans, Worlds and semantic contracts without this marker
+retain their older deterministic replay behavior. This check is a
+bounded output-slot guard, not a full natural-language entailment
+proof.

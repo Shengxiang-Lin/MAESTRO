@@ -22,9 +22,15 @@ def _goal_value(field: str, kind: str, i: int, rng: random.Random):
     places = ("Riverside", "Central", "North", "Harbor", "Union",
               "Eastside", "Westport", "Garden", "Civic")
     venue_types = ("Hall", "Arena", "Ground", "Auditorium", "Stage")
-    if field in {"event_venue", "screening_venue", "performance_venue"}:
+    if field in {
+        "event_venue", "screening_venue", "performance_venue",
+        "arrival_site", "campus_site", "civic_site",
+    }:
         return f"{rng.choice(places)} {rng.choice(venue_types)}"
-    if field in {"review_status", "resolution_status"}:
+    if field in {
+        "review_status", "resolution_status", "permit_status",
+        "delivery_status",
+    }:
         return rng.choice((
             "confirmed", "under review", "resolved", "withdrawn", "revised"
         ))
@@ -35,7 +41,7 @@ def _goal_value(field: str, kind: str, i: int, rng: random.Random):
     nouns = ("Signal", "Window", "Crossing", "Departure", "Echo",
              "Record", "Return", "Journey", "Interval", "Horizon")
     title = f"{rng.choice(adjectives)} {rng.choice(nouns)}"
-    if field == "song_title":
+    if field in {"song_title", "exhibition_title", "course_title"}:
         return title
     if field == "episode_title":
         return "The " + title
@@ -45,6 +51,9 @@ def _goal_value(field: str, kind: str, i: int, rng: random.Random):
         return f"{title} exhibit"
     if field == "case_title":
         return f"{title} review file"
+    if field == "species_label":
+        return rng.choice(("river willow", "red-backed finch",
+                           "marsh orchid", "silver birch", "field lark"))
     if field == "experiment_label":
         return f"{rng.choice(('Phase', 'Trial', 'Protocol'))} {rng.choice(adjectives)}-{i+1:02d}"
     return title
@@ -101,7 +110,16 @@ def generate_world(spec: dict) -> dict:
         # For multimodal_event, candidate 1 has both cues but wrong ordering.
         if plan["pattern"] == "multimodal_event":
             motif = clues["emblem_shape"] if i in (0, 1, 2) else other_motif
-        case_tag = clues["case_tag"] if i in (0, 1, 2) else other_tag
+        information_necessary = bool(
+            spec.get("macro_information_necessity_version")
+        )
+        if information_necessary and plan["pattern"] == "multimodal_event":
+            # Both branches must meaningfully reduce *different* candidate
+            # sets. Video+audio gives {target, candidate-1}; the event log
+            # gives {target, candidate-2}. Neither is unique alone.
+            case_tag = clues["case_tag"] if i in (0, 2) else other_tag
+        else:
+            case_tag = clues["case_tag"] if i in (0, 1, 2) else other_tag
         item = {
             "candidate_id": labels[i], "case_id": labels[i],
             "marker_code": f"MK-{marker_codes[i]:04d}",
@@ -110,7 +128,10 @@ def generate_world(spec: dict) -> dict:
             "frame_time_ms": timestamp,
             "footage_time_ms": timestamp,
             "commentary_time_ms": (
-                timestamp + 5000 if i != 1 else timestamp - 5000
+                timestamp + 5000 if (i != 1 or (
+                    information_necessary and
+                    plan["pattern"] == "multimodal_event"
+                )) else timestamp - 5000
             ),
             "spoken_cue": motif, "caption_motif": motif,
             "utterance_time_ms": timestamp + 5000,
@@ -121,6 +142,23 @@ def generate_world(spec: dict) -> dict:
         for j, keys in enumerate(index_codes, 1):
             item[f"record_key_{j}"] = f"KEY{j}-{keys[i]:05d}"
         objects.append(item)
+
+    if (spec.get("macro_information_necessity_version")
+            and plan["pattern"] == "multimodal_event"):
+        # Information necessity should matter to the ANSWER, not merely
+        # to a candidate label. The target and competing candidates must
+        # resolve to different final values (statuses, dates, titles, etc.).
+        values_seen = set()
+        for index, row in enumerate(objects[:3]):
+            for attempt in range(40):
+                if row[field] not in values_seen:
+                    break
+                row[field] = _goal_value(
+                    field, kind, entity_count + index + attempt, rng
+                )
+            if row[field] in values_seen:
+                raise ValueError("nonunique_competing_goal_values")
+            values_seen.add(row[field])
 
     kind_map = {
         "visual": ["candidate_id", "marker_code", "emblem_color"] + (
