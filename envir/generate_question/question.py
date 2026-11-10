@@ -39,7 +39,17 @@ def _one_output_v2_question(spec: dict) -> str:
         "civic": "site record", "environment": "survey observation",
         "science": "experiment observation", "business": "filing",
     }.get(domain, "item")
-    if plan["pattern"] == "disputed_reports":
+    if plan["pattern"] in {
+        "disputed_reports", "corroborated_dispute",
+    }:
+        if plan["pattern"] == "corroborated_dispute":
+            return (
+                f"In the {topic} materials, two independent reports "
+                f"disagree about the reported year for some {item} records. "
+                f"An independent event log also marks the matching "
+                f"record as {clues['case_tag']}. For the record satisfying "
+                f"both conditions, what is the confirmed {goal}?"
+            )
         return (
             f"Two independent {topic} records disagree about the year "
             f"reported for one {item}. For the disputed {item}, "
@@ -412,12 +422,14 @@ def guard_question(question: str, spec: dict,
         if not any(phrase in q.casefold()
                    for phrase in GOAL_PHRASES.get(goal_field, (label,))):
             errors.append("macro_first_v2_goal_semantics_missing")
-        if mode == "disputed_reports" and not re.search(
+        if mode in {"disputed_reports", "corroborated_dispute"} and not re.search(
             r"\b(disagree\w*|disput\w*|differ\w*|conflict\w*|"
             r"discrepanc\w*|mismatch\w*)\b", q, re.I
         ):
             errors.append("macro_first_v2_disagreement_missing")
-        if mode != "disputed_reports":
+        if mode == "corroborated_dispute" and clues["case_tag"] not in q:
+            errors.append("macro_first_v2_context_tag_missing")
+        if mode not in {"disputed_reports", "corroborated_dispute"}:
             required = ([clues["scene_action"], clues["spoken_cue"],
                          clues["case_tag"]]
                         if mode == "multimodal_event"
