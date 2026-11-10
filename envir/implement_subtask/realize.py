@@ -33,6 +33,11 @@ def _describe_operation(node: dict) -> str:
     op = node["op"]
     if op == "scan":
         return f"Read the {node['source_id']} source to obtain relevant observations"
+    if op == "lookup_by_key":
+        return (
+            f"Retrieve only the {node['source_id']} record addressed by "
+            f"upstream {node['input_key_field']} via {node['source_key_field']}"
+        )
     if op == "filter_eq":
         return (f"Keep rows whose {node['field']} equals "
                 f"{node['value']!r}")
