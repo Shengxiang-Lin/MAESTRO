@@ -107,8 +107,12 @@ class InformationNecessityTests(unittest.TestCase):
         # Reconstruct a PR106-style frozen V2 scene without the new marker.
         scene = compile_and_validate(old, reference_question(old))
         self.assertEqual(validate_replay(scene)["status"], "valid")
-        self.assertNotIn("candidate_information_necessity",
-                         scene["difficulty_audit"]["macro_first_audit"])
+        old_audit = scene["difficulty_audit"]["macro_first_audit"][
+            "candidate_information_necessity"
+        ]
+        self.assertEqual(old_audit["policy"], POLICY)
+        self.assertEqual(old_audit["left_candidate_count"], 2)
+        self.assertEqual(old_audit["right_candidate_count"], 2)
 
     def test_context_cannot_be_redundant_in_new_multimodal(self):
         spec = sample_of("multimodal_event")
