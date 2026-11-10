@@ -111,19 +111,28 @@ def domain_hint_v2(topic: str, hint: str) -> str:
     value = str(hint or "").strip().lower()
     if value == "sports":
         return "sports"
+    if value == "commerce":
+        return "business"
+    return domain_hint(topic, hint)
+
+
+def domain_hint_v3(topic: str, hint: str) -> str:
+    """More faithful domain taxonomy for NEW information-contract scenes.
+
+    Keep domain_hint_v2 unchanged: the older semantic V2 scenes must replay
+    against their original topic/Goal mapping.
+    """
+    value = str(hint or "").strip().lower()
     by_metadata = {
         "commerce": "business", "culture": "culture",
         "education": "education", "logistics": "logistics",
         "civic": "civic", "environment": "environment",
-        "science": "science",
+        "science": "science", "sports": "sports",
     }
-    if value in by_metadata:
-        # Metadata is an authentic *topic-category hint*, not a source of
-        # asserted facts; fall back to recognized named subjects when
-        # they strongly identify a more specific subdomain.
-        named = domain_hint(topic, "")
-        return named if named != "general" else by_metadata[value]
-    return domain_hint(topic, hint)
+    named = domain_hint(topic, "")
+    return named if named != "general" else by_metadata.get(
+        value, domain_hint_v2(topic, hint)
+    )
 
 
 def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
@@ -299,7 +308,7 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
 
 def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
               difficulty: str, topic: str, record_id: str, version: str) -> dict:
-    domain = domain_hint_v2(topic, str(seed_record.get("domain_hint", "")))
+    domain = domain_hint_v3(topic, str(seed_record.get("domain_hint", "")))
     plan, roles = sample_macro_plan(
         seed=run_seed, ordinal=ordinal, record_id=record_id, topic=topic,
         difficulty=difficulty, domain=domain,
@@ -362,7 +371,8 @@ def validate_spec(spec: dict) -> list[str]:
             topic=spec["scenario"]["topic"],
             difficulty=spec["difficulty_target"],
             domain=(
-                domain_hint_v2 if spec.get("semantic_evidence_contract_version")
+                domain_hint_v3 if spec.get("macro_information_necessity_version")
+                else domain_hint_v2 if spec.get("semantic_evidence_contract_version")
                 else domain_hint
             )(
                 spec["scenario"]["topic"],
