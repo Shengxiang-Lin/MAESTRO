@@ -225,9 +225,17 @@ def enrich_one(spec: dict, *, author, critic,
             # In new V2 scenes, source titles are always regenerated from
             # the frozen modality/schema; LLM-authored titles are ignored.
             proposal = canonicalize_scenario_proposal(spec, proposal)
+            field_repair = None
+            if has_scene_realism(spec):
+                from .scenario_repair import repair_draft
+                proposal, field_repair = repair_draft(spec, proposal)
             issues = _narrative_issues(spec, proposal)
             if issues:
-                failures.append({"stage": "schema_guard", "errors": issues})
+                failures.append({
+                    "stage": "schema_guard", "errors": issues,
+                    **({"field_repair": field_repair}
+                       if field_repair is not None else {}),
+                })
                 continue
             scenario_critic_system = SCENARIO_CRITIC if v2 else CRITIC_SYSTEM
             review = critic.complete_json(scenario_critic_system, json.dumps({
@@ -255,7 +263,10 @@ def enrich_one(spec: dict, *, author, critic,
                 continue
             result["scenario_authoring"] = {
                 "status": "accepted", "attempts": attempt + 1,
-                "review": review, "formal_equivalence_proven": False,
+                "review": review,
+                **({"field_repair": field_repair}
+                   if field_repair is not None else {}),
+                "formal_equivalence_proven": False,
             }
             return result, result["scenario_authoring"]
         except Exception as exc:
