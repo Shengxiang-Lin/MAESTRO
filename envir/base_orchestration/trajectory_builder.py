@@ -307,9 +307,12 @@ def build_episode(
     # A teacher shortcut is legal only if its exact public upstream report
     # will have returned before the terminal wave. Check again against
     # actually delivered history before emitting the final completion.
+    preview_prior = {
+        tid: reports[tid] for wave in waves[:-1] for tid in wave
+    }
     visible_answer_shortcut = (
         waves[-1] == [graph["terminal_task_id"]]
-        and _visible_terminal_answer(scene, reports, tasks)
+        and _visible_terminal_answer(scene, preview_prior, tasks)
     )
     scheduled = (waves[:-1] if (main_compute or visible_answer_shortcut)
                  else waves)
