@@ -46,19 +46,20 @@ class ClueChainContracts(unittest.TestCase):
         from envir.__main__ import parser
         from envir.generate_question.stages import construct_scenes, read_jsonl
         cfg = load_config(DEFAULT_CONFIG)
-        self.assertEqual(args_from_config(cfg).clue_chain_share, 0)
+        self.assertFalse(hasattr(args_from_config(cfg), "clue_chain_share"))
         parsed = parser().parse_args([
             "generate-questions", "--config", str(DEFAULT_CONFIG),
-            "--target", "10", "--clue-chain-share", "100",
+            "--target", "10", "--macro-first-v2-share", "100",
             "--output-dir", "envir/data/clue-pilot-test",
         ])
-        self.assertEqual(parsed.clue_chain_share, 100)
+        self.assertEqual(parsed.macro_first_v2_share, 100)
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             args = args_from_config(cfg, output_dir=root / "constructed",
                                     target=10, no_progress=True)
             args.difficulty_mix = "0,100,0"
             args.clue_chain_share = 100
+            args.macro_first_v2_share = 0  # explicit archived pilot mode
             args.scenario_model = None
             args.scenario_api_base = None
             args.mmqa = root / "source-not-required-by-mock.jsonl"

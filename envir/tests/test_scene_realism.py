@@ -99,6 +99,40 @@ class SceneRealismTests(unittest.TestCase):
         self.assertIn("scene_source_title_not_schema_frozen",
                       spec_issues(tampered))
 
+    def test_overlong_motivation_is_repaired_and_rechecked(self):
+        spec = sample(2)
+        class OverlongAuthor(SchemaAuthor):
+            def complete_json(self, prompt, request):
+                proposal = super().complete_json(prompt, request)
+                proposal["scenario"]["motivation"] = (
+                    "Cross-check independent working materials for the "
+                    "specified result. " * 18
+                )
+                proposal["scenario"]["setting"] = (
+                    "A research review of available working materials"
+                )
+                return proposal
+        critic = GroundedCritic()
+        reviewed, decision = enrich_one(
+            spec, author=OverlongAuthor(), critic=critic,
+            max_revisions=0,
+        )
+        self.assertEqual(decision["status"], "accepted")
+        self.assertIn(spec["scenario"]["topic"],
+                      reviewed["scenario"]["setting"])
+        self.assertLessEqual(len(reviewed["scenario"]["motivation"]), 250)
+        all_repairs = [
+            action for attempt in decision["field_repair_history"]
+            for action in attempt["field_repairs"]
+        ]
+        self.assertIn("too_long", {x["reason"] for x in all_repairs})
+        self.assertIn("topic_prefix", {x["reason"] for x in all_repairs})
+        self.assertEqual(
+            {x["source_id"]: x["title"] for x in reviewed["sources"]},
+            expected_source_titles(spec),
+        )
+        self.assertEqual(spec_issues(reviewed), [])
+
     def test_explicit_second_answer_is_rejected(self):
         for i in range(15):
             spec = sample(i, topic="The Office", domain="film")
@@ -111,6 +145,27 @@ class SceneRealismTests(unittest.TestCase):
             self.assertIn("semantic_additional_output_requested",
                           guard_question(bad, spec))
             self.assertEqual(guard_question(q, spec), [])
+
+    def test_game_identity_and_match_result_cannot_both_be_requested(self):
+        for i in range(150):
+            spec = sample(i, topic="Premier League", domain="sports")
+            if spec["macro_plan"]["goal"]["answer_field"] != "match_result":
+                continue
+            bad = (
+                "In the Premier League evidence, which specific game "
+                "matches the records, and what is the confirmed "
+                "match result for that game?"
+            )
+            self.assertIn("semantic_additional_output_requested",
+                          guard_question(bad, spec))
+            good = reference_question(spec).replace(
+                "match result", "match outcome"
+            )
+            self.assertNotIn("macro_first_v2_goal_semantics_missing",
+                             guard_question(good, spec))
+            break
+        else:
+            self.fail("No match-result Goal among 150 seeded sports scenes")
 
     def test_triangle_and_triangular_are_equivalent(self):
         for i in range(450):

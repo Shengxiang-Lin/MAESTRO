@@ -30,14 +30,10 @@ def parser() -> argparse.ArgumentParser:
                           help="Override generation.output_dir from YAML")
     generate.add_argument("--target", type=int,
                           help="Override generation.target from YAML")
-    generate.add_argument("--clue-chain-share", type=int,
-                          help="Percent of medium scenes using visual clue -> keyed index -> keyed archive")
     generate.add_argument("--macro-first-v2-share", type=int,
                           help="Percent of medium/hard scenes using diverse goals and per-Macro evidence planning")
-    generate.add_argument("--macro-first-share", type=int,
-                          help="Percent of medium/hard scenes using Macro-first DAGs and local Gold Solvers")
-    generate.add_argument("--evidence-graph-share", type=int,
-                          help="Percent of medium/hard scenes using typed random evidence DAGs")
+    generate.add_argument("--max-candidate-multiplier", type=int,
+                          help="Cap attempts to target × multiplier (default: config)")
     generate.add_argument("--no-progress", action="store_true")
     generate.add_argument("--flush-every", type=int,
                           help="Commit a durable checkpoint every N LLM reports")
@@ -146,22 +142,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         if cli.flush_every is not None:
             options.flush_every = cli.flush_every
-        if cli.clue_chain_share is not None:
-            if not 0 <= cli.clue_chain_share <= 100:
-                p.error("--clue-chain-share must be 0..100")
-            options.clue_chain_share = cli.clue_chain_share
-        if cli.evidence_graph_share is not None:
-            if not 0 <= cli.evidence_graph_share <= 100:
-                p.error("--evidence-graph-share must be 0..100")
-            options.evidence_graph_share = cli.evidence_graph_share
-        if cli.macro_first_share is not None:
-            if not 0 <= cli.macro_first_share <= 100:
-                p.error("--macro-first-share must be 0..100")
-            options.macro_first_share = cli.macro_first_share
         if cli.macro_first_v2_share is not None:
             if not 0 <= cli.macro_first_v2_share <= 100:
                 p.error("--macro-first-v2-share must be 0..100")
             options.macro_first_v2_share = cli.macro_first_v2_share
+        if cli.max_candidate_multiplier is not None:
+            if not 1 <= cli.max_candidate_multiplier <= 10:
+                p.error("--max-candidate-multiplier must be 1..10")
+            options.max_candidate_multiplier = cli.max_candidate_multiplier
         result = generate_questions(options)
     else:
         config_args = args_from_config(config)

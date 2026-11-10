@@ -43,6 +43,7 @@ def _construction_identity(args) -> str:
                 "macro_first_world.py", "macro_first_v2.py",
                 "macro_first_v2_world.py", "information_necessity.py",
                 "source_title_contract.py", "difficulty_proxy.py",
+                "scenario_fields.py", "topic_quality.py",
                 "semantic_evidence.py",
                 "v2_prompts.py", "intent.py", "surface_quality.py",
                 "program_ir.py",
@@ -190,6 +191,12 @@ def construct_scenes(args) -> dict:
     for seed_record in order:
         if len(chosen) >= args.target:
             break
+        if getattr(args, "macro_first_v2_share", 0):
+            from .topic_quality import topic_seed_issues
+            problems = topic_seed_issues(seed_record)
+            if problems:
+                rejected.update(problems)
+                continue
         try:
             ordinal = len(chosen)
             spec = make_spec(

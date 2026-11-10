@@ -98,11 +98,15 @@ def _narrative_issues(spec: dict, proposal: dict) -> list[str]:
         errors.append("unexpected_narrative_fields")
     for key in keys:
         value = narrative.get(key)
-        if not isinstance(value, str) or not 3 <= len(value.strip()) <= 250:
-            errors.append("invalid_" + key)
+        if not isinstance(value, str):
+            errors.append(f"scenario_{key}_invalid_type")
+        elif len(value.strip()) < 3:
+            errors.append(f"scenario_{key}_too_short")
+        elif len(value.strip()) > 250:
+            errors.append(f"scenario_{key}_too_long")
         elif re.search(r"\b(TaskGraph|WorkProduct|synthetic_attribute|original media)\b",
                        value, re.I):
-            errors.append("implementation_or_original_media_claim")
+            errors.append(f"scenario_{key}_internal_jargon")
     topic = spec["scenario"]["topic"]
     if isinstance(narrative.get("setting"), str):
         if not topic_mentioned(narrative["setting"], topic):
@@ -208,6 +212,7 @@ def enrich_one(spec: dict, *, author, critic,
     if has_scene_realism(spec):
         frozen["domain_context"] = scenario_domain_context(spec)
     failures = []
+    repair_history = []
     for attempt in range(max_revisions + 1):
         try:
             from .v2_prompts import (
@@ -225,6 +230,12 @@ def enrich_one(spec: dict, *, author, critic,
             # In new V2 scenes, source titles are always regenerated from
             # the frozen modality/schema; LLM-authored titles are ignored.
             proposal = canonicalize_scenario_proposal(spec, proposal)
+            if has_scene_realism(spec):
+                from .scenario_fields import repair_scenario_fields
+                proposal, repairs = repair_scenario_fields(spec, proposal)
+                if repairs:
+                    repair_history.append({"attempt": attempt + 1,
+                                           "field_repairs": repairs})
             issues = _narrative_issues(spec, proposal)
             if issues:
                 failures.append({"stage": "schema_guard", "errors": issues})
@@ -255,6 +266,7 @@ def enrich_one(spec: dict, *, author, critic,
                 continue
             result["scenario_authoring"] = {
                 "status": "accepted", "attempts": attempt + 1,
+                "field_repair_history": repair_history,
                 "review": review, "formal_equivalence_proven": False,
             }
             return result, result["scenario_authoring"]
@@ -266,6 +278,7 @@ def enrich_one(spec: dict, *, author, critic,
     fallback = copy.deepcopy(spec)
     fallback["scenario_authoring"] = {
         "status": "fallback", "attempts": max_revisions + 1,
-        "failures": failures, "formal_equivalence_proven": False,
+        "failures": failures, "field_repair_history": repair_history,
+        "formal_equivalence_proven": False,
     }
     return fallback, fallback["scenario_authoring"]

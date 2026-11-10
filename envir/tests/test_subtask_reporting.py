@@ -325,8 +325,8 @@ class StageLocalScopeRegressions(unittest.TestCase):
 
 class VerifiedListCriticRegressions(unittest.TestCase):
     def test_second_critic_can_correct_oracle_membership_hallucination(self):
-        from envir.implement_subtask.reporting import (
-            _critic_oracle_membership_false_negative,
+        from envir.implement_subtask.oracle_review import (
+            critic_oracle_contradiction,
         )
         frozen = scene(25, "medium")
         realized = realize_scene(frozen)
@@ -372,21 +372,104 @@ class VerifiedListCriticRegressions(unittest.TestCase):
         self.assertEqual(result["status"], "accepted")
         self.assertEqual(len(critic.calls), 2)
         self.assertTrue(
-            result["critic_membership_false_negative_rechecked"]
+            result["critic_oracle_contradiction_rechecked"]
         )
         self.assertEqual(reviewed["answer"], final["answer"])
         self.assertEqual(reviewed["answer_with_provenance"],
                          final["answer_with_provenance"])
-        self.assertTrue(_critic_oracle_membership_false_negative(
+        self.assertIsNotNone(critic_oracle_contradiction(
             {"reason": "Entry-01 is absent from exact_oracle_answer"},
             "Entries: Entry-01, Entry-02.",
-            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}],
+            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}], {},
         ))
-        self.assertFalse(_critic_oracle_membership_false_negative(
+        self.assertIsNone(critic_oracle_contradiction(
             {"reason": "Entry-99 is absent from exact_oracle_answer"},
             "Entries: Entry-01, Entry-02.",
-            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}],
+            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}], {},
         ))
+
+
+class EntryEvidenceMappingRegressions(unittest.TestCase):
+    def test_wrong_fact_ref_is_not_accepted_as_an_entry_status(self):
+        from envir.implement_subtask.oracle_review import (
+            critic_oracle_contradiction, mismatched_entry_refs,
+        )
+        facts = {
+            "register:F005": {"entry_label": "Entry-06", "active": False},
+            "register:F007": {"entry_label": "Entry-01", "active": True},
+        }
+        error = critic_oracle_contradiction(
+            {"verdict": "fail",
+             "reason": "Entry-01 (register:F005) has active=false according to the evidence"},
+            "Entries: Entry-01, Entry-02.",
+            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}],
+            facts,
+        )
+        self.assertEqual(error["type"], "critic_entry_fact_ref_mismatch")
+        self.assertEqual(error["mismatches"][0]["actual_entry"], "Entry-06")
+        self.assertTrue(mismatched_entry_refs(
+            "Entry-01 (register:F005)", facts
+        ))
+        self.assertFalse(mismatched_entry_refs(
+            "Entry-01 (register:F007)", facts
+        ))
+
+    def test_wrong_author_entry_fact_ref_is_rejected_by_guard(self):
+        from envir.implement_subtask.reporting import (
+            _guard, _teacher_contract,
+        )
+        from envir.implement_subtask.oracle_review import (
+            positive_entry_provenance,
+        )
+        frozen = scene(25, "medium")
+        realized = realize_scene(frozen)
+        teacher = next(
+            r for r in realized["macro_tasks"]
+            if r["macro_task_id"] == realized["terminal_macro_task_id"]
+        )
+        positive = positive_entry_provenance(teacher)
+        if not positive:
+            self.skipTest("no register provenance in sampled teacher")
+        label, refs = next((k, v) for k, v in positive.items() if v)
+        wrong = "register:F999"
+        text = (
+            "Checked the register entries and validated the output "
+            f"with the incorrectly attributed {label} ({wrong})."
+        )
+        from envir.implement_subtask.reporting import _normalize_author_result
+        rows = teacher["answer"]
+        contract = _teacher_contract(teacher, question=frozen["question"],
+                                     is_terminal=True)
+        contract["all_evidence_refs"] = {
+            wrong, *(
+                ref for step in teacher["trace_summary"]["steps"]
+                for ref in step["supporting_fact_refs"]
+            ),
+        }
+        candidate = {
+            "status": "done", "result": rows, "summary": text,
+        }
+        self.assertIn(
+            "summary_entry_fact_ref_mismatch",
+            _guard(candidate, contract),
+        )
+
+    def test_real_oracle_facts_map_to_correct_entries(self):
+        from envir.implement_subtask.oracle_review import entry_fact_index
+        frozen = scene(25, "medium")
+        realized = realize_scene(frozen)
+        teacher = next(
+            record for record in realized["macro_tasks"]
+            if record["macro_task_id"] == realized["terminal_macro_task_id"]
+        )
+        fact_index = entry_fact_index(teacher)
+        for row in teacher["answer_with_provenance"]:
+            label = row["values"].get("entry_label")
+            if label:
+                self.assertTrue(any(
+                    fact_index.get(ref, {}).get("entry_label") == label
+                    for ref in row["source_fact_refs"]
+                ))
 
 
 class ActiveStatusPrecisionRegressions(unittest.TestCase):
