@@ -112,3 +112,35 @@ media perception. Do not publish PRIVATE World, Program or Gold material.
 
 No premature cost optimization or source-trust adversarial state is modeled
 during question generation.
+
+
+## Executable clue acquisition (opt-in)
+
+The new clue_chain / accession_year semantic family intentionally has
+a different goal than the old approval, time-window, status disagreement
+and threshold templates. One illustrated exhibit must be identified
+by TWO observed motif features; its marker opens an index record, and
+the resulting accession identifier opens exactly one archive record.
+The desired answer is an accession year, not a qualifying entry list.
+
+The Program IR now includes lookup_by_key:
+- one typed upstream relation input with a key field and provenance
+- one explicitly authorized keyed store with an exact key-field match
+- output containing ONLY matching source records and merged fact refs
+- no unrestricted scan or read_source fallback for keyed stores
+
+The two lookups are separate Macro tasks so Main-Agent can see and
+dispatch the acquisition dependencies. No private World or Gold values
+are exposed in the initial public Question view.
+
+The frozen Spec declares investigation.visual_features and an ordered
+acquisition_chain, independent of the LLM's prose. Question Author
+can make a natural clue-led request, but is not permitted to invent a
+different marker, feature, source path or final output. Strict replay
+checks both source access modes, missing-source sensitivity, misleading
+single-source shortcuts, visual decoys, and changing the pictured
+marker to redirect the archive answer.
+
+The Stage-1 CLI accepts --clue-chain-share 0..100 for MEDIUM difficulty.
+This is an isolated clean pilot with simulated image annotations, not
+yet open-web source discovery, video decoding or adversarial feedback.
