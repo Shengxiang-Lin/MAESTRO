@@ -88,6 +88,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     graph_counterfactual_pass = 0
     graph_parallel_widths = []
     keyed_lookup_total = 0
+    v2_keyed_lookup_total = 0
+    v2_keyed_lookup_scenes = 0
     acquisition_depths = []
     clue_counterfactual_pass = 0
     full_read_bypass_count = 0
@@ -155,6 +157,12 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                         if necessity:
                             macro_v2_information_audits.append(necessity)
                     macro_v2_modes[plan["pattern"]] += 1
+                    n_lookups = sum(
+                        node["op"] == "lookup_by_key"
+                        for node in scene["gold_program"]["nodes"]
+                    )
+                    v2_keyed_lookup_total += n_lookups
+                    v2_keyed_lookup_scenes += int(n_lookups > 0)
                     macro_v2_goals[plan["goal"]["answer_field"]] += 1
                     for macro in plan["macro_tasks"]:
                         macro_v2_local_source_counts.append(len(macro["source_scope"]))
@@ -417,6 +425,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             ],
             "versioned_output_contract_scenes": macro_v2_output_contracts,
             "schema_locked_scene_count": macro_v2_realism_scenes,
+            "keyed_lookup_count": v2_keyed_lookup_total,
+            "scenes_with_keyed_lookup": v2_keyed_lookup_scenes,
             "structural_difficulty_by_target": {
                 label: {
                     "scenes": len(items),
@@ -499,7 +509,13 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
         },
         "evidence_acquisition": {
             "scenes_with_keyed_clue_chain": acquisition_scenes,
-            "keyed_lookup_count": keyed_lookup_total,
+            "scenes_with_keyed_acquisition": (
+                acquisition_scenes + v2_keyed_lookup_scenes
+            ),
+            "keyed_lookup_count": keyed_lookup_total + v2_keyed_lookup_total,
+            "clue_chain_keyed_lookup_count": keyed_lookup_total,
+            "v2_keyed_lookup_count": v2_keyed_lookup_total,
+            "v2_scenes_with_keyed_lookup": v2_keyed_lookup_scenes,
             "mean_evidence_acquisition_depth": (
                 round(sum(acquisition_depths) / len(acquisition_depths), 3)
                 if acquisition_depths else None
