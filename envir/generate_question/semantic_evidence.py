@@ -151,6 +151,31 @@ def compile_semantic_contract(spec: dict, *, program: dict | None = None) -> dic
         and row["operator"] == "lte" for row in predicates
     )
     # A field existing in a source is not evidence that the Solver checks it.
+    clue_labels = {
+        "emblem_color": "visual_emblem_color",
+        "emblem_shape": "visual_emblem_shape",
+        "scene_action": "video_action",
+        "spoken_cue": "audio_spoken_cue",
+        "caption_motif": "written_caption_motif",
+        "case_tag": "event_log_tag",
+    }
+    necessary_clues = {
+        clue_labels[predicate["field"]]: predicate["value"]
+        for predicate in predicates
+        if predicate.get("operator") == "eq"
+        and predicate.get("field") in clue_labels
+    }
+    if time_thresholds:
+        necessary_clues["video_minimum_seconds_inclusive"] = time_thresholds[0]
+    if temporal_ordering:
+        necessary_clues["video_event_not_after_audio_commentary"] = True
+    if any(
+        p.get("left_field") == "reported_year_a"
+        and p.get("right_field") == "reported_year_b"
+        and p.get("operator") == "ne"
+        for p in predicates
+    ):
+        necessary_clues["independent_report_year_disagreement"] = True
     return {
         "version": CONTRACT_VERSION,
         "goal": dict(spec["macro_plan"]["goal"]),
@@ -160,6 +185,7 @@ def compile_semantic_contract(spec: dict, *, program: dict | None = None) -> dic
         }),
         "applied_predicates": predicates,
         "applied_filter_fields": sorted(applied),
+        "necessary_question_clues": necessary_clues,
         "temporal_semantics": {
             "frame_minimum_seconds_inclusive": time_thresholds,
             "footage_not_after_commentary": temporal_ordering,
