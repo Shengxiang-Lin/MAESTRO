@@ -265,21 +265,21 @@ _COORDINATED_OUTPUT = (
     # A first identity requested by 'which case/record/episode' and a
     # second explicitly queried fact are two output slots, even though
     # the identity can also be a legitimate intermediate matching key.
-    r"\\bwhich\\s+(?:(?:specific|matching|identified)\\s+)?"
+    r"\bwhich\s+(?:(?:specific|matching|identified)\s+)?"
     r"(?:case|record|entry|event|episode|song|match|item|artifact|"
-    r"report|person|team|exhibit|venue)\\b[^?!.]{0,220}"
-    r"\\b(?:and|plus|as well as)\\s+(?:what|which|where|who)\\b"
+    r"report|person|team|exhibit|venue)\b[^?!.]{0,220}"
+    r"\b(?:and|plus|as well as)\s+(?:what|which|where|who)\b"
 )
 _REVERSE_COORDINATED_OUTPUT = (
-    r"\\b(?:what|which|where|who)\\b[^?!.]{0,180}"
-    r"\\b(?:and|plus|as well as)\\s+which\\s+(?:case|record|"
-    r"entry|event|episode|song|match|item|artifact|report|exhibit)\\b"
+    r"\b(?:what|which|where|who)\b[^?!.]{0,180}"
+    r"\b(?:and|plus|as well as)\s+which\s+(?:case|record|"
+    r"entry|event|episode|song|match|item|artifact|report|exhibit)\b"
 )
 _IMPERATIVE_COORDINATED_OUTPUT = (
-    r"\\b(?:identify|name|list|give|report|provide)\\s+(?:the\\s+)?"
-    r"(?:case|record|entry|event|episode|song|match|item|exhibit)\\b"
-    r"[^?!.]{0,180}\\band\\s+"
-    r"(?:give|report|provide|return|identify|name|state)\\b"
+    r"\b(?:identify|name|list|give|report|provide)\s+(?:the\s+)?"
+    r"(?:case|record|entry|event|episode|song|match|item|exhibit)\b"
+    r"[^?!.]{0,180}\band\s+"
+    r"(?:give|report|provide|return|identify|name|state)\b"
 )
 
 
