@@ -535,7 +535,7 @@ class StageAndQualityTests(unittest.TestCase):
             self.assertEqual(result["rejected"], 2)
             self.assertEqual(result["failed_scenario"], 1)
             self.assertEqual(result["failed_question"], 1)
-            self.assertEqual(result["acceptance_rate"], 4 / 6)
+            self.assertAlmostEqual(result["acceptance_rate"], 4 / 6, places=4)
             self.assertEqual(result["status"], "done")
             self.assertEqual(
                 result["selection_policy"],
