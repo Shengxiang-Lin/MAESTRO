@@ -204,3 +204,11 @@ STRICT QUESTION PREDICATE FIDELITY (new V2):
 - Never change a source observation into a duration, first occurrence,
   date, real media action, or an unverified additional filter.
 """
+
+QUESTION_AUTHOR_SINGLE_SLOT += """
+CORROBORATED DISPUTES: If the Macro pattern is corroborated_dispute,
+preserve BOTH executed conditions: (1) the two report years differ and
+(2) the independent event log matches the exact case tag. Do not
+describe a single-source report scan as if the year disagreement had
+already been verified. Only the final Goal field is requested.
+"""
