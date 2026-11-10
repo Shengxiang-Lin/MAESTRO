@@ -18,25 +18,46 @@ The reference platform is Linux x86_64, with PyTorch's CUDA 13.0 build (`2.13.0+
 
 ## MAESTRO dataset workflows
 
-Three trusted dataset workflows share the frozen Scene and evidence contracts.
+Three trusted workflows and an independent round-local untrusted orchestration workflow share frozen Scene and evidence contracts.
 All paths, model endpoints, worker counts and output directories live in
-[envir/configs](envir/configs/README.md).
+[environment/configs](environment/configs/README.md).
 
 ```bash
-python -m envir generate-questions --config envir/configs/questions.yaml
-python -m envir naturalize-subtasks --config envir/configs/subagent_reports.yaml
-python -m envir generate-main-turns --config envir/configs/base_orchestration.yaml
+python -m environment generate-questions --config environment/configs/questions.yaml
+python -m environment naturalize-subtasks --config environment/configs/subagent_reports.yaml
+python -m environment generate-main-turns --config environment/configs/base_orchestration.yaml
+python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml
 ```
 
 The first workflow constructs validated Questions and Macro DAGs from a fixed
 candidate pool; the second materializes exact evidence traces and reviewed
 Sub-Agent responses; the third generates trusted, cumulative-history
-Main-Agent decision trajectories. Rejected cases are not silently accepted
-or replaced to hit a quota. A future independent
-`envir/untrusted_orchestration` workflow will produce adversarial scenarios
-without changing the semantics of trusted data generation.
+Main-Agent decision trajectories. The fourth workflow branches from an accepted
+Main decision round, injects a last-batch primitive evidence fault, and
+executes dynamic recovery and no-repair counterfactuals. Rejected cases are
+not silently accepted or replaced to hit a quota.
 
-Implementation details: [envir/README.md](envir/README.md).
+Implementation details: [environment/README.md](environment/README.md).
+
+## Migrating existing generated data
+
+Previously generated `envir/data/` outputs are ignored by Git and are **not**
+moved automatically by `git pull`. To reuse your accepted Scene/report/Base
+Episode files with the new default configurations, from the repository root
+run:
+
+```bash
+mkdir -p environment/data
+cp -a envir/data/. environment/data/
+```
+
+Then run the fourth workflow using
+`python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml`.
+The old *tracked* `environment/` implementation is deleted by the rename;
+local ignored/untracked files should be backed up separately. Do not resume
+old `envir` checkpoints after code-path/signature changes.
+
+
 
 ## Repository layout
 

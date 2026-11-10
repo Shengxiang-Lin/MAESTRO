@@ -1,234 +1,124 @@
-"""YAML configuration and per-role model resolution for environment CLIs.
-
-Both remote APIs and already-running local vLLM servers use the same
-OpenAI-compatible chat-completions client. No API tokens are stored in YAML.
-"""
+"""YAML settings for question generation and deterministic Replay."""
 from __future__ import annotations
 
 import argparse
-import os
-import sys
 from pathlib import Path
-from typing import Any, Mapping
 
 import yaml
 
-ENV_DIR = Path(__file__).resolve().parent
-REPO_DIR = ENV_DIR.parent
-DEFAULT_CONFIG = ENV_DIR / "config.yaml"
-ROLE_SELECTORS = {
-    "question_author": ("question_generation", "author_profile"),
-    "question_critic": ("question_generation", "critic_profile"),
-    "trajectory_planner": ("trajectory_simulation", "planner_profile"),
-    "trajectory_executor": ("trajectory_simulation", "executor_profile"),
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG = Path(__file__).with_name("configs") / "questions.yaml"
+
+SECTIONS = {
+    "input": {"mmqa", "max_records"},
+    "generation": {"output_dir", "target", "seed", "difficulty_mix",
+                   "overwrite", "no_progress", "flush_every",
+                   "macro_planning_share", "macro_first_v2_share"},
+    "scenario": {"api_base", "model", "critic_api_base", "critic_model",
+                 "api_key_env", "critic_api_key_env", "workers",
+                 "max_revisions", "timeout"},
+    "question": {"api_base", "model", "critic_api_base", "critic_model",
+                 "api_key_env", "workers", "max_revisions", "timeout"},
 }
-PATH_ARGUMENTS = {
-    "manifest", "authoring_inputs", "worlds", "capabilities",
-    "output_dir", "output", "bank", "realized", "rejected_output",
-    "kqa_train", "kqa_val", "yago_facts", "yago_schema",
-    "yago_taxonomy", "mmqa_train", "mmqa_dev",
-}
 
 
-class EnvironmentConfigError(ValueError):
-    """Raised when the YAML has an invalid setting or model profile."""
-
-
-def load_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
-    config_path = Path(path).expanduser().resolve()
-    if not config_path.is_file():
-        raise EnvironmentConfigError(f"environment config not found: {config_path}")
+def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
+    location = Path(path).expanduser().resolve()
+    if not location.is_file():
+        raise FileNotFoundError(f"Generator config not found: {location}")
     try:
-        payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        payload = yaml.safe_load(location.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
-        raise EnvironmentConfigError(f"invalid YAML in {config_path}: {exc}") from exc
-    if not isinstance(payload, Mapping):
-        raise EnvironmentConfigError("environment/config.yaml must contain a YAML mapping")
-    if payload.get("version") != 1:
-        raise EnvironmentConfigError("environment/config.yaml must declare version: 1")
-    models = payload.get("models", {})
-    if not isinstance(models, Mapping):
-        raise EnvironmentConfigError("models must be a mapping of named profiles")
-    return dict(payload)
+        raise ValueError(f"Invalid YAML in {location}: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise ValueError("Configuration must be a mapping with version: 1")
+    if set(payload) != {"version", *SECTIONS}:
+        raise ValueError("Configuration must contain exactly: version, input, "
+                         "generation, scenario, question")
+    for section, allowed in SECTIONS.items():
+        values = payload[section]
+        if not isinstance(values, dict):
+            raise ValueError(f"config.{section} must be a mapping")
+        unknown = set(values) - allowed
+        if unknown:
+            raise ValueError(f"Unknown config.{section} key(s): {sorted(unknown)}")
+    return payload
 
 
-def _extract_config_arg(argv: list[str]) -> tuple[str, list[str]]:
-    """Allow --config before or after an argparse subcommand."""
-    config_path = str(DEFAULT_CONFIG)
-    cleaned: list[str] = []
-    index = 0
-    while index < len(argv):
-        part = argv[index]
-        if part == "--config":
-            if index + 1 == len(argv):
-                raise EnvironmentConfigError("--config requires a YAML file path")
-            config_path = argv[index + 1]
-            index += 2
-            continue
-        if part.startswith("--config="):
-            config_path = part.partition("=")[2]
-            index += 1
-            continue
-        cleaned.append(part)
-        index += 1
-    return config_path, cleaned
+def _path(value: str | Path) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else ROOT / path
 
 
-def _walk_parsers(parser: argparse.ArgumentParser):
-    yield parser
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            for child in action.choices.values():
-                yield from _walk_parsers(child)
-
-
-def _configured_value(name: str, value: Any, pool_size: int) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        value = value.replace("{pool_size}", str(pool_size))
-        if name in PATH_ARGUMENTS:
-            path = Path(value).expanduser()
-            return str((REPO_DIR / path).resolve()) if not path.is_absolute() else str(path)
-    return value
-
-
-def parse_with_config(
-    parser: argparse.ArgumentParser,
-    section: str,
-    argv: list[str] | None = None,
-) -> argparse.Namespace:
-    """Load defaults from YAML, then let explicit CLI flags take precedence."""
-    raw = list(sys.argv[1:] if argv is None else argv)
-    config_path, cleaned = _extract_config_arg(raw)
-    config = load_config(config_path)
-    values = config.get(section, {})
-    if not isinstance(values, Mapping):
-        raise EnvironmentConfigError(f"{section} must be a YAML mapping")
-    construction = config.get("task_construction", {})
-    values = dict(values)
-    if section in {"question_generation", "trajectory_simulation"} and "seed" not in values and any(action.dest=="seed" for current in _walk_parsers(parser) for action in current._actions):
-        values["seed"] = construction.get("seed", 17)
-    # The filename suffix identifies the fixed candidate pool, while the
-    # manifest's frozen_count reports how many worlds actually passed.
-    pool_size = int(construction.get("candidate_pool_size", 2000))
-    if pool_size < 1:
-        raise EnvironmentConfigError(
-            "task_construction.candidate_pool_size must be positive"
-        )
-    recognized: set[str] = set()
-    for current in _walk_parsers(parser):
-        names = {action.dest for action in current._actions}
-        recognized.update(names)
-        defaults = {
-            key: _configured_value(key, value, pool_size)
-            for key, value in values.items()
-            if key in names and key not in {"help", "config", "command"}
-        }
-        if defaults:
-            current.set_defaults(**defaults)
-            # YAML-supplied inputs remove the need to repeat required path flags.
-            for action in current._actions:
-                if action.dest in defaults and defaults[action.dest] is not None:
-                    action.required = False
-    extras = {"author_profile", "critic_profile", "planner_profile", "executor_profile"}
-    unknown = set(values).difference(recognized | extras)
-    if unknown:
-        raise EnvironmentConfigError(
-            f"unknown {section} configuration key(s): {', '.join(sorted(unknown))}"
-        )
-    if not any(action.dest == "config" for action in parser._actions):
-        parser.add_argument(
-            "--config", default=str(DEFAULT_CONFIG),
-            help="environment YAML (default: environment/config.yaml)",
-        )
-    args = parser.parse_args(cleaned)
-    args.config = str(Path(config_path).expanduser().resolve())
-    args._environment_config = config
-    args._explicit_options = {
-        item.split("=", 1)[0] for item in cleaned if item.startswith("--")
-    }
-    return args
-
-
-def resolve_model(args: argparse.Namespace, role: str) -> dict[str, Any]:
-    """Resolve the model used by an Author, Critic or trajectory teacher role.
-
-    A profile with backend=api or backend=vllm is accessed via an
-    OpenAI-compatible HTTP endpoint. backend=passthrough needs no network.
-    Explicit legacy CLI options override profile values.
-    """
-    if role not in ROLE_SELECTORS:
-        raise EnvironmentConfigError(f"unknown environment model role: {role}")
-    section, selector = ROLE_SELECTORS[role]
-    config = getattr(args, "_environment_config", {}) or {}
-    section_cfg = config.get(section, {}) or {}
-    profile_name = section_cfg.get(selector)
-    if profile_name:
-        models = config.get("models", {})
-        if profile_name not in models:
-            raise EnvironmentConfigError(
-                f"{section}.{selector} refers to missing model profile: {profile_name}"
-            )
-        profile = models[profile_name]
-        if not isinstance(profile, Mapping):
-            raise EnvironmentConfigError(f"model profile {profile_name} must be a mapping")
-        profile = dict(profile)
-    else:
-        profile = {
-            "backend": "passthrough" if getattr(args, "provider", "passthrough") == "passthrough" else "api",
-            "model": getattr(args, "model", None),
-            "base_url": getattr(args, "base_url", None),
-            "api_key_env": getattr(args, "api_key_env", None),
-            "json_mode": True,
-        }
-    explicit = getattr(args, "_explicit_options", set())
-    if "--provider" in explicit and args.provider == "passthrough":
-        profile["backend"] = "passthrough"
-    if role == "question_critic" and "--critic-model" in explicit:
-        profile["model"] = args.critic_model
-    elif role == "trajectory_planner" and "--planner-model" in explicit:
-        profile["model"] = args.planner_model
-    elif role == "trajectory_executor" and "--executor-model" in explicit:
-        profile["model"] = args.executor_model
-    elif "--model" in explicit:
-        profile["model"] = args.model
-    if "--base-url" in explicit:
-        profile["base_url"] = args.base_url
-    if "--api-key-env" in explicit:
-        profile["api_key_env"] = args.api_key_env
-    if "--no-json-mode" in explicit and args.no_json_mode:
-        profile["json_mode"] = False
-
-    backend = str(profile.get("backend", "")).lower()
-    if backend == "passthrough":
-        return {"backend": "passthrough", "provider": "passthrough",
-                "model": None, "base_url": None, "api_key": None, "json_mode": False}
-    if backend not in {"api", "vllm"}:
-        raise EnvironmentConfigError(
-            f"profile {profile_name or '(CLI)'}: backend must be api, vllm or passthrough"
-        )
-    model = profile.get("model")
-    base_url = profile.get("base_url")
-    if not model or not base_url:
-        raise EnvironmentConfigError(
-            f"profile {profile_name or '(CLI)'} requires model and base_url"
-        )
-    env_name = profile.get("api_key_env")
-    api_key = os.environ.get(str(env_name)) if env_name else None
-    if backend == "api" and env_name and not api_key:
-        raise EnvironmentConfigError(
-            f"set {env_name} before calling API model profile {profile_name}"
-        )
-    enable_thinking = profile.get("enable_thinking")
-    if enable_thinking is not None and type(enable_thinking) is not bool:
-        raise EnvironmentConfigError("model enable_thinking must be a boolean")
-    return {
-        "backend": backend,
-        "provider": "openai-compatible",
-        "model": str(model),
-        "base_url": str(base_url),
-        "api_key": api_key,
-        "json_mode": bool(profile.get("json_mode", True)),
-        "enable_thinking": enable_thinking,
-    }
+def args_from_config(config: dict, *, output_dir=None, target=None,
+                     no_progress=False) -> argparse.Namespace:
+    data = config["input"]
+    generation = config["generation"]
+    scenario = config["scenario"]
+    question = config["question"]
+    if not data.get("mmqa"):
+        raise ValueError("input.mmqa is required")
+    for section, value in (("scenario", scenario), ("question", question)):
+        if not value.get("api_base") or not value.get("model"):
+            raise ValueError(f"{section}.api_base and {section}.model are required")
+        for field in ("workers", "timeout"):
+            if not isinstance(value.get(field), int) or value[field] < 1:
+                raise ValueError(f"{section}.{field} must be a positive integer")
+        revisions = value.get("max_revisions")
+        if not isinstance(revisions, int) or not 0 <= revisions <= 8:
+            raise ValueError(f"{section}.max_revisions must be between 0 and 8")
+    mix = generation.get("difficulty_mix")
+    if (not isinstance(mix, list) or len(mix) != 3
+            or any(type(n) is not int or n < 0 for n in mix)
+            or sum(mix) != 100):
+        raise ValueError("generation.difficulty_mix must be three integer "
+                         "percentages summing to 100")
+    chosen_target = target if target is not None else generation.get("target")
+    max_records = data.get("max_records")
+    if (type(chosen_target) is not int or chosen_target < 1
+            or type(max_records) is not int or max_records < chosen_target):
+        raise ValueError("generation.target must be positive and <= input.max_records")
+    seed = generation.get("seed")
+    if type(seed) is not int:
+        raise ValueError("generation.seed must be an integer")
+    flush_every = generation.get("flush_every", 1)
+    if type(flush_every) is not int or flush_every < 1:
+        raise ValueError("generation.flush_every must be a positive integer")
+    if "macro_planning_share" in generation and "macro_first_v2_share" in generation:
+        raise ValueError("Specify only one of macro_planning_share or legacy macro_first_v2_share")
+    macro_first_v2_share = generation.get(
+        "macro_planning_share", generation.get("macro_first_v2_share", 0)
+    )
+    if type(macro_first_v2_share) is not int or not 0 <= macro_first_v2_share <= 100:
+        raise ValueError("generation.macro_first_v2_share must be 0..100")
+    directory = output_dir or generation.get("output_dir")
+    if not directory:
+        raise ValueError("generation.output_dir is required")
+    return argparse.Namespace(
+        mmqa=_path(data["mmqa"]), scenes=None,
+        output_dir=_path(directory), target=chosen_target,
+        max_records=max_records, seed=seed,
+        difficulty_mix=",".join(map(str, mix)),
+        overwrite=bool(generation.get("overwrite", False)),
+        flush_every=flush_every,
+        # Legacy share flags intentionally omitted from public args.
+        macro_first_v2_share=macro_first_v2_share,
+        no_progress=no_progress or bool(generation.get("no_progress", False)),
+        scenario_api_base=scenario["api_base"],
+        scenario_model=scenario["model"],
+        scenario_critic_api_base=scenario.get("critic_api_base"),
+        scenario_critic_model=scenario.get("critic_model"),
+        scenario_api_key_env=scenario.get("api_key_env"),
+        scenario_critic_api_key_env=scenario.get("critic_api_key_env"),
+        scenario_workers=scenario["workers"],
+        scenario_max_revisions=scenario["max_revisions"],
+        scenario_timeout=scenario["timeout"],
+        question_api_base=question["api_base"],
+        question_model=question["model"],
+        question_critic_api_base=question.get("critic_api_base"),
+        question_critic_model=question.get("critic_model"),
+        question_api_key_env=question.get("api_key_env"),
+        question_workers=question["workers"],
+        max_revisions=question["max_revisions"],
+        question_timeout=question["timeout"],
+    )

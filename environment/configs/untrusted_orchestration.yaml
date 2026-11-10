@@ -1,0 +1,38 @@
+# Round-local untrusted Sub-Agent feedback -> dynamic Main decisions.
+# Requires frozen Questions, reviewed Sub-Agent reports, and accepted Base Episodes.
+version: 1
+
+input:
+  scenes: environment/data/maestro_current_100/questions/scenes.jsonl
+  reports: environment/data/maestro_subagent_reports_100/subtasks.jsonl
+  base_episodes: environment/data/maestro_base_orchestration_100/episodes.jsonl
+
+generation:
+  output_dir: environment/data/maestro_untrusted_orchestration_100
+  max_scenes: 30
+  branches_per_scene: 2
+  seed: 17
+  fault_modes: [missing, partial, wrong]
+  persistence: once           # once | same_path (persist on same-task retry)
+  multi_target_probability: 0.0
+  max_rounds: 16
+  max_cost: 80
+  max_retries: 1
+  max_parallel_tasks: 4
+  workers: 4
+  mode: template              # template for deterministic pilot; llm for naturalization
+  max_revisions: 2
+  sub_model: qwen3-8b
+  model_alias: model_1
+  overwrite: false
+  no_progress: false
+
+model:
+  author_api_base: http://127.0.0.1:8807/v1
+  author_model: local-qwen3.5-9b
+  critic_api_base: null
+  critic_model: null
+  temperature: 0.3
+  author_max_tokens: 2800
+  critic_max_tokens: 1200
+  api_key_env: OPENAI_API_KEY
