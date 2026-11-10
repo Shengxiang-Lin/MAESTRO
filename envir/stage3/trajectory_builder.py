@@ -19,7 +19,7 @@ from typing import Any
 from envir.generate_question.quality import validate_replay
 from envir.implement_subtask.realize import realize_scene
 
-from .o1_compat import o1_prompt, o1_history, source_catalog
+from .o1_compat import o1_prompt, o1_history, o1_prompt_from_turn, source_catalog
 from .action_author import _assignment, action_issues, author_delegate_action
 
 
@@ -267,7 +267,12 @@ def build_episode(
             prior_audit = saved.get("private_audit", {})
             if (not isinstance(prior_turn, dict)
                     or not isinstance(prior_audit, dict)
-                    or prior_turn.get("input", {}).get("prompt") != main_prompt):
+                    or prior_turn.get("input") != {"subtask_history": history}
+                    or prior_audit.get("prompt_sha256") != _hash(main_prompt)
+                    or o1_prompt_from_turn(
+                        scene, prior_turn, max_attempts=max_attempts,
+                        sub_model=sub_model, model_alias=model_alias,
+                    ) != main_prompt):
                 raise RuntimeError("stage3_checkpoint_prompt_mismatch")
             action = deepcopy(prior_turn.get("output"))
             expected_mode = "llm_reviewed" if author is not None else "template"
@@ -312,7 +317,7 @@ def build_episode(
         example = {
             "sample_id": scene["task_id"] + f"-round-{wave_number:02d}",
             "task_id": scene["task_id"], "round": wave_number,
-            "input": {"prompt": main_prompt},
+            "input": {"subtask_history": history},
             "output": action,
             "output_json": json.dumps(action, ensure_ascii=False),
             "generation_mode": status["mode"],
@@ -378,7 +383,7 @@ def build_episode(
     final_example = {
         "sample_id": scene["task_id"] + f"-round-{completion_round:02d}",
         "task_id": scene["task_id"], "round": completion_round,
-        "input": {"prompt": completion_prompt},
+        "input": {"subtask_history": o1_history(task_entries)},
         "output": final_action,
         "output_json": json.dumps(final_action, ensure_ascii=False),
         "generation_mode": "teacher_verified_completion",
@@ -419,7 +424,7 @@ def build_episode(
     return {
         "task_id": scene["task_id"],
         "question": scene["question"],
-        "format": "orchestra_o1_main_trajectory.v1",
+        "format": "orchestra_o1_main_trajectory.v2",
         "trajectory": trajectory,
         "main_decision_rounds": len(trajectory),
         "trusted_subagent_feedback": True,
