@@ -186,6 +186,35 @@ def _critic_oracle_membership_false_negative(
     return bool(mentioned) and mentioned.issubset(correct)
 
 
+
+def _fact_entry_mapping(steps: list[dict]) -> dict[str, str]:
+    """Use observed source facts, never sorted Entry row alignment."""
+    mapping = {}
+    for step in steps:
+        for atom in step.get("evidence_atoms", []):
+            ref = atom.get("fact_ref")
+            values = atom.get("values", {})
+            label = values.get("entry_label") if isinstance(values, dict) else None
+            if isinstance(ref, str) and isinstance(label, str):
+                mapping[ref] = label
+    return mapping
+
+
+def _critic_misattributes_fact(
+    decision: dict, result: str, rows: list[dict], mapping: dict[str, str],
+) -> bool:
+    if not _verified_enumerated_entries(result, rows):
+        return False
+    pairs = re.findall(
+        r"(Entry-\d+)[^.!?]{0,55}\b([A-Za-z][A-Za-z0-9_-]*:F[0-9A-Za-z_-]+)\b",
+        str(decision.get("reason", "")), flags=re.I,
+    )
+    return any(
+        fact in mapping and mapping[fact].casefold() != entry.casefold()
+        for entry, fact in pairs
+    )
+
+
 def _canonical(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"))
@@ -212,6 +241,7 @@ def _teacher_contract(record: dict, *, question: str | None,
         if any(atom["fact_ref"] not in step["supporting_fact_refs"]
                for atom in step["evidence_atoms"]):
             raise ValueError("oracle_atom_reference_inconsistent")
+    source_fact_entry_index = _fact_entry_mapping(steps)
     return {
         "overall_question_for_context_only": question,
         "macro_task_id": record["macro_task_id"],
@@ -221,6 +251,7 @@ def _teacher_contract(record: dict, *, question: str | None,
         "available_provenance_sources": sorted(allowed),
         "terminal_output_schema_of_this_macro": record["output_schema"],
         "exact_oracle_answer": rows,
+        "verified_fact_entry_index": source_fact_entry_index,
         "executed_operations_in_this_macro": [
             step["operation"] for step in steps
         ],
@@ -663,8 +694,16 @@ def author_critic_report(
             )
             corrected_false_negative = False
             if (decision.get("verdict") != "pass"
-                    and _critic_oracle_membership_false_negative(
-                        decision, normalized_result, contract["exact_oracle_answer"]
+                    and (
+                        _critic_oracle_membership_false_negative(
+                            decision, normalized_result,
+                            contract["exact_oracle_answer"],
+                        )
+                        or _critic_misattributes_fact(
+                            decision, normalized_result,
+                            contract["exact_oracle_answer"],
+                            contract["verified_fact_entry_index"],
+                        )
                     )):
                 # Keep the first review in the private audit trail. A second
                 # independent judgment is required; no automatic pass.
@@ -676,6 +715,9 @@ def author_critic_report(
                         "verified_full_result": normalized_result,
                         "candidate_summary_for_review": candidate["summary"],
                         "previous_critic_error": initial_decision.get("reason"),
+                        "verified_fact_entry_index": contract[
+                            "verified_fact_entry_index"
+                        ],
                     }, ensure_ascii=False)
                 )
                 corrected_false_negative = (
