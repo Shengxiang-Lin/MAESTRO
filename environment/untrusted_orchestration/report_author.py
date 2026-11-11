@@ -144,7 +144,13 @@ def _observed_contract(task: dict, attempt: Attempt, instruction: str) -> dict:
         "available_fields": list(attempt.available_fields),
         "unresolved_fields": list(attempt.runtime.get("missing_fields", [])),
         "rows_complete": attempt.runtime.get("rows_complete", True),
-        "delivery_fault_kind": attempt.runtime.get("delivery_fault_kind"),
+        "delivery_issue": (
+            "partial_field_delivery"
+            if attempt.runtime.get("delivery_fault_kind") == "field_not_delivered"
+            else "incomplete_delivered_record_set"
+            if attempt.runtime.get("delivery_fault_kind") == "row_set_truncated"
+            else None
+        ),
         "execution_ended": True,
         "delivery_status": attempt.status,
         "finish_result_exists": attempt.product is not None,
