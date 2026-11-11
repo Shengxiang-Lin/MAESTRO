@@ -75,7 +75,10 @@ _GENERATION_META = re.compile(
     # Previous Sub-Agent attempts/responses are normal O1 history, not
     # evidence of a previous LLM Author draft.
     r"\b(?:previous|earlier|last)\s+(?:draft|revision|generation)\b|"
-    r"\b(?:critic|reviewer)\s+(?:said|requested|feedback|rejected)\b|"
+    r"\b(?:critic|reviewer|judge)\s+"
+    r"(?:(?:correctly|previously|also)\s+)?"
+    r"(?:said|requested|rejected|noted|observed|pointed\s+out|"
+    r"recommended|suggested|flagged|concluded)\b|"
     r"\b(?:in|from|per)\s+(?:the|this)\s+prompt\b|"
     r"\b(?:my|the)\s+(?:tool|action)\s+(?:choice|selection)\s+"
     r"(?:was|is)\s+(?:wrong|invalid)\b|"
