@@ -428,7 +428,8 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
         # the ACTUAL executed trace, not from the future clean World.
         # The separate final-field check prevents intermediate values
         # from masquerading as the delivered output.
-        allowed = allowed_tokens | instruction_tokens
+        allowed = (allowed_tokens if field == "result"
+                   else allowed_tokens | instruction_tokens)
         if _claim_tokens(text) - allowed:
             issues.append(field + "_unobserved_numeric_or_entity")
         if field == "result":
