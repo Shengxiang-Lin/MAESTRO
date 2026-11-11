@@ -30,6 +30,7 @@ from .offline_pipeline import author_branch_reports, author_branch_main
 from .publication_guard import review_turn_surface
 from .candidate_exploration import expand_all_rounds
 from .candidate_selection import select_recovered_candidates
+from .evidence_affordances import analyze_scene_evidence_affordances
 
 
 def _jsonl(path: Path) -> list[dict]:
@@ -70,6 +71,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "faults.py", "atomic_faults.py", "report_faults.py",
         "event_scheduler.py", "scenario_generator.py",
         "candidate_exploration.py", "candidate_selection.py",
+        "evidence_affordances.py",
         "publication_guard.py",
         "state_machine.py", "report_author.py",
         "trajectory_builder.py", "generate_turns.py",
@@ -740,6 +742,17 @@ def generate_turns(
         raise ValueError("untrusted_existing_output_without_manifest")
     else:
         _atomic_json(manifest, signature)
+    # Baseline Macro/Source verification affordances are diagnostic only.
+    # Do not reclassify complementary evidence as an independent verifier
+    # or read hidden World rows into Main decisions.
+    affordance_rows = [
+        analyze_scene_evidence_affordances(scene)
+        for scene in scenes if scene["task_id"] in base
+    ]
+    _atomic_jsonl(
+        output / "private" / "scene_evidence_affordances.jsonl",
+        affordance_rows,
+    )
     # Explicit, inspectable round index; unsupported feedback rounds are
     # retained instead of disappearing silently from the total.
     _atomic_jsonl(output / "round_index.jsonl", [{
@@ -1151,6 +1164,19 @@ def generate_turns(
         "max_selected_per_feedback_round": max_selected_per_round,
         "candidate_selection_diagnostics": str(
             output / "private" / "candidate_selection.jsonl"
+        ),
+        "evidence_affordance_diagnostics": str(
+            output / "private" / "scene_evidence_affordances.jsonl"
+        ),
+        "potential_cross_check_macro_pairs": sum(
+            x["potential_cross_check_pairs"] for x in affordance_rows
+        ),
+        "complementary_fusion_macro_pairs": sum(
+            x["complementary_fusion_pairs"] for x in affordance_rows
+        ),
+        "provisional_downstream_late_witness_pairs": sum(
+            x["provisional_downstream_before_late_witness_pairs"]
+            for x in affordance_rows
         ),
         **selection_stats,
         "scenario_blueprints": dict(Counter(
