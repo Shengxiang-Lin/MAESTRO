@@ -54,11 +54,16 @@ def evidence_request(state, task_id: str, *, round_number: int,
     missing = []
     if previous is not None:
         missing = list(previous.runtime.get("missing_fields", []))
+        if previous.runtime.get("report_fault_kind") == "report_missing":
+            missing = target
         if previous.product is None:
             missing = target
         if previous.status == "stale":
             missing = target
-    if issue and previous and previous.status not in {"missing", "partial", "stale"}:
+    if (previous is not None and
+            previous.runtime.get("report_fault_kind") == "report_missing"):
+        operation = "retry_missing_evidence"
+    elif issue and previous and previous.status not in {"missing", "partial", "stale"}:
         operation = "verify_conflicting_evidence"
     elif previous and previous.status == "missing":
         operation = "retry_missing_evidence"
