@@ -275,6 +275,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     atom_outcomes: dict[str, Counter] = defaultdict(Counter)
     event_timeline_rows = []
     invalidations_total = 0
+    revalidations_total = 0
     late_conflicts_total = 0
     recovered_after_actual_invalidation = 0
     for plan in planned:
@@ -337,6 +338,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             invalidations = runtime.get("invalidations", [])
             conflicts = runtime.get("detected_conflicts", [])
             invalidations_total += len(invalidations)
+            revalidations_total += len(runtime.get("revalidations", []))
             late_conflicts_total += len(conflicts)
             recovered_after_actual_invalidation += (
                 bool(invalidations) and bool(conflicts)
@@ -351,6 +353,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 "evidence_events": audit.get("event_timeline", []),
                 "observable_late_conflicts": conflicts,
                 "invalidations": invalidations,
+                "revalidations": runtime.get("revalidations", []),
                 "execution_outcome": audit.get("execution_outcome"),
             })
             if any(f.mode == "wrong" for f in plan["faults"]):
@@ -538,6 +541,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             for name, counts in sorted(atom_outcomes.items())
         },
         "actual_downstream_invalidations": invalidations_total,
+        "verified_without_downstream_invalidation": revalidations_total,
         "visible_late_conflicts_detected": late_conflicts_total,
         "execution_recovered_after_invalidation":
             recovered_after_actual_invalidation,
