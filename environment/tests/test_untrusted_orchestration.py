@@ -155,7 +155,8 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                              "completed")
             self.assertFalse(audit["counterfactual_unrepaired"]["correct"])
             self.assertEqual(audit["outcome"], "recovered")
-            self.assertIn("Recheck only", json.dumps(turns[0]["output"]))
+            self.assertIn("Reconcile the visible conflicting",
+                      json.dumps(turns[0]["output"]))
             versions = audit["runtime"]["attempt_versions"][tid]
             self.assertEqual(len(versions), 2)
             self.assertNotEqual(versions[0]["rows"], versions[1]["rows"])
@@ -1062,11 +1063,13 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 )
         self.assertEqual(result["requested_branches"], 1)
         self.assertEqual([bar.desc for bar in bars],
-                         ["Sub-Agent feedback", "Main orchestration"])
+                         ["Stage 4A evidence simulation",
+                          "Stage 4B Sub-Agent feedback",
+                          "Stage 4C Main orchestration"])
         self.assertGreater(bars[0].n, 0)
         self.assertGreater(bars[1].n, 0)
-        self.assertEqual(bars[0].total, bars[0].n)
-        self.assertEqual(bars[1].total, bars[1].n)
+        self.assertGreater(bars[2].n, 0)
+        self.assertTrue(all(bar.total == bar.n for bar in bars))
 
 
 if __name__ == "__main__":
