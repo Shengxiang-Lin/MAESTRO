@@ -455,32 +455,144 @@ def generate_turns(
             "turns": [], "private_audit": None,
         }
 
+    def _progress_bucket(data: dict) -> str:
+        """Execution outcomes are independent of SFT publication review."""
+        status = data.get("status", "rejected_validation")
+        if status == "recovered":
+            return "recovered"
+        if status == "incorrect_result_after_actual_propagation":
+            return "incorrect"
+        if status in {"skipped_unsupported", "rejected_validation"}:
+            return "skipped"
+        return "unresolved"
+
+    def _review_progress(counts: Counter, result: dict) -> None:
+        status = result.get("status", "failed")
+        if status == "accepted":
+            counts["accepted"] += 1
+        elif status == "fallback":
+            counts["fallback"] += 1
+        else:
+            counts["failed"] += 1
+        # A completion fallback can carry status=accepted, unlike report
+        # fallback. Keep it visible as a separate publication-quality flag.
+        if ("fallback" in str(result.get("mode", ""))
+                and status != "fallback"):
+            counts["fallback"] += 1
+
     def run_parallel(phase: str, directory: Path, unit: str,
-                     total: int, initial: int, callback_worker):
+                     total: int, initial: int, callback_worker,
+                     *, stage: str):
+        """Concurrent independent round samples, truthful live counters.
+
+        Per-review callbacks update the *completed-call* bar immediately.
+        'written' changes only after a full round journal is atomically
+        committed; it is not a misleading per-review persistence claim.
+        Resume reconstructs both kinds of counts from existing journals.
+        """
+        if stage not in {"simulation", "reports", "main"}:
+            raise ValueError("unknown_stage4_progress_kind")
+        review_key = {
+            "reports": "subagent_report_reviews",
+            "main": "main_action_reviews",
+        }.get(stage)
         pending = [p for p in planned if saved(directory, p) is None]
+        counts = Counter()
+        for plan in planned:
+            existing = saved(directory, plan)
+            if existing is None:
+                continue
+            counts["saved_rounds"] += 1
+            if stage == "simulation":
+                counts[_progress_bucket(existing)] += 1
+                counts["written"] += 1
+            else:
+                reviews = ((existing.get("private_audit") or {})
+                           .get(review_key, []))
+                for review in reviews:
+                    _review_progress(counts, review.get("authoring") or {})
+                counts["written"] += len(reviews)
         with tqdm(
             total=max(total, initial), initial=initial,
             desc=phase, unit=unit, dynamic_ncols=True,
             disable=no_progress, leave=True,
         ) as bar:
             lock = Lock()
-            def tick(amount: int = 1) -> None:
+
+            def refresh() -> None:
+                if stage == "simulation":
+                    display = {
+                        "recovered": counts["recovered"],
+                        "incorrect": counts["incorrect"],
+                        "unresolved": counts["unresolved"],
+                        "skipped": counts["skipped"],
+                        "written": counts["written"],
+                    }
+                elif stage == "reports":
+                    display = {
+                        "accepted": counts["accepted"],
+                        "fallback": counts["fallback"],
+                        "failed": counts["failed"],
+                        "written": counts["written"],
+                    }
+                else:
+                    display = {
+                        "accepted": counts["accepted"],
+                        "fallback": counts["fallback"],
+                        "failed": counts["failed"],
+                        "written": counts["written"],
+                    }
+                bar.set_postfix(display, refresh=False)
+
+            def tick(status: dict | None = None) -> None:
                 with lock:
-                    if bar.total is not None and bar.n + amount > bar.total:
-                        bar.total = bar.n + amount
-                    bar.update(amount)
+                    if stage in {"reports", "main"} and status is not None:
+                        _review_progress(counts, status)
+                    if bar.total is not None and bar.n + 1 > bar.total:
+                        bar.total = bar.n + 1
+                    refresh()
+                    bar.update(1)
+
+            def commit_round(plan: dict) -> None:
+                # callback_worker has *already* written the round journal.
+                # Keep progress and durable persistence counters distinct.
+                current = saved(directory, plan)
+                if current is None:
+                    raise RuntimeError("stage4_worker_did_not_write_journal")
+                with lock:
+                    counts["saved_rounds"] += 1
+                    if stage == "simulation":
+                        counts[_progress_bucket(current)] += 1
+                        counts["written"] += 1
+                    else:
+                        review_count = len(
+                            ((current.get("private_audit") or {})
+                             .get(review_key, []))
+                        )
+                        counts["written"] += review_count
+                    refresh()
+                    bar.refresh()
+
+            def run_one(plan: dict) -> None:
+                callback_worker(plan, tick)
+                commit_round(plan)
+
+            refresh()
             with ThreadPoolExecutor(
                 max_workers=workers,
                 thread_name_prefix="stage4-" + phase[:2],
             ) as pool:
                 futures = [
-                    pool.submit(callback_worker, plan, tick)
-                    for plan in pending
+                    pool.submit(run_one, plan) for plan in pending
                 ]
                 for future in as_completed(futures):
                     future.result()
-            bar.total = bar.n
-            bar.refresh()
+            # A branch can stop early on evidence/LLM validation; the
+            # initial total is a forecast, not a promised number of calls.
+            with lock:
+                bar.total = bar.n
+                refresh()
+                bar.refresh()
 
     def simulate(plan: dict, tick) -> None:
         scene = scenes[plan["scene_index"]]
@@ -524,7 +636,7 @@ def generate_turns(
     run_parallel(
         "Stage 4A evidence simulation", stage_a, "round",
         len(planned), sum(saved(stage_a, p) is not None for p in planned),
-        simulate,
+        simulate, stage="simulation",
     )
 
     def report_count(data: dict) -> int:
@@ -546,7 +658,7 @@ def generate_turns(
                 source["episode"], source["private_audit"],
                 author=report_author, critic=report_critic,
                 max_revisions=report_max_revisions,
-                on_report=lambda _status: tick(),
+                on_report=lambda status: tick(status),
             )
             data = {
                 **source, "episode": episode, "private_audit": audit,
@@ -558,6 +670,7 @@ def generate_turns(
     run_parallel(
         "Stage 4B Sub-Agent feedback", stage_b, "report",
         total_reports, initial_reports, make_reports,
+        stage="reports",
     )
 
     def action_count(data: dict) -> int:
@@ -592,7 +705,7 @@ def generate_turns(
                 max_revisions=main_max_revisions,
                 max_rounds=max_rounds, sub_model=sub_model,
                 model_alias=model_alias,
-                on_main=lambda _status: tick(),
+                on_main=lambda status: tick(status),
             )
             data = {
                 **source, "status": audit["outcome"],
@@ -606,6 +719,7 @@ def generate_turns(
     run_parallel(
         "Stage 4C Main orchestration", journal, "action",
         total_actions, initial_actions, make_main,
+        stage="main",
     )
     counts_summary = _publish(output, planned)
     summary = {

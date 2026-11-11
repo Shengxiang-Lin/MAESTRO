@@ -1184,6 +1184,8 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         class Bar:
             def __init__(self, *, total, initial, desc, **kwargs):
                 self.total, self.n, self.desc = total, initial, desc
+                self.postfix = {}
+                self.snapshots = []
                 bars.append(self)
             def __enter__(self):
                 return self
@@ -1191,8 +1193,9 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 return False
             def update(self, amount):
                 self.n += amount
-            def set_postfix(self, *args, **kwargs):
-                pass
+            def set_postfix(self, fields=None, **kwargs):
+                self.postfix = dict(fields or {})
+                self.snapshots.append((self.n, dict(self.postfix)))
             def refresh(self):
                 pass
             @staticmethod
@@ -1228,6 +1231,33 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertGreater(bars[1].n, 0)
         self.assertGreater(bars[2].n, 0)
         self.assertTrue(all(bar.total == bar.n for bar in bars))
+        # Round-level 4A outcomes, report-level 4B reviews and action-level
+        # 4C reviews are live counters, not a single misleading status bar.
+        self.assertEqual(
+            list(bars[0].postfix),
+            ["recovered", "incorrect", "unresolved", "skipped", "written"],
+        )
+        self.assertEqual(bars[0].postfix["written"],
+                         result["completed_branches"])
+        self.assertEqual(
+            bars[0].postfix["recovered"],
+            result["execution_recovered_branches"],
+        )
+        self.assertEqual(
+            list(bars[1].postfix),
+            ["accepted", "fallback", "failed", "written"],
+        )
+        self.assertEqual(
+            bars[1].postfix["written"],
+            sum(result["subagent_report_review_statuses"].values()),
+        )
+        self.assertEqual(
+            bars[2].postfix["written"],
+            sum(result["main_action_review_statuses"].values()),
+        )
+        self.assertGreater(len(bars[0].snapshots), 1)
+        self.assertGreater(len(bars[1].snapshots), 1)
+        self.assertGreater(len(bars[2].snapshots), 1)
 
 
     def test_offline_evidence_pipeline_stage_order_and_dynamic_requests(self):
