@@ -1359,6 +1359,27 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             bars[2].postfix["written"],
             sum(result["main_action_review_statuses"].values()),
         )
+        self.assertEqual(
+            bars[2].postfix["processed"], result["main_actions_processed"],
+        )
+        self.assertEqual(
+            bars[2].postfix["planned"], result["main_actions_planned"],
+        )
+        self.assertEqual(
+            bars[2].postfix["skipped_downstream"],
+            result["main_actions_skipped_downstream"],
+        )
+        self.assertEqual(
+            result["main_actions_planned"],
+            result["main_actions_processed"]
+            + result["main_actions_skipped_downstream"],
+        )
+        self.assertEqual(
+            result["reviewed_branches"], result["recovered"],
+        )
+        self.assertEqual(
+            result["reviewed_turns"], result["main_training_turns"],
+        )
         self.assertGreater(len(bars[0].snapshots), 1)
         self.assertGreater(len(bars[1].snapshots), 1)
         self.assertGreater(len(bars[2].snapshots), 1)
@@ -1367,6 +1388,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
     def test_offline_evidence_pipeline_stage_order_and_dynamic_requests(self):
         """4A must finish before *all* 4B calls, then 4C calls commence."""
         events = []
+        main_review_requests = []
 
         class ReportAuthor:
             def complete_json(self, system, request):
@@ -1407,6 +1429,14 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                         "scope_preserved": True, "natural": True,
                         "useful": True,
                     }
+                payload = json.loads(request)
+                if "candidate_reasoning_only" in payload:
+                    main_review_requests.append(payload)
+                    assert "candidate_prose_only" not in payload
+                    assert "task_instruction" not in json.dumps(payload)
+                    assert "context" not in payload.get(
+                        "candidate_reasoning_only", ""
+                    )
                 return {
                     "verdict": "pass", "grounded": True,
                     "assignment_fidelity": True, "o1_style": True,
@@ -1485,6 +1515,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                     self.assertEqual(assignment["task_instruction"],
                                      report["task_instruction"])
                     self.assertEqual(assignment["model"], report["model"])
+        self.assertTrue(main_review_requests)
         self.assertIn("report", events)
         self.assertIn("main", events)
         first_main = events.index("main")
