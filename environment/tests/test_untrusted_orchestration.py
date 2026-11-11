@@ -764,5 +764,122 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 generate_turns(**args)
 
 
+    def test_actual_attempt_trace_matches_post_fault_relation(self):
+        """The report-facing trace must come from executed, changed rows."""
+        from environment.untrusted_orchestration.faults import relation_rows
+        first = self.scene["macro_graph"]["reference_waves"][0]
+        tasks = {t["task_id"]: t for t in
+                 self.scene["macro_graph"]["tasks"]}
+        partial_tid = next(
+            tid for tid in first
+            if len(tasks[tid]["outputs"]["typed_relation"]) > 1
+        )
+        state = ExecutionState(self.scene, {})
+        partial = state.register(partial_tid, fault=Fault(partial_tid, "partial"))
+        steps = partial.runtime["observed_operator_steps"]
+        self.assertTrue(steps)
+        self.assertEqual(
+            steps[-1]["sampled_result_rows"],
+            relation_rows(partial.product)[:4],
+        )
+        self.assertEqual(
+            steps[-1]["output_row_count"], len(partial.product.rows)
+        )
+        self.assertEqual(
+            partial.runtime["delivery_fault_kind"], "field_not_delivered"
+        )
+        self.assertTrue(all(
+            "evidence_atoms" in step and "supporting_fact_refs" in step
+            for step in steps
+        ))
+
+        missing_tid = first[0]
+        other = ExecutionState(self.scene, {})
+        missing = other.register(missing_tid, fault=Fault(missing_tid, "missing"))
+        records = missing.runtime["observed_operator_steps"]
+        self.assertEqual(records[-1]["execution_status"], "missing")
+        self.assertTrue(all(
+            row["execution_status"] == "done" for row in records[:-1]
+        ))
+        self.assertFalse(any(
+            row.get("sampled_result_rows") for row in records[-1:]
+        ))
+
+    def test_main_guard_distinguishes_subagent_attempt_from_author_draft(self):
+        from environment.base_orchestration.action_author import _GENERATION_META
+        self.assertIsNone(_GENERATION_META.search(
+            "The previous attempt returned an incomplete result, so retry."
+        ))
+        self.assertIsNone(_GENERATION_META.search(
+            "A repair attempt should cross-check the returned key."
+        ))
+        self.assertIsNotNone(_GENERATION_META.search(
+            "My previous draft was rejected by the critic."
+        ))
+
+    def test_status_is_executor_owned_with_real_missing_attempt(self):
+        """A legacy model status cannot override actual missing delivery."""
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+        state = ExecutionState(self.scene, {})
+        attempt = state.register(tid, fault=Fault(tid, "missing"))
+        task = state.tasks[tid]
+        captured = []
+        class Author:
+            def complete_json(self, system, request):
+                contract = json.loads(request)["observed_current_attempt"]
+                captured.append(contract)
+                return {
+                    "status": "done",  # Legacy Author misclassifies missing.
+                    "result": None,
+                    "summary": "No usable source record was returned for this task.",
+                    "trace_summary": (
+                        "The source acquisition failed to deliver any "
+                        "inspectable observations for this attempt."
+                    ),
+                }
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True, "useful": True,
+                }
+        report, review = naturalize_report(
+            task, attempt, instruction="Investigate the assigned source.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=Critic(), max_revisions=0,
+        )
+        self.assertEqual(review["mode"], "llm_reviewed")
+        self.assertTrue(review["author_status_ignored"])
+        self.assertTrue(captured[0]["trace_from_actual_execution"])
+        self.assertEqual(
+            captured[0]["observed_operator_steps"][-1]["execution_status"],
+            "missing",
+        )
+        self.assertIsNone(report["finish_result"])
+
+    def test_execution_success_is_separate_from_review_acceptance(self):
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+        class InvalidAuthor:
+            def complete_json(self, system, request):
+                return {"result": "Invented data", "summary": "No evidence"}
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True, "useful": True,
+                }
+        _, turns, audit = build_branch(
+            self.scene, self.reports, self.episode,
+            branch_round=2, faults=[Fault(tid, "missing")],
+            report_author=InvalidAuthor(), report_critic=Critic(),
+            report_max_revisions=0,
+        )
+        self.assertEqual(audit["execution_outcome"], "recovered")
+        self.assertTrue(audit["execution_recovered"])
+        self.assertFalse(audit["language_review_accepted"])
+        self.assertEqual(turns, [])
+
+
+
 if __name__ == "__main__":
     unittest.main()
