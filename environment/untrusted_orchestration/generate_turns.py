@@ -168,6 +168,9 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     report_statuses = Counter()
     main_statuses = Counter()
     execution_outcomes = Counter()
+    report_guard_failures = Counter()
+    report_review_failures = Counter()
+    executor_normalized_results = 0
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -209,6 +212,18 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 result = review["authoring"]
                 report_modes[result["mode"]] += 1
                 report_statuses[result.get("status", "unknown")] += 1
+                executor_normalized_results += bool(
+                    result.get("executor_result_normalized")
+                )
+                for failure in result.get("failures", []):
+                    if failure.get("stage") == "guard":
+                        report_guard_failures.update(
+                            failure.get("errors", [])
+                        )
+                    else:
+                        report_review_failures.update(
+                            [failure.get("stage", "unknown")]
+                        )
             for review in audit.get("main_action_reviews", []):
                 result = review["authoring"]
                 main_modes[result["mode"]] += 1
@@ -244,6 +259,9 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         },
         "subagent_report_generation_modes": dict(report_modes),
         "subagent_report_review_statuses": dict(report_statuses),
+        "subagent_executor_result_normalized": executor_normalized_results,
+        "subagent_guard_failure_causes": dict(report_guard_failures),
+        "subagent_review_failure_stages": dict(report_review_failures),
         "main_action_generation_modes": dict(main_modes),
         "main_action_review_statuses": dict(main_statuses),
     }
