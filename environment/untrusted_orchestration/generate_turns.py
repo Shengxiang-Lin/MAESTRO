@@ -323,7 +323,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             episodes.append(public_episode)
         if status == "recovered":
             positive_turns.extend(data["turns"])
-        else:
+        elif status != "not_selected_for_language_review":
             failures.append({
                 "task_id": data["task_id"],
                 "branch_index": plan["index"],
@@ -499,7 +499,11 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                               "recovered", "skipped_unsupported",
                               "rejected_validation",
                               "incorrect_result_after_actual_propagation",
+                              "not_selected_for_language_review",
                           }),
+        "screened_out_before_llm": counters[
+            "not_selected_for_language_review"
+        ],
         "skipped_or_rejected": (
             counters["skipped_unsupported"] +
             counters["rejected_validation"]
