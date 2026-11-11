@@ -183,11 +183,16 @@ class EventEngineTests(unittest.TestCase):
                     ["A"], ["B", "C"], ["D"], ["E"]
                 ],
                 "tasks": [
-                    {"task_id": "A", "depends_on": []},
-                    {"task_id": "B", "depends_on": ["A"]},
-                    {"task_id": "C", "depends_on": []},
-                    {"task_id": "D", "depends_on": ["C"]},
-                    {"task_id": "E", "depends_on": ["B", "D"]},
+                    {"task_id": "A", "depends_on": [],
+                     "source_ids": ["image"]},
+                    {"task_id": "B", "depends_on": ["A"],
+                     "source_ids": ["index"]},
+                    {"task_id": "C", "depends_on": [],
+                     "source_ids": ["subtitle"]},
+                    {"task_id": "D", "depends_on": ["C"],
+                     "source_ids": ["sub_index"]},
+                    {"task_id": "E", "depends_on": ["B", "D"],
+                     "source_ids": []},
                 ],
             },
         }
@@ -203,10 +208,12 @@ class EventEngineTests(unittest.TestCase):
         state.tasks = {
             "old": {
                 "task_id": "old", "depends_on": [],
+                "source_ids": ["image"],
                 "operator_chain": [],
             },
             "independent": {
                 "task_id": "independent", "depends_on": [],
+                "source_ids": ["subtitle"],
                 "operator_chain": [],
             },
             "lookup": {
