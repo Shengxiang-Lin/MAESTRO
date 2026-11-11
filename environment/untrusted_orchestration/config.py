@@ -18,6 +18,8 @@ _REQUIRED = {
         "max_revisions", "report_max_revisions", "main_max_revisions",
         "sub_model", "model_alias",
         "overwrite", "no_progress",
+        "scenario_mode", "atomic_fault_kinds",
+        "max_fault_atoms", "delayed_evidence_probability",
     },
     "model": {
         "author_api_base", "author_model", "critic_api_base",
@@ -65,6 +67,16 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         "branches_per_scene": run.get("branches_per_scene"),
         "seed": run.get("seed", 17),
         "fault_modes": run.get("fault_modes", ["missing", "partial", "wrong"]),
+        "scenario_mode": run.get("scenario_mode", "round_fork"),
+        "atomic_fault_kinds": run.get("atomic_fault_kinds", [
+            "no_result", "incomplete_retrieval", "wrong_retrieval",
+            "wrong_entity_binding", "report_missing",
+            "result_summary_conflict", "fabricated_claim",
+        ]),
+        "max_fault_atoms": run.get("max_fault_atoms", 1),
+        "delayed_evidence_probability": run.get(
+            "delayed_evidence_probability", 0.0
+        ),
         "persistence": run.get("persistence", "once"),
         "multi_target_probability": run.get("multi_target_probability", 0.0),
         "max_rounds": run.get("max_rounds", 16),
@@ -137,6 +149,22 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             or len(set(modes)) != len(modes)
             or not set(modes) <= {"missing", "partial", "wrong"}):
         raise ValueError("untrusted_invalid_fault_modes")
+    from .atomic_faults import ATOM_TO_MODE
+    if config["scenario_mode"] not in {"round_fork", "event_driven"}:
+        raise ValueError("untrusted_invalid_scenario_mode")
+    kinds = config["atomic_fault_kinds"]
+    if (not isinstance(kinds, list) or not kinds
+            or any(not isinstance(k, str) for k in kinds)
+            or len(set(kinds)) != len(kinds)
+            or not set(kinds) <= set(ATOM_TO_MODE)):
+        raise ValueError("untrusted_invalid_atomic_fault_kinds")
+    if (type(config["max_fault_atoms"]) is not int
+            or not 1 <= config["max_fault_atoms"] <= 2):
+        raise ValueError("untrusted_invalid_max_fault_atoms")
+    delay_probability = config["delayed_evidence_probability"]
+    if (type(delay_probability) not in (int, float)
+            or not 0 <= delay_probability <= 1):
+        raise ValueError("untrusted_invalid_delayed_evidence_probability")
     p = config["multi_target_probability"]
     if type(p) not in (int, float) or not 0 <= p <= 1:
         raise ValueError("untrusted_invalid_multi_target_probability")

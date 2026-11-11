@@ -1,1 +1,1 @@
-"""Round-local unreliable evidence and dynamic Main orchestration training data."""
+"""Event-driven untrusted evidence execution, recovery, and O1 review data."""

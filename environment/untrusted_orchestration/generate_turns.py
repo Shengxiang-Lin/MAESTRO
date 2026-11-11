@@ -1,9 +1,9 @@
-"""Config-driven batch generation of round-local untrusted O1 Main decisions.
+"""Event-driven untrusted O1 Main decision generation.
 
-Each branch begins from an accepted clean Base Episode. At t>=2 only the
-Sub-Agent batch returned in t-1 is eligible for injection; the entire
-earlier visible history remains trusted. Deterministic WorkProduct replay
-then drives every newly scheduled Sub-Agent action.
+Every prior feedback round is a legal single-atom scenario. Opt-in event
+scenarios additionally schedule an executable later fault and/or defer a
+not-yet-returned independent evidence task. No historical Main action is
+retroactively rewritten; all events are replayed in causal order.
 """
 from __future__ import annotations
 
@@ -23,8 +23,11 @@ from tqdm.auto import tqdm
 from .faults import (
     Fault, FaultUnsupported, choose_targets, probe_eligible_fault_modes,
 )
+from .atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
+from .scenario_generator import make_scenario
 from .trajectory_builder import build_branch
 from .offline_pipeline import author_branch_reports, author_branch_main
+from .publication_guard import review_turn_surface
 
 
 def _jsonl(path: Path) -> list[dict]:
@@ -62,7 +65,10 @@ def _hash_file(path: Path) -> str:
 def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
     directory = Path(__file__).resolve().parent
     code_files = (
-        "faults.py", "state_machine.py", "report_author.py",
+        "faults.py", "atomic_faults.py", "report_faults.py",
+        "event_scheduler.py", "scenario_generator.py",
+        "publication_guard.py",
+        "state_machine.py", "report_author.py",
         "trajectory_builder.py", "generate_turns.py",
         "evidence_planning.py", "offline_pipeline.py",
         "../generate_question/compiler.py",
@@ -74,7 +80,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "../../orchestra/base_main_agent.py",
     )
     return {
-        "version": "maestro.untrusted_orchestration.reasoning_review_v5",
+        "version": "maestro.untrusted_orchestration.event_engine_v1",
         "input_sha256": [_hash_file(path) for path in inputs],
         "source_code_sha256": {
             name: _hash_file(directory / name) for name in code_files
@@ -89,6 +95,10 @@ def _plan_branches(
     fault_modes: list[str], persistence: str,
     multi_target_probability: float,
     max_rounds: int,
+    scenario_mode: str = "round_fork",
+    atomic_fault_kinds: list[str] | None = None,
+    max_fault_atoms: int = 1,
+    delayed_evidence_probability: float = 0.0,
 ) -> tuple[list[dict], int, int]:
     """Expand EVERY accepted Main feedback round into one fault scenario.
 
@@ -142,15 +152,32 @@ def _plan_branches(
             no_eligible += 1
             continue
 
-        eligible = probe_eligible_fault_modes(scene, fault_modes)
+        # The ordinary latest-feedback fork is expressed as one
+        # ScenarioPlan rather than maintained as a separate executor.
+        if scenario_mode == "event_driven":
+            eligible = probe_atoms(
+                scene, atomic_fault_kinds or [
+                    "no_result", "incomplete_retrieval",
+                    "wrong_retrieval", "wrong_entity_binding",
+                    "report_missing", "result_summary_conflict",
+                    "fabricated_claim",
+                ],
+            )
+        else:
+            eligible = probe_eligible_fault_modes(scene, fault_modes)
         tasks = {task["task_id"]: task
                  for task in scene["macro_graph"]["tasks"]}
         eligible_count = 0
         for decision_round, previous_delegate in rounds:
             wave = waves[decision_round - 2]
             available_modes = [
-                mode for mode in fault_modes
-                if any(mode in eligible.get(tid, []) for tid in wave)
+                kind for kind in (
+                    atomic_fault_kinds if scenario_mode == "event_driven"
+                    and atomic_fault_kinds is not None else
+                    list(ATOM_TO_MODE)[:7] if scenario_mode == "event_driven"
+                    else fault_modes
+                )
+                if any(kind in eligible.get(tid, []) for tid in wave)
             ]
             # Independent deterministic randomness per (question, round)
             # means adding/removing another round cannot perturb this one.
@@ -170,20 +197,32 @@ def _plan_branches(
                 multiple = (
                     rng.random() < multi_target_probability
                     and len(supported) > 1
+                    and (scenario_mode != "event_driven"
+                         or max_fault_atoms >= 2)
                 )
                 chosen_targets = choose_targets(
                     supported, tasks, seed=round_seed, multiple=multiple,
                 )
-                faults = [
-                    Fault(task_id=tid, mode=chosen_mode,
-                          seed=round_seed, persistence=persistence)
-                    for tid in chosen_targets
-                ]
+                if scenario_mode == "event_driven":
+                    faults = [
+                        AtomicFault(
+                            chosen_mode, tid, decision_round - 1,
+                            seed=round_seed,
+                            persistence=persistence,
+                        ).as_legacy_fault()
+                        for tid in chosen_targets
+                    ]
+                else:
+                    faults = [
+                        Fault(task_id=tid, mode=chosen_mode,
+                              seed=round_seed, persistence=persistence)
+                        for tid in chosen_targets
+                    ]
                 eligible_count += 1
             elif skip_reason is None:
                 skip_reason = "no_executable_fault_on_returned_batch"
 
-            planned.append({
+            plan = {
                 "index": len(planned),
                 "unit": "main_feedback_round",
                 "sample_id": (
@@ -200,7 +239,16 @@ def _plan_branches(
                 "fault_mode": chosen_mode,
                 "faults": faults,
                 "skip_reason": skip_reason,
-            })
+            }
+            plan["scenario_plan"] = make_scenario(
+                scene, plan,
+                mode=scenario_mode, eligible_atoms=(
+                    eligible if scenario_mode == "event_driven" else None
+                ),
+                max_fault_atoms=max_fault_atoms,
+                delayed_evidence_probability=delayed_evidence_probability,
+            )
+            planned.append(plan)
         if not eligible_count:
             no_eligible += 1
     return planned, no_base, no_eligible
@@ -222,6 +270,14 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     wrong_visibility_rows = []
     wrong_visibility_counts = Counter()
     wrong_visibility_outcomes: dict[str, Counter] = defaultdict(Counter)
+    publication_guard_rows = []
+    event_outcomes: dict[str, Counter] = defaultdict(Counter)
+    atom_outcomes: dict[str, Counter] = defaultdict(Counter)
+    event_timeline_rows = []
+    invalidations_total = 0
+    revalidations_total = 0
+    late_conflicts_total = 0
+    recovered_after_actual_invalidation = 0
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -229,10 +285,27 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
         if data["task_id"] != plan["task_id"]:
             raise RuntimeError("untrusted_journal_scene_mismatch")
-        counters[data["status"]] += 1
+        status = data["status"]
+        leaks = [
+            {"sample_id": turn.get("sample_id"),
+             "issues": review_turn_surface(turn)}
+            for turn in data.get("turns", [])
+        ]
+        leaks = [row for row in leaks if row["issues"]]
+        if status == "recovered" and leaks:
+            status = "publication_generation_process_leak"
+            publication_guard_rows.append({
+                "branch_index": plan["index"],
+                "round_sample_id": plan["sample_id"],
+                "rejected_turns": leaks,
+            })
+        counters[status] += 1
         for mode in {fault.mode for fault in plan["faults"]}:
-            mode_outcomes[mode][data["status"]] += 1
-        if data["status"] == "recovered" and (
+            mode_outcomes[mode][status] += 1
+        event_outcomes[plan["scenario_plan"]["blueprint"]][status] += 1
+        for atom in plan["scenario_plan"]["fault_atoms"]:
+            atom_outcomes[atom["kind"]][status] += 1
+        if status == "recovered" and (
             not isinstance(data.get("private_audit"), dict)
             or data["private_audit"].get("parallel_batches_verified") is not True
         ):
@@ -245,20 +318,44 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             public_episode.pop("outcome", None)
             public_episode.pop("recovered", None)
             episodes.append(public_episode)
-        if data["status"] == "recovered":
+        if status == "recovered":
             positive_turns.extend(data["turns"])
         else:
             failures.append({
                 "task_id": data["task_id"],
                 "branch_index": plan["index"],
                 "branch_round": plan["branch_round"],
-                "status": data["status"],
-                "error": data.get("error"),
+                "status": status,
+                "error": data.get("error") or (
+                    "generation_process_leak" if leaks else None
+                ),
             })
         if data.get("private_audit") is not None:
             audit = data["private_audit"]
             audits.append(audit)
             execution_outcomes[audit.get("execution_outcome", audit["outcome"])] += 1
+            runtime = audit.get("runtime") or {}
+            invalidations = runtime.get("invalidations", [])
+            conflicts = runtime.get("detected_conflicts", [])
+            invalidations_total += len(invalidations)
+            revalidations_total += len(runtime.get("revalidations", []))
+            late_conflicts_total += len(conflicts)
+            recovered_after_actual_invalidation += (
+                bool(invalidations) and bool(conflicts)
+                and audit.get("execution_outcome") == "recovered"
+            )
+            event_timeline_rows.append({
+                "round_sample_id": plan["sample_id"],
+                "scenario_blueprint": plan["scenario_plan"]["blueprint"],
+                "fault_events_applied": audit.get(
+                    "fault_events_applied", []
+                ),
+                "evidence_events": audit.get("event_timeline", []),
+                "observable_late_conflicts": conflicts,
+                "invalidations": invalidations,
+                "revalidations": runtime.get("revalidations", []),
+                "execution_outcome": audit.get("execution_outcome"),
+            })
             if any(f.mode == "wrong" for f in plan["faults"]):
                 # Diagnostic classes refer ONLY to whether the evidence
                 # planner emitted a Main-visible conflict verification.
@@ -297,7 +394,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                             req["main_visible_justification"],
                     } for rnd, req in verifies],
                     "execution_outcome": execution_status,
-                    "final_publication_status": data["status"],
+                    "final_publication_status": status,
                     "interpretation": (
                         "Evidence-plan observability only; absence of "
                         "an explicit VERIFY is not proof that the error "
@@ -363,7 +460,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                     "local_main_action_review_passed": main_accepted,
                     "dependency_safe": dependency_safe,
                     "locally_qualified": locally_qualified,
-                    "globally_recovered": data["status"] == "recovered",
+                    "globally_recovered": status == "recovered",
                     "terminal_execution_outcome": audit.get(
                         "execution_outcome"
                     ),
@@ -380,6 +477,10 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     _atomic_jsonl(output / "main_turns.jsonl", positive_turns)
     _atomic_jsonl(output / "failed.jsonl", failures)
     _atomic_jsonl(output / "private" / "fault_alignment.jsonl", audits)
+    _atomic_jsonl(output / "private" / "publication_guard.jsonl",
+                  publication_guard_rows)
+    _atomic_jsonl(output / "private" / "event_timeline.jsonl",
+                  event_timeline_rows)
     _atomic_jsonl(output / "private" / "wrong_visibility.jsonl",
                   wrong_visibility_rows)
     _atomic_jsonl(output / "private" / "main_turns_local_review.jsonl",
@@ -431,6 +532,25 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "publication_main_action_failed":
             counters["main_action_not_accepted"],
         "execution_outcomes": dict(execution_outcomes),
+        "event_blueprint_outcomes": {
+            name: dict(counts)
+            for name, counts in sorted(event_outcomes.items())
+        },
+        "atomic_fault_outcomes": {
+            name: dict(counts)
+            for name, counts in sorted(atom_outcomes.items())
+        },
+        "actual_downstream_invalidations": invalidations_total,
+        "verified_without_downstream_invalidation": revalidations_total,
+        "visible_late_conflicts_detected": late_conflicts_total,
+        "execution_recovered_after_invalidation":
+            recovered_after_actual_invalidation,
+        "event_timeline_diagnostics": str(
+            output / "private" / "event_timeline.jsonl"
+        ),
+        "publication_generation_process_leaks": len(
+            publication_guard_rows
+        ),
         "wrong_visibility_by_explicit_verify": dict(wrong_visibility_counts),
         "wrong_visibility_execution_outcomes": {
             name: dict(counters)
@@ -465,6 +585,10 @@ def generate_turns(
     persistence: str = "once", multi_target_probability: float = 0.0,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
     max_parallel_tasks: int = 4, workers: int = 4,
+    scenario_mode: str = "round_fork",
+    atomic_fault_kinds: list[str] | None = None,
+    max_fault_atoms: int = 1,
+    delayed_evidence_probability: float = 0.0,
     max_revisions: int = 2,
     report_max_revisions: int | None = None,
     main_max_revisions: int | None = None,
@@ -510,10 +634,30 @@ def generate_turns(
         raise ValueError("untrusted_output_overwrites_input")
 
     modes = list(fault_modes or ["missing", "partial", "wrong"])
+    if scenario_mode not in {"round_fork", "event_driven"}:
+        raise ValueError("invalid_scenario_mode")
+    kinds = list(atomic_fault_kinds or [
+        "no_result", "incomplete_retrieval", "wrong_retrieval",
+        "wrong_entity_binding", "report_missing",
+        "result_summary_conflict", "fabricated_claim",
+    ])
+    if (not kinds or any(kind not in ATOM_TO_MODE for kind in kinds)
+            or len(kinds) != len(set(kinds))):
+        raise ValueError("invalid_atomic_fault_kinds")
+    if type(max_fault_atoms) is not int or not 1 <= max_fault_atoms <= 2:
+        raise ValueError("invalid_max_atomic_faults")
+    if type(delayed_evidence_probability) not in (int, float) or (
+        not 0 <= delayed_evidence_probability <= 1
+    ):
+        raise ValueError("invalid_delayed_evidence_probability")
     settings = {
         "max_scenes": max_scenes,
         "branches_per_scene": branches_per_scene, "seed": seed,
         "fault_modes": modes, "persistence": persistence,
+        "scenario_mode": scenario_mode,
+        "atomic_fault_kinds": kinds,
+        "max_fault_atoms": max_fault_atoms,
+        "delayed_evidence_probability": delayed_evidence_probability,
         "multi_target_probability": multi_target_probability,
         "max_rounds": max_rounds, "max_cost": max_cost,
         "max_retries": max_retries, "max_parallel_tasks": max_parallel_tasks,
@@ -542,6 +686,9 @@ def generate_turns(
         seed=seed, fault_modes=modes, persistence=persistence,
         multi_target_probability=multi_target_probability,
         max_rounds=max_rounds,
+        scenario_mode=scenario_mode, atomic_fault_kinds=kinds,
+        max_fault_atoms=max_fault_atoms,
+        delayed_evidence_probability=delayed_evidence_probability,
     )
     if overwrite and output.exists():
         shutil.rmtree(output)
@@ -566,6 +713,14 @@ def generate_turns(
         "latest_subagent_count": plan["incoming_subtask_count"],
         "fault_eligible": not bool(plan["skip_reason"]),
         "skip_reason": plan["skip_reason"],
+        "scenario_mode": plan["scenario_plan"]["mode"],
+        "scenario_blueprint": plan["scenario_plan"]["blueprint"],
+        "atomic_fault_kinds": [
+            a["kind"] for a in plan["scenario_plan"]["fault_atoms"]
+        ],
+        "scheduled_evidence_events": len(
+            plan["scenario_plan"]["evidence_events"]
+        ),
     } for plan in planned])
 
     # Three genuine phases with separate signed, resumable artifacts.
@@ -779,6 +934,7 @@ def generate_turns(
                 scene, rows_by_scene[scene["task_id"]],
                 base[scene["task_id"]],
                 branch_round=plan["branch_round"], faults=plan["faults"],
+                scenario_plan=plan["scenario_plan"],
                 max_rounds=max_rounds, max_cost=max_cost,
                 max_retries=max_retries,
                 max_parallel_tasks=max_parallel_tasks,
@@ -905,7 +1061,23 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_reasoning_review_v5",
+        "pipeline": "maestro_untrusted_orchestration_event_engine_v1",
+        "scenario_mode": scenario_mode,
+        "scenario_blueprints": dict(Counter(
+            p["scenario_plan"]["blueprint"] for p in planned
+        )),
+        "atomic_fault_kinds_planned": dict(Counter(
+            atom["kind"] for p in planned
+            for atom in p["scenario_plan"]["fault_atoms"]
+        )),
+        "evidence_events_scheduled": sum(
+            len(p["scenario_plan"]["evidence_events"])
+            for p in planned
+        ),
+        "delayed_requested_but_not_executable": sum(
+            p["scenario_plan"]["delayed_requested_but_unsupported"]
+            for p in planned
+        ),
         "mode": ("llm" if main_mode == "llm" or report_mode == "llm"
                  else "template"),
         "subagent_report_mode": report_mode,

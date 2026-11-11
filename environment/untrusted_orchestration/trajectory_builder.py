@@ -24,6 +24,8 @@ from environment.base_orchestration.trajectory_builder import (
     _answer_text, _strict_reports, _main_local_terminal,
 )
 from .faults import Fault, FaultUnsupported, choose_targets
+from .atomic_faults import AtomicFault
+from .event_scheduler import EventScheduler
 from .state_machine import (
     ExecutionState, deterministic_report, public_history_item,
 )
@@ -159,7 +161,9 @@ def _clean_prefix(
                     "execution": deepcopy(attempt.runtime),
                     "report_mode": status,
                 })
-            state.set_public_report(tid, public)
+            state.set_public_report(
+                tid, public, round_number=index + 1,
+            )
             visible_results.append(public)
         history.append(_history_batch(index + 1, visible_results))
         modified = deepcopy(source_action)
@@ -317,6 +321,7 @@ def batch_has_independent_dependencies(state: ExecutionState,
 def build_branch(
     scene: dict, stage2_rows: list[dict], base_episode: dict, *,
     branch_round: int, faults: list[Fault],
+    scenario_plan: dict | None = None,
     author=None, critic=None, report_author=None, report_critic=None,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
     max_parallel_tasks: int = 4, max_revisions: int = 2,
@@ -345,6 +350,49 @@ def build_branch(
     before = counterfactual_continuation(
         state, start_wave_index=branch_round - 1,
     )
+    # All error origins are causal events, not historical rewrites.
+    # An old round_fork is simply one atom on the most recent batch.
+    scenario_plan = deepcopy(scenario_plan) if scenario_plan else {
+        "scenario_id": scene["task_id"] + f"-fork-{branch_round}",
+        "mode": "round_fork", "blueprint": "immediate_feedback_fault",
+        "fault_atoms": [{
+            "kind": fault.atom_kind or (
+                "legacy_wrong_evidence" if fault.mode == "wrong" else
+                "no_result" if fault.mode == "missing" else
+                "incomplete_retrieval"
+            ),
+            "task_id": fault.task_id, "origin_round": branch_round - 1,
+            "seed": fault.seed, "persistence": fault.persistence,
+        } for fault in faults],
+        "evidence_events": [],
+    }
+    scheduler = EventScheduler(
+        scenario_plan.get("evidence_events", []),
+        state=state, fork_round=branch_round,
+    )
+    state.cross_source_checks_enabled = (
+        scenario_plan.get("mode") == "event_driven"
+    )
+    future_atoms = {}
+    for atom in scenario_plan.get("fault_atoms", []):
+        if atom["origin_round"] >= branch_round:
+            if atom["task_id"] in state.current:
+                raise ValueError("future_fault_targets_historical_attempt")
+            if atom["task_id"] in future_atoms:
+                raise ValueError("duplicate_future_fault_target")
+            future_atoms[atom["task_id"]] = AtomicFault(
+                kind=atom["kind"], task_id=atom["task_id"],
+                origin_round=atom["origin_round"],
+                persistence=atom.get("persistence", "once"),
+                seed=atom.get("seed", 0), atom_id=atom.get("atom_id", "F"),
+            )
+    applied_future_atoms = set()
+    applied_fault_events = [{
+        "task_id": fault.task_id,
+        "kind": fault.atom_kind or fault.mode,
+        "actual_execution_round": branch_round - 1,
+        "where": "incoming_feedback",
+    } for fault in faults]
     catalog = source_catalog(scene)
     retry_counts = Counter()
     turns = []
@@ -394,6 +442,11 @@ def build_branch(
             tid for tid in scheduling["ready"]
             if tid not in repairs
         ]
+        ready = scheduler.available(ready, round_number)
+        event_pending = any(
+            row["status"] == "scheduled"
+            for row in scheduler.audit()
+        )
         if (terminal in ready and _main_local_terminal(graph)
                 and not repairs):
             # Deterministic local computation on *current* parent
@@ -401,7 +454,17 @@ def build_branch(
             state.register(terminal)
             ready.remove(terminal)
         if (not repairs and state.effective_answer() is not None
-                and not ready):
+                and not ready and not event_pending):
+            # A fabricated result can be unseen as wrong when Main has
+            # no independent evidence. Do not publish a "successful"
+            # recovery merely because the PRIVATE executor still holds
+            # a clean product that was never delivered to Main.
+            if any(
+                item.runtime.get("report_fault_kind") == "fabricated_claim"
+                for item in state.current.values()
+            ):
+                stopped = "unverified_report_claim"
+                break
             if not state.answer_matches_gold():
                 stopped = "incorrect_result_after_actual_propagation"
                 break
@@ -450,7 +513,10 @@ def build_branch(
             catalog=catalog, model_alias=model_alias,
         )
         if not batch:
-            stopped = "unresolved_dependencies"
+            stopped = (
+                "event_wait_without_legal_action"
+                if event_pending else "unresolved_dependencies"
+            )
             break
         # One dispatch can fulfill several atomic evidence requests.
         # Request IDs and Macro bindings are PRIVATE simulation metadata,
@@ -526,7 +592,20 @@ def build_branch(
                 and f.persistence == "same_path"
                 and tid in repairs
             ), None)
+            future = future_atoms.get(tid)
+            if (future is not None
+                    and round_number >= future.origin_round
+                    and (tid not in applied_future_atoms
+                         or future.persistence == "same_path")):
+                fault = future.as_legacy_fault()
+                applied_future_atoms.add(tid)
+                applied_fault_events.append({
+                    "task_id": tid, "kind": future.kind,
+                    "actual_execution_round": round_number,
+                    "where": "future_execution",
+                })
             attempt = state.register(tid, fault=fault)
+            scheduler.note_execution(tid, round_number)
             if tid in repairs:
                 retry_counts[tid] += 1
             report, report_status = naturalize_report(
@@ -546,7 +625,9 @@ def build_branch(
                 on_report_review(report_status)
             report["subtask_index"] = slot
             public = _as_public(report)
-            state.set_public_report(tid, public)
+            state.set_public_report(
+                tid, public, round_number=round_number,
+            )
             returned.append(public)
         task_entries.append(_history_batch(round_number, returned))
         trajectory.append({
@@ -567,6 +648,19 @@ def build_branch(
         })
     if stopped is None:
         stopped = "max_decision_rounds"
+    if stopped == "recovered" and (
+        set(future_atoms) - applied_future_atoms
+        or any(x["status"] != "released" for x in scheduler.audit())
+    ):
+        stopped = "scenario_events_not_realized"
+    # Never advertise a delayed *recovery* if the supposed late evidence
+    # did not expose an actual visible contradiction followed by a real
+    # upstream replacement and downstream invalidation.
+    if (stopped == "recovered"
+            and scenario_plan.get("blueprint")
+                == "delayed_independent_evidence"
+            and (not state.detected_conflicts or not state.invalidations)):
+        stopped = "delayed_blueprint_not_demonstrated"
     # Positive reviewed-turn in LLM mode must be language-reviewed on *both*
     # surfaces. The existing deterministic report remains inspectable
     # as a diagnostic when a review fails, not secretly accepted as an
@@ -598,6 +692,12 @@ def build_branch(
         "faults": injected,
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
+        "event_scenario": scenario_plan,
+        "event_timeline": scheduler.audit(),
+        "fault_events_applied": applied_fault_events,
+        "unrealized_future_fault_tasks": sorted(
+            set(future_atoms) - applied_future_atoms
+        ),
         "decision_audit": decisions,
         "evidence_plan": evidence_plan,
         "subagent_report_reviews": report_reviews,

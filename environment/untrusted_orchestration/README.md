@@ -6,7 +6,7 @@ Run from the MAESTRO repository root:
 python -m environment generate-untrusted-turns \
   --config environment/configs/untrusted_orchestration.yaml \
   --mode llm \
-  --output-dir environment/data/maestro_untrusted_rounds_v8
+  --output-dir environment/data/maestro_untrusted_rounds_v9
 ```
 
 The runner uses the frozen Scene/World/Macro DAG, reviewed Stage-2 reports,
@@ -15,11 +15,15 @@ one existing (Question, Main decision round)**, not a random number of
 branches per Question. For each accepted Stage-3 `delegate_task` batch that
 returned Sub-Agent feedback in round `t-1`, Stage 4A extracts its next Main
 decision point `t`; the clean feedback history before `t-1` is preserved.
-An independently seeded, preflight-executable missing/partial/wrong fault
-is injected into one or more Sub-Agent reports **from that just-returned
-batch**. The simulation then recomputes the evidence needs and full
-continuation from this round. Consequently the same Question may yield
-many independent round samples, one per received batch.
+In `scenario_mode: round_fork` (the exact V8 compatibility case), one
+preflight-executable missing/partial/wrong fault is injected into the
+just-returned batch, and the continuation is re-executed. In the default
+`scenario_mode: event_driven`, that initial injection is represented as
+the earliest AtomicFault of a causal event scenario. Optionally another
+atomic fault can be scheduled when a future task actually executes, or
+an independently executable evidence task can be held until a specified
+already-scheduled task returns. **No historical Main action is rewritten.**
+The Main only sees actual returned feedback in chronological order.
 
 **All available rounds are indexed.** If no configured fault can execute
 at a given round, it remains visible as a skipped round; a future round
@@ -29,6 +33,81 @@ feedback rounds. `branches_per_scene` is retained only as an optional
 chronological debugging cap. A `max_rounds` recovery budget below a
 particular Main decision round is recorded as a skipped round rather
 than quietly discarding it.
+
+## Unified event engine (V9)
+
+`round_fork` is now a **single-atom event scenario**, not a separate
+simulation implementation. The default config selects `event_driven`;
+set `scenario_mode: round_fork` to replay V8 sampling semantics. The
+original public O1 Action and compact `main_turns.jsonl` interface are
+unchanged. Stage 1/2/3 inputs are reused without regenerating Questions.
+
+**Implemented atomic operators (real execution or delivered feedback):**
+
+| Kind | Surface | Effect |
+|---|---|---|
+| `no_result` | acquisition | Actual evidence operation supplies no usable WorkProduct |
+| `incomplete_retrieval` | acquisition/delivery | Field omitted or returned row set truncated |
+| `wrong_retrieval` | processing | A real alternate source row replaces one executed primitive output |
+| `wrong_entity_binding` | processing | Actual Join uses a real but nonmatching candidate |
+| `report_missing` | report | Tool completed but Sub-Agent delivered no Finish Result |
+| `result_summary_conflict` | report | Report Result and Summary differ on an actual field |
+| `fabricated_claim` | report | Report claims an alternate real-source value that the executed step did not select |
+
+For the last three, the *actual executor WorkProduct* and the *Main-visible
+report* are stored separately. In particular, descendants consume the
+**communicated** value of a fabricated report, never a hidden correct
+executor value. Such a claim without a visible resolution must not be
+labelled as successful recovery. All distractors come from existing
+authorized observations; unsupported combinations are rejected during
+preflight. Controlled faulty reports are separately marked in the
+PRIVATE review audit, rather than mislabeled as LLM-authored.
+
+An event `hold_independent_evidence` can delay a task that is **not
+yet dispatched**, when it is causally independent of the anchor task
+and there is a shared downstream consumer. The event must be released
+by actual executor progress. A delayed-recovery branch may be published
+as positive reviewed turns only when the replay actually produces a
+Main-visible late conflict AND an actual downstream invalidation; a scheduled
+delay alone is insufficient. This is *not* the same as a completed
+Sub-Agent message arriving late over an asynchronous transport. The
+latter (`message_delayed`) remains a **declared but unsupported**
+transport capability pending a faithful O1 late-result adapter; the
+generator refuses to simulate it rather than forging an extra Main
+turn or retroactively modifying history.
+
+The optional `max_fault_atoms: 2` schedules a second preflight-eligible
+fault on a future task's **actual first attempt**. If the continuation
+never executes that task, the event is logged as unrealized and cannot
+be called a fully recovered composite case. Atomic kinds and delays
+are selected reproducibly with a seeded, constraint-guided generator.
+
+**Late conflict:** When a newly delivered independent report disagrees
+on a typed join key with a previously delivered report *already consumed
+by a real downstream attempt*, the event-driven state machine can
+request a targeted recheck of the earlier **used** binding. It does
+not consult hidden Gold to decide which report is wrong. On an actual
+upstream replacement, `used_parent_versions` and `invalidations`
+record stale descendants and selective recomputation.
+
+Output diagnostics include `private/event_timeline.jsonl` and the
+private event plans in `fault_alignment.jsonl`, along with summary
+counters `actual_downstream_invalidations`,
+`visible_late_conflicts_detected`, `atomic_fault_outcomes`,
+`verified_without_downstream_invalidation`, and
+`scenario_blueprints`. When a recheck reconfirms the same communicated
+relation, previously executed downstream tasks are preserved and only
+a private revalidation is recorded. These metrics describe **actual**
+observed execution,
+not guaranteed success: not every existing Scene admits a delayed
+causal repair.
+
+**Publication safety:** `private/publication_guard.jsonl` records
+branches excluded from reviewed turns for generation-process leakage
+such as `The critic correctly noted ...`. Failed and undetected
+counterfactuals remain in private audit/diagnostic Episodes, not
+positive reviewed turns. All published Main actions still require
+correct executable outcome and Stage 4B/4C language review.
 
 ## Three real sequential stages
 
