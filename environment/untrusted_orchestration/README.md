@@ -66,7 +66,10 @@ PRIVATE review audit, rather than mislabeled as LLM-authored.
 An event `hold_independent_evidence` can delay a task that is **not
 yet dispatched**, when it is causally independent of the anchor task
 and there is a shared downstream consumer. The event must be released
-by actual executor progress. This is *not* the same as a completed
+by actual executor progress. A delayed-recovery branch may be published
+as positive reviewed turns only when the replay actually produces a
+Main-visible late conflict AND an actual downstream invalidation; a scheduled
+delay alone is insufficient. This is *not* the same as a completed
 Sub-Agent message arriving late over an asynchronous transport. The
 latter (`message_delayed`) remains a **declared but unsupported**
 transport capability pending a faithful O1 late-result adapter; the
@@ -90,8 +93,12 @@ record stale descendants and selective recomputation.
 Output diagnostics include `private/event_timeline.jsonl` and the
 private event plans in `fault_alignment.jsonl`, along with summary
 counters `actual_downstream_invalidations`,
-`visible_late_conflicts_detected`, `atomic_fault_outcomes`, and
-`scenario_blueprints`. These describe **actual** observed execution,
+`visible_late_conflicts_detected`, `atomic_fault_outcomes`,
+`verified_without_downstream_invalidation`, and
+`scenario_blueprints`. When a recheck reconfirms the same communicated
+relation, previously executed downstream tasks are preserved and only
+a private revalidation is recorded. These metrics describe **actual**
+observed execution,
 not guaranteed success: not every existing Scene admits a delayed
 causal repair.
 
