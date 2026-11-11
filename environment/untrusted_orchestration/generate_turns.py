@@ -1000,6 +1000,36 @@ def generate_turns(
         simulate, stage="simulation",
     )
 
+    # The 4A search is intentionally wider than the expensive 4B/4C
+    # publication candidates. Keep ALL executions in stage4a/journal
+    # and an explicit private selection ledger, including failures.
+    if candidate_strategy == "enumerate":
+        selected_indices, selection_rows, selection_stats = (
+            select_recovered_candidates(
+                planned, [saved(stage_a, plan) for plan in planned],
+                max_selected_per_round=max_selected_per_round,
+            )
+        )
+    else:
+        selected_indices = {plan["index"] for plan in planned}
+        selection_rows = [{
+            "candidate_index": plan["index"],
+            "round_sample_id": plan["sample_id"],
+            "selected_for_language_review": True,
+            "selection_reason": "legacy_sample_one_all_candidates",
+        } for plan in planned]
+        selection_stats = {
+            "candidates_simulated": len(planned),
+            "candidates_selected_for_language_review": len(planned),
+            "candidates_filtered_before_llm": 0,
+            "candidate_behavior_distribution": {},
+            "selected_behavior_distribution": {},
+        }
+    _atomic_jsonl(
+        output / "private" / "candidate_selection.jsonl",
+        selection_rows,
+    )
+
     def report_count(data: dict) -> int:
         audit = (data or {}).get("private_audit") or {}
         return len(audit.get("subagent_report_reviews", []))
@@ -1010,6 +1040,16 @@ def generate_turns(
     def make_reports(plan: dict, tick) -> None:
         source = saved(stage_a, plan)
         scene = scenes[plan["scene_index"]]
+        if plan["index"] not in selected_indices:
+            # Deliberately no LLM call. Preserve full private 4A audit,
+            # but do not expose a failed/unselected Episode as a positive
+            # or a potentially misleading public training example.
+            write(stage_b, plan, {
+                **source, "status": "not_selected_for_language_review",
+                "error": "4a_candidate_screened_out",
+                "episode": None, "turns": [],
+            })
+            return
         if source["episode"] is None:
             write(stage_b, plan, source)
             return
@@ -1099,8 +1139,16 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_event_engine_v1",
+        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v2",
         "scenario_mode": scenario_mode,
+        "candidate_strategy": candidate_strategy,
+        "max_candidates_per_feedback_round": max_candidates_per_round,
+        "max_distractors_per_fault": max_distractors_per_fault,
+        "max_selected_per_feedback_round": max_selected_per_round,
+        "candidate_selection_diagnostics": str(
+            output / "private" / "candidate_selection.jsonl"
+        ),
+        **selection_stats,
         "scenario_blueprints": dict(Counter(
             p["scenario_plan"]["blueprint"] for p in planned
         )),
@@ -1135,8 +1183,13 @@ def generate_turns(
         ),
         "input_scenes": len(scenes),
         "scenes_without_accepted_base": no_base,
-        "round_sampling_unit": "question_x_main_feedback_round",
-        "rounds_extracted_from_base": len(planned),
+        "round_sampling_unit": (
+            "question_x_feedback_round_x_atomic_instance"
+            if candidate_strategy == "enumerate"
+            else "question_x_main_feedback_round"
+        ),
+        "rounds_extracted_from_base": base_feedback_round_count,
+        "candidate_trials": len(planned),
         "rounds_with_executable_fault": sum(
             not plan["skip_reason"] for plan in planned
         ),
@@ -1152,12 +1205,15 @@ def generate_turns(
             plan["task_id"] for plan in planned
         }),
         "rounds_per_question": dict(Counter(
-            plan["task_id"] for plan in planned
+            task_id for task_id, _ in {
+                (plan["task_id"], plan["branch_round"])
+                for plan in planned
+            }
         )),
         "round_index": str(output / "round_index.jsonl"),
         "scenes_without_eligible_fault": no_eligible,
         "requested_branches": len(planned),
-        "requested_feedback_rounds": len(planned),
+        "requested_feedback_rounds": base_feedback_round_count,
         **counts_summary,
         "stage4a_evidence_plans": str(output / "stage4a" / "journal"),
         "stage4b_reviewed_reports": str(output / "stage4b" / "journal"),
@@ -1167,9 +1223,12 @@ def generate_turns(
             output / "private" / "fault_alignment.jsonl"
         ),
         "limitations": [
+            "Candidate enumeration and ranking are deterministic 4A-only; all unselected trials remain privately auditable and do not consume LLM requests.",
+            "The default 4A search only retries the frozen executable Macro path; new independent verification operators are not yet synthesized.",
+            "One atomic fault per candidate is sufficient to expose several multi-round outcomes; trial count is not the number of distinct questions.",
             "Every accepted base Main decision round receiving a prior Sub-Agent batch is indexed; only an explicit debug cap limits extraction.",
             "Feedback rounds after the configured max_rounds budget are indexed but transparently skipped, never silently omitted.",
-            "One fault injection window per round sample: the latest completed Sub-Agent batch.",
+            "The initial fault injection window is the latest completed Sub-Agent batch. Optional event-scheduled future atoms are separately audited.",
             "Only preflight-executable fault/macro pairs are sampled.",
             "Only publicly observable discrepancies trigger targeted repair labels.",
             "Clean World/Gold never change; uncorrected counterfactuals are private, not reviewed turns.",
@@ -1189,6 +1248,7 @@ def generate_turns(
         tqdm.write(
             "Evidence rounds: "
             f"{summary['completed_branches']}/{summary['requested_feedback_rounds']} "
+            f"| selected={summary['candidates_selected_for_language_review']} "
             f"| execution recovered={summary['execution_recovered_branches']} "
             f"| incorrect={summary['incorrect']} "
             f"| reviewed branches={summary['reviewed_branches']} "
