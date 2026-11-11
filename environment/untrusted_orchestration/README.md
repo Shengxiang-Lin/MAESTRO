@@ -87,6 +87,11 @@ compares final field assertions with the complete actual delivered relation;
 the intermediate trace and erroneous returned WorkProduct remain immutable.
 A wrong result must be described as an actual *return*, not silently corrected
 to a plausible clean value. Critic instructions reinforce this distinction.
+When the Critic specifically confuses an intermediate observation with
+final delivery, the same independent Critic is given one narrow second
+review with the unchanged actual WorkProduct and trace. This does not
+automatically override failure: an unsupported or inconsistent narrative
+remains rejected if the second review also fails.
 Author and Critic must still independently pass: there is no blanket
 acceptance of inconsistent or unsupported results.
 
