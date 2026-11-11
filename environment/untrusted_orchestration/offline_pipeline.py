@@ -248,6 +248,19 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                 break
             step["reasoning"] = action["reasoning"]
             step["params"] = deepcopy(action["params"])
+            if step["action"] == "delegate_task":
+                # In this offline pipeline 4B was authored before 4C.
+                # Rebind only the public *instruction metadata* to the
+                # final Main-assigned language. Actual observed evidence,
+                # report prose and frozen WorkProduct are unchanged.
+                for report, task_action in zip(
+                    step["result"]["subtask_results"],
+                    action["params"]["tasks"],
+                ):
+                    report["task_instruction"] = task_action[
+                        "task_instruction"
+                    ]
+                    report["model"] = task_action["model"]
             turns.append({
                 "sample_id": (scene["task_id"] +
                               f"-branch-{fork:02d}-round-{round_number:02d}"),
