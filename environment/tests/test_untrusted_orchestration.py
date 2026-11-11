@@ -369,6 +369,8 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             summary = generate_turns(**args)
             self.assertEqual(summary["requested_branches"], 1)
             self.assertEqual(summary["recovered"], 1)
+            self.assertEqual(summary["fault_mode_outcomes"]["missing"],
+                             {"recovered": 1})
             self.assertGreater(summary["main_training_turns"], 0)
             output = root / "output"
             lines = [
@@ -387,6 +389,14 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                                  .read_text().splitlines()))
             with self.assertRaisesRegex(ValueError, "signature_mismatch"):
                 generate_turns(**{**args, "seed": 99})
+            journal = output / "journal" / "000000.json"
+            recorded = json.loads(journal.read_text(encoding="utf-8"))
+            recorded["private_audit"]["parallel_batches_verified"] = False
+            journal.write_text(json.dumps(recorded), encoding="utf-8")
+            with self.assertRaisesRegex(
+                RuntimeError, "unsafe_parallel_batch_cannot_publish",
+            ):
+                generate_turns(**args)
 
 
 if __name__ == "__main__":
