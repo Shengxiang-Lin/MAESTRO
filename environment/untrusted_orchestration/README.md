@@ -6,15 +6,18 @@ Run from the MAESTRO repository root:
 python -m environment generate-untrusted-turns \
   --config environment/configs/untrusted_orchestration.yaml \
   --mode llm \
-  --output-dir environment/data/maestro_untrusted_rounds_v9
+  --output-dir environment/data/maestro_untrusted_rounds_v10
 ```
 
 The runner uses the frozen Scene/World/Macro DAG, reviewed Stage-2 reports,
-and accepted Stage-3 base episodes as inputs. **The primary sample unit is
-one existing (Question, Main decision round)**, not a random number of
-branches per Question. For each accepted Stage-3 `delegate_task` batch that
-returned Sub-Agent feedback in round `t-1`, Stage 4A extracts its next Main
-decision point `t`; the clean feedback history before `t-1` is preserved.
+and accepted Stage-3 base episodes as inputs. The base **feedback-round
+unit** is (Question, Main decision round). In V10's default
+`candidate_strategy: enumerate` mode, a feedback round expands into
+multiple real-executor candidate trials indexed by the returned Sub-Agent
+task, atomic mechanism and (for applicable faults) real distractor value.
+For each accepted Stage-3 `delegate_task` batch returning feedback in
+round `t-1`, Stage 4A extracts its next decision point `t`; the clean
+feedback history before `t-1` is preserved.
 In `scenario_mode: round_fork` (the exact V8 compatibility case), one
 preflight-executable missing/partial/wrong fault is injected into the
 just-returned batch, and the continuation is re-executed. In the default
@@ -33,6 +36,67 @@ feedback rounds. `branches_per_scene` is retained only as an optional
 chronological debugging cap. A `max_rounds` recovery budget below a
 particular Main decision round is recorded as a skipped round rather
 than quietly discarding it.
+
+## V10: many cheap 4A trials, few expensive 4B/4C calls
+
+The Stage-1 Macro-first Question/World, Stage-2 trusted reports, and
+Stage-3 Macro-driven trusted Episodes **are not regenerated or modified**.
+V10 adds two *offline-only* steps around the existing 4A executor:
+
+1. **Candidate enumeration:** Test each task in the just-returned batch
+   against each configured atomic mechanism and up to
+   `max_distractors_per_fault` distinct *real* source-backed distractors.
+   Preflight executes the frozen Macro with its actual authorized sources.
+   All legal, deterministic candidates are kept up to the explicit
+   per-feedback-round cap; no synthetic reports or additional sources
+   are invented. A single candidate contains one initial fault by default.
+2. **Causal selection before LLM:** Execute **all** candidates in 4A
+   and classify each from its actual audit: visible verification, upstream
+   revalidation, downstream invalidation, recovered Wrong/Partial/Missing,
+   or non-recovery. Dedupe comparable evidence-request behaviors within
+   a feedback round; prefer real downstream invalidations over routine
+   missing-result retries. Only `max_selected_per_round` **recovered**
+   candidates enter 4B and 4C. The others remain in private 4A journals.
+
+Default settings:
+
+```yaml
+scenario_mode: event_driven
+candidate_strategy: enumerate
+max_candidates_per_round: 24
+max_distractors_per_fault: 2
+max_selected_per_round: 1
+max_fault_atoms: 1
+```
+
+For exact V9 random single-scenario behavior, switch
+`candidate_strategy: sample_one`. Do not reuse an old V9 output directory:
+the manifest includes source hashes and the new sampling configuration.
+
+**Files and metrics:** `feedback_round_index.jsonl` has exactly one
+row per original accepted feedback round; `round_index.jsonl` indexes
+the expanded trial candidates. `stage4a/journal/*.json` contains
+*every* replay. `private/candidate_selection.jsonl` contains one
+acceptance decision and actual behavioral category per candidate.
+For analysis only, it also separates the private Missing/Partial/Unreliable
+fault family from the actual Main-visible delivery state (e.g.
+`apparently_complete`). Hidden fault categories are never placed into
+the Main prompt. `stage4b/journal`,
+`journal`, `main_turns.jsonl` and `episodes.jsonl` hold reviewed or
+selected outputs. `private/scene_evidence_affordances.jsonl` separately
+audits the original Macro topology for independent source scopes,
+complementary fusion and *potential* same-field cross-checks; shared
+fields alone do not establish independent verification. The summary
+distinguishes `requested_feedback_rounds`, `candidate_trials`,
+`candidates_simulated`, `candidates_selected_for_language_review`,
+`screened_out_before_llm`, and recovered/publication counts.
+
+**Limitations:** This iteration does not synthesize a new independent
+EvidenceGap Sub-Agent tool program. Every 4A dispatch still executes a
+frozen authorized Macro chain, possibly as a targeted field-level retry.
+It also does not add optional verification sources to Stage 1 or create
+an online agent evaluation environment. A private Gold comparison
+decides data publication eligibility, never the next Main action.
 
 ## Unified event engine (V9)
 
@@ -128,16 +192,17 @@ operator or alternative route is fabricated. Completion is evaluated
 privately against frozen Gold but **Gold cannot trigger a VERIFY label**.
 
 **4B — Sub-Agent Feedback Generation (LLM only for Reports).** After *all*
-4A round samples have been simulated, naturalize the faulty or newly
-executed Sub-Agent Attempt traces
+4A candidate trials have been simulated and the deterministic selector
+has chosen recovered examples, naturalize only those selected faulty or
+newly executed Sub-Agent Attempt traces
 from the private ledger. A report sees only its own observed rows, source
 atoms, assigned instruction and execution outcome, not a future attempt or
 clean Gold. Previously accepted clean prefix reports are preserved. Report
 Author/Guard/Critic can revise a failed report without calling Main; fallback
 reports remain explicitly labeled and excluded from positive reviewed-turn.
 
-**4C — Main Action Generation (LLM only for Main).** After *all* 4B
-round samples have been processed, rebuild cumulative O1 `subtask_history` strictly from
+**4C — Main Action Generation (LLM only for Main).** After *selected* 4B
+candidate branches have been processed, rebuild cumulative O1 `subtask_history` strictly from
 the FINAL reviewed/fallback Sub-Agent reports. Assignments retain 4A's legal
 action count, source permissions, primitive tool routing and evidence goals,
 but refresh parent context from the newly finalized public feedback. A

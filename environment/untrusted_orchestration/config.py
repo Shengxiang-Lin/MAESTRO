@@ -20,6 +20,8 @@ _REQUIRED = {
         "overwrite", "no_progress",
         "scenario_mode", "atomic_fault_kinds",
         "max_fault_atoms", "delayed_evidence_probability",
+        "candidate_strategy", "max_candidates_per_round",
+        "max_distractors_per_fault", "max_selected_per_round",
     },
     "model": {
         "author_api_base", "author_model", "critic_api_base",
@@ -68,6 +70,16 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         "seed": run.get("seed", 17),
         "fault_modes": run.get("fault_modes", ["missing", "partial", "wrong"]),
         "scenario_mode": run.get("scenario_mode", "round_fork"),
+        "candidate_strategy": run.get("candidate_strategy", "sample_one"),
+        "max_candidates_per_round": run.get(
+            "max_candidates_per_round", 24
+        ),
+        "max_distractors_per_fault": run.get(
+            "max_distractors_per_fault", 2
+        ),
+        "max_selected_per_round": run.get(
+            "max_selected_per_round", 1
+        ),
         "atomic_fault_kinds": run.get("atomic_fault_kinds", [
             "no_result", "incomplete_retrieval", "wrong_retrieval",
             "wrong_entity_binding", "report_missing",
@@ -150,6 +162,19 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             or not set(modes) <= {"missing", "partial", "wrong"}):
         raise ValueError("untrusted_invalid_fault_modes")
     from .atomic_faults import ATOM_TO_MODE
+    strategy = config["candidate_strategy"]
+    if strategy not in {"sample_one", "enumerate"}:
+        raise ValueError("untrusted_invalid_candidate_strategy")
+    if strategy == "enumerate" and config["scenario_mode"] != "event_driven":
+        raise ValueError("untrusted_enumeration_requires_event_driven")
+    for field, minimum, maximum in (
+        ("max_candidates_per_round", 1, 128),
+        ("max_distractors_per_fault", 1, 10),
+        ("max_selected_per_round", 1, 8),
+    ):
+        value = config[field]
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError("untrusted_invalid_" + field)
     if config["scenario_mode"] not in {"round_fork", "event_driven"}:
         raise ValueError("untrusted_invalid_scenario_mode")
     kinds = config["atomic_fault_kinds"]

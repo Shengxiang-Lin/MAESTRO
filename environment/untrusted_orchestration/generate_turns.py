@@ -28,6 +28,9 @@ from .scenario_generator import make_scenario
 from .trajectory_builder import build_branch
 from .offline_pipeline import author_branch_reports, author_branch_main
 from .publication_guard import review_turn_surface
+from .candidate_exploration import expand_all_rounds
+from .candidate_selection import select_recovered_candidates
+from .evidence_affordances import analyze_scene_evidence_affordances
 
 
 def _jsonl(path: Path) -> list[dict]:
@@ -67,6 +70,8 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
     code_files = (
         "faults.py", "atomic_faults.py", "report_faults.py",
         "event_scheduler.py", "scenario_generator.py",
+        "candidate_exploration.py", "candidate_selection.py",
+        "evidence_affordances.py",
         "publication_guard.py",
         "state_machine.py", "report_author.py",
         "trajectory_builder.py", "generate_turns.py",
@@ -320,7 +325,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             episodes.append(public_episode)
         if status == "recovered":
             positive_turns.extend(data["turns"])
-        else:
+        elif status != "not_selected_for_language_review":
             failures.append({
                 "task_id": data["task_id"],
                 "branch_index": plan["index"],
@@ -496,7 +501,11 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                               "recovered", "skipped_unsupported",
                               "rejected_validation",
                               "incorrect_result_after_actual_propagation",
+                              "not_selected_for_language_review",
                           }),
+        "screened_out_before_llm": counters[
+            "not_selected_for_language_review"
+        ],
         "skipped_or_rejected": (
             counters["skipped_unsupported"] +
             counters["rejected_validation"]
@@ -589,6 +598,10 @@ def generate_turns(
     atomic_fault_kinds: list[str] | None = None,
     max_fault_atoms: int = 1,
     delayed_evidence_probability: float = 0.0,
+    candidate_strategy: str = "sample_one",
+    max_candidates_per_round: int = 24,
+    max_distractors_per_fault: int = 2,
+    max_selected_per_round: int = 1,
     max_revisions: int = 2,
     report_max_revisions: int | None = None,
     main_max_revisions: int | None = None,
@@ -633,6 +646,17 @@ def generate_turns(
     } or any(output.resolve() == p.parent.resolve() for p in paths):
         raise ValueError("untrusted_output_overwrites_input")
 
+    if candidate_strategy not in {"sample_one", "enumerate"}:
+        raise ValueError("invalid_candidate_strategy")
+    if candidate_strategy == "enumerate" and scenario_mode != "event_driven":
+        raise ValueError("enumeration_requires_event_driven_scenario")
+    for name, value, maximum in (
+        ("max_candidates_per_round", max_candidates_per_round, 128),
+        ("max_distractors_per_fault", max_distractors_per_fault, 10),
+        ("max_selected_per_round", max_selected_per_round, 8),
+    ):
+        if type(value) is not int or not 1 <= value <= maximum:
+            raise ValueError("invalid_" + name)
     modes = list(fault_modes or ["missing", "partial", "wrong"])
     if scenario_mode not in {"round_fork", "event_driven"}:
         raise ValueError("invalid_scenario_mode")
@@ -658,6 +682,10 @@ def generate_turns(
         "atomic_fault_kinds": kinds,
         "max_fault_atoms": max_fault_atoms,
         "delayed_evidence_probability": delayed_evidence_probability,
+        "candidate_strategy": candidate_strategy,
+        "max_candidates_per_round": max_candidates_per_round,
+        "max_distractors_per_fault": max_distractors_per_fault,
+        "max_selected_per_round": max_selected_per_round,
         "multi_target_probability": multi_target_probability,
         "max_rounds": max_rounds, "max_cost": max_cost,
         "max_retries": max_retries, "max_parallel_tasks": max_parallel_tasks,
@@ -690,6 +718,19 @@ def generate_turns(
         max_fault_atoms=max_fault_atoms,
         delayed_evidence_probability=delayed_evidence_probability,
     )
+    base_feedback_round_count = len(planned)
+    if candidate_strategy == "enumerate":
+        # Source-true variants are tested by the executable 4A preflight,
+        # not ranked by LLM preference or arbitrary hallucinated facts.
+        planned = expand_all_rounds(
+            scenes, planned,
+            atomic_fault_kinds=kinds,
+            max_candidates_per_round=max_candidates_per_round,
+            max_distractors_per_fault=max_distractors_per_fault,
+            max_fault_atoms=max_fault_atoms,
+            delayed_evidence_probability=delayed_evidence_probability,
+            seed=seed,
+        )
     if overwrite and output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -701,8 +742,45 @@ def generate_turns(
         raise ValueError("untrusted_existing_output_without_manifest")
     else:
         _atomic_json(manifest, signature)
+    # Baseline Macro/Source verification affordances are diagnostic only.
+    # Do not reclassify complementary evidence as an independent verifier
+    # or read hidden World rows into Main decisions.
+    affordance_rows = [
+        analyze_scene_evidence_affordances(scene)
+        for scene in scenes if scene["task_id"] in base
+    ]
+    _atomic_jsonl(
+        output / "private" / "scene_evidence_affordances.jsonl",
+        affordance_rows,
+    )
     # Explicit, inspectable round index; unsupported feedback rounds are
     # retained instead of disappearing silently from the total.
+    # Two explicit levels of indexing: baseline feedback rounds and
+    # the expanded one-fault trial ledger. Do not call 2,000 trials
+    # "2,000 Main rounds" in a downstream data analysis.
+    feedback_groups = {}
+    for plan in planned:
+        key = (plan["task_id"], plan["branch_round"])
+        if key not in feedback_groups:
+            feedback_groups[key] = {
+                "question_id": plan["task_id"],
+                "main_decision_round": plan["branch_round"],
+                "received_from_delegate_round":
+                    plan["received_from_delegate_round"],
+                "latest_subagent_task_ids": plan["incoming_task_ids"],
+                "candidate_count": 0,
+                "candidate_trial_ids": [],
+                "candidates_pruned_by_cap":
+                    plan.get("candidate_count_pruned", 0),
+            }
+        feedback_groups[key]["candidate_count"] += 1
+        feedback_groups[key]["candidate_trial_ids"].append(
+            plan["sample_id"]
+        )
+    _atomic_jsonl(
+        output / "feedback_round_index.jsonl",
+        list(feedback_groups.values()),
+    )
     _atomic_jsonl(output / "round_index.jsonl", [{
         "round_sample_id": plan["sample_id"],
         "question_id": plan["task_id"],
@@ -715,6 +793,9 @@ def generate_turns(
         "skip_reason": plan["skip_reason"],
         "scenario_mode": plan["scenario_plan"]["mode"],
         "scenario_blueprint": plan["scenario_plan"]["blueprint"],
+        "candidate_variant_index": plan.get("candidate_variant_index"),
+        "candidate_count_total": plan.get("candidate_count_total"),
+        "candidate_count_pruned": plan.get("candidate_count_pruned"),
         "atomic_fault_kinds": [
             a["kind"] for a in plan["scenario_plan"]["fault_atoms"]
         ],
@@ -962,16 +1043,62 @@ def generate_turns(
         simulate, stage="simulation",
     )
 
+    # The 4A search is intentionally wider than the expensive 4B/4C
+    # publication candidates. Keep ALL executions in stage4a/journal
+    # and an explicit private selection ledger, including failures.
+    if candidate_strategy == "enumerate":
+        selected_indices, selection_rows, selection_stats = (
+            select_recovered_candidates(
+                planned, [saved(stage_a, plan) for plan in planned],
+                max_selected_per_round=max_selected_per_round,
+            )
+        )
+    else:
+        selected_indices = {plan["index"] for plan in planned}
+        selection_rows = [{
+            "candidate_index": plan["index"],
+            "round_sample_id": plan["sample_id"],
+            "selected_for_language_review": True,
+            "selection_reason": "legacy_sample_one_all_candidates",
+        } for plan in planned]
+        selection_stats = {
+            "candidates_simulated": len(planned),
+            "candidates_selected_for_language_review": len(planned),
+            "candidates_filtered_before_llm": 0,
+            "candidate_behavior_distribution": {},
+            "selected_behavior_distribution": {},
+        }
+    _atomic_jsonl(
+        output / "private" / "candidate_selection.jsonl",
+        selection_rows,
+    )
+
     def report_count(data: dict) -> int:
         audit = (data or {}).get("private_audit") or {}
         return len(audit.get("subagent_report_reviews", []))
 
-    total_reports = sum(report_count(saved(stage_a, p)) for p in planned)
-    initial_reports = sum(report_count(saved(stage_b, p)) for p in planned)
+    total_reports = sum(
+        report_count(saved(stage_a, p))
+        for p in planned if p["index"] in selected_indices
+    )
+    initial_reports = sum(
+        report_count(saved(stage_b, p))
+        for p in planned if p["index"] in selected_indices
+    )
 
     def make_reports(plan: dict, tick) -> None:
         source = saved(stage_a, plan)
         scene = scenes[plan["scene_index"]]
+        if plan["index"] not in selected_indices:
+            # Deliberately no LLM call. Preserve full private 4A audit,
+            # but do not expose a failed/unselected Episode as a positive
+            # or a potentially misleading public training example.
+            write(stage_b, plan, {
+                **source, "status": "not_selected_for_language_review",
+                "error": "4a_candidate_screened_out",
+                "episode": None, "turns": [],
+            })
+            return
         if source["episode"] is None:
             write(stage_b, plan, source)
             return
@@ -1061,8 +1188,29 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_event_engine_v1",
+        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v2",
         "scenario_mode": scenario_mode,
+        "candidate_strategy": candidate_strategy,
+        "max_candidates_per_feedback_round": max_candidates_per_round,
+        "max_distractors_per_fault": max_distractors_per_fault,
+        "max_selected_per_feedback_round": max_selected_per_round,
+        "candidate_selection_diagnostics": str(
+            output / "private" / "candidate_selection.jsonl"
+        ),
+        "evidence_affordance_diagnostics": str(
+            output / "private" / "scene_evidence_affordances.jsonl"
+        ),
+        "potential_cross_check_macro_pairs": sum(
+            x["potential_cross_check_pairs"] for x in affordance_rows
+        ),
+        "complementary_fusion_macro_pairs": sum(
+            x["complementary_fusion_pairs"] for x in affordance_rows
+        ),
+        "provisional_downstream_late_witness_pairs": sum(
+            x["provisional_downstream_before_late_witness_pairs"]
+            for x in affordance_rows
+        ),
+        **selection_stats,
         "scenario_blueprints": dict(Counter(
             p["scenario_plan"]["blueprint"] for p in planned
         )),
@@ -1097,11 +1245,17 @@ def generate_turns(
         ),
         "input_scenes": len(scenes),
         "scenes_without_accepted_base": no_base,
-        "round_sampling_unit": "question_x_main_feedback_round",
-        "rounds_extracted_from_base": len(planned),
-        "rounds_with_executable_fault": sum(
-            not plan["skip_reason"] for plan in planned
+        "round_sampling_unit": (
+            "question_x_feedback_round_x_atomic_instance"
+            if candidate_strategy == "enumerate"
+            else "question_x_main_feedback_round"
         ),
+        "rounds_extracted_from_base": base_feedback_round_count,
+        "candidate_trials": len(planned),
+        "rounds_with_executable_fault": len({
+            (plan["task_id"], plan["branch_round"])
+            for plan in planned if not plan["skip_reason"]
+        }),
         "rounds_without_executable_fault": sum(
             plan["skip_reason"] == "no_executable_fault_on_returned_batch"
             for plan in planned
@@ -1114,12 +1268,18 @@ def generate_turns(
             plan["task_id"] for plan in planned
         }),
         "rounds_per_question": dict(Counter(
-            plan["task_id"] for plan in planned
+            task_id for task_id, _ in sorted({
+                (plan["task_id"], plan["branch_round"])
+                for plan in planned
+            })
         )),
         "round_index": str(output / "round_index.jsonl"),
+        "feedback_round_index": str(
+            output / "feedback_round_index.jsonl"
+        ),
         "scenes_without_eligible_fault": no_eligible,
         "requested_branches": len(planned),
-        "requested_feedback_rounds": len(planned),
+        "requested_feedback_rounds": base_feedback_round_count,
         **counts_summary,
         "stage4a_evidence_plans": str(output / "stage4a" / "journal"),
         "stage4b_reviewed_reports": str(output / "stage4b" / "journal"),
@@ -1129,9 +1289,12 @@ def generate_turns(
             output / "private" / "fault_alignment.jsonl"
         ),
         "limitations": [
+            "Candidate enumeration and ranking are deterministic 4A-only; all unselected trials remain privately auditable and do not consume LLM requests.",
+            "The default 4A search only retries the frozen executable Macro path; new independent verification operators are not yet synthesized.",
+            "One atomic fault per candidate is sufficient to expose several multi-round outcomes; trial count is not the number of distinct questions.",
             "Every accepted base Main decision round receiving a prior Sub-Agent batch is indexed; only an explicit debug cap limits extraction.",
             "Feedback rounds after the configured max_rounds budget are indexed but transparently skipped, never silently omitted.",
-            "One fault injection window per round sample: the latest completed Sub-Agent batch.",
+            "The initial fault injection window is the latest completed Sub-Agent batch. Optional event-scheduled future atoms are separately audited.",
             "Only preflight-executable fault/macro pairs are sampled.",
             "Only publicly observable discrepancies trigger targeted repair labels.",
             "Clean World/Gold never change; uncorrected counterfactuals are private, not reviewed turns.",
@@ -1151,6 +1314,7 @@ def generate_turns(
         tqdm.write(
             "Evidence rounds: "
             f"{summary['completed_branches']}/{summary['requested_feedback_rounds']} "
+            f"| selected={summary['candidates_selected_for_language_review']} "
             f"| execution recovered={summary['execution_recovered_branches']} "
             f"| incorrect={summary['incorrect']} "
             f"| reviewed branches={summary['reviewed_branches']} "
