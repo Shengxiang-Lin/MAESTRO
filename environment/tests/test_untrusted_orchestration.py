@@ -696,7 +696,11 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             report_author=Author(), report_critic=Critic(),
             main_max_revisions=0, report_max_revisions=0,
         )
-        self.assertEqual(audit["outcome"], "recovered")
+        self.assertEqual(
+            audit["outcome"], "recovered",
+            repr(audit["subagent_report_reviews"]) + " / " +
+            repr(audit["main_action_reviews"]),
+        )
         self.assertTrue(turns)
         self.assertTrue(all(
             review["authoring"]["mode"] == "llm_reviewed"
