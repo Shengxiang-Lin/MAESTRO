@@ -48,7 +48,8 @@ def evidence_request(state, task_id: str, *, round_number: int,
     """
     task = state.tasks[task_id]
     previous = state.current.get(task_id)
-    issue = state.visible_discrepancy(task_id) if previous else None
+    issue = (state.visible_discrepancy(task_id)
+             or previous.runtime.get("visible_issue")) if previous else None
     target = list(task["outputs"]["typed_relation"])
     required = _required_fields(state, task)
     missing = []
