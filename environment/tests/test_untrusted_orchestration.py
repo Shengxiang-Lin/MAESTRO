@@ -598,6 +598,89 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertIn("KEY1-96979", rejected["finish_result"]["result"])
         self.assertNotIn("KEY1-94705", rejected["finish_result"]["result"])
 
+    def test_4b_critic_boundary_rereview_does_not_rewrite_results(self):
+        from environment.generate_question.program_ir import Relation
+        task = {
+            "task_id": "lookup-record",
+            "source_ids": ["index"],
+            "operator_chain": [{
+                "op": "lookup_by_key", "source_id": "index",
+                "input_key_field": "record_key_1",
+                "source_key_field": "record_key_1",
+            }],
+        }
+        attempt = Attempt(
+            task_id="lookup-record", version=1, status="done",
+            product=Relation(("record_key_1", "completed_count"), ({
+                "values": {
+                    "record_key_1": "KEY1-96979",
+                    "completed_count": 13,
+                }, "support": ("index:F013",),
+            },)),
+            available_fields=("record_key_1", "completed_count"),
+            used_parent_versions={}, runtime={},
+        )
+
+        class Author:
+            def complete_json(self, system, request):
+                return {
+                    "result": (
+                        "The returned ledger entry KEY1-96979 has a "
+                        "completed count of 13."
+                    ),
+                    "summary": (
+                        "The supplied ledger returned this observation "
+                        "without an independent source check."
+                    ),
+                    "trace_summary": (
+                        "I examined the assigned keyed record and "
+                        "reported the fields actually delivered."
+                    ),
+                }
+
+        class Critic:
+            def __init__(self, second_pass):
+                self.calls = 0
+                self.second_pass = second_pass
+            def complete_json(self, system, request):
+                self.calls += 1
+                if "SECOND REVIEW" in system and self.second_pass:
+                    return {
+                        "verdict": "pass", "grounded": True,
+                        "scope_preserved": True, "natural": True,
+                        "useful": True,
+                    }
+                return {
+                    "verdict": "fail", "grounded": False,
+                    "scope_preserved": False, "natural": True,
+                    "useful": False,
+                    "reason": (
+                        "An intermediate lookup allegedly showed another "
+                        "key, so the final delivered value should be "
+                        "replaced with the earlier observation."
+                    ),
+                }
+
+        critic = Critic(second_pass=True)
+        report, meta = naturalize_report(
+            task, attempt, instruction="Read the assigned ledger record.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=critic, max_revisions=0,
+        )
+        self.assertEqual(critic.calls, 2)
+        self.assertEqual(meta["mode"], "llm_reviewed")
+        self.assertTrue(meta["critic_boundary_rereviewed"])
+        self.assertIn("KEY1-96979", report["finish_result"]["result"])
+
+        rejecting = Critic(second_pass=False)
+        _, failed = naturalize_report(
+            task, attempt, instruction="Read the assigned ledger record.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=rejecting, max_revisions=0,
+        )
+        self.assertEqual(rejecting.calls, 2)
+        self.assertEqual(failed["mode"], "grounded_template_fallback")
+
     def test_llm_author_preserves_partial_and_missing_status(self):
         from environment.generate_question.program_ir import Relation
         task = {
