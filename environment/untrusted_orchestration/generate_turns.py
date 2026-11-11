@@ -158,6 +158,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     journals = output / "journal"
     episodes, positive_turns, audits, failures = [], [], [], []
     counters = Counter()
+    mode_outcomes: dict[str, Counter] = defaultdict(Counter)
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -166,6 +167,15 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         if data["task_id"] != plan["task_id"]:
             raise RuntimeError("untrusted_journal_scene_mismatch")
         counters[data["status"]] += 1
+        for mode in {fault.mode for fault in plan["faults"]}:
+            mode_outcomes[mode][data["status"]] += 1
+        if data["status"] == "recovered" and (
+            not isinstance(data.get("private_audit"), dict)
+            or data["private_audit"].get("parallel_batches_verified") is not True
+        ):
+            raise RuntimeError(
+                "untrusted_unsafe_parallel_batch_cannot_publish_positive_sft"
+            )
         if data.get("episode") is not None:
             public_episode = deepcopy(data["episode"])
             # Truth labels belong in private audit, never public SFT.
@@ -204,6 +214,10 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         ),
         "main_training_turns": len(positive_turns),
         "outcomes": dict(counters),
+        "fault_mode_outcomes": {
+            mode: dict(counts)
+            for mode, counts in sorted(mode_outcomes.items())
+        },
     }
 
 
