@@ -459,6 +459,27 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
     return sorted(set(issues))
 
 
+def _review_confuses_intermediate_and_delivery(review: dict) -> bool:
+    """Identify a *possible* reviewer scope error, never auto-accept it."""
+    if not isinstance(review, dict) or review.get("verdict") != "fail":
+        return False
+    reason = (
+        str(review.get("reason") or "") + " "
+        + str(review.get("repair_hint") or "")
+    ).lower()
+    return (
+        bool(re.search(
+            r"intermediate|sampled|observed|projection|project|join|lookup",
+            reason,
+        ))
+        and bool(re.search(
+            r"delivered|returned|final|partial|null|missing|"
+            r"no rows|zero rows|should yield|should return",
+            reason,
+        ))
+    )
+
+
 def naturalize_report(task: dict, attempt: Attempt, *,
                       instruction: str, model_alias: str,
                       reviewed: dict | None,
@@ -569,6 +590,46 @@ def naturalize_report(task: dict, attempt: Attempt, *,
         except Exception as exc:
             failures.append({"stage": "critic_backend", "reason": str(exc)[:200]})
             continue
+        # A critic may mistake an intermediate operator preview for the
+        # final returned WorkProduct, particularly under partial/wrong
+        # execution. Re-review this narrow class of objections using the
+        # SAME immutable actual-attempt contract. Never auto-accept or
+        # rewrite the result just because the first critique appears wrong.
+        scope_rereviewed = False
+        if _review_confuses_intermediate_and_delivery(decision):
+            scope_rereviewed = True
+            try:
+                decision = critic.complete_json(
+                    _CRITIC_SYSTEM + (
+                        "\\nSECOND REVIEW: Distinguish the authoritative "
+                        "final actual_delivered_rows from earlier intermediate "
+                        "operator outputs and sampled evidence atoms. "
+                        "A returned value may differ from an intermediate; "
+                        "do not rewrite the returned value as a correction. "
+                        "Check whether the report claims verification or "
+                        "only faithfully describes the return. If its "
+                        "summary invents a successful match or operation, "
+                        "still FAIL. Do not auto-pass this review.\\n"
+                    ),
+                    json.dumps({
+                        "observed_current_attempt": contract,
+                        "candidate_main_facing_report": {
+                            "result": result,
+                            "summary": candidate["summary"],
+                            "trace_summary": candidate["trace_summary"],
+                            "status": attempt.status,
+                        },
+                        "first_critique_for_reconsideration": {
+                            "reason": str(decision.get("reason", ""))[:300],
+                        },
+                    }, ensure_ascii=False),
+                )
+            except Exception as exc:
+                failures.append({
+                    "stage": "critic_boundary_rereview_backend",
+                    "reason": str(exc)[:200],
+                })
+                continue
         if (isinstance(decision, dict)
                 and decision.get("verdict") == "pass"
                 and all(decision.get(k) is True for k in (
@@ -597,6 +658,7 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                     contract["trace_from_actual_execution"],
                 "executor_result_normalized": result_normalized,
                 "review": decision,
+                "critic_boundary_rereviewed": scope_rereviewed,
                 "actual_workproduct_immutable": True,
             }
         failures.append({
