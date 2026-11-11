@@ -27,6 +27,7 @@ from .atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
 from .scenario_generator import make_scenario
 from .trajectory_builder import build_branch
 from .offline_pipeline import author_branch_reports, author_branch_main
+from .publication_guard import review_turn_surface
 
 
 def _jsonl(path: Path) -> list[dict]:
@@ -66,6 +67,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
     code_files = (
         "faults.py", "atomic_faults.py", "report_faults.py",
         "event_scheduler.py", "scenario_generator.py",
+        "publication_guard.py",
         "state_machine.py", "report_author.py",
         "trajectory_builder.py", "generate_turns.py",
         "evidence_planning.py", "offline_pipeline.py",
@@ -268,6 +270,8 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     wrong_visibility_rows = []
     wrong_visibility_counts = Counter()
     wrong_visibility_outcomes: dict[str, Counter] = defaultdict(Counter)
+    publication_guard_rows = []
+    event_outcomes: dict[str, Counter] = defaultdict(Counter)
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -275,10 +279,25 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
         if data["task_id"] != plan["task_id"]:
             raise RuntimeError("untrusted_journal_scene_mismatch")
-        counters[data["status"]] += 1
+        status = data["status"]
+        leaks = [
+            {"sample_id": turn.get("sample_id"),
+             "issues": review_turn_surface(turn)}
+            for turn in data.get("turns", [])
+        ]
+        leaks = [row for row in leaks if row["issues"]]
+        if status == "recovered" and leaks:
+            status = "publication_generation_process_leak"
+            publication_guard_rows.append({
+                "branch_index": plan["index"],
+                "round_sample_id": plan["sample_id"],
+                "rejected_turns": leaks,
+            })
+        counters[status] += 1
         for mode in {fault.mode for fault in plan["faults"]}:
-            mode_outcomes[mode][data["status"]] += 1
-        if data["status"] == "recovered" and (
+            mode_outcomes[mode][status] += 1
+        event_outcomes[plan["scenario_plan"]["blueprint"]][status] += 1
+        if status == "recovered" and (
             not isinstance(data.get("private_audit"), dict)
             or data["private_audit"].get("parallel_batches_verified") is not True
         ):
@@ -291,15 +310,17 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             public_episode.pop("outcome", None)
             public_episode.pop("recovered", None)
             episodes.append(public_episode)
-        if data["status"] == "recovered":
+        if status == "recovered":
             positive_turns.extend(data["turns"])
         else:
             failures.append({
                 "task_id": data["task_id"],
                 "branch_index": plan["index"],
                 "branch_round": plan["branch_round"],
-                "status": data["status"],
-                "error": data.get("error"),
+                "status": status,
+                "error": data.get("error") or (
+                    "generation_process_leak" if leaks else None
+                ),
             })
         if data.get("private_audit") is not None:
             audit = data["private_audit"]
@@ -343,7 +364,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                             req["main_visible_justification"],
                     } for rnd, req in verifies],
                     "execution_outcome": execution_status,
-                    "final_publication_status": data["status"],
+                    "final_publication_status": status,
                     "interpretation": (
                         "Evidence-plan observability only; absence of "
                         "an explicit VERIFY is not proof that the error "
@@ -409,7 +430,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                     "local_main_action_review_passed": main_accepted,
                     "dependency_safe": dependency_safe,
                     "locally_qualified": locally_qualified,
-                    "globally_recovered": data["status"] == "recovered",
+                    "globally_recovered": status == "recovered",
                     "terminal_execution_outcome": audit.get(
                         "execution_outcome"
                     ),
@@ -426,6 +447,8 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     _atomic_jsonl(output / "main_turns.jsonl", positive_turns)
     _atomic_jsonl(output / "failed.jsonl", failures)
     _atomic_jsonl(output / "private" / "fault_alignment.jsonl", audits)
+    _atomic_jsonl(output / "private" / "publication_guard.jsonl",
+                  publication_guard_rows)
     _atomic_jsonl(output / "private" / "wrong_visibility.jsonl",
                   wrong_visibility_rows)
     _atomic_jsonl(output / "private" / "main_turns_local_review.jsonl",
@@ -477,6 +500,13 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "publication_main_action_failed":
             counters["main_action_not_accepted"],
         "execution_outcomes": dict(execution_outcomes),
+        "event_blueprint_outcomes": {
+            name: dict(counts)
+            for name, counts in sorted(event_outcomes.items())
+        },
+        "publication_generation_process_leaks": len(
+            publication_guard_rows
+        ),
         "wrong_visibility_by_explicit_verify": dict(wrong_visibility_counts),
         "wrong_visibility_execution_outcomes": {
             name: dict(counters)
