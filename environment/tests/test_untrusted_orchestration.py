@@ -1182,6 +1182,17 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             )
             self.assertEqual(summary["completed_branches"], 1)
             self.assertTrue((root / "dataset" / "main_turns.jsonl").exists())
+            for step in c["episode"]["trajectory"]:
+                if (step["action"] != "delegate_task"
+                        or step["attempt"] < c["private_audit"]["branch_round"]):
+                    continue
+                for assignment, report in zip(
+                    step["params"]["tasks"],
+                    step["result"]["subtask_results"],
+                ):
+                    self.assertEqual(assignment["task_instruction"],
+                                     report["task_instruction"])
+                    self.assertEqual(assignment["model"], report["model"])
         self.assertIn("report", events)
         self.assertIn("main", events)
         first_main = events.index("main")
