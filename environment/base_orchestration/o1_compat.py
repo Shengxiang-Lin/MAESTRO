@@ -33,7 +33,7 @@ def o1_prompt_from_history(
 ) -> str:
     """Exactly reconstruct the O1 prompt from shared Scene + turn state.
 
-    The on-disk per-turn SFT input stores only the cumulative subtask
+    The on-disk per-turn reviewed-turn input stores only the cumulative subtask
     history. The fixed prompt template, Question and source catalog are
     resolved from the Stage-1 Scene and these run-level rendering settings.
     """
@@ -97,7 +97,7 @@ def o1_prompt_from_turn(
     scene: dict, turn: dict, *, max_attempts: int,
     sub_model: str, model_alias: str = "model_1",
 ) -> str:
-    """Rebuild a full baseline O1 prompt for an exported compact SFT turn."""
+    """Rebuild a full baseline O1 prompt for an exported compact reviewed-turn turn."""
     if turn.get("task_id") != scene.get("task_id"):
         raise ValueError("stage3_turn_scene_mismatch")
     if type(turn.get("round")) is not int:
