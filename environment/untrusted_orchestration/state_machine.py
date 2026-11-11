@@ -557,6 +557,18 @@ class ExecutionState:
                 )
         return None
 
+    def _source_lineage(self, task_id: str) -> set[str]:
+        seen, queue, source_ids = set(), [task_id], set()
+        while queue:
+            tid = queue.pop()
+            if tid in seen:
+                continue
+            seen.add(tid)
+            task = self.tasks[tid]
+            source_ids.update(task.get("source_ids", []))
+            queue.extend(task["depends_on"])
+        return source_ids
+
     def _detect_late_cross_source_conflicts(self) -> None:
         """A *newly visible* independent report may dispute an old used key.
 
@@ -579,6 +591,11 @@ class ExecutionState:
                                 for p in parents):
                 continue
             left, right = parents
+            left_sources = self._source_lineage(left)
+            right_sources = self._source_lineage(right)
+            if (not left_sources or not right_sources
+                    or left_sources & right_sources):
+                continue
             left_key = joins[0]["left_on"]
             right_key = joins[0]["right_on"]
             left_values = self._public_field_values(
