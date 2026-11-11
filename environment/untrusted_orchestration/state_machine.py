@@ -47,6 +47,7 @@ class ExecutionState:
         self.detected_conflicts: list[dict] = []
         self.total_cost = 0
         self.invalidations: list[dict] = []
+        self.revalidations: list[dict] = []
 
     def _dependents(self, task_id: str) -> set[str]:
         affected, queue = set(), [task_id]
@@ -195,6 +196,8 @@ class ExecutionState:
         communicated value, NEVER a hidden clean executor result.
         """
         item = self.current[task_id]
+        if item.runtime.get("report_fault_kind") == "report_missing":
+            return None
         delivered = item.runtime.get("communicated_rows")
         if delivered is None:
             return item.product
@@ -233,6 +236,10 @@ class ExecutionState:
             evidence_index=self.fact_index,
         )
         previous = self.current.get(task_id)
+        previous_delivered = (
+            self.communicated_product(task_id)
+            if previous is not None else None
+        )
         version = (previous.version + 1 if previous else 1)
         cost = 1 + 2 * len(task["source_ids"])
         attempt = Attempt(
@@ -246,16 +253,36 @@ class ExecutionState:
         self.attempts[task_id].append(attempt)
         self.total_cost += cost
         if previous is not None:
-            for child in sorted(self._dependents(task_id)):
-                existing = self.current.get(child)
-                if existing is not None and existing.status != "stale":
-                    existing.status = "stale"
-                    self.invalidations.append({
-                        "replaced_task": task_id,
-                        "stale_task": child,
-                        "old_parent_version": previous.version,
-                        "new_parent_version": version,
-                    })
+            current_delivered = self.communicated_product(task_id)
+            previous_rows = relation_rows(previous_delivered)
+            current_rows = relation_rows(current_delivered)
+            changed = previous_rows != current_rows
+            affected = sorted(self._dependents(task_id))
+            if not changed:
+                # A disputed but reconfirmed value should NOT cause a
+                # cascade of redundant lookups. Preserve prior executed
+                # attempts and record semantic equivalence privately.
+                self.revalidations.append({
+                    "task_id": task_id,
+                    "old_version": previous.version,
+                    "new_version": version,
+                    "downstream_preserved": [
+                        child for child in affected
+                        if child in self.current
+                        and self.current[child].status != "stale"
+                    ],
+                })
+            else:
+                for child in affected:
+                    existing = self.current.get(child)
+                    if existing is not None and existing.status != "stale":
+                        existing.status = "stale"
+                        self.invalidations.append({
+                            "replaced_task": task_id,
+                            "stale_task": child,
+                            "old_parent_version": previous.version,
+                            "new_parent_version": version,
+                        })
         if public_report is not None:
             self.public_reports[task_id] = public_report
         return attempt
@@ -676,6 +703,7 @@ class ExecutionState:
                 for tid, attempts in self.attempts.items() if attempts
             },
             "invalidations": list(self.invalidations),
+            "revalidations": list(self.revalidations),
             "detected_conflicts": list(self.detected_conflicts),
             "public_report_rounds": dict(self.public_report_rounds),
             "total_cost": self.total_cost,
