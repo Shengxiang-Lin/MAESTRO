@@ -65,6 +65,9 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "../generate_question/compiler.py",
         "../generate_question/program_ir.py",
         "../base_orchestration/o1_compat.py",
+        "../base_orchestration/action_author.py",
+        "../implement_subtask/reporting.py",
+        "config.py",
         "../../orchestra/base_main_agent.py",
     )
     return {
@@ -159,6 +162,10 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     episodes, positive_turns, audits, failures = [], [], [], []
     counters = Counter()
     mode_outcomes: dict[str, Counter] = defaultdict(Counter)
+    report_modes = Counter()
+    main_modes = Counter()
+    report_statuses = Counter()
+    main_statuses = Counter()
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -193,7 +200,16 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 "error": data.get("error"),
             })
         if data.get("private_audit") is not None:
-            audits.append(data["private_audit"])
+            audit = data["private_audit"]
+            audits.append(audit)
+            for review in audit.get("subagent_report_reviews", []):
+                result = review["authoring"]
+                report_modes[result["mode"]] += 1
+                report_statuses[result.get("status", "unknown")] += 1
+            for review in audit.get("main_action_reviews", []):
+                result = review["authoring"]
+                main_modes[result["mode"]] += 1
+                main_statuses[result.get("status", "unknown")] += 1
     _atomic_jsonl(output / "episodes.jsonl", episodes)
     _atomic_jsonl(output / "main_turns.jsonl", positive_turns)
     _atomic_jsonl(output / "failed.jsonl", failures)
@@ -218,6 +234,10 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             mode: dict(counts)
             for mode, counts in sorted(mode_outcomes.items())
         },
+        "subagent_report_generation_modes": dict(report_modes),
+        "subagent_report_review_statuses": dict(report_statuses),
+        "main_action_generation_modes": dict(main_modes),
+        "main_action_review_statuses": dict(main_statuses),
     }
 
 
@@ -229,11 +249,18 @@ def generate_turns(
     persistence: str = "once", multi_target_probability: float = 0.0,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
     max_parallel_tasks: int = 4, workers: int = 4,
-    max_revisions: int = 2, sub_model: str = "qwen3-8b",
+    max_revisions: int = 2,
+    report_max_revisions: int | None = None,
+    main_max_revisions: int | None = None,
+    sub_model: str = "qwen3-8b",
     model_alias: str = "model_1", overwrite: bool = False,
     no_progress: bool = False,
     author=None, critic=None, report_author=None, report_critic=None,
     author_model: str | None = None, critic_model: str | None = None,
+    report_author_model: str | None = None,
+    report_critic_model: str | None = None,
+    main_mode: str | None = None,
+    report_mode: str | None = None,
 ) -> dict:
     paths = tuple(map(Path, (scenes_path, reports_path, base_episodes_path)))
     output = Path(output_dir)
@@ -243,6 +270,20 @@ def generate_turns(
         raise ValueError("untrusted_workers_invalid")
     if bool(author) != bool(critic) or bool(report_author) != bool(report_critic):
         raise ValueError("untrusted_author_and_critic_must_be_paired")
+    if main_mode is None:
+        main_mode = "llm" if author is not None else "template"
+    if report_mode is None:
+        report_mode = "llm" if report_author is not None else "template"
+    if (main_mode not in {"template", "llm"}
+            or report_mode not in {"template", "llm"}):
+        raise ValueError("untrusted_invalid_stage_llm_mode")
+    if ((main_mode == "llm") != (author is not None)
+            or (report_mode == "llm") != (report_author is not None)):
+        raise ValueError("untrusted_stage_mode_requires_matching_clients")
+    if report_max_revisions is None:
+        report_max_revisions = max_revisions
+    if main_max_revisions is None:
+        main_max_revisions = max_revisions
     if output.resolve() in {
         path.resolve() for path in paths
     } or any(output.resolve() == p.parent.resolve() for p in paths):
@@ -256,10 +297,16 @@ def generate_turns(
         "multi_target_probability": multi_target_probability,
         "max_rounds": max_rounds, "max_cost": max_cost,
         "max_retries": max_retries, "max_parallel_tasks": max_parallel_tasks,
-        "max_revisions": max_revisions, "sub_model": sub_model,
+        "max_revisions": max_revisions,
+        "report_max_revisions": report_max_revisions,
+        "main_max_revisions": main_max_revisions,
+        "sub_model": sub_model,
         "model_alias": model_alias, "author_model": author_model,
         "critic_model": critic_model,
-        "mode": "llm" if author else "template",
+        "report_author_model": report_author_model,
+        "report_critic_model": report_critic_model,
+        "main_mode": main_mode,
+        "report_mode": report_mode,
     }
     signature = _signature(paths, settings)
     scenes = _jsonl(paths[0])[:max_scenes]
@@ -306,7 +353,10 @@ def generate_turns(
                 max_rounds=max_rounds, max_cost=max_cost,
                 max_retries=max_retries,
                 max_parallel_tasks=max_parallel_tasks,
-                max_revisions=max_revisions, sub_model=sub_model,
+                max_revisions=max_revisions,
+                report_max_revisions=report_max_revisions,
+                main_max_revisions=main_max_revisions,
+                sub_model=sub_model,
                 model_alias=model_alias,
             )
             status = audit["outcome"]
@@ -374,7 +424,10 @@ def generate_turns(
             else "partial"
         ),
         "pipeline": "maestro_untrusted_orchestration_round_local_v1",
-        "mode": settings["mode"],
+        "mode": ("llm" if main_mode == "llm" or report_mode == "llm"
+                 else "template"),
+        "subagent_report_mode": report_mode,
+        "main_action_mode": main_mode,
         "input_scenes": len(scenes),
         "scenes_without_accepted_base": no_base,
         "scenes_without_eligible_fault": no_eligible,
@@ -391,6 +444,9 @@ def generate_turns(
             "Only publicly observable discrepancies trigger targeted repair labels.",
             "Clean World/Gold never change; uncorrected counterfactuals are private, not positive SFT.",
             "Template actions are deterministic teacher demonstrations, not online Main-Agent rollouts.",
+            "Sub-Agent Author/Critic write full prose for this attempt; status and actual WorkProduct remain code-owned.",
+            "Main-Agent Author/Critic only naturalize the program-selected O1 tasks; private state does not enter their prompt.",
+            "LLM-mode fallback reports are diagnostic only, never silently counted as reviewed positive SFT.",
         ],
     }
     _atomic_json(output / "summary.json", summary)
