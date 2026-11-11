@@ -62,7 +62,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         "base_episodes_path": _path(source.get("base_episodes")),
         "output_dir": _path(run.get("output_dir")),
         "max_scenes": run.get("max_scenes"),
-        "branches_per_scene": run.get("branches_per_scene", 1),
+        "branches_per_scene": run.get("branches_per_scene"),
         "seed": run.get("seed", 17),
         "fault_modes": run.get("fault_modes", ["missing", "partial", "wrong"]),
         "persistence": run.get("persistence", "once"),
@@ -99,7 +99,14 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         "report_critic_max_tokens": report_model.get("critic_max_tokens", 1200),
         "report_api_key_env": report_model.get("api_key_env", "OPENAI_API_KEY"),
     }
-    for key in ("branches_per_scene", "max_rounds", "max_cost",
+    # None means every accepted Main feedback round in every Question.
+    # The optional integer cap is diagnostic/backwards-compatible only.
+    if config["branches_per_scene"] is not None and (
+        type(config["branches_per_scene"]) is not int
+        or config["branches_per_scene"] < 1
+    ):
+        raise ValueError("untrusted_invalid_round_debug_cap")
+    for key in ("max_rounds", "max_cost",
                 "max_parallel_tasks", "workers", "author_max_tokens",
                 "critic_max_tokens", "report_author_max_tokens",
                 "report_critic_max_tokens"):
