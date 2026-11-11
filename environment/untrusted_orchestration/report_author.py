@@ -49,7 +49,10 @@ earlier internal operation or a sampled source atom. Its delivered value
 remains unavailable.
 For a wrong but delivered record, report that returned record faithfully,
 without comparing it to a private clean reference or claiming independent
-verification.
+verification. An executed intermediate observation may disagree with a later
+delivered value. Describe the final DELIVERED value as returned, not as
+independently validated, and do not silently replace it with a seemingly
+more plausible intermediate value.
 
 Prefer concrete source roles and returned identifiers over generic backend
 phrases. Keep intermediate handoffs local: a source scan does not complete
@@ -95,7 +98,13 @@ successful operations may have observed a value subsequently NOT DELIVERED.
 This is a partial handoff, not a contradiction or an error in the program.
 Review whether the prose correctly distinguishes observed intermediates from
 actual delivered WorkProduct; never demand missing values be restored.
-Judge the actual attempt, not hypothetical clean values.
+If an executed step and the final delivered result conflict, do NOT demand
+that the report replace the actually delivered result with the step's value.
+This feedback may describe an unreliable return. A report can truthfully
+state "the attempt returned X" without asserting "X was verified correct".
+Judge fidelity to the executed attempt, not hypothetical clean values. If
+a contradiction is relevant, request neutral wording or explicit uncertainty,
+not alteration of the delivered record.
 
 Return JSON ONLY:
 {"verdict":"pass|fail","grounded":true|false,
@@ -272,6 +281,41 @@ def _prepare_result(candidate: dict, attempt: Attempt,
     return new, True
 
 
+def _explicit_final_value_issues(text: str, contract: dict) -> list[str]:
+    """Distinguish a claimed delivered field value from observed provenance.
+
+    Numeric values inside an actually executed filter/lookup condition may
+    legitimately be discussed in `result`, even if the final projection
+    drops that field. But a value explicitly assigned to a FINAL output
+    field must belong to the actual delivered rows, not just an intermediate
+    preview. This especially protects null fields in partial handoffs.
+    """
+    issues = []
+    rows = [entry["values"] for entry in contract["actual_delivered_rows"]]
+    for field in contract["output_fields"]:
+        forms = {field, field.replace("_", " ")}
+        valid = {
+            str(row[field]).casefold() for row in rows
+            if row.get(field) is not None
+        }
+        for name in forms:
+            # Match declarative field-value syntax, not incidental context
+            # such as "marker code field remains unavailable" or a
+            # source/filter operation that did not deliver the field.
+            pattern = re.compile(
+                r"\\b" + re.escape(name) +
+                r"\\b\\s*(?::|=|is|was)\\s*"
+                r"(?P<value>KEY[12]-\\d+|MK-\\d+|RK-\\d+|"
+                r"Case-\\d+|Entry-\\d+|-?\\d+(?:\\.\\d+)?)\\b",
+                flags=re.I,
+            )
+            for match in pattern.finditer(text):
+                value = match.group("value").casefold()
+                if value not in valid:
+                    issues.append("claimed_final_field_value_not_delivered")
+    return sorted(set(issues))
+
+
 def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
     if not isinstance(draft, dict):
         return ["invalid_report_json"]
@@ -379,11 +423,17 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
             continue
         # A clean upstream identifier may be visible in a preceding
         # operation, but it must not replace the actually DELIVERED result.
-        allowed = (result_tokens | contextual_entities
-                   if field == "result" else
-                   allowed_tokens | instruction_tokens)
+        # A result may explain a grounded threshold, observed lookup key,
+        # or intermediate row count as context. Those tokens originate in
+        # the ACTUAL executed trace, not from the future clean World.
+        # The separate final-field check prevents intermediate values
+        # from masquerading as the delivered output.
+        allowed = allowed_tokens | instruction_tokens
         if _claim_tokens(text) - allowed:
             issues.append(field + "_unobserved_numeric_or_entity")
+        if field == "result":
+            issues.extend("result_" + issue for issue in
+                          _explicit_final_value_issues(text, contract))
 
     if attempt.status == "partial":
         missing_fields = contract["unresolved_fields"]
