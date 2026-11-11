@@ -997,6 +997,8 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                       _guard(malicious, contract, attempt))
         self.assertEqual(_claim_tokens("70,000 ms"),
                          _claim_tokens("70000 ms"))
+        self.assertEqual(_claim_tokens("MK-0531"),
+                         _claim_tokens("mk-0531"))
 
     def test_branch_notifies_distinct_agent_progress_events(self):
         tid = self.scene["macro_graph"]["reference_waves"][0][0]
