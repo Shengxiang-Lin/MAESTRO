@@ -190,7 +190,8 @@ def _validate_evidence_dispatch(plan: dict, assignments: list[dict],
             raise ValueError("stage4c_dispatch_unresolved_request")
         covered.extend(req_ids)
         if any(assignment[k] != contracted[k] for k in (
-            "model", "tools", "source_ids", "output_fields", "needs_upstream"
+            "model", "tools", "source_ids", "output_fields",
+            "focus_fields", "needs_upstream"
         )):
             raise ValueError("stage4c_dispatch_source_or_schema_changed")
         instruction = assignment["target_instruction"].casefold()
@@ -261,6 +262,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                         tasks[tid], catalog, latest, model_alias=model_alias,
                     )
                     current["target_instruction"] = planned["target_instruction"]
+                    current["focus_fields"] = list(planned["focus_fields"])
                     current["context"] = (
                         current["context"] + " Current evidence need: "
                         + next(req["main_visible_justification"]
