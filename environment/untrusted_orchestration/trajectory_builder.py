@@ -517,6 +517,7 @@ def build_branch(
     # surfaces. The existing deterministic report remains inspectable
     # as a diagnostic when a review fails, not secretly accepted as an
     # LLM-written trajectory.
+    execution_outcome = stopped
     if stopped == "recovered" and (
         (report_author is not None and any(
             x["authoring"]["mode"] == "grounded_template_fallback"
@@ -547,6 +548,9 @@ def build_branch(
         "subagent_report_reviews": report_reviews,
         "main_action_reviews": main_reviews,
         "completion_generation_mode": final_mode,
+        "execution_outcome": execution_outcome,
+        "execution_recovered": execution_outcome == "recovered",
+        "language_review_accepted": stopped != "language_review_unaccepted",
         "parallel_batches_verified": all(
             batch_has_independent_dependencies(
                 state, d.get("task_ids", []),
