@@ -1,4 +1,4 @@
-# Round-local untrusted Sub-Agent feedback -> dynamic Main decisions.
+# Every accepted question/round feedback -> offline 4A/4B/4C recovery.
 # Requires frozen Questions, reviewed Sub-Agent reports, and accepted Base Episodes.
 version: 1
 
@@ -10,7 +10,9 @@ input:
 generation:
   output_dir: environment/data/maestro_untrusted_orchestration_100
   max_scenes: 30
-  branches_per_scene: 2
+  # null = extract EVERY Main decision round with newly returned feedback.
+  # Set an integer only for a small debugging run (chronological round cap).
+  branches_per_scene: null
   seed: 17
   fault_modes: [missing, partial, wrong]
   persistence: once           # once | same_path (persist on same-task retry)
