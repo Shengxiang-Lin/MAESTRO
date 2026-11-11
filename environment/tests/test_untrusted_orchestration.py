@@ -358,7 +358,26 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         )
         self.assertFalse(no_base)
         self.assertFalse(no_eligible)
+        delegates = [
+            x for x in self.episode["trajectory"]
+            if x["action"] == "delegate_task"
+        ]
+        # A diagnostic cap returns the first 3 chronological feedback
+        # rounds; this is never random branch sampling.
+        self.assertEqual(
+            [p["branch_round"] for p in planned],
+            list(range(2, min(3, len(delegates)) + 2)),
+        )
         for plan in planned:
+            self.assertEqual(plan["unit"], "main_feedback_round")
+            self.assertEqual(plan["received_from_delegate_round"],
+                             plan["branch_round"] - 1)
+            self.assertEqual(
+                plan["incoming_task_ids"],
+                self.scene["macro_graph"]["reference_waves"][
+                    plan["branch_round"] - 2
+                ],
+            )
             for fault in plan["faults"]:
                 self.assertIn(fault.mode, possible[fault.task_id])
                 self.assertIn(
@@ -366,6 +385,75 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                     self.scene["macro_graph"]["reference_waves"][
                         plan["branch_round"] - 2],
                 )
+
+    def test_every_base_feedback_round_is_extractable(self):
+        """No fixed 2-branch cap; every received Sub-Agent batch is a unit."""
+        delegates = [
+            x for x in self.episode["trajectory"]
+            if x["action"] == "delegate_task"
+        ]
+        self.assertGreater(len(delegates), 2)
+        kw = dict(
+            scenes=[self.scene],
+            base={self.scene["task_id"]: self.episode},
+            branches_per_scene=None, seed=17,
+            fault_modes=["missing", "partial", "wrong"],
+            persistence="once", multi_target_probability=0.0,
+            max_rounds=16,
+        )
+        first, no_base, _ = _plan_branches(**kw)
+        again, _, _ = _plan_branches(**kw)
+        self.assertFalse(no_base)
+        self.assertEqual(len(first), len(delegates))
+        self.assertEqual(
+            [p["branch_round"] for p in first],
+            list(range(2, len(delegates) + 2)),
+        )
+        self.assertEqual(
+            [(p["sample_id"], [(f.task_id, f.mode, f.seed)
+                               for f in p["faults"]]) for p in first],
+            [(p["sample_id"], [(f.task_id, f.mode, f.seed)
+                               for f in p["faults"]]) for p in again],
+        )
+        self.assertEqual(
+            len({p["sample_id"] for p in first}), len(first),
+        )
+        self.assertTrue(all(
+            p["incoming_subtask_count"] == len(p["incoming_task_ids"])
+            for p in first
+        ))
+        # Future addition of a shorter diagnostic cap must never alter
+        # which (question, round) is at the start of the run.
+        capped, _, _ = _plan_branches(
+            **{**kw, "branches_per_scene": 2},
+        )
+        self.assertEqual(
+            [p["sample_id"] for p in capped],
+            [p["sample_id"] for p in first[:2]],
+        )
+
+    def test_unsupported_fault_round_is_preserved_in_plan(self):
+        # Preflight must never silently discard an accepted feedback round,
+        # even if no configured fault can execute on its most recent batch.
+        delegates = [x for x in self.episode["trajectory"]
+                     if x["action"] == "delegate_task"]
+        planned, _, _ = _plan_branches(
+            [self.scene], {self.scene["task_id"]: self.episode},
+            branches_per_scene=None, seed=17, fault_modes=["wrong"],
+            persistence="once", multi_target_probability=0.0,
+            max_rounds=16,
+        )
+        self.assertEqual(len(planned), len(delegates))
+        for plan in planned:
+            if plan["skip_reason"]:
+                self.assertEqual(
+                    plan["skip_reason"],
+                    "no_executable_fault_on_returned_batch",
+                )
+                self.assertEqual(plan["faults"], [])
+            else:
+                self.assertTrue(plan["faults"])
+                self.assertTrue(all(f.mode == "wrong" for f in plan["faults"]))
 
     def test_untrusted_subagent_llm_preserves_wrong_record_not_gold(self):
         task = {
@@ -744,6 +832,15 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             self.assertEqual(summary["fault_mode_outcomes"]["missing"],
                              {"recovered": 1})
             self.assertGreater(summary["main_training_turns"], 0)
+            self.assertEqual(summary["round_sampling_unit"],
+                             "question_x_main_feedback_round")
+            self.assertEqual(summary["requested_feedback_rounds"], 1)
+            round_index = (root / "output" / "round_index.jsonl")
+            indexes = [json.loads(row) for row in
+                       round_index.read_text().splitlines()]
+            self.assertEqual(len(indexes), 1)
+            self.assertEqual(indexes[0]["main_decision_round"], 2)
+            self.assertEqual(indexes[0]["received_from_delegate_round"], 1)
             output = root / "output"
             lines = [
                 json.loads(s) for s in
