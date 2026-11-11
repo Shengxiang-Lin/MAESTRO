@@ -282,11 +282,12 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             downstream: {
                 "task_id": downstream, "depends_on": [parent],
                 "source_ids": [],
+                "external_inputs": ["ordered"],
                 "input_schema": {
                     "input_0": ["entry_label", "relative_step"],
                 },
                 "operator_chain": [
-                    {"id":"take","op":"take","inputs":["input_0"],"limit":1},
+                    {"id":"take","op":"take","inputs":["ordered"],"limit":1},
                     {"id":"project","op":"project","inputs":["take"],
                      "fields":["entry_label"]},
                 ],
@@ -305,6 +306,21 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             state.required_parent_fields(state.tasks[downstream], parent),
             {"entry_label"},
         )
+        # A real frozen Task uses arbitrary external node IDs, never input_0.
+        for real_task in self.scene["macro_graph"]["tasks"]:
+            if real_task["depends_on"] and any(
+                op["op"] == "lookup_by_key"
+                for op in real_task["operator_chain"]
+            ):
+                required = state.required_parent_fields(
+                    real_task, real_task["depends_on"][0],
+                )
+                lookup = next(
+                    op for op in real_task["operator_chain"]
+                    if op["op"] == "lookup_by_key"
+                )
+                self.assertIn(lookup["input_key_field"], required)
+                break
         from environment.untrusted_orchestration.state_machine import Attempt
         state.current[parent] = Attempt(
             task_id=parent, version=1, status="partial",
