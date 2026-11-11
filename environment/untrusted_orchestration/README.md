@@ -21,7 +21,7 @@ re-runs the rest of the Macro operator chain. The resulting WorkProduct
 
 ## Current functionality
 
-- `faults.py`: Deterministic `missing`, `partial` or `wrong` outcomes.
+- `faults.py`: Deterministic `missing`, `partial` or `wrong` outcomes, with a **per-attempt observed operator trace** built from the actual post-injection execution. The missing mode stops at the failed operation; partial is currently a final-delivery truncation (not a mid-chain partial source read); wrong changes a primitive Relation then recomputes downstream primitives.
   The `wrong` mode uses actual alternative source observations or
   mismatched **real** parent candidates at a join; unsupported cases are
   skipped instead of inventing values. Fault target selection weighs
@@ -37,8 +37,12 @@ re-runs the rest of the Macro operator chain. The resulting WorkProduct
   the resulting WorkProducts. Unresolved or incorrect outcomes are
   diagnostic only and never published as positive SFT labels.
 - `report_author.py`: Stage-2-style Sub-Agent Author/Guard/Critic
-  generates natural-language `finish_result.result`, `summary` and
-  `trace_summary` **for the actual attempt**. The Guard verifies values,
+  consumes the current attempt's actual `observed_operator_steps`, output
+  rows and evidence atoms. It shares Stage 2's observed-step representation,
+  result normalization, surface normalization and high-precision stage-scope
+  checks; it generates natural-language `finish_result.result`, `summary`
+  and `trace_summary` **for the actual attempt**. Executor-owned `status`
+  is never requested from the model and a legacy model `status` is ignored. The Guard verifies values,
   identifiers, report status, evidence scope and partial delivery against
   the deterministic WorkProduct, not the private clean Gold. For a missing
   deliverable, `finish_result` remains absent. Review failures are
@@ -50,6 +54,18 @@ re-runs the rest of the Macro operator chain. The resulting WorkProduct
 - `generate_turns.py`: Multiple independent branch variants per Scene,
   configurable worker pool, atomic journals, input/code signatures for
   exact resume and positive-label publication.
+
+The public report Author never receives the private fault label, clean
+reference WorkProduct or overall Gold answer. In a wrong-result attempt,
+actual observed (possibly wrong) records are authoritative, while the
+complete frozen Gold remains private for episode outcome evaluation.
+
+The `summary.json` explicitly separates `execution_recovered_branches` and
+`execution_outcomes` from `recovered`/positive SFT publication. A branch
+can be deterministically recovered but fail LLM language review; it remains
+diagnostic and is never silently treated as reviewed training data.
+For changed trace/Author code, generate into a new output directory:
+existing signed journals cannot be resumed across these changes.
 
 The runner also executes a private **no-repair counterfactual** along the
 old Macro DAG using the poisoned WorkProduct, to distinguish an incorrect
