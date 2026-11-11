@@ -264,8 +264,8 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
             issues.append("partial_missing_field_not_acknowledged")
     if attempt.status == "missing" and contract["observed_operator_steps"]:
         # Stage-local check on truthful failed-acquisition description.
-        if re.search(r"\\b(?:completed|successfully|finished)\\b.{0,75}"
-                     r"\\b(?:lookup|extraction|search|retrieval)\\b",
+        if re.search(r"\b(?:completed|successfully|finished)\b.{0,75}"
+                     r"\b(?:lookup|extraction|search|retrieval)\b",
                      prose, re.I):
             issues.append("missing_claims_completed_acquisition")
     return sorted(set(issues))
