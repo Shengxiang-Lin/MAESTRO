@@ -20,7 +20,8 @@ build/
 # Datasets (large files)
 benchmark/gaia/data/Gaia/
 benchmark/terminalbench/terminal-bench/
-dataset/
+dataset/data/
+dataset/outputs/
 
 # OS
 .DS_Store
@@ -54,3 +55,6 @@ tests/
 
 /work/environment_parallel_20261104/
 work/
+
+# Versioned DA-GRPO training reference config
+!baseline/da-grpo/ds_config.json
