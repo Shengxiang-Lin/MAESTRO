@@ -893,6 +893,27 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             self.assertEqual(summary["fault_mode_outcomes"]["missing"],
                              {"recovered": 1})
             self.assertGreater(summary["main_training_turns"], 0)
+            self.assertGreaterEqual(
+                summary["local_decisions_qualified_diagnostic"],
+                summary["main_training_turns"],
+            )
+            self.assertEqual(
+                summary["local_decisions_reviewed"],
+                summary["local_decisions_qualified_diagnostic"]
+                + summary["local_decisions_rejected_diagnostic"],
+            )
+            diagnostic = root / "output" / "private" / "main_turns_local_review.jsonl"
+            self.assertTrue(diagnostic.is_file())
+            self.assertEqual(
+                len(diagnostic.read_text(encoding="utf-8").splitlines()),
+                summary["local_decisions_reviewed"],
+            )
+            self.assertEqual(
+                summary["execution_recovered_branches"], 1,
+            )
+            self.assertEqual(
+                summary["execution_unresolved_branches"], 0,
+            )
             self.assertEqual(summary["round_sampling_unit"],
                              "question_x_main_feedback_round")
             self.assertEqual(summary["requested_feedback_rounds"], 1)
