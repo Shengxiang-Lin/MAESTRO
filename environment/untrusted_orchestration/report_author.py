@@ -495,6 +495,12 @@ def naturalize_report(task: dict, attempt: Attempt, *,
         model_alias=model_alias, reviewed=reviewed,
     )
     provenance = base.pop("_report_mode")
+    # Controlled report faults alter *only what Main sees*, not the
+    # executed WorkProduct. They are intentional, so the normal report
+    # author/critic cannot silently "fix" the malicious claim.
+    if attempt.runtime.get("report_fault_kind"):
+        from .report_faults import render_report_fault
+        return render_report_fault(base, attempt)
     if author is None:
         return base, {"status": "accepted", "mode": provenance,
                       "attempts": 0}
