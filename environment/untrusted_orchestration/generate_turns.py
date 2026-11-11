@@ -19,7 +19,9 @@ import shutil
 
 from tqdm.auto import tqdm
 
-from .faults import Fault, FaultUnsupported, choose_targets
+from .faults import (
+    Fault, FaultUnsupported, choose_targets, probe_eligible_fault_modes,
+)
 from .trajectory_builder import build_branch
 
 
@@ -81,8 +83,9 @@ def _plan_branches(
     fault_modes: list[str], persistence: str,
     multi_target_probability: float,
     max_rounds: int,
-) -> tuple[list[dict], int]:
-    planned, no_base = [], 0
+) -> tuple[list[dict], int, int]:
+    """Sample only executable last-batch faults, retaining mode diversity."""
+    planned, no_base, no_eligible = [], 0, 0
     for i, scene in enumerate(scenes):
         episode = base.get(scene["task_id"])
         if episode is None:
@@ -94,33 +97,61 @@ def _plan_branches(
         ]
         rounds = list(range(2, min(len(delegates) + 1, max_rounds) + 1))
         if not rounds:
+            no_eligible += 1
             continue
+        eligible = probe_eligible_fault_modes(scene, fault_modes)
+        waves = scene["macro_graph"]["reference_waves"]
+        tasks = {a["task_id"]: a for a in scene["macro_graph"]["tasks"]}
         rng = random.Random(seed + i * 1009)
         rng.shuffle(rounds)
-        for slot, t in enumerate(rounds[:branches_per_scene]):
-            target_wave = scene["macro_graph"]["reference_waves"][t-2]
-            tasks = {a["task_id"]: a for a in scene["macro_graph"]["tasks"]}
-            multitarget = (
-                rng.random() < multi_target_probability and
-                len(target_wave) > 1
-            )
-            target = choose_targets(
-                target_wave, tasks, seed=seed + i*103 + slot,
+        picked_rounds = set()
+        added = 0
+        for slot in range(min(branches_per_scene, len(rounds))):
+            # Rotate the preferred mode, but search for an *actually
+            # executable* mode rather than trying a doomed random target.
+            priority = [
+                fault_modes[(i + slot + offset) % len(fault_modes)]
+                for offset in range(len(fault_modes))
+            ]
+            chosen = None
+            for mode in priority:
+                for decision_round in rounds:
+                    if decision_round in picked_rounds:
+                        continue
+                    wave = waves[decision_round - 2]
+                    supported = [tid for tid in wave
+                                 if mode in eligible.get(tid, [])]
+                    if not supported:
+                        continue
+                    chosen = (mode, decision_round, supported)
+                    break
+                if chosen is not None:
+                    break
+            if chosen is None:
+                break
+            mode, decision_round, supported = chosen
+            multitarget = (rng.random() < multi_target_probability
+                           and len(supported) > 1)
+            targets = choose_targets(
+                supported, tasks, seed=seed + i * 103 + slot,
                 multiple=multitarget,
             )
-            mode = fault_modes[(i + slot) % len(fault_modes)]
             faults = [
                 Fault(task_id=tid, mode=mode,
-                      seed=seed + i*103 + slot,
+                      seed=seed + i * 103 + slot,
                       persistence=persistence)
-                for tid in target
+                for tid in targets
             ]
             planned.append({
                 "index": len(planned), "scene_index": i,
                 "task_id": scene["task_id"],
-                "branch_round": t, "faults": faults,
+                "branch_round": decision_round, "faults": faults,
             })
-    return planned, no_base
+            picked_rounds.add(decision_round)
+            added += 1
+        if not added:
+            no_eligible += 1
+    return planned, no_base, no_eligible
 
 
 def _publish(output: Path, planned: list[dict]) -> dict:
@@ -225,7 +256,7 @@ def generate_turns(
     rows_by_scene = defaultdict(list)
     for row in _jsonl(paths[1]):
         rows_by_scene[row["scene_task_id"]].append(row)
-    planned, no_base = _plan_branches(
+    planned, no_base, no_eligible = _plan_branches(
         scenes, base, branches_per_scene=branches_per_scene,
         seed=seed, fault_modes=modes, persistence=persistence,
         multi_target_probability=multi_target_probability,
@@ -298,9 +329,14 @@ def generate_turns(
         def progress():
             bar.set_postfix({
                 "recovered": counts["recovered"],
+                "incorrect": counts[
+                    "incorrect_result_after_actual_propagation"
+                ],
                 "unresolved": sum(x for key, x in counts.items()
                                   if key not in {
-                                      "recovered", "skipped_unsupported",
+                                      "recovered",
+                                      "incorrect_result_after_actual_propagation",
+                                      "skipped_unsupported",
                                       "rejected_validation",
                                   }),
                 "skipped": counts["skipped_unsupported"] +
@@ -327,6 +363,7 @@ def generate_turns(
         "mode": settings["mode"],
         "input_scenes": len(scenes),
         "scenes_without_accepted_base": no_base,
+        "scenes_without_eligible_fault": no_eligible,
         "requested_branches": len(planned),
         **counts_summary,
         "public_turns": str(output / "main_turns.jsonl"),
@@ -336,6 +373,7 @@ def generate_turns(
         ),
         "limitations": [
             "One fault injection window per branch: the latest completed Sub-Agent batch.",
+            "Only preflight-executable fault/macro pairs are sampled.",
             "Only publicly observable discrepancies trigger targeted repair labels.",
             "Clean World/Gold never change; uncorrected counterfactuals are private, not positive SFT.",
             "Template actions are deterministic teacher demonstrations, not online Main-Agent rollouts.",
