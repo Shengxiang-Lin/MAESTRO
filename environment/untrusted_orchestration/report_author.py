@@ -121,6 +121,10 @@ def _observed_contract(task: dict, attempt: Attempt, instruction: str) -> dict:
         "rows_omitted_from_prompt": max(0, len(rows) - 32),
         "output_fields": (list(attempt.product.columns)
                           if attempt.product else []),
+        "authorized_direct_sources": list(task["source_ids"]),
+        "returned_source_fact_refs": sorted({
+            ref for row in rows for ref in row["source_fact_refs"]
+        }),
         "available_fields": list(attempt.available_fields),
         "unresolved_fields": list(attempt.runtime.get("missing_fields", [])),
         "rows_complete": attempt.runtime.get("rows_complete", True),
@@ -225,9 +229,12 @@ def naturalize_report(task: dict, attempt: Attempt, *,
         model_alias=model_alias, reviewed=reviewed,
     )
     provenance = base.pop("_report_mode")
-    if author is None or provenance == "reviewed_clean":
+    if author is None:
         return base, {"status": "accepted", "mode": provenance,
                       "attempts": 0}
+    # In LLM mode even a repaired retry whose WorkProduct equals the clean
+    # Oracle is freshly authored: its *current* delegated instruction and
+    # completed verification differ from the old Stage 2 trace.
     if critic is None:
         raise ValueError("subagent_naturalization_requires_critic")
     contract = _observed_contract(task, attempt, instruction)
