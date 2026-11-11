@@ -215,7 +215,7 @@ def _observed_contract(task: dict, attempt: Attempt, instruction: str) -> dict:
 
 def _claim_tokens(value: str) -> set[str]:
     """Normalize thousands separators, not facts or entity identifiers."""
-    value = re.sub(r"(?<=\\d),(?=\\d{3}\\b)", "", value)
+    value = re.sub(r"(?<=\d),(?=\d{3}\b)", "", value)
     return set(_TOKEN.findall(value))
 
 
