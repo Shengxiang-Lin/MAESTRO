@@ -198,6 +198,134 @@ class EventEngineTests(unittest.TestCase):
         self.assertEqual(event["after_task_id"], "B")
         self.assertEqual(event["earliest_round"], 3)
 
+    def test_late_conflict_uses_public_reports_and_consumed_version(self):
+        state = ExecutionState(self.scene, {})
+        state.tasks = {
+            "old": {
+                "task_id": "old", "depends_on": [],
+                "operator_chain": [],
+            },
+            "independent": {
+                "task_id": "independent", "depends_on": [],
+                "operator_chain": [],
+            },
+            "lookup": {
+                "task_id": "lookup", "depends_on": ["old"],
+                "operator_chain": [],
+            },
+            "join": {
+                "task_id": "join",
+                "depends_on": ["old", "independent"],
+                "operator_chain": [{
+                    "op": "join", "left_on": "marker_code",
+                    "right_on": "marker_code",
+                }],
+            },
+        }
+        state.current = {
+            "old": Attempt(
+                "old", 1, "done",
+                Relation(("marker_code",), ({
+                    "values": {"marker_code": "MK-6243"},
+                    "support": ("image:F002",),
+                },)),
+                ("marker_code",), {}, {},
+            ),
+            "independent": Attempt(
+                "independent", 1, "done",
+                Relation(("marker_code",), ({
+                    "values": {"marker_code": "MK-0531"},
+                    "support": ("subtitle:F001",),
+                },)),
+                ("marker_code",), {}, {},
+            ),
+            "lookup": Attempt(
+                "lookup", 1, "done",
+                Relation(("record_key_1",), ({
+                    "values": {"record_key_1": "KEY1-012"},
+                    "support": ("index:F012",),
+                },)),
+                ("record_key_1",), {"old": 1}, {},
+            ),
+        }
+        state.set_public_report(
+            "old", {"finish_result": {
+                "status": "done",
+                "result": json.dumps([{"marker_code": "MK-6243"}]),
+                "summary": "One candidate key was returned.",
+            }}, round_number=1,
+        )
+        state.set_public_report(
+            "independent", {"finish_result": {
+                "status": "done",
+                "result": json.dumps([{"marker_code": "MK-0531"}]),
+                "summary": "A second independent key was returned.",
+            }}, round_number=4,
+        )
+        state.cross_source_checks_enabled = True
+        state._detect_late_cross_source_conflicts()
+        self.assertEqual(state.current["old"].status, "disputed")
+        self.assertIn(
+            "MK-6243", state.current["old"].runtime["visible_issue"],
+        )
+        self.assertTrue(state.detected_conflicts)
+        state._detect_late_cross_source_conflicts()
+        self.assertEqual(len(state.detected_conflicts), 1)
+        # A conflict with no earlier downstream consumer is a reason
+        # to compare evidence, NOT automatically to name a wrong source.
+        state2 = ExecutionState(self.scene, {})
+        state2.tasks = state.tasks
+        state2.current = {
+            k: v for k, v in state.current.items() if k != "lookup"
+        }
+        state2.public_reports = dict(state.public_reports)
+        state2.cross_source_checks_enabled = True
+        state2._detect_late_cross_source_conflicts()
+        self.assertFalse(state2.detected_conflicts)
+
+    def test_frozen_publication_rejects_critic_process_leak(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes = root / "scenes.jsonl"
+            reports = root / "reports.jsonl"
+            base = root / "episodes.jsonl"
+            scenes.write_text(json.dumps(self.scene) + "\n")
+            reports.write_text(
+                "".join(json.dumps(r) + "\n" for r in self.reports)
+            )
+            base.write_text(json.dumps(self.episode) + "\n")
+            out = root / "output"
+            result = generate_turns(
+                scenes_path=scenes, reports_path=reports,
+                base_episodes_path=base, output_dir=out,
+                max_scenes=1, branches_per_scene=1,
+                fault_modes=["missing"], workers=2,
+                no_progress=True,
+            )
+            self.assertGreater(result["reviewed_turns"], 0)
+            saved = out / "journal" / "000000.json"
+            journal = json.loads(saved.read_text())
+            journal["turns"][0]["output"]["reasoning"] = (
+                "The critic correctly noted this action was needed."
+            )
+            saved.write_text(json.dumps(journal))
+            plans, _, _ = _plan_branches(
+                [self.scene], {self.scene["task_id"]: self.episode},
+                branches_per_scene=1, seed=17,
+                fault_modes=["missing"], persistence="once",
+                multi_target_probability=0, max_rounds=16,
+            )
+            published = _publish(out, plans)
+            self.assertEqual(published["reviewed_turns"], 0)
+            self.assertEqual(
+                published["publication_generation_process_leaks"], 1,
+            )
+            self.assertEqual(
+                json.loads((out / "failed.jsonl").read_text().splitlines()[0])
+                ["status"],
+                "publication_generation_process_leak",
+            )
+
     def test_event_mode_one_report_atom_is_executable(self):
         with TemporaryDirectory() as td:
             root = Path(td)
