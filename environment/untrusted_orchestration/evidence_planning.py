@@ -236,6 +236,10 @@ def evidence_assignment(state, task_id: str, *, catalog: dict,
         context + " Current evidence need: "
         + request["main_visible_justification"]
     )[:3500]
+    # Internal structured role marker: Main action output remains O1-only.
+    # This makes the reasoning critic aware of the *requested* missing
+    # evidence rather than the Macro's complete output schema.
+    base["focus_fields"] = list(request["target_fields"])
     return base
 
 
