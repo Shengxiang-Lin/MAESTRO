@@ -7,6 +7,8 @@ observations or already materialized parent relations.
 """
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass
 from copy import deepcopy
 import random
@@ -29,8 +31,12 @@ class Fault:
     persistence: str = "once"        # once | same_path
     # Typed atomic fault; None preserves legacy wrong-join/row priority.
     atom_kind: str | None = None
+    # Optional genuine distractor index. Zero keeps V9 exactly compatible.
+    variant_index: int = 0
 
     def __post_init__(self):
+        if type(self.variant_index) is not int or self.variant_index < 0:
+            raise ValueError("invalid_fault_variant_index")
         if self.mode not in {"missing", "partial", "wrong", "report"}:
             raise ValueError("unsupported_fault_mode")
         if self.persistence not in {"once", "same_path"}:
@@ -74,7 +80,8 @@ def _different(a: Relation, b: Relation) -> bool:
     return (a.columns != b.columns or relation_rows(a) != relation_rows(b))
 
 
-def _wrong_join(step: dict, products: dict, clean: Relation) -> tuple[Relation, dict] | None:
+def _wrong_join(step: dict, products: dict, clean: Relation, *,
+                variant_index: int = 0) -> tuple[Relation, dict] | None:
     left, right = (products[step["inputs"][0]],
                    products[step["inputs"][1]])
     if not left.rows or not right.rows or not clean.rows:
@@ -90,7 +97,9 @@ def _wrong_join(step: dict, products: dict, clean: Relation) -> tuple[Relation, 
     ]
     if not alternatives:
         return None
-    a, b = alternatives[0], right.rows[0]
+    if variant_index >= len(alternatives):
+        return None
+    a, b = alternatives[variant_index], right.rows[0]
     joined = {**b["values"], **a["values"]}
     if set(joined) != set(clean.columns):
         return None
@@ -111,7 +120,8 @@ def _wrong_join(step: dict, products: dict, clean: Relation) -> tuple[Relation, 
 
 
 def _wrong_row(
-    step: dict, clean: Relation, products: dict, sources: dict,
+    step: dict, clean: Relation, products: dict, sources: dict, *,
+    variant_index: int = 0,
 ) -> tuple[Relation, dict] | None:
     if not clean.rows:
         return None
@@ -135,13 +145,21 @@ def _wrong_row(
                     tuple(row["support"]),
                 ))
     original = [row["values"] for row in clean.rows]
-    alternate = next((
-        (values, refs) for values, refs in candidates
-        if values not in original and refs
-    ), None)
-    if alternate is None:
+    unique_alternates = []
+    seen = set()
+    for values, refs in candidates:
+        if values in original or not refs:
+            continue
+        # Same values with distinct provenance represent different
+        # evidence, but do not multiply identical local observations.
+        key = (json.dumps(values, sort_keys=True, default=str),
+               tuple(sorted(refs)))
+        if key not in seen:
+            seen.add(key)
+            unique_alternates.append((values, refs))
+    if variant_index >= len(unique_alternates):
         return None
-    values, refs = alternate
+    values, refs = unique_alternates[variant_index]
     mutated = Relation(clean.columns, ({
         "values": dict(values), "support": tuple(sorted(set(refs))),
     },))
@@ -151,12 +169,14 @@ def _wrong_row(
     }
 
 
-def _report_fault_payload(clean: Relation, sources: dict) -> dict | None:
+def _report_fault_payload(clean: Relation, sources: dict, *,
+                          variant_index: int = 0) -> dict | None:
     """Find a REAL same-field distractor from the task's granted sources."""
     clean_values = {
         field: {str(row["values"].get(field)) for row in clean.rows}
         for field in clean.columns
     }
+    payloads, seen = [], set()
     for sid, source in sorted(sources.items()):
         for obs in source.get("observations", []):
             for field in clean.columns:
@@ -166,12 +186,16 @@ def _report_fault_payload(clean: Relation, sources: dict) -> dict | None:
                 if (candidate is None or
                         str(candidate) in clean_values[field]):
                     continue
-                return {
+                key = (field, str(candidate), sid)
+                if key in seen:
+                    continue
+                seen.add(key)
+                payloads.append({
                     "field": field, "replacement": candidate,
                     "source_id": sid,
                     "source_fact_refs": list(obs.get("fact_refs", [])),
-                }
-    return None
+                })
+    return payloads[variant_index] if variant_index < len(payloads) else None
 
 
 def _observed_step(step: dict, product: Relation, *,
@@ -298,7 +322,9 @@ def run_attempt(
         if kind is None:
             raise FaultUnsupported("report_atom_requires_kind")
         payload = (None if kind == "report_missing"
-                   else _report_fault_payload(correct, sources))
+                   else _report_fault_payload(
+                       correct, sources, variant_index=fault.variant_index,
+                   ))
         if kind != "report_missing" and payload is None:
             raise FaultUnsupported("no_real_report_distractor")
         # A fabricated delivered result is a COMMUNICATION-level value,
@@ -409,9 +435,13 @@ def run_attempt(
         ]
     chosen = None
     for step, relation in ordered:
-        altered = (_wrong_join(step, prefix, relation)
-                   if step["op"] == "join" else
-                   _wrong_row(step, relation, prefix, sources))
+        altered = (_wrong_join(
+            step, prefix, relation,
+            variant_index=fault.variant_index,
+        ) if step["op"] == "join" else _wrong_row(
+            step, relation, prefix, sources,
+            variant_index=fault.variant_index,
+        ))
         if altered is not None:
             chosen = step, altered[0], altered[1]
             break
