@@ -1,9 +1,9 @@
-"""Config-driven batch generation of round-local untrusted O1 Main decisions.
+"""Event-driven untrusted O1 Main decision generation.
 
-Each branch begins from an accepted clean Base Episode. At t>=2 only the
-Sub-Agent batch returned in t-1 is eligible for injection; the entire
-earlier visible history remains trusted. Deterministic WorkProduct replay
-then drives every newly scheduled Sub-Agent action.
+Every prior feedback round is a legal single-atom scenario. Opt-in event
+scenarios additionally schedule an executable later fault and/or defer a
+not-yet-returned independent evidence task. No historical Main action is
+retroactively rewritten; all events are replayed in causal order.
 """
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ from tqdm.auto import tqdm
 from .faults import (
     Fault, FaultUnsupported, choose_targets, probe_eligible_fault_modes,
 )
+from .atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
+from .scenario_generator import make_scenario
 from .trajectory_builder import build_branch
 from .offline_pipeline import author_branch_reports, author_branch_main
 
@@ -62,7 +64,9 @@ def _hash_file(path: Path) -> str:
 def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
     directory = Path(__file__).resolve().parent
     code_files = (
-        "faults.py", "state_machine.py", "report_author.py",
+        "faults.py", "atomic_faults.py", "report_faults.py",
+        "event_scheduler.py", "scenario_generator.py",
+        "state_machine.py", "report_author.py",
         "trajectory_builder.py", "generate_turns.py",
         "evidence_planning.py", "offline_pipeline.py",
         "../generate_question/compiler.py",
@@ -74,7 +78,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "../../orchestra/base_main_agent.py",
     )
     return {
-        "version": "maestro.untrusted_orchestration.reasoning_review_v5",
+        "version": "maestro.untrusted_orchestration.event_engine_v1",
         "input_sha256": [_hash_file(path) for path in inputs],
         "source_code_sha256": {
             name: _hash_file(directory / name) for name in code_files
@@ -89,6 +93,10 @@ def _plan_branches(
     fault_modes: list[str], persistence: str,
     multi_target_probability: float,
     max_rounds: int,
+    scenario_mode: str = "round_fork",
+    atomic_fault_kinds: list[str] | None = None,
+    max_fault_atoms: int = 1,
+    delayed_evidence_probability: float = 0.0,
 ) -> tuple[list[dict], int, int]:
     """Expand EVERY accepted Main feedback round into one fault scenario.
 
@@ -142,15 +150,32 @@ def _plan_branches(
             no_eligible += 1
             continue
 
-        eligible = probe_eligible_fault_modes(scene, fault_modes)
+        # The ordinary latest-feedback fork is expressed as one
+        # ScenarioPlan rather than maintained as a separate executor.
+        if scenario_mode == "event_driven":
+            eligible = probe_atoms(
+                scene, atomic_fault_kinds or [
+                    "no_result", "incomplete_retrieval",
+                    "wrong_retrieval", "wrong_entity_binding",
+                    "report_missing", "result_summary_conflict",
+                    "fabricated_claim",
+                ],
+            )
+        else:
+            eligible = probe_eligible_fault_modes(scene, fault_modes)
         tasks = {task["task_id"]: task
                  for task in scene["macro_graph"]["tasks"]}
         eligible_count = 0
         for decision_round, previous_delegate in rounds:
             wave = waves[decision_round - 2]
             available_modes = [
-                mode for mode in fault_modes
-                if any(mode in eligible.get(tid, []) for tid in wave)
+                kind for kind in (
+                    atomic_fault_kinds if scenario_mode == "event_driven"
+                    and atomic_fault_kinds is not None else
+                    list(ATOM_TO_MODE)[:7] if scenario_mode == "event_driven"
+                    else fault_modes
+                )
+                if any(kind in eligible.get(tid, []) for tid in wave)
             ]
             # Independent deterministic randomness per (question, round)
             # means adding/removing another round cannot perturb this one.
@@ -170,20 +195,32 @@ def _plan_branches(
                 multiple = (
                     rng.random() < multi_target_probability
                     and len(supported) > 1
+                    and (scenario_mode != "event_driven"
+                         or max_fault_atoms >= 2)
                 )
                 chosen_targets = choose_targets(
                     supported, tasks, seed=round_seed, multiple=multiple,
                 )
-                faults = [
-                    Fault(task_id=tid, mode=chosen_mode,
-                          seed=round_seed, persistence=persistence)
-                    for tid in chosen_targets
-                ]
+                if scenario_mode == "event_driven":
+                    faults = [
+                        AtomicFault(
+                            chosen_mode, tid, decision_round - 1,
+                            seed=round_seed,
+                            persistence=persistence,
+                        ).as_legacy_fault()
+                        for tid in chosen_targets
+                    ]
+                else:
+                    faults = [
+                        Fault(task_id=tid, mode=chosen_mode,
+                              seed=round_seed, persistence=persistence)
+                        for tid in chosen_targets
+                    ]
                 eligible_count += 1
             elif skip_reason is None:
                 skip_reason = "no_executable_fault_on_returned_batch"
 
-            planned.append({
+            plan = {
                 "index": len(planned),
                 "unit": "main_feedback_round",
                 "sample_id": (
@@ -200,7 +237,16 @@ def _plan_branches(
                 "fault_mode": chosen_mode,
                 "faults": faults,
                 "skip_reason": skip_reason,
-            })
+            }
+            plan["scenario_plan"] = make_scenario(
+                scene, plan,
+                mode=scenario_mode, eligible_atoms=(
+                    eligible if scenario_mode == "event_driven" else None
+                ),
+                max_fault_atoms=max_fault_atoms,
+                delayed_evidence_probability=delayed_evidence_probability,
+            )
+            planned.append(plan)
         if not eligible_count:
             no_eligible += 1
     return planned, no_base, no_eligible
