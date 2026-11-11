@@ -469,7 +469,8 @@ def generate_turns(
                 scene, rows_by_scene[scene["task_id"]],
                 source["episode"], source["private_audit"],
                 author=report_author, critic=report_critic,
-                max_revisions=report_max_revisions, on_report=tick,
+                max_revisions=report_max_revisions,
+                on_report=lambda _status: tick(),
             )
             data = {
                 **source, "episode": episode, "private_audit": audit,
@@ -514,7 +515,8 @@ def generate_turns(
                 author=author, critic=critic,
                 max_revisions=main_max_revisions,
                 max_rounds=max_rounds, sub_model=sub_model,
-                model_alias=model_alias, on_main=tick,
+                model_alias=model_alias,
+                on_main=lambda _status: tick(),
             )
             data = {
                 **source, "status": audit["outcome"],
