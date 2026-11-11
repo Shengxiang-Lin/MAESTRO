@@ -59,6 +59,30 @@ invent a new task, future evidence, attack origin, or hidden Gold.
 """
 
 
+_MAIN_REASONING_CRITIC_SYSTEM = """Review ONLY the Main-Agent's reasoning for
+the current delegated evidence requests. The assignment contract was
+deterministically validated in the evidence simulator and is IMMUTABLE.
+The review input deliberately contains no editable task_instruction/context,
+tool names or model routing. Do not demand any changes to these fields.
+
+Judge whether the reasoning:
+(1) refers only to information already present in the current Main-visible
+history, not hidden fault origins, Gold, future returns, or invented sources;
+(2) gives a coherent reason to collect the currently requested evidence,
+without claiming a missing or partial result was verified;
+(3) does not claim a dependency was satisfied by a not-yet-returned result,
+and does not falsely claim independent tasks are sequentially dependent.
+
+Do not require the Main to solve the terminal question prematurely, and
+do not criticize the already frozen plan or its output fields. If the
+reasoning invents completed actions or facts, FAIL with a precise prose-only
+repair hint. Return JSON:
+{"verdict":"pass"|"fail","grounded":true|false,
+"assignment_fidelity":true|false,"o1_style":true|false,
+"reason":"brief explanation","repair_hint":"reasoning-only fix"}
+"""
+
+
 def _as_public(sub_result: dict) -> dict:
     return {k: deepcopy(v) for k, v in sub_result.items()
             if not k.startswith("_")}
@@ -543,7 +567,7 @@ def build_branch(
         })
     if stopped is None:
         stopped = "max_decision_rounds"
-    # Positive SFT in LLM mode must be language-reviewed on *both*
+    # Positive reviewed-turn in LLM mode must be language-reviewed on *both*
     # surfaces. The existing deterministic report remains inspectable
     # as a diagnostic when a review fails, not secretly accepted as an
     # LLM-written trajectory.

@@ -1284,7 +1284,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
 
 
     def test_live_dual_progress_bars_track_report_and_main_calls(self):
-        bars = []
+        bars, messages = [], []
         class Bar:
             def __init__(self, *, total, initial, desc, **kwargs):
                 self.total, self.n, self.desc = total, initial, desc
@@ -1304,7 +1304,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 pass
             @staticmethod
             def write(message):
-                pass
+                messages.append(message)
 
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1359,14 +1359,90 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             bars[2].postfix["written"],
             sum(result["main_action_review_statuses"].values()),
         )
+        self.assertEqual(
+            bars[2].postfix["processed"], result["main_actions_processed"],
+        )
+        self.assertEqual(
+            bars[2].postfix["planned"], result["main_actions_planned"],
+        )
+        self.assertEqual(
+            bars[2].postfix["skipped_downstream"],
+            result["main_actions_skipped_downstream"],
+        )
+        self.assertEqual(
+            result["main_actions_planned"],
+            result["main_actions_processed"]
+            + result["main_actions_skipped_downstream"],
+        )
+        self.assertEqual(
+            result["reviewed_branches"], result["recovered"],
+        )
+        self.assertEqual(
+            result["reviewed_turns"], result["main_training_turns"],
+        )
         self.assertGreater(len(bars[0].snapshots), 1)
         self.assertGreater(len(bars[1].snapshots), 1)
         self.assertGreater(len(bars[2].snapshots), 1)
+        self.assertTrue(any(
+            "reviewed branches=" in m and "reviewed turns=" in m
+            and "SFT" not in m for m in messages
+        ))
 
+
+    def test_main_progress_accounts_for_skipped_downstream_actions(self):
+        class InvalidMainAuthor:
+            def complete_json(self, system, request):
+                # The first Main decision fails O1 reasoning validation.
+                return {
+                    "action": "delegate_task",
+                    "reasoning": "No",
+                    "params": {"tasks": []},
+                }
+
+        class AlwaysPassCritic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            files = {
+                "scenes_path": root / "scenes.jsonl",
+                "reports_path": root / "reports.jsonl",
+                "base_episodes_path": root / "episodes.jsonl",
+            }
+            files["scenes_path"].write_text(json.dumps(self.scene) + "\n")
+            files["reports_path"].write_text(
+                "".join(json.dumps(r) + "\n" for r in self.reports)
+            )
+            files["base_episodes_path"].write_text(
+                json.dumps(self.episode) + "\n"
+            )
+            summary = generate_turns(
+                **files, output_dir=root / "failed_main",
+                max_scenes=1, branches_per_scene=1,
+                seed=17, fault_modes=["missing"],
+                workers=2, no_progress=True,
+                author=InvalidMainAuthor(), critic=AlwaysPassCritic(),
+                main_max_revisions=0,
+            )
+            self.assertGreater(summary["main_actions_planned"], 1)
+            self.assertEqual(summary["main_actions_processed"], 1)
+            self.assertEqual(
+                summary["main_actions_skipped_downstream"],
+                summary["main_actions_planned"] - 1,
+            )
+            self.assertEqual(summary["reviewed_turns"], 0)
+            self.assertEqual(
+                summary["outcomes"]["main_action_not_accepted"], 1,
+            )
 
     def test_offline_evidence_pipeline_stage_order_and_dynamic_requests(self):
         """4A must finish before *all* 4B calls, then 4C calls commence."""
         events = []
+        main_review_requests = []
 
         class ReportAuthor:
             def complete_json(self, system, request):
@@ -1407,6 +1483,16 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                         "scope_preserved": True, "natural": True,
                         "useful": True,
                     }
+                payload = json.loads(request)
+                if "candidate_reasoning_only" in payload:
+                    main_review_requests.append(payload)
+                    assert "candidate_prose_only" not in payload
+                    assert "expected_current_evidence_goals" in payload
+                    assert isinstance(payload["candidate_reasoning_only"], str)
+                    assert all(
+                        "target_instruction" not in goal
+                        for goal in payload["expected_current_evidence_goals"]
+                    )
                 return {
                     "verdict": "pass", "grounded": True,
                     "assignment_fidelity": True, "o1_style": True,
@@ -1485,6 +1571,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                     self.assertEqual(assignment["task_instruction"],
                                      report["task_instruction"])
                     self.assertEqual(assignment["model"], report["model"])
+        self.assertTrue(main_review_requests)
         self.assertIn("report", events)
         self.assertIn("main", events)
         first_main = events.index("main")

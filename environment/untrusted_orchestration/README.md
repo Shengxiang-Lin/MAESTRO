@@ -6,7 +6,7 @@ Run from the MAESTRO repository root:
 python -m environment generate-untrusted-turns \
   --config environment/configs/untrusted_orchestration.yaml \
   --mode llm \
-  --output-dir environment/data/maestro_untrusted_rounds_v5
+  --output-dir environment/data/maestro_untrusted_rounds_v8
 ```
 
 The runner uses the frozen Scene/World/Macro DAG, reviewed Stage-2 reports,
@@ -55,7 +55,7 @@ from the private ledger. A report sees only its own observed rows, source
 atoms, assigned instruction and execution outcome, not a future attempt or
 clean Gold. Previously accepted clean prefix reports are preserved. Report
 Author/Guard/Critic can revise a failed report without calling Main; fallback
-reports remain explicitly labeled and excluded from positive SFT.
+reports remain explicitly labeled and excluded from positive reviewed-turn.
 
 **4C — Main Action Generation (LLM only for Main).** After *all* 4B
 round samples have been processed, rebuild cumulative O1 `subtask_history` strictly from
@@ -65,6 +65,42 @@ but refresh parent context from the newly finalized public feedback. A
 factual visibility guard rejects labels if required identifiers or
 contradictory observations were not actually shown to Main. Main Author/Critic
 generate each round's natural O1 delegate/complete action.
+
+## V8: evidence-plan validation, reasoning review and progress semantics
+
+- **4A:** Produce specific requests for the exact missing field or remaining
+  record set. For a partial row-set return, the assignment asks for a
+  complete applicable set rather than guessing the identity of an unseen
+  record. Identifiers used for targeted repair come only from Main-visible
+  previous reports. Each private dispatch records `focus_fields` separately
+  from the entire underlying Macro output schema.
+- **4C contract validator:** Before any Main Author call, check that every
+  evidence request is covered exactly once, all requested fields are named,
+  source/model/tool/typed output schema and target focus remain unchanged,
+  and the resulting O1 action is structurally legal. This is independent
+  of LLM judgment; invalid plans are rejected, not polished into
+  something else.
+- **4C reasoning-only critic:** The LLM Author writes natural Main reasoning
+  but cannot rewrite executable task instructions or contexts. Critic now
+  receives the Main-visible history, the requested fields and the
+  candidate **reasoning only**. It does not judge tool ordering or demand
+  a different final answer/task from the frozen plan.
+- **Progress accounting:** `Main orchestration` keeps the entire
+  `planned` number as its denominator. `processed` counts actually
+  reviewed Main Actions; `skipped_downstream` counts planned future
+  actions not generated after a branch stops; `written` counts Action
+  reviews durably stored in the per-round journals. Accounted-for
+  progress reaches 100% without pretending each action was authored.
+- **Wrong-fault diagnostics:** `private/wrong_visibility.jsonl` categorizes
+  whether an *explicit* visible conflict verification was planned at the
+  injection decision, later, or never. This is a measure of planner
+  observability, **not proof** that an unverified error is intrinsically
+  undetectable.
+- **Reviewed output terminology:** Console output uses
+  `reviewed branches` and `reviewed turns`. The summary includes these
+  fields, retaining the historical `recovered` and `main_training_turns`
+  keys for compatibility. Public `main_turns.jsonl` retains its O1
+  input/output format and strict acceptance policy.
 
 ## V6 evidence-quality hardening
 
@@ -102,7 +138,7 @@ Main decision has accepted visible prior feedback, reviewed Main language and
 a legal dependency batch. The resulting private reports at
 `private/main_turns_local_review.jsonl` and
 `private/main_turns_local_qualified.jsonl` allow analysis of otherwise
-discarded valid *local* decisions. These are NOT automatically positive SFT:
+discarded valid *local* decisions. These are NOT automatically positive reviewed-turn:
 a locally sensible decision does not prove the terminal answer correct.
 `summary.json` now separates execution incorrect/unresolved from
 language/action publication rejection and records the local diagnostic count.
@@ -147,7 +183,7 @@ Main-Agent rollout.
   for targeted rechecks, unfinished evidence and independent ready tasks
   **in the same decision batch**. All tasks are actually re-executed on
   the resulting WorkProducts. Unresolved or incorrect outcomes are
-  diagnostic only and never published as positive SFT labels.
+  diagnostic only and never published as positive reviewed-turn labels.
 - `report_author.py`: Stage-2-style Sub-Agent Author/Guard/Critic
   consumes the current attempt's actual `observed_operator_steps`, output
   rows and evidence atoms. It shares Stage 2's observed-step representation,
@@ -158,7 +194,7 @@ Main-Agent rollout.
   identifiers, report status, evidence scope and partial delivery against
   the deterministic WorkProduct, not the private clean Gold. For a missing
   deliverable, `finish_result` remains absent. Review failures are
-  explicitly labeled and excluded from positive LLM-mode SFT.
+  explicitly labeled and excluded from positive LLM-mode reviewed-turn.
 - Main Action Author/Critic reuses the Stage-3 O1 Guard, but with
   recovery-specific prose prompts. The deterministic planner still chooses
   every legal target, tool/model routing and parallel batch; LLM never
@@ -180,7 +216,7 @@ The `summary.json` explicitly separates `requested_feedback_rounds`,
 reports whether round generation completed, while `publication_status`
 tracks whether those rounds passed recovery and language review.
 The `summary.json` also separates `execution_recovered_branches` and
-`execution_outcomes` from `recovered`/positive SFT publication. It also
+`execution_outcomes` from `recovered`/positive reviewed-turn publication. It also
 records `subagent_executor_result_normalized`,
 `subagent_guard_failure_causes` and `subagent_review_failure_stages`.
 A branch
@@ -228,7 +264,7 @@ Each bar estimates its total work from the original DAG, expands as
 dynamic recovery schedules extra calls, and displays the exact total
 on completion. Postfixes show accepted/fallback report counts and
 accepted/failed Main action counts. A final branch-level line reports
-**execution recovered** separately from **fully reviewed SFT**.
+**execution recovered** separately from **fully reviewed reviewed-turn**.
 
 Sub-Agent reports use the **complete delivered relation** for factual
 grounding. Source evidence atoms and intermediate operator rows are
@@ -248,7 +284,7 @@ wrong or fabricated value is silently corrected.
 `private/fault_alignment.jsonl`. An LLM report that fails deterministic
 Guard or independent Critic may be retained as a clearly labeled
 diagnostic template, but its branch is **not** published as positive LLM
-SFT. This is **not** an online learned Main-Agent rollout. Persistent
+reviewed-turn. This is **not** an online learned Main-Agent rollout. Persistent
 `same_path` faults without an authorized recovery route remain unresolved.
 
 The `input` fields in the YAML point at the *existing* accepted trusted

@@ -74,7 +74,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "../../orchestra/base_main_agent.py",
     )
     return {
-        "version": "maestro.untrusted_orchestration.evidence_quality_v4",
+        "version": "maestro.untrusted_orchestration.reasoning_review_v5",
         "input_sha256": [_hash_file(path) for path in inputs],
         "source_code_sha256": {
             name: _hash_file(directory / name) for name in code_files
@@ -219,6 +219,9 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     report_review_failures = Counter()
     executor_normalized_results = 0
     local_candidates, local_qualified, local_rejections = [], [], []
+    wrong_visibility_rows = []
+    wrong_visibility_counts = Counter()
+    wrong_visibility_outcomes: dict[str, Counter] = defaultdict(Counter)
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -238,7 +241,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             )
         if data.get("episode") is not None:
             public_episode = deepcopy(data["episode"])
-            # Truth labels belong in private audit, never public SFT.
+            # Truth labels belong in private audit, never public reviewed-turn.
             public_episode.pop("outcome", None)
             public_episode.pop("recovered", None)
             episodes.append(public_episode)
@@ -256,6 +259,51 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             audit = data["private_audit"]
             audits.append(audit)
             execution_outcomes[audit.get("execution_outcome", audit["outcome"])] += 1
+            if any(f.mode == "wrong" for f in plan["faults"]):
+                # Diagnostic classes refer ONLY to whether the evidence
+                # planner emitted a Main-visible conflict verification.
+                # Lack of a VERIFY request does not prove that the wrong
+                # fact was inherently undetectable.
+                verifies = [
+                    (step["round"], request)
+                    for step in audit.get("evidence_plan", [])
+                    for request in step.get("evidence_requests", [])
+                    if request["operation"] == "verify_conflicting_evidence"
+                ]
+                at_fork = [
+                    (rnd, req) for rnd, req in verifies
+                    if rnd == plan["branch_round"]
+                ]
+                if at_fork:
+                    classification = "verify_planned_at_fork"
+                elif verifies:
+                    classification = "verify_planned_later"
+                else:
+                    classification = "no_explicit_verify_planned"
+                wrong_visibility_counts[classification] += 1
+                execution_status = audit.get(
+                    "execution_outcome", audit["outcome"]
+                )
+                wrong_visibility_outcomes[classification][execution_status] += 1
+                wrong_visibility_rows.append({
+                    "round_sample_id": plan["sample_id"],
+                    "question_id": plan["task_id"],
+                    "fork_round": plan["branch_round"],
+                    "classification": classification,
+                    "visible_verify_requests": [{
+                        "round": rnd,
+                        "target_fields": req["target_fields"],
+                        "main_visible_justification":
+                            req["main_visible_justification"],
+                    } for rnd, req in verifies],
+                    "execution_outcome": execution_status,
+                    "final_publication_status": data["status"],
+                    "interpretation": (
+                        "Evidence-plan observability only; absence of "
+                        "an explicit VERIFY is not proof that the error "
+                        "is intrinsically undetectable."
+                    ),
+                })
             for review in audit.get("subagent_report_reviews", []):
                 result = review["authoring"]
                 report_modes[result["mode"]] += 1
@@ -320,7 +368,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                         "execution_outcome"
                     ),
                     "release_policy": (
-                        "diagnostic_only_never_auto_promote_to_sft"
+                        "diagnostic_only_never_auto_promote_to_reviewed_turns"
                     ),
                 }
                 local_candidates.append(info)
@@ -332,6 +380,8 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     _atomic_jsonl(output / "main_turns.jsonl", positive_turns)
     _atomic_jsonl(output / "failed.jsonl", failures)
     _atomic_jsonl(output / "private" / "fault_alignment.jsonl", audits)
+    _atomic_jsonl(output / "private" / "wrong_visibility.jsonl",
+                  wrong_visibility_rows)
     _atomic_jsonl(output / "private" / "main_turns_local_review.jsonl",
                   local_candidates)
     _atomic_jsonl(output / "private" / "main_turns_local_qualified.jsonl",
@@ -351,6 +401,8 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             counters["rejected_validation"]
         ),
         "main_training_turns": len(positive_turns),
+        "reviewed_branches": counters["recovered"],
+        "reviewed_turns": len(positive_turns),
         "local_decisions_reviewed": len(local_candidates),
         "local_decisions_qualified_diagnostic": len(local_qualified),
         "local_decisions_rejected_diagnostic": len(local_rejections),
@@ -379,6 +431,14 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "publication_main_action_failed":
             counters["main_action_not_accepted"],
         "execution_outcomes": dict(execution_outcomes),
+        "wrong_visibility_by_explicit_verify": dict(wrong_visibility_counts),
+        "wrong_visibility_execution_outcomes": {
+            name: dict(counters)
+            for name, counters in sorted(wrong_visibility_outcomes.items())
+        },
+        "wrong_visibility_diagnostics": str(
+            output / "private" / "wrong_visibility.jsonl"
+        ),
         "language_review_rejected_after_recovery":
             sum(1 for audit in audits if audit.get("execution_recovered")
                 and not audit.get("language_review_accepted", True)),
@@ -539,7 +599,7 @@ def generate_turns(
         }
 
     def _progress_bucket(data: dict) -> str:
-        """Execution outcomes are independent of SFT publication review."""
+        """Execution outcomes are independent of reviewed-turn publication review."""
         status = data.get("status", "rejected_validation")
         if status == "recovered":
             return "recovered"
@@ -595,6 +655,11 @@ def generate_turns(
                 for review in reviews:
                     _review_progress(counts, review.get("authoring") or {})
                 counts["written"] += len(reviews)
+                if stage == "main":
+                    counts["processed"] += len(reviews)
+                    remaining = max(0, action_count(saved(stage_b, plan))
+                                    - len(reviews))
+                    counts["skipped_downstream"] += remaining
         with tqdm(
             total=max(total, initial), initial=initial,
             desc=phase, unit=unit, dynamic_ncols=True,
@@ -620,9 +685,12 @@ def generate_turns(
                     }
                 else:
                     display = {
+                        "processed": counts["processed"],
+                        "planned": total,
                         "accepted": counts["accepted"],
-                        "fallback": counts["fallback"],
                         "failed": counts["failed"],
+                        "skipped_downstream":
+                            counts["skipped_downstream"],
                         "written": counts["written"],
                     }
                 bar.set_postfix(display, refresh=False)
@@ -631,6 +699,8 @@ def generate_turns(
                 with lock:
                     if stage in {"reports", "main"} and status is not None:
                         _review_progress(counts, status)
+                        if stage == "main":
+                            counts["processed"] += 1
                     if bar.total is not None and bar.n + 1 > bar.total:
                         bar.total = bar.n + 1
                     refresh()
@@ -653,6 +723,17 @@ def generate_turns(
                              .get(review_key, []))
                         )
                         counts["written"] += review_count
+                        if stage == "main":
+                            remaining = max(
+                                0, action_count(saved(stage_b, plan))
+                                - review_count
+                            )
+                            counts["skipped_downstream"] += remaining
+                            # Mark planned but not attempted actions as
+                            # accounted-for after the round was persisted.
+                            # This is *not* a reviewed/accepted action.
+                            if remaining:
+                                bar.update(remaining)
                     refresh()
                     bar.refresh()
 
@@ -670,10 +751,13 @@ def generate_turns(
                 ]
                 for future in as_completed(futures):
                     future.result()
-            # A branch can stop early on evidence/LLM validation; the
-            # initial total is a forecast, not a promised number of calls.
+            # Main progress includes explicitly skipped downstream
+            # actions, so its denominator stays at the 4A plan count.
+            # Report counts can vary after a failed sample; allow that
+            # bar to settle on the actual reviewed-report total.
             with lock:
-                bar.total = bar.n
+                if stage != "main":
+                    bar.total = bar.n
                 refresh()
                 bar.refresh()
 
@@ -768,11 +852,13 @@ def generate_turns(
         )
 
     total_actions = sum(action_count(saved(stage_b, p)) for p in planned)
+    # A fully handled round contributes its *entire planned action*
+    # budget to accounted progress, including downstream actions skipped
+    # after a reviewed Main failure. Do not disguise partial coverage by
+    # shrinking the denominator to the number actually authored.
     initial_actions = sum(
-        len((saved(journal, p) or {}).get("private_audit", {})
-            .get("main_action_reviews", []))
-        if (saved(journal, p) or {}).get("private_audit") else 0
-        for p in planned
+        action_count(saved(stage_b, p))
+        for p in planned if saved(journal, p) is not None
     )
 
     def make_main(plan: dict, tick) -> None:
@@ -819,11 +905,24 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_evidence_quality_v4",
+        "pipeline": "maestro_untrusted_orchestration_reasoning_review_v5",
         "mode": ("llm" if main_mode == "llm" or report_mode == "llm"
                  else "template"),
         "subagent_report_mode": report_mode,
         "main_action_mode": main_mode,
+        "main_actions_planned": total_actions,
+        "main_actions_processed": sum(
+            len((saved(journal, p).get("private_audit") or {})
+                .get("main_action_reviews", []))
+            for p in planned if saved(journal, p) is not None
+        ),
+        "main_actions_skipped_downstream": (
+            total_actions - sum(
+                len((saved(journal, p).get("private_audit") or {})
+                    .get("main_action_reviews", []))
+                for p in planned if saved(journal, p) is not None
+            )
+        ),
         "input_scenes": len(scenes),
         "scenes_without_accepted_base": no_base,
         "round_sampling_unit": "question_x_main_feedback_round",
@@ -863,26 +962,26 @@ def generate_turns(
             "One fault injection window per round sample: the latest completed Sub-Agent batch.",
             "Only preflight-executable fault/macro pairs are sampled.",
             "Only publicly observable discrepancies trigger targeted repair labels.",
-            "Clean World/Gold never change; uncorrected counterfactuals are private, not positive SFT.",
+            "Clean World/Gold never change; uncorrected counterfactuals are private, not reviewed turns.",
             "Stage 4A determines evidence requests and an executable global schedule using only Main-visible report justifications.", 
             "4B materializes every actual executed Sub-Agent Attempt before any Stage 4C Main LLM is called.",
             "4C naturalizes 4A's fixed legal scheduling contracts against the finalized Main-visible 4B history.",
             "Template actions are deterministic teacher demonstrations, not online Main-Agent rollouts.",
             "Sub-Agent Author/Critic write full prose for this attempt; status and actual WorkProduct remain code-owned.",
             "Main-Agent Author/Critic only naturalize the program-selected O1 tasks; private state does not enter their prompt.",
-            "LLM-mode fallback reports are diagnostic only, never silently counted as reviewed positive SFT.",
+            "LLM-mode fallback reports are diagnostic only, never silently counted as reviewed positive turns.",
             "4C action task_instruction and context are fixed against the current 4A/4B executable evidence contract; LLM edits only decision reasoning.",
-            "Per-turn local eligibility is diagnostic in private/main_turns_local_review.jsonl; it is never silently merged into globally verified SFT.",
+            "Per-turn local eligibility is diagnostic in private/main_turns_local_review.jsonl; it is never silently merged into globally verified reviewed turns.",
         ],
     }
     _atomic_json(output / "summary.json", summary)
     if not no_progress:
         tqdm.write(
-            "Stage 4 branches: "
+            "Evidence rounds: "
             f"{summary['completed_branches']}/{summary['requested_feedback_rounds']} "
             f"| execution recovered={summary['execution_recovered_branches']} "
             f"| incorrect={summary['incorrect']} "
-            f"| reviewed SFT branches={summary['recovered']} "
-            f"| SFT turns={summary['main_training_turns']}"
+            f"| reviewed branches={summary['reviewed_branches']} "
+            f"| reviewed turns={summary['reviewed_turns']}"
         )
     return summary

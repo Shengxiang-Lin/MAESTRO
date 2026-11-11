@@ -530,6 +530,12 @@ def author_delegate_action(
             "reference_action_for_structure_only": template,
             "previous_feedback": failures[-2:],
         }
+        if freeze_assignment_prose:
+            request["authoring_scope"] = (
+                "Generate natural grounded reasoning ONLY. The assigned "
+                "task instructions and contexts are already determined "
+                "by the evidence planner and cannot be revised here."
+            )
         try:
             candidate = author.complete_json(
                 author_system, json.dumps(request, ensure_ascii=False)
@@ -596,31 +602,57 @@ def author_delegate_action(
             failures.append({"stage": "guard", "errors": errors})
             continue
         try:
+            if freeze_assignment_prose:
+                # The LLM critic must not attempt to rewrite frozen
+                # evidence acquisition instructions or tool routing.
+                # It reviews only Main's *reasoning* against the visible
+                # history and the STRUCTURAL goal summaries. The code
+                # validates and emits the executable task assignments.
+                review_payload = {
+                    "current_main_visible_prompt": prompt,
+                    "expected_current_evidence_goals": [{
+                        "target_fields": item.get(
+                            "focus_fields", item["output_fields"]
+                        ),
+                        "needs_upstream": item["needs_upstream"],
+                    } for item in assignments],
+                    "candidate_reasoning_only": candidate["reasoning"],
+                    "assignment_contract_validated_by_code": True,
+                    "review_scope": (
+                        "Grounded Main reasoning, motivation for the "
+                        "current evidence requests, and independence of "
+                        "parallel assignments only. Do not assess or "
+                        "rewrite task_instruction, context, model, tools, "
+                        "or the overall plan itself."
+                    ),
+                }
+            else:
+                review_payload = {
+                    "current_main_visible_prompt": prompt,
+                    "assignment_prose_goals_in_required_order": [{
+                        "target_instruction": item["target_instruction"],
+                        "expected_context": item["context"],
+                        "needs_upstream": item["needs_upstream"],
+                        "output_fields": item["output_fields"],
+                    } for item in assignments],
+                    "candidate_prose_only": {
+                        "reasoning": candidate["reasoning"],
+                        "tasks": [{
+                            "task_instruction": task["task_instruction"],
+                            "context": task["context"],
+                        } for task in candidate["params"]["tasks"]],
+                    },
+                    "fixed_tool_and_model_fields_checked_by_code": True,
+                }
             review = critic.complete_json(
-                critic_system, json.dumps({
-                "current_main_visible_prompt": prompt,
-                "assignment_prose_goals_in_required_order": [{
-                    "target_instruction": item["target_instruction"],
-                    "expected_context": item["context"],
-                    "needs_upstream": item["needs_upstream"],
-                    "output_fields": item["output_fields"],
-                } for item in assignments],
-                "candidate_prose_only": {
-                    "reasoning": candidate["reasoning"],
-                    "tasks": [{
-                        "task_instruction": task["task_instruction"],
-                        "context": task["context"],
-                    } for task in candidate["params"]["tasks"]],
-                },
-                "fixed_tool_and_model_fields_checked_by_code": True,
-            }, ensure_ascii=False)
+                critic_system, json.dumps(review_payload, ensure_ascii=False)
             )
         except Exception as exc:
             failures.append({
                 "stage": "critic_backend", "reason": str(exc)[:200],
             })
             continue
-        if _review_only_frozen_tool_objection(review):
+        if not freeze_assignment_prose and _review_only_frozen_tool_objection(review):
             try:
                 review = critic.complete_json(
                     critic_system + "\nSECOND REVIEW: ignore all frozen tool "

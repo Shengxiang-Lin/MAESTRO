@@ -214,7 +214,7 @@ def generate_turns(
     )
     counts = Counter({"accepted": len(old_episodes),
                       "rejected": len(old_failures)})
-    # Only turns from fully accepted Episodes are public SFT samples.
+    # Only turns from fully accepted Episodes are public reviewed-turn samples.
     published_turns = len(old_turns)
     pending = [
         (i, scene) for i, scene in enumerate(scene_rows)

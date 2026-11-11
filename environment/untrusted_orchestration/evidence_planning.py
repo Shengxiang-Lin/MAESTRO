@@ -178,16 +178,68 @@ def evidence_assignment(state, task_id: str, *, catalog: dict,
     context = base["context"]
     if ids:
         context += " Previously reported identifiers: " + ids + "."
+    old_public = state.public_reports.get(task_id) or {}
+    old_finish = old_public.get("finish_result") or {}
+    observed_ids = list(dict.fromkeys(_IDENT.findall(
+        str(old_finish.get("result") or "") + " "
+        + str(old_finish.get("summary") or "")
+    )))[:5]
+    if observed_ids and operation in {
+        "retry_missing_evidence", "complete_partial_evidence",
+        "verify_conflicting_evidence", "recheck_prior_evidence",
+    }:
+        # Only name identifiers already sent back to Main, never hidden
+        # missing rows inferred from Gold or the operator's future output.
+        context += (
+            " Identifiers visible in the earlier returned handoff: "
+            + ", ".join(observed_ids) + "."
+        )
+    if operation == "complete_partial_evidence":
+        if "remaining_rows" in request["target_fields"]:
+            objective += (
+                " Retrieve the complete applicable record set rather "
+                "than copying the truncated prior subset. Preserve both "
+                "previously seen and newly retrieved identifiers; "
+                "report which rows remain unavailable. "
+                "Do not infer the identity of any unseen row."
+            )
+        else:
+            objective += (
+                " Distinguish delivered field values from unavailable "
+                "fields; do not replace missing fields with intermediate "
+                "values that were not finally delivered."
+            )
+    elif operation == "retry_missing_evidence":
+        objective += (
+            " State the precise requested output fields and return a "
+            "usable current handoff, without claiming the previous "
+            "unsuccessful acquisition already established the answer."
+        )
+    elif operation == "verify_conflicting_evidence":
+        objective += (
+            " Preserve the competing previously reported identifiers "
+            "and report any remaining disagreement rather than "
+            "silently picking an unsupported candidate."
+        )
     # Retain Stage-3 source/workflow specification and O1 tool routing;
     # narrow the actual evidence goal and constraints dynamically.
+    focus = (
+        "Recover the complete missing row set"
+        if fields == "remaining_rows" else
+        "Return precisely the requested evidence field(s): " + fields
+    )
     base["target_instruction"] = (
-        objective + " Focus on " + fields + ". "
+        objective + " " + focus + ". "
         + base["target_instruction"]
     )[:1500]
     base["context"] = (
         context + " Current evidence need: "
         + request["main_visible_justification"]
     )[:3500]
+    # Internal structured role marker: Main action output remains O1-only.
+    # This makes the reasoning critic aware of the *requested* missing
+    # evidence rather than the Macro's complete output schema.
+    base["focus_fields"] = list(request["target_fields"])
     return base
 
 
