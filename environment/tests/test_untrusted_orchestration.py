@@ -455,6 +455,67 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 self.assertTrue(plan["faults"])
                 self.assertTrue(all(f.mode == "wrong" for f in plan["faults"]))
 
+    def test_exhaustive_round_generation_has_one_journal_per_feedback_round(self):
+        """Stage 4A runs over rounds, 4B/4C consume its completed units."""
+        delegates = [x for x in self.episode["trajectory"]
+                     if x["action"] == "delegate_task"]
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes = root / "scenes.jsonl"
+            reports = root / "reports.jsonl"
+            episodes = root / "episodes.jsonl"
+            scenes.write_text(json.dumps(self.scene) + "\n")
+            reports.write_text(
+                "".join(json.dumps(r) + "\n" for r in self.reports)
+            )
+            episodes.write_text(json.dumps(self.episode) + "\n")
+            summary = generate_turns(
+                scenes_path=scenes, reports_path=reports,
+                base_episodes_path=episodes,
+                output_dir=root / "all_rounds",
+                max_scenes=None, branches_per_scene=None,
+                seed=17, fault_modes=["missing", "partial", "wrong"],
+                workers=2, no_progress=True,
+            )
+            output = root / "all_rounds"
+            rows = [
+                json.loads(line) for line in
+                (output / "round_index.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(summary["requested_feedback_rounds"],
+                             len(delegates))
+            self.assertEqual(summary["requested_branches"],
+                             len(delegates))
+            self.assertEqual(summary["completed_branches"],
+                             len(delegates))
+            self.assertEqual(summary["status"], "done")
+            self.assertEqual(summary["questions_with_extracted_rounds"], 1)
+            self.assertEqual(summary["rounds_per_question"],
+                             {self.scene["task_id"]: len(delegates)})
+            self.assertEqual(len(rows), len(delegates))
+            self.assertEqual(
+                [row["main_decision_round"] for row in rows],
+                list(range(2, len(delegates) + 2)),
+            )
+            self.assertEqual(
+                [row["received_from_delegate_round"] for row in rows],
+                list(range(1, len(delegates) + 1)),
+            )
+            for stage in ("stage4a/journal", "stage4b/journal", "journal"):
+                self.assertEqual(
+                    len(list((output / stage).glob("*.json"))),
+                    len(delegates),
+                )
+            # Resume all stages without repeating already completed
+            # simulation/authoring or changing the published output.
+            self.assertEqual(generate_turns(
+                scenes_path=scenes, reports_path=reports,
+                base_episodes_path=episodes,
+                output_dir=output, max_scenes=None, branches_per_scene=None,
+                seed=17, fault_modes=["missing", "partial", "wrong"],
+                workers=2, no_progress=True,
+            ), summary)
+
     def test_untrusted_subagent_llm_preserves_wrong_record_not_gold(self):
         task = {
             "task_id": "faulty-lookup",
