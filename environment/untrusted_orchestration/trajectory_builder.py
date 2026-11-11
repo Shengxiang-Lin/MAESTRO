@@ -567,7 +567,7 @@ def build_branch(
         })
     if stopped is None:
         stopped = "max_decision_rounds"
-    # Positive SFT in LLM mode must be language-reviewed on *both*
+    # Positive reviewed-turn in LLM mode must be language-reviewed on *both*
     # surfaces. The existing deterministic report remains inspectable
     # as a diagnostic when a review fails, not secretly accepted as an
     # LLM-written trajectory.
