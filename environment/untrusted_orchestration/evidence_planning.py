@@ -185,16 +185,35 @@ def evidence_assignment(state, task_id: str, *, catalog: dict,
 def plan_evidence_batch(state, batch: list[str], *, round_number: int,
                         repairs: list[str], catalog: dict,
                         model_alias: str) -> tuple[list[dict], list[dict]]:
+    # Plan at the field/evidence level first. A single executable operator
+    # chain may satisfy several requests, which are grouped into one legal
+    # dispatch. This avoids pretending that every field needs a separate
+    # Agent call (or that a Macro ID is itself an evidence requirement).
     requests = []
     assignments = []
     for tid in batch:
-        request = evidence_request(
+        group = evidence_request(
             state, tid, round_number=round_number, retry=tid in repairs,
         )
+        fields = list(dict.fromkeys(group["target_fields"]))
+        group_ids = []
+        for index, field in enumerate(fields):
+            request = deepcopy(group)
+            request["request_id"] = group["request_id"] + f"-F{index + 1:02d}"
+            request["target_fields"] = [field]
+            request["evidence_unit"] = {
+                "field": field,
+                "entity_identifiers": list(group["known_identifiers"]),
+                "source_scope": list(group["authorized_source_ids"]),
+                "needed_for": list(group["required_parent_fields"]),
+            }
+            requests.append(request)
+            group_ids.append(request["request_id"])
         assignment = evidence_assignment(
             state, tid, catalog=catalog, model_alias=model_alias,
-            request=request,
+            request=group,
         )
-        requests.append(request)
+        # This is private dispatch metadata: NEVER pass binding to Main LLM.
+        assignment["grouped_request_ids"] = group_ids
         assignments.append(assignment)
     return requests, assignments
