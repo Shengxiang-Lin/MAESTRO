@@ -177,6 +177,15 @@ class CandidateExplorationTests(unittest.TestCase):
             )
             self.assertEqual(summary["status"], "done")
             self.assertEqual(summary["requested_feedback_rounds"], 1)
+            round_index = [
+                json.loads(line) for line in
+                (out / "feedback_round_index.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(len(round_index), 1)
+            self.assertEqual(
+                round_index[0]["candidate_count"],
+                summary["candidate_trials"],
+            )
             self.assertGreater(summary["candidate_trials"], 1)
             self.assertEqual(
                 summary["candidate_trials"],
