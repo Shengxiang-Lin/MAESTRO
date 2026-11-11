@@ -468,8 +468,8 @@ class ExecutionState:
         if len(parents) != 2 or not all(p in self.public_reports
                                         for p in parents):
             return None
-        left = self.current[parents[0]].product
-        right = self.current[parents[1]].product
+        left = self.communicated_product(parents[0])
+        right = self.communicated_product(parents[1])
         if left is None or right is None:
             return None
         join = next(step for step in task["operator_chain"]
@@ -497,7 +497,10 @@ class ExecutionState:
         )
         if not shared or not result_text:
             return None
-        for row in current.product.rows:
+        visible_product = self.communicated_product(task_id)
+        if visible_product is None:
+            return None
+        for row in visible_product.rows:
             returned_keys = []
             if key_left in row["values"]:
                 returned_keys.append(row["values"][key_left])
