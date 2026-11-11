@@ -303,10 +303,10 @@ def _explicit_final_value_issues(text: str, contract: dict) -> list[str]:
             # such as "marker code field remains unavailable" or a
             # source/filter operation that did not deliver the field.
             pattern = re.compile(
-                r"\\b" + re.escape(name) +
-                r"\\b\\s*(?::|=|is|was)\\s*"
-                r"(?P<value>KEY[12]-\\d+|MK-\\d+|RK-\\d+|"
-                r"Case-\\d+|Entry-\\d+|-?\\d+(?:\\.\\d+)?)\\b",
+                r"\b" + re.escape(name) +
+                r"\b\s*(?::|=|is|was)\s*"
+                r"(?P<value>KEY[12]-\d+|MK-\d+|RK-\d+|"
+                r"Case-\d+|Entry-\d+|-?\d+(?:\.\d+)?)\b",
                 flags=re.I,
             )
             for match in pattern.finditer(text):
