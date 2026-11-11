@@ -16,6 +16,9 @@ from environment.untrusted_orchestration.candidate_exploration import (
 from environment.untrusted_orchestration.candidate_selection import (
     select_recovered_candidates, classify_trial,
 )
+from environment.untrusted_orchestration.evidence_affordances import (
+    analyze_scene_evidence_affordances,
+)
 from environment.untrusted_orchestration.generate_turns import (
     generate_turns, _plan_branches,
 )
@@ -193,6 +196,11 @@ class CandidateExplorationTests(unittest.TestCase):
                 .read_text().splitlines()
             ]
             self.assertEqual(len(choices), summary["candidate_trials"])
+            self.assertTrue(
+                (out / "private" /
+                 "scene_evidence_affordances.jsonl").is_file()
+            )
+            self.assertIn("potential_cross_check_macro_pairs", summary)
             self.assertEqual(
                 len({row["round_sample_id"] for row in choices}),
                 len(choices),
@@ -235,6 +243,43 @@ class CandidateExplorationTests(unittest.TestCase):
                 set(turn["output"]) == {"action", "reasoning", "params"}
                 for turn in turns
             ))
+
+    def test_independent_sources_can_be_complementary_not_verifiers(self):
+        scene = {
+            "task_id": "Q-affordance",
+            "macro_graph": {
+                "reference_waves": [["A", "B"], ["C"]],
+                "tasks": [{
+                    "task_id": "A", "depends_on": [],
+                    "source_ids": ["visual"],
+                    "outputs": {"typed_relation": [
+                        "candidate_id", "marker_code"
+                    ]}, "operator_chain": [],
+                }, {
+                    "task_id": "B", "depends_on": [],
+                    "source_ids": ["caption"],
+                    "outputs": {"typed_relation": ["candidate_id"]},
+                    "operator_chain": [],
+                }, {
+                    "task_id": "C", "depends_on": ["A", "B"],
+                    "source_ids": [],
+                    "outputs": {"typed_relation": ["marker_code"]},
+                    "operator_chain": [{"op": "join"}],
+                }],
+            },
+        }
+        facts = analyze_scene_evidence_affordances(scene)
+        self.assertEqual(facts["independent_comparable_pairs"], 1)
+        self.assertEqual(facts["complementary_fusion_pairs"], 1)
+        self.assertEqual(facts["potential_cross_check_pairs"], 0)
+        self.assertEqual(facts["same_wave_comparable_pairs"], 1)
+        self.assertEqual(
+            facts["provisional_downstream_late_witness_pairs"], 0
+        )
+        self.assertEqual(
+            facts["candidate_relationships"][0]
+            ["verification_status"], "schema_only_not_proven",
+        )
 
     def test_config_v10_default_and_legacy_switch(self):
         config = load_config()
