@@ -130,8 +130,10 @@ def _plan_branches(
             if not isinstance(results, list) or len(results) != len(waves[index]):
                 raise ValueError("trusted_returned_batch_alignment_invalid")
             decision_round = expected + 1
-            if decision_round <= max_rounds:
-                rounds.append((decision_round, delegate))
+            # Preserve all accepted base feedback rounds, including those
+            # exceeding this run's configured recovery horizon. Such a
+            # round is explicitly accounted for as budget-skipped below.
+            rounds.append((decision_round, delegate))
         if branches_per_scene is not None:
             # A diagnostic cap uses *chronological rounds*, not random
             # selection. Production never caps coverage at two branches.
@@ -155,9 +157,12 @@ def _plan_branches(
             round_seed = seed + scene_index * 1009 + decision_round * 92821
             rng = random.Random(round_seed)
             faults = []
-            skip_reason = None
+            skip_reason = (
+                "insufficient_recovery_round_budget"
+                if decision_round > max_rounds else None
+            )
             chosen_mode = None
-            if available_modes:
+            if available_modes and skip_reason is None:
                 chosen_mode = rng.choice(available_modes)
                 supported = [
                     tid for tid in wave if chosen_mode in eligible.get(tid, [])
@@ -175,7 +180,7 @@ def _plan_branches(
                     for tid in chosen_targets
                 ]
                 eligible_count += 1
-            else:
+            elif skip_reason is None:
                 skip_reason = "no_executable_fault_on_returned_batch"
 
             planned.append({
@@ -621,7 +626,12 @@ def generate_turns(
             not plan["skip_reason"] for plan in planned
         ),
         "rounds_without_executable_fault": sum(
-            bool(plan["skip_reason"]) for plan in planned
+            plan["skip_reason"] == "no_executable_fault_on_returned_batch"
+            for plan in planned
+        ),
+        "rounds_skipped_by_recovery_budget": sum(
+            plan["skip_reason"] == "insufficient_recovery_round_budget"
+            for plan in planned
         ),
         "questions_with_extracted_rounds": len({
             plan["task_id"] for plan in planned
@@ -642,7 +652,8 @@ def generate_turns(
             output / "private" / "fault_alignment.jsonl"
         ),
         "limitations": [
-            "Every accepted base Main decision round that receives a prior Sub-Agent batch is extracted, except an explicit debug cap or max-rounds cutoff.",
+            "Every accepted base Main decision round receiving a prior Sub-Agent batch is indexed; only an explicit debug cap limits extraction.",
+            "Feedback rounds after the configured max_rounds budget are indexed but transparently skipped, never silently omitted.",
             "One fault injection window per round sample: the latest completed Sub-Agent batch.",
             "Only preflight-executable fault/macro pairs are sampled.",
             "Only publicly observable discrepancies trigger targeted repair labels.",
