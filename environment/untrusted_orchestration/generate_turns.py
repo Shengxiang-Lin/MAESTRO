@@ -511,6 +511,10 @@ def generate_turns(
     persistence: str = "once", multi_target_probability: float = 0.0,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
     max_parallel_tasks: int = 4, workers: int = 4,
+    scenario_mode: str = "round_fork",
+    atomic_fault_kinds: list[str] | None = None,
+    max_fault_atoms: int = 1,
+    delayed_evidence_probability: float = 0.0,
     max_revisions: int = 2,
     report_max_revisions: int | None = None,
     main_max_revisions: int | None = None,
@@ -556,10 +560,30 @@ def generate_turns(
         raise ValueError("untrusted_output_overwrites_input")
 
     modes = list(fault_modes or ["missing", "partial", "wrong"])
+    if scenario_mode not in {"round_fork", "event_driven"}:
+        raise ValueError("invalid_scenario_mode")
+    kinds = list(atomic_fault_kinds or [
+        "no_result", "incomplete_retrieval", "wrong_retrieval",
+        "wrong_entity_binding", "report_missing",
+        "result_summary_conflict", "fabricated_claim",
+    ])
+    if (not kinds or any(kind not in ATOM_TO_MODE for kind in kinds)
+            or len(kinds) != len(set(kinds))):
+        raise ValueError("invalid_atomic_fault_kinds")
+    if type(max_fault_atoms) is not int or not 1 <= max_fault_atoms <= 2:
+        raise ValueError("invalid_max_atomic_faults")
+    if type(delayed_evidence_probability) not in (int, float) or (
+        not 0 <= delayed_evidence_probability <= 1
+    ):
+        raise ValueError("invalid_delayed_evidence_probability")
     settings = {
         "max_scenes": max_scenes,
         "branches_per_scene": branches_per_scene, "seed": seed,
         "fault_modes": modes, "persistence": persistence,
+        "scenario_mode": scenario_mode,
+        "atomic_fault_kinds": kinds,
+        "max_fault_atoms": max_fault_atoms,
+        "delayed_evidence_probability": delayed_evidence_probability,
         "multi_target_probability": multi_target_probability,
         "max_rounds": max_rounds, "max_cost": max_cost,
         "max_retries": max_retries, "max_parallel_tasks": max_parallel_tasks,
@@ -588,6 +612,9 @@ def generate_turns(
         seed=seed, fault_modes=modes, persistence=persistence,
         multi_target_probability=multi_target_probability,
         max_rounds=max_rounds,
+        scenario_mode=scenario_mode, atomic_fault_kinds=kinds,
+        max_fault_atoms=max_fault_atoms,
+        delayed_evidence_probability=delayed_evidence_probability,
     )
     if overwrite and output.exists():
         shutil.rmtree(output)
@@ -612,6 +639,14 @@ def generate_turns(
         "latest_subagent_count": plan["incoming_subtask_count"],
         "fault_eligible": not bool(plan["skip_reason"]),
         "skip_reason": plan["skip_reason"],
+        "scenario_mode": plan["scenario_plan"]["mode"],
+        "scenario_blueprint": plan["scenario_plan"]["blueprint"],
+        "atomic_fault_kinds": [
+            a["kind"] for a in plan["scenario_plan"]["fault_atoms"]
+        ],
+        "scheduled_evidence_events": len(
+            plan["scenario_plan"]["evidence_events"]
+        ),
     } for plan in planned])
 
     # Three genuine phases with separate signed, resumable artifacts.
@@ -825,6 +860,7 @@ def generate_turns(
                 scene, rows_by_scene[scene["task_id"]],
                 base[scene["task_id"]],
                 branch_round=plan["branch_round"], faults=plan["faults"],
+                scenario_plan=plan["scenario_plan"],
                 max_rounds=max_rounds, max_cost=max_cost,
                 max_retries=max_retries,
                 max_parallel_tasks=max_parallel_tasks,
@@ -951,7 +987,23 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_reasoning_review_v5",
+        "pipeline": "maestro_untrusted_orchestration_event_engine_v1",
+        "scenario_mode": scenario_mode,
+        "scenario_blueprints": dict(Counter(
+            p["scenario_plan"]["blueprint"] for p in planned
+        )),
+        "atomic_fault_kinds_planned": dict(Counter(
+            atom["kind"] for p in planned
+            for atom in p["scenario_plan"]["fault_atoms"]
+        )),
+        "evidence_events_scheduled": sum(
+            len(p["scenario_plan"]["evidence_events"])
+            for p in planned
+        ),
+        "delayed_requested_but_not_executable": sum(
+            p["scenario_plan"]["delayed_requested_but_unsupported"]
+            for p in planned
+        ),
         "mode": ("llm" if main_mode == "llm" or report_mode == "llm"
                  else "template"),
         "subagent_report_mode": report_mode,
