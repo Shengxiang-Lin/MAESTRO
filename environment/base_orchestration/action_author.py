@@ -504,7 +504,13 @@ def author_complete_action(*, template: dict, prompt: str,
 def author_delegate_action(
     *, assignments: list[dict], prompt: str, author=None, critic=None,
     max_revisions: int = 2,
+    author_system: str | None = None,
+    critic_system: str | None = None,
 ) -> tuple[dict | None, dict]:
+    # Separate runtime-specific prose instructions from the shared O1
+    # deterministic structure/Guard. Existing Base callers are unchanged.
+    author_system = author_system or _AUTHOR_SYSTEM
+    critic_system = critic_system or _CRITIC_SYSTEM
     template = proposed_template_action(assignments)
     if author is None:
         errors = action_issues(template, assignments, prompt=prompt)
@@ -524,7 +530,7 @@ def author_delegate_action(
         }
         try:
             candidate = author.complete_json(
-                _AUTHOR_SYSTEM, json.dumps(request, ensure_ascii=False)
+                author_system, json.dumps(request, ensure_ascii=False)
             )
         except Exception as exc:
             failures.append({"stage": "author", "reason": str(exc)[:200]})
@@ -575,7 +581,7 @@ def author_delegate_action(
             continue
         try:
             review = critic.complete_json(
-                _CRITIC_SYSTEM, json.dumps({
+                critic_system, json.dumps({
                 "current_main_visible_prompt": prompt,
                 "assignment_prose_goals_in_required_order": [{
                     "target_instruction": item["target_instruction"],
@@ -601,7 +607,7 @@ def author_delegate_action(
         if _review_only_frozen_tool_objection(review):
             try:
                 review = critic.complete_json(
-                    _CRITIC_SYSTEM + "\nSECOND REVIEW: ignore all frozen tool "
+                    critic_system + "\nSECOND REVIEW: ignore all frozen tool "
                     "routing, judge only grounded Task prose.\n",
                     json.dumps(
                         _tool_neutral_review_payload(
