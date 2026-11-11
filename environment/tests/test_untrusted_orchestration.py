@@ -565,6 +565,62 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             self.assertIsNone(writer.call_args.kwargs["report_author"])
             self.assertEqual(len(instances), 2)
 
+    def test_unreviewed_report_fallback_excluded_from_llm_sft(self):
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+        class InvalidAuthor:
+            def complete_json(self, system, request):
+                return {"status": "done", "result": "Invented observation"}
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True,
+                    "useful": True,
+                }
+        episode, turns, audit = build_branch(
+            self.scene, self.reports, self.episode,
+            branch_round=2, faults=[Fault(tid, "missing")],
+            report_author=InvalidAuthor(), report_critic=Critic(),
+            report_max_revisions=0,
+        )
+        self.assertEqual(audit["outcome"], "language_review_unaccepted")
+        self.assertEqual(turns, [])
+        self.assertEqual(
+            audit["subagent_report_reviews"][0]["authoring"]["mode"],
+            "grounded_template_fallback",
+        )
+        self.assertTrue(audit["parallel_batches_verified"])
+
+    def test_main_author_uses_recovery_specific_stage3_prompt(self):
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+        seen = []
+        class Author:
+            def complete_json(self, system, request):
+                seen.append(system)
+                return json.loads(request)["reference_action_for_structure_only"]
+        class Critic:
+            def complete_json(self, system, request):
+                seen.append(system)
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+        episode, turns, audit = build_branch(
+            self.scene, self.reports, self.episode,
+            branch_round=2, faults=[Fault(tid, "missing")],
+            author=Author(), critic=Critic(),
+            main_max_revisions=0,
+        )
+        self.assertEqual(audit["outcome"], "recovered")
+        self.assertTrue(any("UNTRUSTED ROUND-LOCAL RECOVERY" in x
+                            for x in seen))
+        self.assertTrue(any("UNTRUSTED RECOVERY REVIEW" in x
+                            for x in seen))
+        self.assertIn("llm_reviewed", {
+            row["generation_mode"] for row in turns
+        })
+        self.assertTrue(audit["main_action_reviews"])
+
     def test_journal_resume_positive_publication_and_manifest(self):
         with TemporaryDirectory() as td:
             root = Path(td)
