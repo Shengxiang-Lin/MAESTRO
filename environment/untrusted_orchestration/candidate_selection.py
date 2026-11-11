@@ -26,6 +26,46 @@ _PRIORITY = {
 }
 
 
+_FAULT_FAMILIES = {
+    "no_result": "missing",
+    "report_missing": "missing",
+    "incomplete_retrieval": "partial",
+    "wrong_retrieval": "unreliable",
+    "wrong_entity_binding": "unreliable",
+    "legacy_wrong_evidence": "unreliable",
+    "fabricated_claim": "unreliable",
+    "result_summary_conflict": "unreliable",
+}
+
+
+def _visible_at_injection(plan: dict, journal: dict) -> str:
+    """What the Main actually received, NOT the private fault family."""
+    target = (plan.get("faults") or [None])[0]
+    incoming = plan.get("incoming_task_ids") or []
+    if target is None or target.task_id not in incoming:
+        return "unknown"
+    slot = incoming.index(target.task_id)
+    for step in (journal.get("episode") or {}).get("trajectory", []):
+        if (step.get("attempt") != plan["branch_round"] - 1
+                or step.get("action") != "delegate_task"):
+            continue
+        results = step.get("result", {}).get("subtask_results") or []
+        if slot >= len(results):
+            return "unknown"
+        finish = results[slot].get("finish_result")
+        if not isinstance(finish, dict):
+            return "missing"
+        status = str(finish.get("status", "unknown"))
+        if status == "partial":
+            return "partial"
+        if status == "missing":
+            return "missing"
+        if status == "done":
+            return "apparently_complete"
+        return status
+    return "unknown"
+
+
 def classify_trial(plan: dict, journal: dict) -> dict:
     audit = journal.get("private_audit") or {}
     runtime = audit.get("runtime") or {}
@@ -83,6 +123,12 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         "question_id": plan["task_id"],
         "feedback_round": plan["branch_round"],
         "atom_kind": kinds[0] if kinds else None,
+        "private_fault_family": (
+            _FAULT_FAMILIES.get(kinds[0], "other") if kinds else None
+        ),
+        "main_visible_delivery_state": _visible_at_injection(
+            plan, journal
+        ),
         "fault_target": (
             plan["faults"][0].task_id if plan["faults"] else None
         ),
@@ -163,6 +209,13 @@ def select_recovered_candidates(
         row["category"] for row in rows
         if row["selected_for_language_review"]
     )
+    fault_families = Counter(
+        row["private_fault_family"] for row in rows
+        if row["private_fault_family"]
+    )
+    visible_states = Counter(
+        row["main_visible_delivery_state"] for row in rows
+    )
     stats = {
         "candidates_simulated": len(rows),
         "candidates_execution_recovered": sum(
@@ -171,6 +224,12 @@ def select_recovered_candidates(
         "candidates_selected_for_language_review": len(chosen),
         "candidates_filtered_before_llm": len(rows) - len(chosen),
         "candidate_behavior_distribution": dict(sorted(counts.items())),
+        "private_fault_family_distribution": dict(
+            sorted(fault_families.items())
+        ),
+        "main_visible_delivery_state_distribution": dict(
+            sorted(visible_states.items())
+        ),
         "selected_behavior_distribution": dict(sorted(
             chosen_counts.items()
         )),
