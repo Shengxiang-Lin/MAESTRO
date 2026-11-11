@@ -161,7 +161,9 @@ def _clean_prefix(
                     "execution": deepcopy(attempt.runtime),
                     "report_mode": status,
                 })
-            state.set_public_report(tid, public)
+            state.set_public_report(
+                tid, public, round_number=index + 1,
+            )
             visible_results.append(public)
         history.append(_history_batch(index + 1, visible_results))
         modified = deepcopy(source_action)
@@ -367,6 +369,9 @@ def build_branch(
     scheduler = EventScheduler(
         scenario_plan.get("evidence_events", []),
         state=state, fork_round=branch_round,
+    )
+    state.cross_source_checks_enabled = (
+        scenario_plan.get("mode") == "event_driven"
     )
     future_atoms = {}
     for atom in scenario_plan.get("fault_atoms", []):
@@ -620,7 +625,9 @@ def build_branch(
                 on_report_review(report_status)
             report["subtask_index"] = slot
             public = _as_public(report)
-            state.set_public_report(tid, public)
+            state.set_public_report(
+                tid, public, round_number=round_number,
+            )
             returned.append(public)
         task_entries.append(_history_batch(round_number, returned))
         trajectory.append({
