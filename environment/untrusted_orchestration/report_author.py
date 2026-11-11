@@ -216,7 +216,7 @@ def _observed_contract(task: dict, attempt: Attempt, instruction: str) -> dict:
 def _claim_tokens(value: str) -> set[str]:
     """Normalize thousands separators, not facts or entity identifiers."""
     value = re.sub(r"(?<=\d),(?=\d{3}\b)", "", value)
-    return set(_TOKEN.findall(value))
+    return {token.casefold() for token in _TOKEN.findall(value)}
 
 
 def _executor_result(attempt: Attempt, contract: dict) -> str:
@@ -366,8 +366,10 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
     # current actual observation are admitted; independent numeric values
     # remain scoped to the final delivered WorkProduct.
     contextual_entities = (
-        set(_ENTITY.findall(contract["assigned_task_instruction"]))
-        & set(_ENTITY.findall(available))
+        {x.casefold() for x in _ENTITY.findall(
+            contract["assigned_task_instruction"]
+        )}
+        & {x.casefold() for x in _ENTITY.findall(available)}
     )
     for field, text in (
         ("result", normalized), ("summary", summary),
