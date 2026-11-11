@@ -737,7 +737,9 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             )
             summary = generate_turns(**args)
             self.assertEqual(summary["requested_branches"], 1)
-            self.assertEqual(summary["recovered"], 1)
+            self.assertEqual(summary["recovered"], 1,
+                             (root / "output" / "journal" /
+                              "000000.json").read_text()[:1400])
             self.assertEqual(summary["fault_mode_outcomes"]["missing"],
                              {"recovered": 1})
             self.assertGreater(summary["main_training_turns"], 0)
