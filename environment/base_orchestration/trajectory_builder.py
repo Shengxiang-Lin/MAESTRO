@@ -285,7 +285,7 @@ def build_episode(
     resume_rounds: list[dict] | None = None,
     on_round=None, on_episode_start=None,
 ) -> tuple[dict | None, list[dict], list[dict], dict]:
-    """Return (public Episode, SFT turns, PRIVATE alignments, status)."""
+    """Return (public Episode, reviewed-turn turns, PRIVATE alignments, status)."""
     if max_attempts < 2:
         raise ValueError("stage3_max_attempts_too_small")
     if not isinstance(model_alias, str) or not model_alias:
