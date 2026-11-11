@@ -140,7 +140,9 @@ class ExecutionState:
         current = self.current.get(task_id)
         if current is None or current.product is None:
             return False
-        if current.status in {"missing", "disputed", "stale"}:
+        if current.status in {"missing", "disputed", "stale"} or (
+            current.runtime.get("report_fault_kind") == "report_missing"
+        ):
             return False
         if current.status == "partial":
             return (
@@ -153,6 +155,8 @@ class ExecutionState:
     def repair_required(self, task_id: str) -> bool:
         """A partial handoff is repaired only when needed downstream."""
         item = self.current[task_id]
+        if item.runtime.get("report_fault_kind") == "report_missing":
+            return True
         if item.status != "partial":
             return item.status in {"missing", "disputed", "stale"}
         if task_id == self.scene["macro_graph"]["terminal_task_id"]:
@@ -358,6 +362,47 @@ class ExecutionState:
                 )
         return None
 
+    def _visible_report_internal_conflict(self, task_id: str) -> str | None:
+        """Compare RESULT with SUMMARY using ONLY the delivered report.
+
+        The clean private WorkProduct cannot be used to label a report
+        erroneous, since the Main did not observe that private result.
+        """
+        finish = (self.public_reports.get(task_id) or {}).get(
+            "finish_result"
+        ) or {}
+        try:
+            rows = json.loads(finish.get("result"))
+        except (TypeError, ValueError):
+            return None
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list) or not rows:
+            return None
+        if not isinstance(rows[0], dict):
+            return None
+        if "values" in rows[0] and isinstance(rows[0]["values"], dict):
+            rows = [row["values"] for row in rows
+                    if isinstance(row, dict) and "values" in row]
+        summary = str(finish.get("summary") or "")
+        for match in re.finditer(
+            r"\bsummary records?\s+([A-Za-z][A-Za-z0-9_ ]+)"
+            r"\s*=\s*([^.;,]+)", summary, flags=re.I,
+        ):
+            field = match.group(1).strip().replace(" ", "_")
+            claimed = match.group(2).strip()
+            values = {str(row[field]) for row in rows
+                      if isinstance(row, dict) and field in row}
+            if values and claimed not in values:
+                return (
+                    "The delivered result and summary disagree about "
+                    + field.replace("_", " ") + ": result lists "
+                    + ", ".join(sorted(values)[:4])
+                    + ", but the summary says " + claimed
+                    + ". Check the field against its source."
+                )
+        return None
+
     def visible_discrepancy(self, task_id: str) -> str | None:
         """Find a contradiction using only facts *reported* to Main.
 
@@ -379,6 +424,9 @@ class ExecutionState:
                 report.get("summary", "Some required evidence is missing.")
             )
         task = self.tasks[task_id]
+        report_issue = self._visible_report_internal_conflict(task_id)
+        if report_issue:
+            return report_issue
         lookup_issue = self._visible_lookup_issue(task_id)
         if lookup_issue:
             return lookup_issue
