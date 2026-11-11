@@ -28,7 +28,7 @@ from .state_machine import (
     ExecutionState, deterministic_report, public_history_item,
 )
 from .report_author import naturalize_report
-from .evidence_planning import plan_evidence_batch
+from .evidence_planning import schedule_evidence_requests
 
 
 _MAIN_AUTHOR_SYSTEM = _AUTHOR_SYSTEM + """
@@ -415,16 +415,18 @@ def build_branch(
             stopped = "recovered"
             break
 
-        batch = dependency_safe_batch(
-            state, repairs, ready, max_parallel_tasks,
+        # Evidence gaps drive prioritization globally. Macro IR is only
+        # used after selection to enforce executable dependency and source
+        # constraints for each grouped Sub-Agent assignment.
+        batch, requests, assignments = schedule_evidence_requests(
+            state, repairs=repairs, ready=ready,
+            round_number=round_number,
+            max_parallel_tasks=max_parallel_tasks,
+            catalog=catalog, model_alias=model_alias,
         )
         if not batch:
             stopped = "unresolved_dependencies"
             break
-        requests, assignments = plan_evidence_batch(
-            state, batch, round_number=round_number,
-            repairs=repairs, catalog=catalog, model_alias=model_alias,
-        )
         # One dispatch can fulfill several atomic evidence requests.
         # Request IDs and Macro bindings are PRIVATE simulation metadata,
         # not fields permitted in the Main LLM's assignment prompt.
