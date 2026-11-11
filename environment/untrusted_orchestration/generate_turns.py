@@ -16,6 +16,7 @@ import json
 import os
 import random
 import shutil
+from threading import Lock
 
 from tqdm.auto import tqdm
 
@@ -167,6 +168,9 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     report_statuses = Counter()
     main_statuses = Counter()
     execution_outcomes = Counter()
+    report_guard_failures = Counter()
+    report_review_failures = Counter()
+    executor_normalized_results = 0
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -208,6 +212,18 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 result = review["authoring"]
                 report_modes[result["mode"]] += 1
                 report_statuses[result.get("status", "unknown")] += 1
+                executor_normalized_results += bool(
+                    result.get("executor_result_normalized")
+                )
+                for failure in result.get("failures", []):
+                    if failure.get("stage") == "guard":
+                        report_guard_failures.update(
+                            failure.get("errors", [])
+                        )
+                    else:
+                        report_review_failures.update(
+                            [failure.get("stage", "unknown")]
+                        )
             for review in audit.get("main_action_reviews", []):
                 result = review["authoring"]
                 main_modes[result["mode"]] += 1
@@ -243,6 +259,9 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         },
         "subagent_report_generation_modes": dict(report_modes),
         "subagent_report_review_statuses": dict(report_statuses),
+        "subagent_executor_result_normalized": executor_normalized_results,
+        "subagent_guard_failure_causes": dict(report_guard_failures),
+        "subagent_review_failure_stages": dict(report_review_failures),
         "main_action_generation_modes": dict(main_modes),
         "main_action_review_statuses": dict(main_statuses),
     }
@@ -365,6 +384,8 @@ def generate_turns(
                 main_max_revisions=main_max_revisions,
                 sub_model=sub_model,
                 model_alias=model_alias,
+                on_report_review=track_report,
+                on_main_review=track_main,
             )
             status = audit["outcome"]
             data = {
@@ -387,43 +408,105 @@ def generate_turns(
         _atomic_json(journal / f"{plan['index']:06d}.json", data)
         return plan["index"], data
 
+    # Dynamic recovery interleaves Sub-Agent and Main calls within each
+    # branch. Two independent event-driven bars reflect actual authoring
+    # work, not a fictitious sequential Stage-2-then-Stage-3 batch. Totals
+    # are forecasts from the clean schedule and grow as recovery adds tasks.
+    estimated_reports = 0
+    estimated_main = 0
+    for plan in planned:
+        waves = scenes[plan["scene_index"]]["macro_graph"]["reference_waves"]
+        remaining = waves[plan["branch_round"] - 1:]
+        estimated_reports += (
+            len(plan["faults"]) + sum(len(wave) for wave in remaining) + 1
+        )
+        estimated_main += len(remaining) + 2
+
     counts = Counter()
-    with tqdm(total=len(planned),
-              initial=len(planned)-len(pending),
-              desc="Untrusted round branches", unit="branch",
-              dynamic_ncols=True, disable=no_progress) as bar:
-        for plan in planned:
-            file = journal / f"{plan['index']:06d}.json"
-            if file.is_file():
-                saved = json.loads(file.read_text(encoding="utf-8"))
-                counts[saved["status"]] += 1
-        def progress():
-            bar.set_postfix({
-                "recovered": counts["recovered"],
-                "incorrect": counts[
-                    "incorrect_result_after_actual_propagation"
-                ],
-                "unresolved": sum(x for key, x in counts.items()
-                                  if key not in {
-                                      "recovered",
-                                      "incorrect_result_after_actual_propagation",
-                                      "skipped_unsupported",
-                                      "rejected_validation",
-                                  }),
-                "skipped": counts["skipped_unsupported"] +
-                           counts["rejected_validation"],
-                "written": sum(counts.values()),
-            })
-        progress()
+    report_counts = Counter()
+    main_counts = Counter()
+    completed = 0
+    for plan in planned:
+        path = journal / f"{plan['index']:06d}.json"
+        if not path.is_file():
+            continue
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        counts[saved["status"]] += 1
+        completed += 1
+        audit = saved.get("private_audit") or {}
+        for review in audit.get("subagent_report_reviews", []):
+            result = review["authoring"]
+            report_counts[result.get("status", "unknown")] += 1
+            report_counts["written"] += 1
+        for review in audit.get("main_action_reviews", []):
+            result = review["authoring"]
+            main_counts[result.get("status", "unknown")] += 1
+            main_counts["written"] += 1
+    display_lock = Lock()
+
+    with tqdm(
+        total=max(estimated_reports, report_counts["written"]),
+        initial=report_counts["written"],
+        desc="Sub-Agent feedback", unit="report", position=0,
+        dynamic_ncols=True, disable=no_progress, leave=True,
+    ) as report_bar, tqdm(
+        total=max(estimated_main, main_counts["written"]),
+        initial=main_counts["written"],
+        desc="Main orchestration", unit="action", position=1,
+        dynamic_ncols=True, disable=no_progress, leave=True,
+    ) as main_bar:
+
+        def refresh_postfix() -> None:
+            report_bar.set_postfix({
+                "accepted": report_counts["accepted"],
+                "fallback": report_counts["fallback"],
+                "written": report_counts["written"],
+            }, refresh=False)
+            main_bar.set_postfix({
+                "accepted": main_counts["accepted"],
+                "failed": main_counts["failed"],
+                "written": main_counts["written"],
+            }, refresh=False)
+
+        def record(bar, counters, status: dict) -> None:
+            # Called synchronously by a worker when the corresponding
+            # independent Author/Guard/Critic finishes.
+            with display_lock:
+                counters[status.get("status", "unknown")] += 1
+                counters["written"] += 1
+                if bar.total is not None and bar.n + 1 >= bar.total and (
+                    completed < len(planned)
+                ):
+                    bar.total = bar.n + max(2, len(planned) - completed)
+                refresh_postfix()
+                bar.update(1)
+
+        def track_report(status: dict) -> None:
+            record(report_bar, report_counts, status)
+
+        def track_main(status: dict) -> None:
+            record(main_bar, main_counts, status)
+
+        refresh_postfix()
         with ThreadPoolExecutor(
             max_workers=workers, thread_name_prefix="untrusted-branch",
         ) as pool:
             futures = [pool.submit(worker, plan) for plan in pending]
             for future in as_completed(futures):
                 _, result = future.result()
-                counts[result["status"]] += 1
-                bar.update(1)
-                progress()
+                with display_lock:
+                    counts[result["status"]] += 1
+                    completed += 1
+                    refresh_postfix()
+
+        # Forecasts are not exact for adaptive DAGs. Only at the end can
+        # both bars display the exact number of performed calls as 100%.
+        with display_lock:
+            report_bar.total = report_bar.n
+            main_bar.total = main_bar.n
+            refresh_postfix()
+            report_bar.refresh()
+            main_bar.refresh()
     counts_summary = _publish(output, planned)
     summary = {
         "status": (
@@ -457,4 +540,13 @@ def generate_turns(
         ],
     }
     _atomic_json(output / "summary.json", summary)
+    if not no_progress:
+        tqdm.write(
+            "Stage 4 branches: "
+            f"{summary['completed_branches']}/{summary['requested_branches']} "
+            f"| execution recovered={summary['execution_recovered_branches']} "
+            f"| incorrect={summary['incorrect']} "
+            f"| reviewed SFT branches={summary['recovered']} "
+            f"| SFT turns={summary['main_training_turns']}"
+        )
     return summary

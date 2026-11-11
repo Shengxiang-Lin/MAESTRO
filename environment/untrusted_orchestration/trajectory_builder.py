@@ -81,6 +81,7 @@ def _clean_prefix(
     report_author=None, report_critic=None,
     report_revisions: int = 1,
     model_alias: str = "model_1",
+    on_report_review=None,
 ) -> tuple[ExecutionState, list[dict], list[dict], list[dict]]:
     waves = scene["macro_graph"]["reference_waves"]
     actions = [
@@ -123,6 +124,8 @@ def _clean_prefix(
                 )
                 public["subtask_index"] = slot
                 report_mode = status["mode"]
+                if on_report_review is not None:
+                    on_report_review(status)
                 fault_log.append({
                     "task_id": tid, "mode": fault.mode,
                     "persistence": fault.persistence, "seed": fault.seed,
@@ -294,6 +297,7 @@ def build_branch(
     report_max_revisions: int | None = None,
     main_max_revisions: int | None = None,
     sub_model: str = "qwen3-8b", model_alias: str = "model_1",
+    on_report_review=None, on_main_review=None,
 ) -> tuple[dict, list[dict], dict]:
     """Returns (public episode, accepted *post-branch* turn labels, audit)."""
     if max_rounds < branch_round or max_parallel_tasks < 1:
@@ -310,6 +314,7 @@ def build_branch(
         branch_round=branch_round, faults=faults,
         report_author=report_author, report_critic=report_critic,
         report_revisions=report_max_revisions, model_alias=model_alias,
+        on_report_review=on_report_review,
     )
     before = counterfactual_continuation(
         state, start_wave_index=branch_round - 1,
@@ -395,6 +400,8 @@ def build_branch(
                 "round": round_number, "kind": "complete",
                 "authoring": deepcopy(status),
             })
+            if on_main_review is not None:
+                on_main_review(status)
             emit(round_number, action, status["mode"], kind="complete")
             final_mode = status["mode"]
             trajectory.append({
@@ -437,6 +444,8 @@ def build_branch(
             "round": round_number, "kind": "delegate",
             "authoring": deepcopy(status),
         })
+        if on_main_review is not None:
+            on_main_review(status)
         if action is None:
             stopped = "main_action_not_accepted"
             decisions.append({
@@ -490,6 +499,8 @@ def build_branch(
                 "round": round_number,
                 "authoring": deepcopy(report_status),
             })
+            if on_report_review is not None:
+                on_report_review(report_status)
             report["subtask_index"] = slot
             public = _as_public(report)
             state.set_public_report(tid, public)

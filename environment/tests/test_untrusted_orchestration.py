@@ -885,5 +885,187 @@ class RoundLocalRecoveryTests(unittest.TestCase):
 
 
 
+    def test_attempt_contract_separates_delivery_from_preview(self):
+        from environment.untrusted_orchestration.report_author import (
+            _observed_contract,
+        )
+        tasks = {task["task_id"]: task for task in
+                 self.scene["macro_graph"]["tasks"]}
+        target = next(tid for tid in
+                      self.scene["macro_graph"]["reference_waves"][0]
+                      if len(tasks[tid]["outputs"]["typed_relation"]) > 1)
+        state = ExecutionState(self.scene, {})
+        attempt = state.register(target, fault=Fault(target, "partial"))
+        contract = _observed_contract(
+            tasks[target], attempt, "Inspect the assigned records."
+        )
+        self.assertEqual(contract["delivery_status"], "partial")
+        self.assertTrue(contract["evidence_samples_are_preview_only"])
+        self.assertTrue(contract["delivered_relation_is_complete_in_prompt"])
+        self.assertEqual(contract["total_delivered_rows"],
+                         len(contract["actual_delivered_rows"]))
+        self.assertTrue(contract["observed_operator_steps"])
+        self.assertTrue(all("remaining_rows_omitted" not in step
+                            and "evidence_atoms_truncated" not in step
+                            for step in contract["observed_operator_steps"]))
+        self.assertTrue(all("sampled_evidence_atoms" in step for step
+                            in contract["observed_operator_steps"]))
+
+    def test_partial_null_prose_result_normalizes_from_actual_workproduct(self):
+        tasks = {task["task_id"]: task for task in
+                 self.scene["macro_graph"]["tasks"]}
+        target = next(tid for tid in
+                      self.scene["macro_graph"]["reference_waves"][0]
+                      if len(tasks[tid]["outputs"]["typed_relation"]) > 1)
+        state = ExecutionState(self.scene, {})
+        attempt = state.register(target, fault=Fault(target, "partial"))
+        class Author:
+            def complete_json(self, system, request):
+                return {
+                    "result": None,  # Frequently observed in the 47-branch run
+                    "summary": (
+                        "The assigned scan returned only part of the "
+                        "required result; the final delivery is incomplete."
+                    ),
+                    "trace_summary": (
+                        "I examined the assigned records but could not "
+                        "provide every requested field in the handoff."
+                    ),
+                }
+        class Critic:
+            def complete_json(self, system, request):
+                payload = json.loads(request)["observed_current_attempt"]
+                assert payload["delivery_status"] == "partial"
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True, "useful": True,
+                }
+        report, meta = naturalize_report(
+            tasks[target], attempt,
+            instruction="Read the assigned source records.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=Critic(), max_revisions=0,
+        )
+        self.assertEqual(meta["mode"], "llm_reviewed", meta)
+        self.assertTrue(meta["executor_result_normalized"])
+        self.assertEqual(report["finish_result"]["status"], "partial")
+        self.assertIsInstance(report["finish_result"]["result"], str)
+        self.assertIn("not delivered", report["finish_result"]["result"])
+
+    def test_result_context_ids_are_grounded_but_invented_ids_still_fail(self):
+        from environment.untrusted_orchestration.report_author import (
+            _observed_contract, _guard, _claim_tokens,
+        )
+        task = {"task_id": "lookup", "source_ids": ["stat_a"],
+                "depends_on": [], "operator_chain": []}
+        attempt = Attempt(
+            task_id="lookup", version=1, status="done",
+            product=Relation(("marker_code", "completed_count"), ({
+                "values": {"marker_code": "MK-0531",
+                           "completed_count": 36},
+                "support": ("stat_a:F001",),
+            },)),
+            available_fields=("marker_code", "completed_count"),
+            used_parent_versions={}, runtime={
+                "observed_operator_steps": [{
+                    "operation": "lookup_by_key",
+                    "execution_status": "done",
+                    "output_schema": ["marker_code", "completed_count"],
+                    "supporting_fact_refs": ["stat_a:F001"],
+                    "sampled_result_rows": [{
+                        "values": {"marker_code": "MK-0531",
+                                   "candidate_id": "Case-016"},
+                    }],
+                    "evidence_atoms": [],
+                }],
+            },
+        )
+        contract = _observed_contract(
+            task, attempt, "Retrieve stat_a for Case-016 using MK-0531."
+        )
+        draft = {
+            "result": "MK-0531 has count 36 for Case-016.",
+            "summary": "I retrieved the requested record and its count.",
+            "trace_summary": (
+                "The assigned keyed lookup returned the corresponding "
+                "stat_a record for the current case."
+            ),
+        }
+        self.assertEqual(_guard(draft, contract, attempt), [])
+        malicious = dict(draft, result="MK-0531 has count 36 for Case-999.")
+        self.assertIn("result_unobserved_numeric_or_entity",
+                      _guard(malicious, contract, attempt))
+        self.assertEqual(_claim_tokens("70,000 ms"),
+                         _claim_tokens("70000 ms"))
+        self.assertEqual(_claim_tokens("MK-0531"),
+                         _claim_tokens("mk-0531"))
+
+    def test_branch_notifies_distinct_agent_progress_events(self):
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+        report_events, main_events = [], []
+        _, turns, audit = build_branch(
+            self.scene, self.reports, self.episode,
+            branch_round=2, faults=[Fault(tid, "missing")],
+            on_report_review=lambda status: report_events.append(status),
+            on_main_review=lambda status: main_events.append(status),
+        )
+        self.assertTrue(turns)
+        self.assertEqual(len(report_events),
+                         len(audit["subagent_report_reviews"]))
+        self.assertEqual(len(main_events),
+                         len(audit["main_action_reviews"]))
+        self.assertTrue(all("mode" in status for status in report_events))
+        self.assertTrue(all("mode" in status for status in main_events))
+
+
+    def test_live_dual_progress_bars_track_report_and_main_calls(self):
+        bars = []
+        class Bar:
+            def __init__(self, *, total, initial, desc, **kwargs):
+                self.total, self.n, self.desc = total, initial, desc
+                bars.append(self)
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+            def update(self, amount):
+                self.n += amount
+            def set_postfix(self, *args, **kwargs):
+                pass
+            def refresh(self):
+                pass
+            @staticmethod
+            def write(message):
+                pass
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            scenes, reports, episodes = (
+                root / "scenes.jsonl", root / "subtasks.jsonl",
+                root / "episodes.jsonl",
+            )
+            scenes.write_text(json.dumps(self.scene) + "\n")
+            reports.write_text("".join(json.dumps(x) + "\n"
+                                       for x in self.reports))
+            episodes.write_text(json.dumps(self.episode) + "\n")
+            with patch("environment.untrusted_orchestration.generate_turns.tqdm",
+                       Bar):
+                result = generate_turns(
+                    scenes_path=scenes, reports_path=reports,
+                    base_episodes_path=episodes,
+                    output_dir=root / "dual_progress",
+                    max_scenes=1, branches_per_scene=1,
+                    seed=17, fault_modes=["missing"], workers=2,
+                    no_progress=False,
+                )
+        self.assertEqual(result["requested_branches"], 1)
+        self.assertEqual([bar.desc for bar in bars],
+                         ["Sub-Agent feedback", "Main orchestration"])
+        self.assertGreater(bars[0].n, 0)
+        self.assertGreater(bars[1].n, 0)
+        self.assertEqual(bars[0].total, bars[0].n)
+        self.assertEqual(bars[1].total, bars[1].n)
+
+
 if __name__ == "__main__":
     unittest.main()
