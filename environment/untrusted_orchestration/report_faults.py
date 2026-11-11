@@ -33,8 +33,8 @@ def render_report_fault(base: dict, attempt) -> tuple[dict, dict]:
     if kind == "report_missing":
         report["finish_result"] = None
         report["trace_summary"] = (
-            "The assigned operation finished, but the result handoff "
-            "contained no usable result or summary."
+            "The assigned operation finished, but no usable finish "
+            "result was delivered; the result is missing."
         )
         return report, review
 
