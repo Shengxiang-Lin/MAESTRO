@@ -31,6 +31,20 @@ def _dependents(tasks: dict[str, dict], tid: str) -> set[str]:
     return reached
 
 
+def _source_lineage(tasks: dict[str, dict], tid: str) -> set[str]:
+    """Direct plus inherited source grants for independent-source checks."""
+    visited, stack, grants = set(), [tid], set()
+    while stack:
+        node = stack.pop()
+        if node in visited:
+            continue
+        visited.add(node)
+        task = tasks[node]
+        grants.update(task.get("source_ids", []))
+        stack.extend(task.get("depends_on", []))
+    return grants
+
+
 def delayed_event_candidate(scene: dict, *, fork_round: int,
                             initial_fault_task: str) -> dict | None:
     """Look for two legal post-fork investigations that can run separately.
@@ -64,6 +78,13 @@ def delayed_event_candidate(scene: dict, *, fork_round: int,
                     or anchor in _dependents(tasks, held)):
                 continue
             if not anchor_children.intersection(_dependents(tasks, held)):
+                continue
+            left_sources = _source_lineage(tasks, initial_fault_task)
+            right_sources = _source_lineage(tasks, held)
+            # Independent DAG positions are not sufficient if both
+            # reports ultimately cite the SAME source material.
+            if (not left_sources or not right_sources
+                    or left_sources & right_sources):
                 continue
             return EvidenceEvent(
                 kind="hold_independent_evidence",
