@@ -371,7 +371,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
     # Preserve each individually reviewed Main decision in the PRIVATE
     # per-round audit even when a later report or terminal result invalidates
     # the complete branch. The publisher may review *local* decisions
-    # separately, but cannot silently promote them to globally correct SFT.
+    # separately, but cannot silently promote them to globally correct reviewed-turn.
     audit["candidate_local_turns"] = deepcopy(turns)
     audit["main_action_reviews"] = reviews
     audit["outcome"] = outcome
