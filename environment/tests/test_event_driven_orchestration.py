@@ -326,6 +326,35 @@ class EventEngineTests(unittest.TestCase):
                 "publication_generation_process_leak",
             )
 
+    def test_reconfirmed_evidence_preserves_unrelated_executed_work(self):
+        state = ExecutionState(self.scene, {})
+        for wave in self.scene["macro_graph"]["reference_waves"]:
+            for tid in wave:
+                attempt = state.register(tid)
+                state.set_public_report(
+                    tid, {"finish_result": {
+                        "status": "done", "result": "Grounded evidence.",
+                        "summary": "Completed observation.",
+                    }},
+                )
+        earliest = self.scene["macro_graph"]["reference_waves"][0][0]
+        prior_attempt_versions = {
+            tid: item.version for tid, item in state.current.items()
+        }
+        replacement = state.register(earliest)
+        self.assertEqual(replacement.version, 2)
+        self.assertEqual(state.invalidations, [])
+        self.assertEqual(len(state.revalidations), 1)
+        self.assertEqual(
+            state.revalidations[0]["task_id"], earliest,
+        )
+        for tid in state._dependents(earliest):
+            if tid in state.current:
+                self.assertEqual(
+                    state.current[tid].version, prior_attempt_versions[tid]
+                )
+                self.assertEqual(state.current[tid].status, "done")
+
     def test_event_mode_one_report_atom_is_executable(self):
         with TemporaryDirectory() as td:
             root = Path(td)
