@@ -61,7 +61,10 @@ actual observed (possibly wrong) records are authoritative, while the
 complete frozen Gold remains private for episode outcome evaluation.
 
 The `summary.json` explicitly separates `execution_recovered_branches` and
-`execution_outcomes` from `recovered`/positive SFT publication. A branch
+`execution_outcomes` from `recovered`/positive SFT publication. It also
+records `subagent_executor_result_normalized`,
+`subagent_guard_failure_causes` and `subagent_review_failure_stages`.
+A branch
 can be deterministically recovered but fail LLM language review; it remains
 diagnostic and is never silently treated as reviewed training data.
 For changed trace/Author code, generate into a new output directory:
@@ -93,6 +96,31 @@ generation:
 ```
 
 The deterministic fault and decision planner never invoke an LLM.
+
+### Progress display
+
+The CLI displays **two independent live progress bars**:
+`Sub-Agent feedback` (each new report Author/Guard/Critic call) and
+`Main orchestration` (each new Main Action Author/Guard/Critic call).
+Unlike trusted Stage 2 and Stage 3, recovery execution is causally
+interleaved: Main decisions can require another report and vice versa.
+It would be incorrect to force the two bars into sequential full passes.
+Each bar estimates its total work from the original DAG, expands as
+dynamic recovery schedules extra calls, and displays the exact total
+on completion. Postfixes show accepted/fallback report counts and
+accepted/failed Main action counts. A final branch-level line reports
+**execution recovered** separately from **fully reviewed SFT**.
+
+Sub-Agent reports use the **complete delivered relation** for factual
+grounding. Source evidence atoms and intermediate operator rows are
+explicitly *previews*, not indications that the scan was incomplete.
+A `partial` handoff may omit values observed before delivery; it remains
+partial even if the internal earlier step found those values. An LLM
+`result=null` for a partially delivered WorkProduct can be replaced with
+a readable, deterministic statement of exactly that delivered Relation
+before undergoing the full Guard and independent Critic; no arbitrary
+wrong or fabricated value is silently corrected.
+
 `summary.json` reports independent
 `subagent_report_generation_modes`,
 `subagent_report_review_statuses`,
