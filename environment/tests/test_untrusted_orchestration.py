@@ -14,10 +14,18 @@ from environment.generate_question.question import reference_question
 from environment.generate_question.quality import compile_and_validate
 from environment.implement_subtask.realize import realize_scene
 from environment.base_orchestration.trajectory_builder import build_episode
-from environment.untrusted_orchestration.faults import Fault, FaultUnsupported
-from environment.untrusted_orchestration.trajectory_builder import build_branch
-from environment.untrusted_orchestration.generate_turns import generate_turns
+from environment.untrusted_orchestration.faults import (
+    Fault, FaultUnsupported, probe_eligible_fault_modes,
+)
+from environment.untrusted_orchestration.trajectory_builder import (
+    build_branch, dependency_safe_batch, batch_has_independent_dependencies,
+)
+from environment.untrusted_orchestration.generate_turns import (
+    generate_turns, _plan_branches,
+)
 from environment.untrusted_orchestration.config import DEFAULT_CONFIG, load_config
+from environment.untrusted_orchestration.state_machine import ExecutionState
+from environment.generate_question.program_ir import Relation
 
 
 def sample(i=0):
@@ -152,6 +160,193 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             self.assertEqual(ep["trajectory"][-1]["action"], "complete")
             break
         self.assertTrue(found, "no valid wrong-join fixture found")
+
+    def test_parallel_batches_are_independent_and_snapshot_safe(self):
+        # This used to produce [work_ordered, work_distinct_answer]
+        # in one O1 parallel batch, silently running the latter after
+        # the former's retry inside the Python loop.
+        for i in range(12):
+            scene, rows, base = (
+                (self.scene, self.reports, self.episode)
+                if i == 0 else sample(i)
+            )
+            first = scene["macro_graph"]["reference_waves"][0]
+            tid = first[0]
+            episode, labels, audit = build_branch(
+                scene, rows, base, branch_round=2,
+                faults=[Fault(tid, "missing")],
+            )
+            self.assertEqual(audit["outcome"], "recovered")
+            self.assertTrue(audit["parallel_batches_verified"])
+            actual = [
+                record["task_ids"] for record in audit["decision_audit"]
+                if record.get("decision_kind") == "delegate"
+            ]
+            by_id = {task["task_id"]: task for task in
+                     scene["macro_graph"]["tasks"]}
+            for batch in actual:
+                for child in batch:
+                    self.assertFalse(
+                        set(by_id[child]["depends_on"]) & set(batch),
+                        (child, batch),
+                    )
+        # Unit-level direct dependency guard: independently available
+        # downstream values still cannot be sent alongside parent repair.
+        state = ExecutionState(self.scene, {})
+        wave = self.scene["macro_graph"]["reference_waves"]
+        all_tasks = state.tasks
+        parent = next(t for t in wave[0]
+                      if any(t in task["depends_on"]
+                             for task in all_tasks.values()))
+        child = next(t["task_id"] for t in all_tasks.values()
+                     if parent in t["depends_on"])
+        self.assertFalse(batch_has_independent_dependencies(
+            state, [parent, child],
+        ))
+        self.assertEqual(
+            dependency_safe_batch(state, [parent], [child], 4), [parent],
+        ) if state.ready(parent) else None
+
+    def test_public_lookup_key_mismatch_is_detected_without_gold(self):
+        # Mock the current WorkProduct identity to *demonstrate* that
+        # detection depends only on the two public report strings.
+        state = ExecutionState(self.scene, {})
+        parent, child = "parent", "lookup"
+        state.tasks = {
+            parent: {
+                "task_id": parent, "depends_on": [],
+                "source_ids": [], "operator_chain": [],
+            },
+            child: {
+                "task_id": child, "depends_on": [parent],
+                "source_ids": ["stat_a"],
+                "operator_chain": [{
+                    "id": "lookup-1", "op": "lookup_by_key",
+                    "inputs": ["input_0"],
+                    "input_key_field": "record_key_1",
+                    "source_key_field": "record_key_1",
+                }],
+            },
+        }
+        from environment.untrusted_orchestration.state_machine import Attempt
+        state.current = {
+            child: Attempt(
+                task_id=child, version=1, status="done",
+                product=Relation(("record_key_1", "completed_count"), ({
+                    "values": {"record_key_1": "KEY1-96979",
+                               "completed_count": 13},
+                    "support": ("stat_a:F001",),
+                },)),
+                available_fields=("record_key_1", "completed_count"),
+                used_parent_versions={parent: 1}, runtime={},
+            ),
+        }
+        state.public_reports = {
+            parent: {"finish_result": {
+                "status": "done",
+                "result": "The indexed record key is KEY1-94705.",
+                "summary": "Confirmed for this entity.",
+            }},
+            child: {"finish_result": {
+                "status": "done",
+                "result": '[{"values":{"record_key_1":"KEY1-96979",'
+                          '"completed_count":13}}]',
+                "summary": "The current keyed lookup returned one record.",
+            }},
+        }
+        self.assertIn("KEY1-96979", state.visible_discrepancy(child))
+        self.assertIn("KEY1-94705", state.visible_discrepancy(child))
+        state.public_reports[child]["finish_result"]["result"] = (
+            '[{"values":{"record_key_1":"KEY1-94705",'
+            '"completed_count":13}}]'
+        )
+        self.assertIsNone(state.visible_discrepancy(child))
+        # Private relation still wrong, but without observable conflict
+        # the supervisor must not pretend it knows the hidden fault.
+        state.public_reports[child]["finish_result"]["result"] = (
+            "The lookup returned one supported record."
+        )
+        self.assertIsNone(state.visible_discrepancy(child))
+
+    def test_partial_field_liveness_and_row_completeness(self):
+        state = ExecutionState(self.scene, {})
+        # If terminal only takes/projects entry_label, it does not need
+        # a preceding already-used relative_step ordering field.
+        parent, downstream = "work_ordered", "work_distinct_answer"
+        state.tasks = {
+            parent: {
+                "task_id": parent, "depends_on": [],
+                "source_ids": [], "operator_chain": [],
+                "outputs": {"typed_relation": ["entry_label", "relative_step"]},
+            },
+            downstream: {
+                "task_id": downstream, "depends_on": [parent],
+                "source_ids": [],
+                "input_schema": {
+                    "input_0": ["entry_label", "relative_step"],
+                },
+                "operator_chain": [
+                    {"id":"take","op":"take","inputs":["input_0"],"limit":1},
+                    {"id":"project","op":"project","inputs":["take"],
+                     "fields":["entry_label"]},
+                ],
+                "program_node_id": "project",
+                "outputs": {"typed_relation": ["entry_label"]},
+            },
+        }
+        state.scene = {
+            **self.scene,
+            "macro_graph": {
+                **self.scene["macro_graph"],
+                "terminal_task_id": downstream,
+            },
+        }
+        self.assertEqual(
+            state.required_parent_fields(state.tasks[downstream], parent),
+            {"entry_label"},
+        )
+        from environment.untrusted_orchestration.state_machine import Attempt
+        state.current[parent] = Attempt(
+            task_id=parent, version=1, status="partial",
+            product=Relation(("entry_label", "relative_step"), ({
+                "values": {"entry_label": "Entry-03",
+                           "relative_step": None},
+                "support": ("register:F001",),
+            },)),
+            available_fields=("entry_label",),
+            used_parent_versions={},
+            runtime={"rows_complete": True, "missing_fields": ["relative_step"]},
+        )
+        self.assertTrue(state.ready(downstream))
+        self.assertFalse(state.repair_required(parent))
+        state.current[parent].runtime["rows_complete"] = False
+        self.assertFalse(state.ready(downstream))
+        self.assertTrue(state.repair_required(parent))
+
+    def test_fault_sampler_only_selects_preflight_supported_modes(self):
+        all_tasks = {t["task_id"]: t for t in self.scene["macro_graph"]["tasks"]}
+        possible = probe_eligible_fault_modes(
+            self.scene, ["missing", "partial", "wrong"],
+        )
+        self.assertEqual(set(possible), set(all_tasks))
+        self.assertTrue(any("missing" in v for v in possible.values()))
+        planned, no_base, no_eligible = _plan_branches(
+            [self.scene], {self.scene["task_id"]: self.episode},
+            branches_per_scene=3, seed=17,
+            fault_modes=["missing", "partial", "wrong"],
+            persistence="once", multi_target_probability=0.0,
+            max_rounds=16,
+        )
+        self.assertFalse(no_base)
+        self.assertFalse(no_eligible)
+        for plan in planned:
+            for fault in plan["faults"]:
+                self.assertIn(fault.mode, possible[fault.task_id])
+                self.assertIn(
+                    fault.task_id,
+                    self.scene["macro_graph"]["reference_waves"][
+                        plan["branch_round"] - 2],
+                )
 
     def test_journal_resume_positive_publication_and_manifest(self):
         with TemporaryDirectory() as td:
