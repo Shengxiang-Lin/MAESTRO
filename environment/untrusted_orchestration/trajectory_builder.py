@@ -28,6 +28,7 @@ from .state_machine import (
     ExecutionState, deterministic_report, public_history_item,
 )
 from .report_author import naturalize_report
+from .evidence_planning import schedule_evidence_requests
 
 
 _MAIN_AUTHOR_SYSTEM = _AUTHOR_SYSTEM + """
@@ -328,6 +329,7 @@ def build_branch(
         "round": branch_round - 1, "authoring": deepcopy(item["report_mode"]),
     } for item in injected]
     main_reviews = []
+    evidence_plan = []
     stopped = None
     final_mode = None
     graph = scene["macro_graph"]
@@ -413,20 +415,36 @@ def build_branch(
             stopped = "recovered"
             break
 
-        batch = dependency_safe_batch(
-            state, repairs, ready, max_parallel_tasks,
+        # Evidence gaps drive prioritization globally. Macro IR is only
+        # used after selection to enforce executable dependency and source
+        # constraints for each grouped Sub-Agent assignment.
+        batch, requests, assignments = schedule_evidence_requests(
+            state, repairs=repairs, ready=ready,
+            round_number=round_number,
+            max_parallel_tasks=max_parallel_tasks,
+            catalog=catalog, model_alias=model_alias,
         )
         if not batch:
             stopped = "unresolved_dependencies"
             break
-        assignments = [
-            (_repair_assignment(state, tid, catalog=catalog,
-                                model_alias=model_alias)
-             if tid in repairs else
-             _assignment(state.tasks[tid], catalog, state.public_reports,
-                         model_alias=model_alias))
-            for tid in batch
+        # One dispatch can fulfill several atomic evidence requests.
+        # Request IDs and Macro bindings are PRIVATE simulation metadata,
+        # not fields permitted in the Main LLM's assignment prompt.
+        grouped_ids = [
+            item.pop("grouped_request_ids") for item in assignments
         ]
+        evidence_plan.append({
+            "round": round_number,
+            "evidence_requests": deepcopy(requests),
+            "dispatch": [{
+                "assignment_id": f"R{round_number:02d}-A{i:02d}",
+                "evidence_request_ids": grouped_ids[i],
+                "execution_binding": {"macro_task_id": tid},
+                "assignment_contract": deepcopy(assignment),
+            } for i, (tid, assignment) in
+                enumerate(zip(batch, assignments))],
+            "parallel": len(batch) > 1,
+        })
         history = o1_history(task_entries)
         prompt = o1_prompt(
             scene, task_entries, attempt=round_number,
@@ -556,6 +574,7 @@ def build_branch(
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
         "decision_audit": decisions,
+        "evidence_plan": evidence_plan,
         "subagent_report_reviews": report_reviews,
         "main_action_reviews": main_reviews,
         "completion_generation_mode": final_mode,

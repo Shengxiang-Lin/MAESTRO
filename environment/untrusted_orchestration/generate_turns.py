@@ -24,6 +24,7 @@ from .faults import (
     Fault, FaultUnsupported, choose_targets, probe_eligible_fault_modes,
 )
 from .trajectory_builder import build_branch
+from .offline_pipeline import author_branch_reports, author_branch_main
 
 
 def _jsonl(path: Path) -> list[dict]:
@@ -63,6 +64,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
     code_files = (
         "faults.py", "state_machine.py", "report_author.py",
         "trajectory_builder.py", "generate_turns.py",
+        "evidence_planning.py", "offline_pipeline.py",
         "../generate_question/compiler.py",
         "../generate_question/program_ir.py",
         "../base_orchestration/o1_compat.py",
@@ -72,7 +74,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "../../orchestra/base_main_agent.py",
     )
     return {
-        "version": "maestro.untrusted_orchestration.round_local.v1",
+        "version": "maestro.untrusted_orchestration.evidence_offline.v2",
         "input_sha256": [_hash_file(path) for path in inputs],
         "source_code_sha256": {
             name: _hash_file(directory / name) for name in code_files
@@ -360,160 +362,182 @@ def generate_turns(
         raise ValueError("untrusted_existing_output_without_manifest")
     else:
         _atomic_json(manifest, signature)
+    # Three genuine phases with separate signed, resumable artifacts.
+    # 4A: zero model calls; Global execution + Main-visible constrained
+    #     evidence requests and ordered task attempts.
+    # 4B: only Sub-Agent Author/Guard/Critic calls.
+    # 4C: only Main Author/Guard/Critic calls, based on FINAL 4B reports.
+    stage_a = output / "stage4a" / "journal"
+    stage_b = output / "stage4b" / "journal"
     journal = output / "journal"
-    journal.mkdir(exist_ok=True)
-    pending = [
-        plan for plan in planned
-        if not (journal / f"{plan['index']:06d}.json").is_file()
-    ]
+    for directory in (stage_a, stage_b, journal):
+        directory.mkdir(parents=True, exist_ok=True)
 
-    def worker(plan: dict) -> tuple[int, dict]:
+    def saved(directory: Path, plan: dict) -> dict | None:
+        path = directory / f"{plan['index']:06d}.json"
+        return (json.loads(path.read_text(encoding="utf-8"))
+                if path.is_file() else None)
+
+    def write(directory: Path, plan: dict, data: dict) -> None:
+        _atomic_json(directory / f"{plan['index']:06d}.json", data)
+
+    def as_failure(scene: dict, exc: Exception) -> dict:
+        if isinstance(exc, FaultUnsupported):
+            status = "skipped_unsupported"
+        else:
+            status = "rejected_validation"
+        return {
+            "task_id": scene["task_id"], "status": status,
+            "error": str(exc)[:300], "episode": None,
+            "turns": [], "private_audit": None,
+        }
+
+    def run_parallel(phase: str, directory: Path, unit: str,
+                     total: int, initial: int, callback_worker):
+        pending = [p for p in planned if saved(directory, p) is None]
+        with tqdm(
+            total=max(total, initial), initial=initial,
+            desc=phase, unit=unit, dynamic_ncols=True,
+            disable=no_progress, leave=True,
+        ) as bar:
+            lock = Lock()
+            def tick(amount: int = 1) -> None:
+                with lock:
+                    if bar.total is not None and bar.n + amount > bar.total:
+                        bar.total = bar.n + amount
+                    bar.update(amount)
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="stage4-" + phase[:2],
+            ) as pool:
+                futures = [
+                    pool.submit(callback_worker, plan, tick)
+                    for plan in pending
+                ]
+                for future in as_completed(futures):
+                    future.result()
+            bar.total = bar.n
+            bar.refresh()
+
+    def simulate(plan: dict, tick) -> None:
         scene = scenes[plan["scene_index"]]
         try:
-            episode, turns, audit = build_branch(
+            episode, _, audit = build_branch(
                 scene, rows_by_scene[scene["task_id"]],
                 base[scene["task_id"]],
                 branch_round=plan["branch_round"], faults=plan["faults"],
-                author=author, critic=critic,
-                report_author=report_author, report_critic=report_critic,
                 max_rounds=max_rounds, max_cost=max_cost,
                 max_retries=max_retries,
                 max_parallel_tasks=max_parallel_tasks,
-                max_revisions=max_revisions,
-                report_max_revisions=report_max_revisions,
-                main_max_revisions=main_max_revisions,
-                sub_model=sub_model,
-                model_alias=model_alias,
-                on_report_review=track_report,
-                on_main_review=track_main,
+                sub_model=sub_model, model_alias=model_alias,
+                # Stage 4A must never call the language models.
+                author=None, critic=None, report_author=None,
+                report_critic=None,
             )
-            status = audit["outcome"]
             data = {
-                "task_id": scene["task_id"], "status": status,
+                "task_id": scene["task_id"],
+                "status": audit["execution_outcome"],
+                "episode": episode, "turns": [],
+                "private_audit": audit,
+            }
+        except (FaultUnsupported, ValueError, KeyError, TypeError) as exc:
+            data = as_failure(scene, exc)
+        write(stage_a, plan, data)
+        tick()
+
+    run_parallel(
+        "Stage 4A evidence simulation", stage_a, "branch",
+        len(planned), sum(saved(stage_a, p) is not None for p in planned),
+        simulate,
+    )
+
+    def report_count(data: dict) -> int:
+        audit = (data or {}).get("private_audit") or {}
+        return len(audit.get("subagent_report_reviews", []))
+
+    total_reports = sum(report_count(saved(stage_a, p)) for p in planned)
+    initial_reports = sum(report_count(saved(stage_b, p)) for p in planned)
+
+    def make_reports(plan: dict, tick) -> None:
+        source = saved(stage_a, plan)
+        scene = scenes[plan["scene_index"]]
+        if source["episode"] is None:
+            write(stage_b, plan, source)
+            return
+        try:
+            episode, audit = author_branch_reports(
+                scene, rows_by_scene[scene["task_id"]],
+                source["episode"], source["private_audit"],
+                author=report_author, critic=report_critic,
+                max_revisions=report_max_revisions,
+                on_report=lambda _status: tick(),
+            )
+            data = {
+                **source, "episode": episode, "private_audit": audit,
+            }
+        except (ValueError, KeyError, TypeError) as exc:
+            data = as_failure(scene, exc)
+        write(stage_b, plan, data)
+
+    run_parallel(
+        "Stage 4B Sub-Agent feedback", stage_b, "report",
+        total_reports, initial_reports, make_reports,
+    )
+
+    def action_count(data: dict) -> int:
+        if data is None or data.get("episode") is None:
+            return 0
+        audit = data["private_audit"]
+        fork = audit["branch_round"]
+        return sum(
+            row["attempt"] >= fork
+            and row["action"] in {"delegate_task", "complete"}
+            for row in data["episode"]["trajectory"]
+        )
+
+    total_actions = sum(action_count(saved(stage_b, p)) for p in planned)
+    initial_actions = sum(
+        len((saved(journal, p) or {}).get("private_audit", {})
+            .get("main_action_reviews", []))
+        if (saved(journal, p) or {}).get("private_audit") else 0
+        for p in planned
+    )
+
+    def make_main(plan: dict, tick) -> None:
+        source = saved(stage_b, plan)
+        scene = scenes[plan["scene_index"]]
+        if source["episode"] is None:
+            write(journal, plan, source)
+            return
+        try:
+            episode, turns, audit = author_branch_main(
+                scene, source["episode"], source["private_audit"],
+                author=author, critic=critic,
+                max_revisions=main_max_revisions,
+                max_rounds=max_rounds, sub_model=sub_model,
+                model_alias=model_alias,
+                on_main=lambda _status: tick(),
+            )
+            data = {
+                **source, "status": audit["outcome"],
                 "episode": episode, "turns": turns,
                 "private_audit": audit,
             }
-        except FaultUnsupported as exc:
-            data = {
-                "task_id": scene["task_id"],
-                "status": "skipped_unsupported", "error": str(exc)[:300],
-                "episode": None, "turns": [], "private_audit": None,
-            }
         except (ValueError, KeyError, TypeError) as exc:
-            data = {
-                "task_id": scene["task_id"],
-                "status": "rejected_validation", "error": str(exc)[:300],
-                "episode": None, "turns": [], "private_audit": None,
-            }
-        _atomic_json(journal / f"{plan['index']:06d}.json", data)
-        return plan["index"], data
+            data = as_failure(scene, exc)
+        write(journal, plan, data)
 
-    # Dynamic recovery interleaves Sub-Agent and Main calls within each
-    # branch. Two independent event-driven bars reflect actual authoring
-    # work, not a fictitious sequential Stage-2-then-Stage-3 batch. Totals
-    # are forecasts from the clean schedule and grow as recovery adds tasks.
-    estimated_reports = 0
-    estimated_main = 0
-    for plan in planned:
-        waves = scenes[plan["scene_index"]]["macro_graph"]["reference_waves"]
-        remaining = waves[plan["branch_round"] - 1:]
-        estimated_reports += (
-            len(plan["faults"]) + sum(len(wave) for wave in remaining) + 1
-        )
-        estimated_main += len(remaining) + 2
-
-    counts = Counter()
-    report_counts = Counter()
-    main_counts = Counter()
-    completed = 0
-    for plan in planned:
-        path = journal / f"{plan['index']:06d}.json"
-        if not path.is_file():
-            continue
-        saved = json.loads(path.read_text(encoding="utf-8"))
-        counts[saved["status"]] += 1
-        completed += 1
-        audit = saved.get("private_audit") or {}
-        for review in audit.get("subagent_report_reviews", []):
-            result = review["authoring"]
-            report_counts[result.get("status", "unknown")] += 1
-            report_counts["written"] += 1
-        for review in audit.get("main_action_reviews", []):
-            result = review["authoring"]
-            main_counts[result.get("status", "unknown")] += 1
-            main_counts["written"] += 1
-    display_lock = Lock()
-
-    with tqdm(
-        total=max(estimated_reports, report_counts["written"]),
-        initial=report_counts["written"],
-        desc="Sub-Agent feedback", unit="report", position=0,
-        dynamic_ncols=True, disable=no_progress, leave=True,
-    ) as report_bar, tqdm(
-        total=max(estimated_main, main_counts["written"]),
-        initial=main_counts["written"],
-        desc="Main orchestration", unit="action", position=1,
-        dynamic_ncols=True, disable=no_progress, leave=True,
-    ) as main_bar:
-
-        def refresh_postfix() -> None:
-            report_bar.set_postfix({
-                "accepted": report_counts["accepted"],
-                "fallback": report_counts["fallback"],
-                "written": report_counts["written"],
-            }, refresh=False)
-            main_bar.set_postfix({
-                "accepted": main_counts["accepted"],
-                "failed": main_counts["failed"],
-                "written": main_counts["written"],
-            }, refresh=False)
-
-        def record(bar, counters, status: dict) -> None:
-            # Called synchronously by a worker when the corresponding
-            # independent Author/Guard/Critic finishes.
-            with display_lock:
-                counters[status.get("status", "unknown")] += 1
-                counters["written"] += 1
-                if bar.total is not None and bar.n + 1 >= bar.total and (
-                    completed < len(planned)
-                ):
-                    bar.total = bar.n + max(2, len(planned) - completed)
-                refresh_postfix()
-                bar.update(1)
-
-        def track_report(status: dict) -> None:
-            record(report_bar, report_counts, status)
-
-        def track_main(status: dict) -> None:
-            record(main_bar, main_counts, status)
-
-        refresh_postfix()
-        with ThreadPoolExecutor(
-            max_workers=workers, thread_name_prefix="untrusted-branch",
-        ) as pool:
-            futures = [pool.submit(worker, plan) for plan in pending]
-            for future in as_completed(futures):
-                _, result = future.result()
-                with display_lock:
-                    counts[result["status"]] += 1
-                    completed += 1
-                    refresh_postfix()
-
-        # Forecasts are not exact for adaptive DAGs. Only at the end can
-        # both bars display the exact number of performed calls as 100%.
-        with display_lock:
-            report_bar.total = report_bar.n
-            main_bar.total = main_bar.n
-            refresh_postfix()
-            report_bar.refresh()
-            main_bar.refresh()
+    run_parallel(
+        "Stage 4C Main orchestration", journal, "action",
+        total_actions, initial_actions, make_main,
+    )
     counts_summary = _publish(output, planned)
     summary = {
         "status": (
             "done" if counts_summary["recovered"] == len(planned)
             else "partial"
         ),
-        "pipeline": "maestro_untrusted_orchestration_round_local_v1",
+        "pipeline": "maestro_untrusted_orchestration_evidence_offline_v2",
         "mode": ("llm" if main_mode == "llm" or report_mode == "llm"
                  else "template"),
         "subagent_report_mode": report_mode,
@@ -523,6 +547,8 @@ def generate_turns(
         "scenes_without_eligible_fault": no_eligible,
         "requested_branches": len(planned),
         **counts_summary,
+        "stage4a_evidence_plans": str(output / "stage4a" / "journal"),
+        "stage4b_reviewed_reports": str(output / "stage4b" / "journal"),
         "public_turns": str(output / "main_turns.jsonl"),
         "public_episodes": str(output / "episodes.jsonl"),
         "private_fault_alignment": str(
@@ -533,6 +559,9 @@ def generate_turns(
             "Only preflight-executable fault/macro pairs are sampled.",
             "Only publicly observable discrepancies trigger targeted repair labels.",
             "Clean World/Gold never change; uncorrected counterfactuals are private, not positive SFT.",
+            "Stage 4A determines evidence requests and an executable global schedule using only Main-visible report justifications.", 
+            "4B materializes every actual executed Sub-Agent Attempt before any Stage 4C Main LLM is called.",
+            "4C naturalizes 4A's fixed legal scheduling contracts against the finalized Main-visible 4B history.",
             "Template actions are deterministic teacher demonstrations, not online Main-Agent rollouts.",
             "Sub-Agent Author/Critic write full prose for this attempt; status and actual WorkProduct remain code-owned.",
             "Main-Agent Author/Critic only naturalize the program-selected O1 tasks; private state does not enter their prompt.",

@@ -1,23 +1,75 @@
-# Untrusted orchestration: round-local evidence faults and recovery
+# Stage 4: evidence-centric offline orchestration (4A → 4B → 4C)
 
 Run from the MAESTRO repository root:
 
 ```bash
-python -m environment generate-untrusted-turns \
-  --config environment/configs/untrusted_orchestration.yaml
+python -m environment generate-untrusted-turns \\
+  --config environment/configs/untrusted_orchestration.yaml \\
+  --mode llm \\
+  --output-dir environment/data/maestro_untrusted_evidence_v4_100
 ```
 
-The generator uses the three existing trusted products:
-1. Frozen Scene + Macro DAG + World from Question generation
-2. Complete, reviewed Sub-Agent Macro reports
-3. Accepted Base Orchestration Episodes and exact O1 returned-batch history
+The runner uses the frozen Scene/World/Macro DAG, reviewed Stage-2 reports,
+and accepted Stage-3 base episodes as inputs. It first samples a *round-local*
+fault window: all earlier Main-visible batches remain exactly as originally
+reviewed; one or more reports in the immediately prior returned batch are
+replaced by evidence-grounded missing/partial/wrong observations.
 
-A branch chooses a **Main decision round t >= 2**. All history through
-round t-2 stays clean and is replayed as the original accepted O1 records.
-Only one or more Sub-Agent results from the batch returned in round t-1
-are changed. The simulator modifies *primitive execution results* and
-re-runs the rest of the Macro operator chain. The resulting WorkProduct
-(not a rewritten Oracle report) is passed to any downstream tasks.
+## Three real sequential stages
+
+**4A — Evidence-Centric Global Simulation (no LLM).** Construct a complete
+counterfactual execution using actual source-/operator-level results, versioned
+WorkProducts, and the global dependency graph. At *each round* inspect
+Main-visible missing/partial/contradictory evidence, determine required fields,
+and emit one **evidence request per needed field**. Requests contain the
+requested field, relevant previously visible identifiers, authorized source
+scope, a Main-visible reason, and acceptance criteria. Requests are bundled
+into executable Sub-Agent assignments when they share the same valid primitive
+execution contract. Task instructions are dynamically narrowed for missing
+retrieval, partial field completion, stale dependency recomputation, or
+observable conflicts. Internally each executable dispatch is bound to a
+frozen Macro operator chain; this is an **execution adapter**, not the
+Main-Agent's scheduling vocabulary. No new ungrounded independent source,
+operator or alternative route is fabricated. Completion is evaluated
+privately against frozen Gold but **Gold cannot trigger a VERIFY label**.
+
+**4B — Sub-Agent Feedback Generation (LLM only for Reports).** After *all*
+4A branches have been simulated, naturalize actual returned Attempt traces
+from the private ledger. A report sees only its own observed rows, source
+atoms, assigned instruction and execution outcome, not a future attempt or
+clean Gold. Previously accepted clean prefix reports are preserved. Report
+Author/Guard/Critic can revise a failed report without calling Main; fallback
+reports remain explicitly labeled and excluded from positive SFT.
+
+**4C — Main Action Generation (LLM only for Main).** After *all* 4B branches
+have been processed, rebuild cumulative O1 `subtask_history` strictly from
+the FINAL reviewed/fallback Sub-Agent reports. Assignments retain 4A's legal
+action count, source permissions, primitive tool routing and evidence goals,
+but refresh parent context from the newly finalized public feedback. A
+factual visibility guard rejects labels if required identifiers or
+contradictory observations were not actually shown to Main. Main Author/Critic
+generate each round's natural O1 delegate/complete action.
+
+Stages are intentionally separated rather than interleaved. The CLI prints
+three sequential progress bars: Stage 4A branches, Stage 4B reports, Stage 4C
+Main actions. Each stage is journaled with an atomic file per branch:
+
+- `stage4a/journal/`: PRIVATE simulated evidence requirements, assignments,
+  and complete attempt ledger
+- `stage4b/journal/`: evidence-grounded reviewed Sub-Agent reports
+- `journal/`: reviewed Main actions and final per-branch outcome
+
+With unchanged input/code signatures, rerunning the command resumes
+incomplete stages; changing any relevant code requires a new output folder.
+
+**Important current limitation:** evidence *planning* is field-level, and a
+single assignment can satisfy multiple requests, but execution still uses
+frozen Macro operator programs to guarantee correct provenance. The system
+does not yet dynamically compile completely new primitive programs or create
+new authorized sources. Independent Verify/Switch actions require a
+supported evidence route in the frozen World; otherwise the branch remains
+unresolved. This is an offline dataset simulator, not an online autonomous
+Main-Agent rollout.
 
 ## Current functionality
 

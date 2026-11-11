@@ -155,7 +155,8 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                              "completed")
             self.assertFalse(audit["counterfactual_unrepaired"]["correct"])
             self.assertEqual(audit["outcome"], "recovered")
-            self.assertIn("Recheck only", json.dumps(turns[0]["output"]))
+            self.assertIn("Reconcile the visible conflicting",
+                      json.dumps(turns[0]["output"]))
             versions = audit["runtime"]["attempt_versions"][tid]
             self.assertEqual(len(versions), 2)
             self.assertNotEqual(versions[0]["rows"], versions[1]["rows"])
@@ -737,7 +738,9 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             )
             summary = generate_turns(**args)
             self.assertEqual(summary["requested_branches"], 1)
-            self.assertEqual(summary["recovered"], 1)
+            self.assertEqual(summary["recovered"], 1,
+                             (root / "output" / "journal" /
+                              "000000.json").read_text()[:1400])
             self.assertEqual(summary["fault_mode_outcomes"]["missing"],
                              {"recovered": 1})
             self.assertGreater(summary["main_training_turns"], 0)
@@ -1060,11 +1063,166 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 )
         self.assertEqual(result["requested_branches"], 1)
         self.assertEqual([bar.desc for bar in bars],
-                         ["Sub-Agent feedback", "Main orchestration"])
+                         ["Stage 4A evidence simulation",
+                          "Stage 4B Sub-Agent feedback",
+                          "Stage 4C Main orchestration"])
         self.assertGreater(bars[0].n, 0)
         self.assertGreater(bars[1].n, 0)
-        self.assertEqual(bars[0].total, bars[0].n)
-        self.assertEqual(bars[1].total, bars[1].n)
+        self.assertGreater(bars[2].n, 0)
+        self.assertTrue(all(bar.total == bar.n for bar in bars))
+
+
+    def test_offline_evidence_pipeline_stage_order_and_dynamic_requests(self):
+        """4A must finish before *all* 4B calls, then 4C calls commence."""
+        events = []
+
+        class ReportAuthor:
+            def complete_json(self, system, request):
+                events.append("report")
+                observed = json.loads(request)["observed_current_attempt"]
+                result = (
+                    [row["values"]
+                     for row in observed["actual_delivered_rows"]]
+                    if observed["finish_result_exists"] else None
+                )
+                return {
+                    "result": result,
+                    "summary": (
+                        "The assigned evidence operation returned the "
+                        "actual observed rows without further inference. "
+                        + ("The handoff remains partial and unresolved."
+                           if observed["delivery_status"] == "partial" else
+                           "The returned evidence is available for the "
+                           "next dependent investigation.")
+                    ),
+                    "trace_summary": (
+                        "I used the authorized observation for this "
+                        "assignment and reported the returned records "
+                        "without performing any later dependency step."
+                    ),
+                }
+
+        class MainAuthor:
+            def complete_json(self, system, request):
+                events.append("main")
+                return json.loads(request)["reference_action_for_structure_only"]
+
+        class Critic:
+            def complete_json(self, system, request):
+                if "candidate_main_facing_report" in json.loads(request):
+                    return {
+                        "verdict": "pass", "grounded": True,
+                        "scope_preserved": True, "natural": True,
+                        "useful": True,
+                    }
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            files = {
+                "scenes_path": root / "scenes.jsonl",
+                "reports_path": root / "reports.jsonl",
+                "base_episodes_path": root / "base.jsonl",
+            }
+            files["scenes_path"].write_text(json.dumps(self.scene) + "\n")
+            files["reports_path"].write_text(
+                "".join(json.dumps(r) + "\n" for r in self.reports)
+            )
+            files["base_episodes_path"].write_text(
+                json.dumps(self.episode) + "\n"
+            )
+            summary = generate_turns(
+                **files, output_dir=root / "dataset", max_scenes=1,
+                branches_per_scene=1, fault_modes=["missing"], seed=17,
+                workers=2, no_progress=True,
+                author=MainAuthor(), critic=Critic(),
+                report_author=ReportAuthor(), report_critic=Critic(),
+                max_revisions=0,
+            )
+            a = json.loads((root / "dataset" / "stage4a" /
+                            "journal" / "000000.json").read_text())
+            b = json.loads((root / "dataset" / "stage4b" /
+                            "journal" / "000000.json").read_text())
+            c = json.loads((root / "dataset" / "journal" /
+                            "000000.json").read_text())
+            requests = [
+                req for p in a["private_audit"]["evidence_plan"]
+                for req in p["evidence_requests"]
+            ]
+            self.assertTrue(requests)
+            self.assertTrue(any(r["operation"] ==
+                                "retry_missing_evidence" for r in requests))
+            self.assertTrue(all("target_fields" in req and
+                                "main_visible_justification" in req
+                                for req in requests))
+            self.assertTrue(all(r["operation"] != "fixed_macro_replay"
+                                for r in requests))
+            for plan in a["private_audit"]["evidence_plan"]:
+                assigned = plan["dispatch"]
+                self.assertEqual(len(assigned),
+                                 len({d["execution_binding"]["macro_task_id"]
+                                      for d in assigned}))
+                self.assertEqual(
+                    {r["request_id"] for r in plan["evidence_requests"]},
+                    {identifier for d in assigned
+                     for identifier in d["evidence_request_ids"]},
+                )
+                self.assertTrue(all(len(r["target_fields"]) == 1
+                                    for r in plan["evidence_requests"]))
+            self.assertEqual(
+                len(b["private_audit"]["subagent_report_reviews"]),
+                len(a["private_audit"]["subagent_report_reviews"]),
+            )
+            self.assertEqual(
+                len(c["private_audit"]["main_action_reviews"]),
+                events.count("main"),
+            )
+            self.assertEqual(summary["completed_branches"], 1)
+            self.assertTrue((root / "dataset" / "main_turns.jsonl").exists())
+            for step in c["episode"]["trajectory"]:
+                if (step["action"] != "delegate_task"
+                        or step["attempt"] < c["private_audit"]["branch_round"]):
+                    continue
+                for assignment, report in zip(
+                    step["params"]["tasks"],
+                    step["result"]["subtask_results"],
+                ):
+                    self.assertEqual(assignment["task_instruction"],
+                                     report["task_instruction"])
+                    self.assertEqual(assignment["model"], report["model"])
+        self.assertIn("report", events)
+        self.assertIn("main", events)
+        first_main = events.index("main")
+        self.assertTrue(all(x == "report" for x in events[:first_main]))
+        self.assertTrue(all(x == "main" for x in events[first_main:]))
+
+    def test_evidence_request_retargets_missing_and_partial_fields(self):
+        from environment.untrusted_orchestration.evidence_planning import (
+            evidence_request,
+        )
+        task = next(
+            t for t in self.scene["macro_graph"]["tasks"]
+            if len(t["outputs"]["typed_relation"]) > 1
+            and not t["depends_on"]
+        )
+        state = ExecutionState(self.scene, {})
+        initial = evidence_request(
+            state, task["task_id"], round_number=1, retry=False,
+        )
+        self.assertEqual(initial["operation"], "retrieve_required_evidence")
+        state.register(task["task_id"],
+                       fault=Fault(task["task_id"], "partial"))
+        updated = evidence_request(
+            state, task["task_id"], round_number=2, retry=True,
+        )
+        self.assertEqual(updated["operation"], "complete_partial_evidence")
+        self.assertTrue(updated["unresolved_fields"])
+        self.assertLessEqual(len(updated["target_fields"]),
+                             len(initial["target_fields"]))
+        self.assertNotIn("gold_answer", json.dumps(updated))
 
 
 if __name__ == "__main__":
