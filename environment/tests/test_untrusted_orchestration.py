@@ -1016,5 +1016,54 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertTrue(all("mode" in status for status in main_events))
 
 
+    def test_live_dual_progress_bars_track_report_and_main_calls(self):
+        bars = []
+        class Bar:
+            def __init__(self, *, total, initial, desc, **kwargs):
+                self.total, self.n, self.desc = total, initial, desc
+                bars.append(self)
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+            def update(self, amount):
+                self.n += amount
+            def set_postfix(self, *args, **kwargs):
+                pass
+            def refresh(self):
+                pass
+            @staticmethod
+            def write(message):
+                pass
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            scenes, reports, episodes = (
+                root / "scenes.jsonl", root / "subtasks.jsonl",
+                root / "episodes.jsonl",
+            )
+            scenes.write_text(json.dumps(self.scene) + "\\n")
+            reports.write_text("".join(json.dumps(x) + "\\n"
+                                       for x in self.reports))
+            episodes.write_text(json.dumps(self.episode) + "\\n")
+            with patch("environment.untrusted_orchestration.generate_turns.tqdm",
+                       Bar):
+                result = generate_turns(
+                    scenes_path=scenes, reports_path=reports,
+                    base_episodes_path=episodes,
+                    output_dir=root / "dual_progress",
+                    max_scenes=1, branches_per_scene=1,
+                    seed=17, fault_modes=["missing"], workers=2,
+                    no_progress=False,
+                )
+        self.assertEqual(result["requested_branches"], 1)
+        self.assertEqual([bar.desc for bar in bars],
+                         ["Sub-Agent feedback", "Main orchestration"])
+        self.assertGreater(bars[0].n, 0)
+        self.assertGreater(bars[1].n, 0)
+        self.assertEqual(bars[0].total, bars[0].n)
+        self.assertEqual(bars[1].total, bars[1].n)
+
+
 if __name__ == "__main__":
     unittest.main()
