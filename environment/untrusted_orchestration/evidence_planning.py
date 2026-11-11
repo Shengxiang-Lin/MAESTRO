@@ -22,8 +22,14 @@ def _visible_identifiers(state, task: dict) -> list[str]:
         report = state.public_reports.get(parent) or {}
         finish = report.get("finish_result") or {}
         text = " ".join(str(finish.get(k) or "") for k in ("result", "summary"))
-        found.extend(_IDENT.findall(text))
-    return list(dict.fromkeys(found))[:8]
+        identities = list(dict.fromkeys(_IDENT.findall(text)))
+        # A long candidate set does not identify the particular record
+        # needed next. Do not require Main to reiterate all candidates.
+        # Only uniquely established upstream identifiers constrain a new
+        # evidence request; conflict-specific IDs are handled separately.
+        if len(identities) == 1:
+            found.extend(identities)
+    return list(dict.fromkeys(found))[:4]
 
 
 def _required_fields(state, task: dict) -> dict:
@@ -68,7 +74,10 @@ def evidence_request(state, task_id: str, *, round_number: int,
         operation = "derive_from_returned_evidence"
     missing = list(dict.fromkeys(missing))
     focus = missing or target
-    identifiers = _visible_identifiers(state, task)
+    identifiers = (
+        list(dict.fromkeys(_IDENT.findall(issue)))[:4]
+        if issue else _visible_identifiers(state, task)
+    )
     if issue:
         justification = issue
     elif previous and previous.status == "missing":
