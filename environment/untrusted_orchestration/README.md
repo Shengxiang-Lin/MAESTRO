@@ -6,7 +6,7 @@ Run from the MAESTRO repository root:
 python -m environment generate-untrusted-turns \
   --config environment/configs/untrusted_orchestration.yaml \
   --mode llm \
-  --output-dir environment/data/maestro_untrusted_rounds_v5
+  --output-dir environment/data/maestro_untrusted_rounds_v8
 ```
 
 The runner uses the frozen Scene/World/Macro DAG, reviewed Stage-2 reports,
@@ -65,6 +65,42 @@ but refresh parent context from the newly finalized public feedback. A
 factual visibility guard rejects labels if required identifiers or
 contradictory observations were not actually shown to Main. Main Author/Critic
 generate each round's natural O1 delegate/complete action.
+
+## V8: evidence-plan validation, reasoning review and progress semantics
+
+- **4A:** Produce specific requests for the exact missing field or remaining
+  record set. For a partial row-set return, the assignment asks for a
+  complete applicable set rather than guessing the identity of an unseen
+  record. Identifiers used for targeted repair come only from Main-visible
+  previous reports. Each private dispatch records `focus_fields` separately
+  from the entire underlying Macro output schema.
+- **4C contract validator:** Before any Main Author call, check that every
+  evidence request is covered exactly once, all requested fields are named,
+  source/model/tool/typed output schema and target focus remain unchanged,
+  and the resulting O1 action is structurally legal. This is independent
+  of LLM judgment; invalid plans are rejected, not polished into
+  something else.
+- **4C reasoning-only critic:** The LLM Author writes natural Main reasoning
+  but cannot rewrite executable task instructions or contexts. Critic now
+  receives the Main-visible history, the requested fields and the
+  candidate **reasoning only**. It does not judge tool ordering or demand
+  a different final answer/task from the frozen plan.
+- **Progress accounting:** `Main orchestration` keeps the entire
+  `planned` number as its denominator. `processed` counts actually
+  reviewed Main Actions; `skipped_downstream` counts planned future
+  actions not generated after a branch stops; `written` counts Action
+  reviews durably stored in the per-round journals. Accounted-for
+  progress reaches 100% without pretending each action was authored.
+- **Wrong-fault diagnostics:** `private/wrong_visibility.jsonl` categorizes
+  whether an *explicit* visible conflict verification was planned at the
+  injection decision, later, or never. This is a measure of planner
+  observability, **not proof** that an unverified error is intrinsically
+  undetectable.
+- **Reviewed output terminology:** Console output uses
+  `reviewed branches` and `reviewed turns`. The summary includes these
+  fields, retaining the historical `recovered` and `main_training_turns`
+  keys for compatibility. Public `main_turns.jsonl` retains its O1
+  input/output format and strict acceptance policy.
 
 ## V6 evidence-quality hardening
 
