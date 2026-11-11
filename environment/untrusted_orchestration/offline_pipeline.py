@@ -13,7 +13,7 @@ import json
 from typing import Callable
 
 from environment.base_orchestration.action_author import (
-    _assignment, proposed_template_action,
+    _assignment, action_issues, proposed_template_action,
     author_delegate_action, author_complete_action,
 )
 from environment.base_orchestration.o1_compat import (
@@ -24,7 +24,7 @@ from environment.generate_question.program_ir import Relation
 from .report_author import naturalize_report
 from .state_machine import Attempt
 from .trajectory_builder import (
-    _MAIN_AUTHOR_SYSTEM, _MAIN_CRITIC_SYSTEM, _history_batch,
+    _MAIN_AUTHOR_SYSTEM, _MAIN_REASONING_CRITIC_SYSTEM, _history_batch,
     _as_public,
 )
 
@@ -167,6 +167,57 @@ def _completion_from_visible(step: dict, latest: dict,
     }
 
 
+def _validate_evidence_dispatch(plan: dict, assignments: list[dict],
+                                *, prompt: str) -> None:
+    """Code-owned 4A/4B semantic and source contract, BEFORE Main authoring.
+
+    The LLM must not be tasked with deciding whether a frozen Macro
+    operator/route is valid. It can only explain a validated decision.
+    """
+    requests = {
+        item["request_id"]: item for item in plan["evidence_requests"]
+    }
+    dispatches = plan["dispatch"]
+    if (not dispatches or len(dispatches) != len(assignments)
+            or len({x["execution_binding"]["macro_task_id"]
+                    for x in dispatches}) != len(dispatches)):
+        raise ValueError("stage4c_dispatch_cardinality_or_binding_invalid")
+    covered = []
+    for i, (dispatch, assignment) in enumerate(zip(dispatches, assignments)):
+        contracted = dispatch["assignment_contract"]
+        req_ids = dispatch["evidence_request_ids"]
+        if not req_ids or any(x not in requests for x in req_ids):
+            raise ValueError("stage4c_dispatch_unresolved_request")
+        covered.extend(req_ids)
+        if any(assignment[k] != contracted[k] for k in (
+            "model", "tools", "source_ids", "output_fields", "needs_upstream"
+        )):
+            raise ValueError("stage4c_dispatch_source_or_schema_changed")
+        instruction = assignment["target_instruction"].casefold()
+        for rid in req_ids:
+            for field in requests[rid]["target_fields"]:
+                if (field.casefold() not in instruction
+                        and field.replace("_", " ").casefold()
+                            not in instruction):
+                    raise ValueError(
+                        f"stage4c_dispatch_missing_requested_field:{i}:{field}"
+                    )
+        if not all(
+            sid in assignment["target_instruction"] + assignment["context"]
+            for sid in contracted["source_ids"]
+        ):
+            raise ValueError("stage4c_dispatch_source_not_named")
+    if len(covered) != len(set(covered)) or set(covered) != set(requests):
+        raise ValueError("stage4c_dispatch_not_exact_cover")
+    issues = action_issues(
+        proposed_template_action(assignments), assignments, prompt=prompt,
+    )
+    if issues:
+        raise ValueError(
+            "stage4c_dispatch_o1_contract_invalid:" + ",".join(issues)
+        )
+
+
 def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                        author=None, critic=None,
                        max_revisions: int = 2,
@@ -218,12 +269,15 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                                dispatch["evidence_request_ids"])
                     )[:3500]
                     assignments.append(current)
+                _validate_evidence_dispatch(
+                    plan, assignments, prompt=prompt,
+                )
                 action, status = author_delegate_action(
                     assignments=assignments, prompt=prompt,
                     author=author, critic=critic,
                     max_revisions=max_revisions,
                     author_system=_MAIN_AUTHOR_SYSTEM,
-                    critic_system=_MAIN_CRITIC_SYSTEM,
+                    critic_system=_MAIN_REASONING_CRITIC_SYSTEM,
                     freeze_assignment_prose=True,
                 )
                 # The final Main instruction/context must be exactly the
