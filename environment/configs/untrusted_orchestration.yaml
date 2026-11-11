@@ -20,14 +20,32 @@ generation:
   max_retries: 1
   max_parallel_tasks: 4
   workers: 4
-  mode: template              # template for deterministic pilot; llm for naturalization
-  max_revisions: 2
+  # Common default. Each Author/Critic can be enabled independently below.
+  mode: template              # template | llm
+  report_mode: inherit        # inherit | template | llm
+  main_mode: inherit          # inherit | template | llm
+  max_revisions: 2            # fallback for callers of the Python API
+  report_max_revisions: 2
+  main_max_revisions: 2
   sub_model: qwen3-8b
   model_alias: model_1
   overwrite: false
   no_progress: false
 
+# Stage-3-style Main-Agent Action Author/Critic.
 model:
+  author_api_base: http://127.0.0.1:8807/v1
+  author_model: local-qwen3.5-9b
+  critic_api_base: null
+  critic_model: null
+  temperature: 0.3
+  author_max_tokens: 2800
+  critic_max_tokens: 1200
+  api_key_env: OPENAI_API_KEY
+
+# Stage-2-style Sub-Agent finish-result Author/Critic.
+# This model may differ from the Main action model.
+subagent_model:
   author_api_base: http://127.0.0.1:8807/v1
   author_model: local-qwen3.5-9b
   critic_api_base: null
