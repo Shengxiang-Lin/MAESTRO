@@ -214,6 +214,50 @@ def _completion_template(state: ExecutionState, *, answer: str) -> dict:
     }
 
 
+def dependency_safe_batch(state: ExecutionState,
+                          repairs: list[str], ready: list[str],
+                          max_parallel_tasks: int) -> list[str]:
+    """Select a batch against ONE pre-dispatch execution snapshot.
+
+    Even if an old partial product exposes enough fields to make a
+    descendant technically ready, that descendant must not be dispatched
+    in parallel with a parent being repaired. O1 parallel delegation has
+    no intra-batch result handoff; sequential Python register() calls
+    must never be used to justify an otherwise illegal parallel wave.
+    """
+    candidates = list(dict.fromkeys(repairs + ready))
+    priority = set(repairs)
+    chosen = []
+    for tid in candidates:
+        if len(chosen) >= max_parallel_tasks:
+            break
+        if not state.ready(tid):
+            continue
+        # Repairing any ancestor can change the input version even if the
+        # currently available partial fields happen to suffice.
+        if any(tid in state._dependents(repair) for repair in priority
+               if repair != tid):
+            continue
+        if any((tid in state._dependents(other)
+                or other in state._dependents(tid))
+               for other in chosen):
+            continue
+        chosen.append(tid)
+    if not batch_has_independent_dependencies(state, chosen):
+        raise ValueError("untrusted_parallel_batch_has_dependencies")
+    return chosen
+
+
+def batch_has_independent_dependencies(state: ExecutionState,
+                                       batch: list[str]) -> bool:
+    if len(batch) != len(set(batch)):
+        return False
+    return all(
+        b not in state._dependents(a)
+        for a in batch for b in batch if a != b
+    )
+
+
 def build_branch(
     scene: dict, stage2_rows: list[dict], base_episode: dict, *,
     branch_round: int, faults: list[Fault],
@@ -319,7 +363,9 @@ def build_branch(
             stopped = "recovered"
             break
 
-        batch = (repairs + ready)[:max_parallel_tasks]
+        batch = dependency_safe_batch(
+            state, repairs, ready, max_parallel_tasks,
+        )
         if not batch:
             stopped = "unresolved_dependencies"
             break
@@ -352,12 +398,27 @@ def build_branch(
             break
         if action_issues(action, assignments, prompt=prompt):
             raise ValueError("invalid_dynamic_o1_main_action")
+        if not batch_has_independent_dependencies(state, batch):
+            raise ValueError("invalid_parallel_delegation")
         emit(
             round_number, action, status["mode"],
             kind="delegate", task_ids=batch,
         )
+        # A parallel batch is atomic from Main's perspective: all tasks
+        # consume the snapshot that existed BEFORE the batch was launched.
+        # No task can secretly use an earlier sibling's new WorkProduct.
+        parent_snapshot = {
+            task_id: item.version for task_id, item in state.current.items()
+        }
         returned = []
         for slot, tid in enumerate(batch):
+            if not state.ready(tid):
+                raise ValueError("parallel_task_became_unready:" + tid)
+            if any(
+                parent_snapshot.get(p) != state.current[p].version
+                for p in state.tasks[tid]["depends_on"]
+            ):
+                raise ValueError("parallel_batch_consumed_new_parent:" + tid)
             dispatched = action["params"]["tasks"][slot]
             fault = next((
                 f for f in faults if f.task_id == tid
@@ -415,6 +476,11 @@ def build_branch(
         "runtime": state.audit(),
         "decision_audit": decisions,
         "completion_generation_mode": final_mode,
+        "parallel_batches_verified": all(
+            batch_has_independent_dependencies(
+                state, d.get("task_ids", []),
+            ) for d in decisions if d.get("decision_kind") == "delegate"
+        ),
         "outcome": stopped,
         "accepted_turns": len(turns) if success else 0,
         "private_only": True,
