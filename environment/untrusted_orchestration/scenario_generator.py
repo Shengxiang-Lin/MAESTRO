@@ -145,9 +145,19 @@ def make_scenario(
             rng.random() < delayed_evidence_probability
         )
         if requested_delayed:
-            option = delayed_event_candidate(
-                scene, fork_round=plan["branch_round"],
-                initial_fault_task=initial[0].task_id,
+            # Delaying independent corroboration is meaningful when a
+            # plausible wrong value can still drive real downstream
+            # work. A missing/partial handoff generally cannot do so;
+            # attempting to hold its other prerequisite just deadlocks.
+            eligible_for_delay = initial[0].kind in {
+                "legacy_wrong_evidence", "wrong_retrieval",
+                "wrong_entity_binding", "fabricated_claim",
+            }
+            option = (
+                delayed_event_candidate(
+                    scene, fork_round=plan["branch_round"],
+                    initial_fault_task=initial[0].task_id,
+                ) if eligible_for_delay else None
             )
             if option is not None:
                 events.append(option)
