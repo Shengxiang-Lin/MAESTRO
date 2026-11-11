@@ -1224,9 +1224,9 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 )
         self.assertEqual(result["requested_branches"], 1)
         self.assertEqual([bar.desc for bar in bars],
-                         ["Stage 4A evidence simulation",
-                          "Stage 4B Sub-Agent feedback",
-                          "Stage 4C Main orchestration"])
+                         ["Evidence simulation",
+                          "Sub-Agent feedback",
+                          "Main orchestration"])
         self.assertGreater(bars[0].n, 0)
         self.assertGreater(bars[1].n, 0)
         self.assertGreater(bars[2].n, 0)

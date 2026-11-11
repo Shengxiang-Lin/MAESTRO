@@ -22,7 +22,7 @@ generation:
   max_cost: 80
   max_retries: 1
   max_parallel_tasks: 4
-  workers: 4
+  workers: 8
   # Common default. Each Author/Critic can be enabled independently below.
   mode: template              # template | llm
   report_mode: inherit        # inherit | template | llm

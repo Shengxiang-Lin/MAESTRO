@@ -67,8 +67,8 @@ contradictory observations were not actually shown to Main. Main Author/Critic
 generate each round's natural O1 delegate/complete action.
 
 Stages are intentionally separated rather than interleaved. The CLI prints
-three sequential progress bars: Stage 4A **rounds**, Stage 4B reports, Stage 4C
-Main actions. Each stage is journaled with an atomic file per round sample:
+three sequential progress bars: **Evidence simulation** (rounds),
+**Sub-Agent feedback** (reports), and **Main orchestration** (actions). Each stage is journaled with an atomic file per round sample:
 
 - `round_index.jsonl`: all extracted (Question, decision-round) identities,
   received Sub-Agent batch and eligibility/skip reason
