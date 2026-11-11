@@ -301,6 +301,17 @@ def run_attempt(
                    else _report_fault_payload(correct, sources))
         if kind != "report_missing" and payload is None:
             raise FaultUnsupported("no_real_report_distractor")
+        # A fabricated delivered result is a COMMUNICATION-level value,
+        # not a change to the executed primitive trace. Downstream tasks
+        # may consume this false delivered value, so track the actual
+        # communicated relation separately from the executor result.
+        communicated = None
+        if kind == "fabricated_claim":
+            communicated = relation_rows(correct)
+            communicated[0]["values"][payload["field"]] = payload["replacement"]
+            communicated[0]["source_fact_refs"] = list(
+                payload["source_fact_refs"]
+            )
         return correct, {
             "status": "done", "available_fields": list(correct.columns),
             "primitive": None,
@@ -310,6 +321,7 @@ def run_attempt(
             }),
             "report_fault_kind": kind,
             "report_fault_payload": payload,
+            "communicated_rows": communicated,
             # This is private attack metadata, NOT a Main-visible
             # declaration that the delivered report must be disbelieved.
         }
