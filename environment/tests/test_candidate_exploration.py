@@ -274,7 +274,7 @@ class CandidateExplorationTests(unittest.TestCase):
         self.assertEqual(facts["potential_cross_check_pairs"], 0)
         self.assertEqual(facts["same_wave_comparable_pairs"], 1)
         self.assertEqual(
-            facts["provisional_downstream_late_witness_pairs"], 0
+            facts["provisional_downstream_before_late_witness_pairs"], 0
         )
         self.assertEqual(
             facts["candidate_relationships"][0]
