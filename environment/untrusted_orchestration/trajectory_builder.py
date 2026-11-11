@@ -15,7 +15,7 @@ from typing import Any
 
 from environment.base_orchestration.action_author import (
     _assignment, action_issues, author_delegate_action,
-    author_complete_action,
+    author_complete_action, _AUTHOR_SYSTEM, _CRITIC_SYSTEM,
 )
 from environment.base_orchestration.o1_compat import (
     o1_history, o1_prompt, source_catalog,
@@ -28,6 +28,33 @@ from .state_machine import (
     ExecutionState, deterministic_report, public_history_item,
 )
 from .report_author import naturalize_report
+
+
+_MAIN_AUTHOR_SYSTEM = _AUTHOR_SYSTEM + """
+UNTRUSTED ROUND-LOCAL RECOVERY:
+This round has a real prior Sub-Agent feedback history, including results
+that may be missing, partial, contradictory, or replaced. The independent
+planner already selected the exact set of LEGAL tasks and parallelism from
+only visible evidence. You do NOT choose the action, change batch size,
+replace tools, or add verification that was not selected. Write natural
+Main reasoning and Sub-Agent task instructions explaining the specific
+observed missing field, conflicting key, or dependency that motivates the
+assigned repair. When some other tasks are independent and ready, explain
+why they can proceed concurrently. NEVER claim you know which report was
+attacked or quote a private correct answer. Explicitly retain usable
+previous findings; do not imply an unperformed verification succeeded.
+"""
+
+
+_MAIN_CRITIC_SYSTEM = _CRITIC_SYSTEM + """
+UNTRUSTED RECOVERY REVIEW:
+Judge whether the produced prose faithfully conveys the planner's
+fixed targeted repair, still-usable prior results, and independent
+parallel tasks. The planner has ALREADY proved dependency legality.
+A Sub-Agent done flag is execution termination, not proof of factual
+correctness. Rejected text must be repaired as prose ONLY; do not
+invent a new task, future evidence, attack origin, or hidden Gold.
+"""
 
 
 def _as_public(sub_result: dict) -> dict:
@@ -264,11 +291,17 @@ def build_branch(
     author=None, critic=None, report_author=None, report_critic=None,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
     max_parallel_tasks: int = 4, max_revisions: int = 2,
+    report_max_revisions: int | None = None,
+    main_max_revisions: int | None = None,
     sub_model: str = "qwen3-8b", model_alias: str = "model_1",
 ) -> tuple[dict, list[dict], dict]:
     """Returns (public episode, accepted *post-branch* turn labels, audit)."""
     if max_rounds < branch_round or max_parallel_tasks < 1:
         raise ValueError("invalid_branch_round_or_budget")
+    if report_max_revisions is None:
+        report_max_revisions = max_revisions
+    if main_max_revisions is None:
+        main_max_revisions = max_revisions
     if base_episode.get("task_id") != scene["task_id"]:
         raise ValueError("base_episode_wrong_scene")
     reviewed = _strict_reports(scene, stage2_rows)
@@ -276,7 +309,7 @@ def build_branch(
         scene, reviewed, base_episode,
         branch_round=branch_round, faults=faults,
         report_author=report_author, report_critic=report_critic,
-        report_revisions=max_revisions, model_alias=model_alias,
+        report_revisions=report_max_revisions, model_alias=model_alias,
     )
     before = counterfactual_continuation(
         state, start_wave_index=branch_round - 1,
@@ -285,6 +318,11 @@ def build_branch(
     retry_counts = Counter()
     turns = []
     decisions = []
+    report_reviews = [{
+        "task_id": item["task_id"], "attempt_version": 1,
+        "round": branch_round - 1, "authoring": deepcopy(item["report_mode"]),
+    } for item in injected]
+    main_reviews = []
     stopped = None
     final_mode = None
     graph = scene["macro_graph"]
@@ -350,8 +388,13 @@ def build_branch(
                     k: v for k, v in state.public_reports.items()
                     if isinstance(v.get("finish_result"), dict)
                 },
-                author=author, critic=critic, max_revisions=max_revisions,
+                author=author, critic=critic,
+                max_revisions=main_max_revisions,
             )
+            main_reviews.append({
+                "round": round_number, "kind": "complete",
+                "authoring": deepcopy(status),
+            })
             emit(round_number, action, status["mode"], kind="complete")
             final_mode = status["mode"]
             trajectory.append({
@@ -386,8 +429,14 @@ def build_branch(
         action, status = author_delegate_action(
             assignments=assignments, prompt=prompt,
             author=author, critic=critic,
-            max_revisions=max_revisions,
+            max_revisions=main_max_revisions,
+            author_system=_MAIN_AUTHOR_SYSTEM,
+            critic_system=_MAIN_CRITIC_SYSTEM,
         )
+        main_reviews.append({
+            "round": round_number, "kind": "delegate",
+            "authoring": deepcopy(status),
+        })
         if action is None:
             stopped = "main_action_not_accepted"
             decisions.append({
@@ -434,8 +483,13 @@ def build_branch(
                 model_alias=dispatched["model"],
                 reviewed=reviewed.get(tid),
                 author=report_author, critic=report_critic,
-                max_revisions=max_revisions,
+                max_revisions=report_max_revisions,
             )
+            report_reviews.append({
+                "task_id": tid, "attempt_version": attempt.version,
+                "round": round_number,
+                "authoring": deepcopy(report_status),
+            })
             report["subtask_index"] = slot
             public = _as_public(report)
             state.set_public_report(tid, public)
@@ -459,6 +513,21 @@ def build_branch(
         })
     if stopped is None:
         stopped = "max_decision_rounds"
+    # Positive SFT in LLM mode must be language-reviewed on *both*
+    # surfaces. The existing deterministic report remains inspectable
+    # as a diagnostic when a review fails, not secretly accepted as an
+    # LLM-written trajectory.
+    if stopped == "recovered" and (
+        (report_author is not None and any(
+            x["authoring"]["mode"] == "grounded_template_fallback"
+            for x in report_reviews
+        )) or (author is not None and any(
+            x["authoring"]["mode"] ==
+            "teacher_grounded_completion_fallback"
+            for x in main_reviews
+        ))
+    ):
+        stopped = "language_review_unaccepted"
     success = stopped == "recovered"
     episode = {
         "task_id": scene["task_id"], "question": scene["question"],
@@ -475,6 +544,8 @@ def build_branch(
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
         "decision_audit": decisions,
+        "subagent_report_reviews": report_reviews,
+        "main_action_reviews": main_reviews,
         "completion_generation_mode": final_mode,
         "parallel_batches_verified": all(
             batch_has_independent_dependencies(
