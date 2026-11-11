@@ -234,6 +234,17 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
         contract["actual_delivered_rows"], ensure_ascii=False,
     )))
     result_tokens.add(str(contract["total_delivered_rows"]))
+    # Stage 2 normalizes schema names like record_key_1 to "record key 1".
+    # The digit 1 is a FIELD LABEL, not a fabricated numeric observation.
+    # Authorize only actual output/observed schema labels, not arbitrary
+    # numbers from the question or hidden clean WorkProduct.
+    schema_fields = set(contract["output_fields"]) | {
+        field for step in observed
+        for field in step.get("output_schema", [])
+    }
+    result_tokens.update(_TOKEN.findall(
+        " ".join(name.replace("_", " ") for name in schema_fields)
+    ))
     allowed_tokens = set(_TOKEN.findall(available))
     allowed_tokens |= result_tokens | {
         str(len(contract["executed_operations_in_order"])),
@@ -332,7 +343,20 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                     candidate[field] = revised
         issues = _guard(candidate, contract, attempt)
         if issues:
-            failures.append({"stage": "guard", "errors": issues})
+            failures.append({
+                "stage": "guard", "errors": issues,
+                # Private diagnostics: no attempted text is put into the
+                # published Main turn. A mere error count is insufficient
+                # to distinguish false positives from actual invention.
+                "candidate_result": (
+                    str(candidate.get("result"))[:600]
+                    if isinstance(candidate, dict) else None
+                ),
+                "candidate_summary": (
+                    str(candidate.get("summary"))[:600]
+                    if isinstance(candidate, dict) else None
+                ),
+            })
             continue
         # The structured WorkProduct remains in the execution ledger.
         # LLM's structured answer, when supplied, must match exactly and is
