@@ -179,7 +179,6 @@ def evidence_assignment(state, task_id: str, *, catalog: dict,
         context + " Current evidence need: "
         + request["main_visible_justification"]
     )[:3500]
-    base["evidence_request_id"] = request["request_id"]
     return base
 
 
