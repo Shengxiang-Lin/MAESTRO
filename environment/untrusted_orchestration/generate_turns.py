@@ -166,6 +166,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     main_modes = Counter()
     report_statuses = Counter()
     main_statuses = Counter()
+    execution_outcomes = Counter()
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -202,6 +203,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         if data.get("private_audit") is not None:
             audit = data["private_audit"]
             audits.append(audit)
+            execution_outcomes[audit.get("execution_outcome", audit["outcome"])] += 1
             for review in audit.get("subagent_report_reviews", []):
                 result = review["authoring"]
                 report_modes[result["mode"]] += 1
@@ -229,6 +231,11 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             counters["rejected_validation"]
         ),
         "main_training_turns": len(positive_turns),
+        "execution_recovered_branches": execution_outcomes["recovered"],
+        "execution_outcomes": dict(execution_outcomes),
+        "language_review_rejected_after_recovery":
+            sum(1 for audit in audits if audit.get("execution_recovered")
+                and not audit.get("language_review_accepted", True)),
         "outcomes": dict(counters),
         "fault_mode_outcomes": {
             mode: dict(counts)

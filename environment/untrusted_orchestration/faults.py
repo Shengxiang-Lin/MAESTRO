@@ -135,38 +135,95 @@ def _wrong_row(
     }
 
 
+def _observed_step(step: dict, product: Relation, *,
+                   evidence_index: dict | None,
+                   source_ids: set[str], evidence_limit: int = 6) -> dict:
+    """Stage-2-shaped evidence from the ACTUAL attempted operator result.
+
+    This function is called after any mutation, never with the clean result
+    at a poisoned boundary. Only facts supporting the executed relation are
+    rendered into the report-facing trace.
+    """
+    from environment.implement_subtask.realize import (
+        _describe_operation, _operator_evidence,
+    )
+    refs = sorted({
+        ref for row in product.rows for ref in row["support"]
+    })
+    if evidence_index is not None:
+        # Fact provenance is scoped to this relation's actual parents and
+        # authorized sources. The full index is used solely to resolve refs.
+        if any(ref not in evidence_index for ref in refs):
+            raise ProgramError("attempt_trace_unknown_supporting_fact")
+        observed = _operator_evidence(
+            step, product, {"source_fact_refs": refs},
+            evidence_index, source_ids | {ref.split(":", 1)[0] for ref in refs},
+            evidence_limit=evidence_limit,
+        )
+    else:
+        observed = {
+            "node_id": step["id"], "operation": step["op"],
+            "input_nodes": list(step["inputs"]),
+            "action": _describe_operation(step),
+            "observed_result": (
+                f"Produced {len(product.rows)} row(s) with "
+                + ", ".join(product.columns)
+            ),
+            "output_schema": list(product.columns),
+            "output_row_count": len(product.rows),
+            "supporting_fact_refs": refs,
+            "evidence_atoms": [], "evidence_atoms_total": len(refs),
+            "evidence_atoms_truncated": bool(refs),
+            "lookup_keys": ({
+                "source_id": step["source_id"],
+                "key_field": step["input_key_field"],
+                "key_values": sorted({
+                    str(row["values"][step["input_key_field"]])
+                    for row in product.rows
+                    if step["input_key_field"] in row["values"]
+                }),
+            } if step["op"] == "lookup_by_key" else None),
+        }
+    observed["execution_status"] = "done"
+    observed["sampled_result_rows"] = relation_rows(product)[:4]
+    observed["remaining_rows_omitted"] = max(0, len(product.rows) - 4)
+    return observed
+
+
 def run_attempt(
     task: dict, *, parents: list[Relation], sources: dict,
     fault: Fault | None = None,
+    evidence_index: dict | None = None,
 ) -> tuple[Relation | None, dict]:
-    """Execute actual primitive operations and optionally alter one step.
+    """Execute the Macro and return the delivered product AND actual trace.
 
-    clean returns exactly compiler.execute_task's relation. A poisoned
-    WorkProduct flows through every *subsequent* operator; the next Macro
-    then consumes this resulting Relation as its actual input.
+    No injected-fault label or clean reference appears in observed steps.
+    The returned private metadata can contain fault provenance, while the
+    report Author is given only the actual observed execution contract.
+    Missing halts at an acquisition boundary; partial is explicitly an
+    output-delivery fault; wrong mutates a real primitive relation and
+    re-executes every downstream primitive on the changed values.
     """
     grants = set(task["source_ids"])
     if set(sources) != grants:
         raise ProgramError("fault_run_source_grant_mismatch")
     if len(parents) != len(task["depends_on"]):
         raise ProgramError("fault_run_dependency_arity_mismatch")
-    if fault is None:
-        result = execute_task(
-            task, input_products=parents, visible_sources=sources,
-        )
-        return result, {
-            "status": "done", "available_fields": list(result.columns),
-            "primitive": None, "source_fact_refs": sorted({
-                ref for row in result.rows for ref in row["support"]
-            }),
-        }
-    if fault.task_id != task["task_id"]:
+    correct = execute_task(
+        task, input_products=parents, visible_sources=sources,
+    )
+    if fault is not None and fault.task_id != task["task_id"]:
         raise ValueError("fault_target_does_not_match_task")
     if "operator_chain" not in task:
-        raise FaultUnsupported("fault_requires_primitive_operator_chain")
-    # Validate using the unmodified compiler first (also protects against
-    # accidentally bypassing frozen source grants and input schemas).
-    correct = execute_task(task, input_products=parents, visible_sources=sources)
+        if fault is not None:
+            raise FaultUnsupported("fault_requires_primitive_operator_chain")
+        return correct, {
+            "status": "done", "available_fields": list(correct.columns),
+            "primitive": None, "observed_operator_steps": [],
+            "source_fact_refs": sorted({
+                ref for row in correct.rows for ref in row["support"]
+            }),
+        }
     prefix = dict(zip(task["external_inputs"], parents))
     clean_steps = []
     for step in task["operator_chain"]:
@@ -175,14 +232,51 @@ def run_attempt(
         clean_steps.append((step, relation))
     assert not _different(prefix[task["program_node_id"]], correct)
 
+    source_ids = grants | {
+        ref.split(":", 1)[0]
+        for parent in parents for row in parent.rows for ref in row["support"]
+    }
+    def trace(steps):
+        return [
+            _observed_step(
+                step, product, evidence_index=evidence_index,
+                source_ids=source_ids,
+            )
+            for step, product in steps
+        ]
+
+    if fault is None:
+        return correct, {
+            "status": "done", "available_fields": list(correct.columns),
+            "primitive": None, "observed_operator_steps": trace(clean_steps),
+            "source_fact_refs": sorted({
+                ref for row in correct.rows for ref in row["support"]
+            }),
+        }
+
     if fault.mode == "missing":
-        first = next((
-            step for step, _ in clean_steps
+        from environment.implement_subtask.realize import _describe_operation
+        index = next((
+            i for i, (step, _) in enumerate(clean_steps)
             if step["op"] in {"scan", "lookup_by_key"}
-        ), clean_steps[0][0])
+        ), 0)
+        failed = clean_steps[index][0]
+        observed = trace(clean_steps[:index])
+        observed.append({
+            "node_id": failed["id"], "operation": failed["op"],
+            "input_nodes": list(failed["inputs"]),
+            "action": _describe_operation(failed),
+            "execution_status": "missing",
+            "observed_result": "No usable result was delivered.",
+            "output_row_count": None, "output_schema": [],
+            "supporting_fact_refs": [], "evidence_atoms": [],
+            "sampled_result_rows": [], "remaining_rows_omitted": 0,
+            "lookup_keys": None,
+        })
         return None, {
-            "status": "missing", "primitive": first["id"],
+            "status": "missing", "primitive": failed["id"],
             "available_fields": [], "source_fact_refs": [],
+            "observed_operator_steps": observed,
             "failure": "acquisition_or_execution_returned_no_deliverable",
         }
 
@@ -191,36 +285,38 @@ def run_attempt(
                                 and len(correct.rows) <= 1):
             raise FaultUnsupported("no_partial_deliverable_available")
         if len(correct.columns) > 1:
-            # Keep schema fixed for typed handoff but set this one field
-            # missing; do not fabricate a value.
             field = correct.columns[-1]
             rows = tuple({
                 "values": {**row["values"], field: None},
                 "support": tuple(row["support"]),
             } for row in correct.rows)
-            result = Relation(correct.columns, rows)
+            delivered = Relation(correct.columns, rows)
             available = [c for c in correct.columns if c != field]
             missing = [field]
+            delivery_kind = "field_not_delivered"
         else:
-            result = Relation(correct.columns, correct.rows[:-1])
+            delivered = Relation(correct.columns, correct.rows[:-1])
             available = list(correct.columns)
             missing = ["remaining_rows"]
-        return result, {
-            "status": "partial",
-            "primitive": task["program_node_id"],
-            # Truncating rows is not the same as omitting a field. Even if
-            # the remaining rows contain all fields, counting or selection
-            # over an incomplete set is unsafe.
-            "rows_complete": len(correct.columns) > 1,
-            "missing_fields": missing,
-            "available_fields": available,
+            delivery_kind = "row_set_truncated"
+        # The final operation's report-facing observation is the actually
+        # delivered relation. Do not show the hidden pre-delivery values.
+        observed = trace(clean_steps[:-1])
+        observed.append(_observed_step(
+            clean_steps[-1][0], delivered, evidence_index=evidence_index,
+            source_ids=source_ids,
+        ))
+        return delivered, {
+            "status": "partial", "primitive": task["program_node_id"],
+            "delivery_fault_kind": delivery_kind,
+            "rows_complete": delivery_kind == "field_not_delivered",
+            "missing_fields": missing, "available_fields": available,
+            "observed_operator_steps": observed,
             "source_fact_refs": sorted({
-                ref for row in result.rows for ref in row["support"]
+                ref for row in delivered.rows for ref in row["support"]
             }),
         }
 
-    # Wrong-result faults are evaluated at the *earliest viable semantic
-    # operation* rather than rewriting the final Sub-Agent text.
     ordered = [
         (step, relation) for step, relation in clean_steps
         if step["op"] == "join"
@@ -240,24 +336,22 @@ def run_attempt(
         raise FaultUnsupported("no_real_evidence_distractor")
     target, poisoned, meta = chosen
     products = dict(zip(task["external_inputs"], parents))
-    applied = False
+    actual_steps = []
     for step in task["operator_chain"]:
         result = _primitive(step, products, sources)
         if step["id"] == target["id"]:
             result = poisoned
-            applied = True
         products[step["id"]] = result
-    if not applied:
-        raise AssertionError("fault_primitive_not_reached")
+        actual_steps.append((step, result))
     final = products[task["program_node_id"]]
     if list(final.columns) != task["outputs"]["typed_relation"]:
         raise FaultUnsupported("fault_changed_frozen_output_schema")
     if not _different(final, correct) or not final.rows:
         raise FaultUnsupported("fault_did_not_propagate_to_workproduct")
     return final, {
-        "status": "done",
-        "available_fields": list(final.columns),
+        "status": "done", "available_fields": list(final.columns),
         "primitive": target["id"],
+        "observed_operator_steps": trace(actual_steps),
         "source_fact_refs": sorted({
             ref for row in final.rows for ref in row["support"]
         }),

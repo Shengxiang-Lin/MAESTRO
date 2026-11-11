@@ -14,6 +14,7 @@ import re
 
 from environment.generate_question.program_ir import Relation
 from .faults import Fault, relation_rows, run_attempt
+from environment.implement_subtask.realize import _fact_index
 
 
 @dataclass
@@ -31,6 +32,7 @@ class Attempt:
 class ExecutionState:
     def __init__(self, scene: dict, reviewed_reports: dict[str, dict]):
         self.scene = scene
+        self.fact_index = _fact_index(scene["world"])
         self.tasks = {
             task["task_id"]: task for task in scene["macro_graph"]["tasks"]
         }
@@ -200,6 +202,7 @@ class ExecutionState:
         }
         product, metadata = run_attempt(
             task, parents=parents, sources=sources, fault=fault,
+            evidence_index=self.fact_index,
         )
         previous = self.current.get(task_id)
         version = (previous.version + 1 if previous else 1)

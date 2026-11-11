@@ -14,68 +14,71 @@ import json
 import re
 
 from environment.implement_subtask.reporting import (
-    _normalize_author_result, _readable_verified_answer,
+    _normalize_author_result, _stage_scope_issues, _public_field_text,
+)
+from environment.implement_subtask.stage_local_claims import (
+    normalize_report_language,
 )
 from .state_machine import deterministic_report, Attempt, relation_rows
 
 
-_AUTHOR_SYSTEM = """Write the FINAL message that a specialized Orchestra-o1
-Sub-Agent would return after THIS specific delegated attempt.
+_AUTHOR_SYSTEM = """Write a concise, natural Orchestra-o1 Sub-Agent finish report,
+following the same evidence-local writing convention as Stage 2.
 
-Only the observations and operation steps supplied in the user payload
-were available. They might be incomplete or confidently mistaken: report
-exactly what this attempt established, NOT a corrected benchmark answer.
-Do not inspect or infer the ground truth. Never compare this output with a
-hidden clean reference or suggest an unobserved correction.
+The authoritative input describes THIS executed attempt. Its result may be
+incomplete or wrong relative to an unknown global answer: do not correct it.
+Write only the actually delivered observation and the operations actually
+recorded in observed_operator_steps. Do not infer that planned steps were
+performed when a missing result halted the attempt.
 
-Return JSON ONLY:
-{"result": "a concise, actionable, naturally phrased finding (or null if
- no result was delivered)",
- "summary": "1-2 grounded sentences about what this attempt did and learned",
- "trace_summary": "1-2 grounded sentences about observed operations",
- "status": "done|partial|missing"}
+Return JSON ONLY with the three prose fields:
+{"result": "short actionable finding, or null if no result was delivered",
+ "summary": "1-2 grounded sentences on this attempt and its evidence",
+ "trace_summary": "1-2 grounded sentences on the actually observed steps"}
 
-Result should identify concrete returned entities, keys and values where
-feasible. For a small one-row lookup, mention its actual lookup key and
-numeric measure; a large intermediate handoff can summarize its record set.
-Status is immutable: done is NOT proof of correctness, and partial is NOT
-the same as no usable result. Missing means no finish_result was delivered:
-result must be null and you must not invent evidence. If only some fields
-are available, describe those without claiming the task is fully solved.
+DO NOT GENERATE status. The executor owns status, structured rows, fact
+references, partial-field availability and the existence of finish_result.
+For a completed empty relation, report no matches; it is not missing.
+For partial delivery, describe available fields and what remains unresolved.
+For a wrong but delivered record, report that returned record faithfully,
+without comparing it to a private clean reference or claiming independent
+verification.
 
-Describe this stage only; do not claim a later filter, join, verification,
-approval, web search, real audio/video perception, or tool call that the
-provided executed operations did not perform. Never invent source IDs,
-entity names, units, measurements, dates, provenance or numerical facts.
-Do not mention fault injection, Oracle, Teacher, Gold, the simulator,
-previous drafts or the Critic. You are a Sub-Agent reporting normally to
-its Main-Agent, not an omniscient judge of the attempt.
+Prefer concrete source roles and returned identifiers over generic backend
+phrases. Keep intermediate handoffs local: a source scan does not complete
+future filters and a join does not establish later eligibility checks.
+Use observed_operator_steps for actions, row counts, evidence atoms and lookup
+keys. A truncated evidence sample is not the complete delivered relation.
+Never claim to have browsed a real website, watched video or transcribed audio
+when only the synthetic evidence observation was supplied. Do not invent facts,
+identities, measurements, dates, sources, operations or supporting references.
+Never mention Oracle, Gold, Teacher, fault injection, drafts or Critic.
 """
 
+_CRITIC_SYSTEM = """Independently review the natural Sub-Agent report against
+THIS ATTEMPT's actual returned relation and actually observed steps, using
+Stage-2-style stage-local factual review.
 
-_CRITIC_SYSTEM = """Independently review the Main-facing Sub-Agent report
-against the CURRENT ATTEMPT'S ACTUAL RETURNED RECORDS and executed
-operator scope. The run may have produced a WRONG key or a partial
-result; that is not itself a failure of the language report. Do not
-correct it against the global Gold or imaginary source contents.
+The report is not a new solver. Do not compare it with a clean Oracle or
+reject it merely because an observed result is wrong relative to a hidden
+answer. The executor owns status and WorkProduct; check the prose only.
+Evaluate:
+1. grounded: facts, identities and measured values are supported by actual
+   delivered records and observed evidence, with no invented operations;
+2. scope_preserved: no later filter, lookup, eligibility or independent
+   verification is falsely claimed, and incomplete deliveries are acknowledged;
+3. natural: concise useful specialized feedback, not a raw relation dump;
+4. useful: handoff identifies the actual returned records or unavailable parts.
 
-Check:
-1. grounded: all stated values, identities and source claims are supported
-   by this attempt's returned records and accessible execution context.
-2. scope_preserved: status and findings are stage-local; no invented
-   downstream filter, full completion, or independent verification.
-3. natural: the result, summary and trace read like authentic concise
-   Sub-Agent feedback, not a raw backend dump.
-4. useful: a single-row answer names its returned key and key measurement;
-   partial results distinguish available and unresolved fields.
+Only executed operations can justify claims. A failed acquisition cannot
+justify describing its planned downstream operations as completed.
+A structured result has already been checked against the complete actual
+delivered relation; abbreviated sampled evidence does not invalidate it.
 
-Output JSON ONLY:
+Return JSON ONLY:
 {"verdict":"pass|fail","grounded":true|false,
  "scope_preserved":true|false,"natural":true|false,"useful":true|false,
- "reason":"short factual explanation","repair_hint":"specific prose-only change"}
-The result's status, structured rows and available fields are immutable.
-Do not reject simply because a returned observation is inconsistent with
-a separate clean reference which is NOT included in this payload.
+ "reason":"short factual explanation","repair_hint":"prose-only fix"}
 """
 
 
@@ -98,39 +101,66 @@ _UNPERFORMED = re.compile(
 
 
 def _observed_contract(task: dict, attempt: Attempt, instruction: str) -> dict:
-    """No hidden Gold, fault flag, or clean Oracle rows in LLM context."""
-    rows = relation_rows(attempt.product)
-    steps = []
-    for node in task["operator_chain"]:
-        steps.append({
-            "operation": node["op"],
-            "direct_source": node.get("source_id"),
-            "input_key_field": node.get("input_key_field"),
-            "source_key_field": node.get("source_key_field"),
-            "comparison_keys": [
-                node.get("left_on"), node.get("right_on")
-            ] if node["op"] == "join" else None,
-            "filter_field": node.get("field"),
-            "projected_fields": node.get("fields"),
-        })
+    """Build the Stage-2-shaped contract from THIS execution, never Oracle.
+
+    In the real runner observed_operator_steps comes from run_attempt's
+    per-primitive post-injection trace. Legacy hand-made test Attempts may
+    lack steps; planned_operator_steps are then clearly marked as plans.
+    """
+    delivered = relation_rows(attempt.product)
+    observed = attempt.runtime.get("observed_operator_steps", [])
+    planned = [
+        {"operation": node["op"], "direct_source": node.get("source_id")}
+        for node in task.get("operator_chain", [])
+    ]
+    executed = [
+        row["operation"] for row in observed
+        if row.get("execution_status") == "done"
+    ]
+    refs = sorted({
+        ref for row in delivered for ref in row["source_fact_refs"]
+    })
+    refs = sorted(set(refs) | {
+        ref for step in observed
+        for ref in step.get("supporting_fact_refs", [])
+    })
     return {
         "assigned_task_instruction": instruction,
-        "executed_operations_in_order": steps,
-        "actual_delivered_rows": rows[:32],
-        "total_delivered_rows": len(rows),
-        "rows_omitted_from_prompt": max(0, len(rows) - 32),
-        "output_fields": (list(attempt.product.columns)
-                          if attempt.product else []),
+        "observed_operator_steps": observed,
+        "planned_operator_steps": planned,
+        "trace_from_actual_execution": bool(observed),
+        "executed_operations_in_order": executed,
+        "actual_delivered_rows": delivered[:32],
+        "total_delivered_rows": len(delivered),
+        "rows_omitted_from_prompt": max(0, len(delivered) - 32),
+        "output_fields": (
+            list(attempt.product.columns) if attempt.product else []
+        ),
         "authorized_direct_sources": list(task["source_ids"]),
-        "returned_source_fact_refs": sorted({
-            ref for row in rows for ref in row["source_fact_refs"]
+        "available_provenance_sources": sorted({
+            ref.split(":", 1)[0] for ref in refs
         }),
+        "returned_source_fact_refs": refs,
         "available_fields": list(attempt.available_fields),
         "unresolved_fields": list(attempt.runtime.get("missing_fields", [])),
         "rows_complete": attempt.runtime.get("rows_complete", True),
+        "delivery_issue": (
+            "partial_field_delivery"
+            if attempt.runtime.get("delivery_fault_kind") == "field_not_delivered"
+            else "incomplete_delivered_record_set"
+            if attempt.runtime.get("delivery_fault_kind") == "row_set_truncated"
+            else None
+        ),
         "execution_ended": True,
         "delivery_status": attempt.status,
         "finish_result_exists": attempt.product is not None,
+        "attempt_version": attempt.version,
+        "used_parent_versions": attempt.used_parent_versions,
+        "upstream_handoffs": list(task.get("depends_on", [])),
+        "stage_scope_note": (
+            "Only actually observed operations and this delivered result "
+            "may be reported. Later Macro operations are not yet performed."
+        ),
     }
 
 
@@ -138,20 +168,19 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
     if not isinstance(draft, dict):
         return ["invalid_report_json"]
     issues = []
-    if set(draft) != {"result", "summary", "trace_summary", "status"}:
+    required = {"result", "summary", "trace_summary"}
+    # Old Stage-4 Authors may still supply status. It is ignored rather than
+    # compared with the executor, and never appears in the final report.
+    if not required <= set(draft) or set(draft) - (required | {"status"}):
         issues.append("invalid_report_fields")
-    if draft.get("status") != attempt.status:
-        issues.append("reported_status_not_equal_actual_attempt")
     missing = attempt.product is None
     result = draft.get("result")
+    exact_rows = [row["values"] for row in relation_rows(attempt.product)]
+    normalized = None
     if missing:
         if result is not None:
             issues.append("missing_result_must_be_null")
-    elif not isinstance(result, (str, dict, list)):
-        issues.append("invalid_delivered_result")
-    normalized = None
-    exact_rows = [row["values"] for row in relation_rows(attempt.product)]
-    if not missing and isinstance(result, (str, dict, list)):
+    else:
         normalized, errors = _normalize_author_result(
             result, exact_rows, list(attempt.product.columns),
         )
@@ -170,47 +199,92 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
     if _UNPERFORMED.search(prose):
         issues.append("claims_unperformed_media_or_web_action")
 
-    # A new value or identifier is never licensed merely because it
-    # appears in the overall question or clean Stage 2 report.
-    permitted = set(_TOKEN.findall(json.dumps(
+    # Reuse Stage 2's narrow stage-local factual scope guard. The reference
+    # is this ATTEMPT's delivered relation, never the frozen Gold.
+    stage_local = {
+        "exact_oracle_answer": exact_rows,
+        "executed_operations_in_this_macro":
+            contract["executed_operations_in_order"],
+        "terminal_output_schema_of_this_macro": contract["output_fields"],
+        "macro_is_terminal": False,
+        "upstream_handoffs": contract["upstream_handoffs"],
+        "available_provenance_sources":
+            contract["available_provenance_sources"],
+    }
+    for field, text in (
+        ("result", normalized), ("summary", summary),
+        ("trace_summary", trace),
+    ):
+        if isinstance(text, str):
+            issues.extend(
+                field + "_" + issue
+                for issue in _stage_scope_issues(text, stage_local)
+            )
+
+    # Keep exact structured result comparison above and protect against
+    # hallucinated IDs/measurements in prose. Unlike the old Stage 4 check,
+    # actual observed intermediate steps, lookup keys and output counts
+    # also authorize a statement; none are drawn from the clean Oracle.
+    observed = contract["observed_operator_steps"]
+    available = (
+        json.dumps(contract["actual_delivered_rows"], ensure_ascii=False)
+        + " " + json.dumps(observed, ensure_ascii=False)
+    )
+    result_tokens = set(_TOKEN.findall(json.dumps(
         contract["actual_delivered_rows"], ensure_ascii=False,
     )))
-    permitted |= {
-        str(contract["total_delivered_rows"]),
+    result_tokens.add(str(contract["total_delivered_rows"]))
+    # Stage 2 normalizes schema names like record_key_1 to "record key 1".
+    # The digit 1 is a FIELD LABEL, not a fabricated numeric observation.
+    # Authorize only actual output/observed schema labels, not arbitrary
+    # numbers from the question or hidden clean WorkProduct.
+    schema_fields = set(contract["output_fields"]) | {
+        field for step in observed
+        for field in step.get("output_schema", [])
+    }
+    result_tokens.update(_TOKEN.findall(
+        " ".join(name.replace("_", " ") for name in schema_fields)
+    ))
+    allowed_tokens = set(_TOKEN.findall(available))
+    allowed_tokens |= result_tokens | {
         str(len(contract["executed_operations_in_order"])),
     }
-    # The task instruction can mention *upstream* identifiers and numbers.
-    # Such terms may be used in summary/trace as context, but result must
-    # describe this attempt's actual deliverable, not the clean target.
-    context_tokens = set(_TOKEN.findall(
+    instruction_tokens = set(_TOKEN.findall(
         contract["assigned_task_instruction"]
     ))
-    for field, value in (("result", normalized), ("summary", summary),
-                         ("trace_summary", trace)):
-        if not isinstance(value, str):
+    for field, text in (
+        ("result", normalized), ("summary", summary),
+        ("trace_summary", trace),
+    ):
+        if not isinstance(text, str):
             continue
-        allowed = permitted if field == "result" else permitted | context_tokens
-        # Traces may name an operator's fixed row count, not invent values.
-        unknown = set(_TOKEN.findall(value)) - allowed
-        if unknown:
+        # A clean upstream identifier may be visible in a preceding
+        # operation, but it must not replace the actually DELIVERED result.
+        allowed = (result_tokens if field == "result"
+                   else allowed_tokens | instruction_tokens)
+        if set(_TOKEN.findall(text)) - allowed:
             issues.append(field + "_unobserved_numeric_or_entity")
-    if not missing and isinstance(normalized, str):
-        identities = set(_ENTITY.findall(json.dumps(
-            contract["actual_delivered_rows"], ensure_ascii=False,
-        )))
-        # A short handoff must not silently switch a reported identity.
-        if len(exact_rows) == 1 and len(identities) == 1:
-            if not identities <= set(_ENTITY.findall(normalized)):
-                issues.append("result_missing_returned_identity")
-        if attempt.status == "partial":
-            unresolved = contract["unresolved_fields"]
-            if unresolved and not any(
-                name.replace("_", " ") in (summary or "").lower()
-                or name in (summary or "")
-                or name in (normalized or "")
-                for name in unresolved
-            ):
-                issues.append("partial_missing_field_not_acknowledged")
+
+    if attempt.status == "partial":
+        missing_fields = contract["unresolved_fields"]
+        descriptive = " ".join(
+            x for x in (normalized, summary, trace)
+            if isinstance(x, str)
+        ).lower()
+        if missing_fields and not any(
+            field in descriptive or field.replace("_", " ") in descriptive
+            for field in missing_fields
+        ) and not any(word in descriptive for word in (
+            "incomplete", "unresolved", "missing", "not returned",
+            "not delivered", "partial",
+        )):
+            issues.append("partial_missing_field_not_acknowledged")
+    if attempt.status == "missing" and contract["observed_operator_steps"]:
+        # Stage-local check on truthful failed-acquisition description.
+        if re.search(r"\b(?:completed|successfully|finished)\b.{0,75}"
+                     r"\b(?:lookup|extraction|search|retrieval)\b",
+                     prose, re.I):
+            issues.append("missing_claims_completed_acquisition")
     return sorted(set(issues))
 
 
@@ -252,14 +326,42 @@ def naturalize_report(task: dict, attempt: Attempt, *,
         except Exception as exc:
             failures.append({"stage": "author_backend", "reason": str(exc)[:200]})
             continue
+        # Stage 2's surface-only normalization removes internal schema
+        # jargon without changing any structured result or evidence claim.
+        if isinstance(candidate, dict):
+            known_fields = set(contract["output_fields"]) | {
+                step["operation"] for step in
+                contract["observed_operator_steps"]
+            }
+            candidate = dict(candidate)
+            for field in ("result", "summary", "trace_summary"):
+                if isinstance(candidate.get(field), str):
+                    revised = _public_field_text(
+                        candidate[field], known_fields,
+                    )
+                    revised, _ = normalize_report_language(revised)
+                    candidate[field] = revised
         issues = _guard(candidate, contract, attempt)
         if issues:
-            failures.append({"stage": "guard", "errors": issues})
+            failures.append({
+                "stage": "guard", "errors": issues,
+                # Private diagnostics: no attempted text is put into the
+                # published Main turn. A mere error count is insufficient
+                # to distinguish false positives from actual invention.
+                "candidate_result": (
+                    str(candidate.get("result"))[:600]
+                    if isinstance(candidate, dict) else None
+                ),
+                "candidate_summary": (
+                    str(candidate.get("summary"))[:600]
+                    if isinstance(candidate, dict) else None
+                ),
+            })
             continue
         # The structured WorkProduct remains in the execution ledger.
         # LLM's structured answer, when supplied, must match exactly and is
         # normalized to Stage-2-style concise readable result prose.
-        result = candidate["result"]
+        result = candidate.get("result")
         if result is not None and not isinstance(result, str):
             result, _ = _normalize_author_result(
                 result,
@@ -275,7 +377,7 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                         "result": result,
                         "summary": candidate["summary"],
                         "trace_summary": candidate["trace_summary"],
-                        "status": candidate["status"],
+                        "status": attempt.status,
                     },
                 }, ensure_ascii=False),
             )
@@ -305,6 +407,9 @@ def naturalize_report(task: dict, attempt: Attempt, *,
             return report, {
                 "status": "accepted", "mode": "llm_reviewed",
                 "attempts": revision + 1,
+                "author_status_ignored": candidate.get("status") is not None,
+                "trace_from_actual_execution":
+                    contract["trace_from_actual_execution"],
                 "review": decision,
                 "actual_workproduct_immutable": True,
             }
