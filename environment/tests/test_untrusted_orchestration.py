@@ -1042,10 +1042,10 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 root / "scenes.jsonl", root / "subtasks.jsonl",
                 root / "episodes.jsonl",
             )
-            scenes.write_text(json.dumps(self.scene) + "\\n")
-            reports.write_text("".join(json.dumps(x) + "\\n"
+            scenes.write_text(json.dumps(self.scene) + "\n")
+            reports.write_text("".join(json.dumps(x) + "\n"
                                        for x in self.reports))
-            episodes.write_text(json.dumps(self.episode) + "\\n")
+            episodes.write_text(json.dumps(self.episode) + "\n")
             with patch("environment.untrusted_orchestration.generate_turns.tqdm",
                        Bar):
                 result = generate_turns(
