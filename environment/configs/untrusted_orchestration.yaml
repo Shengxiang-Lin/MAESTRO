@@ -9,7 +9,8 @@ input:
 
 generation:
   output_dir: environment/data/maestro_untrusted_orchestration_100
-  max_scenes: 30
+  # null = process every Question that has an accepted Stage-3 episode.
+  max_scenes: null
   # null = extract EVERY Main decision round with newly returned feedback.
   # Set an integer only for a small debugging run (chronological round cap).
   branches_per_scene: null
