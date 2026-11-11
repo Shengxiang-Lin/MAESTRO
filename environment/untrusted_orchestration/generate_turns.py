@@ -28,6 +28,8 @@ from .scenario_generator import make_scenario
 from .trajectory_builder import build_branch
 from .offline_pipeline import author_branch_reports, author_branch_main
 from .publication_guard import review_turn_surface
+from .candidate_exploration import expand_all_rounds
+from .candidate_selection import select_recovered_candidates
 
 
 def _jsonl(path: Path) -> list[dict]:
@@ -67,6 +69,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
     code_files = (
         "faults.py", "atomic_faults.py", "report_faults.py",
         "event_scheduler.py", "scenario_generator.py",
+        "candidate_exploration.py", "candidate_selection.py",
         "publication_guard.py",
         "state_machine.py", "report_author.py",
         "trajectory_builder.py", "generate_turns.py",
@@ -589,6 +592,10 @@ def generate_turns(
     atomic_fault_kinds: list[str] | None = None,
     max_fault_atoms: int = 1,
     delayed_evidence_probability: float = 0.0,
+    candidate_strategy: str = "sample_one",
+    max_candidates_per_round: int = 24,
+    max_distractors_per_fault: int = 2,
+    max_selected_per_round: int = 1,
     max_revisions: int = 2,
     report_max_revisions: int | None = None,
     main_max_revisions: int | None = None,
@@ -633,6 +640,17 @@ def generate_turns(
     } or any(output.resolve() == p.parent.resolve() for p in paths):
         raise ValueError("untrusted_output_overwrites_input")
 
+    if candidate_strategy not in {"sample_one", "enumerate"}:
+        raise ValueError("invalid_candidate_strategy")
+    if candidate_strategy == "enumerate" and scenario_mode != "event_driven":
+        raise ValueError("enumeration_requires_event_driven_scenario")
+    for name, value, maximum in (
+        ("max_candidates_per_round", max_candidates_per_round, 128),
+        ("max_distractors_per_fault", max_distractors_per_fault, 10),
+        ("max_selected_per_round", max_selected_per_round, 8),
+    ):
+        if type(value) is not int or not 1 <= value <= maximum:
+            raise ValueError("invalid_" + name)
     modes = list(fault_modes or ["missing", "partial", "wrong"])
     if scenario_mode not in {"round_fork", "event_driven"}:
         raise ValueError("invalid_scenario_mode")
@@ -658,6 +676,10 @@ def generate_turns(
         "atomic_fault_kinds": kinds,
         "max_fault_atoms": max_fault_atoms,
         "delayed_evidence_probability": delayed_evidence_probability,
+        "candidate_strategy": candidate_strategy,
+        "max_candidates_per_round": max_candidates_per_round,
+        "max_distractors_per_fault": max_distractors_per_fault,
+        "max_selected_per_round": max_selected_per_round,
         "multi_target_probability": multi_target_probability,
         "max_rounds": max_rounds, "max_cost": max_cost,
         "max_retries": max_retries, "max_parallel_tasks": max_parallel_tasks,
@@ -690,6 +712,19 @@ def generate_turns(
         max_fault_atoms=max_fault_atoms,
         delayed_evidence_probability=delayed_evidence_probability,
     )
+    base_feedback_round_count = len(planned)
+    if candidate_strategy == "enumerate":
+        # Source-true variants are tested by the executable 4A preflight,
+        # not ranked by LLM preference or arbitrary hallucinated facts.
+        planned = expand_all_rounds(
+            scenes, planned,
+            atomic_fault_kinds=kinds,
+            max_candidates_per_round=max_candidates_per_round,
+            max_distractors_per_fault=max_distractors_per_fault,
+            max_fault_atoms=max_fault_atoms,
+            delayed_evidence_probability=delayed_evidence_probability,
+            seed=seed,
+        )
     if overwrite and output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -715,6 +750,9 @@ def generate_turns(
         "skip_reason": plan["skip_reason"],
         "scenario_mode": plan["scenario_plan"]["mode"],
         "scenario_blueprint": plan["scenario_plan"]["blueprint"],
+        "candidate_variant_index": plan.get("candidate_variant_index"),
+        "candidate_count_total": plan.get("candidate_count_total"),
+        "candidate_count_pruned": plan.get("candidate_count_pruned"),
         "atomic_fault_kinds": [
             a["kind"] for a in plan["scenario_plan"]["fault_atoms"]
         ],
