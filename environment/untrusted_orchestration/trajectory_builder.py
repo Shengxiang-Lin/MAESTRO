@@ -653,6 +653,14 @@ def build_branch(
         or any(x["status"] != "released" for x in scheduler.audit())
     ):
         stopped = "scenario_events_not_realized"
+    # Never advertise a delayed *recovery* if the supposed late evidence
+    # did not expose an actual visible contradiction followed by a real
+    # upstream replacement and downstream invalidation.
+    if (stopped == "recovered"
+            and scenario_plan.get("blueprint")
+                == "delayed_independent_evidence"
+            and (not state.detected_conflicts or not state.invalidations)):
+        stopped = "delayed_blueprint_not_demonstrated"
     # Positive reviewed-turn in LLM mode must be language-reviewed on *both*
     # surfaces. The existing deterministic report remains inspectable
     # as a diagnostic when a review fails, not secretly accepted as an
