@@ -28,6 +28,7 @@ from .state_machine import (
     ExecutionState, deterministic_report, public_history_item,
 )
 from .report_author import naturalize_report
+from .evidence_planning import plan_evidence_batch
 
 
 _MAIN_AUTHOR_SYSTEM = _AUTHOR_SYSTEM + """
@@ -328,6 +329,7 @@ def build_branch(
         "round": branch_round - 1, "authoring": deepcopy(item["report_mode"]),
     } for item in injected]
     main_reviews = []
+    evidence_plan = []
     stopped = None
     final_mode = None
     graph = scene["macro_graph"]
@@ -419,14 +421,22 @@ def build_branch(
         if not batch:
             stopped = "unresolved_dependencies"
             break
-        assignments = [
-            (_repair_assignment(state, tid, catalog=catalog,
-                                model_alias=model_alias)
-             if tid in repairs else
-             _assignment(state.tasks[tid], catalog, state.public_reports,
-                         model_alias=model_alias))
-            for tid in batch
-        ]
+        requests, assignments = plan_evidence_batch(
+            state, batch, round_number=round_number,
+            repairs=repairs, catalog=catalog, model_alias=model_alias,
+        )
+        evidence_plan.append({
+            "round": round_number,
+            "evidence_requests": deepcopy(requests),
+            "dispatch": [{
+                "assignment_id": f"R{round_number:02d}-A{i:02d}",
+                "evidence_request_ids": [item["request_id"]],
+                "execution_binding": item["execution_binding"],
+                "assignment_contract": deepcopy(assignment),
+            } for i, (item, assignment) in
+                enumerate(zip(requests, assignments))],
+            "parallel": len(batch) > 1,
+        })
         history = o1_history(task_entries)
         prompt = o1_prompt(
             scene, task_entries, attempt=round_number,
@@ -556,6 +566,7 @@ def build_branch(
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
         "decision_audit": decisions,
+        "evidence_plan": evidence_plan,
         "subagent_report_reviews": report_reviews,
         "main_action_reviews": main_reviews,
         "completion_generation_mode": final_mode,
