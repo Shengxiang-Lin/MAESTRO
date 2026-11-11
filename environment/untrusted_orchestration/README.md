@@ -73,9 +73,15 @@ For exact V9 random single-scenario behavior, switch
 `candidate_strategy: sample_one`. Do not reuse an old V9 output directory:
 the manifest includes source hashes and the new sampling configuration.
 
-**Files and metrics:** `stage4a/journal/*.json` contains *every* replay.
-`private/candidate_selection.jsonl` contains one acceptance decision
-and actual behavioral category per candidate. `stage4b/journal`,
+**Files and metrics:** `feedback_round_index.jsonl` has exactly one
+row per original accepted feedback round; `round_index.jsonl` indexes
+the expanded trial candidates. `stage4a/journal/*.json` contains
+*every* replay. `private/candidate_selection.jsonl` contains one
+acceptance decision and actual behavioral category per candidate.
+For analysis only, it also separates the private Missing/Partial/Unreliable
+fault family from the actual Main-visible delivery state (e.g.
+`apparently_complete`). Hidden fault categories are never placed into
+the Main prompt. `stage4b/journal`,
 `journal`, `main_turns.jsonl` and `episodes.jsonl` hold reviewed or
 selected outputs. `private/scene_evidence_affordances.jsonl` separately
 audits the original Macro topology for independent source scopes,
