@@ -1387,6 +1387,106 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertTrue(all(x == "report" for x in events[:first_main]))
         self.assertTrue(all(x == "main" for x in events[first_main:]))
 
+    def test_stage4c_freezes_off_target_author_assignments(self):
+        """A fluent off-target Main draft cannot redefine the executor goal."""
+        from environment.base_orchestration.action_author import (
+            author_delegate_action, proposed_template_action,
+        )
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+        _, _, audit = build_branch(
+            self.scene, self.reports, self.episode,
+            branch_round=2, faults=[Fault(tid, "missing")],
+        )
+        expected = [
+            dispatch["assignment_contract"]
+            for dispatch in audit["evidence_plan"][0]["dispatch"]
+        ]
+        self.assertTrue(expected)
+
+        class OffTarget:
+            def complete_json(self, system, request):
+                return {
+                    "action": "delegate_task",
+                    "reasoning": (
+                        "The previous Sub-Agent returned an incomplete "
+                        "observation, so I should delegate the next "
+                        "authorized evidence acquisition now."
+                    ),
+                    "params": {"tasks": [{
+                        "task_instruction": (
+                            "Determine the final winner and score, rather "
+                            "than the evidence explicitly requested by "
+                            "the current dependency."
+                        ),
+                        "context": "The final answer must be obtained now.",
+                        "model": "model_1", "tools": [],
+                    } for _ in expected]},
+                }
+
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        action, status = author_delegate_action(
+            assignments=expected, prompt="User question",
+            author=OffTarget(), critic=Critic(),
+            max_revisions=0, freeze_assignment_prose=True,
+        )
+        self.assertEqual(
+            action["params"],
+            proposed_template_action(expected)["params"],
+        )
+        self.assertNotIn("final winner and score", json.dumps(action))
+        self.assertTrue(status["assignment_contract_frozen"])
+        self.assertEqual(status["authored_fields"], ["reasoning"])
+        self.assertEqual(status["mode"], "llm_reviewed_contract_frozen")
+
+    def test_stage4b_intermediate_numeric_is_not_final_delivered_value(self):
+        from environment.untrusted_orchestration.report_author import (
+            _explicit_final_value_issues, _guard,
+        )
+        delivered = [{
+            "values": {"marker_code": None, "candidate_id": "Case-008"},
+            "source_fact_refs": ["visual:F008"],
+        }]
+        contract = {
+            "output_fields": ["marker_code", "candidate_id"],
+            "actual_delivered_rows": delivered,
+            "observed_operator_steps": [{
+                "operation": "filter_gte", "execution_status": "done",
+                "output_schema": ["marker_code", "frame_time_ms"],
+                "output_row_count": 1, "threshold": 60000,
+                "supporting_fact_refs": ["visual:F008"],
+            }],
+            "total_delivered_rows": 1,
+            "executed_operations_in_order": ["filter_gte"],
+            "assigned_task_instruction": "Inspect the supplied visual records.",
+            "upstream_handoffs": [],
+            "available_provenance_sources": ["visual"],
+            "unresolved_fields": ["marker_code"],
+        }
+        self.assertEqual(
+            _explicit_final_value_issues(
+                "The delivered marker code is unavailable, after the "
+                "observed frame threshold of 60000.", contract,
+            ), [],
+        )
+        self.assertIn(
+            "claimed_final_field_value_not_delivered",
+            _explicit_final_value_issues(
+                "The final marker code: MK-4010.", contract,
+            ),
+        )
+        self.assertIn(
+            "claimed_final_field_value_not_delivered",
+            _explicit_final_value_issues(
+                "The final candidate id = Case-999.", contract,
+            ),
+        )
+
     def test_evidence_request_retargets_missing_and_partial_fields(self):
         from environment.untrusted_orchestration.evidence_planning import (
             evidence_request,
