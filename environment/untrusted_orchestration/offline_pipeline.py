@@ -329,9 +329,17 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                         "task_instruction"
                     ]
                     report["model"] = task_action["model"]
+            prefix = (
+                (audit.get("event_scenario") or {}).get("scenario_id") or ""
+            )
+            sample_id = (
+                prefix + f"-round-{round_number:02d}"
+                if "-candidate-" in prefix else
+                scene["task_id"] +
+                f"-branch-{fork:02d}-round-{round_number:02d}"
+            )
             turns.append({
-                "sample_id": (scene["task_id"] +
-                              f"-branch-{fork:02d}-round-{round_number:02d}"),
+                "sample_id": sample_id,
                 "task_id": scene["task_id"], "round": round_number,
                 "input": {
                     "subtask_history": o1_history(entries),
