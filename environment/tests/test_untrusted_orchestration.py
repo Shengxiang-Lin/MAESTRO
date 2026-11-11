@@ -448,6 +448,123 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertIn("KEY1-96979", rejected["finish_result"]["result"])
         self.assertNotIn("KEY1-94705", rejected["finish_result"]["result"])
 
+    def test_llm_author_preserves_partial_and_missing_status(self):
+        from environment.generate_question.program_ir import Relation
+        task = {
+            "task_id": "read-ledger", "source_ids": ["ledger"],
+            "operator_chain": [{
+                "op": "lookup_by_key", "source_id": "ledger",
+                "input_key_field": "record_key_1",
+                "source_key_field": "record_key_1",
+            }],
+        }
+        class Author:
+            def complete_json(self, system, request):
+                status = json.loads(request)["observed_current_attempt"][
+                    "delivery_status"
+                ]
+                if status == "missing":
+                    return {
+                        "status": "missing", "result": None,
+                        "summary": (
+                            "The assigned attempt ended without a usable "
+                            "result to send back."
+                        ),
+                        "trace_summary": (
+                            "The evidence acquisition finished but no "
+                            "inspectable record was delivered."
+                        ),
+                    }
+                return {
+                    "status": "partial",
+                    "result": (
+                        "The record KEY1-96979 was returned, but its "
+                        "completed count remains unresolved."
+                    ),
+                    "summary": (
+                        "The completed_count field is unresolved although "
+                        "the requested record key was delivered."
+                    ),
+                    "trace_summary": (
+                        "I received the requested record identity without "
+                        "a corresponding completed count value."
+                    ),
+                }
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True,
+                    "useful": True,
+                }
+
+        partial = Attempt(
+            task_id="read-ledger", version=1, status="partial",
+            product=Relation(("record_key_1", "completed_count"), ({
+                "values": {
+                    "record_key_1": "KEY1-96979", "completed_count": None,
+                },
+                "support": ("ledger:F013",),
+            },)),
+            available_fields=("record_key_1",),
+            used_parent_versions={},
+            runtime={"missing_fields": ["completed_count"],
+                     "rows_complete": True},
+        )
+        report, meta = naturalize_report(
+            task, partial, instruction="Read the completed count.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=Critic(),
+        )
+        self.assertEqual(meta["mode"], "llm_reviewed")
+        self.assertEqual(report["finish_result"]["status"], "partial")
+        self.assertIn("KEY1-96979", report["finish_result"]["result"])
+
+        missing = Attempt(
+            task_id="read-ledger", version=2, status="missing",
+            product=None, available_fields=(),
+            used_parent_versions={}, runtime={},
+        )
+        report, meta = naturalize_report(
+            task, missing, instruction="Read the completed count.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=Critic(),
+        )
+        self.assertEqual(meta["mode"], "llm_reviewed")
+        self.assertIsNone(report["finish_result"])
+        self.assertTrue(report["done"])
+        self.assertIn("without a usable", report["trace_summary"])
+
+    def test_stage2_and_stage3_llm_clients_configured_separately(self):
+        instances = []
+        class Backend:
+            def __init__(self, *, model, **kwargs):
+                instances.append(model)
+        with patch(
+            "environment.generate_question.backend.OpenAICompatibleBackend",
+            Backend,
+        ), patch(
+            "environment.untrusted_orchestration.generate_turns.generate_turns",
+            return_value={"status": "done"},
+        ) as writer:
+            generate_from_config(
+                DEFAULT_CONFIG, report_mode="llm", main_mode="template",
+            )
+            self.assertEqual(writer.call_args.kwargs["report_mode"], "llm")
+            self.assertEqual(writer.call_args.kwargs["main_mode"], "template")
+            self.assertIsNotNone(writer.call_args.kwargs["report_author"])
+            self.assertIsNone(writer.call_args.kwargs["author"])
+            self.assertEqual(len(instances), 2)
+            instances.clear()
+            generate_from_config(
+                DEFAULT_CONFIG, report_mode="template", main_mode="llm",
+            )
+            self.assertEqual(writer.call_args.kwargs["main_mode"], "llm")
+            self.assertEqual(writer.call_args.kwargs["report_mode"], "template")
+            self.assertIsNotNone(writer.call_args.kwargs["author"])
+            self.assertIsNone(writer.call_args.kwargs["report_author"])
+            self.assertEqual(len(instances), 2)
+
     def test_journal_resume_positive_publication_and_manifest(self):
         with TemporaryDirectory() as td:
             root = Path(td)
