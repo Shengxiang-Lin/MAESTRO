@@ -3,17 +3,32 @@
 Run from the MAESTRO repository root:
 
 ```bash
-python -m environment generate-untrusted-turns \\
-  --config environment/configs/untrusted_orchestration.yaml \\
-  --mode llm \\
-  --output-dir environment/data/maestro_untrusted_evidence_v4_100
+python -m environment generate-untrusted-turns \
+  --config environment/configs/untrusted_orchestration.yaml \
+  --mode llm \
+  --output-dir environment/data/maestro_untrusted_rounds_v5
 ```
 
 The runner uses the frozen Scene/World/Macro DAG, reviewed Stage-2 reports,
-and accepted Stage-3 base episodes as inputs. It first samples a *round-local*
-fault window: all earlier Main-visible batches remain exactly as originally
-reviewed; one or more reports in the immediately prior returned batch are
-replaced by evidence-grounded missing/partial/wrong observations.
+and accepted Stage-3 base episodes as inputs. **The primary sample unit is
+one existing (Question, Main decision round)**, not a random number of
+branches per Question. For each accepted Stage-3 `delegate_task` batch that
+returned Sub-Agent feedback in round `t-1`, Stage 4A extracts its next Main
+decision point `t`; the clean feedback history before `t-1` is preserved.
+An independently seeded, preflight-executable missing/partial/wrong fault
+is injected into one or more Sub-Agent reports **from that just-returned
+batch**. The simulation then recomputes the evidence needs and full
+continuation from this round. Consequently the same Question may yield
+many independent round samples, one per received batch.
+
+**All available rounds are indexed.** If no configured fault can execute
+at a given round, it remains visible as a skipped round; a future round
+does not silently replace it. The default YAML has `max_scenes: null`
+and `branches_per_scene: null` to cover all accepted Questions and
+feedback rounds. `branches_per_scene` is retained only as an optional
+chronological debugging cap. A `max_rounds` recovery budget below a
+particular Main decision round is recorded as a skipped round rather
+than quietly discarding it.
 
 ## Three real sequential stages
 
@@ -34,15 +49,16 @@ operator or alternative route is fabricated. Completion is evaluated
 privately against frozen Gold but **Gold cannot trigger a VERIFY label**.
 
 **4B — Sub-Agent Feedback Generation (LLM only for Reports).** After *all*
-4A branches have been simulated, naturalize actual returned Attempt traces
+4A round samples have been simulated, naturalize the faulty or newly
+executed Sub-Agent Attempt traces
 from the private ledger. A report sees only its own observed rows, source
 atoms, assigned instruction and execution outcome, not a future attempt or
 clean Gold. Previously accepted clean prefix reports are preserved. Report
 Author/Guard/Critic can revise a failed report without calling Main; fallback
 reports remain explicitly labeled and excluded from positive SFT.
 
-**4C — Main Action Generation (LLM only for Main).** After *all* 4B branches
-have been processed, rebuild cumulative O1 `subtask_history` strictly from
+**4C — Main Action Generation (LLM only for Main).** After *all* 4B
+round samples have been processed, rebuild cumulative O1 `subtask_history` strictly from
 the FINAL reviewed/fallback Sub-Agent reports. Assignments retain 4A's legal
 action count, source permissions, primitive tool routing and evidence goals,
 but refresh parent context from the newly finalized public feedback. A
@@ -51,9 +67,11 @@ contradictory observations were not actually shown to Main. Main Author/Critic
 generate each round's natural O1 delegate/complete action.
 
 Stages are intentionally separated rather than interleaved. The CLI prints
-three sequential progress bars: Stage 4A branches, Stage 4B reports, Stage 4C
-Main actions. Each stage is journaled with an atomic file per branch:
+three sequential progress bars: Stage 4A **rounds**, Stage 4B reports, Stage 4C
+Main actions. Each stage is journaled with an atomic file per round sample:
 
+- `round_index.jsonl`: all extracted (Question, decision-round) identities,
+  received Sub-Agent batch and eligibility/skip reason
 - `stage4a/journal/`: PRIVATE simulated evidence requirements, assignments,
   and complete attempt ledger
 - `stage4b/journal/`: evidence-grounded reviewed Sub-Agent reports
@@ -103,16 +121,23 @@ Main-Agent rollout.
   recovery-specific prose prompts. The deterministic planner still chooses
   every legal target, tool/model routing and parallel batch; LLM never
   changes scheduling decisions or makes a hidden attack label visible.
-- `generate_turns.py`: Multiple independent branch variants per Scene,
-  configurable worker pool, atomic journals, input/code signatures for
-  exact resume and positive-label publication.
+- `generate_turns.py`: Exhaustively enumerates accepted Main feedback
+  rounds per Question, samples a grounded fault within each just-returned
+  batch, then runs the fully sequential 4A/4B/4C workflow with configurable
+  worker pools, per-round atomic journals, input/code signatures for exact
+  resume and positive-label publication.
 
 The public report Author never receives the private fault label, clean
 reference WorkProduct or overall Gold answer. In a wrong-result attempt,
 actual observed (possibly wrong) records are authoritative, while the
 complete frozen Gold remains private for episode outcome evaluation.
 
-The `summary.json` explicitly separates `execution_recovered_branches` and
+The `summary.json` explicitly separates `requested_feedback_rounds`,
+`rounds_with_executable_fault`, `rounds_without_executable_fault`,
+`rounds_skipped_by_recovery_budget` and `rounds_per_question`. Its `status`
+reports whether round generation completed, while `publication_status`
+tracks whether those rounds passed recovery and language review.
+The `summary.json` also separates `execution_recovered_branches` and
 `execution_outcomes` from `recovered`/positive SFT publication. It also
 records `subagent_executor_result_normalized`,
 `subagent_guard_failure_causes` and `subagent_review_failure_stages`.
