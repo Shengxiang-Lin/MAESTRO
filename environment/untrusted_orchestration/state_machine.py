@@ -42,6 +42,9 @@ class ExecutionState:
             tid: [] for tid in self.tasks
         }
         self.public_reports: dict[str, dict] = {}
+        self.public_report_rounds: dict[str, int] = {}
+        self.cross_source_checks_enabled = False
+        self.detected_conflicts: list[dict] = []
         self.total_cost = 0
         self.invalidations: list[dict] = []
 
@@ -257,10 +260,15 @@ class ExecutionState:
             self.public_reports[task_id] = public_report
         return attempt
 
-    def set_public_report(self, task_id: str, report: dict) -> None:
+    def set_public_report(self, task_id: str, report: dict, *,
+                          round_number: int | None = None) -> None:
         if task_id not in self.current:
             raise ValueError("report_for_unexecuted_task")
         self.public_reports[task_id] = report
+        self.public_report_rounds[task_id] = (
+            round_number if round_number is not None
+            else len(self.public_reports)
+        )
 
     def public_status(self, task_id: str) -> str:
         """The *delivered report* can be partial even when outer done=true."""
@@ -519,7 +527,96 @@ class ExecutionState:
                 )
         return None
 
+    def _detect_late_cross_source_conflicts(self) -> None:
+        """A *newly visible* independent report may dispute an old used key.
+
+        The detector reads only delivered report fields and the public DAG
+        schema. It does NOT ask the private clean relation which source
+        was wrong. It targets a previously consumed claim for rechecking,
+        not an oracle-identified corrupted source.
+        """
+        if not self.cross_source_checks_enabled:
+            return
+        for join_task in self.tasks.values():
+            parents = join_task["depends_on"]
+            if len(parents) != 2:
+                continue
+            joins = [
+                step for step in join_task["operator_chain"]
+                if step["op"] == "join"
+            ]
+            if not joins or any(p not in self.public_reports
+                                for p in parents):
+                continue
+            left, right = parents
+            left_key = joins[0]["left_on"]
+            right_key = joins[0]["right_on"]
+            left_values = self._public_field_values(
+                self.public_reports[left], left_key,
+            )
+            right_values = self._public_field_values(
+                self.public_reports[right], right_key,
+            )
+            if (not left_values or not right_values
+                    or left_values & right_values):
+                continue
+            # A delayed conflict concerns a value that was *already
+            # consumed*. Merely observing two disjoint candidate sets
+            # does not justify declaring either source erroneous.
+            used = [
+                tid for tid in parents if (
+                    self.current.get(tid) is not None
+                    and self.current[tid].status == "done"
+                    and any(
+                        child in self.current
+                        and self.current[child].status != "stale"
+                        and self.current[child].used_parent_versions.get(tid)
+                            == self.current[tid].version
+                        for child in self._dependents(tid)
+                    )
+                )
+            ]
+            if not used:
+                continue
+            # Main can reasonably recheck an earlier key that has already
+            # driven downstream work. Selecting a "known wrong" source
+            # from Gold here would be a serious teacher leak.
+            target = min(
+                used, key=lambda tid: (
+                    self.public_report_rounds.get(tid, 0), tid,
+                ),
+            )
+            current = self.current[target]
+            if current.runtime.get("cross_source_recheck_requested"):
+                continue
+            label = left_key.replace("_", " ")
+            issue = (
+                "Two independently returned reports disagree on "
+                + label + ": one lists "
+                + ", ".join(sorted(left_values)[:4])
+                + ", while the other lists "
+                + ", ".join(sorted(right_values)[:4])
+                + ". The earlier key already affected downstream work; "
+                "recheck its entity binding against the cited source."
+            )
+            current.status = "disputed"
+            current.runtime["visible_issue"] = issue
+            current.runtime["cross_source_recheck_requested"] = True
+            self.detected_conflicts.append({
+                "kind": "late_cross_source_key_disagreement",
+                "compared_parent_tasks": list(parents),
+                "recheck_task_id": target,
+                "observed_key_values": {
+                    left: sorted(left_values), right: sorted(right_values),
+                },
+                "at_public_round": max(
+                    self.public_report_rounds.get(p, 0) for p in parents
+                ),
+                "downstream_previously_executed": True,
+            })
+
     def scheduling_state(self) -> dict:
+        self._detect_late_cross_source_conflicts()
         disputed = []
         for tid, item in self.current.items():
             discrepancy = self.visible_discrepancy(tid)
@@ -576,6 +673,8 @@ class ExecutionState:
                 for tid, attempts in self.attempts.items() if attempts
             },
             "invalidations": list(self.invalidations),
+            "detected_conflicts": list(self.detected_conflicts),
+            "public_report_rounds": dict(self.public_report_rounds),
             "total_cost": self.total_cost,
         }
 
