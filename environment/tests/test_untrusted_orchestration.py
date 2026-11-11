@@ -24,7 +24,9 @@ from environment.untrusted_orchestration.generate_turns import (
     generate_turns, _plan_branches,
 )
 from environment.untrusted_orchestration.config import DEFAULT_CONFIG, load_config
-from environment.untrusted_orchestration.state_machine import ExecutionState
+from environment.untrusted_orchestration.state_machine import ExecutionState, Attempt
+from environment.untrusted_orchestration.report_author import naturalize_report
+from environment.untrusted_orchestration.config import generate_from_config
 from environment.generate_question.program_ir import Relation
 
 
@@ -363,6 +365,88 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                     self.scene["macro_graph"]["reference_waves"][
                         plan["branch_round"] - 2],
                 )
+
+    def test_untrusted_subagent_llm_preserves_wrong_record_not_gold(self):
+        task = {
+            "task_id": "faulty-lookup",
+            "source_ids": ["ledger"],
+            "operator_chain": [{
+                "op": "lookup_by_key", "source_id": "ledger",
+                "input_key_field": "record_key_1",
+                "source_key_field": "record_key_1",
+            }],
+        }
+        from environment.generate_question.program_ir import Relation
+        observed = Attempt(
+            task_id="faulty-lookup", version=1, status="done",
+            product=Relation(("record_key_1", "completed_count"), ({
+                "values": {"record_key_1": "KEY1-96979",
+                           "completed_count": 13},
+                "support": ("ledger:F013",),
+            },)),
+            available_fields=("record_key_1", "completed_count"),
+            used_parent_versions={}, runtime={},
+        )
+
+        class Author:
+            def __init__(self, wrong=False):
+                self.wrong = wrong
+                self.payloads = []
+
+            def complete_json(self, system, request):
+                observed_attempt = json.loads(request)[
+                    "observed_current_attempt"
+                ]
+                self.payloads.append(observed_attempt)
+                key = "KEY1-94705" if self.wrong else "KEY1-96979"
+                return {
+                    "result": ("The returned ledger entry " + key +
+                               " has a completed count of 13."),
+                    "summary": (
+                        "I checked the assigned keyed ledger and recorded "
+                        "the returned count for this entry."
+                    ),
+                    "trace_summary": (
+                        "I looked up the record key in the supplied "
+                        "ledger and returned the observed measurement."
+                    ),
+                    "status": observed_attempt["delivery_status"],
+                }
+
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True,
+                    "useful": True,
+                }
+
+        author = Author()
+        report, meta = naturalize_report(
+            task, observed, instruction="Read the returned ledger key.",
+            model_alias="model_1", reviewed=None,
+            author=author, critic=Critic(), max_revisions=0,
+        )
+        self.assertEqual(meta["status"], "accepted")
+        self.assertEqual(meta["mode"], "llm_reviewed")
+        self.assertIn("KEY1-96979", report["finish_result"]["result"])
+        self.assertIn("13", report["finish_result"]["result"])
+        self.assertIn("checked", report["finish_result"]["summary"])
+        self.assertIn("looked up", report["trace_summary"])
+        self.assertNotIn("gold_answer", json.dumps(author.payloads))
+        self.assertNotIn("fault", json.dumps(author.payloads).lower())
+
+        rejected, meta = naturalize_report(
+            task, observed, instruction="Read the returned ledger key.",
+            model_alias="model_1", reviewed=None,
+            author=Author(wrong=True), critic=Critic(), max_revisions=0,
+        )
+        self.assertEqual(meta["status"], "fallback")
+        self.assertEqual(meta["mode"], "grounded_template_fallback")
+        self.assertIn("result_unobserved_numeric_or_entity",
+                      meta["failures"][0]["errors"])
+        self.assertIn("KEY1-96979", rejected["finish_result"]["result"])
+        self.assertNotIn("KEY1-94705", rejected["finish_result"]["result"])
 
     def test_journal_resume_positive_publication_and_manifest(self):
         with TemporaryDirectory() as td:
