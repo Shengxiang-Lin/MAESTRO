@@ -55,19 +55,84 @@ class ExecutionState:
         return affected
 
     def required_parent_fields(self, task: dict, parent: str) -> set[str]:
-        """Conservative field-level readiness inferred from primitive ops."""
+        """Back-propagate field liveness through the operator chain.
+
+        A downstream take/project of an *already sorted* relation may need
+        only the projected label, not the parent's no-longer-used sort key.
+        In contrast, join, filter, sort and aggregation consume additional
+        fields even when those fields are absent from the final output.
+        """
         parent_idx = task["depends_on"].index(parent)
-        visible_schema = set(task["input_schema"]["input_" + str(parent_idx)])
-        referenced = set()
-        for op in task["operator_chain"]:
-            for name in ("field", "left_field", "right_field",
-                         "left_on", "right_on", "input_key_field"):
-                if isinstance(op.get(name), str):
-                    referenced.add(op[name])
-            referenced.update(op.get("fields") or [])
-        # A pure project with no directly mentioned fields on this parent
-        # may still rely on its full upstream row. Safe fallback: block.
-        return referenced & visible_schema or visible_schema
+        # In the frozen Macro IR, external_inputs contains the *actual*
+        # upstream program node ID (e.g. "ordered" or "m3_op02").
+        # input_schema uses "input_0" only as the typed contract label.
+        external = task["external_inputs"][parent_idx]
+        declared = set(task["input_schema"]["input_" + str(parent_idx)])
+        steps = task["operator_chain"]
+        needed = {task["program_node_id"]:
+                  set(task["outputs"]["typed_relation"])}
+        def add(node, fields):
+            needed.setdefault(node, set()).update(fields)
+        for step in reversed(steps):
+            output_need = needed.get(step["id"], set())
+            op = step["op"]
+            inputs = step["inputs"]
+            if not inputs:
+                continue
+            if op in {"project", "take", "sort", "filter_eq", "filter_gte",
+                      "unique", "compare_fields", "lookup_by_key",
+                      "attach_evidence", "derive_comparison",
+                      "derive_percentage", "group_count", "count"}:
+                used = set(output_need)
+                used.update(
+                    step[k] for k in ("field", "left_field", "right_field",
+                                      "input_key_field")
+                    if isinstance(step.get(k), str)
+                )
+                if op == "sort":
+                    used.add(step["field"])
+                if op in {"derive_comparison", "derive_percentage"}:
+                    used.update((step["left_field"], step["right_field"]))
+                if op == "group_count":
+                    used.add(step["field"])
+                if op == "unique":
+                    # A unique operation following project deduplicates
+                    # only projected columns, not every original input field.
+                    # If unique reads the full external relation directly,
+                    # all its columns are semantically relevant.
+                    if inputs[0] == external:
+                        used.update(declared)
+                    else:
+                        producer = next(
+                            (prior for prior in steps
+                             if prior["id"] == inputs[0]),
+                            None,
+                        )
+                        if producer and producer["op"] == "project":
+                            used.update(producer["fields"])
+                if op == "count":
+                    # Count depends on row-set completeness, NOT values of
+                    # unrelated columns. rows_complete is checked in usable().
+                    used.clear()
+                if op == "project":
+                    used &= set(step["fields"])
+                if op == "lookup_by_key":
+                    # New source columns are not inputs; preserve only
+                    # existing upstream fields plus the key.
+                    used = {step["input_key_field"]} | output_need
+                if op == "attach_evidence":
+                    used.discard("evidence_refs")
+                add(inputs[0], used)
+            elif op == "join":
+                # Both inputs are needed for the equality predicate; each
+                # passes through only its own fields.
+                add(inputs[0], output_need | {step["left_on"]})
+                add(inputs[1], output_need | {step["right_on"]})
+            else:
+                # Fail closed for future operators we cannot analyze.
+                for dep in inputs:
+                    add(dep, declared)
+        return needed.get(external, declared) & declared
 
     def usable(self, task_id: str, *, required: set[str] | None = None) -> bool:
         current = self.current.get(task_id)
@@ -76,9 +141,34 @@ class ExecutionState:
         if current.status in {"missing", "disputed", "stale"}:
             return False
         if current.status == "partial":
-            return bool(required is not None and
-                        required <= set(current.available_fields))
+            return (
+                bool(current.runtime.get("rows_complete", True))
+                and required is not None
+                and required <= set(current.available_fields)
+            )
         return True
+
+    def repair_required(self, task_id: str) -> bool:
+        """A partial handoff is repaired only when needed downstream."""
+        item = self.current[task_id]
+        if item.status != "partial":
+            return item.status in {"missing", "disputed", "stale"}
+        if task_id == self.scene["macro_graph"]["terminal_task_id"]:
+            return not self.usable(
+                task_id,
+                required=set(self.tasks[task_id]["outputs"]["typed_relation"]),
+            )
+        for dependent in self.tasks.values():
+            if task_id in dependent["depends_on"] and (
+                dependent["task_id"] not in self.current
+                or self.current[dependent["task_id"]].status == "stale"
+            ):
+                if not self.usable(
+                    task_id,
+                    required=self.required_parent_fields(dependent, task_id),
+                ):
+                    return True
+        return False
 
     def ready(self, task_id: str) -> bool:
         task = self.tasks[task_id]
@@ -154,6 +244,117 @@ class ExecutionState:
             return "missing"
         return str(finish.get("status", "unknown"))
 
+    @staticmethod
+    def _public_text(report: dict) -> str:
+        finish = (report or {}).get("finish_result") or {}
+        return " ".join(
+            str(finish.get(field, "")) for field in ("result", "summary")
+        )
+
+    @staticmethod
+    def _public_field_values(report: dict, field: str) -> set[str]:
+        """Read a field only from the *delivered* result, never Oracle rows.
+
+        Natural Sub-Agent prose often mentions KEY1-94705, while poisoned
+        results contain a JSON list of {values: {...}}. We require explicit,
+        unique identifiers and avoid inventing links from unreported data.
+        """
+        finish = (report or {}).get("finish_result") or {}
+        body = str(finish.get("result", ""))
+        try:
+            parsed = json.loads(body)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        if isinstance(parsed, list):
+            rows = [(row.get("values") if isinstance(row, dict)
+                     and "values" in row else row) for row in parsed]
+            values = {
+                str(row[field]) for row in rows if isinstance(row, dict)
+                and field in row and row[field] is not None
+            }
+            if values:
+                return values
+        text = ExecutionState._public_text(report)
+        patterns = {
+            "record_key_1": r"\bKEY1-\d+\b",
+            "record_key_2": r"\bKEY2-\d+\b",
+            "marker_code": r"\bMK-\d+\b",
+            "candidate_id": r"\bCase-\d+\b",
+            "entry_label": r"\bEntry-\d+\b",
+        }
+        pattern = patterns.get(field)
+        return set(re.findall(pattern, text)) if pattern else set()
+
+    def _visible_lookup_issue(self, task_id: str) -> str | None:
+        task = self.tasks[task_id]
+        lookups = [step for step in task["operator_chain"]
+                   if step["op"] == "lookup_by_key"]
+        if not lookups or len(task["depends_on"]) != 1:
+            return None
+        parent_id = task["depends_on"][0]
+        if parent_id not in self.public_reports:
+            return None
+        result = self.public_reports.get(task_id)
+        for op in lookups:
+            parent_keys = self._public_field_values(
+                self.public_reports[parent_id], op["input_key_field"],
+            )
+            output_keys = self._public_field_values(
+                result, op["source_key_field"],
+            )
+            # When two different field names represent the same key value,
+            # the returned result may expose only the upstream field.
+            if not output_keys:
+                output_keys = self._public_field_values(
+                    result, op["input_key_field"],
+                )
+            if (len(parent_keys) == 1 and len(output_keys) == 1
+                    and parent_keys != output_keys):
+                return (
+                    "The returned keyed lookup identifies " +
+                    next(iter(output_keys)) +
+                    ", while the earlier Sub-Agent supplied the lookup "
+                    "key " + next(iter(parent_keys)) +
+                    ". Verify the record identity before using this result."
+                )
+        return None
+
+    def _visible_passthrough_issue(self, task_id: str) -> str | None:
+        """Detect changed identifiers through public one-row transformations.
+
+        Only applies to source-free transforms (project/filter/take/unique
+        and sorting), and only if both reports explicitly have exactly one
+        value for the same identifier field.
+        """
+        task = self.tasks[task_id]
+        if (task["source_ids"] or len(task["depends_on"]) != 1 or
+                any(step["op"] not in {
+                    "project", "filter_eq", "filter_gte", "take",
+                    "sort", "unique", "attach_evidence",
+                } for step in task["operator_chain"])):
+            return None
+        parent = task["depends_on"][0]
+        if parent not in self.public_reports:
+            return None
+        for field in ("record_key_1", "record_key_2", "marker_code",
+                      "candidate_id", "entry_label"):
+            incoming = self._public_field_values(
+                self.public_reports[parent], field,
+            )
+            outgoing = self._public_field_values(
+                self.public_reports[task_id], field,
+            )
+            if len(incoming) == len(outgoing) == 1 and incoming != outgoing:
+                return (
+                    "The derived report changed " + field + " from " +
+                    next(iter(incoming)) + " to " + next(iter(outgoing)) +
+                    " without a source lookup or transformation that "
+                    "can justify that change."
+                )
+        return None
+
     def visible_discrepancy(self, task_id: str) -> str | None:
         """Find a contradiction using only facts *reported* to Main.
 
@@ -175,6 +376,12 @@ class ExecutionState:
                 report.get("summary", "Some required evidence is missing.")
             )
         task = self.tasks[task_id]
+        lookup_issue = self._visible_lookup_issue(task_id)
+        if lookup_issue:
+            return lookup_issue
+        passthrough_issue = self._visible_passthrough_issue(task_id)
+        if passthrough_issue:
+            return passthrough_issue
         if not any(step["op"] == "join" for step in task["operator_chain"]):
             return None
         parents = task["depends_on"]
@@ -248,7 +455,7 @@ class ExecutionState:
                 # Only *observable* contradictions block descendants.
                 item.status = "disputed"
                 item.runtime["visible_issue"] = discrepancy
-            if item.status in {"stale", "disputed", "missing", "partial"}:
+            if self.repair_required(tid):
                 disputed.append(tid)
         ready, blocked = [], []
         for tid in self.tasks:

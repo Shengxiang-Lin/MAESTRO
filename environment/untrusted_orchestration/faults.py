@@ -208,6 +208,10 @@ def run_attempt(
         return result, {
             "status": "partial",
             "primitive": task["program_node_id"],
+            # Truncating rows is not the same as omitting a field. Even if
+            # the remaining rows contain all fields, counting or selection
+            # over an incomplete set is unsafe.
+            "rows_complete": len(correct.columns) > 1,
             "missing_fields": missing,
             "available_fields": available,
             "source_fact_refs": sorted({
@@ -259,6 +263,53 @@ def run_attempt(
         }),
         **meta,
     }
+
+
+def probe_eligible_fault_modes(
+    scene: dict, modes: list[str],
+) -> dict[str, list[str]]:
+    """Preflight real fault execution before selecting a branch target.
+
+    Execute the clean frozen DAG once and probe each allowed fault at the
+    actual task boundary. Impossible single-field partials, nonexistent
+    distractors and faults that cannot propagate are excluded *before*
+    assigning a mode, rather than being counted as runtime failures.
+    All probes use the frozen World and already computed parent Relations;
+    the probes do not mutate the Scene or any published report.
+    """
+    tasks = {task["task_id"]: task for task in scene["macro_graph"]["tasks"]}
+    clean: dict[str, Relation] = {}
+    eligible: dict[str, list[str]] = {}
+    for wave in scene["macro_graph"]["reference_waves"]:
+        for tid in wave:
+            task = tasks[tid]
+            parents = [clean[p] for p in task["depends_on"]]
+            sources = {sid: scene["world"]["sources"][sid]
+                       for sid in task["source_ids"]}
+            clean[tid], _ = run_attempt(
+                task, parents=parents, sources=sources,
+            )
+            eligible[tid] = []
+            for mode in modes:
+                try:
+                    injected, meta = run_attempt(
+                        task, parents=parents, sources=sources,
+                        fault=Fault(tid, mode),
+                    )
+                except (FaultUnsupported, ProgramError, ValueError,
+                        TypeError, KeyError, IndexError, ZeroDivisionError):
+                    continue
+                if mode == "missing" and injected is not None:
+                    continue
+                if mode == "partial" and meta["status"] != "partial":
+                    continue
+                if mode == "wrong" and (
+                    injected is None
+                    or not _different(injected, clean[tid])
+                ):
+                    continue
+                eligible[tid].append(mode)
+    return eligible
 
 
 def choose_targets(wave: list[str], tasks: dict, *,
