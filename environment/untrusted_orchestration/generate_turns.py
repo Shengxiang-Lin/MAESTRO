@@ -634,7 +634,7 @@ def generate_turns(
         tick()
 
     run_parallel(
-        "Stage 4A evidence simulation", stage_a, "round",
+        "Evidence simulation", stage_a, "round",
         len(planned), sum(saved(stage_a, p) is not None for p in planned),
         simulate, stage="simulation",
     )
@@ -668,7 +668,7 @@ def generate_turns(
         write(stage_b, plan, data)
 
     run_parallel(
-        "Stage 4B Sub-Agent feedback", stage_b, "report",
+        "Sub-Agent feedback", stage_b, "report",
         total_reports, initial_reports, make_reports,
         stage="reports",
     )
@@ -717,7 +717,7 @@ def generate_turns(
         write(journal, plan, data)
 
     run_parallel(
-        "Stage 4C Main orchestration", journal, "action",
+        "Main orchestration", journal, "action",
         total_actions, initial_actions, make_main,
         stage="main",
     )
