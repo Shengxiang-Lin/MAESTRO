@@ -609,9 +609,18 @@ def generate_turns(
     )
     counts_summary = _publish(output, planned)
     summary = {
+        # "status" describes whether all requested round units were
+        # processed. Training-label acceptance is a separate measurement:
+        # an incorrect/unresolved fault scenario is still a FINISHED
+        # simulation, not an unfinished generator job.
         "status": (
-            "done" if counts_summary["recovered"] == len(planned)
+            "done" if counts_summary["completed_branches"] == len(planned)
             else "partial"
+        ),
+        "publication_status": (
+            "all_rounds_accepted"
+            if counts_summary["recovered"] == len(planned)
+            else "filtered_by_recovery_or_language_review"
         ),
         "pipeline": "maestro_untrusted_orchestration_every_feedback_round_v3",
         "mode": ("llm" if main_mode == "llm" or report_mode == "llm"
