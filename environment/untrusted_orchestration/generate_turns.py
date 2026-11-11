@@ -755,6 +755,32 @@ def generate_turns(
     )
     # Explicit, inspectable round index; unsupported feedback rounds are
     # retained instead of disappearing silently from the total.
+    # Two explicit levels of indexing: baseline feedback rounds and
+    # the expanded one-fault trial ledger. Do not call 2,000 trials
+    # "2,000 Main rounds" in a downstream data analysis.
+    feedback_groups = {}
+    for plan in planned:
+        key = (plan["task_id"], plan["branch_round"])
+        if key not in feedback_groups:
+            feedback_groups[key] = {
+                "question_id": plan["task_id"],
+                "main_decision_round": plan["branch_round"],
+                "received_from_delegate_round":
+                    plan["received_from_delegate_round"],
+                "latest_subagent_task_ids": plan["incoming_task_ids"],
+                "candidate_count": 0,
+                "candidate_trial_ids": [],
+                "candidates_pruned_by_cap":
+                    plan.get("candidate_count_pruned", 0),
+            }
+        feedback_groups[key]["candidate_count"] += 1
+        feedback_groups[key]["candidate_trial_ids"].append(
+            plan["sample_id"]
+        )
+    _atomic_jsonl(
+        output / "feedback_round_index.jsonl",
+        list(feedback_groups.values()),
+    )
     _atomic_jsonl(output / "round_index.jsonl", [{
         "round_sample_id": plan["sample_id"],
         "question_id": plan["task_id"],
@@ -1248,6 +1274,9 @@ def generate_turns(
             })
         )),
         "round_index": str(output / "round_index.jsonl"),
+        "feedback_round_index": str(
+            output / "feedback_round_index.jsonl"
+        ),
         "scenes_without_eligible_fault": no_eligible,
         "requested_branches": len(planned),
         "requested_feedback_rounds": base_feedback_round_count,
