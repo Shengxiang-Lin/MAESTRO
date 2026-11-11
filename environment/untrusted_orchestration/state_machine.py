@@ -63,8 +63,11 @@ class ExecutionState:
         fields even when those fields are absent from the final output.
         """
         parent_idx = task["depends_on"].index(parent)
-        external = "input_" + str(parent_idx)
-        declared = set(task["input_schema"][external])
+        # In the frozen Macro IR, external_inputs contains the *actual*
+        # upstream program node ID (e.g. "ordered" or "m3_op02").
+        # input_schema uses "input_0" only as the typed contract label.
+        external = task["external_inputs"][parent_idx]
+        declared = set(task["input_schema"]["input_" + str(parent_idx)])
         steps = task["operator_chain"]
         needed = {task["program_node_id"]:
                   set(task["outputs"]["typed_relation"])}
@@ -92,10 +95,25 @@ class ExecutionState:
                     used.update((step["left_field"], step["right_field"]))
                 if op == "group_count":
                     used.add(step["field"])
-                if op in {"count", "unique"}:
-                    # Counting/uniqueness depends on the whole incoming row
-                    # set and/or all columns, even if output projects less.
-                    used.update(task["input_schema"].get(external, []))
+                if op == "unique":
+                    # A unique operation following project deduplicates
+                    # only projected columns, not every original input field.
+                    # If unique reads the full external relation directly,
+                    # all its columns are semantically relevant.
+                    if inputs[0] == external:
+                        used.update(declared)
+                    else:
+                        producer = next(
+                            (prior for prior in steps
+                             if prior["id"] == inputs[0]),
+                            None,
+                        )
+                        if producer and producer["op"] == "project":
+                            used.update(producer["fields"])
+                if op == "count":
+                    # Count depends on row-set completeness, NOT values of
+                    # unrelated columns. rows_complete is checked in usable().
+                    used.clear()
                 if op == "project":
                     used &= set(step["fields"])
                 if op == "lookup_by_key":
