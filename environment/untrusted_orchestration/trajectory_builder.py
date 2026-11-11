@@ -425,16 +425,22 @@ def build_branch(
             state, batch, round_number=round_number,
             repairs=repairs, catalog=catalog, model_alias=model_alias,
         )
+        # One dispatch can fulfill several atomic evidence requests.
+        # Request IDs and Macro bindings are PRIVATE simulation metadata,
+        # not fields permitted in the Main LLM's assignment prompt.
+        grouped_ids = [
+            item.pop("grouped_request_ids") for item in assignments
+        ]
         evidence_plan.append({
             "round": round_number,
             "evidence_requests": deepcopy(requests),
             "dispatch": [{
                 "assignment_id": f"R{round_number:02d}-A{i:02d}",
-                "evidence_request_ids": [item["request_id"]],
-                "execution_binding": item["execution_binding"],
+                "evidence_request_ids": grouped_ids[i],
+                "execution_binding": {"macro_task_id": tid},
                 "assignment_contract": deepcopy(assignment),
-            } for i, (item, assignment) in
-                enumerate(zip(requests, assignments))],
+            } for i, (tid, assignment) in
+                enumerate(zip(batch, assignments))],
             "parallel": len(batch) > 1,
         })
         history = o1_history(task_entries)
