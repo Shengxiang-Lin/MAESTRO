@@ -224,9 +224,12 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
         json.dumps(contract["actual_delivered_rows"], ensure_ascii=False)
         + " " + json.dumps(observed, ensure_ascii=False)
     )
+    result_tokens = set(_TOKEN.findall(json.dumps(
+        contract["actual_delivered_rows"], ensure_ascii=False,
+    )))
+    result_tokens.add(str(contract["total_delivered_rows"]))
     allowed_tokens = set(_TOKEN.findall(available))
-    allowed_tokens |= {
-        str(contract["total_delivered_rows"]),
+    allowed_tokens |= result_tokens | {
         str(len(contract["executed_operations_in_order"])),
     }
     instruction_tokens = set(_TOKEN.findall(
@@ -238,7 +241,9 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
     ):
         if not isinstance(text, str):
             continue
-        allowed = (allowed_tokens if field == "result"
+        # A clean upstream identifier may be visible in a preceding
+        # operation, but it must not replace the actually DELIVERED result.
+        allowed = (result_tokens if field == "result"
                    else allowed_tokens | instruction_tokens)
         if set(_TOKEN.findall(text)) - allowed:
             issues.append(field + "_unobserved_numeric_or_entity")
