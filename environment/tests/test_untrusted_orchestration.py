@@ -1433,9 +1433,11 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 if "candidate_reasoning_only" in payload:
                     main_review_requests.append(payload)
                     assert "candidate_prose_only" not in payload
-                    assert "task_instruction" not in json.dumps(payload)
-                    assert "context" not in payload.get(
-                        "candidate_reasoning_only", ""
+                    assert "expected_current_evidence_goals" in payload
+                    assert isinstance(payload["candidate_reasoning_only"], str)
+                    assert all(
+                        "target_instruction" not in goal
+                        for goal in payload["expected_current_evidence_goals"]
                     )
                 return {
                     "verdict": "pass", "grounded": True,
