@@ -1160,6 +1160,18 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                                 for req in requests))
             self.assertTrue(all(r["operation"] != "fixed_macro_replay"
                                 for r in requests))
+            for plan in a["private_audit"]["evidence_plan"]:
+                assigned = plan["dispatch"]
+                self.assertEqual(len(assigned),
+                                 len({d["execution_binding"]["macro_task_id"]
+                                      for d in assigned}))
+                self.assertEqual(
+                    {r["request_id"] for r in plan["evidence_requests"]},
+                    {identifier for d in assigned
+                     for identifier in d["evidence_request_ids"]},
+                )
+                self.assertTrue(all(len(r["target_fields"]) == 1
+                                    for r in plan["evidence_requests"]))
             self.assertEqual(
                 len(b["private_audit"]["subagent_report_reviews"]),
                 len(a["private_audit"]["subagent_report_reviews"]),
