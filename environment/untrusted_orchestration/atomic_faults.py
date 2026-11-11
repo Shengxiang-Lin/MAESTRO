@@ -56,6 +56,7 @@ class AtomicFault:
     seed: int = 0
     persistence: str = "once"
     atom_id: str = "F001"
+    variant_index: int = 0
 
     def __post_init__(self) -> None:
         if self.kind not in ATOM_TO_MODE:
@@ -68,6 +69,8 @@ class AtomicFault:
             raise ValueError("invalid_atomic_fault_persistence")
         if type(self.seed) is not int:
             raise ValueError("invalid_atomic_fault_seed")
+        if type(self.variant_index) is not int or self.variant_index < 0:
+            raise ValueError("invalid_atomic_fault_variant")
 
     @property
     def surface(self) -> str:
@@ -80,6 +83,7 @@ class AtomicFault:
             self.task_id, ATOM_TO_MODE[self.kind],
             seed=self.seed, persistence=self.persistence,
             atom_kind=self.kind,
+            variant_index=self.variant_index,
         )
 
     def to_private_dict(self) -> dict:
@@ -93,7 +97,7 @@ def legacy_atom(fault: Fault, *, origin_round: int,
         kind=(fault.atom_kind or LEGACY_TO_ATOM[fault.mode]),
         task_id=fault.task_id, origin_round=origin_round,
         seed=fault.seed, persistence=fault.persistence,
-        atom_id=atom_id,
+        atom_id=atom_id, variant_index=fault.variant_index,
     )
 
 
