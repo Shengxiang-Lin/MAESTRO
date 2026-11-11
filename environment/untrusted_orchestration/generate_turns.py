@@ -272,6 +272,11 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     wrong_visibility_outcomes: dict[str, Counter] = defaultdict(Counter)
     publication_guard_rows = []
     event_outcomes: dict[str, Counter] = defaultdict(Counter)
+    atom_outcomes: dict[str, Counter] = defaultdict(Counter)
+    event_timeline_rows = []
+    invalidations_total = 0
+    late_conflicts_total = 0
+    recovered_after_actual_invalidation = 0
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -297,6 +302,8 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         for mode in {fault.mode for fault in plan["faults"]}:
             mode_outcomes[mode][status] += 1
         event_outcomes[plan["scenario_plan"]["blueprint"]][status] += 1
+        for atom in plan["scenario_plan"]["fault_atoms"]:
+            atom_outcomes[atom["kind"]][status] += 1
         if status == "recovered" and (
             not isinstance(data.get("private_audit"), dict)
             or data["private_audit"].get("parallel_batches_verified") is not True
@@ -326,6 +333,26 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             audit = data["private_audit"]
             audits.append(audit)
             execution_outcomes[audit.get("execution_outcome", audit["outcome"])] += 1
+            runtime = audit.get("runtime") or {}
+            invalidations = runtime.get("invalidations", [])
+            conflicts = runtime.get("detected_conflicts", [])
+            invalidations_total += len(invalidations)
+            late_conflicts_total += len(conflicts)
+            recovered_after_actual_invalidation += (
+                bool(invalidations) and bool(conflicts)
+                and audit.get("execution_outcome") == "recovered"
+            )
+            event_timeline_rows.append({
+                "round_sample_id": plan["sample_id"],
+                "scenario_blueprint": plan["scenario_plan"]["blueprint"],
+                "fault_events_applied": audit.get(
+                    "fault_events_applied", []
+                ),
+                "evidence_events": audit.get("event_timeline", []),
+                "observable_late_conflicts": conflicts,
+                "invalidations": invalidations,
+                "execution_outcome": audit.get("execution_outcome"),
+            })
             if any(f.mode == "wrong" for f in plan["faults"]):
                 # Diagnostic classes refer ONLY to whether the evidence
                 # planner emitted a Main-visible conflict verification.
@@ -449,6 +476,8 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     _atomic_jsonl(output / "private" / "fault_alignment.jsonl", audits)
     _atomic_jsonl(output / "private" / "publication_guard.jsonl",
                   publication_guard_rows)
+    _atomic_jsonl(output / "private" / "event_timeline.jsonl",
+                  event_timeline_rows)
     _atomic_jsonl(output / "private" / "wrong_visibility.jsonl",
                   wrong_visibility_rows)
     _atomic_jsonl(output / "private" / "main_turns_local_review.jsonl",
@@ -504,6 +533,17 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             name: dict(counts)
             for name, counts in sorted(event_outcomes.items())
         },
+        "atomic_fault_outcomes": {
+            name: dict(counts)
+            for name, counts in sorted(atom_outcomes.items())
+        },
+        "actual_downstream_invalidations": invalidations_total,
+        "visible_late_conflicts_detected": late_conflicts_total,
+        "execution_recovered_after_invalidation":
+            recovered_after_actual_invalidation,
+        "event_timeline_diagnostics": str(
+            output / "private" / "event_timeline.jsonl"
+        ),
         "publication_generation_process_leaks": len(
             publication_guard_rows
         ),
