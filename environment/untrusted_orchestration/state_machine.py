@@ -184,6 +184,27 @@ class ExecutionState:
             )) for parent in task["depends_on"]
         )
 
+    def communicated_product(self, task_id: str) -> Relation | None:
+        """Relation actually passed to a downstream Sub-Agent.
+
+        An intentionally fabricated Sub-Agent result can disagree with
+        what its own tool really executed. Downstream consumers use the
+        communicated value, NEVER a hidden clean executor result.
+        """
+        item = self.current[task_id]
+        delivered = item.runtime.get("communicated_rows")
+        if delivered is None:
+            return item.product
+        if item.product is None:
+            raise ValueError("communicated_rows_without_execution")
+        return Relation(
+            item.product.columns,
+            tuple({
+                "values": deepcopy(row["values"]),
+                "support": tuple(row["source_fact_refs"]),
+            } for row in delivered),
+        )
+
     def register(
         self, task_id: str, *, fault: Fault | None = None,
         public_report: dict | None = None,
@@ -193,7 +214,7 @@ class ExecutionState:
         task = self.tasks[task_id]
         if not self.ready(task_id):
             raise ValueError("execution_requires_valid_parent_fields:" + task_id)
-        parents = [self.current[parent].product
+        parents = [self.communicated_product(parent)
                    for parent in task["depends_on"]]
         versions = {
             parent: self.current[parent].version
