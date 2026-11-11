@@ -217,7 +217,8 @@ def generate_from_config(
     # endpoint secrets and local Author/Critic clients never enter public
     # main_turns.jsonl or private fault-alignment metadata.
     for key in (
-        "mode", "author_api_base", "critic_api_base", "temperature",
+        "mode", "main_mode", "report_mode",
+        "author_api_base", "critic_api_base", "temperature",
         "author_max_tokens", "critic_max_tokens", "api_key_env",
         "report_author_api_base", "report_critic_api_base",
         "report_temperature", "report_author_max_tokens",
