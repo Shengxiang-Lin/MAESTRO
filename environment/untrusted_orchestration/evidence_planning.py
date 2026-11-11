@@ -217,3 +217,66 @@ def plan_evidence_batch(state, batch: list[str], *, round_number: int,
         assignment["grouped_request_ids"] = group_ids
         assignments.append(assignment)
     return requests, assignments
+
+
+def schedule_evidence_requests(state, *, repairs: list[str],
+                               ready: list[str], round_number: int,
+                               max_parallel_tasks: int, catalog: dict,
+                               model_alias: str) -> tuple[list[str], list[dict], list[dict]]:
+    """Global evidence-gap-first scheduling over every eligible operation.
+
+    The candidate set derives from the whole DAG and current WorkProducts.
+    An evidence goal, not a Macro identifier, determines urgency; only then
+    are requests mapped into parallel-safe executable Macro adapters.
+    """
+    candidates = list(dict.fromkeys(repairs + ready))
+    if not candidates:
+        return [], [], []
+    goals = {
+        tid: evidence_request(
+            state, tid, round_number=round_number,
+            retry=tid in repairs,
+        ) for tid in candidates
+    }
+    priority = {
+        "verify_conflicting_evidence": 0,
+        "retry_missing_evidence": 1,
+        "complete_partial_evidence": 2,
+        "refresh_dependent_evidence": 3,
+        "recheck_prior_evidence": 4,
+        "retrieve_required_evidence": 5,
+        "derive_from_returned_evidence": 6,
+    }
+    order = {tid: i for i, tid in enumerate(candidates)}
+    # More affected descendants => more global information gain, but never
+    # overturn an earlier correctness-critical verification/repair class.
+    ranked = sorted(candidates, key=lambda tid: (
+        priority.get(goals[tid]["operation"], 99),
+        -len(state._dependents(tid)),
+        -len(goals[tid]["target_fields"]),
+        order[tid],
+    ))
+    selected = []
+    repair_set = set(repairs)
+    for tid in ranked:
+        if len(selected) >= max_parallel_tasks:
+            break
+        if not state.ready(tid):
+            continue
+        # Two tasks can share a round only when neither has a causal
+        # dependency on the other's *new* evidence.
+        if any(tid in state._dependents(rep) for rep in repair_set
+               if rep != tid):
+            continue
+        if any(
+            tid in state._dependents(other)
+            or other in state._dependents(tid)
+            for other in selected
+        ):
+            continue
+        selected.append(tid)
+    requests, assignments = plan_evidence_batch(
+        state, selected, round_number=round_number,
+        repairs=repairs, catalog=catalog, model_alias=model_alias,
+    )
+    return selected, requests, assignments
