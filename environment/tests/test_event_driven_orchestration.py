@@ -202,6 +202,25 @@ class EventEngineTests(unittest.TestCase):
         self.assertEqual(event["task_id"], "C")
         self.assertEqual(event["after_task_id"], "B")
         self.assertEqual(event["earliest_round"], 3)
+        plan = {
+            "index": 0, "scene_index": 0, "task_id": "Q001",
+            "sample_id": "Q001-fork-02", "branch_round": 2,
+            "faults": [Fault("A", "wrong")],
+        }
+        scenario = make_scenario(
+            scene, plan, mode="event_driven",
+            eligible_atoms={"B": ["wrong_retrieval"]},
+            max_fault_atoms=2, delayed_evidence_probability=1.0,
+        )
+        self.assertEqual(len(scenario["fault_atoms"]), 2)
+        self.assertEqual(scenario["fault_atoms"][0]["origin_round"], 1)
+        self.assertEqual(scenario["fault_atoms"][1]["origin_round"], 2)
+        self.assertEqual(
+            scenario["blueprint"], "delayed_independent_evidence"
+        )
+        self.assertEqual(
+            scenario["evidence_events"][0]["task_id"], "C"
+        )
 
     def test_late_conflict_uses_public_reports_and_consumed_version(self):
         state = ExecutionState(self.scene, {})
