@@ -611,7 +611,9 @@ def author_delegate_action(
                 review_payload = {
                     "current_main_visible_prompt": prompt,
                     "expected_current_evidence_goals": [{
-                        "target_fields": item["output_fields"],
+                        "target_fields": item.get(
+                            "focus_fields", item["output_fields"]
+                        ),
                         "needs_upstream": item["needs_upstream"],
                     } for item in assignments],
                     "candidate_reasoning_only": candidate["reasoning"],
