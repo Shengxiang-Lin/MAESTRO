@@ -241,7 +241,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             )
         if data.get("episode") is not None:
             public_episode = deepcopy(data["episode"])
-            # Truth labels belong in private audit, never public SFT.
+            # Truth labels belong in private audit, never public reviewed-turn.
             public_episode.pop("outcome", None)
             public_episode.pop("recovered", None)
             episodes.append(public_episode)
@@ -368,7 +368,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                         "execution_outcome"
                     ),
                     "release_policy": (
-                        "diagnostic_only_never_auto_promote_to_sft"
+                        "diagnostic_only_never_auto_promote_to_reviewed_turns"
                     ),
                 }
                 local_candidates.append(info)
@@ -599,7 +599,7 @@ def generate_turns(
         }
 
     def _progress_bucket(data: dict) -> str:
-        """Execution outcomes are independent of SFT publication review."""
+        """Execution outcomes are independent of reviewed-turn publication review."""
         status = data.get("status", "rejected_validation")
         if status == "recovered":
             return "recovered"
@@ -962,16 +962,16 @@ def generate_turns(
             "One fault injection window per round sample: the latest completed Sub-Agent batch.",
             "Only preflight-executable fault/macro pairs are sampled.",
             "Only publicly observable discrepancies trigger targeted repair labels.",
-            "Clean World/Gold never change; uncorrected counterfactuals are private, not positive SFT.",
+            "Clean World/Gold never change; uncorrected counterfactuals are private, not reviewed turns.",
             "Stage 4A determines evidence requests and an executable global schedule using only Main-visible report justifications.", 
             "4B materializes every actual executed Sub-Agent Attempt before any Stage 4C Main LLM is called.",
             "4C naturalizes 4A's fixed legal scheduling contracts against the finalized Main-visible 4B history.",
             "Template actions are deterministic teacher demonstrations, not online Main-Agent rollouts.",
             "Sub-Agent Author/Critic write full prose for this attempt; status and actual WorkProduct remain code-owned.",
             "Main-Agent Author/Critic only naturalize the program-selected O1 tasks; private state does not enter their prompt.",
-            "LLM-mode fallback reports are diagnostic only, never silently counted as reviewed positive SFT.",
+            "LLM-mode fallback reports are diagnostic only, never silently counted as reviewed positive turns.",
             "4C action task_instruction and context are fixed against the current 4A/4B executable evidence contract; LLM edits only decision reasoning.",
-            "Per-turn local eligibility is diagnostic in private/main_turns_local_review.jsonl; it is never silently merged into globally verified SFT.",
+            "Per-turn local eligibility is diagnostic in private/main_turns_local_review.jsonl; it is never silently merged into globally verified reviewed turns.",
         ],
     }
     _atomic_json(output / "summary.json", summary)
