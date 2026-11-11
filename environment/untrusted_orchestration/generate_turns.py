@@ -351,6 +351,8 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             counters["rejected_validation"]
         ),
         "main_training_turns": len(positive_turns),
+        "reviewed_branches": counters["recovered"],
+        "reviewed_turns": len(positive_turns),
         "local_decisions_reviewed": len(local_candidates),
         "local_decisions_qualified_diagnostic": len(local_qualified),
         "local_decisions_rejected_diagnostic": len(local_rejections),
@@ -595,6 +597,11 @@ def generate_turns(
                 for review in reviews:
                     _review_progress(counts, review.get("authoring") or {})
                 counts["written"] += len(reviews)
+                if stage == "main":
+                    counts["processed"] += len(reviews)
+                    remaining = max(0, action_count(saved(stage_b, plan))
+                                    - len(reviews))
+                    counts["skipped_downstream"] += remaining
         with tqdm(
             total=max(total, initial), initial=initial,
             desc=phase, unit=unit, dynamic_ncols=True,
@@ -620,9 +627,12 @@ def generate_turns(
                     }
                 else:
                     display = {
+                        "processed": counts["processed"],
+                        "planned": total,
                         "accepted": counts["accepted"],
-                        "fallback": counts["fallback"],
                         "failed": counts["failed"],
+                        "skipped_downstream":
+                            counts["skipped_downstream"],
                         "written": counts["written"],
                     }
                 bar.set_postfix(display, refresh=False)
@@ -631,6 +641,8 @@ def generate_turns(
                 with lock:
                     if stage in {"reports", "main"} and status is not None:
                         _review_progress(counts, status)
+                        if stage == "main":
+                            counts["processed"] += 1
                     if bar.total is not None and bar.n + 1 > bar.total:
                         bar.total = bar.n + 1
                     refresh()
@@ -653,6 +665,17 @@ def generate_turns(
                              .get(review_key, []))
                         )
                         counts["written"] += review_count
+                        if stage == "main":
+                            remaining = max(
+                                0, action_count(saved(stage_b, plan))
+                                - review_count
+                            )
+                            counts["skipped_downstream"] += remaining
+                            # Mark planned but not attempted actions as
+                            # accounted-for after the round was persisted.
+                            # This is *not* a reviewed/accepted action.
+                            if remaining:
+                                bar.update(remaining)
                     refresh()
                     bar.refresh()
 
@@ -670,10 +693,13 @@ def generate_turns(
                 ]
                 for future in as_completed(futures):
                     future.result()
-            # A branch can stop early on evidence/LLM validation; the
-            # initial total is a forecast, not a promised number of calls.
+            # Main progress includes explicitly skipped downstream
+            # actions, so its denominator stays at the 4A plan count.
+            # Report counts can vary after a failed sample; allow that
+            # bar to settle on the actual reviewed-report total.
             with lock:
-                bar.total = bar.n
+                if stage != "main":
+                    bar.total = bar.n
                 refresh()
                 bar.refresh()
 
@@ -768,11 +794,13 @@ def generate_turns(
         )
 
     total_actions = sum(action_count(saved(stage_b, p)) for p in planned)
+    # A fully handled round contributes its *entire planned action*
+    # budget to accounted progress, including downstream actions skipped
+    # after a reviewed Main failure. Do not disguise partial coverage by
+    # shrinking the denominator to the number actually authored.
     initial_actions = sum(
-        len((saved(journal, p) or {}).get("private_audit", {})
-            .get("main_action_reviews", []))
-        if (saved(journal, p) or {}).get("private_audit") else 0
-        for p in planned
+        action_count(saved(stage_b, p))
+        for p in planned if saved(journal, p) is not None
     )
 
     def make_main(plan: dict, tick) -> None:
@@ -878,11 +906,11 @@ def generate_turns(
     _atomic_json(output / "summary.json", summary)
     if not no_progress:
         tqdm.write(
-            "Stage 4 branches: "
+            "Evidence rounds: "
             f"{summary['completed_branches']}/{summary['requested_feedback_rounds']} "
             f"| execution recovered={summary['execution_recovered_branches']} "
             f"| incorrect={summary['incorrect']} "
-            f"| reviewed SFT branches={summary['recovered']} "
-            f"| SFT turns={summary['main_training_turns']}"
+            f"| reviewed branches={summary['reviewed_branches']} "
+            f"| reviewed turns={summary['reviewed_turns']}"
         )
     return summary
