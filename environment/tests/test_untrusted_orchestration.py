@@ -621,6 +621,98 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         })
         self.assertTrue(audit["main_action_reviews"])
 
+    def test_end_to_end_dual_llm_review_preserves_program_planner(self):
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+
+        class Author:
+            def complete_json(self, system, request):
+                data = json.loads(request)
+                if "observed_current_attempt" not in data:
+                    return data["reference_action_for_structure_only"]
+                observed = data["observed_current_attempt"]
+                if not observed["finish_result_exists"]:
+                    return {
+                        "result": None,
+                        "summary": (
+                            "The investigation ended without a usable "
+                            "result for the delegated task."
+                        ),
+                        "trace_summary": (
+                            "The assigned evidence acquisition did not "
+                            "produce an inspectable record."
+                        ),
+                        "status": "missing",
+                    }
+                records = observed["actual_delivered_rows"]
+                if len(records) == 1:
+                    values = records[0]["values"]
+                    facts = ", ".join(
+                        str(k).replace("_", " ") + " " + str(v)
+                        for k, v in values.items()
+                    )
+                    result = "The returned observation contains " + facts + "."
+                else:
+                    result = (
+                        "The completed task returned " +
+                        str(observed["total_delivered_rows"]) +
+                        " records for the next investigation."
+                    )
+                summary = (
+                    "I checked the requested records and provided the "
+                    "actual returned findings without further filtering."
+                )
+                if observed["delivery_status"] == "partial":
+                    summary += (
+                        " Still unresolved: " +
+                        ", ".join(observed["unresolved_fields"]) + "."
+                    )
+                return {
+                    "result": result,
+                    "summary": summary,
+                    "trace_summary": (
+                        "I performed the assigned operations and reported "
+                        "their observed result for downstream use."
+                    ),
+                    "status": observed["delivery_status"],
+                }
+
+        class Critic:
+            def complete_json(self, system, request):
+                if "candidate_main_facing_report" in json.loads(request):
+                    return {
+                        "verdict": "pass", "grounded": True,
+                        "scope_preserved": True, "natural": True,
+                        "useful": True,
+                    }
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        episode, turns, audit = build_branch(
+            self.scene, self.reports, self.episode,
+            branch_round=2, faults=[Fault(tid, "missing")],
+            author=Author(), critic=Critic(),
+            report_author=Author(), report_critic=Critic(),
+            main_max_revisions=0, report_max_revisions=0,
+        )
+        self.assertEqual(audit["outcome"], "recovered")
+        self.assertTrue(turns)
+        self.assertTrue(all(
+            review["authoring"]["mode"] == "llm_reviewed"
+            for review in audit["subagent_report_reviews"]
+        ))
+        self.assertTrue(any(
+            review["authoring"]["mode"] == "llm_reviewed"
+            for review in audit["main_action_reviews"]
+        ))
+        self.assertTrue(audit["parallel_batches_verified"])
+        self.assertEqual(episode["trajectory"][-1]["action"], "complete")
+        self.assertTrue(all(
+            set(turn["input"]) == {"subtask_history"}
+            for turn in turns
+        ))
+
     def test_journal_resume_positive_publication_and_manifest(self):
         with TemporaryDirectory() as td:
             root = Path(td)
