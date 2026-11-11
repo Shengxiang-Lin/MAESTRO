@@ -74,7 +74,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "../../orchestra/base_main_agent.py",
     )
     return {
-        "version": "maestro.untrusted_orchestration.evidence_offline.v2",
+        "version": "maestro.untrusted_orchestration.every_feedback_round.v3",
         "input_sha256": [_hash_file(path) for path in inputs],
         "source_code_sha256": {
             name: _hash_file(directory / name) for name in code_files
@@ -85,14 +85,29 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
 
 def _plan_branches(
     scenes: list[dict], base: dict[str, dict],
-    *, branches_per_scene: int, seed: int,
+    *, branches_per_scene: int | None = None, seed: int,
     fault_modes: list[str], persistence: str,
     multi_target_probability: float,
     max_rounds: int,
 ) -> tuple[list[dict], int, int]:
-    """Sample only executable last-batch faults, retaining mode diversity."""
+    """Expand EVERY accepted Main feedback round into one fault scenario.
+
+    The unit is (question, Main decision round), *not* a randomly sampled
+    number of branches per Question. A decision round t receives the latest
+    Sub-Agent batch returned from delegate round t-1. Every such available
+    round is retained in the plan, even when no admissible fault exists;
+    those rounds produce explicit skipped_unsupported journals.
+
+    `branches_per_scene` is an optional *debugging cap* for compatibility
+    with prior callers. None means no cap; the production YAML uses None.
+    The max_rounds budget also limits the global round positions.
+    """
+    if branches_per_scene is not None and (
+        type(branches_per_scene) is not int or branches_per_scene < 1
+    ):
+        raise ValueError("invalid_debug_round_cap")
     planned, no_base, no_eligible = [], 0, 0
-    for i, scene in enumerate(scenes):
+    for scene_index, scene in enumerate(scenes):
         episode = base.get(scene["task_id"])
         if episode is None:
             no_base += 1
@@ -101,64 +116,89 @@ def _plan_branches(
             row for row in episode["trajectory"]
             if row["action"] == "delegate_task"
         ]
-        rounds = list(range(2, min(len(delegates) + 1, max_rounds) + 1))
+        waves = scene["macro_graph"]["reference_waves"]
+        # Check every trusted returned batch against the actual global DAG
+        # rather than silently producing incorrect unit/position labels.
+        if len(delegates) > len(waves):
+            raise ValueError("trusted_delegate_exceeds_reference_waves")
+        rounds = []
+        for index, delegate in enumerate(delegates):
+            expected = index + 1
+            if delegate.get("attempt") != expected:
+                raise ValueError("trusted_delegate_round_alignment_invalid")
+            results = (delegate.get("result") or {}).get("subtask_results")
+            if not isinstance(results, list) or len(results) != len(waves[index]):
+                raise ValueError("trusted_returned_batch_alignment_invalid")
+            decision_round = expected + 1
+            if decision_round <= max_rounds:
+                rounds.append((decision_round, delegate))
+        if branches_per_scene is not None:
+            # A diagnostic cap uses *chronological rounds*, not random
+            # selection. Production never caps coverage at two branches.
+            rounds = rounds[:branches_per_scene]
         if not rounds:
             no_eligible += 1
             continue
+
         eligible = probe_eligible_fault_modes(scene, fault_modes)
-        waves = scene["macro_graph"]["reference_waves"]
-        tasks = {a["task_id"]: a for a in scene["macro_graph"]["tasks"]}
-        rng = random.Random(seed + i * 1009)
-        rng.shuffle(rounds)
-        picked_rounds = set()
-        added = 0
-        for slot in range(min(branches_per_scene, len(rounds))):
-            # Rotate the preferred mode, but search for an *actually
-            # executable* mode rather than trying a doomed random target.
-            priority = [
-                fault_modes[(i + slot + offset) % len(fault_modes)]
-                for offset in range(len(fault_modes))
+        tasks = {task["task_id"]: task
+                 for task in scene["macro_graph"]["tasks"]}
+        eligible_count = 0
+        for decision_round, previous_delegate in rounds:
+            wave = waves[decision_round - 2]
+            available_modes = [
+                mode for mode in fault_modes
+                if any(mode in eligible.get(tid, []) for tid in wave)
             ]
-            chosen = None
-            for mode in priority:
-                for decision_round in rounds:
-                    if decision_round in picked_rounds:
-                        continue
-                    wave = waves[decision_round - 2]
-                    supported = [tid for tid in wave
-                                 if mode in eligible.get(tid, [])]
-                    if not supported:
-                        continue
-                    chosen = (mode, decision_round, supported)
-                    break
-                if chosen is not None:
-                    break
-            if chosen is None:
-                break
-            mode, decision_round, supported = chosen
-            multitarget = (rng.random() < multi_target_probability
-                           and len(supported) > 1)
-            targets = choose_targets(
-                supported, tasks, seed=seed + i * 103 + slot,
-                multiple=multitarget,
-            )
-            faults = [
-                Fault(task_id=tid, mode=mode,
-                      seed=seed + i * 103 + slot,
-                      persistence=persistence)
-                for tid in targets
-            ]
+            # Independent deterministic randomness per (question, round)
+            # means adding/removing another round cannot perturb this one.
+            round_seed = seed + scene_index * 1009 + decision_round * 92821
+            rng = random.Random(round_seed)
+            faults = []
+            skip_reason = None
+            chosen_mode = None
+            if available_modes:
+                chosen_mode = rng.choice(available_modes)
+                supported = [
+                    tid for tid in wave if chosen_mode in eligible.get(tid, [])
+                ]
+                multiple = (
+                    rng.random() < multi_target_probability
+                    and len(supported) > 1
+                )
+                chosen_targets = choose_targets(
+                    supported, tasks, seed=round_seed, multiple=multiple,
+                )
+                faults = [
+                    Fault(task_id=tid, mode=chosen_mode,
+                          seed=round_seed, persistence=persistence)
+                    for tid in chosen_targets
+                ]
+                eligible_count += 1
+            else:
+                skip_reason = "no_executable_fault_on_returned_batch"
+
             planned.append({
-                "index": len(planned), "scene_index": i,
+                "index": len(planned),
+                "unit": "main_feedback_round",
+                "sample_id": (
+                    scene["task_id"] + f"-fork-round-{decision_round:02d}"
+                ),
+                "scene_index": scene_index,
                 "task_id": scene["task_id"],
-                "branch_round": decision_round, "faults": faults,
+                "branch_round": decision_round,
+                "received_from_delegate_round": decision_round - 1,
+                "incoming_task_ids": list(wave),
+                "incoming_subtask_count": len(
+                    previous_delegate["result"]["subtask_results"]
+                ),
+                "fault_mode": chosen_mode,
+                "faults": faults,
+                "skip_reason": skip_reason,
             })
-            picked_rounds.add(decision_round)
-            added += 1
-        if not added:
+        if not eligible_count:
             no_eligible += 1
     return planned, no_base, no_eligible
-
 
 def _publish(output: Path, planned: list[dict]) -> dict:
     journals = output / "journal"
@@ -272,7 +312,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
 def generate_turns(
     *, scenes_path: Path, reports_path: Path, base_episodes_path: Path,
     output_dir: Path,
-    max_scenes: int | None = 30, branches_per_scene: int = 2,
+    max_scenes: int | None = 30, branches_per_scene: int | None = None,
     seed: int = 17, fault_modes: list[str] | None = None,
     persistence: str = "once", multi_target_probability: float = 0.0,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
@@ -296,6 +336,10 @@ def generate_turns(
         raise FileNotFoundError("untrusted_requires_frozen_scenes_reports_base")
     if type(workers) is not int or not 1 <= workers <= 64:
         raise ValueError("untrusted_workers_invalid")
+    if branches_per_scene is not None and (
+        type(branches_per_scene) is not int or branches_per_scene < 1
+    ):
+        raise ValueError("untrusted_invalid_round_debug_cap")
     if bool(author) != bool(critic) or bool(report_author) != bool(report_critic):
         raise ValueError("untrusted_author_and_critic_must_be_paired")
     if main_mode is None:
@@ -362,6 +406,20 @@ def generate_turns(
         raise ValueError("untrusted_existing_output_without_manifest")
     else:
         _atomic_json(manifest, signature)
+    # Explicit, inspectable round index; unsupported feedback rounds are
+    # retained instead of disappearing silently from the total.
+    _atomic_jsonl(output / "round_index.jsonl", [{
+        "round_sample_id": plan["sample_id"],
+        "question_id": plan["task_id"],
+        "main_decision_round": plan["branch_round"],
+        "received_from_delegate_round":
+            plan["received_from_delegate_round"],
+        "latest_subagent_task_ids": plan["incoming_task_ids"],
+        "latest_subagent_count": plan["incoming_subtask_count"],
+        "fault_eligible": not bool(plan["skip_reason"]),
+        "skip_reason": plan["skip_reason"],
+    } for plan in planned])
+
     # Three genuine phases with separate signed, resumable artifacts.
     # 4A: zero model calls; Global execution + Main-visible constrained
     #     evidence requests and ordered task attempts.
@@ -421,6 +479,17 @@ def generate_turns(
 
     def simulate(plan: dict, tick) -> None:
         scene = scenes[plan["scene_index"]]
+        if plan["skip_reason"]:
+            write(stage_a, plan, {
+                "task_id": scene["task_id"],
+                "round_sample_id": plan["sample_id"],
+                "fork_round": plan["branch_round"],
+                "status": "skipped_unsupported",
+                "error": plan["skip_reason"],
+                "episode": None, "turns": [], "private_audit": None,
+            })
+            tick()
+            return
         try:
             episode, _, audit = build_branch(
                 scene, rows_by_scene[scene["task_id"]],
@@ -436,6 +505,8 @@ def generate_turns(
             )
             data = {
                 "task_id": scene["task_id"],
+                "round_sample_id": plan["sample_id"],
+                "fork_round": plan["branch_round"],
                 "status": audit["execution_outcome"],
                 "episode": episode, "turns": [],
                 "private_audit": audit,
@@ -446,7 +517,7 @@ def generate_turns(
         tick()
 
     run_parallel(
-        "Stage 4A evidence simulation", stage_a, "branch",
+        "Stage 4A evidence simulation", stage_a, "round",
         len(planned), sum(saved(stage_a, p) is not None for p in planned),
         simulate,
     )
@@ -537,15 +608,31 @@ def generate_turns(
             "done" if counts_summary["recovered"] == len(planned)
             else "partial"
         ),
-        "pipeline": "maestro_untrusted_orchestration_evidence_offline_v2",
+        "pipeline": "maestro_untrusted_orchestration_every_feedback_round_v3",
         "mode": ("llm" if main_mode == "llm" or report_mode == "llm"
                  else "template"),
         "subagent_report_mode": report_mode,
         "main_action_mode": main_mode,
         "input_scenes": len(scenes),
         "scenes_without_accepted_base": no_base,
+        "round_sampling_unit": "question_x_main_feedback_round",
+        "rounds_extracted_from_base": len(planned),
+        "rounds_with_executable_fault": sum(
+            not plan["skip_reason"] for plan in planned
+        ),
+        "rounds_without_executable_fault": sum(
+            bool(plan["skip_reason"]) for plan in planned
+        ),
+        "questions_with_extracted_rounds": len({
+            plan["task_id"] for plan in planned
+        }),
+        "rounds_per_question": dict(Counter(
+            plan["task_id"] for plan in planned
+        )),
+        "round_index": str(output / "round_index.jsonl"),
         "scenes_without_eligible_fault": no_eligible,
         "requested_branches": len(planned),
+        "requested_feedback_rounds": len(planned),
         **counts_summary,
         "stage4a_evidence_plans": str(output / "stage4a" / "journal"),
         "stage4b_reviewed_reports": str(output / "stage4b" / "journal"),
@@ -555,7 +642,8 @@ def generate_turns(
             output / "private" / "fault_alignment.jsonl"
         ),
         "limitations": [
-            "One fault injection window per branch: the latest completed Sub-Agent batch.",
+            "Every accepted base Main decision round that receives a prior Sub-Agent batch is extracted, except an explicit debug cap or max-rounds cutoff.",
+            "One fault injection window per round sample: the latest completed Sub-Agent batch.",
             "Only preflight-executable fault/macro pairs are sampled.",
             "Only publicly observable discrepancies trigger targeted repair labels.",
             "Clean World/Gold never change; uncorrected counterfactuals are private, not positive SFT.",
@@ -572,7 +660,7 @@ def generate_turns(
     if not no_progress:
         tqdm.write(
             "Stage 4 branches: "
-            f"{summary['completed_branches']}/{summary['requested_branches']} "
+            f"{summary['completed_branches']}/{summary['requested_feedback_rounds']} "
             f"| execution recovered={summary['execution_recovered_branches']} "
             f"| incorrect={summary['incorrect']} "
             f"| reviewed SFT branches={summary['recovered']} "
