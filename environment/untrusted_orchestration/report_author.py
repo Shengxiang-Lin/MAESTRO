@@ -601,7 +601,7 @@ def naturalize_report(task: dict, attempt: Attempt, *,
             try:
                 decision = critic.complete_json(
                     _CRITIC_SYSTEM + (
-                        "\\nSECOND REVIEW: Distinguish the authoritative "
+                        "\nSECOND REVIEW: Distinguish the authoritative "
                         "final actual_delivered_rows from earlier intermediate "
                         "operator outputs and sampled evidence atoms. "
                         "A returned value may differ from an intermediate; "
@@ -609,7 +609,7 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                         "Check whether the report claims verification or "
                         "only faithfully describes the return. If its "
                         "summary invents a successful match or operation, "
-                        "still FAIL. Do not auto-pass this review.\\n"
+                        "still FAIL. Do not auto-pass this review.\n"
                     ),
                     json.dumps({
                         "observed_current_attempt": contract,
