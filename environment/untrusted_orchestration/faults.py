@@ -27,12 +27,28 @@ class Fault:
     mode: str                         # missing | partial | wrong
     seed: int = 0
     persistence: str = "once"        # once | same_path
+    # Typed atomic fault; None preserves legacy wrong-join/row priority.
+    atom_kind: str | None = None
 
     def __post_init__(self):
-        if self.mode not in {"missing", "partial", "wrong"}:
+        if self.mode not in {"missing", "partial", "wrong", "report"}:
             raise ValueError("unsupported_fault_mode")
         if self.persistence not in {"once", "same_path"}:
             raise ValueError("unsupported_fault_persistence")
+        types = {
+            "missing": {"no_result"},
+            "partial": {"incomplete_retrieval"},
+            "wrong": {
+                "wrong_retrieval", "wrong_entity_binding",
+                "legacy_wrong_evidence",
+            },
+            "report": {
+                "report_missing", "fabricated_claim",
+                "result_summary_conflict",
+            },
+        }
+        if self.atom_kind is not None and self.atom_kind not in types[self.mode]:
+            raise ValueError("fault_mode_atom_kind_mismatch")
 
 
 def relation_rows(product: Relation | None) -> list[dict]:
@@ -133,6 +149,29 @@ def _wrong_row(
         "primitive": step["id"], "kind": "selected_real_distractor",
         "source_fact_refs": list(refs),
     }
+
+
+def _report_fault_payload(clean: Relation, sources: dict) -> dict | None:
+    """Find a REAL same-field distractor from the task's granted sources."""
+    clean_values = {
+        field: {str(row["values"].get(field)) for row in clean.rows}
+        for field in clean.columns
+    }
+    for sid, source in sorted(sources.items()):
+        for obs in source.get("observations", []):
+            for field in clean.columns:
+                if field not in obs["values"]:
+                    continue
+                candidate = obs["values"][field]
+                if (candidate is None or
+                        str(candidate) in clean_values[field]):
+                    continue
+                return {
+                    "field": field, "replacement": candidate,
+                    "source_id": sid,
+                    "source_fact_refs": list(obs.get("fact_refs", [])),
+                }
+    return None
 
 
 def _observed_step(step: dict, product: Relation, *,
@@ -254,6 +293,27 @@ def run_attempt(
             }),
         }
 
+    if fault.mode == "report":
+        kind = fault.atom_kind
+        if kind is None:
+            raise FaultUnsupported("report_atom_requires_kind")
+        payload = (None if kind == "report_missing"
+                   else _report_fault_payload(correct, sources))
+        if kind != "report_missing" and payload is None:
+            raise FaultUnsupported("no_real_report_distractor")
+        return correct, {
+            "status": "done", "available_fields": list(correct.columns),
+            "primitive": None,
+            "observed_operator_steps": trace(clean_steps),
+            "source_fact_refs": sorted({
+                ref for row in correct.rows for ref in row["support"]
+            }),
+            "report_fault_kind": kind,
+            "report_fault_payload": payload,
+            # This is private attack metadata, NOT a Main-visible
+            # declaration that the delivered report must be disbelieved.
+        }
+
     if fault.mode == "missing":
         from environment.implement_subtask.realize import _describe_operation
         index = next((
@@ -317,13 +377,24 @@ def run_attempt(
             }),
         }
 
-    ordered = [
-        (step, relation) for step, relation in clean_steps
-        if step["op"] == "join"
-    ] + [
-        (step, relation) for step, relation in reversed(clean_steps)
-        if step["op"] != "join"
-    ]
+    if fault.atom_kind == "wrong_entity_binding":
+        ordered = [
+            (step, relation) for step, relation in clean_steps
+            if step["op"] == "join"
+        ]
+    elif fault.atom_kind == "wrong_retrieval":
+        ordered = [
+            (step, relation) for step, relation in reversed(clean_steps)
+            if step["op"] != "join"
+        ]
+    else:
+        ordered = [
+            (step, relation) for step, relation in clean_steps
+            if step["op"] == "join"
+        ] + [
+            (step, relation) for step, relation in reversed(clean_steps)
+            if step["op"] != "join"
+        ]
     chosen = None
     for step, relation in ordered:
         altered = (_wrong_join(step, prefix, relation)
