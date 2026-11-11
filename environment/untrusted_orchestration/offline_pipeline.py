@@ -204,7 +204,6 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                                if req["request_id"] in
                                dispatch["evidence_request_ids"])
                     )[:3500]
-                    current["evidence_request_id"] = planned["evidence_request_id"]
                     assignments.append(current)
                 action, status = author_delegate_action(
                     assignments=assignments, prompt=prompt,
