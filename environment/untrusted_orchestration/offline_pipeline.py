@@ -16,7 +16,7 @@ from environment.base_orchestration.action_author import (
     _assignment, author_delegate_action, author_complete_action,
 )
 from environment.base_orchestration.o1_compat import (
-    o1_prompt, source_catalog,
+    o1_prompt, o1_history, source_catalog,
 )
 from environment.base_orchestration.trajectory_builder import _strict_reports
 from environment.generate_question.program_ir import Relation
@@ -124,6 +124,18 @@ def _visibility_issues(requests: list[dict], public_history: str) -> list[str]:
                 "did not produce",
             )):
                 missing.append(request["request_id"] + ":missing_status")
+        if request["operation"] == "verify_conflicting_evidence":
+            # The discrepancy label cannot be emitted just because the
+            # private simulator noticed different rows. All concrete
+            # identifiers used to justify VERIFY must still be visible.
+            from .evidence_planning import _IDENT
+            for identifier in _IDENT.findall(
+                request["main_visible_justification"]
+            ):
+                if identifier.casefold() not in visible:
+                    missing.append(
+                        request["request_id"] + ":unseen_conflict:" + identifier
+                    )
     return missing
 
 
@@ -241,10 +253,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                               f"-branch-{fork:02d}-round-{round_number:02d}"),
                 "task_id": scene["task_id"], "round": round_number,
                 "input": {
-                    "subtask_history": __import__(
-                        "environment.base_orchestration.o1_compat",
-                        fromlist=["o1_history"],
-                    ).o1_history(entries),
+                    "subtask_history": o1_history(entries),
                 },
                 "output": deepcopy(action),
                 "generation_mode": status["mode"],
