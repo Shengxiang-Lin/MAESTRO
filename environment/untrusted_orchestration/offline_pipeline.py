@@ -13,7 +13,8 @@ import json
 from typing import Callable
 
 from environment.base_orchestration.action_author import (
-    _assignment, author_delegate_action, author_complete_action,
+    _assignment, proposed_template_action,
+    author_delegate_action, author_complete_action,
 )
 from environment.base_orchestration.o1_compat import (
     o1_prompt, o1_history, source_catalog,
@@ -223,7 +224,18 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                     max_revisions=max_revisions,
                     author_system=_MAIN_AUTHOR_SYSTEM,
                     critic_system=_MAIN_CRITIC_SYSTEM,
+                    freeze_assignment_prose=True,
                 )
+                # The final Main instruction/context must be exactly the
+                # field-and-source-scoped 4A contract rebuilt against FINAL
+                # 4B evidence, even if a fluent LLM drafted an unrelated
+                # task objective. Never mutate the contract to fit the LLM.
+                if action is not None and action.get("params") != (
+                    proposed_template_action(assignments)["params"]
+                ):
+                    raise ValueError(
+                        "stage4c_evidence_assignment_semantic_drift"
+                    )
             else:
                 expected = _completion_from_visible(step, latest, scene)
                 action, status = author_complete_action(
@@ -300,6 +312,11 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
         outcome = "language_review_unaccepted"
     else:
         outcome = execution_outcome
+    # Preserve each individually reviewed Main decision in the PRIVATE
+    # per-round audit even when a later report or terminal result invalidates
+    # the complete branch. The publisher may review *local* decisions
+    # separately, but cannot silently promote them to globally correct SFT.
+    audit["candidate_local_turns"] = deepcopy(turns)
     audit["main_action_reviews"] = reviews
     audit["outcome"] = outcome
     audit["language_review_accepted"] = (

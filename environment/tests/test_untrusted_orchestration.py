@@ -598,6 +598,89 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertIn("KEY1-96979", rejected["finish_result"]["result"])
         self.assertNotIn("KEY1-94705", rejected["finish_result"]["result"])
 
+    def test_4b_critic_boundary_rereview_does_not_rewrite_results(self):
+        from environment.generate_question.program_ir import Relation
+        task = {
+            "task_id": "lookup-record",
+            "source_ids": ["index"],
+            "operator_chain": [{
+                "op": "lookup_by_key", "source_id": "index",
+                "input_key_field": "record_key_1",
+                "source_key_field": "record_key_1",
+            }],
+        }
+        attempt = Attempt(
+            task_id="lookup-record", version=1, status="done",
+            product=Relation(("record_key_1", "completed_count"), ({
+                "values": {
+                    "record_key_1": "KEY1-96979",
+                    "completed_count": 13,
+                }, "support": ("index:F013",),
+            },)),
+            available_fields=("record_key_1", "completed_count"),
+            used_parent_versions={}, runtime={},
+        )
+
+        class Author:
+            def complete_json(self, system, request):
+                return {
+                    "result": (
+                        "The returned ledger entry KEY1-96979 has a "
+                        "completed count of 13."
+                    ),
+                    "summary": (
+                        "The supplied ledger returned this observation "
+                        "without an independent source check."
+                    ),
+                    "trace_summary": (
+                        "I examined the assigned keyed record and "
+                        "reported the fields actually delivered."
+                    ),
+                }
+
+        class Critic:
+            def __init__(self, second_pass):
+                self.calls = 0
+                self.second_pass = second_pass
+            def complete_json(self, system, request):
+                self.calls += 1
+                if "SECOND REVIEW" in system and self.second_pass:
+                    return {
+                        "verdict": "pass", "grounded": True,
+                        "scope_preserved": True, "natural": True,
+                        "useful": True,
+                    }
+                return {
+                    "verdict": "fail", "grounded": False,
+                    "scope_preserved": False, "natural": True,
+                    "useful": False,
+                    "reason": (
+                        "An intermediate lookup allegedly showed another "
+                        "key, so the final delivered value should be "
+                        "replaced with the earlier observation."
+                    ),
+                }
+
+        critic = Critic(second_pass=True)
+        report, meta = naturalize_report(
+            task, attempt, instruction="Read the assigned ledger record.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=critic, max_revisions=0,
+        )
+        self.assertEqual(critic.calls, 2)
+        self.assertEqual(meta["mode"], "llm_reviewed")
+        self.assertTrue(meta["critic_boundary_rereviewed"])
+        self.assertIn("KEY1-96979", report["finish_result"]["result"])
+
+        rejecting = Critic(second_pass=False)
+        _, failed = naturalize_report(
+            task, attempt, instruction="Read the assigned ledger record.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=rejecting, max_revisions=0,
+        )
+        self.assertEqual(rejecting.calls, 2)
+        self.assertEqual(failed["mode"], "grounded_template_fallback")
+
     def test_llm_author_preserves_partial_and_missing_status(self):
         from environment.generate_question.program_ir import Relation
         task = {
@@ -893,6 +976,27 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             self.assertEqual(summary["fault_mode_outcomes"]["missing"],
                              {"recovered": 1})
             self.assertGreater(summary["main_training_turns"], 0)
+            self.assertGreaterEqual(
+                summary["local_decisions_qualified_diagnostic"],
+                summary["main_training_turns"],
+            )
+            self.assertEqual(
+                summary["local_decisions_reviewed"],
+                summary["local_decisions_qualified_diagnostic"]
+                + summary["local_decisions_rejected_diagnostic"],
+            )
+            diagnostic = root / "output" / "private" / "main_turns_local_review.jsonl"
+            self.assertTrue(diagnostic.is_file())
+            self.assertEqual(
+                len(diagnostic.read_text(encoding="utf-8").splitlines()),
+                summary["local_decisions_reviewed"],
+            )
+            self.assertEqual(
+                summary["execution_recovered_branches"], 1,
+            )
+            self.assertEqual(
+                summary["execution_unresolved_branches"], 0,
+            )
             self.assertEqual(summary["round_sampling_unit"],
                              "question_x_main_feedback_round")
             self.assertEqual(summary["requested_feedback_rounds"], 1)
@@ -1386,6 +1490,106 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         first_main = events.index("main")
         self.assertTrue(all(x == "report" for x in events[:first_main]))
         self.assertTrue(all(x == "main" for x in events[first_main:]))
+
+    def test_stage4c_freezes_off_target_author_assignments(self):
+        """A fluent off-target Main draft cannot redefine the executor goal."""
+        from environment.base_orchestration.action_author import (
+            author_delegate_action, proposed_template_action,
+        )
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+        _, _, audit = build_branch(
+            self.scene, self.reports, self.episode,
+            branch_round=2, faults=[Fault(tid, "missing")],
+        )
+        expected = [
+            dispatch["assignment_contract"]
+            for dispatch in audit["evidence_plan"][0]["dispatch"]
+        ]
+        self.assertTrue(expected)
+
+        class OffTarget:
+            def complete_json(self, system, request):
+                return {
+                    "action": "delegate_task",
+                    "reasoning": (
+                        "The previous Sub-Agent returned an incomplete "
+                        "observation, so I should delegate the next "
+                        "authorized evidence acquisition now."
+                    ),
+                    "params": {"tasks": [{
+                        "task_instruction": (
+                            "Determine the final winner and score, rather "
+                            "than the evidence explicitly requested by "
+                            "the current dependency."
+                        ),
+                        "context": "The final answer must be obtained now.",
+                        "model": "model_1", "tools": [],
+                    } for _ in expected]},
+                }
+
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        action, status = author_delegate_action(
+            assignments=expected, prompt="User question",
+            author=OffTarget(), critic=Critic(),
+            max_revisions=0, freeze_assignment_prose=True,
+        )
+        self.assertEqual(
+            action["params"],
+            proposed_template_action(expected)["params"],
+        )
+        self.assertNotIn("final winner and score", json.dumps(action))
+        self.assertTrue(status["assignment_contract_frozen"])
+        self.assertEqual(status["authored_fields"], ["reasoning"])
+        self.assertEqual(status["mode"], "llm_reviewed_contract_frozen")
+
+    def test_stage4b_intermediate_numeric_is_not_final_delivered_value(self):
+        from environment.untrusted_orchestration.report_author import (
+            _explicit_final_value_issues, _guard,
+        )
+        delivered = [{
+            "values": {"marker_code": None, "candidate_id": "Case-008"},
+            "source_fact_refs": ["visual:F008"],
+        }]
+        contract = {
+            "output_fields": ["marker_code", "candidate_id"],
+            "actual_delivered_rows": delivered,
+            "observed_operator_steps": [{
+                "operation": "filter_gte", "execution_status": "done",
+                "output_schema": ["marker_code", "frame_time_ms"],
+                "output_row_count": 1, "threshold": 60000,
+                "supporting_fact_refs": ["visual:F008"],
+            }],
+            "total_delivered_rows": 1,
+            "executed_operations_in_order": ["filter_gte"],
+            "assigned_task_instruction": "Inspect the supplied visual records.",
+            "upstream_handoffs": [],
+            "available_provenance_sources": ["visual"],
+            "unresolved_fields": ["marker_code"],
+        }
+        self.assertEqual(
+            _explicit_final_value_issues(
+                "The delivered marker code is unavailable, after the "
+                "observed frame threshold of 60000.", contract,
+            ), [],
+        )
+        self.assertIn(
+            "claimed_final_field_value_not_delivered",
+            _explicit_final_value_issues(
+                "The final marker code: MK-4010.", contract,
+            ),
+        )
+        self.assertIn(
+            "claimed_final_field_value_not_delivered",
+            _explicit_final_value_issues(
+                "The final candidate id = Case-999.", contract,
+            ),
+        )
 
     def test_evidence_request_retargets_missing_and_partial_fields(self):
         from environment.untrusted_orchestration.evidence_planning import (

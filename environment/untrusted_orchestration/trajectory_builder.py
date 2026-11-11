@@ -37,10 +37,11 @@ This round has a real prior Sub-Agent feedback history, including results
 that may be missing, partial, contradictory, or replaced. The independent
 planner already selected the exact set of LEGAL tasks and parallelism from
 only visible evidence. You do NOT choose the action, change batch size,
-replace tools, or add verification that was not selected. Write natural
-Main reasoning and Sub-Agent task instructions explaining the specific
-observed missing field, conflicting key, or dependency that motivates the
-assigned repair. When some other tasks are independent and ready, explain
+replace tools, or add verification that was not selected. For Stage 4C, the evidence-bound task instructions and handoff context
+are IMMUTABLE: output only natural Main reasoning; the compiler restores the
+exact authorized assignments from the planner. Explain the specific
+observable missing field, conflicting key, or dependency motivating the
+assigned repair. When other tasks are independent and ready, explain
 why they can proceed concurrently. NEVER claim you know which report was
 attacked or quote a private correct answer. Explicitly retain usable
 previous findings; do not imply an unperformed verification succeeded.

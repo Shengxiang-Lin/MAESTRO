@@ -66,6 +66,48 @@ factual visibility guard rejects labels if required identifiers or
 contradictory observations were not actually shown to Main. Main Author/Critic
 generate each round's natural O1 delegate/complete action.
 
+## V6 evidence-quality hardening
+
+**4C evidence-constrained Main generation.** The Main Author can now
+naturalize the reasoning of a delegate action, but the O1
+`task_instruction`, `context`, model and tool routing are compiled from
+the immutable 4A evidence assignment (with prerequisite context refreshed
+from FINAL 4B reports). A fluent draft cannot change an executable request
+for `marker_code` into a demand for a final winner/score that the source
+program does not produce. The result is marked
+`llm_reviewed_contract_frozen` with `assignment_contract_frozen=true`
+to distinguish authored reasoning from program-owned task text. Final
+Action structure is checked again before publication.
+
+**4B observed versus delivered evidence.** Numeric identifiers from
+*actually executed* intermediate filter/lookup steps are legal provenance
+context in a report's `result` prose. They must not be substituted as the
+final delivered value of an output field. An explicit field-value Guard
+compares final field assertions with the complete actual delivered relation;
+the intermediate trace and erroneous returned WorkProduct remain immutable.
+A wrong result must be described as an actual *return*, not silently corrected
+to a plausible clean value. Critic instructions reinforce this distinction.
+When the Critic specifically confuses an intermediate observation with
+final delivery, the same independent Critic is given one narrow second
+review with the unchanged actual WorkProduct and trace. This does not
+automatically override failure: an unsupported or inconsistent narrative
+remains rejected if the second review also fails.
+Author and Critic must still independently pass: there is no blanket
+acceptance of inconsistent or unsupported results.
+
+**Local round quality (private diagnostics only).** The strict public
+`main_turns.jsonl` remains restricted to globally recovered branches with
+accepted language. Independently, the publisher checks whether each earlier
+Main decision has accepted visible prior feedback, reviewed Main language and
+a legal dependency batch. The resulting private reports at
+`private/main_turns_local_review.jsonl` and
+`private/main_turns_local_qualified.jsonl` allow analysis of otherwise
+discarded valid *local* decisions. These are NOT automatically positive SFT:
+a locally sensible decision does not prove the terminal answer correct.
+`summary.json` now separates execution incorrect/unresolved from
+language/action publication rejection and records the local diagnostic count.
+Splits should be grouped by Question ID to prevent round-level leakage.
+
 Stages are intentionally separated rather than interleaved. The CLI prints
 three sequential progress bars: **Evidence simulation** (rounds),
 **Sub-Agent feedback** (reports), and **Main orchestration** (actions). Each stage is journaled with an atomic file per round sample:

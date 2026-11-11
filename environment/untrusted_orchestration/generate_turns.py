@@ -74,7 +74,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "../../orchestra/base_main_agent.py",
     )
     return {
-        "version": "maestro.untrusted_orchestration.every_feedback_round.v3",
+        "version": "maestro.untrusted_orchestration.evidence_quality_v4",
         "input_sha256": [_hash_file(path) for path in inputs],
         "source_code_sha256": {
             name: _hash_file(directory / name) for name in code_files
@@ -218,6 +218,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     report_guard_failures = Counter()
     report_review_failures = Counter()
     executor_normalized_results = 0
+    local_candidates, local_qualified, local_rejections = [], [], []
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -275,10 +276,66 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 result = review["authoring"]
                 main_modes[result["mode"]] += 1
                 main_statuses[result.get("status", "unknown")] += 1
+            reviewed_main = {
+                item["round"]: item["authoring"]
+                for item in audit.get("main_action_reviews", [])
+            }
+            for turn in audit.get("candidate_local_turns", []):
+                # This is a *diagnostic* per-decision label, not a
+                # counterfactual guarantee about the final global answer.
+                # Only currently visible previous reports can influence the
+                # decision's local review eligibility.
+                history_reports = [
+                    item["authoring"] for item in
+                    audit.get("subagent_report_reviews", [])
+                    if item["round"] < turn["round"]
+                ]
+                report_accepted = all(
+                    item.get("status") == "accepted"
+                    and item.get("mode") != "grounded_template_fallback"
+                    for item in history_reports
+                )
+                main_review = reviewed_main.get(turn["round"], {})
+                main_accepted = (
+                    main_review.get("status") == "accepted"
+                    and "fallback" not in main_review.get("mode", "")
+                )
+                dependency_safe = (
+                    audit.get("parallel_batches_verified") is True
+                )
+                locally_qualified = (
+                    report_accepted and main_accepted and dependency_safe
+                )
+                info = {
+                    "turn": deepcopy(turn),
+                    "round_sample_id": plan.get("sample_id"),
+                    "branch_index": plan["index"],
+                    "fork_round": plan["branch_round"],
+                    "local_report_reviews_passed": report_accepted,
+                    "local_main_action_review_passed": main_accepted,
+                    "dependency_safe": dependency_safe,
+                    "locally_qualified": locally_qualified,
+                    "globally_recovered": data["status"] == "recovered",
+                    "terminal_execution_outcome": audit.get(
+                        "execution_outcome"
+                    ),
+                    "release_policy": (
+                        "diagnostic_only_never_auto_promote_to_sft"
+                    ),
+                }
+                local_candidates.append(info)
+                if locally_qualified:
+                    local_qualified.append(info)
+                else:
+                    local_rejections.append(info)
     _atomic_jsonl(output / "episodes.jsonl", episodes)
     _atomic_jsonl(output / "main_turns.jsonl", positive_turns)
     _atomic_jsonl(output / "failed.jsonl", failures)
     _atomic_jsonl(output / "private" / "fault_alignment.jsonl", audits)
+    _atomic_jsonl(output / "private" / "main_turns_local_review.jsonl",
+                  local_candidates)
+    _atomic_jsonl(output / "private" / "main_turns_local_qualified.jsonl",
+                  local_qualified)
     return {
         "completed_branches": sum(counters.values()),
         "recovered": counters["recovered"],
@@ -294,7 +351,33 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             counters["rejected_validation"]
         ),
         "main_training_turns": len(positive_turns),
+        "local_decisions_reviewed": len(local_candidates),
+        "local_decisions_qualified_diagnostic": len(local_qualified),
+        "local_decisions_rejected_diagnostic": len(local_rejections),
+        "local_qualified_from_non_recovered_branches": sum(
+            item["locally_qualified"] and not item["globally_recovered"]
+            for item in local_candidates
+        ),
+        "local_decision_review_file": str(
+            output / "private" / "main_turns_local_review.jsonl"
+        ),
         "execution_recovered_branches": execution_outcomes["recovered"],
+        "execution_incorrect_branches":
+            execution_outcomes["incorrect_result_after_actual_propagation"],
+        "execution_unresolved_branches": sum(
+            count for outcome, count in execution_outcomes.items()
+            if outcome not in {
+                "recovered", "incorrect_result_after_actual_propagation",
+            }
+        ),
+        "publication_rejected_by_language_or_action": (
+            counters["language_review_unaccepted"]
+            + counters["main_action_not_accepted"]
+        ),
+        "publication_language_review_rejected":
+            counters["language_review_unaccepted"],
+        "publication_main_action_failed":
+            counters["main_action_not_accepted"],
         "execution_outcomes": dict(execution_outcomes),
         "language_review_rejected_after_recovery":
             sum(1 for audit in audits if audit.get("execution_recovered")
@@ -736,7 +819,7 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_every_feedback_round_v3",
+        "pipeline": "maestro_untrusted_orchestration_evidence_quality_v4",
         "mode": ("llm" if main_mode == "llm" or report_mode == "llm"
                  else "template"),
         "subagent_report_mode": report_mode,
@@ -788,6 +871,8 @@ def generate_turns(
             "Sub-Agent Author/Critic write full prose for this attempt; status and actual WorkProduct remain code-owned.",
             "Main-Agent Author/Critic only naturalize the program-selected O1 tasks; private state does not enter their prompt.",
             "LLM-mode fallback reports are diagnostic only, never silently counted as reviewed positive SFT.",
+            "4C action task_instruction and context are fixed against the current 4A/4B executable evidence contract; LLM edits only decision reasoning.",
+            "Per-turn local eligibility is diagnostic in private/main_turns_local_review.jsonl; it is never silently merged into globally verified SFT.",
         ],
     }
     _atomic_json(output / "summary.json", summary)

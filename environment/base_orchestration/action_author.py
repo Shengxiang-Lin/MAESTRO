@@ -507,6 +507,7 @@ def author_delegate_action(
     max_revisions: int = 2,
     author_system: str | None = None,
     critic_system: str | None = None,
+    freeze_assignment_prose: bool = False,
 ) -> tuple[dict | None, dict]:
     # Separate runtime-specific prose instructions from the shared O1
     # deterministic structure/Guard. Existing Base callers are unchanged.
@@ -536,9 +537,23 @@ def author_delegate_action(
         except Exception as exc:
             failures.append({"stage": "author", "reason": str(exc)[:200]})
             continue
-        # This LLM writes only surface-form language. Tool selection and
-        # routing are frozen by the primitive acquisition contracts.
-        if isinstance(candidate, dict) and candidate.get("action") == "delegate_task":
+        # Stage-4C can explicitly freeze the entire evidence dispatch
+        # contract. The Author writes *reasoning*, while all task language,
+        # handoff context, tool routing and parallelism come from the
+        # verified evidence plan. This avoids silently publishing an
+        # Author's unrelated deliverable (e.g. a winner instead of the
+        # planned marker key) as a valid executor-bound assignment.
+        if freeze_assignment_prose and isinstance(candidate, dict) and (
+            candidate.get("action", "delegate_task") == "delegate_task"
+        ):
+            candidate = {
+                "action": "delegate_task",
+                "reasoning": candidate.get("reasoning"),
+                "params": deepcopy(template["params"]),
+            }
+        # Default Stage-3 and legacy callers remain free to author the
+        # task prose, subject to the original O1 Guard and critic.
+        elif isinstance(candidate, dict) and candidate.get("action") == "delegate_task":
             parameters = candidate.get("params")
             generated = (parameters.get("tasks")
                          if isinstance(parameters, dict) else None)
@@ -624,7 +639,14 @@ def author_delegate_action(
                 continue
         if _critic_review_passes(review):
             return deepcopy(candidate), {
-                "status": "accepted", "mode": "llm_reviewed",
+                "status": "accepted",
+                "mode": ("llm_reviewed_contract_frozen"
+                         if freeze_assignment_prose else "llm_reviewed"),
+                "assignment_contract_frozen": freeze_assignment_prose,
+                "authored_fields": (
+                    ["reasoning"] if freeze_assignment_prose else
+                    ["reasoning", "task_instruction", "context"]
+                ),
                 "attempts": revision + 1, "review": review,
             }
         failures.append({"stage": "critic",
