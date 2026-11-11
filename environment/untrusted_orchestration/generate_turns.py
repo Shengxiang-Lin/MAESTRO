@@ -1051,8 +1051,14 @@ def generate_turns(
         audit = (data or {}).get("private_audit") or {}
         return len(audit.get("subagent_report_reviews", []))
 
-    total_reports = sum(report_count(saved(stage_a, p)) for p in planned)
-    initial_reports = sum(report_count(saved(stage_b, p)) for p in planned)
+    total_reports = sum(
+        report_count(saved(stage_a, p))
+        for p in planned if p["index"] in selected_indices
+    )
+    initial_reports = sum(
+        report_count(saved(stage_b, p))
+        for p in planned if p["index"] in selected_indices
+    )
 
     def make_reports(plan: dict, tick) -> None:
         source = saved(stage_a, plan)
@@ -1220,9 +1226,10 @@ def generate_turns(
         ),
         "rounds_extracted_from_base": base_feedback_round_count,
         "candidate_trials": len(planned),
-        "rounds_with_executable_fault": sum(
-            not plan["skip_reason"] for plan in planned
-        ),
+        "rounds_with_executable_fault": len({
+            (plan["task_id"], plan["branch_round"])
+            for plan in planned if not plan["skip_reason"]
+        }),
         "rounds_without_executable_fault": sum(
             plan["skip_reason"] == "no_executable_fault_on_returned_batch"
             for plan in planned
@@ -1235,10 +1242,10 @@ def generate_turns(
             plan["task_id"] for plan in planned
         }),
         "rounds_per_question": dict(Counter(
-            task_id for task_id, _ in {
+            task_id for task_id, _ in sorted({
                 (plan["task_id"], plan["branch_round"])
                 for plan in planned
-            }
+            })
         )),
         "round_index": str(output / "round_index.jsonl"),
         "scenes_without_eligible_fault": no_eligible,
