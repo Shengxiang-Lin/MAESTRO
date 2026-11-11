@@ -36,9 +36,17 @@ re-runs the rest of the Macro operator chain. The resulting WorkProduct
   **in the same decision batch**. All tasks are actually re-executed on
   the resulting WorkProducts. Unresolved or incorrect outcomes are
   diagnostic only and never published as positive SFT labels.
-- `report_author.py`: A deterministic faithful result string stays fixed.
-  In `llm` mode, an Author/Critic pair may naturalize only the summary
-  and trace prose; failure uses an explicitly labeled grounded fallback.
+- `report_author.py`: Stage-2-style Sub-Agent Author/Guard/Critic
+  generates natural-language `finish_result.result`, `summary` and
+  `trace_summary` **for the actual attempt**. The Guard verifies values,
+  identifiers, report status, evidence scope and partial delivery against
+  the deterministic WorkProduct, not the private clean Gold. For a missing
+  deliverable, `finish_result` remains absent. Review failures are
+  explicitly labeled and excluded from positive LLM-mode SFT.
+- Main Action Author/Critic reuses the Stage-3 O1 Guard, but with
+  recovery-specific prose prompts. The deterministic planner still chooses
+  every legal target, tool/model routing and parallel batch; LLM never
+  changes scheduling decisions or makes a hidden attack label visible.
 - `generate_turns.py`: Multiple independent branch variants per Scene,
   configurable worker pool, atomic journals, input/code signatures for
   exact resume and positive-label publication.
@@ -50,12 +58,35 @@ upstream key from a correct arithmetic calculation on that key.
 ## Pilot vs production
 
 Default YAML uses `generation.mode: template` for a repeatable first
-pass without local API calls. To naturalize actions and reports, set
-`mode: llm` and configure the local OpenAI-compatible Author/Critic
-endpoint. Only reviewed or explicitly labeled teacher-template output is
-created; this is **not** an online learned Main-Agent rollout. Persistent
-`same_path` faults that have no independent authorized recovery route
-remain unresolved rather than being magically repaired.
+pass without local API calls. To naturalize **both** actions and reports,
+set `generation.mode: llm`. Two independent settings,
+`generation.report_mode` and `generation.main_mode`, accept
+`inherit` (use `generation.mode`), `template`, or `llm`. The
+`subagent_model` YAML section configures the Stage-2-style report
+Author/Critic; `model` configures the Stage-3-style Main Action
+Author/Critic. They can use different Qwen models, temperatures and
+revision budgets via `report_max_revisions` / `main_max_revisions`.
+
+Example: run only the Sub-Agent Author/Critic first:
+
+```yaml
+generation:
+  mode: template
+  report_mode: llm
+  main_mode: template
+```
+
+The deterministic fault and decision planner never invoke an LLM.
+`summary.json` reports independent
+`subagent_report_generation_modes`,
+`subagent_report_review_statuses`,
+`main_action_generation_modes` and
+`main_action_review_statuses`. Their per-attempt details remain only in
+`private/fault_alignment.jsonl`. An LLM report that fails deterministic
+Guard or independent Critic may be retained as a clearly labeled
+diagnostic template, but its branch is **not** published as positive LLM
+SFT. This is **not** an online learned Main-Agent rollout. Persistent
+`same_path` faults without an authorized recovery route remain unresolved.
 
 The `input` fields in the YAML point at the *existing* accepted trusted
 outputs. Output paths must differ from the existing inputs.

@@ -24,7 +24,9 @@ from environment.untrusted_orchestration.generate_turns import (
     generate_turns, _plan_branches,
 )
 from environment.untrusted_orchestration.config import DEFAULT_CONFIG, load_config
-from environment.untrusted_orchestration.state_machine import ExecutionState
+from environment.untrusted_orchestration.state_machine import ExecutionState, Attempt
+from environment.untrusted_orchestration.report_author import naturalize_report
+from environment.untrusted_orchestration.config import generate_from_config
 from environment.generate_question.program_ir import Relation
 
 
@@ -363,6 +365,353 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                     self.scene["macro_graph"]["reference_waves"][
                         plan["branch_round"] - 2],
                 )
+
+    def test_untrusted_subagent_llm_preserves_wrong_record_not_gold(self):
+        task = {
+            "task_id": "faulty-lookup",
+            "source_ids": ["ledger"],
+            "operator_chain": [{
+                "op": "lookup_by_key", "source_id": "ledger",
+                "input_key_field": "record_key_1",
+                "source_key_field": "record_key_1",
+            }],
+        }
+        from environment.generate_question.program_ir import Relation
+        observed = Attempt(
+            task_id="faulty-lookup", version=1, status="done",
+            product=Relation(("record_key_1", "completed_count"), ({
+                "values": {"record_key_1": "KEY1-96979",
+                           "completed_count": 13},
+                "support": ("ledger:F013",),
+            },)),
+            available_fields=("record_key_1", "completed_count"),
+            used_parent_versions={}, runtime={},
+        )
+
+        class Author:
+            def __init__(self, wrong=False):
+                self.wrong = wrong
+                self.payloads = []
+
+            def complete_json(self, system, request):
+                observed_attempt = json.loads(request)[
+                    "observed_current_attempt"
+                ]
+                self.payloads.append(observed_attempt)
+                key = "KEY1-94705" if self.wrong else "KEY1-96979"
+                return {
+                    "result": ("The returned ledger entry " + key +
+                               " has a completed count of 13."),
+                    "summary": (
+                        "I checked the assigned keyed ledger and recorded "
+                        "the returned count for this entry."
+                    ),
+                    "trace_summary": (
+                        "I looked up the record key in the supplied "
+                        "ledger and returned the observed measurement."
+                    ),
+                    "status": observed_attempt["delivery_status"],
+                }
+
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True,
+                    "useful": True,
+                }
+
+        author = Author()
+        report, meta = naturalize_report(
+            task, observed, instruction="Read the returned ledger key.",
+            model_alias="model_1", reviewed=None,
+            author=author, critic=Critic(), max_revisions=0,
+        )
+        self.assertEqual(meta["status"], "accepted")
+        self.assertEqual(meta["mode"], "llm_reviewed")
+        self.assertIn("KEY1-96979", report["finish_result"]["result"])
+        self.assertIn("13", report["finish_result"]["result"])
+        self.assertIn("checked", report["finish_result"]["summary"])
+        self.assertIn("looked up", report["trace_summary"])
+        self.assertNotIn("gold_answer", json.dumps(author.payloads))
+        self.assertNotIn("fault", json.dumps(author.payloads).lower())
+
+        rejected, meta = naturalize_report(
+            task, observed, instruction="Read the returned ledger key.",
+            model_alias="model_1", reviewed=None,
+            author=Author(wrong=True), critic=Critic(), max_revisions=0,
+        )
+        self.assertEqual(meta["status"], "fallback")
+        self.assertEqual(meta["mode"], "grounded_template_fallback")
+        self.assertIn("result_unobserved_numeric_or_entity",
+                      meta["failures"][0]["errors"])
+        self.assertIn("KEY1-96979", rejected["finish_result"]["result"])
+        self.assertNotIn("KEY1-94705", rejected["finish_result"]["result"])
+
+    def test_llm_author_preserves_partial_and_missing_status(self):
+        from environment.generate_question.program_ir import Relation
+        task = {
+            "task_id": "read-ledger", "source_ids": ["ledger"],
+            "operator_chain": [{
+                "op": "lookup_by_key", "source_id": "ledger",
+                "input_key_field": "record_key_1",
+                "source_key_field": "record_key_1",
+            }],
+        }
+        class Author:
+            def complete_json(self, system, request):
+                status = json.loads(request)["observed_current_attempt"][
+                    "delivery_status"
+                ]
+                if status == "missing":
+                    return {
+                        "status": "missing", "result": None,
+                        "summary": (
+                            "The assigned attempt ended without a usable "
+                            "result to send back."
+                        ),
+                        "trace_summary": (
+                            "The evidence acquisition finished but no "
+                            "inspectable record was delivered."
+                        ),
+                    }
+                return {
+                    "status": "partial",
+                    "result": (
+                        "The record KEY1-96979 was returned, but its "
+                        "completed count remains unresolved."
+                    ),
+                    "summary": (
+                        "The completed_count field is unresolved although "
+                        "the requested record key was delivered."
+                    ),
+                    "trace_summary": (
+                        "I received the requested record identity without "
+                        "a corresponding completed count value."
+                    ),
+                }
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True,
+                    "useful": True,
+                }
+
+        partial = Attempt(
+            task_id="read-ledger", version=1, status="partial",
+            product=Relation(("record_key_1", "completed_count"), ({
+                "values": {
+                    "record_key_1": "KEY1-96979", "completed_count": None,
+                },
+                "support": ("ledger:F013",),
+            },)),
+            available_fields=("record_key_1",),
+            used_parent_versions={},
+            runtime={"missing_fields": ["completed_count"],
+                     "rows_complete": True},
+        )
+        report, meta = naturalize_report(
+            task, partial, instruction="Read the completed count.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=Critic(),
+        )
+        self.assertEqual(meta["mode"], "llm_reviewed")
+        self.assertEqual(report["finish_result"]["status"], "partial")
+        self.assertIn("KEY1-96979", report["finish_result"]["result"])
+
+        missing = Attempt(
+            task_id="read-ledger", version=2, status="missing",
+            product=None, available_fields=(),
+            used_parent_versions={}, runtime={},
+        )
+        report, meta = naturalize_report(
+            task, missing, instruction="Read the completed count.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=Critic(),
+        )
+        self.assertEqual(meta["mode"], "llm_reviewed")
+        self.assertIsNone(report["finish_result"])
+        self.assertTrue(report["done"])
+        self.assertIn("without a usable", report["trace_summary"])
+
+    def test_stage2_and_stage3_llm_clients_configured_separately(self):
+        instances = []
+        class Backend:
+            def __init__(self, *, model, **kwargs):
+                instances.append(model)
+        with patch(
+            "environment.generate_question.backend.OpenAICompatibleBackend",
+            Backend,
+        ), patch(
+            "environment.untrusted_orchestration.generate_turns.generate_turns",
+            return_value={"status": "done"},
+        ) as writer:
+            generate_from_config(
+                DEFAULT_CONFIG, report_mode="llm", main_mode="template",
+            )
+            self.assertEqual(writer.call_args.kwargs["report_mode"], "llm")
+            self.assertEqual(writer.call_args.kwargs["main_mode"], "template")
+            self.assertIsNotNone(writer.call_args.kwargs["report_author"])
+            self.assertIsNone(writer.call_args.kwargs["author"])
+            self.assertEqual(len(instances), 2)
+            instances.clear()
+            generate_from_config(
+                DEFAULT_CONFIG, report_mode="template", main_mode="llm",
+            )
+            self.assertEqual(writer.call_args.kwargs["main_mode"], "llm")
+            self.assertEqual(writer.call_args.kwargs["report_mode"], "template")
+            self.assertIsNotNone(writer.call_args.kwargs["author"])
+            self.assertIsNone(writer.call_args.kwargs["report_author"])
+            self.assertEqual(len(instances), 2)
+
+    def test_unreviewed_report_fallback_excluded_from_llm_sft(self):
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+        class InvalidAuthor:
+            def complete_json(self, system, request):
+                return {"status": "done", "result": "Invented observation"}
+        class Critic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True,
+                    "useful": True,
+                }
+        episode, turns, audit = build_branch(
+            self.scene, self.reports, self.episode,
+            branch_round=2, faults=[Fault(tid, "missing")],
+            report_author=InvalidAuthor(), report_critic=Critic(),
+            report_max_revisions=0,
+        )
+        self.assertEqual(audit["outcome"], "language_review_unaccepted")
+        self.assertEqual(turns, [])
+        self.assertEqual(
+            audit["subagent_report_reviews"][0]["authoring"]["mode"],
+            "grounded_template_fallback",
+        )
+        self.assertTrue(audit["parallel_batches_verified"])
+
+    def test_main_author_uses_recovery_specific_stage3_prompt(self):
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+        seen = []
+        class Author:
+            def complete_json(self, system, request):
+                seen.append(system)
+                return json.loads(request)["reference_action_for_structure_only"]
+        class Critic:
+            def complete_json(self, system, request):
+                seen.append(system)
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+        episode, turns, audit = build_branch(
+            self.scene, self.reports, self.episode,
+            branch_round=2, faults=[Fault(tid, "missing")],
+            author=Author(), critic=Critic(),
+            main_max_revisions=0,
+        )
+        self.assertEqual(audit["outcome"], "recovered")
+        self.assertTrue(any("UNTRUSTED ROUND-LOCAL RECOVERY" in x
+                            for x in seen))
+        self.assertTrue(any("UNTRUSTED RECOVERY REVIEW" in x
+                            for x in seen))
+        self.assertIn("llm_reviewed", {
+            row["generation_mode"] for row in turns
+        })
+        self.assertTrue(audit["main_action_reviews"])
+
+    def test_end_to_end_dual_llm_review_preserves_program_planner(self):
+        tid = self.scene["macro_graph"]["reference_waves"][0][0]
+
+        class Author:
+            def complete_json(self, system, request):
+                data = json.loads(request)
+                if "observed_current_attempt" not in data:
+                    return data["reference_action_for_structure_only"]
+                observed = data["observed_current_attempt"]
+                if not observed["finish_result_exists"]:
+                    return {
+                        "result": None,
+                        "summary": (
+                            "The investigation ended without a usable "
+                            "result for the delegated task."
+                        ),
+                        "trace_summary": (
+                            "The assigned evidence acquisition did not "
+                            "produce an inspectable record."
+                        ),
+                        "status": "missing",
+                    }
+                records = observed["actual_delivered_rows"]
+                if len(records) == 1:
+                    values = records[0]["values"]
+                    facts = ", ".join(
+                        str(k).replace("_", " ") + " " + str(v)
+                        for k, v in values.items()
+                    )
+                    result = "The returned observation contains " + facts + "."
+                else:
+                    result = (
+                        "The completed task returned " +
+                        str(observed["total_delivered_rows"]) +
+                        " records for the next investigation."
+                    )
+                summary = (
+                    "I checked the requested records and provided the "
+                    "actual returned findings without further filtering."
+                )
+                if observed["delivery_status"] == "partial":
+                    summary += (
+                        " Still unresolved: " +
+                        ", ".join(observed["unresolved_fields"]) + "."
+                    )
+                return {
+                    "result": result,
+                    "summary": summary,
+                    "trace_summary": (
+                        "I performed the assigned operations and reported "
+                        "their observed result for downstream use."
+                    ),
+                    "status": observed["delivery_status"],
+                }
+
+        class Critic:
+            def complete_json(self, system, request):
+                if "candidate_main_facing_report" in json.loads(request):
+                    return {
+                        "verdict": "pass", "grounded": True,
+                        "scope_preserved": True, "natural": True,
+                        "useful": True,
+                    }
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        episode, turns, audit = build_branch(
+            self.scene, self.reports, self.episode,
+            branch_round=2, faults=[Fault(tid, "missing")],
+            author=Author(), critic=Critic(),
+            report_author=Author(), report_critic=Critic(),
+            main_max_revisions=0, report_max_revisions=0,
+        )
+        self.assertEqual(audit["outcome"], "recovered")
+        self.assertTrue(turns)
+        self.assertTrue(all(
+            review["authoring"]["mode"] == "llm_reviewed"
+            for review in audit["subagent_report_reviews"]
+        ))
+        self.assertTrue(any(
+            review["authoring"]["mode"] == "llm_reviewed"
+            for review in audit["main_action_reviews"]
+        ))
+        self.assertTrue(audit["parallel_batches_verified"])
+        self.assertEqual(episode["trajectory"][-1]["action"], "complete")
+        self.assertTrue(all(
+            set(turn["input"]) == {"subtask_history"}
+            for turn in turns
+        ))
 
     def test_journal_resume_positive_publication_and_manifest(self):
         with TemporaryDirectory() as td:
