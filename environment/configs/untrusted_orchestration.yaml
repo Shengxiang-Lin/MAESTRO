@@ -1,5 +1,7 @@
-# V10: all eligible question/round/atomic candidates -> broad 4A search;
-# only selected recovered trajectories enter expensive 4B/4C LLM authoring.
+# V10.3: all eligible question/round/atomic candidates -> broad 4A search;
+# 4B uses a code-owned evidence/delivery fact contract before LLM authoring,
+# 4C reviews Main decisions; accepted Stage-3 episodes remain the baseline.
+# Only selected recovered trajectories enter expensive 4B/4C LLM authoring.
 # Legacy V9 behavior remains available with candidate_strategy: sample_one.
 # Requires frozen Questions, reviewed Sub-Agent reports, and accepted Base Episodes.
 version: 1
@@ -21,7 +23,7 @@ generation:
   # event_driven uses the typed fault catalogue and may defer an unexecuted
   # independent evidence task when the frozen DAG makes that legal.
   scenario_mode: event_driven    # round_fork | event_driven
-  # V10: 4A enumerates legal real-executor candidates before any LLM.
+  # 4A enumerates legal real-executor candidates before any LLM.
   # sample_one retains the exact V9 one-random-fault-per-round workflow.
   candidate_strategy: enumerate  # enumerate | sample_one
   max_candidates_per_round: 24    # hard cap on deterministic 4A trials
