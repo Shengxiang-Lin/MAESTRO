@@ -435,7 +435,11 @@ def train(cfg: dict, *, resume: str | None = None) -> None:
         model=model,
         processing_class=tokenizer,
         train_dataset=Dataset.from_list(rows),
-        reward_funcs=[make_reward_function(cfg["judge"]["workers"])],
+        reward_funcs=[make_reward_function(
+            cfg["judge"]["workers"],
+            diagnostics_path=cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl",
+            num_generations=rollout["num_generations"],
+        )],
         args=args,
     )
     if not getattr(trainer, "use_vllm", False):

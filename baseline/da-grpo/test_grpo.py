@@ -212,6 +212,51 @@ class TestJudgeAdapter(unittest.TestCase):
         self.assertEqual({record[-1] for record in recorded}, {"A", "B"})
         self.assertEqual(len(recorded), 4)
 
+    def test_reward_diagnostics_keep_hashes_scores_and_candidate_order(self):
+        from tempfile import TemporaryDirectory
+        from types import SimpleNamespace
+
+        judge_reply = (
+            "FORMAT_CORRECT: 1\nACTION_VALID: 1\n"
+            "TOOL_REASONABLE: 2\nDECISION_QUALITY: 2"
+        )
+        completions = [
+            '{"action":"complete","params":{"answer":"candidate-answer"}}',
+            '<think>Checking.</think> {"params": {"answer": "candidate-answer"}, "action": "complete"}',
+            '{"action":"complete","params":{"answer":"different"}}',
+            'unparseable completion',
+        ]
+        sample_ids = ["A", "A", "B", "B"]
+        metadata = [json.dumps({"sample_id": item, "has_expert": True}) for item in sample_ids]
+        with TemporaryDirectory() as tmp, patch("reward_fn._call_llm_judge", return_value=judge_reply):
+            path = Path(tmp) / "output" / "reward_diagnostics.jsonl"
+            judge = make_reward_function(2, diagnostics_path=path, num_generations=2)
+            for step in (11, 12):
+                rewards = judge(completions, ["s3"] * 4, ["truth"] * 4, metadata,
+                                trainer_state=SimpleNamespace(global_step=step))
+                self.assertEqual(len(rewards), 4)
+                for reward in rewards:
+                    self.assertAlmostEqual(reward, 0.7333333333333334)
+            raw = path.read_text()
+        records = [json.loads(line) for line in raw.splitlines()]
+        self.assertEqual(len(records), 8)
+        self.assertEqual([r["sample_id"] for r in records[:4]], sample_ids)
+        self.assertEqual([(r["group_index"], r["candidate_index"]) for r in records[:4]],
+                         [(0, 0), (0, 1), (1, 0), (1, 1)])
+        self.assertEqual([r["trainer_step"] for r in records], [11] * 4 + [12] * 4)
+        self.assertEqual(len({r["batch_id"] for r in records[:4]}), 1)
+        self.assertNotEqual(records[0]["batch_id"], records[4]["batch_id"])
+        self.assertRegex(records[0]["decision_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(records[0]["decision_sha256"], records[1]["decision_sha256"])
+        self.assertNotEqual(records[0]["decision_sha256"], records[2]["decision_sha256"])
+        self.assertIsNone(records[3]["decision_sha256"])
+        self.assertEqual(records[0]["scores"], {
+            "format_correct": 1, "action_valid": 1,
+            "tool_reasonable": 2, "decision_quality": 2,
+        })
+        self.assertNotIn("candidate-answer", raw)
+        self.assertNotIn("unparseable completion", raw)
+
     def test_mismatched_reward_metadata_is_not_silently_broadcast(self):
         with self.assertRaisesRegex(ValueError, "length mismatch"):
             make_reward_function(4)(

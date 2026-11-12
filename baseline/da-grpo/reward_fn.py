@@ -23,6 +23,7 @@ All dimensions are evaluated by the configured remote LLM Judge in one call:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -366,12 +367,24 @@ def _evaluate_with_llm_judge(
     return scores
 
 
+def _decision_sha256(decision: dict | None) -> str | None:
+    if not isinstance(decision, dict):
+        return None
+    try:
+        canonical = json.dumps(decision, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except ValueError:
+        return None
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
 # -------------------- scalar reward implementation --------------------
 def _compute_score_inner(
     data_source: str,
     solution_str: str,
     ground_truth: str,
     extra_info: dict | None = None,
+    *,
+    include_decision_hash: bool = False,
     **kwargs: Any,
 ) -> dict:
     extra_info = extra_info or {}
@@ -398,7 +411,7 @@ def _compute_score_inner(
     # acc: decision_quality >= 0.67 (judge score 2 or 3) and format >= 0.67 => acc=1
     acc = 1.0 if (r_decision >= 0.67 and r_format >= 0.67) else 0.0
 
-    return {
+    result = {
         "score": total_score,
         "acc": acc,
         "format_correct": r_format,
@@ -406,6 +419,9 @@ def _compute_score_inner(
         "tool_reasonable": r_tool,
         "decision_quality": r_decision,
     }
+    if include_decision_hash:
+        result["decision_sha256"] = _decision_sha256(decision)
+    return result
 
 
 def compute_score(
@@ -427,7 +443,7 @@ def compute_score(
     except Exception as e:
         print(f"[reward_fn] ERROR in compute_score: {e}")
         traceback.print_exc()
-        return {
+        result = {
             "score": 0.0,
             "acc": 0.0,
             "format_correct": 0.0,
@@ -435,6 +451,9 @@ def compute_score(
             "tool_reasonable": 0.0,
             "decision_quality": 0.0,
         }
+        if kwargs.get("include_decision_hash"):
+            result["decision_sha256"] = _decision_sha256(_try_parse_json(solution_str))
+        return result
 
 
 # -------------------- Quick self-test --------------------
