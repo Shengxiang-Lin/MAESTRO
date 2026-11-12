@@ -61,7 +61,7 @@ variable. The current loader instead uses Unsloth's own
 `UNSLOTH_VLLM_NO_FLASHINFER=1` switch BEFORE importing Unsloth.
 This disables both the FlashInfer sampler and attention backend. Unsloth
 selects its compatible `FLASH_ATTN` fallback on supported NVIDIA GPUs.
-FP8 KV cache and `enforce_eager: true` are retained.
+BF16 KV cache (`kv_cache_dtype: auto`) and `enforce_eager: true` are retained.
 
 If you still see `SM 12.x requires CUDA >= 12.9`, confirm that the
 installed `unsloth_zoo.vllm_utils` contains
@@ -174,3 +174,31 @@ selects `FLASH_ATTN`; another compatible native kernel may be used
 depending on its build. Confirm from the startup logs. The single-step
 training path has not been GPU-validated by the repository authoring
 environment.
+
+## SM120 FLASH_ATTN / FP8 KV incompatibility (2026-11-12)
+
+If vLLM aborts with `Selected backend AttentionBackendEnum.FLASH_ATTN is
+not valid for this configuration` and `kv_cache_dtype not supported`, the
+previous FlashInfer opt-out worked; this is a **new** attention/KV-cache
+compatibility error, not success.
+
+For RTX 6000D, `config.yaml` now uses `kv_cache_dtype: auto`. Unsloth
+receives `float8_kv_cache=False`, and BF16 base weights use BF16 KV
+Cache. The loader rejects FP8 explicitly to prevent repeat failures.
+Do not revert to FP8 merely to reduce memory without changing and
+validating the attention kernel and hardware compatibility first.
+
+BF16 KV Cache uses more memory than FP8. Unsloth Standby may also
+increase `gpu_memory_utilization` beyond the raw config percentage;
+observe the actual vLLM startup logs and memory. If there is a new OOM,
+test fewer concurrent sequences and/or a shorter maximum context before
+changing algorithmic group size or reinstalling CUDA.
+
+```bash
+git pull origin main
+python -m unittest discover -s baseline/da-grpo -p 'test_*.py'
+python baseline/da-grpo/train.py --dry-run
+python baseline/da-grpo/train.py \
+  --max-steps 1 --max-completion-tokens 512 \
+  --output-dir baseline/da-grpo/output_unsloth_smoke_bf16_kv
+```

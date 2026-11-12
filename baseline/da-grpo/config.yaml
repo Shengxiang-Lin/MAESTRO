@@ -32,7 +32,9 @@ rollout:
   top_p: 1.0
   gpu_memory_utilization: 0.35
   max_num_seqs: 32
-  kv_cache_dtype: fp8
+  # FLASH_ATTN on RTX 6000D SM120 rejects FP8 KV Cache (requires other
+  # FA3/FA4 and device/head-size combinations). With BF16 model, auto = BF16 KV.
+  kv_cache_dtype: auto
   # Unsloth's native fallback on NVIDIA SM120 selects FLASH_ATTN when
   # FlashInfer is excluded. vLLM 0.32 does not honor VLLM_ATTENTION_BACKEND.
   disable_flashinfer: true

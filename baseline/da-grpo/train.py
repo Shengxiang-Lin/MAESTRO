@@ -104,6 +104,11 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
         raise ValueError("O1 reference sampling requires temperature=top_p=1")
     if rollout["disable_flashinfer"] is not True:
         raise ValueError("RTX 6000D profile must disable FlashInfer in Unsloth")
+    if rollout["kv_cache_dtype"] != "auto":
+        raise ValueError(
+            "RTX 6000D + Unsloth FLASH_ATTN requires kv_cache_dtype: auto "
+            "(FP8 KV cache unsupported in the selected attention backend)"
+        )
     if type(rollout["enforce_eager"]) is not bool or type(rollout["standby"]) is not bool:
         raise ValueError("Invalid rollout boolean")
 
@@ -166,6 +171,7 @@ def show_config(cfg: dict) -> None:
         "loss_type": cfg["training"]["loss_type"],
         "beta": cfg["training"]["kl_coef"],
         "disable_flashinfer": cfg["rollout"]["disable_flashinfer"],
+        "kv_cache_dtype": cfg["rollout"]["kv_cache_dtype"],
         "judge": {
             "model": cfg["judge"]["model"],
             "base_url": cfg["judge"]["base_url"],
@@ -355,9 +361,10 @@ def train(cfg: dict, *, resume: str | None = None) -> None:
         max_lora_rank=model_cfg["lora_rank"],
         gpu_memory_utilization=rollout["gpu_memory_utilization"],
         max_num_seqs=rollout["max_num_seqs"],
-        # Unsloth exposes FP8 KV as float8_kv_cache, NOT kv_cache_dtype.
-        # The attention backend is selected through VLLM_ATTENTION_BACKEND.
-        float8_kv_cache=rollout["kv_cache_dtype"] == "fp8",
+        # FlashAttention on SM120 rejects FP8 KV Cache. Keep the native
+        # model dtype (BF16) by explicitly disabling float8 KV in Unsloth.
+        # Attention selection is handled by UNSLOTH_VLLM_NO_FLASHINFER.
+        float8_kv_cache=False,
         enforce_eager=rollout["enforce_eager"],
     )
     if tokenizer.pad_token_id is None:

@@ -30,6 +30,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(plan["gradient_accumulation_steps"], 32)
         self.assertEqual(plan["generation_batch_size"], 32)
         self.assertEqual(cfg["training"]["epochs"], 3)
+        self.assertEqual(cfg["rollout"]["kv_cache_dtype"], "auto")
 
     def test_framework_options_preserve_o1_behavior(self):
         cfg = train.load_config()
@@ -50,6 +51,17 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(opts["warmup_steps"], 0.03)
         self.assertEqual(opts["max_completion_length"], 4096)
         self.assertFalse(opts["vllm_importance_sampling_correction"])
+
+    def test_sm120_flash_attn_disallows_fp8_kv_cache(self):
+        import tempfile
+        import yaml
+        cfg = yaml.safe_load(train.DEFAULT_CONFIG.read_text(encoding="utf-8"))
+        cfg["rollout"]["kv_cache_dtype"] = "fp8"
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "fp8-bad.yaml"
+            p.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "FP8 KV cache unsupported"):
+                train.load_config(p)
 
     def test_flashinfer_disabled_before_unsloth_import(self):
         import os
