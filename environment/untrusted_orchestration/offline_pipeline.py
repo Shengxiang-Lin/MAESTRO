@@ -22,6 +22,7 @@ from environment.base_orchestration.o1_compat import (
 from environment.base_orchestration.trajectory_builder import _strict_reports
 from environment.generate_question.program_ir import Relation
 from .report_author import naturalize_report
+from .public_language import sanitize_public_report
 from .reasoning_fidelity import reasoning_evidence_issues
 from .state_machine import Attempt
 from .trajectory_builder import (
@@ -95,7 +96,9 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
             max_revisions=max_revisions,
         )
         report["subtask_index"] = slot
-        step["result"]["subtask_results"][slot] = _as_public(report)
+        step["result"]["subtask_results"][slot] = _as_public(
+            sanitize_public_report(report)
+        )
         review_rows.append({
             **scheduled, "authoring": deepcopy(status),
         })
@@ -229,6 +232,19 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                        on_main=None) -> tuple[dict, list[dict], dict]:
     """4C writes all Main turns after 4B has completed, from public history."""
     episode, audit = deepcopy(episode), deepcopy(audit)
+    # Trusted Stage-3 prefix reports may still contain synthetic Macro /
+    # primitive IDs. Normalize their public PROSE before building either
+    # Main's O1 prompt or the emitted SFT subtask_history. Never alter the
+    # underlying WorkProduct / source provenance in the private ledger.
+    for visible_step in episode["trajectory"]:
+        if visible_step.get("action") != "delegate_task":
+            continue
+        report_list = (visible_step.get("result") or {}).get(
+            "subtask_results", []
+        )
+        visible_step["result"]["subtask_results"] = [
+            sanitize_public_report(report) for report in report_list
+        ]
     fork = audit["branch_round"]
     plans = {p["round"]: p for p in audit.get("evidence_plan", [])}
     tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
@@ -272,9 +288,19 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                                dispatch["evidence_request_ids"])
                     )[:3500]
                     assignments.append(current)
-                _validate_evidence_dispatch(
-                    plan, assignments, prompt=prompt,
-                )
+                try:
+                    _validate_evidence_dispatch(
+                        plan, assignments, prompt=prompt,
+                    )
+                except ValueError as exc:
+                    # Keep the *entire* preceding 4B language audit and
+                    # prior 4C reviewed decisions. This is a publication
+                    # failure, not a new execution failure or a reason to
+                    # erase the successfully replayed 4A evidence.
+                    failure = (
+                        "stage4c_dispatch_validation_rejected:" + str(exc)
+                    )
+                    break
                 # Both Author and Critic see the *observable* reason
                 # for a pending check, not merely a list of output fields.
                 # Without it the Critic can falsely deny a genuine
@@ -383,7 +409,10 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
     )
     if failure is not None:
         outcome = ("language_review_unaccepted"
-                   if failure.startswith("stage4c_evidence_not_main_visible")
+                   if failure.startswith((
+                       "stage4c_evidence_not_main_visible",
+                       "stage4c_dispatch_validation_rejected",
+                   ))
                    else failure)
     elif execution_outcome == "recovered" and (
         had_report_fallback or had_main_fallback

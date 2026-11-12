@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+from .public_language import internal_labels_in_text
+
 
 _GENERATION_PROCESS = re.compile(
     r"\b(?:the\s+)?(?:critic|reviewer|judge|evaluator)\s+"
@@ -29,6 +31,12 @@ def review_turn_surface(turn: dict) -> list[str]:
     if not isinstance(output, dict):
         return ["invalid_action"]
     candidates = [("reasoning", output.get("reasoning"))]
+    # The input history is as important as Main's action text: a
+    # seemingly clean SFT output can still expose internal work_M* IDs
+    # through earlier trusted Stage-2 reports.
+    inputs = turn.get("input") or {}
+    if isinstance(inputs, dict):
+        candidates.append(("subtask_history", inputs.get("subtask_history")))
     params = output.get("params") or {}
     for index, task in enumerate(params.get("tasks", []) or []):
         if isinstance(task, dict):
@@ -36,8 +44,14 @@ def review_turn_surface(turn: dict) -> list[str]:
                 (f"task_{index}_instruction", task.get("task_instruction")),
                 (f"task_{index}_context", task.get("context")),
             ]
-    return [
+    problems = [
         "generation_process_leak:" + name
         for name, value in candidates
         if isinstance(value, str) and _GENERATION_PROCESS.search(value)
     ]
+    problems += [
+        "synthetic_execution_identifier_leak:" + name
+        for name, value in candidates
+        if isinstance(value, str) and internal_labels_in_text(value)
+    ]
+    return problems

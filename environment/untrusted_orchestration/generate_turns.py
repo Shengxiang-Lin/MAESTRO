@@ -72,6 +72,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "event_scheduler.py", "scenario_generator.py",
         "candidate_exploration.py", "candidate_selection.py",
         "evidence_affordances.py", "reasoning_fidelity.py",
+        "report_observation.py", "public_language.py",
         "publication_guard.py",
         "state_machine.py", "report_author.py",
         "trajectory_builder.py", "generate_turns.py",
@@ -271,6 +272,10 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     report_guard_failures = Counter()
     report_review_failures = Counter()
     executor_normalized_results = 0
+    witnessed_report_reviews = 0
+    witnessed_report_fallbacks = 0
+    witness_critic_rereviews = 0
+    retained_language_exceptions = 0
     local_candidates, local_qualified, local_rejections = [], [], []
     wrong_visibility_rows = []
     wrong_visibility_counts = Counter()
@@ -338,6 +343,9 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         if data.get("private_audit") is not None:
             audit = data["private_audit"]
             audits.append(audit)
+            retained_language_exceptions += bool(
+                audit.get("language_exception")
+            )
             execution_outcomes[audit.get("execution_outcome", audit["outcome"])] += 1
             runtime = audit.get("runtime") or {}
             invalidations = runtime.get("invalidations", [])
@@ -418,6 +426,16 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 report_statuses[result.get("status", "unknown")] += 1
                 executor_normalized_results += bool(
                     result.get("executor_result_normalized")
+                )
+                witnessed = bool(
+                    result.get("observed_handoff_discrepancy_count", 0)
+                )
+                witnessed_report_reviews += witnessed
+                witnessed_report_fallbacks += (
+                    witnessed and result.get("status") == "fallback"
+                )
+                witness_critic_rereviews += bool(
+                    result.get("critic_witness_rereviewed")
                 )
                 for failure in result.get("failures", []):
                     if failure.get("stage") == "guard":
@@ -566,6 +584,9 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "publication_generation_process_leaks": len(
             publication_guard_rows
         ),
+        "publication_surface_leaks": len(publication_guard_rows),
+        "language_exceptions_with_retained_audit":
+            retained_language_exceptions,
         "wrong_visibility_by_explicit_verify": dict(wrong_visibility_counts),
         "wrong_visibility_execution_outcomes": {
             name: dict(counters)
@@ -585,6 +606,11 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "subagent_report_generation_modes": dict(report_modes),
         "subagent_report_review_statuses": dict(report_statuses),
         "subagent_executor_result_normalized": executor_normalized_results,
+        "subagent_reports_with_complete_step_discrepancy":
+            witnessed_report_reviews,
+        "subagent_complete_step_discrepancy_fallbacks":
+            witnessed_report_fallbacks,
+        "subagent_witness_critic_rereviews": witness_critic_rereviews,
         "subagent_guard_failure_causes": dict(report_guard_failures),
         "subagent_review_failure_stages": dict(report_review_failures),
         "main_action_generation_modes": dict(main_modes),
@@ -835,15 +861,34 @@ def generate_turns(
     def write(directory: Path, plan: dict, data: dict) -> None:
         _atomic_json(directory / f"{plan['index']:06d}.json", data)
 
-    def as_failure(scene: dict, exc: Exception) -> dict:
-        if isinstance(exc, FaultUnsupported):
-            status = "skipped_unsupported"
-        else:
-            status = "rejected_validation"
+    def as_failure(scene: dict, exc: Exception, *,
+                   source: dict | None = None,
+                   phase: str | None = None) -> dict:
+        status = ("skipped_unsupported" if isinstance(exc, FaultUnsupported)
+                  else "rejected_validation")
+        base = source or {"task_id": scene["task_id"]}
+        # Stage 4C exceptions must NEVER erase the already-replayed 4A
+        # outcome or the actual 4B report reviews. Only the publication
+        # attempt failed. A failed 4B attempt also retains 4A, but must
+        # not present deterministic 4A previews as LLM-reviewed reports.
+        audit = deepcopy(base.get("private_audit"))
+        if isinstance(audit, dict):
+            audit["language_exception"] = {
+                "phase": phase, "kind": type(exc).__name__,
+                "message": str(exc)[:300],
+            }
+            audit["outcome"] = status
+            audit["language_review_accepted"] = False
+            audit["accepted_turns"] = 0
+            audit["candidate_local_turns"] = []
+            audit["main_action_reviews"] = []
+            if phase == "stage4b":
+                audit["subagent_report_reviews"] = []
         return {
-            "task_id": scene["task_id"], "status": status,
-            "error": str(exc)[:300], "episode": None,
-            "turns": [], "private_audit": None,
+            **base, "task_id": scene["task_id"],
+            "status": status, "error": str(exc)[:300],
+            "episode": None, "turns": [],
+            "private_audit": audit,
         }
 
     def _progress_bucket(data: dict) -> str:
@@ -1127,7 +1172,9 @@ def generate_turns(
                 **source, "episode": episode, "private_audit": audit,
             }
         except (ValueError, KeyError, TypeError) as exc:
-            data = as_failure(scene, exc)
+            data = as_failure(
+                scene, exc, source=source, phase="stage4b",
+            )
         write(stage_b, plan, data)
 
     def make_main(plan: dict, tick) -> None:
@@ -1151,7 +1198,9 @@ def generate_turns(
                 "private_audit": audit,
             }
         except (ValueError, KeyError, TypeError) as exc:
-            data = as_failure(scene, exc)
+            data = as_failure(
+                scene, exc, source=source, phase="stage4c",
+            )
         write(journal, plan, data)
 
     def published_recovery(index: int) -> bool:
@@ -1289,7 +1338,7 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_1",
+        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_2",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
         "max_candidates_per_feedback_round": max_candidates_per_round,
@@ -1299,6 +1348,9 @@ def generate_turns(
             max_language_attempts_per_round,
         "candidate_selection_diagnostics": str(
             output / "private" / "candidate_selection.jsonl"
+        ),
+        "candidate_backfill_diversity": (
+            "same_recovery_priority_distinct_fault_kind_first"
         ),
         "evidence_affordance_diagnostics": str(
             output / "private" / "scene_evidence_affordances.jsonl"

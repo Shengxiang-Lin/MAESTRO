@@ -99,6 +99,54 @@ It also does not add optional verification sources to Stage 1 or create
 an online agent evaluation environment. A private Gold comparison
 decides data publication eligibility, never the next Main action.
 
+## V10.2: report handoff fidelity and retained recovery audits
+
+Stage 4A evidence replay and the trusted Stage 1–3 inputs remain frozen.
+
+1. Stage 4B now computes conservative **complete-step discrepancy witnesses**
+   only from actual executed, adjacent, identity-preserving operators
+   (`project`, `take`, `sort`, standard filters, etc.).
+   A snapshot is complete only if `sampled_result_rows` includes the
+   entire step `output_row_count`; absence from truncated previews
+   is NEVER treated as proof of a mismatch. The LLM Author/Critic receive
+   these concrete witnesses and may objectively report the discrepancy
+   without asserting an unknown error cause or private clean answer.
+   A disputed witness may trigger a second **independent** Critic review,
+   never automatic acceptance. Existing deterministic WorkProduct and
+   unsupported-value guards stay active.
+2. Stage 4B authored prose and Stage 4C's trusted historical reports
+   normalize synthetic Macro (`work_M*`) and primitive (`m*_op*`)
+   execution identifiers into natural Sub-Agent language. Structured
+   rows, source provenance, executor status and tool bindings are
+   immutable. The final publication guard now checks **both**
+   `subtask_history` (Main input) and Main output for these labels.
+3. A Stage-4C dispatch validation error is now recorded as a
+   nonpublishable language review with the existing successful
+   execution/4B audit retained. Unexpected 4B/4C exceptions also keep
+   the prior stage's immutable audit, with clear `language_exception`
+   phase metadata, rather than losing actual 4A recovery counts.
+4. Candidate reserves still prioritize the **hardest actual recovery
+   behavior** (not the injected fault label). Within an equal recovery
+   priority, different fault kinds are attempted earlier, improving
+   language backfill diversity without moving easy Missing ahead of
+   causal invalidation.
+5. Summary diagnostics include
+   `subagent_reports_with_complete_step_discrepancy`,
+   `subagent_complete_step_discrepancy_fallbacks`,
+   `subagent_witness_critic_rereviews`,
+   `language_exceptions_with_retained_audit`, and
+   `publication_surface_leaks`. They are not accuracy metrics until
+   confirmed on an actual LLM run.
+
+Use a **new** output directory for V10.2; e.g.:
+
+```bash
+python -m environment generate-untrusted-turns \
+  --config environment/configs/untrusted_orchestration.yaml \
+  --mode llm \
+  --output-dir environment/data/maestro_untrusted_rounds_v10_2
+```
+
 ## V10.1: visible-evidence reasoning fidelity, backfill, and metric fixes
 
 V10.1 leaves the frozen Stage-1/2/3 inputs and zero-LLM 4A replay
