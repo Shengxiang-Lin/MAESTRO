@@ -5,7 +5,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from dataset.prepare_da_grpo import make_examples, check_order, check_renderer_compatibility
+from dataset.prepare_da_grpo import make_examples, check_order, check_renderer_compatibility, validate_prompt_lengths
+from dataset.tokenization import extract_token_ids
 
 
 class TestExportContract(unittest.TestCase):
@@ -104,6 +105,47 @@ class TestExportContract(unittest.TestCase):
     def test_order_validation(self):
         with self.assertRaisesRegex(ValueError, "Out-of-order"):
             check_order({"x": [{"step_index": 2}, {"step_index": 1}]})
+
+
+
+class TestTokenizationContracts(unittest.TestCase):
+    def test_extract_unbatched_input_ids_from_supported_transformers_outputs(self):
+        class FakeArray:
+            def __init__(self, data):
+                self.data = data
+
+            def tolist(self):
+                return self.data
+
+        for result in (
+            [7, 8, 9],
+            FakeArray([[7, 8, 9]]),
+            {"input_ids": FakeArray([7, 8, 9]), "attention_mask": [1, 1, 1]},
+            {"input_ids": [[7, 8, 9]]},
+        ):
+            with self.subTest(type=type(result).__name__):
+                self.assertEqual(extract_token_ids(result), [7, 8, 9])
+        for bad in (
+            {"attention_mask": [1, 1]},
+            {"input_ids": [[7, 8], [9, 10]]},
+            "not token IDs",
+        ):
+            with self.subTest(bad=repr(bad)), self.assertRaises(ValueError):
+                extract_token_ids(bad)
+
+    def test_length_check_uses_input_ids_not_batch_encoding_key_count(self):
+        class FakeTokenizer:
+            def apply_chat_template(self, *args, **kwargs):
+                return {"input_ids": [[7, 8, 9, 10, 11]], "attention_mask": [[1]*5]}
+
+        rows = [{
+            "prompt": [{"role": "user", "content": "Five tokens"}],
+            "extra_info": {"sample_id": "x-round-01"},
+        }]
+        with patch("transformers.AutoTokenizer.from_pretrained", return_value=FakeTokenizer()):
+            validate_prompt_lengths(rows, "fake-qwen-tokenizer", limit=5)
+            with self.assertRaisesRegex(ValueError, "1 prompts exceed 4 tokens"):
+                validate_prompt_lengths(rows, "fake-qwen-tokenizer", limit=4)
 
 
 if __name__ == "__main__":

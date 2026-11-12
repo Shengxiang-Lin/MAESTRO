@@ -3,6 +3,15 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from typing import Any
+from pathlib import Path
+import sys
+
+# This script is launched by path; ensure the shared dataset package is importable.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from dataset.tokenization import extract_token_ids
 
 import torch
 import torch.nn.functional as F
@@ -19,7 +28,7 @@ def load_policy(model_path: str, cfg: dict, *, resume_adapter: str | None = None
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     backbone = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=dtype, trust_remote_code=True,
+        model_path, dtype=dtype, trust_remote_code=True,
         attn_implementation="sdpa", low_cpu_mem_usage=True,
     )
     if resume_adapter:
@@ -45,11 +54,10 @@ def load_policy(model_path: str, cfg: dict, *, resume_adapter: str | None = None
 
 
 def prompt_ids(tokenizer: Any, messages: list[dict], max_length: int) -> list[int]:
-    ids = tokenizer.apply_chat_template(
+    encoded = tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=True,
     )
-    if not isinstance(ids, list) or not ids:
-        raise ValueError("Qwen chat template did not produce token IDs")
+    ids = extract_token_ids(encoded)
     if len(ids) > max_length:
         raise ValueError(
             f"Training prompt is {len(ids)} tokens, exceeding {max_length}; "

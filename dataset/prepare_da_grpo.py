@@ -12,6 +12,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
+from dataset.tokenization import extract_token_ids
 from environment.base_orchestration.o1_compat import o1_prompt_from_turn
 from environment.base_orchestration.trajectory_builder import _answer_text
 
@@ -230,9 +231,10 @@ def validate_prompt_lengths(rows: list[dict], tokenizer_path: str | None, limit:
     violations = []
     for row in rows:
         messages = row["prompt"]
-        tokens = tokenizer.apply_chat_template(
+        encoded = tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True,
         )
+        tokens = extract_token_ids(encoded)
         if len(tokens) > limit:
             violations.append((row["extra_info"]["sample_id"], len(tokens)))
     if violations:

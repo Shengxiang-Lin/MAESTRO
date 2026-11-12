@@ -132,6 +132,45 @@ class ToyPEFT(torch.nn.Module):
 
 
 class TestActionLogprob(unittest.TestCase):
+    def test_prompt_ids_accepts_hf_tensor_and_batch_encoding(self):
+        class FakeTokenizer:
+            def __init__(self, result):
+                self.result = result
+
+            def apply_chat_template(self, messages, **kwargs):
+                self._messages = messages
+                self._kwargs = kwargs
+                return self.result
+
+        messages = [{"role": "user", "content": "question"}]
+        cases = (
+            [100, 101, 102],
+            torch.tensor([100, 101, 102], dtype=torch.long),
+            torch.tensor([[100, 101, 102]], dtype=torch.long),
+            {"input_ids": [[100, 101, 102]], "attention_mask": [[1, 1, 1]]},
+            {"input_ids": torch.tensor([[100, 101, 102]])},
+        )
+        for encoded in cases:
+            with self.subTest(type=type(encoded).__name__):
+                tokenizer = FakeTokenizer(encoded)
+                self.assertEqual(policy.prompt_ids(tokenizer, messages, 3), [100, 101, 102])
+                self.assertTrue(tokenizer._kwargs["add_generation_prompt"])
+                with self.assertRaisesRegex(ValueError, "exceeding 2"):
+                    policy.prompt_ids(tokenizer, messages, 2)
+
+    def test_prompt_ids_rejects_missing_or_batched_ids(self):
+        class FakeTokenizer:
+            def __init__(self, ids):
+                self.ids = ids
+
+            def apply_chat_template(self, *args, **kwargs):
+                return self.ids
+
+        for bad in ({"attention_mask": [1, 1]}, [[1, 2], [3, 4]], "text", []):
+            with self.subTest(value=repr(bad)):
+                with self.assertRaises(ValueError):
+                    policy.prompt_ids(FakeTokenizer(bad), [{"role": "user", "content": "x"}], 9)
+
     def test_shift_and_lm_head_chunked_projection(self):
         """The action logprob must predict token t from hidden state t-1."""
         model = ToyPEFT()
