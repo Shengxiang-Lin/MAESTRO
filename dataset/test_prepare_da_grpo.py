@@ -59,10 +59,10 @@ class TestExportContract(unittest.TestCase):
             )
 
     def test_historical_o1_docstring_only_change_is_safe(self):
-        current = ('"""The on-disk per-turn reviewed-turn input stores"""\\n'
-                   'def render():\\n'
-                   '    """Rebuild a full baseline O1 prompt for an exported compact reviewed-turn turn."""\\n'
-                   '    return "prompt"\\n')
+        current = ('"""The on-disk per-turn reviewed-turn input stores"""\n'
+                   'def render():\n'
+                   '    """Rebuild a full baseline O1 prompt for an exported compact reviewed-turn turn."""\n'
+                   '    return "prompt"\n')
         old = current.replace(
             "The on-disk per-turn reviewed-turn input stores",
             "The on-disk per-turn SFT input stores",
