@@ -14,7 +14,8 @@ _UNCERTAIN = re.compile(
     r"\b(?:conflict(?:ing)?|contradic(?:tion|tory)|disagree(?:ment)?|"
     r"inconsisten(?:t|cy)|discrepan(?:t|cy)|mismatch(?:ed)?|"
     r"unresolved|uncertain|ambiguous|verify|verification|recheck|"
-    r"cross-check|reconcile|validate|not\s+(?:yet\s+)?confirmed|"
+    r"cross-check|reconcile|validate|resolve|re-examin\w*|"
+    r"re-validat\w*|compar\w*|disjoint|unaligned|not\s+(?:yet\s+)?confirmed|"
     r"needs?\s+(?:another\s+)?check)\b", re.I,
 )
 _FALSE_FINALITY = (
@@ -64,6 +65,15 @@ def reasoning_evidence_issues(
         return ["missing_current_conflict_or_verification_motivation"]
     for phrase in re.split(r"(?<=[.!?])\s+", reasoning):
         if not any(pattern.search(phrase) for pattern in _FALSE_FINALITY):
+            continue
+        # Future conditional ("once this conflict is resolved") is not
+        # a past-tense claim that verification already happened.
+        if re.search(
+            r"\b(?:once|until|if|when|unless|after)\b.{0,90}"
+            r"\b(?:conflict|discrepancy|mismatch|inconsistency)\b"
+            r".{0,90}\b(?:resolved|reconciled|verified)\b",
+            phrase, re.I,
+        ):
             continue
         # Quoting a previous Sub-Agent's *claim* is allowed if Main explicitly
         # questions it in the same sentence.

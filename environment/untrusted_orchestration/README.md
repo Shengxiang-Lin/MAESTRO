@@ -55,8 +55,9 @@ V10 adds two *offline-only* steps around the existing 4A executor:
    revalidation, downstream invalidation, recovered Wrong/Partial/Missing,
    or non-recovery. Dedupe comparable evidence-request behaviors within
    a feedback round; prefer real downstream invalidations over routine
-   missing-result retries. Only `max_selected_per_round` **recovered**
-   candidates enter 4B and 4C. The others remain in private 4A journals.
+   missing-result retries. Initially only `max_selected_per_round` **recovered** candidates
+   enter 4B and 4C. V10.1 uses ranked backfill, within its separate total
+   language-attempt budget, only when an earlier reviewed candidate fails.
 
 Default settings:
 
@@ -104,9 +105,9 @@ V10.1 leaves the frozen Stage-1/2/3 inputs and zero-LLM 4A replay
 unchanged. It addresses problems in the V10 language-review publication:
 
 * 4C Author **and** Critic receive the exact Main-visible
-  \`main_visible_justification\`, operation and target fields of the current
+  `main_visible_justification`, operation and target fields of the current
   evidence requests. The Critic must not disregard a visible
-  Result/Summary conflict just because the returned status is \`done\`.
+  Result/Summary conflict just because the returned status is `done`.
   A narrow independent *second review* is allowed when the Critic
   incorrectly declares a cited conflict nonexistent; it never
   auto-accepts a rejected candidate.
@@ -114,19 +115,19 @@ unchanged. It addresses problems in the V10 language-review publication:
   simultaneously requests verification and asserts that the same
   discrepancy was already successfully resolved or verified. The guard
   sends an explicit revision reason back to the Author.
-* \`generation.max_selected_per_round\` is the number of desired accepted
-  candidates per feedback round. \`generation.max_language_attempts_per_round\`
+* `generation.max_selected_per_round` is the number of desired accepted
+  candidates per feedback round. `generation.max_language_attempts_per_round`
   is the **total** per-round 4B/4C attempt budget, including the first
   candidate (default: 3). If the first candidate fails language review,
   the next ranked, distinct **already recovered** 4A candidate is tried;
   otherwise no additional LLM work is done. All attempts are recorded
-  in \`private/candidate_selection.jsonl\` with their ranks and
+  in `private/candidate_selection.jsonl` with their ranks and
   language-review outcomes. Rejections are not mixed into positive SFT.
-* \`main_actions_planned/processed/skipped_downstream\` count only 4C
+* `main_actions_planned/processed/skipped_downstream` count only 4C
   authoring attempts, never template 4A replay actions. Stage-4A
   execution outcomes and downstream invalidations continue to cover
   **all** candidate trials. The terminal summary separately shows
-  \`candidate_trials\` and \`requested_feedback_rounds\`; neither is
+  `candidate_trials` and `requested_feedback_rounds`; neither is
   a count of independently generated questions.
 
 Use a **new output directory** because code and manifest signatures

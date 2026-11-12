@@ -97,6 +97,19 @@ class Stage4ReasoningFidelityTests(unittest.TestCase):
             "operation": "retrieve_required_evidence"
         }]), [])
 
+    def test_future_conditional_and_recheck_would_not_be_blocked(self):
+        pending = (
+            "The lookup reported KEY2-15385 while its upstream key was "
+            "KEY2-17716. This mismatch needs another source check. Once "
+            "this conflict is resolved, the completion rate can be calculated."
+        )
+        self.assertEqual(reasoning_evidence_issues(pending, VERIFY), [])
+        separate = (
+            "The two candidate sets were disjoint. To resolve this, I must "
+            "re-examine the video evidence before the next lookup."
+        )
+        self.assertEqual(reasoning_evidence_issues(separate, VERIFY), [])
+
     def test_reasoning_guard_requests_revision_before_critic(self):
         wrong = (
             "The previous round successfully resolved the conflicting "
