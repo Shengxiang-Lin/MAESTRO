@@ -1,6 +1,8 @@
 """CPU-only contract tests for the single-GPU O1 GRPO trainer."""
 from __future__ import annotations
 
+import json
+
 import importlib.util
 from pathlib import Path
 import sys
@@ -167,11 +169,22 @@ class TestRolloutTokens(unittest.TestCase):
         class FakeTokenizer:
             def decode(self, token_ids, **kwargs):
                 return "".join(chr(x) for x in token_ids)
-        text = 'noise {"action":"complete","params":{"answer":"} escaped \\\\" ok"}} trailing'
+        # Build genuinely valid escaped JSON instead of a hand-escaped
+        # Python literal. The old fixture contained two backslashes before
+        # an unescaped quote, so the JSON root never legally closed.
+        value = "} escaped " + chr(92) + chr(34) + " ok"
+        payload = {"action": "complete", "params": {"answer": value}}
+        text = "noise " + json.dumps(payload) + " trailing"
         end = rollout.json_prefix_end(FakeTokenizer(), list(map(ord, text)))
         self.assertIsNotNone(end)
-        self.assertTrue(text[:end].endswith('"}}'))
+        self.assertEqual(json.loads(text[text.index("{"):end]), payload)
         self.assertFalse(text[:end].endswith("trailing"))
+        self.assertIsNone(
+            rollout.json_prefix_end(
+                FakeTokenizer(),
+                list(map(ord, '{"action":"complete","params":{"answer":"unfinished"')),
+            )
+        )
 
 
 if __name__ == "__main__":
