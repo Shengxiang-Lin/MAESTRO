@@ -202,3 +202,42 @@ python baseline/da-grpo/train.py \
   --max-steps 1 --max-completion-tokens 512 \
   --output-dir baseline/da-grpo/output_unsloth_smoke_bf16_kv
 ```
+
+## FlashInfer Autotuner failure after KV initialization (2026-11-12)
+
+A follow-up error occurs **after** the BF16 KV Cache has initialized and
+vLLM reports `FlashInfer top-p/top-k sampling disabled`:
+
+```text
+No module named 'flashinfer.autotuner'; 'flashinfer' is not a package
+```
+
+This is not an Attention or Tokenizer error. The Unsloth opt-out hides
+FlashInfer from Python import selection; vLLM 0.32's default **O2**
+optimization preset nevertheless sets
+`kernel_config.enable_flashinfer_autotune=True`. Its startup cache
+synchronization then tries to import `flashinfer.autotuner` despite the
+mask. The `enforce_eager` flag does not disable that autotuner.
+
+**Fix:** `train.py:disable_vllm_flashinfer_autotune` changes vLLM's
+in-memory `OPTIMIZATION_LEVEL_TO_CONFIG` presets to opt out of this
+autotune flag **before vLLM constructs the engine**. This is a
+targeted compatibility workaround for Unsloth 2026.11.4 +
+vLLM 0.32.0. It neither edits installed packages nor introduces a
+fake FlashInfer module. A regression test checks the flag for each
+optimization level; if the vLLM internal preset shape changes,
+initialization fails early with a clear message.
+
+```bash
+git pull origin main
+python -m unittest discover -s baseline/da-grpo -p 'test_*.py'
+python baseline/da-grpo/train.py \
+  --max-steps 1 --max-completion-tokens 512 \
+  --output-dir baseline/da-grpo/output_unsloth_smoke_no_fi_autotune
+```
+
+The startup log should contain
+`[da-grpo] Disabled vLLM FlashInfer autotune in all optimization presets`
+and no attempt to import `flashinfer.autotuner` in the worker.
+This is not yet an end-to-end GPU validation: inspect the subsequent
+TRL rollout/gradient logs to verify an optimizer update completes.

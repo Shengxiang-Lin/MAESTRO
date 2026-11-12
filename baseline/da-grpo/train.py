@@ -284,6 +284,36 @@ def configure_runtime(cfg: dict) -> None:
     os.environ["UNSLOTH_VLLM_STANDBY"] = "1" if cfg["rollout"]["standby"] else "0"
 
 
+def disable_vllm_flashinfer_autotune() -> None:
+    """Disable vLLM 0.32's FlashInfer autotuner under Unsloth's opt-out.
+
+    Unsloth's UNSLOTH_VLLM_NO_FLASHINFER masks the 'flashinfer' package so
+    vLLM cannot select its kernels. vLLM 0.32 nonetheless enables its
+    FlashInfer *autotuner* through the default O2 optimization preset, even
+    in enforce_eager mode. During worker initialization the autotune-cache
+    synchronization then imports flashinfer.autotuner and crashes because
+    the masked package is not importable.
+
+    Unsloth's load_vllm entrypoint does not expose vLLM's
+    enable_flashinfer_autotune EngineArgs field. Adjust the official vLLM
+    in-memory optimization presets before the engine is constructed, rather
+    than patching site-packages or creating an unsafe fake FlashInfer module.
+    """
+    from vllm.config.vllm import OPTIMIZATION_LEVEL_TO_CONFIG
+
+    if not OPTIMIZATION_LEVEL_TO_CONFIG:
+        raise RuntimeError("vLLM optimization presets unavailable")
+    for preset in OPTIMIZATION_LEVEL_TO_CONFIG.values():
+        kernel = preset.get("kernel_config")
+        if not isinstance(kernel, dict) or "enable_flashinfer_autotune" not in kernel:
+            raise RuntimeError(
+                "vLLM optimization preset changed; cannot safely disable "
+                "FlashInfer autotuning for this Unsloth/vLLM combination"
+            )
+        kernel["enable_flashinfer_autotune"] = False
+    print("[da-grpo] Disabled vLLM FlashInfer autotune in all optimization presets", flush=True)
+
+
 def build_grpo_kwargs(cfg: dict) -> dict:
     """Pure constructor argument mapper; tested without importing CUDA libraries."""
     plan = batch_plan(cfg)
@@ -344,6 +374,9 @@ def train(cfg: dict, *, resume: str | None = None) -> None:
 
     # IMPORTANT: Unsloth MUST be imported before TRL so it can patch GRPOTrainer.
     from unsloth import FastLanguageModel
+    # Must run after Unsloth initializes its patches, but before it creates
+    # the vLLM EngineArgs/VllmConfig for FastLanguageModel.from_pretrained().
+    disable_vllm_flashinfer_autotune()
     from trl import GRPOConfig, GRPOTrainer
     from datasets import Dataset
     from reward_adapter import make_reward_function

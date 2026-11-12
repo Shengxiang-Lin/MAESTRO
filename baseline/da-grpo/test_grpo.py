@@ -77,6 +77,33 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(os.environ["VLLM_USE_FLASHINFER_SAMPLER"], "0")
             self.assertNotIn("VLLM_ATTENTION_BACKEND", os.environ)
 
+    def test_flashinfer_autotune_disabled_in_all_vllm_presets(self):
+        # Simulate the vLLM 0.32 internal optimization levels without
+        # importing CUDA packages during the CPU-only tests.
+        from types import ModuleType
+        fake_module = ModuleType("vllm.config.vllm")
+        fake_module.OPTIMIZATION_LEVEL_TO_CONFIG = {
+            "O0": {"kernel_config": {"enable_flashinfer_autotune": False}},
+            "O1": {"kernel_config": {"enable_flashinfer_autotune": True}},
+            "O2": {"kernel_config": {"enable_flashinfer_autotune": True}},
+            "O3": {"kernel_config": {"enable_flashinfer_autotune": True}},
+        }
+        with patch.dict(sys.modules, {"vllm.config.vllm": fake_module}):
+            train.disable_vllm_flashinfer_autotune()
+        self.assertTrue(all(
+            not preset["kernel_config"]["enable_flashinfer_autotune"]
+            for preset in fake_module.OPTIMIZATION_LEVEL_TO_CONFIG.values()
+        ))
+
+    def test_flashinfer_autotune_unknown_preset_rejected(self):
+        fake_module = ModuleType("vllm.config.vllm")
+        fake_module.OPTIMIZATION_LEVEL_TO_CONFIG = {
+            "O2": {"kernel_config": {}},
+        }
+        with patch.dict(sys.modules, {"vllm.config.vllm": fake_module}):
+            with self.assertRaisesRegex(RuntimeError, "optimization preset changed"):
+                train.disable_vllm_flashinfer_autotune()
+
     def test_invalid_batch_or_context_rejected(self):
         import tempfile
         import yaml
