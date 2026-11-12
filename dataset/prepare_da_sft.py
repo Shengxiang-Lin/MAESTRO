@@ -65,6 +65,19 @@ def index_turns(
     return turns, settings
 
 
+def comparable(value: Any) -> Any:
+    """Normalize Parquet struct null-fill for heterogeneous params schemas.
+
+    Arrow materializes absent keys (e.g. complete.params.tasks) as None in a
+    union struct. Those were not fields in the original action JSON.
+    """
+    if isinstance(value, dict):
+        return {key: comparable(item) for key, item in value.items() if item is not None}
+    if isinstance(value, list):
+        return [comparable(item) for item in value]
+    return value
+
+
 def build_sft_rows(
     grpo_rows: list[dict],
     turns: dict[tuple[str, str], dict],
@@ -144,7 +157,7 @@ def build_sft_rows(
         history = (turn.get("input") or {}).get("subtask_history")
         if (
             info.get("expert_action") != action["action"]
-            or info.get("expert_params") != params
+            or comparable(info.get("expert_params")) != comparable(params)
             or info.get("subtask_history") != history
             or info.get("step_index") != turn.get("round")
             or info.get("question") != scene.get("question")
