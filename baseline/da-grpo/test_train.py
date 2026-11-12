@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+from types import ModuleType
+from tempfile import TemporaryDirectory
 
 import importlib.util
 from pathlib import Path
 import sys
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -44,6 +46,24 @@ class TestConfig(unittest.TestCase):
         )
         self.assertEqual(cfg["rollout"]["max_prompt_tokens"], 24576)
         self.assertEqual(cfg["rollout"]["max_response_tokens"], 4096)
+
+    def test_blackwell_vllm_init_uses_triton_eager_and_sleep_mode(self):
+        cfg = trainer.load_config()
+        vllm_cfg = {**cfg["rollout"], "lora_rank": cfg["model"]["lora_rank"]}
+        module = ModuleType("vllm")
+        module.LLM = Mock()
+        with TemporaryDirectory() as tmp, patch.dict(sys.modules, {"vllm": module}):
+            engine = rollout.ColocatedRollout(
+                "local-Qwen3-8B", None, vllm_cfg, Path(tmp) / "adapter",
+            )
+            engine.initialize()
+            kwargs = module.LLM.call_args.kwargs
+            self.assertEqual(kwargs["attention_backend"], "TRITON_ATTN")
+            self.assertTrue(kwargs["enforce_eager"])
+            self.assertEqual(kwargs["gpu_memory_utilization"], 0.35)
+            self.assertEqual(kwargs["kv_cache_dtype"], "fp8")
+            self.assertTrue(kwargs["enable_sleep_mode"])
+            self.assertEqual(kwargs["max_lora_rank"], 32)
 
     def test_no_provider_key_is_stored_in_yaml(self):
         cfg = trainer.load_config()
