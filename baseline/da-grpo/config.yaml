@@ -1,39 +1,57 @@
-# Orchestra-o1 DA-GRPO reproduction: all non-secret runtime settings.
-# Paths are resolved relative to the MAESTRO repository root.
-# Do NOT put API keys in this file; train.py asks via getpass on a TTY.
+# Single-GPU Orchestra-o1-style GRPO. No verl; no Future Latent or SFT loss.
+# Paths relative to MAESTRO root. Never put an API key in YAML.
 version: 1
 
 paths:
-  verl_dir: ../verl
-  model_path: base_models/Qwen3-8B
-  data_dir: dataset/data/da-grpo
+  model: base_models/Qwen3-8B
+  train_parquet: dataset/data/da-grpo/train.parquet
+  output_dir: baseline/da-grpo/output
 
 judge:
-  # Reuse the existing provider endpoint and model ID from model_config.yaml.
   registry: config/model_config.yaml
   model: qwen3.7-flash
   api_key_env: DASHSCOPE_API_KEY
-  # Qwen hybrid-thinking models can otherwise spend the small judge response
-  # token budget on reasoning; top-level DashScope HTTP request argument.
   enable_thinking: false
+  workers: 4
+
+model:
+  dtype: bfloat16
+  gradient_checkpointing: true
+  lora_rank: 32
+  lora_alpha: 64
+  lora_dropout: 0.0
+  lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  logits_chunk_size: 128
+
+rollout:
+  backend: vllm
+  group_size: 8
+  temperature: 1.0
+  top_p: 1.0
+  max_prompt_tokens: 24576
+  max_response_tokens: 4096
+  max_model_len: 32768
+  gpu_memory_utilization: 0.40
+  kv_cache_dtype: fp8
+  enable_sleep_mode: true
+  enable_prefix_caching: false
+  max_num_seqs: 8
+  # One vLLM server and the policy share one 96 GB-class GPU in phases.
+  sync_dir: baseline/da-grpo/output/vllm_sync
 
 training:
-  nnodes: 1
-  n_gpus_per_node: 8      # Original Orchestra-o1 single-node 8xH20 setup.
-  train_batch_size: 24
-  ppo_mini_batch_size: 12
-  max_prompt_length: 24576
-  max_response_length: 4096
-  max_token_len_per_gpu: 32768
-  rollout_n: 8
-  learning_rate: 0.000005
   epochs: 5
-  save_freq: 54
-  tensor_parallel_size: 2
-  gpu_memory_utilization: 0.35
-  ray_num_cpus: 32
-
-logging:
-  # Use [console, wandb, file] to reproduce the original logging destinations.
-  # [console, file] avoids requiring a WandB login during setup.
-  backends: [console, file]
+  max_updates: null
+  learning_rate: 0.00005
+  weight_decay: 0.01
+  clip_range: 0.2
+  kl_coef: 0.01
+  micro_batch_size: 1
+  max_tokens_per_gpu: 32768
+  max_grad_norm: 1.0
+  warmup_ratio: 0.03
+  save_every: 50
+  log_every: 1
+  seed: 42
+  # A conservative guard, not a promise that training will fit.
+  min_gpu_memory_gib: 80
