@@ -41,21 +41,21 @@ def make_reward_function(workers: int):
         **_: Any,
     ) -> list[float]:
         """Returns one O1 reward per generated completion (TRL repeats columns)."""
-        from reward_fn import compute_score
-
         n = len(completions)
         if not (len(data_source) == len(ground_truth) == len(extra_info_json) == n):
             raise ValueError("TRL completion/metadata length mismatch")
 
+        metadata = [json.loads(item) for item in extra_info_json]
+        if any(not isinstance(item, dict) or not item.get("has_expert") for item in metadata):
+            raise ValueError("Missing reward-only expert metadata")
+        from reward_fn import compute_score
+
         def score(index: int) -> float:
-            metadata = json.loads(extra_info_json[index])
-            if not isinstance(metadata, dict) or not metadata.get("has_expert"):
-                raise ValueError("Missing reward-only expert metadata")
             scored = compute_score(
                 data_source[index],
                 completion_text(completions[index]),
                 ground_truth[index],
-                metadata,
+                metadata[index],
             )
             value = float(scored["score"] if isinstance(scored, dict) else scored)
             if not 0 <= value <= 1:

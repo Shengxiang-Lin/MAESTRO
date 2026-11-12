@@ -2,8 +2,8 @@
 # select a mutually compatible Torch/Transformers/vLLM build for the GPU.
 # Our RTX 6000D previously worked with vLLM 0.32 + TRITON_ATTN; do NOT
 # indiscriminately install an external flash-attn or flashinfer wheel.
-unsloth>=2026.10
-unsloth_zoo>=2026.10
+unsloth
+unsloth_zoo
 trl>=1.15.0
 datasets
 pyarrow

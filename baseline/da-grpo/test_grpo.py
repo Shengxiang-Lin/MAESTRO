@@ -46,7 +46,8 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(opts["per_device_train_batch_size"], 1)
         self.assertEqual(opts["gradient_accumulation_steps"], 32)
         self.assertEqual(opts["generation_batch_size"], 32)
-        self.assertEqual(opts["max_prompt_length"], 24576)
+        self.assertNotIn("max_prompt_length", opts)
+        self.assertEqual(opts["warmup_steps"], 0.03)
         self.assertEqual(opts["max_completion_length"], 4096)
         self.assertFalse(opts["vllm_importance_sampling_correction"])
 
