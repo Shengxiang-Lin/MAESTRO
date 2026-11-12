@@ -30,6 +30,13 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(plan["gradient_accumulation_steps"], 32)
         self.assertEqual(plan["generation_batch_size"], 32)
         self.assertEqual(cfg["training"]["epochs"], 3)
+        self.assertEqual(cfg["model"]["max_seq_length"], 16384)
+        self.assertEqual(cfg["rollout"]["max_prompt_tokens"], 12288)
+        self.assertEqual(cfg["rollout"]["max_completion_tokens"], 4096)
+        self.assertEqual(
+            cfg["rollout"]["max_prompt_tokens"] + cfg["rollout"]["max_completion_tokens"],
+            cfg["model"]["max_seq_length"],
+        )
         self.assertEqual(cfg["rollout"]["kv_cache_dtype"], "auto")
         self.assertEqual(cfg["rollout"]["gpu_memory_utilization"], 0.70)
         self.assertEqual(cfg["rollout"]["max_num_seqs"], 16)
@@ -53,6 +60,7 @@ class TestConfig(unittest.TestCase):
         self.assertNotIn("max_prompt_length", opts)
         self.assertEqual(opts["warmup_steps"], 0.03)
         self.assertEqual(opts["max_completion_length"], 4096)
+        self.assertEqual(opts["vllm_max_model_length"], 16384)
         self.assertFalse(opts["vllm_importance_sampling_correction"])
 
     def test_sm120_flash_attn_disallows_fp8_kv_cache(self):

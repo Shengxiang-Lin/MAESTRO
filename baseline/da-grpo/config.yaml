@@ -16,7 +16,7 @@ judge:
 
 model:
   dtype: bfloat16
-  max_seq_length: 32768
+  max_seq_length: 16384
   load_in_4bit: false
   lora_rank: 32
   lora_alpha: 64
@@ -26,7 +26,8 @@ model:
 rollout:
   prompts_per_step: 4
   num_generations: 8
-  max_prompt_tokens: 24576
+  # Total context = 12,288 prompt + 4,096 generated = 16,384 tokens.
+  max_prompt_tokens: 12288
   max_completion_tokens: 4096
   temperature: 1.0
   top_p: 1.0

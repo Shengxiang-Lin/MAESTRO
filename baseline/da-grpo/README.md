@@ -11,6 +11,11 @@ dependency and no fall-back to the old trainer.
 - **Framework**: `unsloth.FastLanguageModel(fast_inference=True)` +
   `trl.GRPOTrainer`; vLLM uses Unsloth's shared-weight integration,
   not a separately created second engine.
+- **Context**: 16,384 tokens total = 12,288-token prompt cap +
+  4,096-token completion cap. Long original Main-Agent history is
+  **not silently truncated**: the preflight tokenizer check aborts if a
+  dataset prompt exceeds 12,288 tokens. A CLI test that lowers the
+  completion cap to 512 still uses the same prompt validation limit.
 - **Batch**: 4 distinct prompts × 8 completions = **32 completions**
   in one generation batch. TRL's `per_device_train_batch_size=1`,
   `gradient_accumulation_steps=32`, and
@@ -288,3 +293,29 @@ secondary failure during GPU/allocator teardown. The tokenizer
 If CUDA is in a bad state after an OOM, exit the failed Python process
 and check `nvidia-smi` before restarting. The unchanged MAESTRO dataset
 and 4D Judge should remain the benchmark reference.
+
+## Why Prompt Batch 4 is not the per-device training micro-batch
+
+Here Prompt Batch means **four distinct Main-Agent decision states per
+optimizer update**. TRL repeats each state into eight candidate
+completions and performs 32 gradient accumulation micro-steps with
+`per_device_train_batch_size=1`. The vLLM generation batch is 32
+candidate requests, but `max_num_seqs=16` allows at most 16 active
+sequences at a time: the batch is scheduled dynamically, not necessarily
+fully parallel. The four groups' advantages are kept distinct.
+
+## 16K context after first-update OOM
+
+The default max context was reduced from 32,768 to 16,384 tokens to
+reduce long-sequence activation memory on a single 83 GiB GPU.
+The 4-prompt × 8-candidate GRPO algorithm and BF16 LoRA remain unchanged.
+`max_prompt_tokens=12,288` and `max_completion_tokens=4,096`
+must fit within the 16K total. Do not silently discard earlier
+Sub-Agent observations just to make an overlong prompt fit.
+
+If training fails with a preflight `prompts exceed 12288 tokens`
+message, the dataset contains inputs longer than this revised budget.
+Inspect those sample IDs and lengths; explicitly decide whether to
+filter, summarize, or restore the 32K context with additional memory
+optimization. A successful `--dry-run` is only config validation; it
+does not inspect real token lengths or execute GPU backward.
