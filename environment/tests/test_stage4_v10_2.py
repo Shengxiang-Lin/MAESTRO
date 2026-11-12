@@ -1,0 +1,360 @@
+"""V10.2 regression tests grounded in failed V10.1 review patterns."""
+from __future__ import annotations
+
+import importlib
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from environment.generate_question.program_ir import Relation
+from environment.tests.test_untrusted_orchestration import sample
+from environment.untrusted_orchestration.candidate_selection import (
+    select_recovered_candidates,
+)
+from environment.untrusted_orchestration.public_language import (
+    sanitize_public_prose, sanitize_public_report,
+)
+from environment.untrusted_orchestration.publication_guard import (
+    review_turn_surface,
+)
+from environment.untrusted_orchestration.report_observation import (
+    observed_handoff_discrepancies,
+)
+from environment.untrusted_orchestration.report_author import (
+    _observed_contract, _review_denies_witnessed_handoff,
+    naturalize_report,
+)
+from environment.untrusted_orchestration.state_machine import Attempt
+
+runner = importlib.import_module(
+    "environment.untrusted_orchestration.generate_turns"
+)
+
+
+def step(operation, identities, *, output_count=None):
+    return {
+        "operation": operation,
+        "execution_status": "done",
+        "output_row_count": (
+            len(identities) if output_count is None else output_count
+        ),
+        "output_schema": ["candidate_id", "marker_code"],
+        "sampled_result_rows": [
+            {"values": {"candidate_id": key, "marker_code": marker},
+             "source_fact_refs": ["visual:F001"]}
+            for key, marker in identities
+        ],
+    }
+
+
+class ReportObservationTests(unittest.TestCase):
+    def setUp(self):
+        # From V10.1 candidate 000002: filter returned Case-002/Case-016;
+        # identity-preserving project then returned Case-004.
+        self.filter = step("filter_eq", [
+            ("Case-002", "MK-6243"),
+            ("Case-016", "MK-0531"),
+        ])
+        self.project = step("project", [
+            ("Case-004", "MK-4525"),
+        ])
+
+    def test_real_visible_handoff_mismatch_is_supported(self):
+        observations = observed_handoff_discrepancies(
+            [self.filter, self.project]
+        )
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(
+            observations[0]["later_unmatched_identities"], ["Case-004"],
+        )
+        self.assertEqual(
+            observations[0]["earlier_observed_identities"],
+            ["Case-002", "Case-016"],
+        )
+        self.assertEqual(observations[0]["identity_field"], "candidate_id")
+
+    def test_preview_truncation_does_not_prove_missing_record(self):
+        truncated = step("filter_eq", [
+            ("Case-002", "MK-6243"),
+        ], output_count=5)
+        self.assertEqual(
+            observed_handoff_discrepancies([truncated, self.project]), []
+        )
+        transformed = step("lookup_by_key", [
+            ("Case-004", "MK-4525"),
+        ])
+        self.assertEqual(
+            observed_handoff_discrepancies([self.filter, transformed]), []
+        )
+        self.assertEqual(
+            observed_handoff_discrepancies([
+                self.filter, step("project", [
+                    ("Case-002", "MK-6243"),
+                ]),
+            ]), [],
+        )
+
+    def test_contract_uses_actual_observed_steps_not_gold(self):
+        task = {
+            "task_id": "read-visual", "source_ids": ["visual"],
+            "operator_chain": [{
+                "op": "filter_eq", "source_id": "visual",
+            }, {"op": "project", "source_id": "visual"}],
+        }
+        actual = Attempt(
+            task_id="read-visual", version=1, status="done",
+            product=Relation(("candidate_id", "marker_code"), ({
+                "values": {"candidate_id": "Case-004",
+                           "marker_code": "MK-4525"},
+                "support": ("visual:F001",),
+            },)),
+            available_fields=("candidate_id", "marker_code"),
+            used_parent_versions={},
+            runtime={"observed_operator_steps": [
+                self.filter, self.project,
+            ]},
+        )
+        contract = _observed_contract(
+            task, actual, "Read visual candidates."
+        )
+        self.assertEqual(
+            contract["observed_handoff_discrepancies"][0]
+            ["later_unmatched_identities"], ["Case-004"],
+        )
+        self.assertNotIn("gold", json.dumps(contract).lower())
+        self.assertTrue(_review_denies_witnessed_handoff({
+            "verdict": "fail",
+            "reason": "The report falsely claims a logical inconsistency "
+                      "between filter and project.",
+        }))
+
+    def test_witness_review_remains_failable(self):
+        task = {
+            "task_id": "read-visual", "source_ids": ["visual"],
+            "operator_chain": [{
+                "op": "filter_eq", "source_id": "visual",
+            }, {"op": "project", "source_id": "visual"}],
+        }
+        actual = Attempt(
+            task_id="read-visual", version=1, status="done",
+            product=Relation(("candidate_id", "marker_code"), ({
+                "values": {"candidate_id": "Case-004",
+                           "marker_code": "MK-4525"},
+                "support": ("visual:F001",),
+            },)),
+            available_fields=("candidate_id", "marker_code"),
+            used_parent_versions={},
+            runtime={"observed_operator_steps": [
+                self.filter, self.project,
+            ]},
+        )
+
+        class Author:
+            def complete_json(self, system, request):
+                return {
+                    "result": (
+                        "The delivered record contains candidate id "
+                        "Case-004 and marker code MK-4525."
+                    ),
+                    "summary": (
+                        "The preceding filter returned Case-002 and "
+                        "Case-016, but the later projection returned "
+                        "Case-004. These two executed observations disagree."
+                    ),
+                    "trace_summary": (
+                        "The recorded filter and subsequent projection "
+                        "both completed, but their candidate IDs differ."
+                    ),
+                }
+
+        class Critic:
+            def __init__(self, second_pass):
+                self.calls = 0
+                self.second_pass = second_pass
+            def complete_json(self, system, request):
+                self.calls += 1
+                if self.calls == 2 and self.second_pass:
+                    return {
+                        "verdict": "pass", "grounded": True,
+                        "scope_preserved": True,
+                        "natural": True, "useful": True,
+                    }
+                return {
+                    "verdict": "fail", "grounded": False,
+                    "scope_preserved": False, "natural": False,
+                    "useful": False,
+                    "reason": "The report falsely claims a logical inconsistency "
+                              "between filter and project output.",
+                    "repair_hint": "Remove the claim of logical inconsistency.",
+                }
+
+        accepted_critic = Critic(second_pass=True)
+        report, status = naturalize_report(
+            task, actual, instruction="Read visual candidate records.",
+            model_alias="model_1", reviewed=None, author=Author(),
+            critic=accepted_critic, max_revisions=0,
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(accepted_critic.calls, 2)
+        self.assertTrue(status["critic_witness_rereviewed"])
+        self.assertIn("Case-004", report["finish_result"]["result"])
+
+        reject_critic = Critic(second_pass=False)
+        _, rejected = naturalize_report(
+            task, actual, instruction="Read visual candidate records.",
+            model_alias="model_1", reviewed=None, author=Author(),
+            critic=reject_critic, max_revisions=0,
+        )
+        self.assertEqual(rejected["status"], "fallback")
+        self.assertEqual(reject_critic.calls, 2)
+
+
+class PublicSurfaceTests(unittest.TestCase):
+    def test_internal_ids_removed_only_from_prose(self):
+        report = {
+            "task_instruction": "Combine work_M1 with work_M2.",
+            "trace_summary": "Step m3_op01 ended without a result.",
+            "finish_result": {
+                "status": "done",
+                "result": "Derived from work_M4.",
+                "summary": "Operation m3_op01 executed.",
+            },
+            "rows": [{
+                "values": {"candidate_id": "Case-004"},
+                "source_fact_refs": ["visual:F001"],
+            }],
+        }
+        clean = sanitize_public_report(report)
+        self.assertNotIn("work_M", json.dumps(clean))
+        self.assertNotIn("m3_op01", json.dumps(clean))
+        self.assertEqual(clean["rows"], report["rows"])
+        self.assertEqual(report["task_instruction"],
+                         "Combine work_M1 with work_M2.")
+        original = {"input": {"subtask_history": "work_M1 used m3_op01"},
+                    "output": {"action": "complete",
+                               "reasoning": "Finish the task.",
+                               "params": {}}}
+        self.assertTrue(any(
+            "synthetic_execution_identifier_leak" in issue
+            for issue in review_turn_surface(original)
+        ))
+        original["input"]["subtask_history"] = sanitize_public_prose(
+            original["input"]["subtask_history"]
+        )
+        self.assertEqual(review_turn_surface(original), [])
+
+
+class SelectionDiversityTests(unittest.TestCase):
+    def test_alternate_fault_kind_first_within_same_recovery_priority(self):
+        kinds = [
+            "result_summary_conflict",
+            "result_summary_conflict",
+            "wrong_retrieval",
+        ]
+        plans = [{
+            "index": i, "sample_id": f"q-candidate-{i}",
+            "task_id": "q", "branch_round": 2,
+            "faults": [],
+            "scenario_plan": {"fault_atoms": [{"kind": kind}]},
+        } for i, kind in enumerate(kinds)]
+        journals = [{
+            "status": "recovered",
+            "episode": {"trajectory": [{
+                "attempt": 2, "action": "delegate_task"
+            }]},
+            "private_audit": {
+                "execution_outcome": "recovered",
+                "runtime": {},
+                "fault_events_applied": [{}],
+                "evidence_plan": [{
+                    "evidence_requests": [{
+                        "operation": "verify_conflicting_evidence",
+                        "target_fields": [f"field_{i}"],
+                        "authorized_source_ids": ["visual"],
+                    }]
+                }],
+            },
+        } for i in range(3)]
+        selected, rows, _ = select_recovered_candidates(
+            plans, journals, max_selected_per_round=1,
+        )
+        self.assertEqual(selected, {0})
+        self.assertEqual(
+            [r["candidate_index"] for r in
+             sorted(rows, key=lambda r: r["recovery_rank"])],
+            [0, 2, 1],
+        )
+
+
+class LanguageExceptionTests(unittest.TestCase):
+    def test_main_failure_keeps_true_4a_4b_evidence(self):
+        scene, reports, base = sample(0)
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes, report_path, base_path = [
+                root / name for name in
+                ("scenes.jsonl", "reports.jsonl", "base.jsonl")
+            ]
+            scenes.write_text(json.dumps(scene) + "\n")
+            report_path.write_text("".join(
+                json.dumps(r) + "\n" for r in reports
+            ))
+            base_path.write_text(json.dumps(base) + "\n")
+            with patch.object(
+                runner, "author_branch_main",
+                side_effect=ValueError(
+                    "stage4c_dispatch_o1_contract_invalid:internal_teacher_language"
+                ),
+            ):
+                summary = runner.generate_turns(
+                    scenes_path=scenes, reports_path=report_path,
+                    base_episodes_path=base_path, output_dir=root / "out",
+                    max_scenes=1, branches_per_scene=1, workers=2,
+                    no_progress=True, scenario_mode="event_driven",
+                    candidate_strategy="enumerate",
+                    max_candidates_per_round=8,
+                    max_distractors_per_fault=2,
+                    max_selected_per_round=1,
+                    max_language_attempts_per_round=1,
+                    delayed_evidence_probability=0.0,
+                )
+            choices = [
+                json.loads(row) for row in
+                (root / "out/private/candidate_selection.jsonl")
+                .read_text().splitlines()
+                if json.loads(row)["selected_for_language_review"]
+            ]
+            self.assertEqual(len(choices), 1)
+            chosen = choices[0]["candidate_index"]
+            stage4a = json.loads(
+                (root / "out/stage4a/journal" /
+                 f"{chosen:06d}.json").read_text()
+            )
+            stage4c = json.loads(
+                (root / "out/journal" /
+                 f"{chosen:06d}.json").read_text()
+            )
+            self.assertEqual(stage4a["status"], "recovered")
+            self.assertEqual(stage4c["status"], "rejected_validation")
+            self.assertEqual(
+                stage4c["private_audit"]["execution_outcome"], "recovered"
+            )
+            self.assertEqual(
+                stage4c["private_audit"]["language_exception"]["phase"],
+                "stage4c",
+            )
+            self.assertGreater(
+                len(stage4c["private_audit"]["subagent_report_reviews"]), 0
+            )
+            self.assertEqual(stage4c["private_audit"]["main_action_reviews"], [])
+            self.assertEqual(
+                summary["candidates_execution_recovered"],
+                summary["execution_recovered_branches"],
+            )
+            self.assertEqual(summary["reviewed_turns"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

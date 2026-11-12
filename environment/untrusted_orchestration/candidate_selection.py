@@ -185,16 +185,35 @@ def select_recovered_candidates(
             -row["decision_rounds_post_fork"],
             row["candidate_index"],
         ))
-        seen = set()
+        # Deduplicate behavior before diversity-aware backfill. Within
+        # the SAME causal recovery priority (e.g., visible verification),
+        # put a different fault/observation type ahead of repeated variants.
+        # Never move an easy Missing candidate ahead of a recoverable
+        # downstream invalidation just to satisfy a global quota.
+        seen_signatures = set()
+        distinct = []
         for candidate in eligible:
-            if candidate["behavior_signature"] in seen:
+            if candidate["behavior_signature"] in seen_signatures:
                 continue
-            seen.add(candidate["behavior_signature"])
-            # Preserve the ranked reserve pool without selecting it for
-            # expensive language review yet. V10.1 can backfill a rejected
-            # first candidate from these already-simulated recoveries.
-            candidate["recovery_rank"] = len(seen)
-            if len(seen) <= max_selected_per_round:
+            seen_signatures.add(candidate["behavior_signature"])
+            distinct.append(candidate)
+        used_kinds: dict[str, set[str]] = defaultdict(set)
+        rank = 0
+        while distinct:
+            index = min(range(len(distinct)), key=lambda i: (
+                _PRIORITY.get(distinct[i]["category"], 99),
+                distinct[i]["atom_kind"] in used_kinds[
+                    distinct[i]["category"]
+                ],
+                i,
+            ))
+            candidate = distinct.pop(index)
+            rank += 1
+            candidate["recovery_rank"] = rank
+            used_kinds[candidate["category"]].add(
+                candidate["atom_kind"]
+            )
+            if rank <= max_selected_per_round:
                 chosen.add(candidate["candidate_index"])
     for row in rows:
         row["selected_for_language_review"] = (
