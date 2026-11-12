@@ -481,4 +481,9 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"[da-grpo] ERROR: {exc}", file=sys.stderr)
+        # Unsloth sometimes wraps worker exceptions and prints only their
+        # short message; full Python traceback is useful for debugging.
+        if os.environ.get("MAESTRO_GRPO_TRACEBACK") == "1":
+            import traceback
+            traceback.print_exc()
         raise SystemExit(1)
