@@ -41,8 +41,8 @@ python -m dataset.prepare_da_grpo \
 To check Qwen's prompt token budget, add
 `--tokenizer /path/to/Qwen3-8B --max-prompt-tokens 24576`.
 By default the converter retains all *published positive* turns (including
-explicitly labeled template completions). Add `--require-llm-expert`
-to select only `generation_mode=llm_reviewed`.
+explicitly labeled template completions). Add `--require-llm-expert` to keep all LLM-reviewed regular, completion, and
+contract-frozen decisions, excluding deterministic fallback labels.
 
 The exporter tolerates only the verified documentation-only rename in the O1\nrenderer from MAESTRO PR #137; other renderer hash mismatches remain errors.\n\nInput generation directories must include their `manifest.json` file; the
 converter verifies the Scene hashes and uses each run's original
