@@ -99,6 +99,79 @@ It also does not add optional verification sources to Stage 1 or create
 an online agent evaluation environment. A private Gold comparison
 decides data publication eligibility, never the next Main action.
 
+## V10.4: Main-visible evidence contract for Stage 4C
+
+This change is scoped to **Stage 4C Main reasoning**. It does **not**
+split Stage 3/4, alter 4A replay/fault policies, modify 4B's factual
+report contract, change the causal candidate ranking, or allow an LLM
+to choose a different delegated task.
+
+### Code-owned Main Decision Contract
+
+`main_decision_contract.py` receives only the same **public returned
+Sub-Agent reports** visible to Main and the pending evidence goals. It
+separates:
+
+- **Observed delivery**: the latest returned batch and explicit
+  missing/partial statuses;
+- **Confirmed visible conflicts**: a field's Result and Summary must
+  have different explicit values **inside the same returned report**.
+  A private planner's `verify_conflicting_evidence` label is **not
+  itself proof**. Older conflicts are not silently assumed unresolved
+  after a newer batch returns;
+- **Pending evidence requests**: what Main intends to verify next,
+  never a claim that verification has already happened;
+- **Frozen next action**: the exact `delegate_task` batch and source
+  routing already validated by the executor.
+
+For high-confidence Result/Summary conflicts the compiler supplies a
+short, code-owned factual anchor: "the returned Result says X, while
+its Summary says Y; verification remains pending." It does not select
+which value is true or expose any private World/Gold/teacher data.
+
+The 4C LLM Author now **only** generates a reasoning-only JSON object.
+The shared O1 action compiler fixes `delegate_task`, assignments,
+tools and parallelism. If an Author explicitly attempts `complete`,
+the action is **rejected**, not silently converted into delegation.
+The Author's novel assertions still pass the normal deterministic
+action guard and `reasoning_evidence_issues`, including generation
+process leaks and premature verification claims.
+
+The 4C Critic receives the confirmed visible facts separately from
+new Author prose. It may reject unsupported extra claims but must not
+deny a code-proven Result/Summary discrepancy merely because the
+structured Result exists. If it appears to deny a confirmed visible
+conflict, exactly one independent re-review is permitted; there is
+**never automatic acceptance**.
+
+The legacy `_MAIN_AUTHOR_SYSTEM` remains available to existing
+Stage-4/Stage-3 callers. The offline Stage-4C pipeline uses a
+dedicated `_MAIN_DECISION_AUTHOR_SYSTEM` so changes do not
+accidentally alter legacy behavior.
+
+New diagnostics:
+
+- `main_decision_contract_reviews`
+- `main_decision_contract_accepted`
+- `main_confirmed_visible_conflicts`
+- `main_locked_visible_fact_anchors`
+- `main_conflict_critic_rereviews`
+
+Run with the same configuration and **new** output directory:
+
+```bash
+python -m environment generate-untrusted-turns \
+  --config environment/configs/untrusted_orchestration.yaml \
+  --mode llm \
+  --output-dir environment/data/maestro_untrusted_rounds_v10_4
+```
+
+Regression tests in `test_main_decision_contract.py` cover two
+actual V10.3.1 failure patterns (year 1999 vs 2017; metric 90 vs 21),
+the no-private-evidence contract, absent/old/unproven conflicts,
+explicit `complete` and hidden-Critic leaks, and false-denial
+re-review without automatic passing.
+
 ## V10.3.1: zero reviewer leaks and two-field report naturalization
 
 This is a focused follow-up to the **actual** V10.3 LLM run; no Stage

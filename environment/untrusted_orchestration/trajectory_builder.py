@@ -50,6 +50,32 @@ previous findings; do not imply an unperformed verification succeeded.
 """
 
 
+_MAIN_DECISION_AUTHOR_SYSTEM = """UNTRUSTED ROUND-LOCAL RECOVERY:
+Write only the Main-Agent's next-round reasoning
+from its currently visible Sub-Agent reports and the locked decision contract.
+
+This is Stage 4C: the evidence planner has ALREADY selected a legal
+delegate_task action, its Sub-Agent assignments, parallelism, source
+permissions and tool routes. You do NOT choose tasks, alter their scope, or
+choose whether to finish. Return JSON ONLY:
+{"reasoning": "a grounded explanation of the pending evidence requests"}
+
+The locked_main_visible_decision_facts describes (a) the latest report
+delivery and any gaps, (b) Result/Summary contradictions proven from the
+SAME public Sub-Agent report, (c) requests still awaiting execution, and
+(d) the already-selected next delegate action. Use only observations
+that Main has actually received. The plan's request alone does not prove
+a contradiction unless the contract includes a confirmed visible conflict.
+
+When Result and Summary disagree, do not assume Result is independently
+verified; describe the disagreement and why the selected source-bound
+cross-check is necessary. Preserve usable findings and explain independent
+parallel tasks. Do not declare verification completed, invent future
+results, sources or actions, cite hidden Gold/Oracle, or mention internal
+Critic/reviewer feedback. A complete action is invalid for this round.
+"""
+
+
 _MAIN_CRITIC_SYSTEM = _CRITIC_SYSTEM + """
 UNTRUSTED RECOVERY REVIEW:
 Judge whether the produced prose faithfully conveys the planner's
@@ -75,9 +101,15 @@ without claiming a missing or partial result was verified;
 (3) does not claim a dependency was satisfied by a not-yet-returned result,
 and does not falsely claim independent tasks are sequentially dependent.
 
-Do not require the Main to solve the terminal question prematurely, and
-do not criticize the already frozen plan or its output fields. If the
-reasoning invents completed actions or facts, FAIL with a precise prose-only
+The attached locked Main decision facts, if present, were compiled
+from the actual Main-visible Sub-Agent Result and Summary in the latest
+returned batch, and distinguish observed statements, unresolved evidence,
+and planned actions. A confirmed discrepancy is a factual observation, not
+proof that Result (or Summary) is correct. Judge the Author's EXTRA claims,
+not the validity of this directly observed discrepancy. Do NOT demand a
+complete action or veto the frozen delegate plan just because a structured
+Result exists. If the Author invents completed actions, causal explanations,
+sources, or a previously verified answer, FAIL with a precise prose-only
 repair hint. Return JSON:
 {"verdict":"pass"|"fail","grounded":true|false,
 "assignment_fidelity":true|false,"o1_style":true|false,

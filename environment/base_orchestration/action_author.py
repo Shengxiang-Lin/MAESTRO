@@ -502,6 +502,8 @@ def author_delegate_action(
     freeze_assignment_prose: bool = False,
     reasoning_goals: list[dict] | None = None,
     reasoning_guard=None,
+    decision_contract: dict | None = None,
+    critic_conflict_objection=None,
 ) -> tuple[dict | None, dict]:
     # Separate runtime-specific prose instructions from the shared O1
     # deterministic structure/Guard. Existing Base callers are unchanged.
@@ -517,6 +519,7 @@ def author_delegate_action(
     if critic is None:
         raise ValueError("stage3_llm_author_requires_independent_critic")
     failures = []
+    conflict_rereviewed = False
     for revision in range(max_revisions + 1):
         request = {
             "current_main_visible_prompt": prompt,
@@ -536,6 +539,18 @@ def author_delegate_action(
                     "Explain unresolved evidence requests as unresolved. "
                     "Never claim a pending cross-check already succeeded."
                 )
+            if decision_contract is not None:
+                request["locked_main_visible_decision_facts"] = decision_contract
+                request["authoring_schema"] = {"reasoning": "grounded rationale"}
+                request["authoring_obligation"] = (
+                    "Return reasoning text, not a new action choice. "
+                    "The current decision is already a validated delegate_task. "
+                    "A confirmed Result/Summary difference in the locked "
+                    "facts is observable evidence of uncertainty, NOT proof "
+                    "that either value is correct or that verification ended. "
+                    "Explain what evidence still needs checking. "
+                    "Do not introduce or infer another task or source."
+                )
         try:
             candidate = author.complete_json(
                 author_system, json.dumps(request, ensure_ascii=False)
@@ -543,6 +558,29 @@ def author_delegate_action(
         except Exception as exc:
             failures.append({"stage": "author", "reason": str(exc)[:200]})
             continue
+        # V10.4 only: reasoning-only JSON has no action choice to fix;
+        # an explicitly authored complete action is still rejected below.
+        authored_reasoning = (
+            candidate.get("reasoning") if isinstance(candidate, dict) else None
+        )
+        locked_core = (
+            decision_contract.get("locked_visible_fact_core", "")
+            if decision_contract is not None else ""
+        )
+        if (decision_contract is not None and isinstance(candidate, dict)
+                and "action" not in candidate):
+            candidate = {**candidate, "action": "delegate_task"}
+        if (decision_contract is not None
+                and isinstance(candidate, dict)
+                and candidate.get("action") == "delegate_task"
+                and isinstance(authored_reasoning, str)
+                and locked_core):
+            candidate = {
+                **candidate,
+                "reasoning": (
+                    locked_core + " " + authored_reasoning.strip()
+                ),
+            }
         # Stage-4C can explicitly freeze the entire evidence dispatch
         # contract. The Author writes *reasoning*, while all task language,
         # handoff context, tool routing and parallelism come from the
@@ -624,15 +662,28 @@ def author_delegate_action(
                         ),
                         "needs_upstream": item["needs_upstream"],
                     } for item in assignments],
-                    "candidate_reasoning_only": candidate["reasoning"],
+                    "candidate_reasoning_only": (
+                        authored_reasoning if decision_contract is not None
+                        else candidate["reasoning"]
+                    ),
+                    "published_reasoning": candidate["reasoning"],
                     "main_visible_evidence_requests": reasoning_goals or [],
+                    **({
+                        "locked_main_visible_decision_facts": decision_contract,
+                    } if decision_contract is not None else {}),
                     "assignment_contract_validated_by_code": True,
                     "review_scope": (
-                        "Grounded Main reasoning, motivation for the "
-                        "current evidence requests, and independence of "
-                        "parallel assignments only. Do not assess or "
+                        "Evaluate factual claims ADDED by the Author and "
+                        "their coherence with the code-owned visible facts. "
+                        "The locked fact core, if supplied, is an exact "
+                        "comparison of two fields in the same returned "
+                        "Sub-Agent report; do not re-evaluate its existence "
+                        "or treat Result as independently verified. "
+                        "Never approve an invented source, premature "
+                        "verification, hidden reviewer dialogue or an "
+                        "incorrect dependency claim. Do not assess or "
                         "rewrite task_instruction, context, model, tools, "
-                        "or the overall plan itself."
+                        "or the overall frozen delegation plan."
                     ),
                 }
             else:
@@ -661,31 +712,43 @@ def author_delegate_action(
                 "stage": "critic_backend", "reason": str(exc)[:200],
             })
             continue
+        # The Critic cannot overturn a code-confirmed *visible* conflict
+        # solely by asserting that the two delivered statements agree.
+        # Invalid critiques trigger a second independent review, never
+        # automatic acceptance. Existing Stage-3/legacy behavior is unchanged.
         if freeze_assignment_prose and reasoning_goals and (
             not _critic_review_passes(review)
         ):
-            # A critic can misread a delivered Result/Summary conflict as
-            # identical values. A second *independent* review is permitted
-            # only for this precise evidence-observability disagreement.
             critique = (str(review.get("reason", "")) + " " +
                         str(review.get("repair_hint", ""))).casefold()
-            if (any(g.get("operation") == "verify_conflicting_evidence"
-                    for g in reasoning_goals)
+            if decision_contract is not None:
+                mistaken_conflict_objection = (
+                    critic_conflict_objection is not None
+                    and critic_conflict_objection(review)
+                )
+            else:
+                mistaken_conflict_objection = (
+                    any(g.get("operation") == "verify_conflicting_evidence"
+                        for g in reasoning_goals)
                     and any(word in critique for word in (
                         "no conflict", "no discrepancy", "no mismatch",
                         "both the result", "invented discrepancy",
                         "fabricated discrepancy", "does not exist",
-                    ))):
+                    ))
+                )
+            if mistaken_conflict_objection:
+                conflict_rereviewed = True
                 try:
                     review = critic.complete_json(
                         critic_system + (
-                            "\nSECOND INDEPENDENT REVIEW: The listed "
-                            "evidence requests record a discrepancy grounded "
-                            "in delivered Sub-Agent feedback. Compare the "
-                            "exact field values and Result/Summary text in "
-                            "the visible prompt and evidence request. Do "
-                            "not assume the values agree. Still fail any "
-                            "unsupported or overconfident reasoning.\n"
+                            "\nSECOND INDEPENDENT REVIEW: The attached "
+                            "locked visible-fact contract proves the "
+                            "specified Result/Summary values came from "
+                            "the same public Sub-Agent report. Do not deny "
+                            "their discrepancy. Decide whether the Author "
+                            "ADDED unsupported facts, claimed a false "
+                            "verification or stated the next step badly. "
+                            "Never approve merely because the core is valid.\n"
                         ),
                         json.dumps(review_payload, ensure_ascii=False),
                     )
@@ -723,6 +786,18 @@ def author_delegate_action(
                     ["reasoning", "task_instruction", "context"]
                 ),
                 "attempts": revision + 1, "review": review,
+                **({
+                    "decision_contract_version": decision_contract.get(
+                        "contract_version", "unknown"
+                    ),
+                    "confirmed_visible_conflicts": len(
+                        decision_contract["visible_evidence"][
+                            "confirmed_result_summary_conflicts"
+                        ]
+                    ),
+                    "locked_visible_fact_core_applied": bool(locked_core),
+                    "critic_conflict_rereviewed": conflict_rereviewed,
+                } if decision_contract is not None else {}),
             }
         failures.append({"stage": "critic",
                          "reason": str(review.get("reason", ""))[:250],
@@ -730,4 +805,15 @@ def author_delegate_action(
     return None, {
         "status": "failed", "mode": "llm_reviewed",
         "attempts": max_revisions + 1, "failures": failures,
+        **({
+            "decision_contract_version": decision_contract.get(
+                "contract_version", "unknown"
+            ),
+            "confirmed_visible_conflicts": len(
+                decision_contract["visible_evidence"][
+                    "confirmed_result_summary_conflicts"
+                ]
+            ),
+            "critic_conflict_rereviewed": conflict_rereviewed,
+        } if decision_contract is not None else {}),
     }
