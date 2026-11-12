@@ -38,6 +38,17 @@ class TestDAGRPOConfig(unittest.TestCase):
             self.assertEqual(env["TRAINER_LOGGER"], '["console","file"]')
             self.assertNotIn("private-test-key", cfg["config"].read_text(encoding="utf-8"))
 
+    def test_check_only_does_not_start_training_or_prompt(self):
+        from unittest.mock import patch
+        with patch.object(module, "check_environment", return_value={"verl_import": True}), \
+             patch.object(module, "gpu_count", return_value=8), \
+             patch.object(module, "get_key", side_effect=(
+                 lambda name, *, allow_prompt: None if not allow_prompt
+                 else (_ for _ in ()).throw(AssertionError("unexpected password prompt"))
+             )), \
+             patch.object(module.subprocess, "call", side_effect=AssertionError("unexpected training")):
+            self.assertEqual(module.main(["--check"]), 0)
+
     def test_bad_gpus_validation(self):
         cfg = module.load_config()
         self.assertEqual(cfg["settings"]["TP_SIZE"], "2")
