@@ -24,7 +24,7 @@ model:
   lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
 
 rollout:
-  prompts_per_step: 4
+  prompts_per_step: 1
   num_generations: 8
   # Total context = 12,288 prompt + 4,096 generated = 16,384 tokens.
   max_prompt_tokens: 12288
@@ -35,7 +35,8 @@ rollout:
   # KV reservation. Leave headroom for long-context BF16 LoRA backward.
   gpu_memory_utilization: 0.70
   standby_util_override: true
-  max_num_seqs: 16
+  # One prompt x eight candidates; cap concurrent vLLM requests at eight.
+  max_num_seqs: 8
   # FLASH_ATTN on RTX 6000D SM120 rejects FP8 KV Cache (requires other
   # FA3/FA4 and device/head-size combinations). With BF16 model, auto = BF16 KV.
   kv_cache_dtype: auto

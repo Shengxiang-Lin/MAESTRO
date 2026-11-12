@@ -20,15 +20,15 @@ from reward_adapter import completion_text, make_reward_function
 
 
 class TestConfig(unittest.TestCase):
-    def test_official_four_prompts_eight_generations(self):
+    def test_one_prompt_eight_generations(self):
         cfg = train.load_config()
         plan = train.batch_plan(cfg)
         self.assertEqual(cfg["version"], 2)
         self.assertEqual(plan["num_generations"], 8)
-        self.assertEqual(plan["prompts_per_step"], 4)
+        self.assertEqual(plan["prompts_per_step"], 1)
         self.assertEqual(plan["per_device_train_batch_size"], 1)
-        self.assertEqual(plan["gradient_accumulation_steps"], 32)
-        self.assertEqual(plan["generation_batch_size"], 32)
+        self.assertEqual(plan["gradient_accumulation_steps"], 8)
+        self.assertEqual(plan["generation_batch_size"], 8)
         self.assertEqual(cfg["training"]["epochs"], 3)
         self.assertEqual(cfg["model"]["max_seq_length"], 16384)
         self.assertEqual(cfg["rollout"]["max_prompt_tokens"], 12288)
@@ -39,7 +39,7 @@ class TestConfig(unittest.TestCase):
         )
         self.assertEqual(cfg["rollout"]["kv_cache_dtype"], "auto")
         self.assertEqual(cfg["rollout"]["gpu_memory_utilization"], 0.70)
-        self.assertEqual(cfg["rollout"]["max_num_seqs"], 16)
+        self.assertEqual(cfg["rollout"]["max_num_seqs"], 8)
         self.assertTrue(cfg["rollout"]["standby_util_override"])
 
     def test_framework_options_preserve_o1_behavior(self):
@@ -55,13 +55,22 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(opts["num_iterations"], 1)
         self.assertEqual(opts["num_generations"], 8)
         self.assertEqual(opts["per_device_train_batch_size"], 1)
-        self.assertEqual(opts["gradient_accumulation_steps"], 32)
-        self.assertEqual(opts["generation_batch_size"], 32)
+        self.assertEqual(opts["gradient_accumulation_steps"], 8)
+        self.assertEqual(opts["generation_batch_size"], 8)
         self.assertNotIn("max_prompt_length", opts)
         self.assertEqual(opts["warmup_steps"], 0.03)
         self.assertEqual(opts["max_completion_length"], 4096)
         self.assertEqual(opts["vllm_max_model_length"], 16384)
         self.assertFalse(opts["vllm_importance_sampling_correction"])
+
+    def test_batch_plan_scales_by_prompt_without_microbatch_change(self):
+        cfg = train.load_config()
+        cfg["rollout"]["prompts_per_step"] = 2
+        plan = train.batch_plan(cfg)
+        self.assertEqual(plan["per_device_train_batch_size"], 1)
+        self.assertEqual(plan["num_generations"], 8)
+        self.assertEqual(plan["generation_batch_size"], 16)
+        self.assertEqual(plan["gradient_accumulation_steps"], 16)
 
     def test_sm120_flash_attn_disallows_fp8_kv_cache(self):
         import tempfile
@@ -128,7 +137,9 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(data["vllm_gpu_memory_utilization"], 0.65)
         self.assertEqual(data["vllm_max_num_seqs"], 8)
         self.assertEqual(data["batch_plan"]["num_generations"], 8)
-        self.assertEqual(data["batch_plan"]["prompts_per_step"], 4)
+        self.assertEqual(data["batch_plan"]["prompts_per_step"], 1)
+        self.assertEqual(data["batch_plan"]["gradient_accumulation_steps"], 8)
+        self.assertEqual(data["batch_plan"]["generation_batch_size"], 8)
 
     def test_invalid_batch_or_context_rejected(self):
         import tempfile

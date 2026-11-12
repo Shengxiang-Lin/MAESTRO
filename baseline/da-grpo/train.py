@@ -145,8 +145,9 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
 def batch_plan(cfg: dict) -> dict[str, int]:
     rollout = cfg["rollout"]
     # In TRL, per_device_train_batch_size counts completions (NOT prompts).
-    # One-completion backward plus 32 gradient accumulation steps:
-    # 4 different prompts x 8 generations = 32 completions per optimizer step.
+    # Stream one completion per backward pass. The effective batch is
+    # prompts_per_step * num_generations (default 1 * 8 = 8).
+    # Accumulate that many gradients for one optimizer step.
     generation_batch = rollout["prompts_per_step"] * rollout["num_generations"]
     return {
         "per_device_train_batch_size": 1,

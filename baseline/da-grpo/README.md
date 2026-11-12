@@ -16,12 +16,13 @@ dependency and no fall-back to the old trainer.
   **not silently truncated**: the preflight tokenizer check aborts if a
   dataset prompt exceeds 12,288 tokens. A CLI test that lowers the
   completion cap to 512 still uses the same prompt validation limit.
-- **Batch**: 4 distinct prompts × 8 completions = **32 completions**
+- **Batch**: 1 distinct prompt × 8 completions = **8 completions**
   in one generation batch. TRL's `per_device_train_batch_size=1`,
-  `gradient_accumulation_steps=32`, and
-  `generation_batch_size=32` implement streamed backward and **one
-  optimizer update** per 4-prompt batch. These values count completions,
-  not prompts.
+  `gradient_accumulation_steps=8`, and
+  `generation_batch_size=8` implement streamed backward and **one
+  optimizer update** per one-prompt batch. These values count completions,
+  not prompts. vLLM `max_num_seqs=8` bounds concurrent generation
+  requests; it does not change GRPO's eight-candidate group size.
 - **Loss**: TRL `loss_type="dapo"` with 0.01 KL, 0.2 clip,
   `scale_rewards="group"`, one policy iteration per generated batch.
   The DAPO loss is token-normalized like the former O1-style training,
@@ -93,7 +94,7 @@ python baseline/da-grpo/train.py \
   --output-dir baseline/da-grpo/output_unsloth_smoke
 ```
 
-Full run (default: 3 epochs, 4 prompts × 8 candidates, 4096 output cap):
+Full run (default: 3 epochs, 1 prompt × 8 candidates, 4096 output cap):
 
 ```bash
 bash baseline/da-grpo/run.sh
@@ -115,11 +116,11 @@ may be reusable for a separate warm start, but exact resume is not.
 
 ## Training semantics and limitations
 
-TRL repeats the 4 source prompts to create 32 completions per update.
-Advantages are grouped by original prompt (8 completions each). The
-trainer takes 32 sequential 1-completion gradient micro-steps before an
-optimizer step. The vLLM engine's `max_num_seqs=32` is a concurrency
-**cap**, not a guarantee all 32 will decode simultaneously.
+TRL repeats each source prompt to create 8 completions per update.
+Advantages are grouped within the same prompt (8 completions).
+The trainer takes 8 sequential 1-completion gradient micro-steps before
+an optimizer step. The vLLM engine's `max_num_seqs=8` is a concurrency
+**cap**, not a guarantee all 8 will decode simultaneously.
 
 Existing MAESTRO training remains *offline*: the generated Main-Agent
 decision does not trigger a real Sub-Agent/tool execution during GRPO.
@@ -294,21 +295,23 @@ If CUDA is in a bad state after an OOM, exit the failed Python process
 and check `nvidia-smi` before restarting. The unchanged MAESTRO dataset
 and 4D Judge should remain the benchmark reference.
 
-## Why Prompt Batch 4 is not the per-device training micro-batch
+## Why Prompt Batch 1 is not the per-device training micro-batch
 
-Here Prompt Batch means **four distinct Main-Agent decision states per
-optimizer update**. TRL repeats each state into eight candidate
-completions and performs 32 gradient accumulation micro-steps with
-`per_device_train_batch_size=1`. The vLLM generation batch is 32
-candidate requests, but `max_num_seqs=16` allows at most 16 active
-sequences at a time: the batch is scheduled dynamically, not necessarily
-fully parallel. The four groups' advantages are kept distinct.
+Here Prompt Batch means **one distinct Main-Agent decision state per
+optimizer update**. TRL generates eight candidate completions and runs
+eight gradient accumulation micro-steps with
+`per_device_train_batch_size=1`. The vLLM generation batch is eight
+candidate requests, capped at eight active sequences.
+The original four-prompt mode used 32 completions/update; the current
+one-prompt mode uses 8 completions/update. The GRPO advantage is still
+computed from eight competing candidates **within one prompt**.
 
 ## 16K context after first-update OOM
 
 The default max context was reduced from 32,768 to 16,384 tokens to
 reduce long-sequence activation memory on a single 83 GiB GPU.
-The 4-prompt × 8-candidate GRPO algorithm and BF16 LoRA remain unchanged.
+The current 1-prompt × 8-candidate GRPO algorithm and BF16 LoRA
+remain unchanged by the 16K context setting.
 `max_prompt_tokens=12,288` and `max_completion_tokens=4,096`
 must fit within the 16K total. Do not silently discard earlier
 Sub-Agent observations just to make an overlong prompt fit.
@@ -319,3 +322,31 @@ Inspect those sample IDs and lengths; explicitly decide whether to
 filter, summarize, or restore the 32K context with additional memory
 optimization. A successful `--dry-run` is only config validation; it
 does not inspect real token lengths or execute GPU backward.
+
+## One-prompt GRPO batch default (2026-11-12)
+
+Prompt Batch was reduced from four to one following the first backward
+OOM. Each optimizer update now groups **one** Main-Agent prompt with
+eight vLLM completions. TRL uses
+`generation_batch_size=8`, `num_generations=8`,
+`gradient_accumulation_steps=8`, and
+`per_device_train_batch_size=1`; the loss is still computed by TRL
+with per-prompt GRPO advantages. vLLM `max_num_seqs=8` matches the
+maximum number of candidates in each rollout. This is NOT equivalent to
+eight prompt examples per training step.
+
+A smaller Prompt Batch reduces rollout work and some buffered state
+per optimizer step, but does NOT guarantee a smaller maximum activation
+allocation for an individual long completion. If a single 16K example
+still OOMs, investigate its actual input+output token length and the
+model's backward peak; reducing Prompt Batch further is not possible
+without changing the GRPO group structure.
+
+```bash
+git pull origin main
+python -m unittest discover -s baseline/da-grpo -p 'test_*.py'
+python baseline/da-grpo/train.py --dry-run
+MAESTRO_GRPO_TRACEBACK=1 python baseline/da-grpo/train.py \
+  --max-steps 1 --max-completion-tokens 512 \
+  --output-dir baseline/da-grpo/output_prompt1_test
+```
