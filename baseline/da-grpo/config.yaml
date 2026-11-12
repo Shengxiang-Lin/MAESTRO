@@ -31,7 +31,12 @@ rollout:
   max_prompt_tokens: 24576
   max_response_tokens: 4096
   max_model_len: 32768
-  gpu_memory_utilization: 0.40
+  # RTX 6000D (83.05 GiB): conservative budget for colocated LoRA policy.
+  gpu_memory_utilization: 0.35
+  # SM120: avoid incompatible FlashInfer JIT on older CUDA toolkit.
+  attention_backend: TRITON_ATTN
+  # Avoid CUDA Graph capture memory spikes at vLLM initialization.
+  enforce_eager: true
   kv_cache_dtype: fp8
   enable_sleep_mode: true
   enable_prefix_caching: false
