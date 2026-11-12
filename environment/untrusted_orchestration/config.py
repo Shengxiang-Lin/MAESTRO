@@ -22,6 +22,7 @@ _REQUIRED = {
         "max_fault_atoms", "delayed_evidence_probability",
         "candidate_strategy", "max_candidates_per_round",
         "max_distractors_per_fault", "max_selected_per_round",
+        "max_language_attempts_per_round",
     },
     "model": {
         "author_api_base", "author_model", "critic_api_base",
@@ -79,6 +80,9 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         ),
         "max_selected_per_round": run.get(
             "max_selected_per_round", 1
+        ),
+        "max_language_attempts_per_round": run.get(
+            "max_language_attempts_per_round", 1
         ),
         "atomic_fault_kinds": run.get("atomic_fault_kinds", [
             "no_result", "incomplete_retrieval", "wrong_retrieval",
@@ -171,10 +175,16 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         ("max_candidates_per_round", 1, 128),
         ("max_distractors_per_fault", 1, 10),
         ("max_selected_per_round", 1, 8),
+        ("max_language_attempts_per_round", 1, 8),
     ):
         value = config[field]
         if type(value) is not int or not minimum <= value <= maximum:
             raise ValueError("untrusted_invalid_" + field)
+    if config["candidate_strategy"] == "enumerate" and (
+        config["max_language_attempts_per_round"] <
+        config["max_selected_per_round"]
+    ):
+        raise ValueError("untrusted_language_budget_smaller_than_selection")
     if config["scenario_mode"] not in {"round_fork", "event_driven"}:
         raise ValueError("untrusted_invalid_scenario_mode")
     kinds = config["atomic_fault_kinds"]

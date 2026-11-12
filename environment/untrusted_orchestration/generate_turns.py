@@ -71,7 +71,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "faults.py", "atomic_faults.py", "report_faults.py",
         "event_scheduler.py", "scenario_generator.py",
         "candidate_exploration.py", "candidate_selection.py",
-        "evidence_affordances.py",
+        "evidence_affordances.py", "reasoning_fidelity.py",
         "publication_guard.py",
         "state_machine.py", "report_author.py",
         "trajectory_builder.py", "generate_turns.py",
@@ -406,6 +406,12 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                         "is intrinsically undetectable."
                     ),
                 })
+            # For screened-out trials, the inherited 4A audit contains
+            # *template* reviews, not actual 4B/4C model invocations.
+            # Preserve execution metrics above, but never count those
+            # previews as accepted language review or local SFT turns.
+            if status == "not_selected_for_language_review":
+                continue
             for review in audit.get("subagent_report_reviews", []):
                 result = review["authoring"]
                 report_modes[result["mode"]] += 1
@@ -602,6 +608,7 @@ def generate_turns(
     max_candidates_per_round: int = 24,
     max_distractors_per_fault: int = 2,
     max_selected_per_round: int = 1,
+    max_language_attempts_per_round: int = 1,
     max_revisions: int = 2,
     report_max_revisions: int | None = None,
     main_max_revisions: int | None = None,
@@ -654,9 +661,13 @@ def generate_turns(
         ("max_candidates_per_round", max_candidates_per_round, 128),
         ("max_distractors_per_fault", max_distractors_per_fault, 10),
         ("max_selected_per_round", max_selected_per_round, 8),
+        ("max_language_attempts_per_round", max_language_attempts_per_round, 8),
     ):
         if type(value) is not int or not 1 <= value <= maximum:
             raise ValueError("invalid_" + name)
+    if (candidate_strategy == "enumerate"
+            and max_language_attempts_per_round < max_selected_per_round):
+        raise ValueError("language_budget_smaller_than_selection")
     modes = list(fault_modes or ["missing", "partial", "wrong"])
     if scenario_mode not in {"round_fork", "event_driven"}:
         raise ValueError("invalid_scenario_mode")
@@ -686,6 +697,7 @@ def generate_turns(
         "max_candidates_per_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
         "max_selected_per_round": max_selected_per_round,
+        "max_language_attempts_per_round": max_language_attempts_per_round,
         "multi_target_probability": multi_target_probability,
         "max_rounds": max_rounds, "max_cost": max_cost,
         "max_retries": max_retries, "max_parallel_tasks": max_parallel_tasks,
@@ -861,7 +873,7 @@ def generate_turns(
 
     def run_parallel(phase: str, directory: Path, unit: str,
                      total: int, initial: int, callback_worker,
-                     *, stage: str):
+                     *, stage: str, subset: list[dict] | None = None):
         """Concurrent independent round samples, truthful live counters.
 
         Per-review callbacks update the *completed-call* bar immediately.
@@ -875,9 +887,10 @@ def generate_turns(
             "reports": "subagent_report_reviews",
             "main": "main_action_reviews",
         }.get(stage)
-        pending = [p for p in planned if saved(directory, p) is None]
+        units = planned if subset is None else subset
+        pending = [p for p in units if saved(directory, p) is None]
         counts = Counter()
-        for plan in planned:
+        for plan in units:
             existing = saved(directory, plan)
             if existing is None:
                 continue
@@ -1068,37 +1081,37 @@ def generate_turns(
             "candidate_behavior_distribution": {},
             "selected_behavior_distribution": {},
         }
-    _atomic_jsonl(
-        output / "private" / "candidate_selection.jsonl",
-        selection_rows,
-    )
-
     def report_count(data: dict) -> int:
         audit = (data or {}).get("private_audit") or {}
         return len(audit.get("subagent_report_reviews", []))
 
-    total_reports = sum(
-        report_count(saved(stage_a, p))
-        for p in planned if p["index"] in selected_indices
-    )
-    initial_reports = sum(
-        report_count(saved(stage_b, p))
-        for p in planned if p["index"] in selected_indices
-    )
+    def action_count(data: dict) -> int:
+        if data is None or data.get("episode") is None:
+            return 0
+        audit = data["private_audit"]
+        fork = audit["branch_round"]
+        return sum(
+            row["attempt"] >= fork
+            and row["action"] in {"delegate_task", "complete"}
+            for row in data["episode"]["trajectory"]
+        )
+
+    # One deterministic rank per distinct *recovered execution behavior*.
+    # Reserve candidates remain in the 4A journal until an earlier language
+    # candidate fails; there is never an extra execution replay or LLM call
+    # just for constructing the reserve pool.
+    by_index = {plan["index"]: plan for plan in planned}
+    ranked = defaultdict(list)
+    if candidate_strategy == "enumerate":
+        for row in selection_rows:
+            if row.get("recovery_rank") is not None:
+                ranked[(row["question_id"], row["feedback_round"])].append(row)
+        for key in ranked:
+            ranked[key].sort(key=lambda row: row["recovery_rank"])
 
     def make_reports(plan: dict, tick) -> None:
         source = saved(stage_a, plan)
         scene = scenes[plan["scene_index"]]
-        if plan["index"] not in selected_indices:
-            # Deliberately no LLM call. Preserve full private 4A audit,
-            # but do not expose a failed/unselected Episode as a positive
-            # or a potentially misleading public training example.
-            write(stage_b, plan, {
-                **source, "status": "not_selected_for_language_review",
-                "error": "4a_candidate_screened_out",
-                "episode": None, "turns": [],
-            })
-            return
         if source["episode"] is None:
             write(stage_b, plan, source)
             return
@@ -1116,33 +1129,6 @@ def generate_turns(
         except (ValueError, KeyError, TypeError) as exc:
             data = as_failure(scene, exc)
         write(stage_b, plan, data)
-
-    run_parallel(
-        "Sub-Agent feedback", stage_b, "report",
-        total_reports, initial_reports, make_reports,
-        stage="reports",
-    )
-
-    def action_count(data: dict) -> int:
-        if data is None or data.get("episode") is None:
-            return 0
-        audit = data["private_audit"]
-        fork = audit["branch_round"]
-        return sum(
-            row["attempt"] >= fork
-            and row["action"] in {"delegate_task", "complete"}
-            for row in data["episode"]["trajectory"]
-        )
-
-    total_actions = sum(action_count(saved(stage_b, p)) for p in planned)
-    # A fully handled round contributes its *entire planned action*
-    # budget to accounted progress, including downstream actions skipped
-    # after a reviewed Main failure. Do not disguise partial coverage by
-    # shrinking the denominator to the number actually authored.
-    initial_actions = sum(
-        action_count(saved(stage_b, p))
-        for p in planned if saved(journal, p) is not None
-    )
 
     def make_main(plan: dict, tick) -> None:
         source = saved(stage_b, plan)
@@ -1168,10 +1154,125 @@ def generate_turns(
             data = as_failure(scene, exc)
         write(journal, plan, data)
 
-    run_parallel(
-        "Main orchestration", journal, "action",
-        total_actions, initial_actions, make_main,
-        stage="main",
+    def published_recovery(index: int) -> bool:
+        current = saved(journal, by_index[index])
+        return (
+            current is not None and current.get("status") == "recovered"
+            and not any(review_turn_surface(turn) for turn in current["turns"])
+        )
+
+    # Each round starts with max_selected_per_round candidates. On review
+    # failure, try another *distinct* successful 4A replay from the same
+    # question/feedback round. Never spend language budget on a recovered
+    # branch once the round already has its required accepted output(s).
+    active = set(selected_indices)
+    attempted = set()
+    initial_selection = set(active)
+    backfilled_groups = set()
+    total_actions = 0
+    while active:
+        batch_plans = [by_index[i] for i in sorted(active)]
+        total_reports = sum(
+            report_count(saved(stage_a, plan)) for plan in batch_plans
+        )
+        initial_reports = sum(
+            report_count(saved(stage_b, plan))
+            for plan in batch_plans if saved(stage_b, plan) is not None
+        )
+        run_parallel(
+            "Sub-Agent feedback", stage_b, "report",
+            total_reports, initial_reports, make_reports,
+            stage="reports", subset=batch_plans,
+        )
+        wave_actions = sum(
+            action_count(saved(stage_b, plan)) for plan in batch_plans
+        )
+        total_actions += wave_actions
+        initial_actions = sum(
+            action_count(saved(stage_b, plan))
+            for plan in batch_plans if saved(journal, plan) is not None
+        )
+        run_parallel(
+            "Main orchestration", journal, "action",
+            wave_actions, initial_actions, make_main,
+            stage="main", subset=batch_plans,
+        )
+        attempted.update(active)
+        if candidate_strategy != "enumerate":
+            break
+        next_active = set()
+        for key, candidates in ranked.items():
+            past = [r for r in candidates if r["candidate_index"] in attempted]
+            succeeded = sum(
+                published_recovery(r["candidate_index"]) for r in past
+            )
+            room = max(0, max_selected_per_round - succeeded)
+            budget = max(0, max_language_attempts_per_round - len(past))
+            if room == 0 or budget == 0:
+                continue
+            for candidate in candidates:
+                if room == 0 or budget == 0:
+                    break
+                index = candidate["candidate_index"]
+                if index in attempted:
+                    continue
+                next_active.add(index)
+                room -= 1
+                budget -= 1
+                backfilled_groups.add(key)
+        active = next_active
+
+    # Retain compatibility with the V10 full candidate journal while keeping
+    # all rejected/unused candidates private and LLM-free.
+    for plan in planned:
+        if plan["index"] in attempted:
+            continue
+        source = saved(stage_a, plan)
+        placeholder = {
+            **source, "status": "not_selected_for_language_review",
+            "error": "4a_candidate_screened_out",
+            "episode": None, "turns": [],
+        }
+        write(stage_b, plan, placeholder)
+        write(journal, plan, placeholder)
+
+    if candidate_strategy == "enumerate":
+        for row in selection_rows:
+            index = row["candidate_index"]
+            row["selected_for_language_review"] = index in attempted
+            row["selection_reason"] = (
+                "language_review_primary" if index in initial_selection
+                else "language_review_backfill_after_rejection"
+                if index in attempted
+                else "not_execution_recovered"
+                if row["execution_outcome"] != "recovered"
+                else "not_needed_or_language_budget_exhausted"
+            )
+            if index in attempted:
+                row["language_review_outcome"] = (
+                    saved(journal, by_index[index]) or {}
+                ).get("status")
+        selection_stats["candidates_selected_for_language_review"] = len(
+            attempted
+        )
+        selection_stats["candidates_filtered_before_llm"] = (
+            len(planned) - len(attempted)
+        )
+        selection_stats["selected_behavior_distribution"] = dict(Counter(
+            row["category"] for row in selection_rows
+            if row["selected_for_language_review"]
+        ))
+        selection_stats["feedback_rounds_with_selected_candidates"] = len({
+            (row["question_id"], row["feedback_round"])
+            for row in selection_rows if row["selected_for_language_review"]
+        })
+    selection_stats["candidate_language_backfill_attempts"] = len(
+        attempted - initial_selection
+    )
+    selection_stats["feedback_rounds_backfilled"] = len(backfilled_groups)
+    _atomic_jsonl(
+        output / "private" / "candidate_selection.jsonl",
+        selection_rows,
     )
     counts_summary = _publish(output, planned)
     summary = {
@@ -1188,12 +1289,14 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v2",
+        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_1",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
         "max_candidates_per_feedback_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
         "max_selected_per_feedback_round": max_selected_per_round,
+        "max_language_attempts_per_feedback_round":
+            max_language_attempts_per_round,
         "candidate_selection_diagnostics": str(
             output / "private" / "candidate_selection.jsonl"
         ),
@@ -1232,15 +1335,15 @@ def generate_turns(
         "main_action_mode": main_mode,
         "main_actions_planned": total_actions,
         "main_actions_processed": sum(
-            len((saved(journal, p).get("private_audit") or {})
-                .get("main_action_reviews", []))
-            for p in planned if saved(journal, p) is not None
+            len(((saved(journal, by_index[i]) or {}).get("private_audit")
+                 or {}).get("main_action_reviews", []))
+            for i in attempted
         ),
-        "main_actions_skipped_downstream": (
+        "main_actions_skipped_downstream": max(0,
             total_actions - sum(
-                len((saved(journal, p).get("private_audit") or {})
-                    .get("main_action_reviews", []))
-                for p in planned if saved(journal, p) is not None
+                len(((saved(journal, by_index[i]) or {}).get("private_audit")
+                     or {}).get("main_action_reviews", []))
+                for i in attempted
             )
         ),
         "input_scenes": len(scenes),
@@ -1289,7 +1392,7 @@ def generate_turns(
             output / "private" / "fault_alignment.jsonl"
         ),
         "limitations": [
-            "Candidate enumeration and ranking are deterministic 4A-only; all unselected trials remain privately auditable and do not consume LLM requests.",
+            "Candidate enumeration and ranking are deterministic 4A-only; successful candidates are author-reviewed in ranked order only if earlier reviewed candidates fail, within a per-round budget.",
             "The default 4A search only retries the frozen executable Macro path; new independent verification operators are not yet synthesized.",
             "One atomic fault per candidate is sufficient to expose several multi-round outcomes; trial count is not the number of distinct questions.",
             "Every accepted base Main decision round receiving a prior Sub-Agent batch is indexed; only an explicit debug cap limits extraction.",
@@ -1312,8 +1415,9 @@ def generate_turns(
     _atomic_json(output / "summary.json", summary)
     if not no_progress:
         tqdm.write(
-            "Evidence rounds: "
-            f"{summary['completed_branches']}/{summary['requested_feedback_rounds']} "
+            "Evidence candidate trials: "
+            f"{summary['completed_branches']}/{summary['candidate_trials']} "
+            f"| feedback rounds={summary['requested_feedback_rounds']} "
             f"| selected={summary['candidates_selected_for_language_review']} "
             f"| execution recovered={summary['execution_recovered_branches']} "
             f"| incorrect={summary['incorrect']} "

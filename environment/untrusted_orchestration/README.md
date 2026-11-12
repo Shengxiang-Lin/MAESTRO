@@ -98,6 +98,42 @@ It also does not add optional verification sources to Stage 1 or create
 an online agent evaluation environment. A private Gold comparison
 decides data publication eligibility, never the next Main action.
 
+## V10.1: visible-evidence reasoning fidelity, backfill, and metric fixes
+
+V10.1 leaves the frozen Stage-1/2/3 inputs and zero-LLM 4A replay
+unchanged. It addresses problems in the V10 language-review publication:
+
+* 4C Author **and** Critic receive the exact Main-visible
+  \`main_visible_justification\`, operation and target fields of the current
+  evidence requests. The Critic must not disregard a visible
+  Result/Summary conflict just because the returned status is \`done\`.
+  A narrow independent *second review* is allowed when the Critic
+  incorrectly declares a cited conflict nonexistent; it never
+  auto-accepts a rejected candidate.
+* A conservative deterministic guard rejects Main reasoning that
+  simultaneously requests verification and asserts that the same
+  discrepancy was already successfully resolved or verified. The guard
+  sends an explicit revision reason back to the Author.
+* \`generation.max_selected_per_round\` is the number of desired accepted
+  candidates per feedback round. \`generation.max_language_attempts_per_round\`
+  is the **total** per-round 4B/4C attempt budget, including the first
+  candidate (default: 3). If the first candidate fails language review,
+  the next ranked, distinct **already recovered** 4A candidate is tried;
+  otherwise no additional LLM work is done. All attempts are recorded
+  in \`private/candidate_selection.jsonl\` with their ranks and
+  language-review outcomes. Rejections are not mixed into positive SFT.
+* \`main_actions_planned/processed/skipped_downstream\` count only 4C
+  authoring attempts, never template 4A replay actions. Stage-4A
+  execution outcomes and downstream invalidations continue to cover
+  **all** candidate trials. The terminal summary separately shows
+  \`candidate_trials\` and \`requested_feedback_rounds\`; neither is
+  a count of independently generated questions.
+
+Use a **new output directory** because code and manifest signatures
+have changed. Existing V10 data remains an archival snapshot. V10.1
+reuses 4A results within its own resumable run; it does not import
+arbitrary older stage4a journals without input/code signature checks.
+
 ## Unified event engine (V9)
 
 `round_fork` is now a **single-atom event scenario**, not a separate
