@@ -26,6 +26,7 @@ model:
 rollout:
   backend: vllm
   group_size: 8
+  prompts_per_batch: 4
   temperature: 1.0
   top_p: 1.0
   max_prompt_tokens: 24576
@@ -40,11 +41,11 @@ rollout:
   compilation_config:
     mode: 0  # Disable torch.compile.
     cudagraph_mode: FULL_DECODE_ONLY
-    cudagraph_capture_sizes: [1, 2, 4, 8]
+    cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32]
   kv_cache_dtype: fp8
   enable_sleep_mode: true
   enable_prefix_caching: false
-  max_num_seqs: 8
+  max_num_seqs: 32
   # One vLLM server and the policy share one 96 GB-class GPU in phases.
   sync_dir: baseline/da-grpo/output/vllm_sync
 

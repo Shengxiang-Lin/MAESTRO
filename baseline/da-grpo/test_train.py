@@ -103,11 +103,14 @@ class TestConfig(unittest.TestCase):
     def test_legacy_config_still_uses_triton_eager_and_sleep_mode(self):
         raw = trainer.yaml.safe_load(trainer.DEFAULT_CONFIG.read_text())
         raw["rollout"].pop("compilation_config")
+        raw["rollout"].pop("prompts_per_batch")
+        raw["rollout"]["max_num_seqs"] = 8
         raw["rollout"]["enforce_eager"] = True
         with TemporaryDirectory() as tmp:
             config = Path(tmp) / "legacy.yaml"
             config.write_text(trainer.yaml.safe_dump(raw), encoding="utf-8")
             cfg = trainer.load_config(config)
+        self.assertEqual(cfg["rollout"]["prompts_per_batch"], 1)
         vllm_cfg = {**cfg["rollout"], "lora_rank": cfg["model"]["lora_rank"]}
         module = ModuleType("vllm")
         module.LLM = Mock()
@@ -138,11 +141,13 @@ class TestConfig(unittest.TestCase):
             engine = rollout.ColocatedRollout("Qwen3-8B", None, vllm_cfg, Path(tmp))
             engine.initialize()
         kwargs = module.LLM.call_args.kwargs
+        self.assertEqual(cfg["rollout"]["prompts_per_batch"], 4)
+        self.assertEqual(kwargs["max_num_seqs"], 32)
         self.assertFalse(kwargs["enforce_eager"])
         self.assertEqual(kwargs["compilation_config"], {
             "mode": 0,
             "cudagraph_mode": "FULL_DECODE_ONLY",
-            "cudagraph_capture_sizes": [1, 2, 4, 8],
+            "cudagraph_capture_sizes": [1, 2, 4, 8, 16, 32],
         })
         self.assertEqual(kwargs["attention_backend"], "TRITON_ATTN")
         self.assertTrue(kwargs["enable_sleep_mode"])

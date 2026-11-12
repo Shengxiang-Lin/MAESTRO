@@ -94,11 +94,14 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
                         "gpu_memory_utilization", "attention_backend", "enforce_eager",
                         "kv_cache_dtype", "enable_sleep_mode",
                         "enable_prefix_caching", "max_num_seqs", "sync_dir"}
-    allowed_rollout = required_rollout | {"compilation_config"}
+    allowed_rollout = required_rollout | {"compilation_config", "prompts_per_batch"}
     if not required_rollout <= rollout.keys() <= allowed_rollout:
         raise ValueError("Invalid rollout configuration keys")
     if "compilation_config" in rollout and not isinstance(rollout["compilation_config"], dict):
         raise ValueError("rollout.compilation_config must be a mapping")
+    prompts_per_batch = rollout.setdefault("prompts_per_batch", 1)
+    if type(prompts_per_batch) is not int or prompts_per_batch not in (1, 2, 4):
+        raise ValueError("rollout.prompts_per_batch must be 1, 2, or 4")
     if rollout["backend"] != "vllm" or rollout["enable_sleep_mode"] is not True:
         raise ValueError("Single-card profile requires vLLM sleep mode")
     if rollout["temperature"] != 1.0 or rollout["top_p"] != 1.0:
@@ -628,7 +631,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--test-judge", action="store_true")
     parser.add_argument("--max-updates", type=int, default=None)
-    parser.add_argument("--rollout-prompts", type=int, choices=(1, 2, 4), default=1,
+    parser.add_argument("--rollout-prompts", type=int, choices=(1, 2, 4),
                         help="Prompt groups sampled together and accumulated per update")
     parser.add_argument("--max-num-seqs", type=int, default=None,
                         help="vLLM concurrent sequence cap, e.g. 8, 16 or 32")
@@ -661,6 +664,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.output_dir is not None:
         cfg["paths"]["output_dir"] = repo_path(args.output_dir)
         cfg["rollout"]["sync_dir"] = cfg["paths"]["output_dir"] / "vllm_sync"
+    if args.rollout_prompts is None:
+        args.rollout_prompts = cfg["rollout"]["prompts_per_batch"]
     cfg["rollout"]["prompts_per_batch"] = args.rollout_prompts
     if args.dry_run:
         show_config(cfg)

@@ -158,7 +158,7 @@ On the user's RTX 6000D (83.05 GiB), FlashInfer JIT was selected despite
 an incompatible CUDA toolkit and reported `FlashInfer requires GPUs with sm75
 or higher`. A separate CUDA Graph profiling/capture step exhausted device
 memory. The default configuration limits capture to decode batches of up to
-eight sequences:
+32 sequences:
 
 ```yaml
 rollout:
@@ -167,7 +167,7 @@ rollout:
   compilation_config:
     mode: 0
     cudagraph_mode: FULL_DECODE_ONLY
-    cudagraph_capture_sizes: [1, 2, 4, 8]
+    cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32]
   gpu_memory_utilization: 0.35
   kv_cache_dtype: fp8
 ```
@@ -195,10 +195,9 @@ problem unless this conservative configuration also fails.
 
 ## Optional experiment: multiple prompts in one vLLM rollout
 
-The default single-GPU training remains one Main-Agent prompt, eight
-candidates, and one optimizer step for an informative group. The optional
-`--rollout-prompts 2` and `--rollout-prompts 4` modes submit two or four
-prompts in one `vLLM.generate()` call, with eight candidates per prompt.
+The default configuration submits four Main-Agent prompts in one
+`vLLM.generate()` call, with eight candidates per prompt. Use
+`--rollout-prompts` to override the configured prompt count.
 Each group keeps its own reward normalization. The optimizer steps once
 after backpropagating the informative groups, one candidate at a time.
 
@@ -216,7 +215,8 @@ must not be shared between live experiments.
 ```bash
 # Baseline: one prompt per rollout, original eight candidates
 python baseline/da-grpo/train.py \
-  --rollout-prompts 1 --max-updates 4 --max-response-tokens 1024 \
+  --rollout-prompts 1 --max-num-seqs 8 --decode-cuda-graph \
+  --max-updates 4 --max-response-tokens 1024 \
   --output-dir baseline/da-grpo/output_batch1_bench
 
 # Opt-in: two different prompts and 16 candidates per rollout;
