@@ -1,4 +1,4 @@
-"""Stage 4 V10.1 regression: reason fidelity, critic rereview, adaptive backfill."""
+"""Main reasoning fidelity and causal candidate-backfill regression tests."""
 from __future__ import annotations
 
 import importlib
@@ -12,6 +12,9 @@ from environment.base_orchestration.action_author import author_delegate_action
 from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.reasoning_fidelity import (
     reasoning_evidence_issues,
+)
+from environment.untrusted_orchestration.candidate_selection import (
+    select_recovered_candidates,
 )
 
 runner = importlib.import_module(
@@ -272,6 +275,48 @@ class Stage4BackfillTests(unittest.TestCase):
                     "language_review_backfill_after_rejection"
                     for x in selection), 1,
             )
+
+
+class CausalCandidateRankingTests(unittest.TestCase):
+    def test_backfill_preserves_causal_rank_without_fault_name_reordering(self):
+        kinds = [
+            "result_summary_conflict",
+            "result_summary_conflict",
+            "wrong_retrieval",
+        ]
+        plans = [{
+            "index": i, "sample_id": f"q-candidate-{i}",
+            "task_id": "q", "branch_round": 2,
+            "faults": [],
+            "scenario_plan": {"fault_atoms": [{"kind": kind}]},
+        } for i, kind in enumerate(kinds)]
+        journals = [{
+            "status": "recovered",
+            "episode": {"trajectory": [{
+                "attempt": 2, "action": "delegate_task"
+            }]},
+            "private_audit": {
+                "execution_outcome": "recovered",
+                "runtime": {},
+                "fault_events_applied": [{}],
+                "evidence_plan": [{
+                    "evidence_requests": [{
+                        "operation": "verify_conflicting_evidence",
+                        "target_fields": [f"field_{i}"],
+                        "authorized_source_ids": ["visual"],
+                    }]
+                }],
+            },
+        } for i in range(3)]
+        selected, rows, _ = select_recovered_candidates(
+            plans, journals, max_selected_per_round=1,
+        )
+        self.assertEqual(selected, {0})
+        self.assertEqual(
+            [r["candidate_index"] for r in
+             sorted(rows, key=lambda r: r["recovery_rank"])],
+            [0, 1, 2],
+        )
 
 
 if __name__ == "__main__":
