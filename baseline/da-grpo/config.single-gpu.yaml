@@ -1,0 +1,53 @@
+# Single 96-GiB-class GPU, Qwen3-8B, original O1 GRPO + Judge.
+# Resource adaptation only: LoRA / CPU offload / vLLM memory limits.
+# This is NOT byte-for-byte full-parameter O1 training.
+version: 1
+
+paths:
+  verl_dir: ../verl
+  model_path: base_models/Qwen3-8B
+  data_dir: dataset/data/da-grpo
+
+judge:
+  registry: config/model_config.yaml
+  model: qwen3.7-flash
+  api_key_env: DASHSCOPE_API_KEY
+  enable_thinking: false
+
+training:
+  nnodes: 1
+  n_gpus_per_node: 1
+  train_batch_size: 2
+  ppo_mini_batch_size: 2
+  max_prompt_length: 24576
+  max_response_length: 4096
+  max_token_len_per_gpu: 32768
+  rollout_n: 8
+  learning_rate: 0.000005
+  epochs: 5
+  save_freq: 54
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.35
+  ray_num_cpus: 8
+
+logging:
+  backends: [console, file]
+
+hardware:
+  # O2's proven single-GPU long-context experiment used a 96 GB GPU.
+  # This conservative gate does NOT guarantee fitting every long rollout.
+  min_gpu_memory_gib: 80
+
+# These are native verl/Hydra flags; no o2 custom training loop is imported.
+# They preserve algorithm.adv_estimator=grpo and O1's judge rubric/weights.
+verl_overrides:
+  - actor_rollout_ref.model.lora_rank=32
+  - actor_rollout_ref.model.lora_alpha=64
+  - actor_rollout_ref.model.target_modules=all-linear
+  - actor_rollout_ref.rollout.load_format=safetensors
+  - actor_rollout_ref.rollout.layered_summon=True
+  - actor_rollout_ref.actor.fsdp_config.param_offload=True
+  - actor_rollout_ref.actor.fsdp_config.optimizer_offload=True
+  - actor_rollout_ref.ref.fsdp_config.param_offload=True
+  - actor_rollout_ref.rollout.max_model_len=32768
+  - actor_rollout_ref.rollout.max_num_seqs=2

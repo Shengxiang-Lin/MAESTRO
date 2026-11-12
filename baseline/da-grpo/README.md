@@ -123,3 +123,43 @@ rollout is introduced.
 If `import verl` fails, install verl from its Git checkout; it is
 not a module provided by either `baseline/orchestra-o1/` or
 `train_maestro_8b/`.
+
+
+## Single-GPU (96 GB-class) option: same GRPO and judge, LoRA updates
+
+Orchestra-o2's [single-card long-context profile](https://github.com/Shengxiang-Lin/orchestra-o2/blob/main/orchestra-o3/model/configs/qwen3_8b_bf16_lora_1x96g_long.yaml)
+uses **Qwen3-8B LoRA rank 32**, shared-GPU vLLM and streamed candidate
+backpropagation. That run is **not** an 8B full-parameter Orchestra-o1
+GRPO run; it additionally implements future latents and composite losses.
+
+For a simplified single-GPU variant we reuse **verl's official LoRA
+support** (not o2's custom trainer). O1's GRPO estimator, eight candidate
+rollouts, original four-dimensional reward and KL settings remain unchanged.
+**Trainable weights differ:** this is a resource-adapted reproduction,
+**not** exact full-parameter O1 training.
+
+The separate `config.single-gpu.yaml` assumes **one 80–96 GB GPU**
+(96 GB recommended), sets LoRA rank 32, TP 1, FSDP2 CPU offload,
+small prompt/mini-batches, and vLLM memory budget 0.35. Hardware preflight
+checks both GPU count and device memory. Training fit and vLLM compatibility
+still require a real test; the 24K prompt / 4K response upper bounds can be
+expensive even on 96 GB.
+
+```bash
+python baseline/da-grpo/train.py \
+  --config baseline/da-grpo/config.single-gpu.yaml --dry-run
+python baseline/da-grpo/train.py \
+  --config baseline/da-grpo/config.single-gpu.yaml --check
+# Only after resolving DashScope HTTP 401:
+python baseline/da-grpo/train.py \
+  --config baseline/da-grpo/config.single-gpu.yaml --test-judge
+# First: limit to one optimizer update, with shorter decoding for smoke test.
+python baseline/da-grpo/train.py \
+  --config baseline/da-grpo/config.single-gpu.yaml \
+  trainer.total_training_steps=1 data.max_response_length=512
+```
+
+After smoke testing, omit the final two Hydra overrides to restore the
+profile's 4096 response-token ceiling and full five-epoch schedule.
+For the strict O1 **full-parameter** reproduction, use `config.yaml`
+with its eight-GPU hardware rather than this LoRA profile.

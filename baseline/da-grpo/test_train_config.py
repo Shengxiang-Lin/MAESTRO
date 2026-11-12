@@ -49,6 +49,35 @@ class TestDAGRPOConfig(unittest.TestCase):
              patch.object(module.subprocess, "call", side_effect=AssertionError("unexpected training")):
             self.assertEqual(module.main(["--check"]), 0)
 
+    def test_single_gpu_profile_uses_original_grpo_with_lora_resource_overrides(self):
+        cfg = module.load_config(
+            Path(__file__).with_name("config.single-gpu.yaml")
+        )
+        self.assertEqual(cfg["settings"]["N_GPUS_PER_NODE"], "1")
+        self.assertEqual(cfg["settings"]["TP_SIZE"], "1")
+        self.assertEqual(cfg["settings"]["ROLLOUT_N"], "8")
+        self.assertEqual(cfg["minimum_gpu_memory_gib"], 80)
+        self.assertIn(
+            "actor_rollout_ref.model.lora_rank=32", cfg["verl_overrides"]
+        )
+        self.assertIn(
+            "actor_rollout_ref.actor.fsdp_config.optimizer_offload=True",
+            cfg["verl_overrides"],
+        )
+        self.assertTrue(all(
+            "algorithm.adv_estimator" not in item
+            and "reward.custom_reward_function" not in item
+            for item in cfg["verl_overrides"]
+        ))
+
+    def test_single_gpu_memory_check_is_not_just_gpu_count(self):
+        cfg = module.load_config(Path(__file__).with_name("config.single-gpu.yaml"))
+        with patch.object(module, "gpu_count", return_value=1), \
+             patch.object(module, "visible_gpu_memory_gib", return_value=[47]):
+            result = module.check_environment(cfg)
+        self.assertTrue(result["gpu_count"])
+        self.assertFalse(result["gpu_memory"])
+
     def test_bad_gpus_validation(self):
         cfg = module.load_config()
         self.assertEqual(cfg["settings"]["TP_SIZE"], "2")

@@ -41,7 +41,9 @@ ENV_FIELDS = {
     "ray_num_cpus": "RAY_NUM_CPUS",
 }
 FLOAT_FIELDS = {"learning_rate", "gpu_memory_utilization"}
-ALLOWED_SECTIONS = {"version", "paths", "judge", "training", "logging"}
+REQUIRED_SECTIONS = {"version", "paths", "judge", "training", "logging"}
+OPTIONAL_SECTIONS = {"verl_overrides", "hardware"}
+ALLOWED_SECTIONS = REQUIRED_SECTIONS | OPTIONAL_SECTIONS
 
 
 def root_path(value: str) -> Path:
@@ -58,8 +60,8 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or raw.get("version") != 1:
         raise ValueError("DA-GRPO config requires version: 1")
-    if set(raw) != ALLOWED_SECTIONS:
-        raise ValueError(f"DA-GRPO config must contain exactly {sorted(ALLOWED_SECTIONS)}")
+    if not REQUIRED_SECTIONS.issubset(raw) or set(raw) - ALLOWED_SECTIONS:
+        raise ValueError(f"DA-GRPO config requires {sorted(REQUIRED_SECTIONS)} and only optional {sorted(OPTIONAL_SECTIONS)}")
     for section in ("paths", "judge", "training", "logging"):
         if not isinstance(raw[section], dict):
             raise ValueError(f"{section} must be a YAML mapping")
@@ -112,6 +114,24 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict:
         or any(name not in {"console", "file", "wandb"} for name in backends)):
         raise ValueError("logging.backends must be a unique list from console, file, wandb")
 
+    overrides = raw.get("verl_overrides", [])
+    if not isinstance(overrides, list) or any(
+        not isinstance(item, str) or "=" not in item
+        or not item.split("=", 1)[0].strip()
+        or any(char.isspace() for char in item.split("=", 1)[0])
+        for item in overrides
+    ):
+        raise ValueError("verl_overrides must be a list of Hydra key=value strings")
+    if len({item.split("=", 1)[0] for item in overrides}) != len(overrides):
+        raise ValueError("Duplicate keys in verl_overrides")
+
+    hardware = raw.get("hardware", {})
+    if not isinstance(hardware, dict) or set(hardware) - {"min_gpu_memory_gib"}:
+        raise ValueError("hardware only supports min_gpu_memory_gib")
+    minimum = hardware.get("min_gpu_memory_gib")
+    if minimum is not None and (type(minimum) not in (int, float) or minimum <= 0):
+        raise ValueError("hardware.min_gpu_memory_gib must be positive")
+
     paths = {name: root_path(value) for name, value in raw["paths"].items()}
     return {
         "config": path, "paths": paths, "settings": settings,
@@ -120,6 +140,8 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict:
             "api_key_env": key_env, "enable_thinking": judge["enable_thinking"],
         },
         "backends": backends,
+        "verl_overrides": list(overrides),
+        "minimum_gpu_memory_gib": minimum,
     }
 
 
@@ -132,6 +154,21 @@ def gpu_count() -> int | None:
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     return len([line for line in done.stdout.splitlines() if line.strip()])
+
+
+def visible_gpu_memory_gib() -> list[float] | None:
+    """GPU memory is a separate requirement from merely detecting one GPU."""
+    try:
+        done = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total",
+             "--format=csv,noheader,nounits"],
+            text=True, capture_output=True, timeout=8, check=True,
+        )
+        return [float(row.strip()) / 1024
+                for row in done.stdout.splitlines() if row.strip()]
+    except (FileNotFoundError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired, ValueError):
+        return None
 
 
 def check_environment(cfg: dict) -> dict[str, bool]:
@@ -151,6 +188,13 @@ def check_environment(cfg: dict) -> dict[str, bool]:
     count = gpu_count()
     needed = int(cfg["settings"]["N_GPUS_PER_NODE"])
     missing["gpu_count"] = count is not None and count >= needed
+    minimum = cfg.get("minimum_gpu_memory_gib")
+    if minimum is not None:
+        memories = visible_gpu_memory_gib()
+        missing["gpu_memory"] = (
+            memories is not None and len(memories) >= needed
+            and min(memories[:needed]) >= minimum
+        )
     return missing
 
 
@@ -238,8 +282,11 @@ def main(argv: list[str] | None = None) -> int:
         },
         "training_env": cfg["settings"],
         "loggers": cfg["backends"],
+        "verl_overrides": cfg["verl_overrides"],
+        "minimum_gpu_memory_gib": cfg["minimum_gpu_memory_gib"],
         "checks": checks,
         "detected_gpus": gpu_count(),
+        "detected_gpu_memory_gib": visible_gpu_memory_gib(),
     }
     print(json.dumps(safe, ensure_ascii=False, indent=2))
     if args.dry_run:
@@ -262,7 +309,10 @@ def main(argv: list[str] | None = None) -> int:
         test_judge(cfg, env)
         return 0
     print("[da-grpo] Starting original Orchestra-o1 verl trainer. Credentials are not logged.")
-    return subprocess.call(["bash", str(ENGINE), *overrides], cwd=str(ROOT), env=env)
+    return subprocess.call(
+        ["bash", str(ENGINE), *cfg["verl_overrides"], *overrides],
+        cwd=str(ROOT), env=env,
+    )
 
 
 if __name__ == "__main__":
