@@ -166,7 +166,11 @@ def make_examples(
         mode = turn.get("generation_mode", "unknown")
         modes[mode] += 1
         seen.add(sample_id)
-        if require_llm and mode != "llm_reviewed":
+        if require_llm and mode not in {
+            "llm_reviewed",
+            "llm_reviewed_completion",
+            "llm_reviewed_contract_frozen",
+        }:
             continue
 
         scene = scenes[scene_id]
