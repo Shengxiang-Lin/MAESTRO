@@ -1,0 +1,10 @@
+# Use a separate Python 3.11+ environment (do not upgrade a running GRPO env).
+# Let Unsloth resolve a compatible CUDA/Torch/Transformers build.
+unsloth
+unsloth_zoo
+trl>=0.19.0
+datasets
+pyarrow
+PyYAML
+bitsandbytes
+accelerate
