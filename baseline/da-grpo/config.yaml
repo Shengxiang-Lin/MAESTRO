@@ -30,8 +30,11 @@ rollout:
   max_completion_tokens: 4096
   temperature: 1.0
   top_p: 1.0
-  gpu_memory_utilization: 0.35
-  max_num_seqs: 32
+  # Standby otherwise overrides 0.35 -> ~0.879 and gives vLLM an oversized
+  # KV reservation. Leave headroom for long-context BF16 LoRA backward.
+  gpu_memory_utilization: 0.70
+  standby_util_override: true
+  max_num_seqs: 16
   # FLASH_ATTN on RTX 6000D SM120 rejects FP8 KV Cache (requires other
   # FA3/FA4 and device/head-size combinations). With BF16 model, auto = BF16 KV.
   kv_cache_dtype: auto

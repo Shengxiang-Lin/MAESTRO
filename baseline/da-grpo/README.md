@@ -241,3 +241,50 @@ The startup log should contain
 and no attempt to import `flashinfer.autotuner` in the worker.
 This is not yet an end-to-end GPU validation: inspect the subsequent
 TRL rollout/gradient logs to verify an optimizer update completes.
+
+## RTX 6000D first-update CUDA OOM (2026-11-12)
+
+Observed: 4 prompts × 8 candidate actions finished vLLM rollout, but the
+first backward needed 5.48 GiB with only ~1.70 GiB GPU free. The first
+training step did **not** finish. vLLM had silently replaced
+`gpu_memory_utilization: 0.35` with ~`0.87875` because Standby
+automatically sizes the KV cache. This is partly an inference-memory
+budget issue and partly long-context BF16 LoRA activation pressure;
+a complete fix is not established until a GRPO optimizer step succeeds.
+
+Unsloth has an official override `UNSLOTH_VLLM_STANDBY_UTIL_OVERRIDE=1`.
+The new default sets it *before* importing Unsloth and uses
+`gpu_memory_utilization: 0.70`, `max_num_seqs: 16`. This gives the
+policy's long-context backward more room and reduces rollout concurrency
+while preserving **4 prompt groups × 8 candidates each** and
+`gradient_accumulation_steps: 32`. Fewer concurrently scheduled
+rollouts may be slower but the group semantics remain unchanged.
+
+```bash
+git pull origin main
+python -m unittest discover -s baseline/da-grpo -p 'test_*.py'
+python baseline/da-grpo/train.py --dry-run
+MAESTRO_GRPO_TRACEBACK=1 python baseline/da-grpo/train.py \
+  --max-steps 1 --max-completion-tokens 512 \
+  --output-dir baseline/da-grpo/output_unsloth_vram70
+```
+
+Check that `Unsloth: Standby mode is enabled. Changing
+gpu_memory_utilization to 0.87875` is **absent** and the printed vLLM
+utilization reflects ~0.70 (possibly adjusted down by Unsloth's planner).
+If one optimization step still OOMs, run another isolated experiment
+with `--vllm-memory-utilization 0.60 --max-num-seqs 8`, and inspect
+the longest prompt lengths; reducing `max_num_seqs` alone will not
+reduce per-completion backward activations.
+
+Do **not** blindly apply the CUDA error's suggestion
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`: colocated vLLM
+Sleep/Standby uses the CuMemAllocator, and expandable CUDA allocator
+segments may conflict with its memory pool. The
+`CUDA Error: invalid argument` after the primary OOM may be a
+secondary failure during GPU/allocator teardown. The tokenizer
+`bos_token_id: None` alignment message is also not an OOM cause.
+
+If CUDA is in a bad state after an OOM, exit the failed Python process
+and check `nvidia-smi` before restarting. The unchanged MAESTRO dataset
+and 4D Judge should remain the benchmark reference.

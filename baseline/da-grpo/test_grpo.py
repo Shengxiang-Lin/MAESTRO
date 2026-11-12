@@ -31,6 +31,9 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(plan["generation_batch_size"], 32)
         self.assertEqual(cfg["training"]["epochs"], 3)
         self.assertEqual(cfg["rollout"]["kv_cache_dtype"], "auto")
+        self.assertEqual(cfg["rollout"]["gpu_memory_utilization"], 0.70)
+        self.assertEqual(cfg["rollout"]["max_num_seqs"], 16)
+        self.assertTrue(cfg["rollout"]["standby_util_override"])
 
     def test_framework_options_preserve_o1_behavior(self):
         cfg = train.load_config()
@@ -76,6 +79,9 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(os.environ["UNSLOTH_VLLM_NO_FLASHINFER"], "1")
             self.assertEqual(os.environ["VLLM_USE_FLASHINFER_SAMPLER"], "0")
             self.assertNotIn("VLLM_ATTENTION_BACKEND", os.environ)
+            self.assertEqual(
+                os.environ["UNSLOTH_VLLM_STANDBY_UTIL_OVERRIDE"], "1"
+            )
 
     def test_flashinfer_autotune_disabled_in_all_vllm_presets(self):
         # Simulate the vLLM 0.32 internal optimization levels without
@@ -103,6 +109,18 @@ class TestConfig(unittest.TestCase):
         with patch.dict(sys.modules, {"vllm.config.vllm": fake_module}):
             with self.assertRaisesRegex(RuntimeError, "optimization preset changed"):
                 train.disable_vllm_flashinfer_autotune()
+
+    def test_vllm_memory_override_cli_and_sequence_limit(self):
+        import io
+        from contextlib import redirect_stdout
+        with redirect_stdout(io.StringIO()) as capture:
+            train.main(["--dry-run", "--vllm-memory-utilization", "0.65",
+                        "--max-num-seqs", "8"])
+        data = json.loads(capture.getvalue())
+        self.assertEqual(data["vllm_gpu_memory_utilization"], 0.65)
+        self.assertEqual(data["vllm_max_num_seqs"], 8)
+        self.assertEqual(data["batch_plan"]["num_generations"], 8)
+        self.assertEqual(data["batch_plan"]["prompts_per_step"], 4)
 
     def test_invalid_batch_or_context_rejected(self):
         import tempfile

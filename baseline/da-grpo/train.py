@@ -85,7 +85,8 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
     expected = {"prompts_per_step", "num_generations", "max_prompt_tokens",
                 "max_completion_tokens", "temperature", "top_p",
                 "gpu_memory_utilization", "max_num_seqs", "kv_cache_dtype",
-                "disable_flashinfer", "enforce_eager", "standby"}
+                "disable_flashinfer", "enforce_eager", "standby",
+                "standby_util_override"}
     if set(rollout) != expected:
         raise ValueError("Invalid rollout configuration")
     for key in ("prompts_per_step", "num_generations", "max_prompt_tokens",
@@ -109,8 +110,14 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
             "RTX 6000D + Unsloth FLASH_ATTN requires kv_cache_dtype: auto "
             "(FP8 KV cache unsupported in the selected attention backend)"
         )
-    if type(rollout["enforce_eager"]) is not bool or type(rollout["standby"]) is not bool:
+    if any(type(rollout[key]) is not bool for key in
+           ("enforce_eager", "standby", "standby_util_override")):
         raise ValueError("Invalid rollout boolean")
+    if rollout["standby"] and not rollout["standby_util_override"]:
+        raise ValueError(
+            "With Unsloth Standby, set standby_util_override: true so "
+            "gpu_memory_utilization is not silently forced to ~0.879"
+        )
 
     train = cfg["training"]
     required = {"epochs", "max_steps", "learning_rate", "weight_decay", "warmup_ratio",
@@ -172,6 +179,9 @@ def show_config(cfg: dict) -> None:
         "beta": cfg["training"]["kl_coef"],
         "disable_flashinfer": cfg["rollout"]["disable_flashinfer"],
         "kv_cache_dtype": cfg["rollout"]["kv_cache_dtype"],
+        "vllm_gpu_memory_utilization": cfg["rollout"]["gpu_memory_utilization"],
+        "vllm_max_num_seqs": cfg["rollout"]["max_num_seqs"],
+        "standby_util_override": cfg["rollout"]["standby_util_override"],
         "judge": {
             "model": cfg["judge"]["model"],
             "base_url": cfg["judge"]["base_url"],
@@ -282,6 +292,11 @@ def configure_runtime(cfg: dict) -> None:
     # and the installed default selected FLASHINFER despite TRITON_ATTN.
     os.environ.pop("VLLM_ATTENTION_BACKEND", None)
     os.environ["UNSLOTH_VLLM_STANDBY"] = "1" if cfg["rollout"]["standby"] else "0"
+    # Otherwise Unsloth silently replaces the requested 0.35 utilization with
+    # ~0.879 on 83 GiB GPUs. Its official override preserves this budget.
+    os.environ["UNSLOTH_VLLM_STANDBY_UTIL_OVERRIDE"] = (
+        "1" if cfg["rollout"]["standby_util_override"] else "0"
+    )
 
 
 def disable_vllm_flashinfer_autotune() -> None:
@@ -438,6 +453,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--test-judge", action="store_true", help="Probe API without loading a GPU model")
     parser.add_argument("--max-steps", type=int, help="Override training steps for smoke test")
     parser.add_argument("--max-completion-tokens", type=int, help="Override generated response cap")
+    parser.add_argument("--vllm-memory-utilization", type=float,
+                        help="Override vLLM memory fraction for OOM experiments, e.g. 0.65")
+    parser.add_argument("--max-num-seqs", type=int,
+                        help="vLLM active sequence concurrency cap, e.g. 8 or 16")
     parser.add_argument("--output-dir", type=Path, help="Independent experiment output")
     parser.add_argument("--resume", type=Path, help="TRL checkpoint path (old custom checkpoints unsupported)")
     args = parser.parse_args(argv)
@@ -452,6 +471,14 @@ def main(argv: list[str] | None = None) -> int:
         cfg["rollout"]["max_completion_tokens"] = args.max_completion_tokens
         if cfg["rollout"]["max_prompt_tokens"] + args.max_completion_tokens > cfg["model"]["max_seq_length"]:
             parser.error("Prompt + completion exceeds model context")
+    if args.vllm_memory_utilization is not None:
+        if not 0.1 <= args.vllm_memory_utilization < 1.0:
+            parser.error("--vllm-memory-utilization must be in [0.1,1)")
+        cfg["rollout"]["gpu_memory_utilization"] = args.vllm_memory_utilization
+    if args.max_num_seqs is not None:
+        if args.max_num_seqs < cfg["rollout"]["num_generations"]:
+            parser.error("--max-num-seqs must be >= num_generations")
+        cfg["rollout"]["max_num_seqs"] = args.max_num_seqs
     if args.output_dir is not None:
         cfg["paths"]["output_dir"] = repo_path(args.output_dir)
     if args.dry_run:
