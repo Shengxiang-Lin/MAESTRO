@@ -111,6 +111,7 @@ class PublicationLeakRegressionTests(unittest.TestCase):
                         "task_instruction": "Read marker code.",
                         "context": "The critic correctly noted the gap.",
                     }]},
+                },
             }),
         )
 
