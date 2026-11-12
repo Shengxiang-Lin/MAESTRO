@@ -82,6 +82,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "../generate_question/program_ir.py",
         "../base_orchestration/o1_compat.py",
         "../base_orchestration/action_author.py",
+        "../base_orchestration/generation_meta.py",
         "../implement_subtask/reporting.py",
         "config.py",
         "../../orchestra/base_main_agent.py",
@@ -275,6 +276,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     executor_normalized_results = 0
     contract_reports_reviewed = 0
     contract_reports_accepted = 0
+    contract_results_compiled = 0
     contract_mandatory_facts = 0
     contract_optional_summary_omitted = 0
     witnessed_report_reviews = 0
@@ -436,6 +438,11 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 contract_reports_reviewed += bool(is_contract)
                 contract_reports_accepted += (
                     bool(is_contract) and result.get("status") == "accepted"
+                )
+                contract_results_compiled += bool(
+                    is_contract and result.get(
+                        "result_compiled_after_author_omission"
+                    )
                 )
                 contract_mandatory_facts += (
                     result.get("mandatory_fact_clauses", 0)
@@ -625,6 +632,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "subagent_executor_result_normalized": executor_normalized_results,
         "subagent_fact_contract_reports": contract_reports_reviewed,
         "subagent_fact_contract_accepted": contract_reports_accepted,
+        "subagent_contract_results_compiled": contract_results_compiled,
         "subagent_fact_clauses_compiled": contract_mandatory_facts,
         "subagent_optional_summary_omitted":
             contract_optional_summary_omitted,
@@ -1360,7 +1368,7 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_3",
+        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_3_1",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
         "max_candidates_per_feedback_round": max_candidates_per_round,

@@ -36,10 +36,12 @@ Orchestra-o1 feedback. You are NOT deciding which facts occurred.
 The fact_spine in observed_current_attempt is CODE-OWNED and authoritative
 about observable executed steps and the ACTUAL returned WorkProduct.
 
-Return JSON ONLY:
-{"result":"a faithful statement of delivered values, or null on missing",
- "summary":"1-2 natural sentences on delivery status and observations",
+Return JSON ONLY with TWO prose fields:
+{"summary":"1-2 natural sentences on delivery status and observations",
  "trace_summary":"1-2 natural sentences on executed operations"}
+Do NOT generate a result field: the executor supplies immutable result
+prose from fact_spine.delivery.result_text. If your output nevertheless
+contains result, it will be independently checked before being ignored.
 
 Rules:
 - Execution observations and final delivery are different categories.
@@ -56,9 +58,8 @@ Rules:
 - No invented source, operation, number, date, causal explanation or
   outside website/media/tool access. Do not mention hidden Gold, teacher,
   critic, synthetic internals or any attack/fault-injection process.
-- A missing finish_result requires result=null. Partial delivery
-  requires an explicitly incomplete non-null result. Completed empty
-  results are NOT equivalent to missing delivery.
+- Missing, partial and completed empty returns are distinguished by
+  fact_spine.delivery. You are not asked to author their result fields.
 """
 
 _CRITIC_SYSTEM = """Review ONLY model-authored prose extensions of the
@@ -125,6 +126,17 @@ def _prepare_result(candidate: dict, attempt: Attempt,
     to the actually delivered value. Arbitrary numbers are never coerced
     into a different answer.
     """
+    # The requested V10.3.1 Author schema is summary/trace ONLY. When
+    # the model follows it, compile the result from the actual delivery.
+    # If it still supplies a result, the existing strict Guard will
+    # inspect it; an invented value is never silently corrected.
+    if "result" not in candidate:
+        completed = dict(candidate)
+        completed["result"] = (
+            render_delivered_result(contract)
+            if attempt.product is not None else None
+        )
+        return completed, True
     raw = candidate.get("result")
     if attempt.product is None or raw is not None:
         if (attempt.product is not None
@@ -231,6 +243,7 @@ def naturalize_report(task: dict, attempt: Attempt, *,
         # Stage 2's surface-only normalization removes internal schema
         # jargon without changing any structured result or evidence claim.
         if isinstance(candidate, dict):
+            author_result_omitted = "result" not in candidate
             known_fields = set(contract["output_fields"]) | {
                 step["operation"] for step in
                 contract["observed_operator_steps"]
@@ -257,6 +270,7 @@ def naturalize_report(task: dict, attempt: Attempt, *,
             )
         else:
             result_normalized = False
+            author_result_omitted = False
         # First vet the Author's ORIGINAL claims. Never use a deterministic
         # prefix to conceal invented identities, numeric claims or a wrong
         # final field value.
@@ -389,6 +403,8 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                 "executor_result_normalized": result_normalized,
                 "report_contract_version": "v10_3",
                 "delivered_result_locked": True,
+                "result_compiled_after_author_omission":
+                    author_result_omitted,
                 "mandatory_fact_clauses": len(
                     contract["fact_spine"]["mandatory_summary_clauses"]
                 ),

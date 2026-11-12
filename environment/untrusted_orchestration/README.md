@@ -99,6 +99,53 @@ It also does not add optional verification sources to Stage 1 or create
 an online agent evaluation environment. A private Gold comparison
 decides data publication eligibility, never the next Main action.
 
+## V10.3.1: zero reviewer leaks and two-field report naturalization
+
+This is a focused follow-up to the **actual** V10.3 LLM run; no Stage
+1–3 interface, 4A execution logic, candidate rank, or 4C policy changes.
+
+- Private Author/Critic dialogue may never appear in Main SFT.
+  A shared `environment/base_orchestration/generation_meta.py`
+  recognizer runs in the Main Action/Completion Guard and the
+  independent Stage-4 final publication gate. In particular,
+  `the critic correctly identified`, `the critic correctly notes`,
+  `critic feedback confirms`, and related reviewer feedback are
+  rejected. The Author has its normal revision budget to produce a
+  grounded alternative; no leak is silently rewritten to pass.
+  Contaminated branches stay in the private diagnostics, not positive SFT.
+- The normal Stage-4B Author now returns **only summary and trace_summary**.
+  The final result (including missing/partial status and delivered values)
+  is compiled from the code-owned delivery contract. If an older Author
+  still sends `result`, it is **strictly validated** against the actual
+  WorkProduct before being replaced by the exact delivered rendering;
+  an invented final value cannot be excused or corrected automatically.
+  Deliberate `report_fault_kind` adversarial messages still bypass
+  faithful normal-report rewriting.
+- A small multi-row actual WorkProduct is rendered with its real
+  field values and identifiers rather than only its row count, with
+  bounded length. Partial deliveries never inherit omitted values from
+  intermediate steps.
+- Diagnostics add `subagent_contract_results_compiled`; code signature
+  includes the shared leak recognizer.
+
+Regression suites `test_untrusted_publication_leaks.py` and
+`test_untrusted_report_contract.py` cover the leaked V10.3 phrasing,
+early retry, independent publication rejection, null partials,
+multi-record fidelity and optional `result` authoring.
+
+Run into a **new** output directory:
+
+```bash
+python -m environment generate-untrusted-turns \
+  --config environment/configs/untrusted_orchestration.yaml \
+  --mode llm \
+  --output-dir environment/data/maestro_untrusted_rounds_v10_3_1
+```
+
+The old V10.3 output remains useful for diagnostics, but its 863
+positive Main turns should not be treated as clean without revalidation.
+A clean full LLM rerun is needed to measure the new acceptance rates.
+
 ## V10.3: evidence-first report contract and modular 4B
 
 V10.3 deliberately **does not split Stage 3 and Stage 4**. Stage 4

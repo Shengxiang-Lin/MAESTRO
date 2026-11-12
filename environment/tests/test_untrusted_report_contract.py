@@ -23,7 +23,9 @@ from environment.untrusted_orchestration.report_author import (
     _observed_contract, _review_denies_witnessed_handoff,
     naturalize_report,
 )
-from environment.untrusted_orchestration.report_contract import build_report_contract
+from environment.untrusted_orchestration.report_contract import (
+    build_report_contract, render_delivered_result,
+)
 from environment.untrusted_orchestration.state_machine import Attempt
 
 runner = importlib.import_module(
@@ -453,6 +455,106 @@ class StructuredFactSpineTests(unittest.TestCase):
             "reported year b: 2003",
             report["finish_result"]["result"].lower(),
         )
+
+    def test_two_field_author_compiles_partial_result_without_rewriting(self):
+        task, attempt = self.partial_attempt()
+
+        class Author:
+            def complete_json(self, system, payload):
+                self.assertion_payload = json.loads(payload)
+                return {
+                    "summary": (
+                        "The scan observed a year in an intermediate step, "
+                        "but the final reported_year_b field is unavailable."
+                    ),
+                    "trace_summary": (
+                        "The assigned scan completed, and its final "
+                        "handoff contains a partial record."
+                    ),
+                }
+
+        class Critic:
+            def complete_json(self, system, payload):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True, "useful": True,
+                }
+
+        author = Author()
+        report, meta = naturalize_report(
+            task, attempt, instruction="Read register records.",
+            model_alias="model_1", reviewed=None,
+            author=author, critic=Critic(), max_revisions=0,
+        )
+        self.assertEqual(meta["status"], "accepted", meta)
+        self.assertTrue(meta["result_compiled_after_author_omission"])
+        self.assertTrue(meta["delivered_result_locked"])
+        self.assertIn(
+            "not delivered", report["finish_result"]["result"].lower()
+        )
+        self.assertNotIn(
+            "reported year b: 2003",
+            report["finish_result"]["result"].lower(),
+        )
+        self.assertEqual(
+            "result" in author.assertion_payload[
+                "observed_current_attempt"]["fact_spine"]["delivery"],
+            True,
+        )
+
+    def test_multi_row_compiler_preserves_returned_record_identifiers(self):
+        result = render_delivered_result({
+            "actual_delivered_rows": [
+                {"values": {"case_id": "Case-010"}},
+                {"values": {"case_id": "Case-012"}},
+            ],
+            "delivery_status": "partial",
+            "unresolved_fields": ["remaining_rows"],
+        })
+        self.assertIn("Case-010", result)
+        self.assertIn("Case-012", result)
+        self.assertIn("incomplete delivered row set", result)
+
+    def test_missing_author_can_omit_result_without_creating_finish_result(self):
+        task = {
+            "task_id": "missing", "source_ids": ["table"],
+            "depends_on": [],
+            "operator_chain": [{"op": "scan", "source_id": "table"}],
+        }
+        attempt = Attempt(
+            task_id="missing", version=1, status="missing",
+            product=None, available_fields=(),
+            used_parent_versions={}, runtime={},
+        )
+
+        class Author:
+            def complete_json(self, system, payload):
+                return {
+                    "summary": (
+                        "The assigned attempt returned no usable evidence "
+                        "for the requested field."
+                    ),
+                    "trace_summary": (
+                        "The scan did not deliver an inspectable final "
+                        "result for this handoff."
+                    ),
+                }
+
+        class Critic:
+            def complete_json(self, system, payload):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True, "useful": True,
+                }
+
+        report, meta = naturalize_report(
+            task, attempt, instruction="Read table.",
+            model_alias="model_1", reviewed=None,
+            author=Author(), critic=Critic(), max_revisions=0,
+        )
+        self.assertEqual(meta["status"], "accepted", meta)
+        self.assertIsNone(report["finish_result"])
+        self.assertTrue(meta["result_compiled_after_author_omission"])
 
     def test_witnessed_mismatch_is_not_assigned_attack_cause(self):
         task = {

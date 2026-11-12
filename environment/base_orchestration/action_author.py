@@ -13,6 +13,7 @@ from environment.generate_question.evidence_tools import (
     legacy_tools_from_task, registered_o1_tool_names,
     tools_from_primitive_steps,
 )
+from .generation_meta import GENERATION_PROCESS_RE
 
 _AUTHOR_SYSTEM = """Write one realistic Orchestra-o1 Main-Agent decision.
 The action MUST delegate exactly the supplied independent tasks in this round,
@@ -71,20 +72,8 @@ _FORBIDDEN = re.compile(
 )
 
 
-_GENERATION_META = re.compile(
-    # Previous Sub-Agent attempts/responses are normal O1 history, not
-    # evidence of a previous LLM Author draft.
-    r"\b(?:previous|earlier|last)\s+(?:draft|revision|generation)\b|"
-    r"\b(?:critic|reviewer|judge)\s+"
-    r"(?:(?:correctly|previously|also)\s+)?"
-    r"(?:said|requested|rejected|noted|observed|pointed\s+out|"
-    r"recommended|suggested|flagged|concluded)\b|"
-    r"\b(?:in|from|per)\s+(?:the|this)\s+prompt\b|"
-    r"\b(?:my|the)\s+(?:tool|action)\s+(?:choice|selection)\s+"
-    r"(?:was|is)\s+(?:wrong|invalid)\b|"
-    r"\brevision\s+(?:attempt|feedback)\b",
-    re.I,
-)
+# Shared with the independent Stage-4 publication guard.
+_GENERATION_META = GENERATION_PROCESS_RE
 
 
 def _critic_review_passes(review: dict) -> bool:
