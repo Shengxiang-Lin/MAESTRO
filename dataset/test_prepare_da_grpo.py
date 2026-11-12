@@ -83,6 +83,24 @@ class TestExportContract(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cannot be verified"):
                 check_renderer_compatibility(old_hash, path, "Stage 3")
 
+    @patch("dataset.prepare_da_grpo.o1_prompt_from_turn", return_value="O1 prompt")
+    def test_reviewed_modes_keep_completion_and_contract_frozen(self, _):
+        turns = []
+        for index, mode in enumerate((
+            "llm_reviewed", "llm_reviewed_completion",
+            "llm_reviewed_contract_frozen", "teacher_grounded_completion_fallback",
+        ), 1):
+            turn = self.turn(f"x-round-{index:02d}", index)
+            turn["generation_mode"] = mode
+            turns.append(turn)
+        rows, experts, modes = make_examples(
+            self.scenes, turns, source="stage3",
+            settings=self.settings, seen=set(), require_llm=True,
+        )
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(experts["x"]), 3)
+        self.assertEqual(modes["teacher_grounded_completion_fallback"], 1)
+
     def test_order_validation(self):
         with self.assertRaisesRegex(ValueError, "Out-of-order"):
             check_order({"x": [{"step_index": 2}, {"step_index": 1}]})
