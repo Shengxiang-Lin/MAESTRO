@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Orchestra-o1 Main-Agent GRPO reward (v3 - unified LLM-as-judge multi-dimensional scoring).
+Orchestra-o1 Main-Agent four-dimensional LLM Judge reward.
 
-verl entry point: reward.custom_reward_function.name=compute_score
+Used through reward_adapter.py by Unsloth + TRL GRPOTrainer. No verl
+training entrypoint is required.
 Signature: compute_score(data_source, solution_str, ground_truth, extra_info)
 
 total_score = w_format   * r_format          (0.10)  <- LLM judge 0/1 binary
@@ -10,7 +11,7 @@ total_score = w_format   * r_format          (0.10)  <- LLM judge 0/1 binary
      + w_tool     * r_tool_reasonable  (0.20)  <- LLM judge 0-3 4-level
      + w_decision * r_decision_quality (0.60 * core dimension) <- LLM judge 0-3 4-level
 
-All dimensions evaluated by LLM judge (claude-haiku-4-5) scored simultaneously in one call:
+All dimensions are evaluated by the configured remote LLM Judge in one call:
   - format_correct and action_valid use 0/1 binary scoring
   - tool_reasonable and decision_quality use 0-3 4-level scoring, normalized to [0,1]
 
@@ -91,7 +92,7 @@ def _try_parse_json(text: str) -> dict | None:
 
 # -------------------- LLM Judge --------------------
 def _call_llm_judge(prompt: str) -> str | None:
-    """call claude-haiku-4-5 as judge, return model reply text.return None on failure."""
+    """Call the configured remote judge; return None after exhausting retries."""
     url = LLM_JUDGE_BASE_URL.rstrip("/") + "/chat/completions"
     headers = {
         "Content-Type": "application/json",
@@ -365,7 +366,7 @@ def _evaluate_with_llm_judge(
     return scores
 
 
-# -------------------- verl entry --------------------
+# -------------------- scalar reward implementation --------------------
 def _compute_score_inner(
     data_source: str,
     solution_str: str,
