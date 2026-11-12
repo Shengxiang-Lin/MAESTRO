@@ -69,6 +69,8 @@ class ColocatedRollout:
     def initialize(self):
         if self.llm is None:
             from vllm import LLM
+            compilation = self.cfg.get("compilation_config")
+            options = {"compilation_config": compilation} if compilation else {}
             self.llm = LLM(
                 model=self.model_path,
                 dtype="bfloat16",
@@ -86,6 +88,7 @@ class ColocatedRollout:
                 enable_prefix_caching=self.cfg["enable_prefix_caching"],
                 generation_config="vllm",
                 trust_remote_code=True,
+                **options,
             )
 
     def sleep(self):

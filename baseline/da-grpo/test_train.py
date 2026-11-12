@@ -100,8 +100,14 @@ class TestConfig(unittest.TestCase):
         ])
         self.assertEqual(fake.sleep.call_count, 1)
 
-    def test_blackwell_vllm_init_uses_triton_eager_and_sleep_mode(self):
-        cfg = trainer.load_config()
+    def test_legacy_config_still_uses_triton_eager_and_sleep_mode(self):
+        raw = trainer.yaml.safe_load(trainer.DEFAULT_CONFIG.read_text())
+        raw["rollout"].pop("compilation_config")
+        raw["rollout"]["enforce_eager"] = True
+        with TemporaryDirectory() as tmp:
+            config = Path(tmp) / "legacy.yaml"
+            config.write_text(trainer.yaml.safe_dump(raw), encoding="utf-8")
+            cfg = trainer.load_config(config)
         vllm_cfg = {**cfg["rollout"], "lora_rank": cfg["model"]["lora_rank"]}
         module = ModuleType("vllm")
         module.LLM = Mock()
@@ -113,10 +119,33 @@ class TestConfig(unittest.TestCase):
             kwargs = module.LLM.call_args.kwargs
             self.assertEqual(kwargs["attention_backend"], "TRITON_ATTN")
             self.assertTrue(kwargs["enforce_eager"])
+            self.assertNotIn("compilation_config", kwargs)
             self.assertEqual(kwargs["gpu_memory_utilization"], 0.35)
             self.assertEqual(kwargs["kv_cache_dtype"], "fp8")
             self.assertTrue(kwargs["enable_sleep_mode"])
             self.assertEqual(kwargs["max_lora_rank"], 32)
+
+    def test_default_decode_cuda_graph_config_reaches_vllm(self):
+        with patch.object(trainer, "show_config") as show_config:
+            self.assertEqual(trainer.main(["--dry-run"]), 0)
+            cfg = show_config.call_args.args[0]
+            self.assertEqual(trainer.main(["--dry-run", "--decode-cuda-graph"]), 0)
+            self.assertEqual(show_config.call_args.args[0]["rollout"], cfg["rollout"])
+        vllm_cfg = {**cfg["rollout"], "lora_rank": cfg["model"]["lora_rank"]}
+        module = ModuleType("vllm")
+        module.LLM = Mock()
+        with TemporaryDirectory() as tmp, patch.dict(sys.modules, {"vllm": module}):
+            engine = rollout.ColocatedRollout("Qwen3-8B", None, vllm_cfg, Path(tmp))
+            engine.initialize()
+        kwargs = module.LLM.call_args.kwargs
+        self.assertFalse(kwargs["enforce_eager"])
+        self.assertEqual(kwargs["compilation_config"], {
+            "mode": 0,
+            "cudagraph_mode": "FULL_DECODE_ONLY",
+            "cudagraph_capture_sizes": [1, 2, 4, 8],
+        })
+        self.assertEqual(kwargs["attention_backend"], "TRITON_ATTN")
+        self.assertTrue(kwargs["enable_sleep_mode"])
 
     def test_optional_two_prompt_mode_does_not_change_default_config(self):
         import io

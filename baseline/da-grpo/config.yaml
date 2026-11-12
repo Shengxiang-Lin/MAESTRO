@@ -35,8 +35,12 @@ rollout:
   gpu_memory_utilization: 0.35
   # SM120: avoid incompatible FlashInfer JIT on older CUDA toolkit.
   attention_backend: TRITON_ATTN
-  # Avoid CUDA Graph capture memory spikes at vLLM initialization.
-  enforce_eager: true
+  # Limit graph capture to the tested decode batch sizes on this GPU.
+  enforce_eager: false
+  compilation_config:
+    mode: 0  # Disable torch.compile.
+    cudagraph_mode: FULL_DECODE_ONLY
+    cudagraph_capture_sizes: [1, 2, 4, 8]
   kv_cache_dtype: fp8
   enable_sleep_mode: true
   enable_prefix_caching: false

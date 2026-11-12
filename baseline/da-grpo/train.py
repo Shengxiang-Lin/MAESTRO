@@ -94,8 +94,11 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
                         "gpu_memory_utilization", "attention_backend", "enforce_eager",
                         "kv_cache_dtype", "enable_sleep_mode",
                         "enable_prefix_caching", "max_num_seqs", "sync_dir"}
-    if set(rollout) != required_rollout:
+    allowed_rollout = required_rollout | {"compilation_config"}
+    if not required_rollout <= rollout.keys() <= allowed_rollout:
         raise ValueError("Invalid rollout configuration keys")
+    if "compilation_config" in rollout and not isinstance(rollout["compilation_config"], dict):
+        raise ValueError("rollout.compilation_config must be a mapping")
     if rollout["backend"] != "vllm" or rollout["enable_sleep_mode"] is not True:
         raise ValueError("Single-card profile requires vLLM sleep mode")
     if rollout["temperature"] != 1.0 or rollout["top_p"] != 1.0:
@@ -194,6 +197,7 @@ def show_config(cfg: dict) -> None:
         "max_num_seqs": cfg["rollout"]["max_num_seqs"],
         "attention_backend": cfg["rollout"]["attention_backend"],
         "enforce_eager": cfg["rollout"]["enforce_eager"],
+        "compilation_config": cfg["rollout"].get("compilation_config"),
         "gpu_memory_utilization": cfg["rollout"]["gpu_memory_utilization"],
         "max_prompt_tokens": cfg["rollout"]["max_prompt_tokens"],
         "max_response_tokens": cfg["rollout"]["max_response_tokens"],
@@ -628,6 +632,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Prompt groups sampled together; effective batch 1 or 2")
     parser.add_argument("--max-num-seqs", type=int, default=None,
                         help="vLLM concurrent sequence cap (8 or 16 recommended)")
+    parser.add_argument("--decode-cuda-graph", action="store_true",
+                        help="Capture small decode-only CUDA graphs for vLLM")
     parser.add_argument("--output-dir", type=Path, default=None,
                         help="Separate run output; avoids overwriting live checkpoints")
     parser.add_argument("--max-response-tokens", type=int, default=None)
@@ -642,6 +648,16 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(args.config)
     if args.max_num_seqs is not None:
         cfg["rollout"]["max_num_seqs"] = args.max_num_seqs
+    if args.decode_cuda_graph:
+        rollout = cfg["rollout"]
+        rollout["enforce_eager"] = False
+        rollout["compilation_config"] = {
+            "mode": 0,  # Disable torch.compile.
+            "cudagraph_mode": "FULL_DECODE_ONLY",
+            "cudagraph_capture_sizes": [
+                size for size in (1, 2, 4, 8) if size <= rollout["max_num_seqs"]
+            ],
+        }
     if args.output_dir is not None:
         cfg["paths"]["output_dir"] = repo_path(args.output_dir)
         cfg["rollout"]["sync_dir"] = cfg["paths"]["output_dir"] / "vllm_sync"

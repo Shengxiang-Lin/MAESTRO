@@ -157,20 +157,24 @@ the memory profile fits end-to-end.
 On the user's RTX 6000D (83.05 GiB), FlashInfer JIT was selected despite
 an incompatible CUDA toolkit and reported `FlashInfer requires GPUs with sm75
 or higher`. A separate CUDA Graph profiling/capture step exhausted device
-memory. The sole single-GPU config therefore uses:
+memory. The default configuration limits capture to decode batches of up to
+eight sequences:
 
 ```yaml
 rollout:
   attention_backend: TRITON_ATTN
-  enforce_eager: true
+  enforce_eager: false
+  compilation_config:
+    mode: 0
+    cudagraph_mode: FULL_DECODE_ONLY
+    cudagraph_capture_sizes: [1, 2, 4, 8]
   gpu_memory_utilization: 0.35
   kv_cache_dtype: fp8
 ```
 
 `TRITON_ATTN` is available in vLLM 0.32 and supports FP8 KV cache.
-`enforce_eager` avoids both CUDA Graph capture and torch.compile; expect
-slower rollout startup/throughput in exchange for compatibility. It does
-NOT disable vLLM sleep mode or modify GRPO / the O1 reward.
+For eager execution, set `enforce_eager: true` and remove the
+`compilation_config` block. Eager mode skips graph capture and torch.compile.
 
 ```bash
 python -m unittest discover -s baseline/da-grpo -p 'test_*.py'
@@ -205,7 +209,7 @@ vLLM's `max_num_seqs` limits active *sequences*, not prompt groups.
 To allow 16 sampled sequences concurrently, try setting it to 16 for
 this short run. vLLM may still dynamically schedule requests because of
 the available KV memory, so this is not a promise of 2x throughput.
-The RTX 6000D profile retains TRITON_ATTN + eager and FP8 KV cache.
+The RTX 6000D profile uses TRITON_ATTN, decode-only CUDA Graphs, and FP8 KV cache.
 
 **Do not run the experiment concurrently with the existing GPU training
 job.** Do not change the configuration of a running job. Use a separate
@@ -251,7 +255,6 @@ the known-working SM120 environment.
 The **rollout-side** vLLM attention backend is **TRITON_ATTN**, not
 the training-side PyTorch SDPA. That is intentional because the previous
 FlashInfer JIT path failed on this RTX 6000D + CUDA-toolkit installation.
-vLLM `enforce_eager=true` remains the safe setting until runtime
-compatibility and peak VRAM are measured. The Qwen3 Policy's default
+The Qwen3 Policy's default
 Thinking behavior and the original four-dimensional O1 reward remain
 unchanged in these batch-speed experiments.
