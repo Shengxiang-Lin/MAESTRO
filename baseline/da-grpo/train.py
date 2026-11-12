@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
-"""Single-GPU Qwen3-8B LoRA GRPO for MAESTRO's O1-equivalent Main turns.
+"""Single-GPU MAESTRO GRPO using Unsloth, TRL GRPOTrainer and colocated vLLM.
 
-Only policy GRPO + KL + the original four-dimension O1 reward. No verl,
-future latents, expert CE, CHORD, consequence heads or external Sub-Agents.
-One or two observations -> n candidates EACH -> independent group-relative
-advantages -> streamed single-candidate backward -> ONE optimizer update.
+All policy-gradient, advantage, KL, optimization and checkpoint logic belongs
+to TRL/Unsloth. This entrypoint only validates MAESTRO data, configures the
+frameworks and supplies the original Orchestra-o1 four-dimensional reward.
 """
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import getpass
+import importlib.util
 import json
 import math
 import os
 from pathlib import Path
-import random
-import shutil
 import sys
-import time
 from typing import Any
 
 import yaml
@@ -28,663 +24,399 @@ ROOT = HERE.parents[1]
 DEFAULT_CONFIG = HERE / "config.yaml"
 
 
-def repo_path(path: str | Path) -> Path:
-    if not isinstance(path, (str, Path)) or not str(path).strip():
-        raise ValueError("Empty path")
-    value = Path(path).expanduser()
+def repo_path(name: str | Path) -> Path:
+    value = Path(name).expanduser()
     return (value if value.is_absolute() else ROOT / value).resolve()
 
 
 def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
     source = Path(path).expanduser().resolve()
-    if not source.is_file():
-        raise FileNotFoundError(f"Configuration not found: {source}")
     cfg = yaml.safe_load(source.read_text(encoding="utf-8"))
-    sections = {"version", "paths", "judge", "model", "rollout", "training"}
-    if not isinstance(cfg, dict) or set(cfg) != sections or cfg["version"] != 1:
-        raise ValueError("Invalid single-GPU config sections/version")
-    for name in sections - {"version"}:
+    if not isinstance(cfg, dict) or cfg.get("version") != 2:
+        raise ValueError("DA-GRPO requires the new Unsloth/TRL config version: 2")
+    if set(cfg) != {"version", "paths", "judge", "model", "rollout", "training"}:
+        raise ValueError("Invalid top-level configuration sections")
+    for name in ("paths", "judge", "model", "rollout", "training"):
         if not isinstance(cfg[name], dict):
             raise ValueError(f"{name} must be a mapping")
-    if set(cfg["paths"]) != {"model", "train_parquet", "output_dir"}:
-        raise ValueError("paths must specify model, train_parquet, output_dir")
-    for key in cfg["paths"]:
-        cfg["paths"][key] = repo_path(cfg["paths"][key])
+
+    paths = cfg["paths"]
+    if set(paths) != {"model", "train_parquet", "output_dir"}:
+        raise ValueError("Invalid paths configuration")
+    for key in paths:
+        paths[key] = repo_path(paths[key])
 
     judge = cfg["judge"]
     if set(judge) != {"registry", "model", "api_key_env", "enable_thinking", "workers"}:
-        raise ValueError("Invalid judge configuration keys")
+        raise ValueError("Invalid judge configuration")
     judge["registry"] = repo_path(judge["registry"])
-    if not judge["registry"].is_file():
-        raise FileNotFoundError("Shared model registry not found")
-    if not isinstance(judge["enable_thinking"], bool):
-        raise ValueError("judge.enable_thinking must be a boolean")
-    if not isinstance(judge["workers"], int) or not 1 <= judge["workers"] <= 16:
-        raise ValueError("judge.workers must be within 1..16")
-    if not isinstance(judge["api_key_env"], str) or not judge["api_key_env"].isidentifier():
-        raise ValueError("Invalid Judge API key environment variable")
     registry = yaml.safe_load(judge["registry"].read_text(encoding="utf-8"))
-    selection = registry.get("models", {}).get(judge["model"])
-    if not isinstance(selection, dict) or selection.get("backend") != "api":
-        raise ValueError("Judge must reference a remote model in config/model_config.yaml")
-    if selection.get("api_type") != "openai":
-        raise ValueError("Judge must use an OpenAI-compatible provider")
-    judge["base_url"] = selection["base_url"]
+    model_info = registry.get("models", {}).get(judge["model"], {})
+    if model_info.get("backend") != "api" or model_info.get("api_type") != "openai":
+        raise ValueError("Judge requires an OpenAI-compatible remote model")
+    judge["base_url"] = model_info["base_url"]
     if not judge["base_url"].startswith("https://"):
-        raise ValueError("Judge base URL must use HTTPS")
+        raise ValueError("Judge base_url must be HTTPS")
+    if type(judge["enable_thinking"]) is not bool or not 1 <= judge["workers"] <= 16:
+        raise ValueError("Invalid judge thinking/workers setting")
+    if not isinstance(judge["api_key_env"], str) or not judge["api_key_env"].isidentifier():
+        raise ValueError("Invalid judge API key env name")
 
     model = cfg["model"]
-    model_fields = {"dtype", "gradient_checkpointing", "lora_rank", "lora_alpha",
-                    "lora_dropout", "lora_target_modules", "logits_chunk_size"}
-    if set(model) != model_fields:
-        raise ValueError("Invalid model configuration keys")
-    if model["dtype"] != "bfloat16" or model["gradient_checkpointing"] is not True:
-        raise ValueError("Single 96GB profile requires BF16 and gradient checkpointing")
-    if not isinstance(model["lora_target_modules"], list) or not model["lora_target_modules"]:
-        raise ValueError("Nonempty LoRA module list required")
-    for name in ("lora_rank", "lora_alpha", "logits_chunk_size"):
-        if type(model[name]) is not int or model[name] <= 0:
-            raise ValueError(f"model.{name} must be positive int")
-    if type(model["lora_dropout"]) not in (float, int) or not 0 <= model["lora_dropout"] < 1:
-        raise ValueError("model.lora_dropout outside [0,1)")
+    if set(model) != {"dtype", "max_seq_length", "load_in_4bit",
+                      "lora_rank", "lora_alpha", "lora_dropout", "lora_target_modules"}:
+        raise ValueError("Invalid model configuration")
+    if model["dtype"] != "bfloat16" or type(model["load_in_4bit"]) is not bool:
+        raise ValueError("Expected BF16 model and a boolean load_in_4bit flag")
+    if model["load_in_4bit"]:
+        raise ValueError("Baseline uses BF16 LoRA; quantized QLoRA is a separate experiment")
+    if not 0 <= model["lora_dropout"] < 1 or not model["lora_target_modules"]:
+        raise ValueError("Invalid LoRA settings")
+    for key in ("max_seq_length", "lora_rank", "lora_alpha"):
+        if type(model[key]) is not int or model[key] < 1:
+            raise ValueError(f"Invalid model.{key}")
 
     rollout = cfg["rollout"]
-    required_rollout = {"backend", "group_size", "temperature", "top_p",
-                        "max_prompt_tokens", "max_response_tokens", "max_model_len",
-                        "gpu_memory_utilization", "attention_backend", "enforce_eager",
-                        "kv_cache_dtype", "enable_sleep_mode",
-                        "enable_prefix_caching", "max_num_seqs", "sync_dir"}
-    allowed_rollout = required_rollout | {"compilation_config", "prompts_per_batch"}
-    if not required_rollout <= rollout.keys() <= allowed_rollout:
-        raise ValueError("Invalid rollout configuration keys")
-    if "compilation_config" in rollout and not isinstance(rollout["compilation_config"], dict):
-        raise ValueError("rollout.compilation_config must be a mapping")
-    prompts_per_batch = rollout.setdefault("prompts_per_batch", 1)
-    if type(prompts_per_batch) is not int or prompts_per_batch not in (1, 2, 4):
-        raise ValueError("rollout.prompts_per_batch must be 1, 2, or 4")
-    if rollout["backend"] != "vllm" or rollout["enable_sleep_mode"] is not True:
-        raise ValueError("Single-card profile requires vLLM sleep mode")
+    expected = {"prompts_per_step", "num_generations", "max_prompt_tokens",
+                "max_completion_tokens", "temperature", "top_p",
+                "gpu_memory_utilization", "max_num_seqs", "kv_cache_dtype",
+                "attention_backend", "enforce_eager", "standby"}
+    if set(rollout) != expected:
+        raise ValueError("Invalid rollout configuration")
+    for key in ("prompts_per_step", "num_generations", "max_prompt_tokens",
+                "max_completion_tokens", "max_num_seqs"):
+        if type(rollout[key]) is not int or rollout[key] < 1:
+            raise ValueError(f"Invalid rollout.{key}")
+    if rollout["num_generations"] < 2:
+        raise ValueError("GRPO requires at least two generations per prompt")
+    if rollout["max_num_seqs"] < rollout["num_generations"]:
+        raise ValueError("max_num_seqs must support at least one GRPO candidate group")
+    if rollout["max_prompt_tokens"] + rollout["max_completion_tokens"] > model["max_seq_length"]:
+        raise ValueError("Maximum prompt + completion exceeds Unsloth model context")
+    if not 0 < rollout["gpu_memory_utilization"] < 1:
+        raise ValueError("Invalid vLLM memory fraction")
     if rollout["temperature"] != 1.0 or rollout["top_p"] != 1.0:
-        raise ValueError("GRPO importance ratios require temperature=top_p=1")
-    for name in ("group_size", "max_prompt_tokens", "max_response_tokens",
-                 "max_model_len", "max_num_seqs"):
-        if type(rollout[name]) is not int or rollout[name] < (2 if name == "group_size" else 1):
-            raise ValueError(f"rollout.{name} invalid")
-    if rollout["max_prompt_tokens"] + rollout["max_response_tokens"] > rollout["max_model_len"]:
-        raise ValueError("Prompt plus response limit exceeds vLLM max_model_len")
-    if not 0 < float(rollout["gpu_memory_utilization"]) <= 1:
-        raise ValueError("rollout.gpu_memory_utilization invalid")
-    if rollout["attention_backend"] not in {"TRITON_ATTN", "FLASH_ATTN", "FLASHINFER"}:
-        raise ValueError("Unsupported rollout.attention_backend")
-    if type(rollout["enforce_eager"]) is not bool:
-        raise ValueError("rollout.enforce_eager must be boolean")
-    rollout["sync_dir"] = repo_path(rollout["sync_dir"])
+        raise ValueError("O1 reference sampling requires temperature=top_p=1")
+    if rollout["attention_backend"] != "TRITON_ATTN":
+        raise ValueError("RTX 6000D profile requires TRITON_ATTN (FlashInfer failed on SM120)")
+    if type(rollout["enforce_eager"]) is not bool or type(rollout["standby"]) is not bool:
+        raise ValueError("Invalid rollout boolean")
 
     train = cfg["training"]
-    required_train = {"epochs", "max_updates", "learning_rate", "weight_decay",
-                      "clip_range", "kl_coef", "micro_batch_size", "max_tokens_per_gpu",
-                      "max_grad_norm", "warmup_ratio", "save_every", "log_every",
-                      "seed", "min_gpu_memory_gib"}
-    if set(train) != required_train:
-        raise ValueError("Invalid training configuration keys")
-    for name in ("epochs", "micro_batch_size", "max_tokens_per_gpu",
-                 "save_every", "log_every"):
-        if type(train[name]) is not int or train[name] < 1:
-            raise ValueError(f"training.{name} must be positive integer")
-    for name in ("learning_rate", "max_grad_norm", "min_gpu_memory_gib"):
-        if type(train[name]) not in (int, float) or train[name] <= 0:
-            raise ValueError(f"training.{name} must be positive")
-    if train["micro_batch_size"] != 1:
-        raise ValueError("Exact streamed candidate backward requires micro_batch_size: 1")
-    if train["max_updates"] is not None and (type(train["max_updates"]) is not int
-                                             or train["max_updates"] < 1):
-        raise ValueError("training.max_updates must be null or positive integer")
-    if rollout["max_prompt_tokens"] + rollout["max_response_tokens"] > train["max_tokens_per_gpu"]:
-        raise ValueError("Prompt + response exceeds backward token budget")
-    if not 0 <= train["clip_range"] < 1 or train["kl_coef"] < 0:
-        raise ValueError("GRPO clip_range or KL coefficient invalid")
+    required = {"epochs", "max_steps", "learning_rate", "weight_decay", "warmup_ratio",
+                "clip_range", "kl_coef", "loss_type", "optim",
+                "max_grad_norm", "save_steps", "logging_steps", "seed"}
+    if set(train) != required:
+        raise ValueError("Invalid training configuration")
+    if train["loss_type"] != "dapo":
+        raise ValueError("MAESTRO uses token-normalized DAPO-style GRPO loss")
+    if train["optim"] != "adamw_8bit":
+        raise ValueError("Single-GPU profile uses 8-bit AdamW optimizer")
+    for key in ("epochs", "save_steps", "logging_steps"):
+        if type(train[key]) is not int or train[key] < 1:
+            raise ValueError(f"Invalid training.{key}")
+    if type(train["max_steps"]) is not int or (train["max_steps"] != -1 and train["max_steps"] < 1):
+        raise ValueError("max_steps must be -1 (epochs) or positive")
+    if train["learning_rate"] <= 0 or train["kl_coef"] < 0 or not 0 <= train["clip_range"] < 1:
+        raise ValueError("Invalid learning rate / KL / clipping")
     if not 0 <= train["warmup_ratio"] < 1:
-        raise ValueError("warmup_ratio invalid")
+        raise ValueError("Invalid warmup_ratio")
     cfg["_source"] = source
     return cfg
 
 
-def local_checks(cfg: dict) -> dict:
-    import importlib.util
-    paths = cfg["paths"]
-    checks = {
-        "model": paths["model"].is_dir(),
-        "train.parquet": paths["train_parquet"].is_file(),
-        "python_torch": importlib.util.find_spec("torch") is not None,
-        "python_peft": importlib.util.find_spec("peft") is not None,
-        "python_transformers": importlib.util.find_spec("transformers") is not None,
-        "python_vllm": importlib.util.find_spec("vllm") is not None,
-        "python_pyarrow": importlib.util.find_spec("pyarrow") is not None,
+def batch_plan(cfg: dict) -> dict[str, int]:
+    rollout = cfg["rollout"]
+    # In TRL, per_device_train_batch_size counts completions (NOT prompts).
+    # One-completion backward plus 32 gradient accumulation steps:
+    # 4 different prompts x 8 generations = 32 completions per optimizer step.
+    generation_batch = rollout["prompts_per_step"] * rollout["num_generations"]
+    return {
+        "per_device_train_batch_size": 1,
+        "gradient_accumulation_steps": generation_batch,
+        "generation_batch_size": generation_batch,
+        "num_generations": rollout["num_generations"],
+        "prompts_per_step": rollout["prompts_per_step"],
     }
-    info: dict[str, Any] = {"count": None, "memory_gib": None}
-    if checks["python_torch"]:
-        import torch
-        count = torch.cuda.device_count()
-        info["count"] = count
-        if count > 0:
-            info["memory_gib"] = round(
-                torch.cuda.get_device_properties(0).total_memory / 1024**3, 2
-            )
-        checks["one_cuda_gpu"] = count == 1
-        checks["bf16_supported"] = count > 0 and torch.cuda.is_bf16_supported()
-        checks["gpu_memory"] = (
-            count == 1 and info["memory_gib"] >= cfg["training"]["min_gpu_memory_gib"]
-        )
-    else:
-        checks.update(one_cuda_gpu=False, bf16_supported=False, gpu_memory=False)
-    return {"checks": checks, "hardware": info}
+
+
+def environment_checks(cfg: dict) -> dict[str, bool]:
+    result = {name: importlib.util.find_spec(name) is not None for name in
+              ("unsloth", "trl", "vllm", "datasets", "torch", "pyarrow", "bitsandbytes")}
+    result["model"] = cfg["paths"]["model"].is_dir()
+    result["train_parquet"] = cfg["paths"]["train_parquet"].is_file()
+    return result
 
 
 def show_config(cfg: dict) -> None:
-    state = local_checks(cfg)
+    checks = environment_checks(cfg)
     print(json.dumps({
+        "backend": "Unsloth + TRL GRPOTrainer + colocated vLLM",
         "config": str(cfg["_source"]),
         "model": str(cfg["paths"]["model"]),
         "train_parquet": str(cfg["paths"]["train_parquet"]),
         "output_dir": str(cfg["paths"]["output_dir"]),
+        "batch_plan": batch_plan(cfg),
+        "epochs": cfg["training"]["epochs"],
+        "loss_type": cfg["training"]["loss_type"],
+        "beta": cfg["training"]["kl_coef"],
         "judge": {
             "model": cfg["judge"]["model"],
-            "api_base": cfg["judge"]["base_url"],
+            "base_url": cfg["judge"]["base_url"],
             "api_key_available": bool(os.environ.get(cfg["judge"]["api_key_env"])),
             "enable_thinking": cfg["judge"]["enable_thinking"],
         },
-        "mode": "single_gpu_lora_grpo",
-        "backend": "torch_peft_vllm_no_verl",
-        "group_size": cfg["rollout"]["group_size"],
-        "prompts_per_batch": cfg["rollout"].get("prompts_per_batch", 1),
-        "max_num_seqs": cfg["rollout"]["max_num_seqs"],
-        "attention_backend": cfg["rollout"]["attention_backend"],
-        "enforce_eager": cfg["rollout"]["enforce_eager"],
-        "compilation_config": cfg["rollout"].get("compilation_config"),
-        "gpu_memory_utilization": cfg["rollout"]["gpu_memory_utilization"],
-        "max_prompt_tokens": cfg["rollout"]["max_prompt_tokens"],
-        "max_response_tokens": cfg["rollout"]["max_response_tokens"],
-        "hardware": state["hardware"],
-        "checks": state["checks"],
-    }, indent=2, ensure_ascii=False))
+        "checks": checks,
+    }, ensure_ascii=False, indent=2))
 
 
-def key_from_tty(name: str) -> str:
+def judge_key(name: str) -> str:
     key = (os.environ.get(name) or "").strip()
-    if key:
-        return key
-    if not sys.stdin.isatty():
-        raise RuntimeError(f"Set {name} securely or use an interactive terminal")
-    key = getpass.getpass(f"Enter {name} (hidden, not saved): ").strip()
     if not key:
-        raise ValueError("API key cannot be empty")
+        if not sys.stdin.isatty():
+            raise RuntimeError(f"Set {name} before noninteractive training")
+        key = getpass.getpass(f"Enter {name} (hidden): ").strip()
+    if not key:
+        raise ValueError("Judge API key cannot be blank")
     return key
 
 
-def setup_judge_env(cfg: dict, key: str) -> None:
-    judge = cfg["judge"]
+def setup_judge(cfg: dict, key: str) -> None:
     os.environ["OPENAI_API_KEY"] = key
-    os.environ["OPENAI_BASE_URL"] = judge["base_url"]
-    os.environ["LLM_JUDGE_MODEL"] = judge["model"]
-    os.environ["LLM_JUDGE_ENABLE_THINKING"] = str(judge["enable_thinking"]).lower()
+    os.environ["OPENAI_BASE_URL"] = cfg["judge"]["base_url"]
+    os.environ["LLM_JUDGE_MODEL"] = cfg["judge"]["model"]
+    os.environ["LLM_JUDGE_ENABLE_THINKING"] = str(cfg["judge"]["enable_thinking"]).lower()
 
 
 def probe_judge(cfg: dict, key: str) -> None:
-    """Fail fast on HTTP 401 before GPU allocation and paid training."""
     import requests
-    judge = cfg["judge"]
-    url = judge["base_url"].rstrip("/") + "/chat/completions"
-    try:
-        response = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={
-                "model": judge["model"],
-                "messages": [{"role": "user", "content": "Reply only: OK"}],
-                "temperature": 0,
-                "max_tokens": 32,
-                "enable_thinking": judge["enable_thinking"],
-            },
-            timeout=45,
-        )
-        response.raise_for_status()
-        value = response.json()["choices"][0]["message"]["content"]
-        if not isinstance(value, str) or not value.strip():
-            raise RuntimeError("Judge returned an empty response")
-        print(f"[da-grpo] Judge {judge['model']} HTTP OK")
-    except requests.HTTPError as exc:
-        code = exc.response.status_code if exc.response is not None else "unknown"
-        raise RuntimeError(
-            f"Judge HTTP {code}. Verify DASHSCOPE_API_KEY and the region of "
-            f"{judge['base_url']}; training has NOT started."
-        ) from exc
+    cfg_j = cfg["judge"]
+    response = requests.post(
+        cfg_j["base_url"].rstrip("/") + "/chat/completions",
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={
+            "model": cfg_j["model"],
+            "messages": [{"role": "user", "content": "Reply only: OK"}],
+            "temperature": 0,
+            "max_tokens": 32,
+            "enable_thinking": cfg_j["enable_thinking"],
+        },
+        timeout=45,
+    )
+    response.raise_for_status()
+    content = response.json()["choices"][0]["message"]["content"]
+    if not content or not str(content).strip():
+        raise RuntimeError("Judge returned empty response")
+    print(f"[da-grpo] Judge {cfg_j['model']} HTTP OK", flush=True)
 
 
-def read_examples(path: Path) -> list[dict]:
+def load_dataset_rows(path: Path) -> list[dict]:
     import pyarrow.parquet as pq
+
     rows = pq.read_table(path).to_pylist()
     if not rows:
-        raise ValueError("Empty training Parquet")
-    for index, row in enumerate(rows):
-        msg = row.get("prompt")
-        info = row.get("extra_info")
-        if not isinstance(msg, list) or not msg or not isinstance(info, dict):
-            raise ValueError(f"Malformed dataset prompt/extra_info row {index}")
-        if any(entry.get("role") != "user" for entry in msg):
-            raise ValueError("Only O1 Main-Agent user prompts may be model-visible")
-        if not info.get("question") or not info.get("has_expert"):
-            raise ValueError(f"Missing O1 Judge metadata in row {index}")
-        if not isinstance(row.get("reward_model"), dict):
-            raise ValueError(f"Missing ground-truth metadata in row {index}")
-    return rows
-
-
-def score_group(candidates: list[dict], record: dict, workers: int) -> list[dict]:
-    from reward_fn import compute_score
-
-    def score(candidate):
-        return compute_score(
-            record["data_source"],
-            candidate["text"],
-            record["reward_model"].get("ground_truth", ""),
-            record["extra_info"],
-        )
-
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        scores = list(pool.map(score, candidates))
-    if any(not 0 <= float(item["score"]) <= 1 for item in scores):
-        raise ValueError("Original O1 reward produced an out-of-range value")
-    return scores
-
-
-def score_groups(groups: list[list[dict]], records: list[dict],
-                 workers: int) -> list[list[dict]]:
-    """Judge many prompt groups with one bounded worker pool."""
-    from reward_fn import compute_score
-
-    if len(groups) != len(records):
-        raise ValueError("Rollout groups and records must align")
-    flat = [
-        (candidate, record)
-        for candidates, record in zip(groups, records)
-        for candidate in candidates
-    ]
-
-    def score(entry):
-        candidate, record = entry
-        return compute_score(
-            record["data_source"], candidate["text"],
-            record["reward_model"].get("ground_truth", ""),
-            record["extra_info"],
-        )
-
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        values = list(pool.map(score, flat))
-    if any(not 0 <= float(item["score"]) <= 1 for item in values):
-        raise ValueError("Original O1 reward produced an out-of-range value")
+        raise ValueError("Empty DA-GRPO Parquet")
     result = []
-    start = 0
-    for group in groups:
-        result.append(values[start:start + len(group)])
-        start += len(group)
+    for i, row in enumerate(rows):
+        messages = row.get("prompt")
+        info = row.get("extra_info")
+        reward_data = row.get("reward_model")
+        if (not isinstance(messages, list) or len(messages) != 1 or
+            messages[0].get("role") != "user" or
+            not isinstance(messages[0].get("content"), str) or
+            not isinstance(info, dict) or not info.get("has_expert") or
+            not info.get("question") or not isinstance(reward_data, dict)):
+            raise ValueError(f"Invalid dataset row {i}: expected O1 prompt/reward-only metadata")
+        result.append({
+            "prompt": messages,
+            # The following columns are passed ONLY to the reward callable.
+            # They must never be interpolated into the prompt.
+            "data_source": row.get("data_source") or "maestro",
+            "ground_truth": str(reward_data.get("ground_truth") or ""),
+            "extra_info_json": json.dumps(info, ensure_ascii=False),
+        })
     return result
 
 
-def learning_rate_schedule(optimizer, total_updates: int, warmup_ratio: float):
-    import torch
-    warmup = min(total_updates, int(total_updates * warmup_ratio))
+def check_prompt_lengths(rows: list[dict], tokenizer: Any, limit: int) -> None:
+    # Fail instead of silently truncating evidence or Sub-Agent history.
+    from dataset.tokenization import extract_token_ids
 
-    def factor(step: int) -> float:
-        if step < warmup:
-            return (step + 1) / max(1, warmup)
-        t = (step - warmup) / max(1, total_updates - warmup)
-        return max(0.0, 0.5 * (1.0 + math.cos(math.pi * t)))
-
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=factor)
-
-
-def save_state(
-    output: Path, model, tokenizer, optimizer, scheduler,
-    *, step: int, epoch: int, next_position: int,
-    rollout_prompts: int = 1,
-) -> None:
-    """Adapter + optimizer/scheduler, to resume at exactly the next observation."""
-    import torch
-    output.mkdir(parents=True, exist_ok=True)
-    target = output / f"checkpoint-{step:06d}"
-    temp = output / f".checkpoint-{step:06d}.tmp"
-    if temp.exists():
-        shutil.rmtree(temp)
-    temp.mkdir(parents=True)
-    model.save_pretrained(temp)
-    tokenizer.save_pretrained(temp)
-    torch.save({
-        "optimizer": optimizer.state_dict(),
-        "scheduler": scheduler.state_dict(),
-        "step": step,
-        "epoch": epoch,
-        "next_position": next_position,
-        "rollout_prompts": rollout_prompts,
-        "total_updates": scheduler.total_steps if hasattr(scheduler, "total_steps") else None,
-    }, temp / "train_state.pt")
-    (temp / "metadata.json").write_text(
-        json.dumps({"step": step, "epoch": epoch, "next_position": next_position,
-                    "rollout_prompts": rollout_prompts}, indent=2),
-        encoding="utf-8",
-    )
-    if target.exists():
-        shutil.rmtree(target)
-    temp.rename(target)
-    print(f"[da-grpo] saved adapter checkpoint: {target}", flush=True)
+    overlong = []
+    for row in rows:
+        encoded = tokenizer.apply_chat_template(
+            row["prompt"], tokenize=True, add_generation_prompt=True,
+        )
+        ids = extract_token_ids(encoded)
+        if len(ids) > limit:
+            overlong.append((json.loads(row["extra_info_json"]).get("sample_id"), len(ids)))
+    if overlong:
+        raise ValueError(
+            f"{len(overlong)} prompts exceed {limit} tokens; examples {overlong[:5]}"
+        )
 
 
-def train(cfg: dict, args) -> None:
-    import torch
-    from policy import action_log_probs, load_policy, prompt_ids, reference_log_probs
-    from losses import clipped_grpo_loss, group_advantages, low_var_kl
-    from rollout import ColocatedRollout
-
-    rows = read_examples(cfg["paths"]["train_parquet"])
-    model_cfg = cfg["model"]
-    rollout_cfg = cfg["rollout"]
-    tr = cfg["training"]
-    random.seed(tr["seed"])
-    torch.manual_seed(tr["seed"])
-    torch.cuda.manual_seed_all(tr["seed"])
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+def configure_runtime(cfg: dict) -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+    os.environ["VLLM_ATTENTION_BACKEND"] = cfg["rollout"]["attention_backend"]
     os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
+    os.environ["UNSLOTH_VLLM_STANDBY"] = "1" if cfg["rollout"]["standby"] else "0"
 
-    resume = repo_path(args.resume) if args.resume else None
-    model, tokenizer = load_policy(
-        str(cfg["paths"]["model"]), model_cfg,
-        resume_adapter=str(resume) if resume else None,
+
+def build_grpo_kwargs(cfg: dict) -> dict:
+    """Pure constructor argument mapper; tested without importing CUDA libraries."""
+    plan = batch_plan(cfg)
+    rollout, train, paths = cfg["rollout"], cfg["training"], cfg["paths"]
+    return {
+        "output_dir": str(paths["output_dir"]),
+        "per_device_train_batch_size": plan["per_device_train_batch_size"],
+        "gradient_accumulation_steps": plan["gradient_accumulation_steps"],
+        "generation_batch_size": plan["generation_batch_size"],
+        "num_generations": plan["num_generations"],
+        "num_iterations": 1,
+        "max_prompt_length": rollout["max_prompt_tokens"],
+        "max_completion_length": rollout["max_completion_tokens"],
+        "temperature": rollout["temperature"],
+        "top_p": rollout["top_p"],
+        "learning_rate": train["learning_rate"],
+        "weight_decay": train["weight_decay"],
+        "warmup_ratio": train["warmup_ratio"],
+        "lr_scheduler_type": "cosine",
+        "optim": train["optim"],
+        "bf16": True,
+        "fp16": False,
+        "num_train_epochs": train["epochs"],
+        "max_steps": train["max_steps"],
+        "beta": train["kl_coef"],
+        "epsilon": train["clip_range"],
+        "loss_type": train["loss_type"],
+        "scale_rewards": "group",
+        "max_grad_norm": train["max_grad_norm"],
+        "save_steps": train["save_steps"],
+        "logging_steps": train["logging_steps"],
+        "seed": train["seed"],
+        "save_total_limit": 2,
+        "report_to": "none",
+        "remove_unused_columns": False,
+        "dataloader_num_workers": 0,
+        "gradient_checkpointing": True,
+        "gradient_checkpointing_kwargs": {"use_reentrant": False},
+        # Unsloth attaches its shared vLLM engine when fast_inference=True.
+        "use_vllm": True,
+        "vllm_mode": "colocate",
+        "vllm_gpu_memory_utilization": rollout["gpu_memory_utilization"],
+        "vllm_max_model_length": cfg["model"]["max_seq_length"],
+        "vllm_enable_sleep_mode": True,
+        "vllm_tensor_parallel_size": 1,
+        # TRL's optional train/inference IS correction is NOT part of O1;
+        # disable it for closer parity with original O1/verl sampling.
+        "vllm_importance_sampling_correction": False,
+    }
+
+
+def train(cfg: dict, *, resume: str | None = None) -> None:
+    configure_runtime(cfg)
+    import torch
+    if torch.cuda.device_count() != 1 or not torch.cuda.is_bf16_supported():
+        raise RuntimeError("Expected a single NVIDIA CUDA GPU with BF16 support")
+
+    # IMPORTANT: Unsloth MUST be imported before TRL so it can patch GRPOTrainer.
+    from unsloth import FastLanguageModel
+    from trl import GRPOConfig, GRPOTrainer
+    from datasets import Dataset
+    from reward_adapter import make_reward_function
+
+    rows = load_dataset_rows(cfg["paths"]["train_parquet"])
+    print(f"[da-grpo] {len(rows)} offline O1 Main-Agent turns; batch plan: {batch_plan(cfg)}", flush=True)
+    model_cfg, rollout = cfg["model"], cfg["rollout"]
+
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=str(cfg["paths"]["model"]),
+        max_seq_length=model_cfg["max_seq_length"],
+        dtype=torch.bfloat16,
+        load_in_4bit=model_cfg["load_in_4bit"],
+        fast_inference=True,
+        max_lora_rank=model_cfg["lora_rank"],
+        gpu_memory_utilization=rollout["gpu_memory_utilization"],
+        max_num_seqs=rollout["max_num_seqs"],
+        kv_cache_dtype=rollout["kv_cache_dtype"],
+        attention_backend=rollout["attention_backend"],
+        enforce_eager=rollout["enforce_eager"],
     )
-    params = [p for p in model.parameters() if p.requires_grad]
-    if not params:
-        raise RuntimeError("No trainable LoRA parameters")
-    optimizer = torch.optim.AdamW(
-        params, lr=tr["learning_rate"], weight_decay=tr["weight_decay"],
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    check_prompt_lengths(rows, tokenizer, rollout["max_prompt_tokens"])
+
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=model_cfg["lora_rank"],
+        lora_alpha=model_cfg["lora_alpha"],
+        lora_dropout=model_cfg["lora_dropout"],
+        target_modules=model_cfg["lora_target_modules"],
+        bias="none",
+        use_gradient_checkpointing="unsloth",
+        random_state=cfg["training"]["seed"],
     )
-    update_limit = (
-        args.max_updates if args.max_updates is not None
-        else tr["max_updates"]
-        or math.ceil(len(rows) / args.rollout_prompts) * tr["epochs"]
+    args = GRPOConfig(**build_grpo_kwargs(cfg))
+    trainer = GRPOTrainer(
+        model=model,
+        processing_class=tokenizer,
+        train_dataset=Dataset.from_list(rows),
+        reward_funcs=[make_reward_function(cfg["judge"]["workers"])],
+        args=args,
     )
-    if update_limit < 1:
-        raise ValueError("max_updates must be positive")
-    scheduler = learning_rate_schedule(optimizer, update_limit, tr["warmup_ratio"])
-
-    step = 0
-    start_epoch = 0
-    start_position = 0
-    if resume:
-        # Only load self-generated local trusted checkpoint files.
-        state = torch.load(resume / "train_state.pt", map_location="cpu", weights_only=False)
-        if int(state.get("rollout_prompts", 1)) != args.rollout_prompts:
-            raise ValueError(
-                "Cannot resume checkpoint with a different --rollout-prompts value"
-            )
-        optimizer.load_state_dict(state["optimizer"])
-        scheduler.load_state_dict(state["scheduler"])
-        step = int(state["step"])
-        start_epoch = int(state["epoch"])
-        start_position = int(state["next_position"])
-
-    vllm_cfg = {**rollout_cfg, "lora_rank": model_cfg["lora_rank"]}
-    engine = ColocatedRollout(
-        str(cfg["paths"]["model"]), tokenizer, vllm_cfg, rollout_cfg["sync_dir"],
-    )
-    output_dir = cfg["paths"]["output_dir"]
-    output_dir.mkdir(parents=True, exist_ok=True)
-    metrics_path = output_dir / "metrics.jsonl"
-    skipped = 0
-    last_position = start_position
-    last_epoch = start_epoch
-
-    try:
-        for epoch in range(start_epoch, tr["epochs"]):
-            indexes = list(range(len(rows)))
-            random.Random(tr["seed"] + epoch).shuffle(indexes)
-            first = start_position if epoch == start_epoch else 0
-            for position in range(first, len(indexes), args.rollout_prompts):
-                if step >= update_limit:
-                    break
-                positions = list(
-                    range(position, min(position + args.rollout_prompts, len(indexes)))
-                )
-                records = [rows[indexes[pos]] for pos in positions]
-                prompts = [
-                    prompt_ids(tokenizer, record["prompt"],
-                               rollout_cfg["max_prompt_tokens"])
-                    for record in records
-                ]
-                response_cap = (
-                    args.max_response_tokens if args.max_response_tokens is not None
-                    else rollout_cfg["max_response_tokens"]
-                )
-                if any(
-                    len(ids) + response_cap > rollout_cfg["max_model_len"]
-                    or len(ids) + response_cap > tr["max_tokens_per_gpu"]
-                    for ids in prompts
-                ):
-                    raise ValueError("Prompt + response exceeds context/backward budget")
-
-                started = time.monotonic()
-                model.eval()
-                candidates_groups = engine.sample_batch(
-                    model, prompts,
-                    n=rollout_cfg["group_size"], max_tokens=response_cap,
-                    temperature=rollout_cfg["temperature"],
-                    top_p=rollout_cfg["top_p"],
-                )
-                rollout_seconds = time.monotonic() - started
-                judge_started = time.monotonic()
-                scores_groups = score_groups(
-                    candidates_groups, records, cfg["judge"]["workers"],
-                )
-                judge_seconds = time.monotonic() - judge_started
-
-                # GRPO advantages are computed WITHIN each prompt's 8
-                # candidates, never pooled across unrelated prompt groups.
-                utilities_groups = [
-                    [float(x["score"]) for x in scores] for scores in scores_groups
-                ]
-                advantages_groups = [
-                    group_advantages(utilities) for utilities in utilities_groups
-                ]
-                active = [
-                    i for i, advantages in enumerate(advantages_groups)
-                    if any(abs(x) > 1e-6 for x in advantages)
-                ]
-                sample_ids = [
-                    record["extra_info"].get("sample_id", "") for record in records
-                ]
-                last_position, last_epoch = positions[-1] + 1, epoch
-                for i in range(len(records)):
-                    if i not in active:
-                        skipped += 1
-                        print(json.dumps({
-                            "skip_uninformative_group": skipped,
-                            "sample_id": sample_ids[i],
-                            "rewards": utilities_groups[i],
-                        }), flush=True)
-                if not active:
-                    continue
-
-                optimizer.zero_grad(set_to_none=True)
-                model.train()
-                backward_started = time.monotonic()
-                loss_total = 0.0
-                kl_total = 0.0
-                logprob_mae = 0.0
-                total_action_tokens = 0
-                total_json_complete = 0
-                all_rewards = []
-                # Normalization: give each useful prompt group equal weight,
-                # irrespective of its candidate-response token count.
-                for i in active:
-                    ids = prompts[i]
-                    candidates = candidates_groups[i]
-                    adv = advantages_groups[i]
-                    group_tokens = sum(len(x["action_input_ids"]) for x in candidates)
-                    total_action_tokens += group_tokens
-                    total_json_complete += sum(
-                        bool(x["json_complete"]) for x in candidates
-                    )
-                    all_rewards.extend(utilities_groups[i])
-                    for candidate, advantage in zip(candidates, adv):
-                        actions = candidate["action_input_ids"]
-                        if len(ids) + len(actions) > tr["max_tokens_per_gpu"]:
-                            raise ValueError("Generated candidate exceeds backward budget")
-                        ref = reference_log_probs(
-                            model, ids, actions,
-                            logits_chunk_size=model_cfg["logits_chunk_size"],
-                        )
-                        current = action_log_probs(
-                            model, ids, actions,
-                            logits_chunk_size=model_cfg["logits_chunk_size"],
-                        )
-                        old = torch.tensor(
-                            candidate["old_log_probs"], dtype=torch.float32,
-                            device=current.device,
-                        )
-                        if current.shape != old.shape or ref.shape != current.shape:
-                            raise ValueError("Candidate/new/reference logprobs misaligned")
-                        surrogate = clipped_grpo_loss(
-                            current, old, advantage,
-                            clip_range=tr["clip_range"],
-                            normalization_tokens=group_tokens,
-                        )
-                        penalty = low_var_kl(
-                            current, ref, normalization_tokens=group_tokens,
-                        )
-                        loss = (surrogate + tr["kl_coef"] * penalty) / len(active)
-                        loss.backward()
-                        loss_total += float(loss.detach())
-                        kl_total += float(penalty.detach()) / len(active)
-                        logprob_mae += float((current.detach() - old).abs().sum())
-                        del ref, current, old, surrogate, penalty, loss
-
-                torch.nn.utils.clip_grad_norm_(params, tr["max_grad_norm"])
-                optimizer.step()
-                scheduler.step()
-                step += 1
-                backward_seconds = time.monotonic() - backward_started
-                result = {
-                    "step": step, "epoch": epoch,
-                    "sample_id": sample_ids[0], "sample_ids": sample_ids,
-                    "prompt_batch_size": len(records),
-                    "active_prompt_groups": len(active),
-                    "skipped_uninformative_groups": skipped,
-                    "loss": loss_total, "kl": kl_total,
-                    "mean_reward": sum(all_rewards) / len(all_rewards),
-                    "min_reward": min(all_rewards), "max_reward": max(all_rewards),
-                    "group_size": rollout_cfg["group_size"],
-                    "response_tokens_mean": (
-                        total_action_tokens / (len(active) * rollout_cfg["group_size"])
-                    ),
-                    "json_completed_rate": (
-                        total_json_complete / (len(active) * rollout_cfg["group_size"])
-                    ),
-                    "old_new_logprob_mae": logprob_mae / total_action_tokens,
-                    "rollout_seconds": round(rollout_seconds, 2),
-                    "judge_seconds": round(judge_seconds, 2),
-                    "backward_seconds": round(backward_seconds, 2),
-                    "total_seconds": round(time.monotonic() - started, 2),
-                    "seconds_per_prompt": round(
-                        (time.monotonic() - started) / len(records), 2,
-                    ),
-                    "lr": scheduler.get_last_lr()[0],
-                }
-                with metrics_path.open("a", encoding="utf-8") as file:
-                    file.write(json.dumps(result, ensure_ascii=False) + "\n")
-                if step % tr["log_every"] == 0:
-                    print(json.dumps(result, ensure_ascii=False), flush=True)
-                torch.cuda.empty_cache()
-                if step % tr["save_every"] == 0:
-                    save_state(
-                        output_dir, model, tokenizer, optimizer, scheduler,
-                        step=step, epoch=epoch, next_position=last_position,
-                        rollout_prompts=args.rollout_prompts,
-                    )
-            if step >= update_limit:
-                break
-            start_position = 0
-    finally:
-        engine.shutdown()
-        if step > 0:
-            save_state(
-                output_dir, model, tokenizer, optimizer, scheduler,
-                step=step, epoch=last_epoch, next_position=last_position,
-                rollout_prompts=args.rollout_prompts,
-            )
+    if not getattr(trainer, "use_vllm", False):
+        raise RuntimeError("Unsloth/TRL did not activate vLLM rollout")
+    trainer.train(resume_from_checkpoint=resume)
+    trainer.save_model(str(cfg["paths"]["output_dir"] / "final_adapter"))
+    tokenizer.save_pretrained(str(cfg["paths"]["output_dir"] / "final_adapter"))
+    print("[da-grpo] Saved final LoRA adapter", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--check", action="store_true")
-    parser.add_argument("--test-judge", action="store_true")
-    parser.add_argument("--max-updates", type=int, default=None)
-    parser.add_argument("--rollout-prompts", type=int, choices=(1, 2, 4),
-                        help="Prompt groups sampled together and accumulated per update")
-    parser.add_argument("--max-num-seqs", type=int, default=None,
-                        help="vLLM concurrent sequence cap, e.g. 8, 16 or 32")
-    parser.add_argument("--decode-cuda-graph", action="store_true",
-                        help="Capture small decode-only CUDA graphs for vLLM")
-    parser.add_argument("--output-dir", type=Path, default=None,
-                        help="Separate run output; avoids overwriting live checkpoints")
-    parser.add_argument("--max-response-tokens", type=int, default=None)
-    parser.add_argument("--resume", type=Path, default=None)
+    parser.add_argument("--dry-run", action="store_true", help="Inspect config without GPU or network")
+    parser.add_argument("--check", action="store_true", help="Check required packages and files")
+    parser.add_argument("--test-judge", action="store_true", help="Probe API without loading a GPU model")
+    parser.add_argument("--max-steps", type=int, help="Override training steps for smoke test")
+    parser.add_argument("--max-completion-tokens", type=int, help="Override generated response cap")
+    parser.add_argument("--output-dir", type=Path, help="Independent experiment output")
+    parser.add_argument("--resume", type=Path, help="TRL checkpoint path (old custom checkpoints unsupported)")
     args = parser.parse_args(argv)
-    if args.max_updates is not None and args.max_updates < 1:
-        parser.error("--max-updates must be >=1")
-    if args.max_response_tokens is not None and args.max_response_tokens < 1:
-        parser.error("--max-response-tokens must be >=1")
-    if args.max_num_seqs is not None and args.max_num_seqs < 1:
-        parser.error("--max-num-seqs must be >=1")
     cfg = load_config(args.config)
-    if args.max_num_seqs is not None:
-        cfg["rollout"]["max_num_seqs"] = args.max_num_seqs
-    if args.decode_cuda_graph:
-        rollout = cfg["rollout"]
-        rollout["enforce_eager"] = False
-        rollout["compilation_config"] = {
-            "mode": 0,  # Disable torch.compile.
-            "cudagraph_mode": "FULL_DECODE_ONLY",
-            "cudagraph_capture_sizes": [
-                size for size in (1, 2, 4, 8, 16, 32) if size <= rollout["max_num_seqs"]
-            ],
-        }
+    if args.max_steps is not None:
+        if args.max_steps < 1:
+            parser.error("--max-steps must be positive")
+        cfg["training"]["max_steps"] = args.max_steps
+    if args.max_completion_tokens is not None:
+        if not 1 <= args.max_completion_tokens <= cfg["model"]["max_seq_length"]:
+            parser.error("--max-completion-tokens out of range")
+        cfg["rollout"]["max_completion_tokens"] = args.max_completion_tokens
+        if cfg["rollout"]["max_prompt_tokens"] + args.max_completion_tokens > cfg["model"]["max_seq_length"]:
+            parser.error("Prompt + completion exceeds model context")
     if args.output_dir is not None:
         cfg["paths"]["output_dir"] = repo_path(args.output_dir)
-        cfg["rollout"]["sync_dir"] = cfg["paths"]["output_dir"] / "vllm_sync"
-    if args.rollout_prompts is None:
-        args.rollout_prompts = cfg["rollout"]["prompts_per_batch"]
-    cfg["rollout"]["prompts_per_batch"] = args.rollout_prompts
     if args.dry_run:
         show_config(cfg)
         return 0
-    if args.check or not args.test_judge:
-        state = local_checks(cfg)
+    checks = environment_checks(cfg)
+    if args.check:
         show_config(cfg)
-        missing = [key for key, ok in state["checks"].items() if not ok]
-        if missing:
-            raise RuntimeError("Single GPU preflight failed: " + ", ".join(missing))
-        if args.check:
-            print("[da-grpo] local single-GPU checks passed (no training started)")
-            return 0
-    key = key_from_tty(cfg["judge"]["api_key_env"])
-    setup_judge_env(cfg, key)
+        if not all(checks.values()):
+            raise RuntimeError("Missing required packages/files: " +
+                               ", ".join(k for k, ok in checks.items() if not ok))
+        return 0
+    if not args.test_judge and not all(checks.values()):
+        raise RuntimeError("Install the new Unsloth/TRL requirements and verify local model/data first: " +
+                           ", ".join(k for k, ok in checks.items() if not ok))
+    key = judge_key(cfg["judge"]["api_key_env"])
+    setup_judge(cfg, key)
     probe_judge(cfg, key)
     if args.test_judge:
         return 0
-    train(cfg, args)
+    train(cfg, resume=str(repo_path(args.resume)) if args.resume else None)
     return 0
 
 

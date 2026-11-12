@@ -1,257 +1,139 @@
-# DA-GRPO: single-GPU Qwen3-8B Main-Agent training
+# DA-GRPO — Unsloth + TRL GRPOTrainer + vLLM
 
-This is the **only maintained training path** under `baseline/da-grpo/`.
-It reproduces Orchestra-o1's **per-turn GRPO objective, group-normalized
-advantages, KL penalty, and four-dimensional LLM-as-Judge reward**, while
-using the single-card memory engineering from Orchestra-o2/o3.
+This directory is the **new** MAESTRO/Orchestra-o1 Main-Agent policy trainer.
+The old hand-written Torch+PEFT GRPO loop, losses, reference log-prob
+code and hand-managed vLLM LoRA engine were **deleted**. There is no verl
+dependency and no fall-back to the old trainer.
 
-**No verl, 8-card FSDP configuration, DeepSpeed, Future Latent, separate
-critic head, teacher CE, CHORD, SFT pre-stage or custom outcome reward.**
+## Overview
 
-## Differences from O2/O3 and strict O1
+- **Model**: local `base_models/Qwen3-8B`, BF16 LoRA r=32 / alpha=64.
+- **Framework**: `unsloth.FastLanguageModel(fast_inference=True)` +
+  `trl.GRPOTrainer`; vLLM uses Unsloth's shared-weight integration,
+  not a separately created second engine.
+- **Batch**: 4 distinct prompts × 8 completions = **32 completions**
+  in one generation batch. TRL's `per_device_train_batch_size=1`,
+  `gradient_accumulation_steps=32`, and
+  `generation_batch_size=32` implement streamed backward and **one
+  optimizer update** per 4-prompt batch. These values count completions,
+  not prompts.
+- **Loss**: TRL `loss_type="dapo"` with 0.01 KL, 0.2 clip,
+  `scale_rewards="group"`, one policy iteration per generated batch.
+  The DAPO loss is token-normalized like the former O1-style training,
+  but it is **not bitwise identical** to the original custom loss.
+  vLLM importance-sampling correction is disabled for closer baseline
+  comparison; TRL/Unsloth still own the actual objective.
+- **Judge**: original local `reward_fn.compute_score`, weighted
+  0.10 FORMAT + 0.10 ACTION + 0.20 TOOL + 0.60 DECISION. TRL passes
+  one completion per reward-row. 4 Judge requests run in parallel by
+  default. Judge uses Alibaba `qwen3.7-flash` with thinking disabled;
+  policy Qwen3 thinking stays at its default (not forcibly disabled).
+- **Dataset**: unchanged offline Parquet `dataset/data/da-grpo/train.parquet`.
+  Policy sees exactly one original Orchestra-o1 Main-Agent user prompt.
+  Ground truth, Stage 3/4 reference action, and other expert metadata
+  are separate dataset columns passed to the **reward only**.
 
-- **Identical task / reward**: one current Main-Agent observation sampled
-  into `group_size=8` proposed `delegate_task` or `complete` actions.
-  `reward_fn.py::compute_score` is the original O1 four-term Judge reward
-  (format 10%, action validity 10%, tool reasonableness 20%, decision quality
-  60%). External Judge uses the shared DashScope model registry.
-- **Original O1-style objective**: clipped token-level GRPO surrogate with
-  group-relative advantages, plus low-variance KL against frozen base Qwen.
-  The reference is computed by temporarily disabling LoRA; **no second 8B
-  reference model** is kept resident.
-- **O2/O3 resource technique**: Qwen3-8B BF16, rank-32 LoRA on seven
-  attention/MLP projections, gradient checkpointing, single-card vLLM,
-  `kv_cache_dtype=fp8`, sleep/wake between rollout and training, one
-  candidate backward at a time and one optimizer step per entire GRPO group.
-- **Not exact full-parameter O1**: trainable parameters are LoRA adapters
-  rather than all 8B weights, and the train optimizer/learning rate follows
-  the practical single-GPU profile. This is an *algorithm/reward*
-  reproduction with a different parameterization, not a claim of identical
-  full-parameter dynamics.
+## Install (new environment recommended)
 
-## Layout
-
-```text
-baseline/da-grpo/
-├── config.yaml       # ONLY YAML profile (single 96GB-class GPU)
-├── train.py          # Dataset, auth, orchestration, checkpoint/resume
-├── policy.py         # Plain Qwen3-8B LoRA; chunked selected-token logprobs
-├── rollout.py        # vLLM + LoRA adapter sync + FP8 KV cache + sleep mode
-├── losses.py         # Group GRPO, clipping, KL
-├── reward_fn.py      # Original Orchestra-o1 Judge rubric/score weights
-├── run.sh            # Thin wrapper calling train.py
-├── test_train.py     # CPU-only contract checks
-└── README.md
-```
-
-There is no dependency on `/root/autodl-tmp/verl`; uninstalling it
-is unnecessary and is not part of this change.
-`train_maestro_8b/` and `baseline/orchestra-o1/` remain separate.
-
-## 1. Prepare dependencies
-
-Use the existing Qwen3-8B / LoRA / vLLM environment, with compatible CUDA,
-PyTorch, Transformers and vLLM versions. Consult the versions already used
-in Orchestra-o2/o3's working
-[1×96GB profile](https://github.com/Shengxiang-Lin/orchestra-o2/blob/main/orchestra-o3/model/configs/qwen3_8b_bf16_lora_1x96g_long.yaml).
+Use an **unused** Python 3.11+ environment, not the environment used
+by a currently running experiment. Stop any other GPU training before
+starting this 8B run.
 
 ```bash
-python -m pip install pyyaml pandas pyarrow requests peft transformers accelerate
-# Install a compatible vLLM build for your CUDA/PyTorch environment.
-python -c "import torch, peft, transformers, vllm, pyarrow; print('imports OK')"
-```
-
-A single 96GB GPU is the reference hardware. A configurable
-`min_gpu_memory_gib: 80` preflight guard prevents accidental attempts on
-24GB hardware; this does not prove that any long-context rollout fits.
-
-## 2. Training data
-
-The input is the previously exported per-turn Parquet, NOT full episodes
-or macro-task state.
-
-```bash
-python -m dataset.prepare_da_grpo \
-  --untrusted-turns environment/data/maestro_untrusted_rounds_v9/main_turns.jsonl
-```
-
-Each `prompt` contains only the O1 Main Agent's view. The expert action,
-ground truth and Sub-Agent history in `extra_info` are visible only to
-the Reward callback, not as policy target tokens. No live Sub-Agent
-execution occurs during GRPO.
-
-## 3. Shared Aliyun Judge settings
-
-`config.yaml` points to `config/model_config.yaml` and selects
-`qwen3.7-flash` (with `enable_thinking: false`). No secret is stored
-in config. The launcher securely prompts for `DASHSCOPE_API_KEY`
-if missing. `--test-judge` sends one request and stops on HTTP 401
-before allocating the training model.
-
-**If HTTP 401 persists**, verify that the API key belongs to the same
-DashScope region as the registered Base URL. GPU settings cannot solve
-an API authentication error.
-
-## 4. Commands from MAESTRO root
-
-```bash
-git pull origin main
+cd /root/autodl-tmp/MAESTRO
+python3 -m venv /root/autodl-tmp/maestro-unsloth-venv
+source /root/autodl-tmp/maestro-unsloth-venv/bin/activate
+python -m pip install -U pip
+python -m pip install -r baseline/da-grpo/requirements.txt
 python -m unittest discover -s baseline/da-grpo -p 'test_*.py'
-
-# Offline configuration and availability inspection
 python baseline/da-grpo/train.py --dry-run
 python baseline/da-grpo/train.py --check
+```
 
-# Verify the Judge request (can incur a minimal API charge)
+Dependency solvers can upgrade CUDA/PyTorch/vLLM; record the versions
+from `python -m pip freeze` before running full training. **This
+migration has not yet been smoke-tested on RTX 6000D (SM120)**. The
+previous environment hit FlashInfer JIT issues; the new config
+explicitly forces vLLM `TRITON_ATTN`, keeps FP8 KV cache and starts
+with `enforce_eager: true`. If the JIT still reports
+`SM 12.x requires CUDA >= 12.9`, check `nvcc --version` versus
+`torch.version.cuda`. `nvidia-smi` displays the driver's supported
+CUDA version, not the compiler version.
+
+## Start
+
+Export the key without putting it in Git:
+
+```bash
+export DASHSCOPE_API_KEY='your-key'
 python baseline/da-grpo/train.py --test-judge
-
-# One real Qwen update with reduced output cap: smoke test only
-python baseline/da-grpo/train.py --max-updates 1 --max-response-tokens 512
-
-# Full configured single-GPU GRPO
-python baseline/da-grpo/train.py
-# Equivalent: bash baseline/da-grpo/run.sh
 ```
 
-`--max-updates` and `--max-response-tokens` are optional CLI
-debug overrides; the default `config.yaml` keeps G=8, max prompt 24576,
-max response 4096 and epochs 5. Smoke-test runs initialize their own
-optimizer and should be treated as separate experiments, not resumed
-as if they used the full schedule.
-
-**Important:** One group is one **optimizer update** only if candidate
-rewards differ enough to give nonzero group advantages. Equal-reward groups
-are skipped rather than silently moving the policy. API errors must be
-addressed before running paid GRPO.
-
-## 5. Checkpoints and monitoring
-
-`baseline/da-grpo/output/` (Git-ignored) contains:
-
-- `metrics.jsonl`: per-optimizer-step policy/KL loss, Judge reward range,
-  JSON completion fraction, vLLM generation duration and policy/logprob drift.
-- `checkpoint-000050/` etc: PEFT LoRA adapter and tokenizer, with
-  `train_state.pt` holding optimizer/scheduler state for resuming.
-- `vllm_sync/current_adapter/`: temporary adapter snapshot for vLLM.
-
-Resume *only from a trusted checkpoint generated by this trainer*:
+One optimizer-step smoke test, with isolated output directory:
 
 ```bash
 python baseline/da-grpo/train.py \
-  --resume baseline/da-grpo/output/checkpoint-000050
+  --max-steps 1 --max-completion-tokens 512 \
+  --output-dir baseline/da-grpo/output_unsloth_smoke
 ```
 
-Since optimizer checkpoints use PyTorch serialization, do not load
-untrusted arbitrary `train_state.pt` files.
-
-## Validation status
-
-Source code and unit tests have been added to GitHub. A full GPU run,
-vLLM sleep/wake cycling, and actual Qwen Judge calls have **not**
-been executed from this environment. Verify `--check`, `--test-judge`
-and a one-update smoke test on the 96GB AutoDL instance before assuming
-the memory profile fits end-to-end.
-
-## RTX 6000D / SM120 (vLLM 0.32) initialization
-
-On the user's RTX 6000D (83.05 GiB), FlashInfer JIT was selected despite
-an incompatible CUDA toolkit and reported `FlashInfer requires GPUs with sm75
-or higher`. A separate CUDA Graph profiling/capture step exhausted device
-memory. The default configuration limits capture to decode batches of up to
-32 sequences:
-
-```yaml
-rollout:
-  attention_backend: TRITON_ATTN
-  enforce_eager: false
-  compilation_config:
-    mode: 0
-    cudagraph_mode: FULL_DECODE_ONLY
-    cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32]
-  gpu_memory_utilization: 0.35
-  kv_cache_dtype: fp8
-```
-
-`TRITON_ATTN` is available in vLLM 0.32 and supports FP8 KV cache.
-For eager execution, set `enforce_eager: true` and remove the
-`compilation_config` block. Eager mode skips graph capture and torch.compile.
+Full run (default: 3 epochs, 4 prompts × 8 candidates, 4096 output cap):
 
 ```bash
-python -m unittest discover -s baseline/da-grpo -p 'test_*.py'
-python baseline/da-grpo/train.py --dry-run
-python baseline/da-grpo/train.py --max-updates 1 --max-response-tokens 512
+bash baseline/da-grpo/run.sh
 ```
 
-If there are still architecture failures, distinguish `nvidia-smi`'s
-**driver** CUDA version from the **runtime/toolkit** CUDA versions:
+The run script is **foreground**, not `nohup`. Use a separate output
+directory for independent experiments. TRL checkpoint directories
+(`checkpoint-XX`) are saved automatically. Resume only from
+**new TRL checkpoints**:
 
 ```bash
-python -c 'import torch; print("PyTorch CUDA:", torch.version.cuda)'
-nvcc --version
-```
-
-Avoid reinstalling CUDA, PyTorch or vLLM just to resolve a backend selection
-problem unless this conservative configuration also fails.
-
-## Optional experiment: multiple prompts in one vLLM rollout
-
-The default configuration submits four Main-Agent prompts in one
-`vLLM.generate()` call, with eight candidates per prompt. Use
-`--rollout-prompts` to override the configured prompt count.
-Each group keeps its own reward normalization. The optimizer steps once
-after backpropagating the informative groups, one candidate at a time.
-
-vLLM's `max_num_seqs` limits active *sequences*, not prompt groups.
-Use `--max-num-seqs 16` or `--max-num-seqs 32` to test those concurrency
-limits. With `--decode-cuda-graph`, capture sizes extend to the chosen
-limit, up to 32. Available KV memory also affects scheduling.
-The RTX 6000D profile uses TRITON_ATTN, decode-only CUDA Graphs, and FP8 KV cache.
-
-**Do not run the experiment concurrently with the existing GPU training
-job.** Do not change the configuration of a running job. Use a separate
-output directory, because output/checkpoint and vLLM adapter sync files
-must not be shared between live experiments.
-
-```bash
-# Baseline: one prompt per rollout, original eight candidates
 python baseline/da-grpo/train.py \
-  --rollout-prompts 1 --max-num-seqs 8 --decode-cuda-graph \
-  --max-updates 4 --max-response-tokens 1024 \
-  --output-dir baseline/da-grpo/output_batch1_bench
-
-# Opt-in: two different prompts and 16 candidates per rollout;
-# backprop is still streamed to control peak GPU memory
-python baseline/da-grpo/train.py \
-  --rollout-prompts 2 --max-num-seqs 16 --decode-cuda-graph --max-updates 2 \
-  --max-response-tokens 1024 \
-  --output-dir baseline/da-grpo/output_batch2_bench
+  --resume baseline/da-grpo/output/checkpoint-50
 ```
 
-The two runs target approximately four input prompts; **their random
-sample sets and optimizer update counts are not identical**.
-Compare `seconds_per_prompt`, `rollout_seconds`,
-`judge_seconds`, `backward_seconds`, reward diversity and GPU OOM/
-preemption, not just "seconds per optimizer step". For more rigorous
-benchmarking, compare more prompts with the same model checkpoint.
+Custom PyTorch DA-GRPO checkpoints created before this migration are
+**not compatible** with TRL optimizer or trainer state. The LoRA weights
+may be reusable for a separate warm start, but exact resume is not.
 
-Changing `--rollout-prompts` changes the effective optimizer batch size
-and therefore training dynamics. Checkpoint resume rejects a different
-batch size rather than silently mixing update schedules.
+## Training semantics and limitations
 
-## FlashAttention / other speed-related components
+TRL repeats the 4 source prompts to create 32 completions per update.
+Advantages are grouped by original prompt (8 completions each). The
+trainer takes 32 sequential 1-completion gradient micro-steps before an
+optimizer step. The vLLM engine's `max_num_seqs=32` is a concurrency
+**cap**, not a guarantee all 32 will decode simultaneously.
 
-The **training-side** Transformers model already loads with
-`attn_implementation="sdpa"`. PyTorch SDPA automatically selects a
-supported fused FlashAttention or other efficient CUDA backend for each
-operation; this does **not** require the external `flash-attn` package.
-Using `flash_attention_2` explicitly is a separate compatibility
-experiment, not an automatic guaranteed speed boost. Avoid pip
-installing incompatible FlashAttention/FlashInfer extensions into
-the known-working SM120 environment.
+Existing MAESTRO training remains *offline*: the generated Main-Agent
+decision does not trigger a real Sub-Agent/tool execution during GRPO.
+The Judge compares each candidate with the reference action and
+ground-truth answer in reward-only metadata.
 
-The **rollout-side** vLLM attention backend is **TRITON_ATTN**, not
-the training-side PyTorch SDPA. That is intentional because the previous
-FlashInfer JIT path failed on this RTX 6000D + CUDA-toolkit installation.
-The Qwen3 Policy's default
-Thinking behavior and the original four-dimensional O1 reward remain
-unchanged in these batch-speed experiments.
+TRL typically performs optimization steps even on all-equal-score
+groups (with zero policy advantage but possible KL); it does **not**
+automatically reproduce the old trainer's `skip_uninformative_group`
+behavior. Similarly, its generation truncation, temperature, reference
+KL normalization and completion filtering should be checked before
+claiming an exact numerical reproduction of upstream Orchestra-o1.
+
+We deliberately do **not** enable 4-bit QLoRA in the first migration:
+keep BF16 LoRA to compare model quality against the old trainer.
+Turning on 4-bit requires a separate experiment and revalidating
+attention kernels, LoRA weight sharing, reference log probabilities
+and reward curves.
+
+## Files
+
+- `config.yaml`: one configuration, version 2.
+- `train.py`: configuration and dataset validation; TRL setup, CLI.
+- `reward_adapter.py`: TRL completion-to-Orchestra-o1 Judge bridge.
+- `reward_fn.py`: original four-dimensional LLM Judge implementation.
+- `run.sh`: thin foreground entrypoint.
+- `test_grpo.py`: CPU-only configuration/reward contract tests.
+- `requirements.txt`: framework dependencies for a fresh environment.
+
+Official references:
+- https://huggingface.co/docs/trl/main/grpo_trainer
+- https://huggingface.co/docs/trl/vllm_integration
+- https://github.com/unslothai/notebooks (Qwen3-8B FP8 GRPO recipe)

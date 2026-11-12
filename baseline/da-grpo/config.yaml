@@ -1,6 +1,6 @@
-# Single-GPU Orchestra-o1-style GRPO. No verl; no Future Latent or SFT loss.
-# Paths relative to MAESTRO root. Never put an API key in YAML.
-version: 1
+# MAESTRO / Orchestra-o1 Main-Agent GRPO: Unsloth + TRL + colocated vLLM
+# Single RTX 6000D (83 GiB). Separate Python env recommended.
+version: 2
 
 paths:
   model: base_models/Qwen3-8B
@@ -16,52 +16,39 @@ judge:
 
 model:
   dtype: bfloat16
-  gradient_checkpointing: true
+  max_seq_length: 32768
+  load_in_4bit: false
   lora_rank: 32
   lora_alpha: 64
   lora_dropout: 0.0
   lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
-  logits_chunk_size: 128
 
 rollout:
-  backend: vllm
-  group_size: 8
-  prompts_per_batch: 4
+  prompts_per_step: 4
+  num_generations: 8
+  max_prompt_tokens: 24576
+  max_completion_tokens: 4096
   temperature: 1.0
   top_p: 1.0
-  max_prompt_tokens: 24576
-  max_response_tokens: 4096
-  max_model_len: 32768
-  # RTX 6000D (83.05 GiB): conservative budget for colocated LoRA policy.
   gpu_memory_utilization: 0.35
-  # SM120: avoid incompatible FlashInfer JIT on older CUDA toolkit.
-  attention_backend: TRITON_ATTN
-  # Limit graph capture to the tested decode batch sizes on this GPU.
-  enforce_eager: false
-  compilation_config:
-    mode: 0  # Disable torch.compile.
-    cudagraph_mode: FULL_DECODE_ONLY
-    cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32]
-  kv_cache_dtype: fp8
-  enable_sleep_mode: true
-  enable_prefix_caching: false
   max_num_seqs: 32
-  # One vLLM server and the policy share one 96 GB-class GPU in phases.
-  sync_dir: baseline/da-grpo/output/vllm_sync
+  kv_cache_dtype: fp8
+  attention_backend: TRITON_ATTN
+  # Safe SM120 default; opt-in CUDA Graph tuning only after an end-to-end smoke test.
+  enforce_eager: true
+  standby: true
 
 training:
   epochs: 3
-  max_updates: null
+  max_steps: -1
   learning_rate: 0.00005
   weight_decay: 0.01
+  warmup_ratio: 0.03
   clip_range: 0.2
   kl_coef: 0.01
-  micro_batch_size: 1
-  max_tokens_per_gpu: 32768
+  loss_type: dapo
+  optim: adamw_8bit
   max_grad_norm: 1.0
-  warmup_ratio: 0.03
-  save_every: 50
-  log_every: 1
+  save_steps: 50
+  logging_steps: 1
   seed: 42
-  # A conservative guard, not a promise that training will fit.
-  min_gpu_memory_gib: 80

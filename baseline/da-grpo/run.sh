@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Single-card O1-style GRPO. The Python trainer handles all settings.
+# New Unsloth + TRL GRPOTrainer entrypoint; runs in the foreground.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "${HERE}/train.py" "$@"
+exec python3 -u "${HERE}/train.py" "$@"
