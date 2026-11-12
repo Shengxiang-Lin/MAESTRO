@@ -91,7 +91,8 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
     rollout = cfg["rollout"]
     required_rollout = {"backend", "group_size", "temperature", "top_p",
                         "max_prompt_tokens", "max_response_tokens", "max_model_len",
-                        "gpu_memory_utilization", "kv_cache_dtype", "enable_sleep_mode",
+                        "gpu_memory_utilization", "attention_backend", "enforce_eager",
+                        "kv_cache_dtype", "enable_sleep_mode",
                         "enable_prefix_caching", "max_num_seqs", "sync_dir"}
     if set(rollout) != required_rollout:
         raise ValueError("Invalid rollout configuration keys")
@@ -107,6 +108,10 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
         raise ValueError("Prompt plus response limit exceeds vLLM max_model_len")
     if not 0 < float(rollout["gpu_memory_utilization"]) <= 1:
         raise ValueError("rollout.gpu_memory_utilization invalid")
+    if rollout["attention_backend"] not in {"TRITON_ATTN", "FLASH_ATTN", "FLASHINFER"}:
+        raise ValueError("Unsupported rollout.attention_backend")
+    if type(rollout["enforce_eager"]) is not bool:
+        raise ValueError("rollout.enforce_eager must be boolean")
     rollout["sync_dir"] = repo_path(rollout["sync_dir"])
 
     train = cfg["training"]
@@ -185,6 +190,9 @@ def show_config(cfg: dict) -> None:
         "mode": "single_gpu_lora_grpo",
         "backend": "torch_peft_vllm_no_verl",
         "group_size": cfg["rollout"]["group_size"],
+        "attention_backend": cfg["rollout"]["attention_backend"],
+        "enforce_eager": cfg["rollout"]["enforce_eager"],
+        "gpu_memory_utilization": cfg["rollout"]["gpu_memory_utilization"],
         "max_prompt_tokens": cfg["rollout"]["max_prompt_tokens"],
         "max_response_tokens": cfg["rollout"]["max_response_tokens"],
         "hardware": state["hardware"],
