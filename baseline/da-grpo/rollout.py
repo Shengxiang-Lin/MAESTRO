@@ -74,6 +74,8 @@ class ColocatedRollout:
                 dtype="bfloat16",
                 tensor_parallel_size=1,
                 gpu_memory_utilization=self.cfg["gpu_memory_utilization"],
+                attention_backend=self.cfg["attention_backend"],
+                enforce_eager=self.cfg["enforce_eager"],
                 max_model_len=self.cfg["max_model_len"],
                 kv_cache_dtype=self.cfg["kv_cache_dtype"],
                 max_num_seqs=self.cfg["max_num_seqs"],
