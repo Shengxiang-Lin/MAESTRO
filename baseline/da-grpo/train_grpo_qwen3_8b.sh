@@ -120,7 +120,7 @@ python3 -m verl.trainer.main_ppo \
     reward.custom_reward_function.name=compute_score \
     trainer.critic_warmup=0 \
     trainer.val_before_train=False \
-    trainer.logger='["console","wandb","file"]' \
+    trainer.logger="${TRAINER_LOGGER:-[\"console\",\"wandb\",\"file\"]}" \
     trainer.project_name="${PROJECT_NAME}" \
     trainer.experiment_name="${EXP_NAME}" \
     trainer.n_gpus_per_node=${N_GPUS_PER_NODE} \

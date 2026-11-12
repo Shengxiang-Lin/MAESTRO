@@ -1,0 +1,39 @@
+# Orchestra-o1 DA-GRPO reproduction: all non-secret runtime settings.
+# Paths are resolved relative to the MAESTRO repository root.
+# Do NOT put API keys in this file; train.py asks via getpass on a TTY.
+version: 1
+
+paths:
+  verl_dir: ../verl
+  model_path: base_models/Qwen3-8B
+  data_dir: dataset/data/da-grpo
+
+judge:
+  # Reuse the existing provider endpoint and model ID from model_config.yaml.
+  registry: config/model_config.yaml
+  model: qwen3.7-flash
+  api_key_env: DASHSCOPE_API_KEY
+  # Qwen hybrid-thinking models can otherwise spend the small judge response
+  # token budget on reasoning; top-level DashScope HTTP request argument.
+  enable_thinking: false
+
+training:
+  nnodes: 1
+  n_gpus_per_node: 8      # Original Orchestra-o1 single-node 8xH20 setup.
+  train_batch_size: 24
+  ppo_mini_batch_size: 12
+  max_prompt_length: 24576
+  max_response_length: 4096
+  max_token_len_per_gpu: 32768
+  rollout_n: 8
+  learning_rate: 0.000005
+  epochs: 5
+  save_freq: 54
+  tensor_parallel_size: 2
+  gpu_memory_utilization: 0.35
+  ray_num_cpus: 32
+
+logging:
+  # Use [console, wandb, file] to reproduce the original logging destinations.
+  # [console, file] avoids requiring a WandB login during setup.
+  backends: [console, file]

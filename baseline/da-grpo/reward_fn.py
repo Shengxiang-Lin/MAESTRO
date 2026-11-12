@@ -44,6 +44,8 @@ VALID_ACTIONS = {"delegate_task", "complete"}
 LLM_JUDGE_MODEL = os.environ.get("LLM_JUDGE_MODEL", "claude-haiku-4-5")
 LLM_JUDGE_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1/")
 LLM_JUDGE_API_KEY = os.environ.get("OPENAI_API_KEY", "your_api_key_here")
+# Optional provider-specific request argument; unset preserves upstream O1 behavior.
+LLM_JUDGE_ENABLE_THINKING = os.environ.get("LLM_JUDGE_ENABLE_THINKING")
 LLM_JUDGE_TIMEOUT = 60  # seconds
 LLM_JUDGE_MAX_RETRIES = 5  # Max retries (6 total attempts)
 LLM_JUDGE_BASE_BACKOFF = 2.0  # Exponential backoff base (seconds)
@@ -103,6 +105,12 @@ def _call_llm_judge(prompt: str) -> str | None:
         "temperature": 0.0,
         "max_tokens": 256,
     }
+
+    if LLM_JUDGE_ENABLE_THINKING is not None:
+        flag = LLM_JUDGE_ENABLE_THINKING.strip().lower()
+        if flag not in {"true", "false"}:
+            raise ValueError("LLM_JUDGE_ENABLE_THINKING must be true or false")
+        payload["enable_thinking"] = flag == "true"
 
     for attempt in range(LLM_JUDGE_MAX_RETRIES + 1):
         try:

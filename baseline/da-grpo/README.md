@@ -1,85 +1,125 @@
-# DA-GRPO: Orchestra-o1 Qwen3-8B reproduction
+# DA-GRPO — Reproduce Orchestra-o1 Qwen3-8B with verl
 
-This directory reproduces **the original Orchestra-o1 small Main-Agent
-training method**; it does not add MAESTRO-specific rewards, alternate
-actions, online Sub-Agent execution, or an SFT pretraining stage.
+This baseline reuses the **original** Orchestra-o1 per-decision GRPO
+algorithm, vLLM rollout + FSDP2 and the four-dimensional LLM-as-Judge reward.
+The only provider-specific addition is configurable DashScope
+`enable_thinking`, **without changing the scoring weights or reward rubric**.
 
-The name `da-grpo` follows the source paper's terminology. The released
-launcher actually specifies `algorithm.adv_estimator=grpo` in verl.
-Do not assume an additional DA-specific algorithm is implemented here.
+## Which training code runs?
 
-## Files
+- `train.py` reads `config.yaml`, resolves the existing
+  `config/model_config.yaml` registry, gets the secret key from
+  `DASHSCOPE_API_KEY` or hidden terminal input, and checks files/GPUs.
+- `train_grpo_qwen3_8b.sh` runs `python -m verl.trainer.main_ppo`
+  with the original GRPO hyperparameters.
+- `reward_fn.py` is the original Orchestra-o1 Judge reward, with an
+  opt-in provider compatibility parameter (`enable_thinking`).
+- **The neural-network training loop lives in the external
+  [verl](https://github.com/verl-project/verl) framework.** It is not in
+  `train_maestro_8b/` (MAESTRO's separate Accelerate/SFT work), or in
+  `baseline/orchestra-o1/` (the preserved baseline scripts).
 
-- `train_grpo_qwen3_8b.sh`: full-parameter Qwen3-8B GRPO launcher (verl,
-  FSDP2, vLLM rollout, 8 × H20 96 GB setup).
-- `reward_fn.py`: copied from `Shengxiang-Lin/orchestra-o1`
-  `train_qwen3_8b/grpo/reward_fn.py`, preserving the original four-term
-  LLM-as-judge reward and `compute_score` callback.
-- `ds_config.json`: original DeepSpeed reference config; **not consumed**
-  by the current FSDP2 launcher.
+## 0. Install verl from source — NOT `pip install verl`
 
-## Prerequisites
-
-Install/clone a compatible [verl](https://github.com/volcengine/verl)
-checkout separately. You also need PyTorch, vLLM, Ray, the corresponding
-GPU CUDA stack, `requests` (reward HTTP calls), and optionally WandB.
-Do not hardcode API credentials; the reward uses the OpenAI-compatible
-`OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `LLM_JUDGE_MODEL`
-(default `claude-haiku-4-5`) environment variables.
-
-## 1. Export the dataset
+The official installation instructions recommend a Git checkout. From the
+*same Python/Conda environment* used to run MAESTRO:
 
 ```bash
-python -m dataset.prepare_da_grpo --output-dir dataset/data/da-grpo
+cd /root/autodl-tmp
+git clone https://github.com/verl-project/verl.git
+cd verl
+python -m pip install -e ".[vllm]"
+python -c "import verl; print(verl.__file__)"
 ```
 
-The exporter creates `train.parquet` and `expert_decisions.jsonl`, and
-keeps gold/expert references only in `extra_info`. Optional Stage 4 turns
-are provided with `--untrusted-turns`; see `dataset/README.md`.
+Before installing, check your installed PyTorch / CUDA / Python versions
+against the selected verl revision. Modern verl may require a newer CUDA
+stack and a compatible vLLM, Ray, Transformers, and PyTorch combination.
+Use a dedicated environment or the official Docker image if the existing
+AutoDL environment cannot support those dependencies. This repository
+does not automatically install or silently upgrade GPU packages.
 
-## 2. Launch the original GRPO setup
+The default YAML points to `../verl` relative to the MAESTRO root
+(e.g. `/root/autodl-tmp/verl`). Adjust that path if the checkout lives elsewhere.
+
+## 1. Configure once
+
+Edit **`baseline/da-grpo/config.yaml`**:
+
+```yaml
+paths:
+  verl_dir: ../verl
+  model_path: base_models/Qwen3-8B
+  data_dir: dataset/data/da-grpo
+judge:
+  registry: config/model_config.yaml
+  model: qwen3.7-flash
+  api_key_env: DASHSCOPE_API_KEY
+  enable_thinking: false
+```
+
+The Judge endpoint comes from the existing
+`config/model_config.yaml` registration for `qwen3.7-flash`:
+`https://dashscope.aliyuncs.com/compatible-mode/v1` (Beijing).
+Use a key from the same geographic region. Do not store keys in YAML.
+
+The original 8 × H20 96GB hyperparameters are under `training:`.
+For a different GPU instance, configure `n_gpus_per_node`, TP,
+batches and memory conservatively; lowering GPU count alone may be
+insufficient to fit full-parameter Qwen3-8B GRPO.
+
+## 2. Export per-round MAESTRO observations
 
 ```bash
-export OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
-export OPENAI_API_KEY=...           # never check secrets into Git
-export LLM_JUDGE_MODEL=claude-haiku-4-5
-
-VERL_DIR=/path/to/verl \
-MODEL_PATH=/path/to/Qwen3-8B \
-DATA_DIR="$(pwd)/dataset/data/da-grpo" \
-bash baseline/da-grpo/train_grpo_qwen3_8b.sh
+python -m dataset.prepare_da_grpo \
+  --untrusted-turns environment/data/maestro_untrusted_rounds_v9/main_turns.jsonl
 ```
 
-The script has the same training settings as the upstream O1 training
-launcher (GRPO, 8 rollouts per prompt, full-parameter FSDP2, KL loss,
-LLM-judge reward). The default data path is already absolute, based on
-this repo, so specifying `DATA_DIR` is optional.
+This creates `dataset/data/da-grpo/train.parquet` (one current Main
+decision per row) and `expert_decisions.jsonl`.
+No gold/expert fields enter the model's `prompt`; they stay in reward
+`extra_info`.
 
-Defaults: 8 GPUs, batch size 24, PPO mini-batch 12, 5 epochs,
-learning rate 5e-6, prompt 24576 tokens, response 4096 tokens,
-vLLM tensor parallel size 2. Overrides use the upstream env variables
-`TRAIN_BSZ`, `MINI_BSZ`, `ROLLOUT_N`, `EPOCHS`, `TP_SIZE`, etc.
+## 3. Inspect, test provider, train
 
-All additional `verl.trainer.main_ppo` overrides can be passed as
-positional arguments after the shell script. Outputs/logs are written under
-`baseline/da-grpo/output/` and `baseline/da-grpo/logs/`.
-
-## Fidelity and verification
-
-The original training repository does not publish its data-preparation
-scripts or Parquet, so this exporter is a **callback-compatible** data
-adapter, not a byte-for-byte reconstruction of the authors' training data.
-The original reward is LLM-only: it does not execute the candidate
-`delegate_task` in an environment. It also retains original grading
-thresholds and fallback behavior for method fidelity.
-
-Before a GPU run, check:
+From the repository root, using the same active Python environment:
 
 ```bash
-python -m unittest dataset.test_prepare_da_grpo
-python -m dataset.prepare_da_grpo --dry-run
-bash -n baseline/da-grpo/train_grpo_qwen3_8b.sh
+python baseline/da-grpo/train.py --dry-run
+python baseline/da-grpo/train.py --check
+python baseline/da-grpo/train.py --test-judge
+python baseline/da-grpo/train.py
 ```
 
-The absence of actual generated `environment/data` and GPUs in the
-repository means end-to-end training must be run on your workstation.
+Alternatively run `bash baseline/da-grpo/run.sh`.
+You can pass extra Hydra/verl CLI overrides after the command:
+`python baseline/da-grpo/train.py trainer.total_epochs=1`.
+
+The launcher prompts `Enter DASHSCOPE_API_KEY` with hidden terminal input
+when it is not set; the key is used **only in memory** and passed to the
+training subprocess via its environment. The launcher does not print or
+write the secret. For non-interactive runs, configure
+`DASHSCOPE_API_KEY` securely in the environment before starting.
+
+`--dry-run` is offline and does not need credentials/GPU/verl; it reports
+which prerequisites are present. `--check` verifies local prerequisites
+without an API request. `--test-judge` sends one small Qwen API request
+without starting training; this incurs a small provider charge.
+The default loggers are `[console, file]`; set
+`logging.backends: [console, wandb, file]` to restore original logging
+destinations. Main training outputs are written under
+`baseline/da-grpo/output/` (ignored by Git).
+
+## Reproduction scope
+
+The original Orchestra-o1 repository provides a launcher and reward but
+not the original training Parquet generator or compiled data. Our
+`dataset/prepare_da_grpo.py` is callback-compatible, not a byte-for-byte
+copy of that unpublished preprocessing. The algorithm remains
+`algorithm.adv_estimator=grpo` (despite the DA-GRPO experiment name).
+No MAESTRO-specific macro critic, SFT pre-stage, or online Sub-Agent
+rollout is introduced.
+
+If `import verl` fails, install verl from its Git checkout; it is
+not a module provided by either `baseline/orchestra-o1/` or
+`train_maestro_8b/`.
