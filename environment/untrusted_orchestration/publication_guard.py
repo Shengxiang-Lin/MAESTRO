@@ -7,23 +7,14 @@ from positive turns but retained with private diagnostic provenance.
 """
 from __future__ import annotations
 
-import re
-
+from environment.base_orchestration.generation_meta import (
+    GENERATION_PROCESS_RE,
+)
 from .public_language import internal_labels_in_text
 
 
-_GENERATION_PROCESS = re.compile(
-    r"\b(?:the\s+)?(?:critic|reviewer|judge|evaluator)\s+"
-    r"(?:(?:correctly|previously|also)\s+)?"
-    r"(?:noted|said|observed|requested|suggested|pointed\s+out|"
-    r"rejected|flagged|concluded|recommended|asked|indicated)\b|"
-    r"\b(?:previous|earlier|last)\s+(?:draft|revision|generation)\b|"
-    r"\b(?:per|according\s+to|as\s+(?:the|my))\s+"
-    r"(?:review\s+feedback|critic\s+feedback|reviewer\s+feedback)\b|"
-    r"\b(?:my|the)\s+(?:prompt|system\s+instruction)\s+"
-    r"(?:says|instructs|requested)\b",
-    re.I,
-)
+# Kept as an alias for existing callers; canonical rules live in one module.
+_GENERATION_PROCESS = GENERATION_PROCESS_RE
 
 
 def review_turn_surface(turn: dict) -> list[str]:

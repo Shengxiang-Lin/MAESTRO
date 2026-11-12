@@ -180,6 +180,25 @@ def render_delivered_result(contract: dict) -> str:
             for k, v in rows[0].items()
         )
         result = "The delivered record contains " + pairs + "."
+    elif 2 <= len(rows) <= 10 and all(len(row) <= 5 for row in rows):
+        # The Author no longer recreates the immutable result. Preserve
+        # actual delivered identities and fields rather than reducing a
+        # multi-record result to an uninformative row count.
+        records = [
+            ", ".join(
+                f"{str(key).replace('_', ' ')}: {_readable_value(value)}"
+                for key, value in row.items()
+            )
+            for row in rows
+        ]
+        detailed = (
+            f"The handoff contains {len(rows)} delivered records: "
+            + "; ".join(records) + "."
+        )
+        result = (
+            detailed if len(detailed) <= 1200
+            else _readable_verified_answer(rows)
+        )
     else:
         result = _readable_verified_answer(rows)
     if contract["delivery_status"] == "partial":
