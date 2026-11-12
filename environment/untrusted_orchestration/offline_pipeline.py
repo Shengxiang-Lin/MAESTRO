@@ -24,9 +24,12 @@ from environment.generate_question.program_ir import Relation
 from .report_author import naturalize_report
 from .public_language import sanitize_public_report
 from .reasoning_fidelity import reasoning_evidence_issues
+from .main_decision_contract import (
+    build_main_decision_contract, critic_denies_confirmed_conflict,
+)
 from .state_machine import Attempt
 from .trajectory_builder import (
-    _MAIN_AUTHOR_SYSTEM, _MAIN_REASONING_CRITIC_SYSTEM, _history_batch,
+    _MAIN_DECISION_AUTHOR_SYSTEM, _MAIN_REASONING_CRITIC_SYSTEM, _history_batch,
     _as_public,
 )
 
@@ -311,14 +314,27 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                     "main_visible_justification":
                         req["main_visible_justification"],
                 } for req in plan["evidence_requests"]]
+                # Compile only the facts Main could read in its current
+                # O1 history. A private planner's VERIFY label alone cannot
+                # establish a contradiction: Result/Summary must differ in
+                # one delivered public Sub-Agent report.
+                decision_contract = build_main_decision_contract(
+                    entries, visible_goals, number_of_tasks=len(assignments),
+                )
                 action, status = author_delegate_action(
                     assignments=assignments, prompt=prompt,
                     author=author, critic=critic,
                     max_revisions=max_revisions,
-                    author_system=_MAIN_AUTHOR_SYSTEM,
+                    author_system=_MAIN_DECISION_AUTHOR_SYSTEM,
                     critic_system=_MAIN_REASONING_CRITIC_SYSTEM,
                     freeze_assignment_prose=True,
                     reasoning_goals=visible_goals,
+                    decision_contract=decision_contract,
+                    critic_conflict_objection=(
+                        lambda review: critic_denies_confirmed_conflict(
+                            review, decision_contract,
+                        )
+                    ),
                     reasoning_guard=(
                         lambda text: reasoning_evidence_issues(text, visible_goals)
                     ) if author is not None else None,

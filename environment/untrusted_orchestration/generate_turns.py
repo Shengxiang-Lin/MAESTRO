@@ -72,6 +72,7 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "event_scheduler.py", "scenario_generator.py",
         "candidate_exploration.py", "candidate_selection.py",
         "evidence_affordances.py", "reasoning_fidelity.py",
+        "main_decision_contract.py",
         "report_contract.py", "report_evidence.py",
         "report_validation.py", "public_language.py",
         "publication_guard.py",
@@ -280,6 +281,11 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     contract_mandatory_facts = 0
     contract_optional_summary_omitted = 0
     witnessed_report_reviews = 0
+    main_decision_contract_reviews = 0
+    main_decision_contract_accepted = 0
+    main_confirmed_visible_conflicts = 0
+    main_locked_visible_fact_anchors = 0
+    main_conflict_critic_rereviews = 0
     witnessed_report_fallbacks = 0
     witness_critic_rereviews = 0
     retained_language_exceptions = 0
@@ -474,6 +480,22 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 result = review["authoring"]
                 main_modes[result["mode"]] += 1
                 main_statuses[result.get("status", "unknown")] += 1
+                contracted = result.get("decision_contract_version") == "v10_4"
+                main_decision_contract_reviews += bool(contracted)
+                main_decision_contract_accepted += (
+                    bool(contracted) and result.get("status") == "accepted"
+                )
+                main_confirmed_visible_conflicts += (
+                    result.get("confirmed_visible_conflicts", 0)
+                    if contracted else 0
+                )
+                main_locked_visible_fact_anchors += (
+                    bool(result.get("locked_visible_fact_core_applied"))
+                    if contracted else 0
+                )
+                main_conflict_critic_rereviews += bool(
+                    contracted and result.get("critic_conflict_rereviewed")
+                )
             reviewed_main = {
                 item["round"]: item["authoring"]
                 for item in audit.get("main_action_reviews", [])
@@ -630,6 +652,11 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "subagent_report_generation_modes": dict(report_modes),
         "subagent_report_review_statuses": dict(report_statuses),
         "subagent_executor_result_normalized": executor_normalized_results,
+        "main_decision_contract_reviews": main_decision_contract_reviews,
+        "main_decision_contract_accepted": main_decision_contract_accepted,
+        "main_confirmed_visible_conflicts": main_confirmed_visible_conflicts,
+        "main_locked_visible_fact_anchors": main_locked_visible_fact_anchors,
+        "main_conflict_critic_rereviews": main_conflict_critic_rereviews,
         "subagent_fact_contract_reports": contract_reports_reviewed,
         "subagent_fact_contract_accepted": contract_reports_accepted,
         "subagent_contract_results_compiled": contract_results_compiled,
@@ -1368,7 +1395,7 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_3_1",
+        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_4",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
         "max_candidates_per_feedback_round": max_candidates_per_round,

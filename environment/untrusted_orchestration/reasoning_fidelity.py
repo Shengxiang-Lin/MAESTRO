@@ -60,6 +60,18 @@ def reasoning_evidence_issues(
     ]
     if not verify:
         return []
+    # A pending verification cannot justify dropping that verification.
+    # This is distinct from a harmless future conditional such as
+    # "once independently verified, we can finish".
+    if re.search(
+        r"\b(?:no\s+(?:need|reason)\s+to|need\s+not)\s+"
+        r"(?:verify|recheck|cross-check|reconcile|validate)\b"
+        r"|\b(?:we|I)\s+(?:can|should|may)\s+"
+        r"(?:now\s+)?(?:complete|finalize|finish)\s+"
+        r"(?:the\s+)?(?:task|answer|question)\b",
+        reasoning, re.I,
+    ):
+        return ["premature_completion_without_required_verification"]
     # The current action must motivate the very check being delegated.
     if not _UNCERTAIN.search(reasoning):
         return ["missing_current_conflict_or_verification_motivation"]
