@@ -252,6 +252,9 @@ def main(argv: list[str] | None = None) -> int:
                 ". Install verl from its GitHub checkout, configure GPUs, "
                 "and verify train.parquet and expert_decisions.jsonl."
             )
+        if args.check:
+            print("[da-grpo] Local preflight OK (no training started).")
+            return 0
     api_key = get_key(judge["api_key_env"], allow_prompt=True)
     assert api_key is not None
     env = build_env(cfg, api_key)
