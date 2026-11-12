@@ -99,6 +99,61 @@ It also does not add optional verification sources to Stage 1 or create
 an online agent evaluation environment. A private Gold comparison
 decides data publication eligibility, never the next Main action.
 
+## V10.3: evidence-first report contract and modular 4B
+
+V10.3 deliberately **does not split Stage 3 and Stage 4**. Stage 4
+continues to fork an accepted Stage-3 episode and use the same 4A
+replay, execution state, failure modes and input layout.
+
+4B now has four separately named responsibilities:
+
+- `report_evidence.py`: high-precision, complete-step observable
+  discrepancies; sampled previews support only positive observations,
+  never absence claims.
+- `report_contract.py`: builds a code-owned `fact_spine` from the
+  current executed attempt: executed steps, final delivered rows/status,
+  unresolved/null fields, and provable handoff discrepancies. For
+  partial reports, intermediate observations can be acknowledged but
+  can never fill a final null field.
+- `report_validation.py`: deterministic guard for Author claims
+  against the actual current attempt, never Gold. Wrong final values,
+  unsupported IDs and invented operations remain rejections.
+- `report_author.py`: language naturalization and a narrower Critic
+  on model-authored additions. The Author's raw claims pass the
+  deterministic Guard *before* fact clauses are inserted. The final
+  result text is rendered from the actual delivered WorkProduct; the
+  report's natural summary/trace still require explicit LLM/Critic
+  acceptance. A fallback is not promoted as positive SFT.
+
+Deliberately untrusted `report_fault_kind` paths bypass faithful
+naturalization. The reporter MUST NOT silently repair fabricated
+Sub-Agent claims before Main observes them.
+
+For evaluation clarity, the reserve-candidate ranking is restored
+to the **V10.1 causal recovery priority and behavior-signature
+deduplication**; V10.2's separate fault-name diversity reorder is
+retired. New diagnostics include
+`subagent_fact_contract_reports`,
+`subagent_fact_contract_accepted`,
+`subagent_fact_clauses_compiled`, and
+`subagent_optional_summary_omitted`.
+
+The two version-suffixed test suites were replaced by functionally
+named suites `test_untrusted_report_contract.py` and
+`test_untrusted_reasoning_backfill.py`. The now-obsolete V10.2
+fault-name-diversity test was removed. Existing broad orchestration
+regressions remain intact.
+
+Run in a fresh output directory, without replacing the V10.1/V10.2
+artifacts:
+
+```bash
+python -m environment generate-untrusted-turns \
+  --config environment/configs/untrusted_orchestration.yaml \
+  --mode llm \
+  --output-dir environment/data/maestro_untrusted_rounds_v10_3
+```
+
 ## V10.2: report handoff fidelity and retained recovery audits
 
 Stage 4A evidence replay and the trusted Stage 1–3 inputs remain frozen.

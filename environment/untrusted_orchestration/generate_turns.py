@@ -72,7 +72,8 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "event_scheduler.py", "scenario_generator.py",
         "candidate_exploration.py", "candidate_selection.py",
         "evidence_affordances.py", "reasoning_fidelity.py",
-        "report_observation.py", "public_language.py",
+        "report_contract.py", "report_evidence.py",
+        "report_validation.py", "public_language.py",
         "publication_guard.py",
         "state_machine.py", "report_author.py",
         "trajectory_builder.py", "generate_turns.py",
@@ -272,6 +273,10 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     report_guard_failures = Counter()
     report_review_failures = Counter()
     executor_normalized_results = 0
+    contract_reports_reviewed = 0
+    contract_reports_accepted = 0
+    contract_mandatory_facts = 0
+    contract_optional_summary_omitted = 0
     witnessed_report_reviews = 0
     witnessed_report_fallbacks = 0
     witness_critic_rereviews = 0
@@ -426,6 +431,18 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 report_statuses[result.get("status", "unknown")] += 1
                 executor_normalized_results += bool(
                     result.get("executor_result_normalized")
+                )
+                is_contract = result.get("report_contract_version") == "v10_3"
+                contract_reports_reviewed += bool(is_contract)
+                contract_reports_accepted += (
+                    bool(is_contract) and result.get("status") == "accepted"
+                )
+                contract_mandatory_facts += (
+                    result.get("mandatory_fact_clauses", 0)
+                    if is_contract else 0
+                )
+                contract_optional_summary_omitted += bool(
+                    result.get("optional_summary_omitted_due_to_length")
                 )
                 witnessed = bool(
                     result.get("observed_handoff_discrepancy_count", 0)
@@ -606,6 +623,11 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "subagent_report_generation_modes": dict(report_modes),
         "subagent_report_review_statuses": dict(report_statuses),
         "subagent_executor_result_normalized": executor_normalized_results,
+        "subagent_fact_contract_reports": contract_reports_reviewed,
+        "subagent_fact_contract_accepted": contract_reports_accepted,
+        "subagent_fact_clauses_compiled": contract_mandatory_facts,
+        "subagent_optional_summary_omitted":
+            contract_optional_summary_omitted,
         "subagent_reports_with_complete_step_discrepancy":
             witnessed_report_reviews,
         "subagent_complete_step_discrepancy_fallbacks":
@@ -1338,7 +1360,7 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_2",
+        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_3",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
         "max_candidates_per_feedback_round": max_candidates_per_round,
@@ -1350,7 +1372,7 @@ def generate_turns(
             output / "private" / "candidate_selection.jsonl"
         ),
         "candidate_backfill_diversity": (
-            "same_recovery_priority_distinct_fault_kind_first"
+            "v10_1_causal_recovery_rank_distinct_behavior"
         ),
         "evidence_affordance_diagnostics": str(
             output / "private" / "scene_evidence_affordances.jsonl"

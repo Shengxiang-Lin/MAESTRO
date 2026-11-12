@@ -185,35 +185,18 @@ def select_recovered_candidates(
             -row["decision_rounds_post_fork"],
             row["candidate_index"],
         ))
-        # Deduplicate behavior before diversity-aware backfill. Within
-        # the SAME causal recovery priority (e.g., visible verification),
-        # put a different fault/observation type ahead of repeated variants.
-        # Never move an easy Missing candidate ahead of a recoverable
-        # downstream invalidation just to satisfy a global quota.
-        seen_signatures = set()
-        distinct = []
+        # V10.3 restores the V10.1 causal rank as the control baseline.
+        # Distinct signatures remain available for language-review backfill.
+        # Reordering by fault name was not supported by V10.2 results;
+        # the planned evidence recovery behavior is the first priority.
+        seen = set()
         for candidate in eligible:
-            if candidate["behavior_signature"] in seen_signatures:
+            signature = candidate["behavior_signature"]
+            if signature in seen:
                 continue
-            seen_signatures.add(candidate["behavior_signature"])
-            distinct.append(candidate)
-        used_kinds: dict[str, set[str]] = defaultdict(set)
-        rank = 0
-        while distinct:
-            index = min(range(len(distinct)), key=lambda i: (
-                _PRIORITY.get(distinct[i]["category"], 99),
-                distinct[i]["atom_kind"] in used_kinds[
-                    distinct[i]["category"]
-                ],
-                i,
-            ))
-            candidate = distinct.pop(index)
-            rank += 1
-            candidate["recovery_rank"] = rank
-            used_kinds[candidate["category"]].add(
-                candidate["atom_kind"]
-            )
-            if rank <= max_selected_per_round:
+            seen.add(signature)
+            candidate["recovery_rank"] = len(seen)
+            if len(seen) <= max_selected_per_round:
                 chosen.add(candidate["candidate_index"])
     for row in rows:
         row["selected_for_language_review"] = (

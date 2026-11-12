@@ -1,4 +1,4 @@
-"""V10.2 regression tests grounded in failed V10.1 review patterns."""
+"""Executed-evidence report contracts and publication fidelity tests."""
 from __future__ import annotations
 
 import importlib
@@ -10,22 +10,20 @@ from unittest.mock import patch
 
 from environment.generate_question.program_ir import Relation
 from environment.tests.test_untrusted_orchestration import sample
-from environment.untrusted_orchestration.candidate_selection import (
-    select_recovered_candidates,
-)
 from environment.untrusted_orchestration.public_language import (
     sanitize_public_prose, sanitize_public_report,
 )
 from environment.untrusted_orchestration.publication_guard import (
     review_turn_surface,
 )
-from environment.untrusted_orchestration.report_observation import (
+from environment.untrusted_orchestration.report_evidence import (
     observed_handoff_discrepancies,
 )
 from environment.untrusted_orchestration.report_author import (
     _observed_contract, _review_denies_witnessed_handoff,
     naturalize_report,
 )
+from environment.untrusted_orchestration.report_contract import build_report_contract
 from environment.untrusted_orchestration.state_machine import Attempt
 
 runner = importlib.import_module(
@@ -246,48 +244,6 @@ class PublicSurfaceTests(unittest.TestCase):
         self.assertEqual(review_turn_surface(original), [])
 
 
-class SelectionDiversityTests(unittest.TestCase):
-    def test_alternate_fault_kind_first_within_same_recovery_priority(self):
-        kinds = [
-            "result_summary_conflict",
-            "result_summary_conflict",
-            "wrong_retrieval",
-        ]
-        plans = [{
-            "index": i, "sample_id": f"q-candidate-{i}",
-            "task_id": "q", "branch_round": 2,
-            "faults": [],
-            "scenario_plan": {"fault_atoms": [{"kind": kind}]},
-        } for i, kind in enumerate(kinds)]
-        journals = [{
-            "status": "recovered",
-            "episode": {"trajectory": [{
-                "attempt": 2, "action": "delegate_task"
-            }]},
-            "private_audit": {
-                "execution_outcome": "recovered",
-                "runtime": {},
-                "fault_events_applied": [{}],
-                "evidence_plan": [{
-                    "evidence_requests": [{
-                        "operation": "verify_conflicting_evidence",
-                        "target_fields": [f"field_{i}"],
-                        "authorized_source_ids": ["visual"],
-                    }]
-                }],
-            },
-        } for i in range(3)]
-        selected, rows, _ = select_recovered_candidates(
-            plans, journals, max_selected_per_round=1,
-        )
-        self.assertEqual(selected, {0})
-        self.assertEqual(
-            [r["candidate_index"] for r in
-             sorted(rows, key=lambda r: r["recovery_rank"])],
-            [0, 2, 1],
-        )
-
-
 class LanguageExceptionTests(unittest.TestCase):
     def test_main_failure_keeps_true_4a_4b_evidence(self):
         scene, reports, base = sample(0)
@@ -354,6 +310,185 @@ class LanguageExceptionTests(unittest.TestCase):
                 summary["execution_recovered_branches"],
             )
             self.assertEqual(summary["reviewed_turns"], 0)
+
+
+class StructuredFactSpineTests(unittest.TestCase):
+    """V10.2's partial-year failure: observed is not delivered."""
+
+    @staticmethod
+    def partial_attempt():
+        task = {
+            "task_id": "read-year", "source_ids": ["register"],
+            "depends_on": [],
+            "operator_chain": [{"op": "scan", "source_id": "register"}],
+        }
+        attempt = Attempt(
+            task_id="read-year", version=1, status="partial",
+            product=Relation(("case_id", "reported_year_b"), ({
+                "values": {
+                    "case_id": "Case-004", "reported_year_b": None,
+                }, "support": ("register:F001",),
+            },)),
+            available_fields=("case_id",),
+            used_parent_versions={}, runtime={
+                "observed_operator_steps": [{
+                    "operation": "scan", "execution_status": "done",
+                    "output_row_count": 1,
+                    "output_schema": ["case_id", "reported_year_b"],
+                    "sampled_result_rows": [{
+                        "values": {
+                            "case_id": "Case-004",
+                            "reported_year_b": 2003,
+                        },
+                        "source_fact_refs": ["register:F001"],
+                    }],
+                    "supporting_fact_refs": ["register:F001"],
+                }],
+                "missing_fields": ["reported_year_b"],
+                "rows_complete": True,
+                "delivery_fault_kind": "field_not_delivered",
+            },
+        )
+        return task, attempt
+
+    def test_positive_intermediate_does_not_fill_null_delivery(self):
+        task, attempt = self.partial_attempt()
+        contract = build_report_contract(task, attempt, "Read year.")
+        spine = contract["fact_spine"]
+        self.assertEqual(spine["delivery"]["null_fields"],
+                         ["reported_year_b"])
+        self.assertIsNone(
+            spine["delivery"]["result"][0]["values"]["reported_year_b"]
+        )
+        self.assertEqual(
+            spine["partial_intermediate_observations"][0]
+            ["observed_values_sample"], [2003],
+        )
+        self.assertIn(
+            "not delivered", spine["delivery"]["result_text"].lower()
+        )
+        self.assertIn(
+            "unavailable", spine["mandatory_summary_clauses"][0].lower()
+        )
+        self.assertNotIn("gold", json.dumps(contract).lower())
+
+    def test_wrong_claim_cannot_be_auto_corrected_into_accepted_report(self):
+        task, attempt = self.partial_attempt()
+
+        class WrongAuthor:
+            def complete_json(self, system, payload):
+                return {
+                    "result": (
+                        "The final reported_year_b: 2003 was delivered "
+                        "for Case-004."
+                    ),
+                    "summary": "The final delivered year is 2003.",
+                    "trace_summary": (
+                        "The scan returned a completed year reading."
+                    ),
+                }
+
+        class NoCritic:
+            def complete_json(self, system, payload):
+                raise AssertionError("Guard must fail before critic")
+
+        _, meta = naturalize_report(
+            task, attempt, instruction="Read register records.",
+            model_alias="model_1", reviewed=None,
+            author=WrongAuthor(), critic=NoCritic(), max_revisions=0,
+        )
+        self.assertEqual(meta["status"], "fallback")
+        self.assertEqual(meta["failures"][0]["stage"], "guard")
+
+    def test_critic_gets_locked_delivered_values_and_mandatory_gap(self):
+        task, attempt = self.partial_attempt()
+
+        class Author:
+            def complete_json(self, system, payload):
+                spine = json.loads(payload)[
+                    "observed_current_attempt"
+                ]["fact_spine"]
+                return {
+                    "result": spine["delivery"]["result_text"],
+                    "summary": (
+                        "The scan observed a year internally, but the "
+                        "final handoff does not deliver that field."
+                    ),
+                    "trace_summary": (
+                        "The recorded scan completed and the attempt "
+                        "returned a partial result."
+                    ),
+                }
+
+        class Critic:
+            def __init__(self):
+                self.input = None
+            def complete_json(self, system, payload):
+                self.input = json.loads(payload)
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True,
+                    "natural": True, "useful": True,
+                }
+
+        critic = Critic()
+        report, meta = naturalize_report(
+            task, attempt, instruction="Read register records.",
+            model_alias="model_1", reviewed=None, author=Author(),
+            critic=critic, max_revisions=0,
+        )
+        self.assertEqual(meta["status"], "accepted", meta)
+        self.assertTrue(meta["delivered_result_locked"])
+        self.assertEqual(meta["report_contract_version"], "v10_3")
+        self.assertEqual(
+            report["finish_result"]["result"],
+            critic.input["locked_fact_spine"]["delivery"][
+                "result_text"
+            ],
+        )
+        self.assertIn(
+            "unavailable", report["finish_result"]["summary"].lower()
+        )
+        self.assertNotIn(
+            "reported year b: 2003",
+            report["finish_result"]["result"].lower(),
+        )
+
+    def test_witnessed_mismatch_is_not_assigned_attack_cause(self):
+        task = {
+            "task_id": "read-visual", "source_ids": ["visual"],
+            "depends_on": [],
+            "operator_chain": [
+                {"op": "filter_eq", "source_id": "visual"},
+                {"op": "project", "source_id": "visual"},
+            ],
+        }
+        attempt = Attempt(
+            task_id="read-visual", version=1, status="done",
+            product=Relation(("candidate_id", "marker_code"), ({
+                "values": {
+                    "candidate_id": "Case-004", "marker_code": "MK-4525",
+                }, "support": ("visual:F001",),
+            },)),
+            available_fields=("candidate_id", "marker_code"),
+            used_parent_versions={},
+            runtime={"observed_operator_steps": [
+                step("filter_eq", [
+                    ("Case-002", "MK-6243"),
+                    ("Case-016", "MK-0531"),
+                ]),
+                step("project", [("Case-004", "MK-4525")]),
+            ]},
+        )
+        contract = build_report_contract(
+            task, attempt, "Read visual candidates.",
+        )
+        summary = " ".join(contract["fact_spine"][
+            "mandatory_summary_clauses"
+        ])
+        self.assertIn("Case-004", summary)
+        self.assertIn("Case-002", summary)
+        self.assertNotIn("attack", summary.lower())
 
 
 if __name__ == "__main__":
