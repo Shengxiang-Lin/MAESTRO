@@ -151,3 +151,40 @@ vLLM sleep/wake cycling, and actual Qwen Judge calls have **not**
 been executed from this environment. Verify `--check`, `--test-judge`
 and a one-update smoke test on the 96GB AutoDL instance before assuming
 the memory profile fits end-to-end.
+
+## RTX 6000D / SM120 (vLLM 0.32) initialization
+
+On the user's RTX 6000D (83.05 GiB), FlashInfer JIT was selected despite
+an incompatible CUDA toolkit and reported `FlashInfer requires GPUs with sm75
+or higher`. A separate CUDA Graph profiling/capture step exhausted device
+memory. The sole single-GPU config therefore uses:
+
+```yaml
+rollout:
+  attention_backend: TRITON_ATTN
+  enforce_eager: true
+  gpu_memory_utilization: 0.35
+  kv_cache_dtype: fp8
+```
+
+`TRITON_ATTN` is available in vLLM 0.32 and supports FP8 KV cache.
+`enforce_eager` avoids both CUDA Graph capture and torch.compile; expect
+slower rollout startup/throughput in exchange for compatibility. It does
+NOT disable vLLM sleep mode or modify GRPO / the O1 reward.
+
+```bash
+python -m unittest discover -s baseline/da-grpo -p 'test_*.py'
+python baseline/da-grpo/train.py --dry-run
+python baseline/da-grpo/train.py --max-updates 1 --max-response-tokens 512
+```
+
+If there are still architecture failures, distinguish `nvidia-smi`'s
+**driver** CUDA version from the **runtime/toolkit** CUDA versions:
+
+```bash
+python -c 'import torch; print("PyTorch CUDA:", torch.version.cuda)'
+nvcc --version
+```
+
+Avoid reinstalling CUDA, PyTorch or vLLM just to resolve a backend selection
+problem unless this conservative configuration also fails.
