@@ -1,0 +1,36 @@
+# MAESTRO Main-Agent SFT: single GPU / Unsloth LoRA + TRL SFTTrainer.
+# BF16 LoRA is the comparable default; enable load_in_4bit for QLoRA.
+version: 1
+
+paths:
+  model: base_models/Qwen3-8B
+  train_parquet: dataset/data/da-sft/train.parquet
+  eval_parquet: dataset/data/da-sft/eval.parquet
+  output_dir: baseline/da-sft/output
+
+model:
+  dtype: bfloat16
+  max_seq_length: 16384
+  max_prompt_tokens: 12288
+  load_in_4bit: false
+  lora_rank: 32
+  lora_alpha: 64
+  lora_dropout: 0.0
+  lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  eos_token: "<|im_end|>"
+
+training:
+  epochs: 2
+  max_steps: -1
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  optim: adamw_8bit
+  gradient_checkpointing: true
+  packing: false
+  bf16: true
+  save_steps: 100
+  logging_steps: 10
+  seed: 42
