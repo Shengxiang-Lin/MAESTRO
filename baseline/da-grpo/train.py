@@ -345,8 +345,9 @@ def train(cfg: dict, *, resume: str | None = None) -> None:
         max_lora_rank=model_cfg["lora_rank"],
         gpu_memory_utilization=rollout["gpu_memory_utilization"],
         max_num_seqs=rollout["max_num_seqs"],
-        kv_cache_dtype=rollout["kv_cache_dtype"],
-        attention_backend=rollout["attention_backend"],
+        # Unsloth exposes FP8 KV as float8_kv_cache, NOT kv_cache_dtype.
+        # The attention backend is selected through VLLM_ATTENTION_BACKEND.
+        float8_kv_cache=rollout["kv_cache_dtype"] == "fp8",
         enforce_eager=rollout["enforce_eager"],
     )
     if tokenizer.pad_token_id is None:
