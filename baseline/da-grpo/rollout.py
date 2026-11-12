@@ -96,10 +96,18 @@ class ColocatedRollout:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-    def sample(self, model: Any, prompt: list[int], *, n: int,
-               max_tokens: int, temperature: float, top_p: float) -> list[dict]:
+    def sample_batch(self, model: Any, prompts: list[list[int]], *, n: int,
+                     max_tokens: int, temperature: float,
+                     top_p: float) -> list[list[dict]]:
+        """Sample n candidates for EACH prompt in one vLLM.generate call.
+
+        vLLM schedules the prompts jointly within its max_num_seqs/KV-cache
+        limits. Every prompt's GRPO advantage must still be computed separately.
+        """
         from vllm import SamplingParams
         from vllm.lora.request import LoRARequest
+        if not prompts or any(not prompt for prompt in prompts):
+            raise ValueError("sample_batch requires nonempty prompt token sequences")
         if temperature != 1.0 or top_p != 1.0:
             raise ValueError("GRPO behavior logprobs require temperature=top_p=1")
         gc.collect()
@@ -108,8 +116,9 @@ class ColocatedRollout:
         self.version += 1
         adapter_dir = self.sync_dir / "current_adapter"
         model.save_pretrained(adapter_dir)
-        request = LoRARequest(f"maestro_o1_grpo_{self.version}",
-                              self.version, str(adapter_dir))
+        request = LoRARequest(
+            f"maestro_o1_grpo_{self.version}", self.version, str(adapter_dir),
+        )
         if self.sleeping:
             self.llm.wake_up()
             self.sleeping = False
@@ -119,41 +128,60 @@ class ColocatedRollout:
                 max_tokens=max_tokens, logprobs=1,
                 skip_special_tokens=True,
             )
-            results = self.llm.generate(
-                {"prompt_token_ids": prompt},
+            outputs = self.llm.generate(
+                [{"prompt_token_ids": prompt} for prompt in prompts],
                 sampling_params=params,
                 lora_request=request,
                 use_tqdm=False,
             )
-            generated = list(results[0].outputs)
-            if len(generated) != n:
-                raise RuntimeError(f"vLLM generated {len(generated)} != {n}")
-            out = []
-            for candidate in generated:
-                ids = list(map(int, candidate.token_ids))
-                entries = list(candidate.logprobs or [])
-                if len(ids) != len(entries):
-                    raise ValueError("vLLM logprobs do not align with token ids")
-                old = [sampled_logprob(item, token)
-                       for item, token in zip(entries, ids)]
-                end = json_prefix_end(self.tokenizer, ids)
-                if end is not None:
-                    ids, old = ids[:end], old[:end]
-                if not ids:
-                    raise ValueError("vLLM returned an empty completion")
-                out.append({
-                    "text": self.tokenizer.decode(
-                        ids, skip_special_tokens=True,
-                        clean_up_tokenization_spaces=False,
-                    ),
-                    "prompt_input_ids": prompt,
-                    "action_input_ids": ids,
-                    "old_log_probs": old,
-                    "json_complete": end is not None,
-                })
-            return out
+            if len(outputs) != len(prompts):
+                raise RuntimeError(
+                    f"vLLM returned {len(outputs)} prompt groups; expected {len(prompts)}"
+                )
+            groups = []
+            for prompt, response in zip(prompts, outputs):
+                generated = list(response.outputs)
+                if len(generated) != n:
+                    raise RuntimeError(
+                        f"vLLM generated {len(generated)} candidates; expected {n}"
+                    )
+                candidates = []
+                for candidate in generated:
+                    ids = list(map(int, candidate.token_ids))
+                    entries = list(candidate.logprobs or [])
+                    if len(ids) != len(entries):
+                        raise ValueError("vLLM logprobs do not align with token ids")
+                    old = [
+                        sampled_logprob(item, token)
+                        for item, token in zip(entries, ids)
+                    ]
+                    end = json_prefix_end(self.tokenizer, ids)
+                    if end is not None:
+                        ids, old = ids[:end], old[:end]
+                    if not ids:
+                        raise ValueError("vLLM returned an empty completion")
+                    candidates.append({
+                        "text": self.tokenizer.decode(
+                            ids, skip_special_tokens=True,
+                            clean_up_tokenization_spaces=False,
+                        ),
+                        "prompt_input_ids": prompt,
+                        "action_input_ids": ids,
+                        "old_log_probs": old,
+                        "json_complete": end is not None,
+                    })
+                groups.append(candidates)
+            return groups
         finally:
             self.sleep()
+
+    def sample(self, model: Any, prompt: list[int], *, n: int,
+               max_tokens: int, temperature: float, top_p: float) -> list[dict]:
+        """Backward-compatible single-prompt path."""
+        return self.sample_batch(
+            model, [prompt], n=n, max_tokens=max_tokens,
+            temperature=temperature, top_p=top_p,
+        )[0]
 
     def shutdown(self):
         self.sleep()

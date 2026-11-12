@@ -47,6 +47,59 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["rollout"]["max_prompt_tokens"], 24576)
         self.assertEqual(cfg["rollout"]["max_response_tokens"], 4096)
 
+    def test_batched_two_prompt_generation_preserves_group_boundaries(self):
+        from types import SimpleNamespace
+
+        class Tokenizer:
+            def decode(self, ids, **kwargs):
+                return "".join(chr(x) for x in ids)
+
+        fake = Mock()
+        sample = lambda: SimpleNamespace(
+            token_ids=[123, 125, 32],
+            logprobs=[{123: SimpleNamespace(logprob=-0.1)},
+                      {125: SimpleNamespace(logprob=-0.2)},
+                      {32: SimpleNamespace(logprob=-0.3)}],
+        )
+        fake.generate.return_value = [
+            SimpleNamespace(outputs=[sample() for _ in range(8)]),
+            SimpleNamespace(outputs=[sample() for _ in range(8)]),
+        ]
+        vllm = ModuleType("vllm")
+        vllm.SamplingParams = Mock()
+        lora = ModuleType("vllm.lora")
+        lora_request = ModuleType("vllm.lora.request")
+        lora_request.LoRARequest = Mock()
+        with TemporaryDirectory() as tmp, patch.dict(
+            sys.modules, {
+                "vllm": vllm,
+                "vllm.lora": lora,
+                "vllm.lora.request": lora_request,
+            },
+        ):
+            engine = rollout.ColocatedRollout(
+                "Qwen3-8B", Tokenizer(), {}, Path(tmp) / "sync",
+            )
+            engine.llm = fake
+            prompts = [[11, 12], [21, 22]]
+            groups = engine.sample_batch(
+                Mock(), prompts, n=8, max_tokens=32,
+                temperature=1.0, top_p=1.0,
+            )
+        self.assertEqual(len(groups), 2)
+        self.assertEqual([len(x) for x in groups], [8, 8])
+        self.assertEqual(groups[0][0]["prompt_input_ids"], prompts[0])
+        self.assertEqual(groups[1][0]["prompt_input_ids"], prompts[1])
+        self.assertEqual(groups[0][0]["action_input_ids"], [123, 125])
+        self.assertEqual(groups[0][0]["old_log_probs"], [-0.1, -0.2])
+        self.assertTrue(groups[0][0]["json_complete"])
+        self.assertEqual(fake.generate.call_count, 1)
+        self.assertEqual(fake.generate.call_args.args[0], [
+            {"prompt_token_ids": prompts[0]},
+            {"prompt_token_ids": prompts[1]},
+        ])
+        self.assertEqual(fake.sleep.call_count, 1)
+
     def test_blackwell_vllm_init_uses_triton_eager_and_sleep_mode(self):
         cfg = trainer.load_config()
         vllm_cfg = {**cfg["rollout"], "lora_rank": cfg["model"]["lora_rank"]}
@@ -64,6 +117,24 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(kwargs["kv_cache_dtype"], "fp8")
             self.assertTrue(kwargs["enable_sleep_mode"])
             self.assertEqual(kwargs["max_lora_rank"], 32)
+
+    def test_optional_two_prompt_mode_does_not_change_default_config(self):
+        import io
+        from contextlib import redirect_stdout
+
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(trainer.main(["--dry-run"]), 0)
+        # The experimental mode is opt-in and can use a separate output dir.
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(trainer.main([
+                "--dry-run", "--rollout-prompts", "2",
+                "--max-num-seqs", "16",
+                "--output-dir", "baseline/da-grpo/output_batch2_smoke",
+            ]), 0)
+        displayed = json.loads(out.getvalue())
+        self.assertEqual(displayed["prompts_per_batch"], 2)
+        self.assertEqual(displayed["max_num_seqs"], 16)
+        self.assertTrue(displayed["output_dir"].endswith("output_batch2_smoke"))
 
     def test_no_provider_key_is_stored_in_yaml(self):
         cfg = trainer.load_config()
@@ -84,6 +155,28 @@ class TestConfig(unittest.TestCase):
 
 
 class TestGRPO(unittest.TestCase):
+    def test_two_groups_keep_distinct_judge_targets(self):
+        judge = ModuleType("reward_fn")
+        judge.compute_score = Mock(
+            side_effect=lambda ds, text, answer, info: {
+                "score": 1.0 if text == answer else 0.0
+            },
+        )
+        groups = [[{"text": "X"}, {"text": "Y"}],
+                  [{"text": "Y"}, {"text": "Y"}]]
+        rows = [
+            {"data_source": "a", "reward_model": {"ground_truth": "X"},
+             "extra_info": {"sample_id": "p1"}},
+            {"data_source": "b", "reward_model": {"ground_truth": "Y"},
+             "extra_info": {"sample_id": "p2"}},
+        ]
+        with patch.dict(sys.modules, {"reward_fn": judge}):
+            scores = trainer.score_groups(groups, rows, 2)
+        self.assertEqual([[x["score"] for x in group] for group in scores],
+                         [[1.0, 0.0], [1.0, 1.0]])
+        self.assertAlmostEqual(sum(losses.group_advantages([1.0, 0.0])), 0.0)
+        self.assertEqual(losses.group_advantages([1.0, 1.0]), [0.0, 0.0])
+
     def test_group_advantages_zero_mean_and_constant(self):
         a = losses.group_advantages([0.0, 0.5, 1.0])
         self.assertAlmostEqual(sum(a), 0.0, places=5)

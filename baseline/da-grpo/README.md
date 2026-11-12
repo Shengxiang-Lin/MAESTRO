@@ -188,3 +188,70 @@ nvcc --version
 
 Avoid reinstalling CUDA, PyTorch or vLLM just to resolve a backend selection
 problem unless this conservative configuration also fails.
+
+## Optional experiment: two prompts in one vLLM rollout
+
+The default single-GPU training remains one Main-Agent prompt, eight
+candidates, and one optimizer step. An **opt-in** experimental mode
+submits **two prompts together** in a single `vLLM.generate()` call,
+with eight candidates per prompt (16 candidates total). The groups keep
+separate eight-candidate reward normalization and are backpropagated
+**sequentially, one candidate at a time**. The optimizer steps **once
+after both prompt groups** (or just one, if the other group's scores are
+all equal), so the sampled behavior policy does not change between the
+two groups.
+
+vLLM's `max_num_seqs` limits active *sequences*, not prompt groups.
+To allow 16 sampled sequences concurrently, try setting it to 16 for
+this short run. vLLM may still dynamically schedule requests because of
+the available KV memory, so this is not a promise of 2x throughput.
+The RTX 6000D profile retains TRITON_ATTN + eager and FP8 KV cache.
+
+**Do not run the experiment concurrently with the existing GPU training
+job.** Do not change the configuration of a running job. Use a separate
+output directory, because output/checkpoint and vLLM adapter sync files
+must not be shared between live experiments.
+
+```bash
+# Baseline: one prompt per rollout, original eight candidates
+python baseline/da-grpo/train.py \
+  --rollout-prompts 1 --max-updates 4 --max-response-tokens 1024 \
+  --output-dir baseline/da-grpo/output_batch1_bench
+
+# Opt-in: two different prompts and 16 candidates per rollout;
+# backprop is still streamed to control peak GPU memory
+python baseline/da-grpo/train.py \
+  --rollout-prompts 2 --max-num-seqs 16 --max-updates 2 \
+  --max-response-tokens 1024 \
+  --output-dir baseline/da-grpo/output_batch2_bench
+```
+
+The two runs target approximately four input prompts; **their random
+sample sets and optimizer update counts are not identical**.
+Compare `seconds_per_prompt`, `rollout_seconds`,
+`judge_seconds`, `backward_seconds`, reward diversity and GPU OOM/
+preemption, not just "seconds per optimizer step". For more rigorous
+benchmarking, compare more prompts with the same model checkpoint.
+
+Changing `--rollout-prompts` changes the effective optimizer batch size
+and therefore training dynamics. Checkpoint resume rejects a different
+batch size rather than silently mixing update schedules.
+
+## FlashAttention / other speed-related components
+
+The **training-side** Transformers model already loads with
+`attn_implementation="sdpa"`. PyTorch SDPA automatically selects a
+supported fused FlashAttention or other efficient CUDA backend for each
+operation; this does **not** require the external `flash-attn` package.
+Using `flash_attention_2` explicitly is a separate compatibility
+experiment, not an automatic guaranteed speed boost. Avoid pip
+installing incompatible FlashAttention/FlashInfer extensions into
+the known-working SM120 environment.
+
+The **rollout-side** vLLM attention backend is **TRITON_ATTN**, not
+the training-side PyTorch SDPA. That is intentional because the previous
+FlashInfer JIT path failed on this RTX 6000D + CUDA-toolkit installation.
+vLLM `enforce_eager=true` remains the safe setting until runtime
+compatibility and peak VRAM are measured. The Qwen3 Policy's default
+Thinking behavior and the original four-dimensional O1 reward remain
+unchanged in these batch-speed experiments.

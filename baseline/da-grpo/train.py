@@ -3,8 +3,8 @@
 
 Only policy GRPO + KL + the original four-dimension O1 reward. No verl,
 future latents, expert CE, CHORD, consequence heads or external Sub-Agents.
-One observation -> n candidates -> group-normalized advantages -> streamed
-single-candidate backward -> ONE optimizer update.
+One or two observations -> n candidates EACH -> independent group-relative
+advantages -> streamed single-candidate backward -> ONE optimizer update.
 """
 from __future__ import annotations
 
@@ -190,6 +190,8 @@ def show_config(cfg: dict) -> None:
         "mode": "single_gpu_lora_grpo",
         "backend": "torch_peft_vllm_no_verl",
         "group_size": cfg["rollout"]["group_size"],
+        "prompts_per_batch": cfg["rollout"].get("prompts_per_batch", 1),
+        "max_num_seqs": cfg["rollout"]["max_num_seqs"],
         "attention_backend": cfg["rollout"]["attention_backend"],
         "enforce_eager": cfg["rollout"]["enforce_eager"],
         "gpu_memory_utilization": cfg["rollout"]["gpu_memory_utilization"],
@@ -288,6 +290,39 @@ def score_group(candidates: list[dict], record: dict, workers: int) -> list[dict
     return scores
 
 
+def score_groups(groups: list[list[dict]], records: list[dict],
+                 workers: int) -> list[list[dict]]:
+    """Judge many prompt groups with one bounded worker pool."""
+    from reward_fn import compute_score
+
+    if len(groups) != len(records):
+        raise ValueError("Rollout groups and records must align")
+    flat = [
+        (candidate, record)
+        for candidates, record in zip(groups, records)
+        for candidate in candidates
+    ]
+
+    def score(entry):
+        candidate, record = entry
+        return compute_score(
+            record["data_source"], candidate["text"],
+            record["reward_model"].get("ground_truth", ""),
+            record["extra_info"],
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        values = list(pool.map(score, flat))
+    if any(not 0 <= float(item["score"]) <= 1 for item in values):
+        raise ValueError("Original O1 reward produced an out-of-range value")
+    result = []
+    start = 0
+    for group in groups:
+        result.append(values[start:start + len(group)])
+        start += len(group)
+    return result
+
+
 def learning_rate_schedule(optimizer, total_updates: int, warmup_ratio: float):
     import torch
     warmup = min(total_updates, int(total_updates * warmup_ratio))
@@ -304,6 +339,7 @@ def learning_rate_schedule(optimizer, total_updates: int, warmup_ratio: float):
 def save_state(
     output: Path, model, tokenizer, optimizer, scheduler,
     *, step: int, epoch: int, next_position: int,
+    rollout_prompts: int = 1,
 ) -> None:
     """Adapter + optimizer/scheduler, to resume at exactly the next observation."""
     import torch
@@ -321,10 +357,12 @@ def save_state(
         "step": step,
         "epoch": epoch,
         "next_position": next_position,
+        "rollout_prompts": rollout_prompts,
         "total_updates": scheduler.total_steps if hasattr(scheduler, "total_steps") else None,
     }, temp / "train_state.pt")
     (temp / "metadata.json").write_text(
-        json.dumps({"step": step, "epoch": epoch, "next_position": next_position}, indent=2),
+        json.dumps({"step": step, "epoch": epoch, "next_position": next_position,
+                    "rollout_prompts": rollout_prompts}, indent=2),
         encoding="utf-8",
     )
     if target.exists():
@@ -366,7 +404,8 @@ def train(cfg: dict, args) -> None:
     )
     update_limit = (
         args.max_updates if args.max_updates is not None
-        else tr["max_updates"] or len(rows) * tr["epochs"]
+        else tr["max_updates"]
+        or math.ceil(len(rows) / args.rollout_prompts) * tr["epochs"]
     )
     if update_limit < 1:
         raise ValueError("max_updates must be positive")
@@ -378,6 +417,10 @@ def train(cfg: dict, args) -> None:
     if resume:
         # Only load self-generated local trusted checkpoint files.
         state = torch.load(resume / "train_state.pt", map_location="cpu", weights_only=False)
+        if int(state.get("rollout_prompts", 1)) != args.rollout_prompts:
+            raise ValueError(
+                "Cannot resume checkpoint with a different --rollout-prompts value"
+            )
         optimizer.load_state_dict(state["optimizer"])
         scheduler.load_state_dict(state["scheduler"])
         step = int(state["step"])
@@ -400,102 +443,155 @@ def train(cfg: dict, args) -> None:
             indexes = list(range(len(rows)))
             random.Random(tr["seed"] + epoch).shuffle(indexes)
             first = start_position if epoch == start_epoch else 0
-            for position in range(first, len(indexes)):
+            for position in range(first, len(indexes), args.rollout_prompts):
                 if step >= update_limit:
                     break
-                record = rows[indexes[position]]
-                ids = prompt_ids(tokenizer, record["prompt"], rollout_cfg["max_prompt_tokens"])
+                positions = list(
+                    range(position, min(position + args.rollout_prompts, len(indexes)))
+                )
+                records = [rows[indexes[pos]] for pos in positions]
+                prompts = [
+                    prompt_ids(tokenizer, record["prompt"],
+                               rollout_cfg["max_prompt_tokens"])
+                    for record in records
+                ]
                 response_cap = (
                     args.max_response_tokens if args.max_response_tokens is not None
                     else rollout_cfg["max_response_tokens"]
                 )
-                if len(ids) + response_cap > rollout_cfg["max_model_len"]:
-                    raise ValueError("Prompt + response exceeds vLLM context")
-                if len(ids) + response_cap > tr["max_tokens_per_gpu"]:
-                    raise ValueError("Prompt + response exceeds training token budget")
+                if any(
+                    len(ids) + response_cap > rollout_cfg["max_model_len"]
+                    or len(ids) + response_cap > tr["max_tokens_per_gpu"]
+                    for ids in prompts
+                ):
+                    raise ValueError("Prompt + response exceeds context/backward budget")
 
                 started = time.monotonic()
                 model.eval()
-                candidates = engine.sample(
-                    model, ids,
-                    n=rollout_cfg["group_size"],
-                    max_tokens=response_cap,
+                candidates_groups = engine.sample_batch(
+                    model, prompts,
+                    n=rollout_cfg["group_size"], max_tokens=response_cap,
                     temperature=rollout_cfg["temperature"],
                     top_p=rollout_cfg["top_p"],
                 )
                 rollout_seconds = time.monotonic() - started
-                scores = score_group(candidates, record, cfg["judge"]["workers"])
-                utilities = [float(value["score"]) for value in scores]
-                advantages = group_advantages(utilities)
-                sample_id = record["extra_info"].get("sample_id", "")
-                last_position, last_epoch = position + 1, epoch
-                if not any(abs(value) > 1e-6 for value in advantages):
-                    skipped += 1
-                    print(json.dumps({
-                        "skip_uninformative_group": skipped,
-                        "sample_id": sample_id,
-                        "rewards": utilities,
-                    }), flush=True)
+                judge_started = time.monotonic()
+                scores_groups = score_groups(
+                    candidates_groups, records, cfg["judge"]["workers"],
+                )
+                judge_seconds = time.monotonic() - judge_started
+
+                # GRPO advantages are computed WITHIN each prompt's 8
+                # candidates, never pooled across unrelated prompt groups.
+                utilities_groups = [
+                    [float(x["score"]) for x in scores] for scores in scores_groups
+                ]
+                advantages_groups = [
+                    group_advantages(utilities) for utilities in utilities_groups
+                ]
+                active = [
+                    i for i, advantages in enumerate(advantages_groups)
+                    if any(abs(x) > 1e-6 for x in advantages)
+                ]
+                sample_ids = [
+                    record["extra_info"].get("sample_id", "") for record in records
+                ]
+                last_position, last_epoch = positions[-1] + 1, epoch
+                for i in range(len(records)):
+                    if i not in active:
+                        skipped += 1
+                        print(json.dumps({
+                            "skip_uninformative_group": skipped,
+                            "sample_id": sample_ids[i],
+                            "rewards": utilities_groups[i],
+                        }), flush=True)
+                if not active:
                     continue
 
-                # The GROUP denominator is common to every streamed candidate.
-                # No optimizer step (nor scheduler step) until all G backprops end.
-                global_action_tokens = sum(len(x["action_input_ids"]) for x in candidates)
                 optimizer.zero_grad(set_to_none=True)
                 model.train()
+                backward_started = time.monotonic()
                 loss_total = 0.0
                 kl_total = 0.0
                 logprob_mae = 0.0
-                for candidate, advantage in zip(candidates, advantages):
-                    actions = candidate["action_input_ids"]
-                    if len(ids) + len(actions) > tr["max_tokens_per_gpu"]:
-                        raise ValueError("Generated candidate exceeds backward token budget")
-                    ref = reference_log_probs(
-                        model, ids, actions,
-                        logits_chunk_size=model_cfg["logits_chunk_size"],
+                total_action_tokens = 0
+                total_json_complete = 0
+                all_rewards = []
+                # Normalization: give each useful prompt group equal weight,
+                # irrespective of its candidate-response token count.
+                for i in active:
+                    ids = prompts[i]
+                    candidates = candidates_groups[i]
+                    adv = advantages_groups[i]
+                    group_tokens = sum(len(x["action_input_ids"]) for x in candidates)
+                    total_action_tokens += group_tokens
+                    total_json_complete += sum(
+                        bool(x["json_complete"]) for x in candidates
                     )
-                    current = action_log_probs(
-                        model, ids, actions,
-                        logits_chunk_size=model_cfg["logits_chunk_size"],
-                    )
-                    old = torch.tensor(
-                        candidate["old_log_probs"], dtype=torch.float32,
-                        device=current.device,
-                    )
-                    if current.shape != old.shape or ref.shape != current.shape:
-                        raise ValueError("Candidate/new/reference logprobs misaligned")
-                    surrogate = clipped_grpo_loss(
-                        current, old, advantage,
-                        clip_range=tr["clip_range"],
-                        normalization_tokens=global_action_tokens,
-                    )
-                    penalty = low_var_kl(
-                        current, ref,
-                        normalization_tokens=global_action_tokens,
-                    )
-                    loss = surrogate + tr["kl_coef"] * penalty
-                    loss.backward()
-                    loss_total += float(loss.detach())
-                    kl_total += float(penalty.detach())
-                    logprob_mae += float((current.detach() - old).abs().sum())
-                    del ref, current, old, surrogate, penalty, loss
+                    all_rewards.extend(utilities_groups[i])
+                    for candidate, advantage in zip(candidates, adv):
+                        actions = candidate["action_input_ids"]
+                        if len(ids) + len(actions) > tr["max_tokens_per_gpu"]:
+                            raise ValueError("Generated candidate exceeds backward budget")
+                        ref = reference_log_probs(
+                            model, ids, actions,
+                            logits_chunk_size=model_cfg["logits_chunk_size"],
+                        )
+                        current = action_log_probs(
+                            model, ids, actions,
+                            logits_chunk_size=model_cfg["logits_chunk_size"],
+                        )
+                        old = torch.tensor(
+                            candidate["old_log_probs"], dtype=torch.float32,
+                            device=current.device,
+                        )
+                        if current.shape != old.shape or ref.shape != current.shape:
+                            raise ValueError("Candidate/new/reference logprobs misaligned")
+                        surrogate = clipped_grpo_loss(
+                            current, old, advantage,
+                            clip_range=tr["clip_range"],
+                            normalization_tokens=group_tokens,
+                        )
+                        penalty = low_var_kl(
+                            current, ref, normalization_tokens=group_tokens,
+                        )
+                        loss = (surrogate + tr["kl_coef"] * penalty) / len(active)
+                        loss.backward()
+                        loss_total += float(loss.detach())
+                        kl_total += float(penalty.detach()) / len(active)
+                        logprob_mae += float((current.detach() - old).abs().sum())
+                        del ref, current, old, surrogate, penalty, loss
+
                 torch.nn.utils.clip_grad_norm_(params, tr["max_grad_norm"])
                 optimizer.step()
                 scheduler.step()
                 step += 1
+                backward_seconds = time.monotonic() - backward_started
                 result = {
                     "step": step, "epoch": epoch,
-                    "sample_id": sample_id, "loss": loss_total,
-                    "kl": kl_total, "mean_reward": sum(utilities) / len(utilities),
-                    "min_reward": min(utilities), "max_reward": max(utilities),
-                    "group_size": len(candidates),
-                    "response_tokens_mean": global_action_tokens / len(candidates),
-                    "json_completed_rate": sum(bool(c["json_complete"]) for c in candidates) / len(candidates),
-                    "old_new_logprob_mae": logprob_mae / global_action_tokens,
-                    "rollout_seconds": round(rollout_seconds, 2),
-                    "total_seconds": round(time.monotonic() - started, 2),
-                    "lr": scheduler.get_last_lr()[0],
+                    "sample_id": sample_ids[0], "sample_ids": sample_ids,
+                    "prompt_batch_size": len(records),
+                    "active_prompt_groups": len(active),
                     "skipped_uninformative_groups": skipped,
+                    "loss": loss_total, "kl": kl_total,
+                    "mean_reward": sum(all_rewards) / len(all_rewards),
+                    "min_reward": min(all_rewards), "max_reward": max(all_rewards),
+                    "group_size": rollout_cfg["group_size"],
+                    "response_tokens_mean": (
+                        total_action_tokens / (len(active) * rollout_cfg["group_size"])
+                    ),
+                    "json_completed_rate": (
+                        total_json_complete / (len(active) * rollout_cfg["group_size"])
+                    ),
+                    "old_new_logprob_mae": logprob_mae / total_action_tokens,
+                    "rollout_seconds": round(rollout_seconds, 2),
+                    "judge_seconds": round(judge_seconds, 2),
+                    "backward_seconds": round(backward_seconds, 2),
+                    "total_seconds": round(time.monotonic() - started, 2),
+                    "seconds_per_prompt": round(
+                        (time.monotonic() - started) / len(records), 2,
+                    ),
+                    "lr": scheduler.get_last_lr()[0],
                 }
                 with metrics_path.open("a", encoding="utf-8") as file:
                     file.write(json.dumps(result, ensure_ascii=False) + "\n")
@@ -505,19 +601,19 @@ def train(cfg: dict, args) -> None:
                 if step % tr["save_every"] == 0:
                     save_state(
                         output_dir, model, tokenizer, optimizer, scheduler,
-                        step=step, epoch=epoch, next_position=position + 1,
+                        step=step, epoch=epoch, next_position=last_position,
+                        rollout_prompts=args.rollout_prompts,
                     )
             if step >= update_limit:
                 break
             start_position = 0
     finally:
         engine.shutdown()
-        # The last update must be persisted even if its scheduled save
-        # interval has not been reached.
         if step > 0:
             save_state(
                 output_dir, model, tokenizer, optimizer, scheduler,
                 step=step, epoch=last_epoch, next_position=last_position,
+                rollout_prompts=args.rollout_prompts,
             )
 
 
@@ -528,6 +624,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--test-judge", action="store_true")
     parser.add_argument("--max-updates", type=int, default=None)
+    parser.add_argument("--rollout-prompts", type=int, choices=(1, 2), default=1,
+                        help="Prompt groups sampled together; effective batch 1 or 2")
+    parser.add_argument("--max-num-seqs", type=int, default=None,
+                        help="vLLM concurrent sequence cap (8 or 16 recommended)")
+    parser.add_argument("--output-dir", type=Path, default=None,
+                        help="Separate run output; avoids overwriting live checkpoints")
     parser.add_argument("--max-response-tokens", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -535,7 +637,15 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--max-updates must be >=1")
     if args.max_response_tokens is not None and args.max_response_tokens < 1:
         parser.error("--max-response-tokens must be >=1")
+    if args.max_num_seqs is not None and args.max_num_seqs < 1:
+        parser.error("--max-num-seqs must be >=1")
     cfg = load_config(args.config)
+    if args.max_num_seqs is not None:
+        cfg["rollout"]["max_num_seqs"] = args.max_num_seqs
+    if args.output_dir is not None:
+        cfg["paths"]["output_dir"] = repo_path(args.output_dir)
+        cfg["rollout"]["sync_dir"] = cfg["paths"]["output_dir"] / "vllm_sync"
+    cfg["rollout"]["prompts_per_batch"] = args.rollout_prompts
     if args.dry_run:
         show_config(cfg)
         return 0
