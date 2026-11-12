@@ -19,7 +19,7 @@ from .report_contract import (
     build_report_contract, render_delivered_result,
 )
 from .report_validation import (
-    validate_report_draft, claim_tokens,
+    validate_report_draft, claim_tokens, _explicit_final_value_issues,
 )
 from .public_language import sanitize_public_prose
 from .state_machine import deterministic_report, Attempt
@@ -387,6 +387,14 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                 "trace_from_actual_execution":
                     contract["trace_from_actual_execution"],
                 "executor_result_normalized": result_normalized,
+                "report_contract_version": "v10_3",
+                "delivered_result_locked": True,
+                "mandatory_fact_clauses": len(
+                    contract["fact_spine"]["mandatory_summary_clauses"]
+                ),
+                "optional_summary_omitted_due_to_length": bool(
+                    candidate.get("_optional_summary_omitted_due_to_length")
+                ),
                 "review": decision,
                 "critic_boundary_rereviewed": scope_rereviewed,
                 "critic_witness_rereviewed": witness_rereviewed,
