@@ -155,7 +155,7 @@ def check_environment(cfg: dict) -> dict[str, bool]:
 
 
 def get_key(key_env: str, *, allow_prompt: bool) -> str | None:
-    key = os.environ.get(key_env) or os.environ.get("OPENAI_API_KEY")
+    key = os.environ.get(key_env)
     if key and key.strip():
         return key.strip()
     if not allow_prompt:
