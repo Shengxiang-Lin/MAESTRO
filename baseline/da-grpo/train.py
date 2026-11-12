@@ -628,10 +628,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--test-judge", action="store_true")
     parser.add_argument("--max-updates", type=int, default=None)
-    parser.add_argument("--rollout-prompts", type=int, choices=(1, 2), default=1,
-                        help="Prompt groups sampled together; effective batch 1 or 2")
+    parser.add_argument("--rollout-prompts", type=int, choices=(1, 2, 4), default=1,
+                        help="Prompt groups sampled together and accumulated per update")
     parser.add_argument("--max-num-seqs", type=int, default=None,
-                        help="vLLM concurrent sequence cap (8 or 16 recommended)")
+                        help="vLLM concurrent sequence cap, e.g. 8, 16 or 32")
     parser.add_argument("--decode-cuda-graph", action="store_true",
                         help="Capture small decode-only CUDA graphs for vLLM")
     parser.add_argument("--output-dir", type=Path, default=None,
@@ -655,7 +655,7 @@ def main(argv: list[str] | None = None) -> int:
             "mode": 0,  # Disable torch.compile.
             "cudagraph_mode": "FULL_DECODE_ONLY",
             "cudagraph_capture_sizes": [
-                size for size in (1, 2, 4, 8) if size <= rollout["max_num_seqs"]
+                size for size in (1, 2, 4, 8, 16, 32) if size <= rollout["max_num_seqs"]
             ],
         }
     if args.output_dir is not None:

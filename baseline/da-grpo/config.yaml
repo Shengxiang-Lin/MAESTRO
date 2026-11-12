@@ -49,7 +49,7 @@ rollout:
   sync_dir: baseline/da-grpo/output/vllm_sync
 
 training:
-  epochs: 5
+  epochs: 3
   max_updates: null
   learning_rate: 0.00005
   weight_decay: 0.01

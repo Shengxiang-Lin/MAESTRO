@@ -165,6 +165,18 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(displayed["max_num_seqs"], 16)
         self.assertTrue(displayed["output_dir"].endswith("output_batch2_smoke"))
 
+    def test_four_prompt_mode_enables_32_sequence_graph_capture(self):
+        with patch.object(trainer, "show_config") as show_config:
+            self.assertEqual(trainer.main([
+                "--dry-run", "--rollout-prompts", "4", "--max-num-seqs", "32",
+                "--decode-cuda-graph",
+            ]), 0)
+        cfg = show_config.call_args.args[0]["rollout"]
+        self.assertEqual(cfg["prompts_per_batch"], 4)
+        self.assertEqual(cfg["max_num_seqs"], 32)
+        self.assertEqual(cfg["compilation_config"]["cudagraph_capture_sizes"],
+                         [1, 2, 4, 8, 16, 32])
+
     def test_no_provider_key_is_stored_in_yaml(self):
         cfg = trainer.load_config()
         self.assertNotIn("sk-", cfg["_source"].read_text(encoding="utf-8"))

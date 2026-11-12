@@ -193,22 +193,19 @@ nvcc --version
 Avoid reinstalling CUDA, PyTorch or vLLM just to resolve a backend selection
 problem unless this conservative configuration also fails.
 
-## Optional experiment: two prompts in one vLLM rollout
+## Optional experiment: multiple prompts in one vLLM rollout
 
 The default single-GPU training remains one Main-Agent prompt, eight
-candidates, and one optimizer step. An **opt-in** experimental mode
-submits **two prompts together** in a single `vLLM.generate()` call,
-with eight candidates per prompt (16 candidates total). The groups keep
-separate eight-candidate reward normalization and are backpropagated
-**sequentially, one candidate at a time**. The optimizer steps **once
-after both prompt groups** (or just one, if the other group's scores are
-all equal), so the sampled behavior policy does not change between the
-two groups.
+candidates, and one optimizer step for an informative group. The optional
+`--rollout-prompts 2` and `--rollout-prompts 4` modes submit two or four
+prompts in one `vLLM.generate()` call, with eight candidates per prompt.
+Each group keeps its own reward normalization. The optimizer steps once
+after backpropagating the informative groups, one candidate at a time.
 
 vLLM's `max_num_seqs` limits active *sequences*, not prompt groups.
-To allow 16 sampled sequences concurrently, try setting it to 16 for
-this short run. vLLM may still dynamically schedule requests because of
-the available KV memory, so this is not a promise of 2x throughput.
+Use `--max-num-seqs 16` or `--max-num-seqs 32` to test those concurrency
+limits. With `--decode-cuda-graph`, capture sizes extend to the chosen
+limit, up to 32. Available KV memory also affects scheduling.
 The RTX 6000D profile uses TRITON_ATTN, decode-only CUDA Graphs, and FP8 KV cache.
 
 **Do not run the experiment concurrently with the existing GPU training
@@ -225,7 +222,7 @@ python baseline/da-grpo/train.py \
 # Opt-in: two different prompts and 16 candidates per rollout;
 # backprop is still streamed to control peak GPU memory
 python baseline/da-grpo/train.py \
-  --rollout-prompts 2 --max-num-seqs 16 --max-updates 2 \
+  --rollout-prompts 2 --max-num-seqs 16 --decode-cuda-graph --max-updates 2 \
   --max-response-tokens 1024 \
   --output-dir baseline/da-grpo/output_batch2_bench
 ```
