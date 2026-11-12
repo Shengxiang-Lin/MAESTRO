@@ -99,6 +99,53 @@ It also does not add optional verification sources to Stage 1 or create
 an online agent evaluation environment. A private Gold comparison
 decides data publication eligibility, never the next Main action.
 
+## V10.4.1: fix live O1 history report schema in 4C
+
+The V10.4 full run exposed a **real 4C adapter bug**, not a lack
+of Result/Summary conflicts: the Main Decision Contract expected raw
+Sub-Agent `finish_result` objects, but the actual `_history_batch()`
+produces **flattened** `status`, `result`, `summary`, and
+`trace_summary` via `public_history_item()`.
+
+Therefore V10.4 wrongly marked returned normal reports as
+`missing_finish_result` and produced zero
+`main_confirmed_visible_conflicts`, zero fact anchors, and zero
+independent false-denial re-reviews despite visible contradictions.
+
+**Fix:** `main_decision_contract._visible_finish()` reads the O1
+flattened schema directly and continues to accept nested raw reports
+from older diagnostics and fixtures. A returned flat report is *never*
+classified missing solely for lacking a `finish_result` wrapper.
+Confirmed conflicts still require two **explicit, different values
+in the same Main-visible Result and Summary**; the internal planner
+or injected-fault label alone cannot authenticate the discrepancy.
+
+The test suite now calls the production `_history_batch()` and
+`public_history_item()` to build its inputs, including real V10.4
+failure phrasings (year 1999 vs 2017, metric 90 vs 21), multi-agent
+returns, missing/partial statuses, an older conflict followed by a
+clean new return, and an erroneous Critic denial. The independent
+re-review remains fail-closed; it does **not** automatically pass.
+
+No Stage 1–3, 4A/4B, candidate ranking, LLM authoring output format,
+delegation, or publication policy was changed. The V10.4 output
+remains unmodified and should not be interpreted as having benefited
+from this fix. Run a new output directory:
+
+```bash
+python -m environment generate-untrusted-turns \
+  --config environment/configs/untrusted_orchestration.yaml \
+  --mode llm \
+  --output-dir environment/data/maestro_untrusted_rounds_v10_4_1
+```
+
+Compare `main_confirmed_visible_conflicts`,
+`main_locked_visible_fact_anchors`,
+`main_conflict_critic_rereviews`, and
+`publication_main_action_failed` with V10.4. A higher acceptance
+rate is not presumed: independently verified *correctness* and
+faithfulness remain required for final training data.
+
 ## V10.4: Main-visible evidence contract for Stage 4C
 
 This change is scoped to **Stage 4C Main reasoning**. It does **not**

@@ -1,4 +1,9 @@
-"""Main-visible evidence contract for 4C. No hidden execution state."""
+"""Main-visible evidence contract for 4C, grounded in public O1 history.
+
+Read the flattened public_history_item() report emitted by _history_batch();
+raw Sub-Agent reports with nested finish_result remain supported for
+existing test fixtures and diagnostic callers. Never consume hidden Gold.
+"""
 from __future__ import annotations
 import json
 import re
@@ -34,6 +39,27 @@ def _field_value(text: str, field: str) -> str | None:
     return next(iter(matches)) if len(matches) == 1 else None
 
 
+def _visible_finish(report: dict) -> dict | None:
+    """Read the *actual O1 history schema*, with legacy raw-report support.
+
+    _history_batch() calls public_history_item(), which flattens the
+    Sub-Agent's finish_result into top-level status/result/summary fields.
+    The legacy raw report instead keeps those fields under finish_result.
+    Neither representation may imply a missing handoff merely because
+    the other representation's wrapper is absent.
+    """
+    nested = report.get("finish_result")
+    if isinstance(nested, dict):
+        return nested
+    if any(key in report for key in ("status", "result", "summary")):
+        return {
+            "status": report.get("status", "done"),
+            "result": report.get("result"),
+            "summary": report.get("summary"),
+        }
+    return None
+
+
 def build_main_decision_contract(history: list[dict], goals: list[dict],
                                  *, number_of_tasks: int) -> dict:
     """A verification request is not proof; confirm values in one public report."""
@@ -56,8 +82,8 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
     for position, report in enumerate(recent):
         if not isinstance(report, dict):
             continue
-        finish = report.get("finish_result")
-        if not isinstance(finish, dict):
+        finish = _visible_finish(report)
+        if finish is None:
             gaps.append({"report_index": position, "status": "missing_finish_result"})
             continue
         status = finish.get("status", "done")
