@@ -23,6 +23,11 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 DEFAULT_CONFIG = HERE / "config.yaml"
 
+# The dataset/tokenization package lives at the repository root. A path-launched
+# script has baseline/da-grpo in sys.path[0], not necessarily MAESTRO root.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 
 def repo_path(name: str | Path) -> Path:
     value = Path(name).expanduser()
