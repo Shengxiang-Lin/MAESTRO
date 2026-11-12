@@ -48,6 +48,38 @@ def digest(path: Path) -> str:
     return sha.hexdigest()
 
 
+def check_renderer_compatibility(expected_sha256: str | None, renderer: Path, source: str) -> None:
+    """Allow a verified historical docstring-only rename, not arbitrary code drift.
+
+    Stage 3/4 manifests hash source *bytes*, so a non-semantic documentation
+    change in o1_compat.py otherwise blocks valid, already-reviewed turns.
+    The allowed historical source is reconstructed byte-for-byte with only
+    the two verified documentation substitutions from PR #137. Comparing its
+    SHA256 with the saved manifest ensures no code change is silently ignored.
+    """
+    if not expected_sha256 or expected_sha256 == digest(renderer):
+        return
+    current = renderer.read_text(encoding="utf-8")
+    historical = current.replace(
+        "The on-disk per-turn reviewed-turn input stores",
+        "The on-disk per-turn SFT input stores",
+        1,
+    ).replace(
+        "Rebuild a full baseline O1 prompt for an exported compact reviewed-turn turn.",
+        "Rebuild a full baseline O1 prompt for an exported compact SFT turn.",
+        1,
+    )
+    if historical != current and sha256(historical.encode("utf-8")).hexdigest() == expected_sha256:
+        print(f"[dataset] {source}: verified O1 renderer docstring-only change; reusing existing turns.")
+        return
+    raise ValueError(
+        f"{source} prompt renderer changed semantically or its historical source "
+        f"cannot be verified. Expected SHA256={expected_sha256}, "
+        f"current SHA256={digest(renderer)}. "
+        "Use the matching historical code or regenerate the affected Main turns."
+    )
+
+
 def settings_for(turns_path: Path, scenes_path: Path, source: str) -> dict:
     manifest_path = turns_path.parent / "manifest.json"
     if not manifest_path.is_file():
@@ -59,8 +91,7 @@ def settings_for(turns_path: Path, scenes_path: Path, source: str) -> dict:
         # Match the version guard used by Stage 3's existing prompt exporter.
         code_hash = (manifest.get("code_sha256") or {}).get("o1_compat.py")
         renderer = ROOT / "environment/base_orchestration/o1_compat.py"
-        if code_hash and code_hash != digest(renderer):
-            raise ValueError(f"Stage 3 prompt renderer changed since {turns_path} was built")
+        check_renderer_compatibility(code_hash, renderer, "Stage 3")
     else:
         hashes = manifest.get("input_sha256") or []
         expected = hashes[0] if hashes else None
@@ -69,8 +100,7 @@ def settings_for(turns_path: Path, scenes_path: Path, source: str) -> dict:
             "../base_orchestration/o1_compat.py"
         )
         renderer = ROOT / "environment/base_orchestration/o1_compat.py"
-        if code_hash and code_hash != digest(renderer):
-            raise ValueError(f"Stage 4 prompt renderer changed since {turns_path} was built")
+        check_renderer_compatibility(code_hash, renderer, "Stage 4")
     if expected is None:
         raise ValueError(f"Manifest is missing source Scene hash: {manifest_path}")
     if digest(scenes_path) != expected:
