@@ -171,6 +171,8 @@ def select_recovered_candidates(
     for row in rows:
         groups[(row["question_id"], row["feedback_round"])].append(row)
     chosen = set()
+    for row in rows:
+        row["recovery_rank"] = None
     for group in groups.values():
         eligible = [
             row for row in group
@@ -185,14 +187,15 @@ def select_recovered_candidates(
         ))
         seen = set()
         for candidate in eligible:
-            if len([x for x in group if x["candidate_index"] in chosen]) >= (
-                max_selected_per_round
-            ):
-                break
             if candidate["behavior_signature"] in seen:
                 continue
-            chosen.add(candidate["candidate_index"])
             seen.add(candidate["behavior_signature"])
+            # Preserve the ranked reserve pool without selecting it for
+            # expensive language review yet. V10.1 can backfill a rejected
+            # first candidate from these already-simulated recoveries.
+            candidate["recovery_rank"] = len(seen)
+            if len(seen) <= max_selected_per_round:
+                chosen.add(candidate["candidate_index"])
     for row in rows:
         row["selected_for_language_review"] = (
             row["candidate_index"] in chosen

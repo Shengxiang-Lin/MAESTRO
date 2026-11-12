@@ -26,7 +26,8 @@ generation:
   candidate_strategy: enumerate  # enumerate | sample_one
   max_candidates_per_round: 24    # hard cap on deterministic 4A trials
   max_distractors_per_fault: 2    # real alternate rows/claims, not invented facts
-  max_selected_per_round: 1      # expensive 4B/4C budget per feedback round
+  max_selected_per_round: 1      # target accepted reviews per feedback round
+  max_language_attempts_per_round: 3 # including primary; replacements only after review failure
   fault_modes: [missing, partial, wrong]  # legacy round_fork compatibility
   atomic_fault_kinds:
     - no_result

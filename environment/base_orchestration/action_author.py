@@ -511,6 +511,8 @@ def author_delegate_action(
     author_system: str | None = None,
     critic_system: str | None = None,
     freeze_assignment_prose: bool = False,
+    reasoning_goals: list[dict] | None = None,
+    reasoning_guard=None,
 ) -> tuple[dict | None, dict]:
     # Separate runtime-specific prose instructions from the shared O1
     # deterministic structure/Guard. Existing Base callers are unchanged.
@@ -539,6 +541,12 @@ def author_delegate_action(
                 "task instructions and contexts are already determined "
                 "by the evidence planner and cannot be revised here."
             )
+            if reasoning_goals is not None:
+                request["main_visible_evidence_requests"] = reasoning_goals
+                request["reasoning_obligation"] = (
+                    "Explain unresolved evidence requests as unresolved. "
+                    "Never claim a pending cross-check already succeeded."
+                )
         try:
             candidate = author.complete_json(
                 author_system, json.dumps(request, ensure_ascii=False)
@@ -604,6 +612,14 @@ def author_delegate_action(
         if errors:
             failures.append({"stage": "guard", "errors": errors})
             continue
+        if freeze_assignment_prose and reasoning_guard is not None:
+            semantic_errors = reasoning_guard(candidate["reasoning"])
+            if semantic_errors:
+                failures.append({
+                    "stage": "evidence_reasoning_guard",
+                    "errors": semantic_errors,
+                })
+                continue
         try:
             if freeze_assignment_prose:
                 # The LLM critic must not attempt to rewrite frozen
@@ -620,6 +636,7 @@ def author_delegate_action(
                         "needs_upstream": item["needs_upstream"],
                     } for item in assignments],
                     "candidate_reasoning_only": candidate["reasoning"],
+                    "main_visible_evidence_requests": reasoning_goals or [],
                     "assignment_contract_validated_by_code": True,
                     "review_scope": (
                         "Grounded Main reasoning, motivation for the "
@@ -655,6 +672,40 @@ def author_delegate_action(
                 "stage": "critic_backend", "reason": str(exc)[:200],
             })
             continue
+        if freeze_assignment_prose and reasoning_goals and (
+            not _critic_review_passes(review)
+        ):
+            # A critic can misread a delivered Result/Summary conflict as
+            # identical values. A second *independent* review is permitted
+            # only for this precise evidence-observability disagreement.
+            critique = (str(review.get("reason", "")) + " " +
+                        str(review.get("repair_hint", ""))).casefold()
+            if (any(g.get("operation") == "verify_conflicting_evidence"
+                    for g in reasoning_goals)
+                    and any(word in critique for word in (
+                        "no conflict", "no discrepancy", "no mismatch",
+                        "both the result", "invented discrepancy",
+                        "fabricated discrepancy", "does not exist",
+                    ))):
+                try:
+                    review = critic.complete_json(
+                        critic_system + (
+                            "\nSECOND INDEPENDENT REVIEW: The listed "
+                            "evidence requests record a discrepancy grounded "
+                            "in delivered Sub-Agent feedback. Compare the "
+                            "exact field values and Result/Summary text in "
+                            "the visible prompt and evidence request. Do "
+                            "not assume the values agree. Still fail any "
+                            "unsupported or overconfident reasoning.\n"
+                        ),
+                        json.dumps(review_payload, ensure_ascii=False),
+                    )
+                except Exception as exc:
+                    failures.append({
+                        "stage": "critic_conflict_rereview_backend",
+                        "reason": str(exc)[:200],
+                    })
+                    continue
         if not freeze_assignment_prose and _review_only_frozen_tool_objection(review):
             try:
                 review = critic.complete_json(

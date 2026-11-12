@@ -22,6 +22,7 @@ from environment.base_orchestration.o1_compat import (
 from environment.base_orchestration.trajectory_builder import _strict_reports
 from environment.generate_question.program_ir import Relation
 from .report_author import naturalize_report
+from .reasoning_fidelity import reasoning_evidence_issues
 from .state_machine import Attempt
 from .trajectory_builder import (
     _MAIN_AUTHOR_SYSTEM, _MAIN_REASONING_CRITIC_SYSTEM, _history_batch,
@@ -274,6 +275,16 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                 _validate_evidence_dispatch(
                     plan, assignments, prompt=prompt,
                 )
+                # Both Author and Critic see the *observable* reason
+                # for a pending check, not merely a list of output fields.
+                # Without it the Critic can falsely deny a genuine
+                # Result/Summary discrepancy in the delivered reports.
+                visible_goals = [{
+                    "operation": req["operation"],
+                    "target_fields": list(req["target_fields"]),
+                    "main_visible_justification":
+                        req["main_visible_justification"],
+                } for req in plan["evidence_requests"]]
                 action, status = author_delegate_action(
                     assignments=assignments, prompt=prompt,
                     author=author, critic=critic,
@@ -281,6 +292,10 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                     author_system=_MAIN_AUTHOR_SYSTEM,
                     critic_system=_MAIN_REASONING_CRITIC_SYSTEM,
                     freeze_assignment_prose=True,
+                    reasoning_goals=visible_goals,
+                    reasoning_guard=(
+                        lambda text: reasoning_evidence_issues(text, visible_goals)
+                    ) if author is not None else None,
                 )
                 # The final Main instruction/context must be exactly the
                 # field-and-source-scoped 4A contract rebuilt against FINAL
