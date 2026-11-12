@@ -33,7 +33,9 @@ rollout:
   gpu_memory_utilization: 0.35
   max_num_seqs: 32
   kv_cache_dtype: fp8
-  attention_backend: TRITON_ATTN
+  # Unsloth's native fallback on NVIDIA SM120 selects FLASH_ATTN when
+  # FlashInfer is excluded. vLLM 0.32 does not honor VLLM_ATTENTION_BACKEND.
+  disable_flashinfer: true
   # Safe SM120 default; opt-in CUDA Graph tuning only after an end-to-end smoke test.
   enforce_eager: true
   standby: true

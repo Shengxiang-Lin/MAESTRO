@@ -85,7 +85,7 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
     expected = {"prompts_per_step", "num_generations", "max_prompt_tokens",
                 "max_completion_tokens", "temperature", "top_p",
                 "gpu_memory_utilization", "max_num_seqs", "kv_cache_dtype",
-                "attention_backend", "enforce_eager", "standby"}
+                "disable_flashinfer", "enforce_eager", "standby"}
     if set(rollout) != expected:
         raise ValueError("Invalid rollout configuration")
     for key in ("prompts_per_step", "num_generations", "max_prompt_tokens",
@@ -102,8 +102,8 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
         raise ValueError("Invalid vLLM memory fraction")
     if rollout["temperature"] != 1.0 or rollout["top_p"] != 1.0:
         raise ValueError("O1 reference sampling requires temperature=top_p=1")
-    if rollout["attention_backend"] != "TRITON_ATTN":
-        raise ValueError("RTX 6000D profile requires TRITON_ATTN (FlashInfer failed on SM120)")
+    if rollout["disable_flashinfer"] is not True:
+        raise ValueError("RTX 6000D profile must disable FlashInfer in Unsloth")
     if type(rollout["enforce_eager"]) is not bool or type(rollout["standby"]) is not bool:
         raise ValueError("Invalid rollout boolean")
 
@@ -165,6 +165,7 @@ def show_config(cfg: dict) -> None:
         "epochs": cfg["training"]["epochs"],
         "loss_type": cfg["training"]["loss_type"],
         "beta": cfg["training"]["kl_coef"],
+        "disable_flashinfer": cfg["rollout"]["disable_flashinfer"],
         "judge": {
             "model": cfg["judge"]["model"],
             "base_url": cfg["judge"]["base_url"],
@@ -264,8 +265,16 @@ def check_prompt_lengths(rows: list[dict], tokenizer: Any, limit: int) -> None:
 def configure_runtime(cfg: dict) -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
-    os.environ["VLLM_ATTENTION_BACKEND"] = cfg["rollout"]["attention_backend"]
-    os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
+    # Unsloth's vLLM loader can unconditionally re-enable the FlashInfer
+    # top-k/top-p sampler on SM120, overriding VLLM_USE_FLASHINFER_SAMPLER=0.
+    # UNSLOTH_VLLM_NO_FLASHINFER is Unsloth's supported hard opt-out: it
+    # disables the sampler AND excludes FlashInfer from attention selection
+    # (including worker subprocesses). Set this before importing Unsloth.
+    os.environ["UNSLOTH_VLLM_NO_FLASHINFER"] = "1"
+    os.environ["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
+    # Not a recognized setting in this vLLM 0.32.0 build: it was ignored
+    # and the installed default selected FLASHINFER despite TRITON_ATTN.
+    os.environ.pop("VLLM_ATTENTION_BACKEND", None)
     os.environ["UNSLOTH_VLLM_STANDBY"] = "1" if cfg["rollout"]["standby"] else "0"
 
 
@@ -322,6 +331,7 @@ def build_grpo_kwargs(cfg: dict) -> dict:
 
 def train(cfg: dict, *, resume: str | None = None) -> None:
     configure_runtime(cfg)
+    print("[da-grpo] Unsloth FlashInfer disabled for SM120; using vLLM native compatible attention/sampler", flush=True)
     import torch
     if torch.cuda.device_count() != 1 or not torch.cuda.is_bf16_supported():
         raise RuntimeError("Expected a single NVIDIA CUDA GPU with BF16 support")

@@ -53,12 +53,23 @@ python baseline/da-grpo/train.py --check
 Dependency solvers can upgrade CUDA/PyTorch/vLLM; record the versions
 from `python -m pip freeze` before running full training. **This
 migration has not yet been smoke-tested on RTX 6000D (SM120)**. The
-previous environment hit FlashInfer JIT issues; the new config
-explicitly forces vLLM `TRITON_ATTN`, keeps FP8 KV cache and starts
-with `enforce_eager: true`. If the JIT still reports
-`SM 12.x requires CUDA >= 12.9`, check `nvcc --version` versus
-`torch.version.cuda`. `nvidia-smi` displays the driver's supported
-CUDA version, not the compiler version.
+previous environment hit FlashInfer JIT issues. The Unsloth 2026.11.4
+runtime was observed to **override the sampler setting** and select
+FLASHINFER even though the config requested TRITON_ATTN; additionally,
+vLLM 0.32.0 reported `VLLM_ATTENTION_BACKEND` as an unknown environment
+variable. The current loader instead uses Unsloth's own
+`UNSLOTH_VLLM_NO_FLASHINFER=1` switch BEFORE importing Unsloth.
+This disables both the FlashInfer sampler and attention backend. Unsloth
+selects its compatible `FLASH_ATTN` fallback on supported NVIDIA GPUs.
+FP8 KV cache and `enforce_eager: true` are retained.
+
+If you still see `SM 12.x requires CUDA >= 12.9`, confirm that the
+installed `unsloth_zoo.vllm_utils` contains
+`UNSLOTH_VLLM_NO_FLASHINFER` and that the new training command is
+running in a fresh Python process. A CUDA 13.0 toolkit is already shown
+in the failing log, so the error can be an incompatible FlashInfer JIT
+architecture probe rather than an actually missing toolkit version.
+Avoid installing FlashInfer as a fix when the feature is not needed.
 
 ## Start
 
@@ -137,3 +148,29 @@ Official references:
 - https://huggingface.co/docs/trl/main/grpo_trainer
 - https://huggingface.co/docs/trl/vllm_integration
 - https://github.com/unslothai/notebooks (Qwen3-8B FP8 GRPO recipe)
+
+## RTX 6000D FlashInfer sampler regression (2026-11-12)
+
+Symptoms: the Judge/Unsloth checks succeed, model weights load, but
+initialization fails with `FlashInfer top-p/top-k sampling unavailable:
+SM 12.x requires CUDA >= 12.9`. The root cause is that Unsloth resets
+`VLLM_USE_FLASHINFER_SAMPLER=1` after MAESTRO previously set it to 0.
+
+The fix in `train.py:configure_runtime` sets the stronger
+`UNSLOTH_VLLM_NO_FLASHINFER=1` knob and clears unsupported
+`VLLM_ATTENTION_BACKEND` before the first Unsloth import.
+
+```bash
+git pull origin main
+python -m unittest discover -s baseline/da-grpo -p 'test_*.py'
+python baseline/da-grpo/train.py --dry-run
+python baseline/da-grpo/train.py --max-steps 1 --max-completion-tokens 512 \
+  --output-dir baseline/da-grpo/output_unsloth_smoke_retry
+```
+
+After restart, the vLLM backend should NOT say
+`Using FLASHINFER attention backend`. The Unsloth fallback typically
+selects `FLASH_ATTN`; another compatible native kernel may be used
+depending on its build. Confirm from the startup logs. The single-step
+training path has not been GPU-validated by the repository authoring
+environment.

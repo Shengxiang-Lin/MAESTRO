@@ -51,6 +51,20 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(opts["max_completion_length"], 4096)
         self.assertFalse(opts["vllm_importance_sampling_correction"])
 
+    def test_flashinfer_disabled_before_unsloth_import(self):
+        import os
+        cfg = train.load_config()
+        self.assertTrue(cfg["rollout"]["disable_flashinfer"])
+        with patch.dict(os.environ, {
+            "VLLM_ATTENTION_BACKEND": "TRITON_ATTN",
+            "VLLM_USE_FLASHINFER_SAMPLER": "1",
+            "UNSLOTH_VLLM_NO_FLASHINFER": "0",
+        }, clear=False):
+            train.configure_runtime(cfg)
+            self.assertEqual(os.environ["UNSLOTH_VLLM_NO_FLASHINFER"], "1")
+            self.assertEqual(os.environ["VLLM_USE_FLASHINFER_SAMPLER"], "0")
+            self.assertNotIn("VLLM_ATTENTION_BACKEND", os.environ)
+
     def test_invalid_batch_or_context_rejected(self):
         import tempfile
         import yaml
