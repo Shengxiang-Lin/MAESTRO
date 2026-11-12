@@ -1395,7 +1395,7 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_4",
+        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_4_1",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
         "max_candidates_per_feedback_round": max_candidates_per_round,

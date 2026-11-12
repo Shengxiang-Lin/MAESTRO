@@ -16,6 +16,9 @@ from environment.untrusted_orchestration.reasoning_fidelity import (
 from environment.untrusted_orchestration.publication_guard import (
     review_turn_surface,
 )
+from environment.untrusted_orchestration.trajectory_builder import _history_batch
+from environment.untrusted_orchestration.state_machine import public_history_item
+
 
 
 def goal(field: str, result: str, summary: str) -> dict:
@@ -338,6 +341,201 @@ class GuardedMainAuthorTests(unittest.TestCase):
         self.assertFalse(critic_denies_confirmed_conflict(
             {"verdict": "fail", "reason": "No conflict exists."}, unproven,
         ))
+
+
+def executed_report(*, result: str | None, summary: str | None,
+                    status: str = "done") -> dict:
+    """Representative post-4B report, before the real O1 history adapter."""
+    return {
+        "task_instruction": "Look up the requested field in the source.",
+        "model": "model_1", "steps_taken": 2,
+        "statistics": {"max_steps": 30},
+        "finish_result": ({
+            "status": status, "result": result, "summary": summary,
+        } if result is not None else None),
+        "trace_summary": "The assigned key lookup and projection completed.",
+    }
+
+
+class MainVisibleO1HistoryIntegrationTests(unittest.TestCase):
+    """Real _history_batch -> public_history_item -> contract, not fake nesting."""
+
+    def test_actual_000081_flattened_history_confirms_year_conflict(self):
+        raw = executed_report(
+            result='[{"exhibition_year": 1999}]',
+            summary=(
+                "The summary records exhibition year = 2017 "
+                "for the returned record."
+            ),
+        )
+        entry = _history_batch(5, [raw])
+        flat = entry["subtask_results"][0]
+        self.assertNotIn("finish_result", flat)
+        self.assertEqual(flat["result"], raw["finish_result"]["result"])
+        self.assertEqual(flat["summary"], raw["finish_result"]["summary"])
+        contract = build_main_decision_contract(
+            [entry], [goal("exhibition_year", "1999", "2017")],
+            number_of_tasks=1,
+        )
+        self.assertEqual(contract["visible_evidence"]["delivery_gaps"], [])
+        conflicts = contract["visible_evidence"][
+            "confirmed_result_summary_conflicts"
+        ]
+        self.assertEqual(
+            [(v["field"], v["result_value"], v["summary_value"])
+             for v in conflicts],
+            [("exhibition_year", "1999", "2017")],
+        )
+        self.assertIn("1999", contract["locked_visible_fact_core"])
+        self.assertIn("2017", contract["locked_visible_fact_core"])
+
+    def test_actual_000280_parallel_batch_identifies_only_metric_conflict(self):
+        raw = [
+            executed_report(
+                result='[{"case_id": "Case-006", "metric_a": 90}]',
+                summary=(
+                    "The summary records metric a = 21 "
+                    "for the returned record."
+                ),
+            ),
+            executed_report(
+                result="The lookup for Case-006 returned metric b = 25.",
+                summary="The metric b measurement is 25.",
+            ),
+        ]
+        entry = _history_batch(4, raw)
+        flat = entry["subtask_results"]
+        self.assertEqual(len(flat), 2)
+        self.assertFalse(any("finish_result" in item for item in flat))
+        contract = build_main_decision_contract(
+            [entry],
+            [
+                goal("case_id", "Case-006", "Case-006"),
+                goal("metric_a", "90", "21"),
+            ],
+            number_of_tasks=1,
+        )
+        conflicts = contract["visible_evidence"][
+            "confirmed_result_summary_conflicts"
+        ]
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["field"], "metric_a")
+        self.assertEqual(conflicts[0]["result_value"], "90")
+        self.assertEqual(conflicts[0]["summary_value"], "21")
+        self.assertEqual(contract["visible_evidence"]["delivery_gaps"], [])
+
+    def test_flat_missing_and_partial_not_spuriously_marked_missing_wrapper(self):
+        missing = executed_report(result=None, summary=None)
+        partial = executed_report(
+            result="The delivered record contains case id: Case-006, metric a: none.",
+            summary="The returned evidence is incomplete.",
+            status="partial",
+        )
+        entry = _history_batch(5, [missing, partial])
+        self.assertEqual([x["status"] for x in entry["subtask_results"]],
+                         ["missing", "partial"])
+        contract = build_main_decision_contract(
+            [entry],
+            [{
+                "operation": "complete_partial_evidence",
+                "target_fields": ["metric_a"],
+                "main_visible_justification": "The metric is not delivered.",
+            }],
+            number_of_tasks=1,
+        )
+        gaps = contract["visible_evidence"]["delivery_gaps"]
+        self.assertEqual(
+            [x["status"] for x in gaps],
+            ["missing", "partial"],
+        )
+        self.assertNotIn(
+            "missing_finish_result", [x["status"] for x in gaps],
+        )
+        self.assertEqual(contract["locked_visible_fact_core"], "")
+
+    def test_clean_latest_batch_does_not_inherit_old_conflict(self):
+        conflicted = _history_batch(3, [
+            executed_report(
+                result='[{"exhibition_year": 1999}]',
+                summary="The summary records exhibition year = 2017.",
+            ),
+        ])
+        repaired = _history_batch(4, [
+            executed_report(
+                result='[{"exhibition_year": 1999}]',
+                summary="The summary records exhibition year = 1999.",
+            ),
+        ])
+        contract = build_main_decision_contract(
+            [conflicted, repaired],
+            [goal("exhibition_year", "1999", "2017")],
+            number_of_tasks=1,
+        )
+        self.assertFalse(contract["visible_evidence"][
+            "confirmed_result_summary_conflicts"
+        ])
+        self.assertEqual(contract["visible_evidence"]["latest_round"], 4)
+
+    def test_false_critic_denial_from_real_o1_history_gets_rereview(self):
+        case = GuardedMainAuthorTests()
+        case.setUp()
+        case.contract = build_main_decision_contract(
+            [_history_batch(4, [
+                executed_report(
+                    result='[{"case_id": "Case-006", "metric_a": 90}]',
+                    summary=(
+                        "The summary records metric a = 21 "
+                        "for the returned record."
+                    ),
+                ),
+            ])],
+            [goal("metric_a", "90", "21")],
+            number_of_tasks=1,
+        )
+        case.goal = goal("metric_a", "90", "21")
+        case.assignments = [assignment("metric_a")]
+        denial = {
+            "verdict": "fail", "grounded": False,
+            "assignment_fidelity": False, "o1_style": False,
+            "reason": (
+                "The Author's reasoning invents a factual contradiction "
+                "between Result=90 and Summary=21."
+            ),
+            "repair_hint": "Use the Result directly.",
+        }
+        self.assertTrue(critic_denies_confirmed_conflict(denial, case.contract))
+        accepted, meta, _, critic = case.call(
+            [{"reasoning": (
+                "The reported metric is inconsistent, so the evidence "
+                "must be rechecked against the permitted source."
+            )}],
+            [denial, review_pass()],
+            max_revisions=0,
+        )
+        self.assertEqual(meta["status"], "accepted", meta)
+        self.assertTrue(meta["critic_conflict_rereviewed"])
+        self.assertEqual(len(critic.payloads), 2)
+        self.assertEqual(meta["confirmed_visible_conflicts"], 1)
+        self.assertIn("90", accepted["reasoning"])
+        self.assertIn("21", accepted["reasoning"])
+
+    def test_unproven_flat_history_does_not_trigger_special_rereview(self):
+        clean = _history_batch(2, [
+            executed_report(
+                result='[{"metric_a": 90}]',
+                summary="The metric a = 90 for the returned record.",
+            ),
+        ])
+        contract = build_main_decision_contract(
+            [clean], [goal("metric_a", "90", "21")],
+            number_of_tasks=1,
+        )
+        denial = {
+            "verdict": "fail",
+            "reason": "No conflict exists in the visible report.",
+            "repair_hint": "Do not invent a discrepancy.",
+        }
+        self.assertFalse(critic_denies_confirmed_conflict(denial, contract))
 
 
 if __name__ == "__main__":
