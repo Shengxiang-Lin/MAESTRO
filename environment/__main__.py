@@ -14,11 +14,7 @@ from .implement_subtask.config import (
 from .implement_subtask.pipeline import materialize_subtasks
 from .implement_subtask.naturalize import naturalize_subtasks
 from .implement_subtask.combined import generate_subagent_reports
-from .base_orchestration.config import (
-    DEFAULT_CONFIG as TRAJECTORY_CONFIG,
-    load_config as load_trajectory_config,
-    generate_from_config,
-)
+from .workflow import run_pipeline
 from .untrusted_orchestration.config import (
     DEFAULT_CONFIG as UNTRUSTED_CONFIG,
     load_config as load_untrusted_config,
@@ -29,9 +25,22 @@ from .untrusted_orchestration.config import (
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
         prog="python -m environment",
-        description="Generate Questions, trusted Sub-Agent reports and Main trajectories",
+        description="MAESTRO Stage 1 -> 2 -> 4 evidence and decision workflow",
     )
     sub = root.add_subparsers(dest="command", required=True)
+    workflow = sub.add_parser(
+        "run", help="Run Stage 1 -> Stage 2 -> Stage 4 end to end"
+    )
+    workflow.add_argument("--questions-config", type=Path,
+                          default=DEFAULT_CONFIG)
+    workflow.add_argument("--reports-config", type=Path,
+                          default=STAGE2_CONFIG)
+    workflow.add_argument("--untrusted-config", type=Path,
+                          default=UNTRUSTED_CONFIG)
+    workflow.add_argument("--mode", choices=("template", "llm"),
+                          default="llm")
+    workflow.add_argument("--max-scenes", type=int)
+    workflow.add_argument("--no-progress", action="store_true")
     generate = sub.add_parser("generate-questions",
                               help="Run the complete config-driven generation pipeline")
     generate.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -90,20 +99,6 @@ def parser() -> argparse.ArgumentParser:
         "--reuse-from", type=Path,
         help="Completed prior reporting directory: reuse accepted Macros, retry only rejected ones in a NEW output folder",
     )
-    trajectories = sub.add_parser(
-        "generate-main-turns",
-        help="Generate trusted Main-Agent decision trajectories",
-    )
-    trajectories.add_argument("--config", type=Path, default=TRAJECTORY_CONFIG)
-    trajectories.add_argument("--scenes", type=Path)
-    trajectories.add_argument("--reports", type=Path)
-    trajectories.add_argument("--output-dir", type=Path)
-    trajectories.add_argument("--max-scenes", type=int)
-    trajectories.add_argument("--workers", type=int)
-    trajectories.add_argument("--mode", choices=("llm", "template"))
-    trajectories.add_argument("--overwrite", action="store_true")
-    trajectories.add_argument("--no-progress", action="store_true")
-    trajectories.add_argument("--verbose-progress", action="store_true")
     untrusted = sub.add_parser(
         "generate-untrusted-turns",
         help="Branch trusted Main history at a returned Sub-Agent batch and simulate evidence failures",
@@ -111,7 +106,6 @@ def parser() -> argparse.ArgumentParser:
     untrusted.add_argument("--config", type=Path, default=UNTRUSTED_CONFIG)
     untrusted.add_argument("--scenes", type=Path)
     untrusted.add_argument("--reports", type=Path)
-    untrusted.add_argument("--base-episodes", type=Path)
     untrusted.add_argument("--output-dir", type=Path)
     untrusted.add_argument("--max-scenes", type=int)
     untrusted.add_argument("--branches-per-scene", type=int)
@@ -125,6 +119,20 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     p = parser()
     cli = p.parse_args(argv)
+    if cli.command == "run":
+        summary = run_pipeline(
+            questions_config=cli.questions_config,
+            reports_config=cli.reports_config,
+            orchestration_config=cli.untrusted_config,
+            mode=cli.mode, max_scenes=cli.max_scenes,
+            no_progress=cli.no_progress,
+        )
+        print(
+            "MAESTRO Stage 1->2->4: " + summary["status"]
+            + " | published Main turns: "
+            + str(summary["published_main_turns"])
+        )
+        return 0
     if cli.command == "implement-subtasks":
         options = load_stage2_config(cli.config)
         if cli.scenes is not None:
@@ -176,34 +184,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"subagent reports: {result['status']} | details: "
               f"{options['output_dir']}/summary.json")
         return 0 if result["status"] in {"done", "partial"} else 1
-    if cli.command == "generate-main-turns":
-        overrides = {}
-        for cli_name, option_name in (
-            ("scenes", "scenes_path"),
-            ("reports", "reports_path"),
-            ("output_dir", "output_dir"),
-            ("max_scenes", "max_scenes"),
-            ("workers", "workers"),
-            ("mode", "mode"),
-        ):
-            value = getattr(cli, cli_name)
-            if value is not None:
-                overrides[option_name] = value
-        for flag in ("overwrite", "no_progress", "verbose_progress"):
-            if getattr(cli, flag):
-                overrides[flag] = True
-        summary = generate_from_config(cli.config, **overrides)
-        target = overrides.get("output_dir") or load_trajectory_config(
-            cli.config
-        )["output_dir"]
-        print(f"base orchestration: {summary['status']} | details: "
-              f"{target}/summary.json")
-        return 0 if summary["status"] in {"done", "partial"} else 1
     if cli.command == "generate-untrusted-turns":
         overrides = {}
         for cli_name, option in (
             ("scenes", "scenes_path"), ("reports", "reports_path"),
-            ("base_episodes", "base_episodes_path"),
             ("output_dir", "output_dir"), ("max_scenes", "max_scenes"),
             ("branches_per_scene", "branches_per_scene"),
             ("workers", "workers"), ("mode", "mode"),

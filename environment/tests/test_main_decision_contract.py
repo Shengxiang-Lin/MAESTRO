@@ -96,8 +96,8 @@ class MainVisibleFactTests(unittest.TestCase):
         self.assertEqual(conflicts[0]["result_value"], "1999")
         self.assertEqual(conflicts[0]["summary_value"], "2017")
         self.assertEqual(contract["next_decision"]["action"], "delegate_task")
-        self.assertIn("1999", contract["locked_visible_fact_core"])
-        self.assertIn("2017", contract["locked_visible_fact_core"])
+        self.assertEqual(len(conflicts), 1)
+        self.assertNotIn("locked_visible_fact_core", contract)
         self.assertNotIn("gold", json.dumps(contract).lower())
         self.assertNotIn("teacher", json.dumps(contract).lower())
 
@@ -139,7 +139,7 @@ class MainVisibleFactTests(unittest.TestCase):
             self.assertEqual(
                 contract["visible_evidence"]["confirmed_result_summary_conflicts"], []
             )
-            self.assertEqual(contract["locked_visible_fact_core"], "")
+            self.assertNotIn("locked_visible_fact_core", contract)
 
     def test_old_conflict_not_promoted_after_new_clean_batch(self):
         h = history([
@@ -154,7 +154,7 @@ class MainVisibleFactTests(unittest.TestCase):
             number_of_tasks=1,
         )
         self.assertEqual(contract["visible_evidence"]["latest_round"], 4)
-        self.assertFalse(contract["locked_visible_fact_core"])
+        self.assertNotIn("locked_visible_fact_core", contract)
 
     def test_partial_missing_status_is_visible_not_a_verified_value(self):
         h = history([
@@ -172,7 +172,7 @@ class MainVisibleFactTests(unittest.TestCase):
         gaps = contract["visible_evidence"]["delivery_gaps"]
         self.assertEqual([g["status"] for g in gaps],
                          ["partial", "missing_finish_result"])
-        self.assertEqual(contract["locked_visible_fact_core"], "")
+        self.assertNotIn("locked_visible_fact_core", contract)
 
 
 class GuardedMainAuthorTests(unittest.TestCase):
@@ -220,7 +220,7 @@ class GuardedMainAuthorTests(unittest.TestCase):
         )
         return action, status, author, critic
 
-    def test_reasoning_only_author_uses_fixed_action_and_visible_fact_core(self):
+    def test_reasoning_only_author_uses_fixed_action_and_observed_conflict(self):
         action, status, author, critic = self.call(
             [{"reasoning": (
                 "I should recheck the conflicting exhibition-year values "
@@ -229,21 +229,26 @@ class GuardedMainAuthorTests(unittest.TestCase):
             [review_pass()],
         )
         self.assertEqual(status["status"], "accepted", status)
-        self.assertEqual(status["decision_contract_version"], "v10_4")
+        self.assertEqual(status["decision_contract_version"], "v10_4_2")
         self.assertEqual(status["confirmed_visible_conflicts"], 1)
-        self.assertTrue(status["locked_visible_fact_core_applied"])
+        self.assertNotIn("locked_visible_fact_core_applied", status)
         self.assertEqual(action["action"], "delegate_task")
         self.assertEqual(action["params"],
                          proposed_template_action(self.assignments)["params"])
-        self.assertIn("1999", action["reasoning"])
-        self.assertIn("2017", action["reasoning"])
+        self.assertNotIn("1999", action["reasoning"])
+        self.assertNotIn("2017", action["reasoning"])
+        self.assertIn("recheck", action["reasoning"])
+        self.assertNotIn("delegate_task", action["reasoning"])
         self.assertEqual(
             critic.payloads[0]["locked_main_visible_decision_facts"],
             self.contract,
         )
-        self.assertIn(
-            "locked_main_visible_decision_facts",
-            author.payloads[0],
+        self.assertNotIn("locked_main_visible_decision_facts", author.payloads[0])
+        self.assertNotIn("reference_action_for_structure_only", author.payloads[0])
+        self.assertNotIn("previous_feedback", author.payloads[0])
+        self.assertEqual(
+            author.payloads[0]["observed_disagreements"],
+            self.contract["visible_evidence"]["confirmed_result_summary_conflicts"],
         )
         self.assertEqual(
             critic.payloads[0]["candidate_reasoning_only"],
@@ -386,8 +391,8 @@ class MainVisibleO1HistoryIntegrationTests(unittest.TestCase):
              for v in conflicts],
             [("exhibition_year", "1999", "2017")],
         )
-        self.assertIn("1999", contract["locked_visible_fact_core"])
-        self.assertIn("2017", contract["locked_visible_fact_core"])
+        self.assertEqual(conflicts[0]["result_value"], "1999")
+        self.assertEqual(conflicts[0]["summary_value"], "2017")
 
     def test_actual_000280_parallel_batch_identifies_only_metric_conflict(self):
         raw = [
@@ -451,7 +456,7 @@ class MainVisibleO1HistoryIntegrationTests(unittest.TestCase):
         self.assertNotIn(
             "missing_finish_result", [x["status"] for x in gaps],
         )
-        self.assertEqual(contract["locked_visible_fact_core"], "")
+        self.assertNotIn("locked_visible_fact_core", contract)
 
     def test_clean_latest_batch_does_not_inherit_old_conflict(self):
         conflicted = _history_batch(3, [
@@ -516,8 +521,8 @@ class MainVisibleO1HistoryIntegrationTests(unittest.TestCase):
         self.assertTrue(meta["critic_conflict_rereviewed"])
         self.assertEqual(len(critic.payloads), 2)
         self.assertEqual(meta["confirmed_visible_conflicts"], 1)
-        self.assertIn("90", accepted["reasoning"])
-        self.assertIn("21", accepted["reasoning"])
+        self.assertIn("rechecked", accepted["reasoning"])
+        self.assertNotIn("evidence planner", accepted["reasoning"])
 
     def test_unproven_flat_history_does_not_trigger_special_rereview(self):
         clean = _history_batch(2, [
@@ -536,6 +541,53 @@ class MainVisibleO1HistoryIntegrationTests(unittest.TestCase):
             "repair_hint": "Do not invent a discrepancy.",
         }
         self.assertFalse(critic_denies_confirmed_conflict(denial, contract))
+
+
+class MultiRowVisibleConflictTests(unittest.TestCase):
+    def test_claimed_missing_entry_in_many_rows_is_discrepancy(self):
+        result = json.dumps([
+            {"entry_label": f"Entry-{i:02d}"} for i in range(1, 9)
+            if i != 7
+        ] + [{"entry_label": "Entry-09"}])
+        contract = build_main_decision_contract(
+            history([report(result, "The summary records entry label = Entry-07.")]),
+            [goal("entry_label", "Entry-01, Entry-02", "Entry-07")],
+            number_of_tasks=1,
+        )
+        conflicts = contract["visible_evidence"][
+            "confirmed_result_summary_conflicts"
+        ]
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["summary_value"], "entry-07")
+        self.assertIn("entry-01", conflicts[0]["result_value"])
+
+    def test_existing_entry_summary_of_subset_is_not_contradiction(self):
+        result = json.dumps([
+            {"entry_label": "Entry-01"},
+            {"entry_label": "Entry-03"},
+            {"entry_label": "Entry-05"},
+        ])
+        contract = build_main_decision_contract(
+            history([report(result, "The summary records entry label = Entry-03.")]),
+            [goal("entry_label", "Entry-01, Entry-05", "Entry-03")],
+            number_of_tasks=1,
+        )
+        self.assertEqual(
+            contract["visible_evidence"]["confirmed_result_summary_conflicts"], []
+        )
+
+    def test_no_inference_from_absent_summary_field(self):
+        contract = build_main_decision_contract(
+            history([report(
+                '[{"entry_label": "Entry-01"}, {"entry_label": "Entry-03"}]',
+                "The records were processed successfully.",
+            )]),
+            [goal("entry_label", "Entry-01", "Entry-07")],
+            number_of_tasks=1,
+        )
+        self.assertEqual(
+            contract["visible_evidence"]["confirmed_result_summary_conflicts"], []
+        )
 
 
 if __name__ == "__main__":

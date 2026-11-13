@@ -48,7 +48,7 @@ class Stage2ConfigTests(unittest.TestCase):
         self.assertEqual(cfg["evidence_limit"], 12)
         cmds = parser()._subparsers._group_actions[0].choices
         self.assertEqual(
-            set(cmds), {"generate-questions", "quality", "implement-subtasks", "naturalize-subtasks", "generate-main-turns", "generate-untrusted-turns"}
+            set(cmds), {"generate-questions", "quality", "implement-subtasks", "naturalize-subtasks", "generate-untrusted-turns", "run"}
         )
 
     def test_invalid_config_fails(self):

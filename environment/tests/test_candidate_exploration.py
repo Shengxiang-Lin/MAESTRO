@@ -167,7 +167,7 @@ class CandidateExplorationTests(unittest.TestCase):
             out = root / "run"
             summary = generate_turns(
                 scenes_path=scenes, reports_path=reports,
-                base_episodes_path=base, output_dir=out,
+ output_dir=out,
                 max_scenes=1, branches_per_scene=1, workers=2,
                 no_progress=True, scenario_mode="event_driven",
                 candidate_strategy="enumerate", atomic_fault_kinds=KINDS,
@@ -290,7 +290,7 @@ class CandidateExplorationTests(unittest.TestCase):
             ["verification_status"], "schema_only_not_proven",
         )
 
-    def test_config_v10_default_and_legacy_switch(self):
+    def test_config_one_supported_single_fault_path(self):
         config = load_config()
         self.assertEqual(config["candidate_strategy"], "enumerate")
         self.assertEqual(config["max_fault_atoms"], 1)
@@ -300,11 +300,12 @@ class CandidateExplorationTests(unittest.TestCase):
         with TemporaryDirectory() as td:
             f = Path(td) / "config.yaml"
             f.write_text(content.replace(
-                "candidate_strategy: enumerate",
-                "candidate_strategy: invalid"
+                "  mode: template",
+                "  candidate_strategy: sample_one\n  mode: template",
+                1,
             ))
             with self.assertRaisesRegex(
-                ValueError, "untrusted_invalid_candidate_strategy"
+                ValueError, "untrusted_unknown_config_key"
             ):
                 load_config(f)
             f.write_text(content.replace(

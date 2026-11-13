@@ -1,106 +1,97 @@
-# MAESTRO dataset environment
+# MAESTRO environment
 
-Three trusted workflows and one untrusted recovery pilot are runnable from the repository root. **Every input,
-output path and LLM setting is configured in a YAML file** under
-`environment/configs/`. There are no mandatory `--scenes`, `--reports` or
-`--output-dir` command-line overrides.
+The supported dataset workflow is **Stage 1 → Stage 2 → Stage 4**.
+It does not require a separate Stage-3 Main LLM run or a
+`base_episodes.jsonl` input. Stage 4 derives a clean deterministic O1
+prefix from accepted Stage-1 scenes and Stage-2 reviewed reports.
 
-```bash
-python -m environment generate-questions --config environment/configs/questions.yaml
-python -m environment naturalize-subtasks --config environment/configs/subagent_reports.yaml
-python -m environment generate-main-turns --config environment/configs/base_orchestration.yaml
-python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml
-```
+## One command
 
-| Workflow | Python package | Config | Published file |
-| --- | --- | --- | --- |
-| Construct Questions | `environment/generate_question/` | `questions.yaml` | `questions/scenes.jsonl` |
-| Report trusted Sub-Agents | `environment/implement_subtask/` | `subagent_reports.yaml` | `subtasks.jsonl` |
-| Generate base orchestration trajectories | `environment/base_orchestration/` | `base_orchestration.yaml` | `main_turns.jsonl` |
-| Untrusted recovery branches | `environment/untrusted_orchestration/` | `untrusted_orchestration.yaml` | `main_turns.jsonl` + private fault alignment |
-
-Edit the `input` and `generation` paths in each YAML to connect your
-experiment directories. YAML paths resolve relative to the **repository
-root**. The default configs are wired together:
-`questions.yaml` publishes to `environment/data/maestro_current_100`,
-`subagent_reports.yaml` reads its `questions/scenes.jsonl`, and
-`base_orchestration.yaml` reads that Scene file plus the reviewed
-`subtasks.jsonl` from the Sub-Agent report directory.
-
-## Migrating existing generated data
-
-Previously generated `envir/data/` outputs are ignored by Git and are **not**
-moved automatically by `git pull`. To reuse your accepted Scene/report/Base
-Episode files with the new default configurations, from the repository root
-run:
+From the repository root:
 
 ```bash
-mkdir -p environment/data
-cp -a envir/data/. environment/data/
+python -m environment run \
+  --questions-config environment/configs/questions.yaml \
+  --reports-config environment/configs/subagent_reports.yaml \
+  --untrusted-config environment/configs/untrusted_orchestration.yaml \
+  --mode llm
 ```
 
-Then run the fourth workflow using
-`python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml`.
-The old *tracked* `environment/` implementation is deleted by the rename;
-local ignored/untracked files should be backed up separately. Do not resume
-old `envir` checkpoints after code-path/signature changes.
+Stage outputs and resumable journals stay in the locations configured by
+their YAML files. Stage 1 creates the frozen Scene/World/Question bank;
+Stage 2 materializes executable Macro tasks and naturalizes Sub-Agent
+reports; Stage 4 samples one genuinely executable untrusted fault, runs
+causal replay, reviews natural-language reports and Main reasoning, and
+publishes only completely recovered and independently reviewed SFT turns.
 
-## Contract and publication boundaries
-
-**Question construction** generates exactly the requested initial candidate
-pool, performs Scenario and Question Author/Critic checks, freezes a
-source-scoped executable Macro DAG, and keeps every genuinely accepted
-Question. No accepted-level quota refill. Summary, strict Replay/quality
-report, and rejected candidate records are written next to the output.
-
-**Sub-Agent reports** in `naturalize-subtasks` do not need an explicit
-`--scenes` argument. The command first materializes deterministic Oracle
-Macro evidence into `<report-output>/oracle/`, then authors and
-independently reviews source-grounded Finish Results. Explicit
-`--source-subtasks` and `--source-scene-index` remain available for
-advanced reuse of a separately materialized Oracle bank. No real media
-or Web tools are executed by dataset synthesis.
-
-**Base orchestration** read the accepted Stage-1 Scenes and complete
-reviewed Sub-Agent reports, dispatch dependency-unblocked Macro
-waves (skipping evidence-free terminal extraction only when all answer
-identities are already explicitly present in public reviewed results),
-insert already delivered feedback into O1's cumulative
-`subtask_history`, and use LLM Author/Critic for natural Main
-`delegate_task` prose. Only finished accepted Episodes contribute
-`main_turns.jsonl` labels. The final `complete` answer is teacher verified; its public-evidence
-rationale is independently LLM-reviewed when possible, with a clearly
-labeled deterministic fallback if the prose review fails.
-Main-turn examples omit the repeated full O1 prompt; use:
+## Run from existing Stage 1 and Stage 2 artifacts
 
 ```bash
-python -m environment.base_orchestration.rebuild_prompts \
-  --scenes environment/data/maestro_current_100/questions/scenes.jsonl \
-  --turns environment/data/maestro_base_orchestration_100/main_turns.jsonl \
-  --output environment/data/maestro_base_orchestration_100/full_prompts.jsonl
+python -m environment generate-questions \
+  --config environment/configs/questions.yaml
+
+python -m environment naturalize-subtasks \
+  --config environment/configs/subagent_reports.yaml
+
+python -m environment generate-untrusted-turns \
+  --config environment/configs/untrusted_orchestration.yaml \
+  --mode llm \
+  --output-dir environment/data/maestro_untrusted_rounds_v10_4_2
 ```
 
-For all workflows, `summary.json` and `failed.jsonl` (when relevant)
-hold diagnostic details. The terminal keeps concise live progress counters.
+The two `input` paths in the Stage-4 YAML must point to the actual
+`questions/scenes.jsonl` and reviewed `subtasks.jsonl` created by
+the first two stages. The single `run` command wires these paths
+automatically.
 
-## Organization and untrusted recovery
+The Stage-4 template mode supports fast local diagnostics without an
+LLM backend:
 
-- `generate_question/macro_planning.py`: current Macro evidence DAG compiler
-  and source access contracts (internal on-disk schema versions retained).
-- `generate_question/macro_evidence_world.py`: deterministic typed evidence.
-- `generate_question/prompt_templates.py`: live Author/Critic text templates.
-- `implement_subtask/realize.py`, `reporting.py`, `combined.py`:
-  trusted evidence replay, report review and one-command integration.
+```bash
+python -m environment generate-untrusted-turns \
+  --config environment/configs/untrusted_orchestration.yaml \
+  --mode template \
+  --max-scenes 2 \
+  --output-dir environment/data/smoke_stage4
+```
+
+## Module boundaries
+
+- `generate_question/`: Stage-1 Scene, World, evidence sources and task DAG
+- `implement_subtask/`: Stage-2 source-grounded Macro execution and reports
+- `untrusted_orchestration/trusted_prefix.py`: **internal deterministic**
+  clean Main history builder from Stage-1/2 inputs
+- `untrusted_orchestration/faults.py`, `atomic_faults.py`,
+  `scenario_generator.py`: Stage-4 fault and causal scenario compiler
+- `untrusted_orchestration/state_machine.py`,
+  `evidence_planning.py`: Stage-4 executor, evidence state and rechecks
+- `untrusted_orchestration/report_author.py` and `report_contract.py`:
+  Stage-4 Sub-Agent naturalization and factual delivery contract
+- `untrusted_orchestration/main_decision_contract.py`,
+  `reasoning_fidelity.py`, `offline_pipeline.py`: Stage-4
+  Main-visible facts, guarded reasoning and reviewed-turn materialization
+- `untrusted_orchestration/publication_guard.py`: independent final
+  release check, including reviewer and internal-planning prose leaks
 - `base_orchestration/trajectory_builder.py`, `action_author.py`,
-  `o1_compat.py`: trusted Main decision supervision and real O1 formatting.
-- `untrusted_orchestration/`: per-round fault injection, WorkProduct
-  propagation, targeted recovery, counterfactual execution and private
-  causal audit. See [implementation limits](untrusted_orchestration/README.md).
+  `o1_compat.py`: shared deterministic O1 format and action validators
+  reused by the Stage-4 bootstrap and reviewers
 
-The old quota-refill engine and the obsolete private simulator/demo have
-been removed. Legacy Macro Scene schema markers remain recognized to avoid
-misinterpreting previously generated archived data. **Do not resume old
-generation journals after this code organization change**; start new output
-directories, or retain an archived Git revision for older runs.
+Older standalone trusted-Main research code is not part of the public
+`python -m environment` workflow. It is not invoked to generate Stage 4
+training data.
 
-Run tests with `python -m unittest discover -s environment/tests`.
+## Trust and publication invariants
+
+Only Main-visible reports and granted sources can justify a verification
+decision; Gold/private fault annotations never enter the Main prompt.
+Single-fault scenarios can propagate through multiple dependent tasks.
+A synchronous delegated batch finishes before Main acts again. If a
+recheck changes an upstream result, its dependent WorkProducts become
+stale and must be recomputed. A critic cannot automatically override a
+verified visible discrepancy, and cannot auto-pass its own rereview.
+Reasoning should be naturally generated, not padded with compiler
+templates or private scheduler details.
+
+The current Scene bank may have zero independent same-claim cross-source
+witnesses; this is a Stage-1 evidence design limitation for future work,
+not permission to synthesize private corroborating evidence in Stage 4.

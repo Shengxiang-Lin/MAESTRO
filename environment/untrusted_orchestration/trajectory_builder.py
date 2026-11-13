@@ -50,29 +50,25 @@ previous findings; do not imply an unperformed verification succeeded.
 """
 
 
-_MAIN_DECISION_AUTHOR_SYSTEM = """UNTRUSTED ROUND-LOCAL RECOVERY:
-Write only the Main-Agent's next-round reasoning
-from its currently visible Sub-Agent reports and the locked decision contract.
+_MAIN_DECISION_AUTHOR_SYSTEM = """You are the Main-Agent coordinating a
+multi-source investigation. Write a concise, natural next-step explanation
+based on the user's question and the Sub-Agent feedback already received.
 
-This is Stage 4C: the evidence planner has ALREADY selected a legal
-delegate_task action, its Sub-Agent assignments, parallelism, source
-permissions and tool routes. You do NOT choose tasks, alter their scope, or
-choose whether to finish. Return JSON ONLY:
-{"reasoning": "a grounded explanation of the pending evidence requests"}
+Some returned results may be missing, incomplete or contradictory. Only
+assert observations actually visible in the supplied history. When Result
+and Summary explicitly disagree, treat both as reported statements, not
+as independently established truth. Explain what remains to be checked,
+which evidence needs obtaining, and why independent tasks can proceed
+together when relevant.
 
-The locked_main_visible_decision_facts describes (a) the latest report
-delivery and any gaps, (b) Result/Summary contradictions proven from the
-SAME public Sub-Agent report, (c) requests still awaiting execution, and
-(d) the already-selected next delegate action. Use only observations
-that Main has actually received. The plan's request alone does not prove
-a contradiction unless the contract includes a confirmed visible conflict.
+Your next investigations are listed under work_to_explain. Focus on the
+substantive reason for those investigations and do not claim they have
+already completed. Do not announce a final answer before the needed
+evidence is available, invent an extra result, or describe the process
+used to write or assess your text.
 
-When Result and Summary disagree, do not assume Result is independently
-verified; describe the disagreement and why the selected source-bound
-cross-check is necessary. Preserve usable findings and explain independent
-parallel tasks. Do not declare verification completed, invent future
-results, sources or actions, cite hidden Gold/Oracle, or mention internal
-Critic/reviewer feedback. A complete action is invalid for this round.
+Return JSON containing only:
+{"reasoning": "a natural explanation of the next investigation"}
 """
 
 
