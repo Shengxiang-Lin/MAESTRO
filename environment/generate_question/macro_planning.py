@@ -539,6 +539,10 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         spec["numeric_goal_world_version"] = NUMERIC_GOAL_WORLD_VERSION
     if question_semantic_lock_enabled:
         spec["question_semantic_lock_version"] = "maestro.question_semantic_lock.v1"
+    # V1.3: private, deterministic Claim/Evidence audit over real source rows.
+    # It does not alter the Macro Gold program or add a model call.
+    from .evidence_relations import VERSION as EVIDENCE_RELATION_VERSION
+    spec["evidence_relation_version"] = EVIDENCE_RELATION_VERSION
     title_by_source = expected_source_titles(spec)
     for source in spec["sources"]:
         source["title"] = title_by_source[source["source_id"]]

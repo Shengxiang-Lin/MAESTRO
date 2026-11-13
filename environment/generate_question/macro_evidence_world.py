@@ -288,6 +288,11 @@ def generate_world(spec: dict) -> dict:
             **_rows(sid, role["modality"], role["title"],
                     role["purpose"], rows),
             "access_policy": policy,
+            # This is authored World provenance, not inferred independence
+            # from two Sub-Agent reports mentioning the same original record.
+            **({"evidence_origin_id": "independent_stream:" + sid}
+               if spec.get("evidence_relation_version")
+               and sid in {"report_a", "report_b"} else {}),
             # A Direct-Extract URL is known before delegation; URLs discovered
             # through Search -> Extract remain private until the simulated
             # search observation returns them.

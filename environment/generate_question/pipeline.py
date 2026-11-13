@@ -676,6 +676,31 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             "Structural and text signatures diagnose diversity, not sufficient novelty.",
         ],
     }
+    # Evidence audit is private teacher data; these are actual source-pair
+    # relations and source-ablation state changes, not Graph signatures.
+    ledgers = [item["evidence_ledger"] for item in scenes
+               if "evidence_ledger" in item]
+    evidence_counts = Counter()
+    for ledger in ledgers:
+        evidence_counts.update(ledger["relation_counts"])
+    data["evidence_relations"] = {
+        "versioned_scenes": len(ledgers),
+        "scenes_with_comparable_pairs": sum(
+            x["independent_comparable_pairs"] > 0 for x in ledgers
+        ),
+        "independent_comparable_pairs": sum(
+            x["independent_comparable_pairs"] for x in ledgers
+        ),
+        "verification_sensitive_pairs": sum(
+            x["verification_sensitive_pairs"] for x in ledgers
+        ),
+        "relation_counts": dict(evidence_counts),
+        "scope": (
+            "Exact source-grounded comparable Claim pairs. Warrant changes "
+            "are source-ablation counterfactuals, not chronological Main actions; "
+            "version-supersession cases require actual versioned records."
+        ),
+    }
     return data
 
 
