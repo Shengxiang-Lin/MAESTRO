@@ -15,6 +15,11 @@ from .implement_subtask.pipeline import materialize_subtasks
 from .implement_subtask.naturalize import naturalize_subtasks
 from .implement_subtask.combined import generate_subagent_reports
 from .workflow import run_pipeline
+from .base_orchestration.config import (
+    DEFAULT_CONFIG as MAIN_CONFIG,
+    generate_from_config as generate_main_from_config,
+    load_config as load_main_config,
+)
 from .untrusted_orchestration.config import (
     DEFAULT_CONFIG as UNTRUSTED_CONFIG,
     load_config as load_untrusted_config,
@@ -96,6 +101,18 @@ def parser() -> argparse.ArgumentParser:
         "--reuse-from", type=Path,
         help="Completed prior reporting directory: reuse accepted Macros, retry only rejected ones in a NEW output folder",
     )
+    trusted = sub.add_parser(
+        "generate-main-turns",
+        help="Stage 3: reviewed, dependency-safe Main decisions",
+    )
+    trusted.add_argument("--config", type=Path, default=MAIN_CONFIG)
+    trusted.add_argument("--scenes", type=Path)
+    trusted.add_argument("--reports", type=Path)
+    trusted.add_argument("--output-dir", type=Path)
+    trusted.add_argument("--max-scenes", type=int)
+    trusted.add_argument("--workers", type=int)
+    trusted.add_argument("--mode", choices=("template", "llm"))
+    trusted.add_argument("--no-progress", action="store_true")
     untrusted = sub.add_parser(
         "generate-untrusted-turns",
         help="Branch trusted Main history at a returned Sub-Agent batch and simulate evidence failures",
@@ -181,6 +198,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"subagent reports: {result['status']} | details: "
               f"{options['output_dir']}/summary.json")
         return 0 if result["status"] in {"done", "partial"} else 1
+    if cli.command == "generate-main-turns":
+        overrides = {}
+        for cli_name, option in (
+            ("scenes", "scenes_path"), ("reports", "reports_path"),
+            ("output_dir", "output_dir"), ("max_scenes", "max_scenes"),
+            ("workers", "workers"), ("mode", "mode"),
+        ):
+            value = getattr(cli, cli_name)
+            if value is not None:
+                overrides[option] = value
+        if cli.no_progress:
+            overrides["no_progress"] = True
+        summary = generate_main_from_config(cli.config, **overrides)
+        out = overrides.get("output_dir") or load_main_config(
+            cli.config
+        )["output_dir"]
+        print(f"main orchestration: {summary['status']} | details: "
+              f"{out}/summary.json")
+        return 0 if summary["status"] in {"done", "partial"} else 1
     if cli.command == "generate-untrusted-turns":
         overrides = {}
         for cli_name, option in (
