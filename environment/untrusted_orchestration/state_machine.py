@@ -8,6 +8,7 @@ in history for causal audit.
 from __future__ import annotations
 
 from copy import deepcopy
+from environment.implement_subtask.public_surface import reviewed_public_view
 from dataclasses import dataclass
 import json
 import re
@@ -737,8 +738,11 @@ def deterministic_report(
     original_rows = (reviewed or {}).get("answer_with_provenance")
     if (reviewed is not None and attempt.status == "done"
             and actual_rows == original_rows):
-        finish = deepcopy(reviewed["finish_result"])
-        narrative = reviewed.get("trace_summary", {}).get("narrative") or (
+        # Shared Stage-3/4 clean presentation; never sanitize a
+        # faulted or adversarially altered report here.
+        view = reviewed_public_view(reviewed)
+        finish = deepcopy(view["finish_result"])
+        narrative = view.get("trace_summary", {}).get("narrative") or (
             finish["summary"]
         )
         mode = "reviewed_clean"
