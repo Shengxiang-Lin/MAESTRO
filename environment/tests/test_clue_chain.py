@@ -47,12 +47,16 @@ class ClueChainContracts(unittest.TestCase):
         from environment.generate_question.stages import construct_scenes, read_jsonl
         cfg = load_config(DEFAULT_CONFIG)
         self.assertFalse(hasattr(args_from_config(cfg), "clue_chain_share"))
+        # Deprecated CLI alias is intentionally absent from canonical Stage 1.
+        with self.assertRaises(SystemExit):
+            parser().parse_args([
+                "generate-questions", "--macro-first-v2-share", "100",
+            ])
         parsed = parser().parse_args([
             "generate-questions", "--config", str(DEFAULT_CONFIG),
-            "--target", "10", "--macro-first-v2-share", "100",
-            "--output-dir", "environment/data/clue-pilot-test",
+            "--target", "10", "--output-dir", "environment/data/clue-pilot-test",
         ])
-        self.assertEqual(parsed.macro_first_v2_share, 100)
+        self.assertFalse(hasattr(parsed, "macro_first_v2_share"))
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             args = args_from_config(cfg, output_dir=root / "constructed",
