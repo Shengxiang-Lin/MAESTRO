@@ -102,6 +102,15 @@ current_round_task_contract and what has already been returned, NOT against
 a proposed alternative plan or immediate completion of the entire question.
 A valid criticism must identify a concrete ungrounded claim in the authored
 reasoning. Never object merely that a later task remains necessary.
+
+If current_round_evidence_contract.observed_identifier_set_relations is
+nonempty, its literal overlap was calculated deterministically from two
+ALREADY RETURNED public Result lists. The correct set intersection is
+exactly shared_identifiers. Do not hallucinate membership in either list.
+This proves only the textual overlap, NOT that the source claims are true,
+nor that a downstream archival answer has already been obtained. If a
+reasoning draft disputes this overlap, reject it; if the reasoning uses
+the overlap faithfully, do not invent a mathematical objection.
 Do not ask for changes to task prose or frozen dispatch. Return the normal
 three axes.
 """
@@ -611,6 +620,7 @@ def author_delegate_action(
         raise ValueError("stage3_llm_author_requires_independent_critic")
     failures = []
     conflict_rereviewed = False
+    visible_set_relation_rereviewed = False
     for revision in range(max_revisions + 1):
         request = {
             "current_main_visible_prompt": prompt,
@@ -638,7 +648,11 @@ def author_delegate_action(
                 "writing_guidance": (
                     "Explain only CURRENT-round investigations, using "
                     "the exact pending task instructions and previously "
-                    "returned Sub-Agent facts. The overall question may "
+                    "returned Sub-Agent facts. If the evidence contract "
+                    "contains observed_identifier_set_relations, use "
+                    "exactly the public shared identifiers, but do NOT "
+                    "confuse candidate selection with confirmed archival "
+                    "year or claim the current batch performs later steps. The overall question may "
                     "require additional dependent source lookups later; "
                     "do not claim all sources must be queried now, or "
                     "that a previous lookup failed just because another "
@@ -656,6 +670,9 @@ def author_delegate_action(
                 # Deliver only general issue-specific repair guidance.
                 # Do not expose private reviewer dialogue to the Author.
                 repairs = {
+                    "reasoning_visible_intersection_mismatch":
+                        "Recalculate the overlap using only the returned "
+                        "identifier sets in the visible evidence contract.",
                     "reasoning_dispatch_task_count_mismatch":
                         "Describe the number of delegated tasks accurately; "
                         "the number of evidence sources may differ.",
@@ -882,7 +899,12 @@ def author_delegate_action(
                         "returned fields from later dependent evidence, "
                         "and distinguish the number of sources from the "
                         "number of independently delegated tasks. "
-                        "Reject unsupported final-step claims."
+                        "Reject unsupported final-step claims. "
+                        "When a public literal set-intersection witness "
+                        "exists, verify membership against that witness "
+                        "rather than inventing extra shared Case IDs. "
+                        "The witness is NOT proof that the final answer "
+                        "or a source's truth has been verified."
                     ),
                 }
             else:
@@ -911,6 +933,50 @@ def author_delegate_action(
                 "stage": "critic_backend", "reason": str(exc)[:200],
             })
             continue
+        # Reviewers can miscompute even a trivial set overlap. If a
+        # rejection disputes a publicly witnessed intersection, request
+        # another INDEPENDENT judgment against the SAME public evidence.
+        # Never auto-pass or erase a genuine unsupported Author claim.
+        if (freeze_assignment_prose and reasoning_only_stage3
+                and round_evidence_contract is not None
+                and not _critic_review_passes(review)
+                and round_evidence_contract["public"].get(
+                    "observed_identifier_set_relations"
+                )):
+            critique = (
+                str(review.get("reason", "")) + " "
+                + str(review.get("repair_hint", ""))
+                if isinstance(review, dict) else ""
+            ).casefold()
+            if any(word in critique for word in (
+                "intersection", "overlap", "both lists",
+                "both sets", "shared identifier",
+            )):
+                visible_set_relation_rereviewed = True
+                try:
+                    review = critic.complete_json(
+                        critic_system + (
+                            "\nSECOND INDEPENDENT REVIEW: The provided "
+                            "observed_identifier_set_relations were "
+                            "computed deterministically from TWO literal "
+                            "Main-visible Sub-Agent Result lists. Check "
+                            "whether the disputed identifier is actually "
+                            "in both lists before alleging faulty "
+                            "arithmetic. The witness is NOT proof of "
+                            "source truth or the downstream final answer. "
+                            "Reject any other unsupported factual claim "
+                            "or incorrect task boundary as usual. "
+                            "Do not auto-accept just because the "
+                            "intersection itself is correct.\n"
+                        ),
+                        json.dumps(review_payload, ensure_ascii=False),
+                    )
+                except Exception as exc:
+                    failures.append({
+                        "stage": "visible_set_relation_rereview_backend",
+                        "reason": str(exc)[:200],
+                    })
+                    continue
         # The Critic cannot overturn a code-confirmed *visible* conflict
         # solely by asserting that the two delivered statements agree.
         # Invalid critiques trigger a second independent review, never
@@ -991,6 +1057,8 @@ def author_delegate_action(
                         for failed in failures
                         if failed.get("stage") == "evidence_reasoning_guard"
                     ],
+                    "visible_set_relation_rereviewed":
+                        visible_set_relation_rereviewed,
                 } if reasoning_only_stage3 else {}),
                 **({
                     "decision_contract_version": decision_contract.get(

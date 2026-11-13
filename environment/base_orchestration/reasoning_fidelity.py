@@ -72,6 +72,19 @@ _FUTURE_CLAUSE = re.compile(
     re.I,
 )
 
+# A decisive *assertion* about the overlap can be checked without an
+# LLM when the two complete Result lists are already visible. Ambiguous
+# phrases such as "we should calculate the overlap" are left alone.
+_LITERAL_OVERLAP_ASSERTION = re.compile(
+    r"\b(?:intersection|overlap)"
+    r"(?:\s+of\s+[^.!?;\n]{0,90}?)?"
+    r"\s+(?:is|equals|yields|contains|includes|isolates)\s+"
+    r"(?:only\s+)?(?P<ids>Case-\d+"
+    r"(?:\s*(?:,|and)\s*Case-\d+)*)",
+    re.I,
+)
+
+
 _FINAL_STEP = re.compile(
     r"\b(?:this|the|current|next)\s+"
     r"(?:(?:assigned|index|keyed)\s+){0,2}"
@@ -114,9 +127,62 @@ def _field_alias(field: str) -> re.Pattern:
     return re.compile(r"(?<!\w)" + expr + suffix + r"(?!\w)", re.I)
 
 
+
+# An *entire* public Result must be a finite explicit identifier list
+# before we compute a set relation. Substring extraction from narrative
+# prose would silently drop conditions or include unrelated examples.
+_LITERAL_CASE_LIST = re.compile(
+    r"^The current task returned (?P<count>\d+) case identifiers?: "
+    r"(?P<ids>Case-\d+(?:,\s*Case-\d+)*)\.$",
+    re.I,
+)
+
+
+def _literal_case_identifiers(result: str) -> list[str] | None:
+    if not isinstance(result, str):
+        return None
+    match = _LITERAL_CASE_LIST.fullmatch(result.strip())
+    if not match:
+        return None
+    cases = [part.strip() for part in match.group("ids").split(",")]
+    if len(cases) != int(match.group("count")) or len(set(cases)) != len(cases):
+        return None
+    return cases
+
+
+def visible_identifier_set_witness(
+    upstream_results: list[str], *, output_fields: list[str],
+) -> dict | None:
+    """Derive ONLY a literal set overlap from two returned Sub-Agent Results.
+
+    Never label either Result correct, independently verified, or trustworthy;
+    do not use structured Oracle rows, hidden future task values, or the
+    question's intended Gold answer. Invalid/incomplete text is UNKNOWN.
+    """
+    if len(upstream_results) != 2 or output_fields != ["case_id"]:
+        return None
+    groups = [_literal_case_identifiers(value) for value in upstream_results]
+    if any(group is None for group in groups):
+        return None
+    left, right = groups
+    shared = sorted(set(left) & set(right))
+    return {
+        "relation": "literal_identifier_set_intersection",
+        "input_identifier_sets": [left, right],
+        "shared_identifiers": shared,
+        "scope": (
+            "The overlap is computed from two already returned public "
+            "Result strings, not an assertion that their source claims "
+            "are true, independently verified or sufficient for the "
+            "final user answer."
+        ),
+    }
+
+
 def build_round_evidence_contract(
     assignments: list[dict], delivered: dict, *,
     has_later_delegation: bool = False,
+    upstream_result_groups: list[list[str] | None] | None = None,
 ) -> dict:
     """Public facts plus a PRIVATE boolean for checking premature finish.
 
@@ -135,6 +201,24 @@ def build_round_evidence_contract(
             "output_fields": list(item["output_fields"]),
             "needs_upstream": bool(item["needs_upstream"]),
         })
+    if upstream_result_groups is not None and (
+        len(upstream_result_groups) != len(assignments)
+    ):
+        raise ValueError("stage3_visible_result_group_cardinality_mismatch")
+    witnessed_relations = []
+    for i, item in enumerate(assignments):
+        group = (upstream_result_groups[i]
+                 if upstream_result_groups is not None else None)
+        if group is None:
+            continue
+        witness = visible_identifier_set_witness(
+            group, output_fields=item["output_fields"],
+        )
+        if witness is not None:
+            witnessed_relations.append({
+                "current_round_task_slot": i,
+                **witness,
+            })
     prior = []
     for report in delivered.values():
         finish = report["finish_result"]
@@ -149,6 +233,7 @@ def build_round_evidence_contract(
             "current_round_task_count": len(current),
             "current_round_tasks": current,
             "already_returned_reports": prior,
+            "observed_identifier_set_relations": witnessed_relations,
             "interpretation": (
                 "The named output fields are the current handoff, not "
                 "every observation that a source might contain. "
@@ -177,6 +262,15 @@ def check_reasoning_fidelity(reasoning: str, contract: dict) -> list[str]:
         if observed != count:
             issues.append("reasoning_dispatch_task_count_mismatch")
             break
+
+    witnesses = public.get("observed_identifier_set_relations", [])
+    if len(witnesses) == 1:
+        public_overlap = set(witnesses[0]["shared_identifiers"])
+        for assertion in _LITERAL_OVERLAP_ASSERTION.finditer(reasoning):
+            claimed = set(re.findall(r"Case-\d+", assertion.group("ids")))
+            if claimed != public_overlap:
+                issues.append("reasoning_visible_intersection_mismatch")
+                break
 
     if contract["private_limits"]["has_later_delegation"]:
         if _FINAL_STEP.search(reasoning) or _FINAL_ANSWER.search(reasoning):
