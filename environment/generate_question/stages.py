@@ -211,10 +211,7 @@ def construct_scenes(args) -> dict:
             spec = make_spec(
                 seed_record=seed_record, ordinal=ordinal,
                 run_seed=args.seed, difficulty=sequence[ordinal],
-                clue_chain_share=getattr(args, "clue_chain_share", 0),
-                evidence_graph_share=getattr(args, "evidence_graph_share", 0),
-                macro_first_share=getattr(args, "macro_first_share", 0),
-                macro_first_v2_share=getattr(args, "macro_first_v2_share", 0),
+                macro_first_v2_share=getattr(args, "macro_first_v2_share", 100),
                 operator_grammar_share=getattr(args, "operator_grammar_share", 0),
                 numeric_goal_diversity_share=getattr(
                     args, "numeric_goal_diversity_share", 0
