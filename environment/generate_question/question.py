@@ -381,10 +381,6 @@ def guard_question(question: str, spec: dict,
     else:
         if not re.search(r"\bactive\b", q, flags=re.I):
             errors.append("active_condition_missing")
-    else:
-        if not re.search(r"\bactive\b", q, flags=re.I):
-            errors.append("active_condition_missing")
-    family = spec["family"]
     family = spec["family"]
     if family in {"coverage_count", "category_distribution"} and not re.search(r"\b(how many|count|number of)\b", q, re.I):
         errors.append("count_answer_scope_missing")
