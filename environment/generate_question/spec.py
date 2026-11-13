@@ -90,7 +90,8 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
               difficulty: str, clue_chain_share: int = 0,
               evidence_graph_share: int = 0,
               macro_first_share: int = 0,
-              macro_first_v2_share: int = 0) -> dict:
+              macro_first_v2_share: int = 0,
+              operator_grammar_share: int = 0) -> dict:
     if difficulty not in DIFFICULTIES:
         raise ValueError("difficulty must be easy, medium or hard")
     if (type(clue_chain_share) is not int
@@ -102,6 +103,9 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         raise ValueError("macro_first_share must be between 0 and 100")
     if type(macro_first_v2_share) is not int or not 0 <= macro_first_v2_share <= 100:
         raise ValueError("macro_first_v2_share must be between 0 and 100")
+    if (type(operator_grammar_share) is not int
+            or not 0 <= operator_grammar_share <= 100):
+        raise ValueError("operator_grammar_share must be between 0 and 100")
     topic = normalize_topic(seed_record.get("topic", ""))
     record_id = str(seed_record.get("record_id") or seed_record.get("scene_id")
                     or f"topic-{ordinal}")
@@ -116,6 +120,11 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
             seed_record=seed_record, ordinal=ordinal, run_seed=run_seed,
             difficulty=difficulty, topic=topic, record_id=record_id,
             version=VERSION,
+            operator_grammar_enabled=(
+                int(digest(run_seed, ordinal, record_id,
+                           "typed-operator-grammar-mix-v1")[:8], 16) % 100
+                < operator_grammar_share
+            ),
         )
     # Select the Macro-level DAG FIRST, before any primitive solver or
     # evidence World is sampled. This opt-in overrides the older

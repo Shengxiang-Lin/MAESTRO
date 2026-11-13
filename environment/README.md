@@ -5,6 +5,44 @@ It does not require a separate Stage-3 Main LLM run or a
 `base_episodes.jsonl` input. Stage 4 derives a clean deterministic O1
 prefix from accepted Stage-1 scenes and Stage-2 reviewed reports.
 
+## Stage-1 typed operator grammar (opt-in V1)
+
+The current Stage-1 default config enables `generation.operator_grammar_share:
+100` for **new** Medium/Hard Macro-first v2 Scenes. It writes to a *new*
+output directory so previously frozen V10.4.x Scene/World/Program banks are
+not modified. Set `operator_grammar_share: 0` to retain their exact legacy
+operator programs.
+
+`generate_question/operator_grammar.py` selects a deterministic, role- and
+modality-compatible relational plan using a stable per-Macro hash. It does
+not consume the World sampling RNG. Current legal rewrites include:
+- swapping independent attribute/temporal Filter order,
+- changing the orientation of a symmetric inner Join,
+- placing Video/Audio source predicates before or after their inner Join.
+
+Every selected plan remains source-scoped and typed. A new Stage-1 audit
+executes the **canonical and variant program on the same World**, checks
+*each Macro WorkProduct* for identical output schema, values and FactRefs,
+and checks the final Gold answer and provenance. A failing rewrite is
+rejected; no extra filler operators are inserted to inflate difficulty.
+The private `quality_report.json` contains
+`macro_first_v2.typed_operator_grammar` with per-role variant and
+operator-sequence distributions. This is **algebraic query-plan diversity**,
+not yet a new information-need or independent cross-source verification
+relation.
+
+To generate the new bank:
+
+```bash
+python -m environment generate-questions \
+  --config environment/configs/questions.yaml
+```
+
+For a fully connected Stage 1→2→4 run, `python -m environment run` wires
+the new Stage-1 output into Stage 2 and Stage 4 automatically. Standalone
+Stage 4 continues to read only the two explicit paths in its own config;
+it does not silently switch to new scenes.
+
 ## One command
 
 From the repository root:
