@@ -11,6 +11,7 @@ generation:
   max_scenes: null    # null means every accepted Scene
   workers: 8
   mode: llm           # llm or template
+  freeze_dispatch: true  # V1.4: code owns task batches; LLM writes reasoning only
   max_revisions: 2
   max_attempts: 16
   sub_model: qwen3-8b

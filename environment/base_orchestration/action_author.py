@@ -576,6 +576,7 @@ def author_delegate_action(
     author_system: str | None = None,
     critic_system: str | None = None,
     freeze_assignment_prose: bool = False,
+    reasoning_only_stage3: bool = False,
     reasoning_goals: list[dict] | None = None,
     reasoning_guard=None,
     decision_contract: dict | None = None,
@@ -603,7 +604,7 @@ def author_delegate_action(
             "reference_action_for_structure_only": template,
             "previous_feedback": failures[-2:],
         }
-        if freeze_assignment_prose and decision_contract is None:
+        if freeze_assignment_prose and reasoning_only_stage3:
             # Stage-3 Author sees public Main history and pending work,
             # never the private reference action or Critic dialogue.
             request = {
@@ -629,7 +630,7 @@ def author_delegate_action(
                      "stage": row.get("stage", "")}
                     for row in failures[-2:]
                 ]
-        if freeze_assignment_prose and decision_contract is not None:
+        if freeze_assignment_prose and not reasoning_only_stage3:
             request["authoring_scope"] = (
                 "Generate natural grounded reasoning ONLY. The assigned "
                 "task instructions and contexts are already determined "

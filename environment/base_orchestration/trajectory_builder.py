@@ -286,6 +286,7 @@ def build_episode(
     sub_model: str = "qwen3-8b", model_alias: str = "model_1",
     resume_rounds: list[dict] | None = None,
     on_round=None, on_episode_start=None,
+    freeze_dispatch: bool = False,
 ) -> tuple[dict | None, list[dict], list[dict], dict]:
     """Return (public Episode, reviewed-turn turns, PRIVATE alignments, status)."""
     if max_attempts < 2:
@@ -297,7 +298,8 @@ def build_episode(
     # Versioned V1.4 scenes train Main reasoning over a frozen
     # dependency-safe dispatch, not redundant action-structure synthesis.
     freeze_trusted_dispatch = bool(
-        scene.get("problem_spec", {}).get("evidence_trust_version")
+        freeze_dispatch
+        and scene.get("problem_spec", {}).get("evidence_trust_version")
     )
     tasks = {row["task_id"]: row for row in graph["tasks"]}
     if len(tasks) != len(graph["tasks"]):
@@ -392,6 +394,7 @@ def build_episode(
                 assignments=assignment, prompt=main_prompt,
                 author=author, critic=critic, max_revisions=max_revisions,
                 freeze_assignment_prose=freeze_trusted_dispatch,
+                reasoning_only_stage3=freeze_trusted_dispatch,
                 author_system=(
                     STAGE3_REASONING_AUTHOR_SYSTEM
                     if freeze_trusted_dispatch else None

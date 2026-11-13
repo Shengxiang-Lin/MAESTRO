@@ -47,7 +47,7 @@ def _write_jsonl(path: Path, data: list[dict]) -> None:
 
 def _signature(scenes: Path, reports: Path, *, max_scenes, sub_model,
                model_alias, max_attempts, max_revisions, mode,
-               author_model, critic_model) -> dict:
+               author_model, critic_model, freeze_dispatch) -> dict:
     root = Path(__file__).parent
     tracked = (
         "trajectory_builder.py", "action_author.py",
@@ -71,6 +71,7 @@ def _signature(scenes: Path, reports: Path, *, max_scenes, sub_model,
         "model_alias": model_alias,
         "max_attempts": max_attempts,
         "max_revisions": max_revisions,
+        "freeze_dispatch": freeze_dispatch,
         "mode": mode,
         "author_model": author_model,
         "critic_model": critic_model,
@@ -157,6 +158,7 @@ def generate_turns(
     critic_model: str | None = None,
     overwrite: bool = False, no_progress: bool = False,
     verbose_progress: bool = False, workers: int = 4,
+    freeze_dispatch: bool = False,
 ) -> dict:
     scenes_path, reports_path = Path(scenes_path), Path(reports_path)
     output_dir = Path(output_dir)
@@ -170,6 +172,8 @@ def generate_turns(
         raise ValueError("stage3_max_revisions_must_be_0_to_8")
     if bool(author) != bool(critic):
         raise ValueError("stage3_requires_both_author_and_critic")
+    if type(freeze_dispatch) is not bool:
+        raise ValueError("stage3_freeze_dispatch_must_be_boolean")
     if type(workers) is not int or not 1 <= workers <= 64:
         raise ValueError("stage3_workers_must_be_between_1_and_64")
     mode = "llm_reviewed" if author is not None else "template"
@@ -178,6 +182,7 @@ def generate_turns(
         sub_model=sub_model, model_alias=model_alias,
         max_attempts=max_attempts, max_revisions=max_revisions, mode=mode,
         author_model=author_model, critic_model=critic_model,
+        freeze_dispatch=freeze_dispatch,
     )
     if output_dir.exists() and overwrite:
         if output_dir.resolve() in {
@@ -256,6 +261,7 @@ def generate_turns(
                     sub_model=sub_model, model_alias=model_alias,
                     resume_rounds=saved_rounds, on_round=on_round,
                     on_episode_start=on_episode_start,
+                    freeze_dispatch=freeze_dispatch,
                 )
             except (ValueError, KeyError, TypeError) as exc:
                 episode, turns, alignments = None, [], []
@@ -438,6 +444,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-attempts", type=int, default=16)
     p.add_argument("--sub-model", default="qwen3-8b")
     p.add_argument("--model-alias", default="model_1")
+    p.add_argument("--freeze-dispatch", action="store_true",
+                   help="V1.4: program-owned parallel batch; author Main reasoning only")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--no-progress", action="store_true",
                    help="Disable progress bars")
@@ -467,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
         author_model=args.author_model, critic_model=args.critic_model,
         overwrite=args.overwrite, no_progress=args.no_progress,
         verbose_progress=args.verbose_progress, workers=args.workers,
+        freeze_dispatch=args.freeze_dispatch,
     )
     print(f"Base orchestration: {summary['status']} | details: "
           f"{args.output_dir}/summary.json")

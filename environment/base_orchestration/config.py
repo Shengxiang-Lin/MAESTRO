@@ -19,7 +19,7 @@ _FIELDS = {
     "generation": {
         "output_dir", "max_scenes", "workers", "mode", "max_revisions",
         "max_attempts", "sub_model", "model_alias", "overwrite",
-        "no_progress", "verbose_progress",
+        "no_progress", "verbose_progress", "freeze_dispatch",
     },
     "model": {
         "author_api_base", "author_model", "critic_api_base",
@@ -74,6 +74,7 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
         "overwrite": options.get("overwrite", False),
         "no_progress": options.get("no_progress", False),
         "verbose_progress": options.get("verbose_progress", False),
+        "freeze_dispatch": options.get("freeze_dispatch", False),
         "author_api_base": models.get("author_api_base"),
         "author_model": models.get("author_model"),
         "critic_api_base": models.get("critic_api_base"),
@@ -98,7 +99,8 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
             type(config["max_scenes"]) is not int
             or config["max_scenes"] < 1)):
         raise ValueError("trajectory_invalid_max_scenes")
-    for key in ("overwrite", "no_progress", "verbose_progress"):
+    for key in ("overwrite", "no_progress", "verbose_progress",
+                "freeze_dispatch"):
         if type(config[key]) is not bool:
             raise ValueError("trajectory_invalid_boolean_" + key)
     for key in ("sub_model", "model_alias"):
@@ -171,4 +173,5 @@ def generate_from_config(path: str | Path = DEFAULT_CONFIG,
         overwrite=options["overwrite"],
         no_progress=options["no_progress"],
         verbose_progress=options["verbose_progress"],
+        freeze_dispatch=options["freeze_dispatch"],
     )
