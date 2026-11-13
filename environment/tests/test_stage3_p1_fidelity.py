@@ -210,6 +210,10 @@ class ReasoningFidelityTests(unittest.TestCase):
         )
         self.assertEqual(audit["status"], "accepted")
         self.assertEqual(audit["attempts"], 2)
+        self.assertEqual(
+            audit["reasoning_fidelity_rejections"],
+            [{"errors": ["reasoning_current_output_field_mismatch"]}],
+        )
         self.assertEqual(len(critic.requests), 1)
         self.assertEqual(
             output["params"]["tasks"][0]["task_instruction"],
