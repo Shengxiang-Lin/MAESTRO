@@ -323,7 +323,7 @@ class EventEngineTests(unittest.TestCase):
             out = root / "output"
             result = generate_turns(
                 scenes_path=scenes, reports_path=reports,
-                base_episodes_path=base, output_dir=out,
+ output_dir=out,
                 max_scenes=1, branches_per_scene=1,
                 fault_modes=["missing"], workers=2,
                 no_progress=True,
@@ -394,7 +394,7 @@ class EventEngineTests(unittest.TestCase):
             base.write_text(json.dumps(self.episode) + "\n")
             result = generate_turns(
                 scenes_path=scenes, reports_path=reports,
-                base_episodes_path=base, output_dir=root / "dataset",
+ output_dir=root / "dataset",
                 max_scenes=1, branches_per_scene=1, workers=2,
                 no_progress=True, scenario_mode="event_driven",
                 atomic_fault_kinds=["report_missing"],

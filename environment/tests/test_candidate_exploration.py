@@ -167,7 +167,7 @@ class CandidateExplorationTests(unittest.TestCase):
             out = root / "run"
             summary = generate_turns(
                 scenes_path=scenes, reports_path=reports,
-                base_episodes_path=base, output_dir=out,
+ output_dir=out,
                 max_scenes=1, branches_per_scene=1, workers=2,
                 no_progress=True, scenario_mode="event_driven",
                 candidate_strategy="enumerate", atomic_fault_kinds=KINDS,

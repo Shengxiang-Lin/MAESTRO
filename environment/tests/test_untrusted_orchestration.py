@@ -65,7 +65,9 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertEqual(DEFAULT_CONFIG.name, "untrusted_orchestration.yaml")
         self.assertEqual(config["mode"], "template")
         self.assertTrue(config["scenes_path"].is_absolute())
-        self.assertEqual(config["fault_modes"], ["missing", "partial", "wrong"])
+        self.assertEqual(config["candidate_strategy"], "enumerate")
+        self.assertEqual(config["max_fault_atoms"], 1)
+        self.assertNotIn("base_episodes_path", config)
         with patch("environment.__main__.generate_untrusted_from_config",
                    return_value={"status": "partial"}) as runner:
             self.assertEqual(main(["generate-untrusted-turns",
@@ -471,7 +473,6 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             episodes.write_text(json.dumps(self.episode) + "\n")
             summary = generate_turns(
                 scenes_path=scenes, reports_path=reports,
-                base_episodes_path=episodes,
                 output_dir=root / "all_rounds",
                 max_scenes=None, branches_per_scene=None,
                 seed=17, fault_modes=["missing", "partial", "wrong"],
@@ -510,7 +511,6 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             # simulation/authoring or changing the published output.
             self.assertEqual(generate_turns(
                 scenes_path=scenes, reports_path=reports,
-                base_episodes_path=episodes,
                 output_dir=output, max_scenes=None, branches_per_scene=None,
                 seed=17, fault_modes=["missing", "partial", "wrong"],
                 workers=2, no_progress=True,
@@ -768,7 +768,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertTrue(report["done"])
         self.assertIn("without a usable", report["trace_summary"])
 
-    def test_stage2_and_stage3_llm_clients_configured_separately(self):
+    def test_one_mode_configures_both_report_and_main_clients(self):
         instances = []
         class Backend:
             def __init__(self, *, model, **kwargs):
@@ -780,23 +780,12 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             "environment.untrusted_orchestration.generate_turns.generate_turns",
             return_value={"status": "done"},
         ) as writer:
-            generate_from_config(
-                DEFAULT_CONFIG, report_mode="llm", main_mode="template",
-            )
+            generate_from_config(DEFAULT_CONFIG, mode="llm")
             self.assertEqual(writer.call_args.kwargs["report_mode"], "llm")
-            self.assertEqual(writer.call_args.kwargs["main_mode"], "template")
-            self.assertIsNotNone(writer.call_args.kwargs["report_author"])
-            self.assertIsNone(writer.call_args.kwargs["author"])
-            self.assertEqual(len(instances), 2)
-            instances.clear()
-            generate_from_config(
-                DEFAULT_CONFIG, report_mode="template", main_mode="llm",
-            )
             self.assertEqual(writer.call_args.kwargs["main_mode"], "llm")
-            self.assertEqual(writer.call_args.kwargs["report_mode"], "template")
+            self.assertIsNotNone(writer.call_args.kwargs["report_author"])
             self.assertIsNotNone(writer.call_args.kwargs["author"])
-            self.assertIsNone(writer.call_args.kwargs["report_author"])
-            self.assertEqual(len(instances), 2)
+            self.assertEqual(len(instances), 4)
 
     def test_unreviewed_report_fallback_excluded_from_llm_sft(self):
         tid = self.scene["macro_graph"]["reference_waves"][0][0]
@@ -963,7 +952,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             episodes.write_text(json.dumps(self.episode) + "\n")
             args = dict(
                 scenes_path=scenes, reports_path=reports,
-                base_episodes_path=episodes, output_dir=root / "output",
+                output_dir=root / "output",
                 max_scenes=1, branches_per_scene=1,
                 seed=17, fault_modes=["missing"], workers=2,
                 no_progress=True,
@@ -1320,8 +1309,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                        Bar):
                 result = generate_turns(
                     scenes_path=scenes, reports_path=reports,
-                    base_episodes_path=episodes,
-                    output_dir=root / "dual_progress",
+                output_dir=root / "dual_progress",
                     max_scenes=1, branches_per_scene=1,
                     seed=17, fault_modes=["missing"], workers=2,
                     no_progress=False,
@@ -1411,15 +1399,12 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             files = {
                 "scenes_path": root / "scenes.jsonl",
                 "reports_path": root / "reports.jsonl",
-                "base_episodes_path": root / "episodes.jsonl",
             }
             files["scenes_path"].write_text(json.dumps(self.scene) + "\n")
             files["reports_path"].write_text(
                 "".join(json.dumps(r) + "\n" for r in self.reports)
             )
-            files["base_episodes_path"].write_text(
-                json.dumps(self.episode) + "\n"
-            )
+
             summary = generate_turns(
                 **files, output_dir=root / "failed_main",
                 max_scenes=1, branches_per_scene=1,
@@ -1473,7 +1458,16 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         class MainAuthor:
             def complete_json(self, system, request):
                 events.append("main")
-                return json.loads(request)["reference_action_for_structure_only"]
+                payload = json.loads(request)
+                assert "reference_action_for_structure_only" not in payload
+                assert "previous_feedback" not in payload
+                return {
+                    "reasoning": (
+                        "The previous feedback does not fully establish the "
+                        "requested fields. I should obtain the outstanding "
+                        "evidence from the authorized source before proceeding."
+                    )
+                }
 
         class Critic:
             def complete_json(self, system, request):
@@ -1503,15 +1497,12 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             files = {
                 "scenes_path": root / "scenes.jsonl",
                 "reports_path": root / "reports.jsonl",
-                "base_episodes_path": root / "base.jsonl",
-            }
+                            }
             files["scenes_path"].write_text(json.dumps(self.scene) + "\n")
             files["reports_path"].write_text(
                 "".join(json.dumps(r) + "\n" for r in self.reports)
             )
-            files["base_episodes_path"].write_text(
-                json.dumps(self.episode) + "\n"
-            )
+
             summary = generate_turns(
                 **files, output_dir=root / "dataset", max_scenes=1,
                 branches_per_scene=1, fault_modes=["missing"], seed=17,

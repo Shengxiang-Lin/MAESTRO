@@ -27,6 +27,7 @@ from .atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
 from .scenario_generator import make_scenario
 from .trajectory_builder import build_branch
 from .offline_pipeline import author_branch_reports, author_branch_main
+from .trusted_prefix import compile_trusted_prefixes
 from .publication_guard import review_turn_surface
 from .candidate_exploration import expand_all_rounds
 from .candidate_selection import select_recovered_candidates
@@ -65,7 +66,7 @@ def _hash_file(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
+def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
     directory = Path(__file__).resolve().parent
     code_files = (
         "faults.py", "atomic_faults.py", "report_faults.py",
@@ -77,11 +78,13 @@ def _signature(inputs: tuple[Path, Path, Path], settings: dict) -> dict:
         "report_validation.py", "public_language.py",
         "publication_guard.py",
         "state_machine.py", "report_author.py",
+        "trusted_prefix.py",
         "trajectory_builder.py", "generate_turns.py",
         "evidence_planning.py", "offline_pipeline.py",
         "../generate_question/compiler.py",
         "../generate_question/program_ir.py",
         "../base_orchestration/o1_compat.py",
+        "../base_orchestration/trajectory_builder.py",
         "../base_orchestration/action_author.py",
         "../base_orchestration/generation_meta.py",
         "../implement_subtask/reporting.py",
@@ -284,7 +287,6 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     main_decision_contract_reviews = 0
     main_decision_contract_accepted = 0
     main_confirmed_visible_conflicts = 0
-    main_locked_visible_fact_anchors = 0
     main_conflict_critic_rereviews = 0
     witnessed_report_fallbacks = 0
     witness_critic_rereviews = 0
@@ -480,17 +482,13 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 result = review["authoring"]
                 main_modes[result["mode"]] += 1
                 main_statuses[result.get("status", "unknown")] += 1
-                contracted = result.get("decision_contract_version") == "v10_4"
+                contracted = result.get("decision_contract_version") == "v10_4_2"
                 main_decision_contract_reviews += bool(contracted)
                 main_decision_contract_accepted += (
                     bool(contracted) and result.get("status") == "accepted"
                 )
                 main_confirmed_visible_conflicts += (
                     result.get("confirmed_visible_conflicts", 0)
-                    if contracted else 0
-                )
-                main_locked_visible_fact_anchors += (
-                    bool(result.get("locked_visible_fact_core_applied"))
                     if contracted else 0
                 )
                 main_conflict_critic_rereviews += bool(
@@ -655,7 +653,6 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "main_decision_contract_reviews": main_decision_contract_reviews,
         "main_decision_contract_accepted": main_decision_contract_accepted,
         "main_confirmed_visible_conflicts": main_confirmed_visible_conflicts,
-        "main_locked_visible_fact_anchors": main_locked_visible_fact_anchors,
         "main_conflict_critic_rereviews": main_conflict_critic_rereviews,
         "subagent_fact_contract_reports": contract_reports_reviewed,
         "subagent_fact_contract_accepted": contract_reports_accepted,
@@ -676,8 +673,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
 
 
 def generate_turns(
-    *, scenes_path: Path, reports_path: Path, base_episodes_path: Path,
-    output_dir: Path,
+    *, scenes_path: Path, reports_path: Path, output_dir: Path,
     max_scenes: int | None = 30, branches_per_scene: int | None = None,
     seed: int = 17, fault_modes: list[str] | None = None,
     persistence: str = "once", multi_target_probability: float = 0.0,
@@ -705,10 +701,10 @@ def generate_turns(
     main_mode: str | None = None,
     report_mode: str | None = None,
 ) -> dict:
-    paths = tuple(map(Path, (scenes_path, reports_path, base_episodes_path)))
+    paths = tuple(map(Path, (scenes_path, reports_path)))
     output = Path(output_dir)
     if not all(path.is_file() for path in paths):
-        raise FileNotFoundError("untrusted_requires_frozen_scenes_reports_base")
+        raise FileNotFoundError("stage4_requires_stage1_scenes_and_stage2_reports")
     if type(workers) is not int or not 1 <= workers <= 64:
         raise ValueError("untrusted_workers_invalid")
     if branches_per_scene is not None and (
@@ -797,13 +793,17 @@ def generate_turns(
     }
     signature = _signature(paths, settings)
     scenes = _jsonl(paths[0])[:max_scenes]
-    base_list = _jsonl(paths[2])
-    if len({x["task_id"] for x in base_list}) != len(base_list):
-        raise ValueError("untrusted_duplicate_base_episode")
-    base = {x["task_id"]: x for x in base_list}
+    stage2_rows = _jsonl(paths[1])
     rows_by_scene = defaultdict(list)
-    for row in _jsonl(paths[1]):
+    for row in stage2_rows:
         rows_by_scene[row["scene_task_id"]].append(row)
+    # Stage 4 derives its frozen clean prefix directly from Stage 1+2.
+    # The internal deterministic compiler does NOT invoke a Stage-3 LLM,
+    # and its template actions are not published as positive SFT turns.
+    base, prefix_reviews = compile_trusted_prefixes(
+        scenes, stage2_rows, max_rounds=max_rounds,
+        sub_model=sub_model, model_alias=model_alias,
+    )
     planned, no_base, no_eligible = _plan_branches(
         scenes, base, branches_per_scene=branches_per_scene,
         seed=seed, fault_modes=modes, persistence=persistence,
@@ -847,6 +847,10 @@ def generate_turns(
     _atomic_jsonl(
         output / "private" / "scene_evidence_affordances.jsonl",
         affordance_rows,
+    )
+    _atomic_jsonl(
+        output / "private" / "trusted_prefix_checks.jsonl",
+        prefix_reviews,
     )
     # Explicit, inspectable round index; unsupported feedback rounds are
     # retained instead of disappearing silently from the total.
@@ -1395,7 +1399,7 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_untrusted_orchestration_candidate_exploration_v10_4_1",
+        "pipeline": "maestro_stage1_stage2_stage4_v10_4_2",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
         "max_candidates_per_feedback_round": max_candidates_per_round,
@@ -1456,6 +1460,9 @@ def generate_turns(
             )
         ),
         "input_scenes": len(scenes),
+        "trusted_prefixes_compiled": len(base),
+        "trusted_prefixes_rejected": len(prefix_reviews) - len(base),
+        "trusted_prefix_checks": str(output / "private" / "trusted_prefix_checks.jsonl"),
         "scenes_without_accepted_base": no_base,
         "round_sampling_unit": (
             "question_x_feedback_round_x_atomic_instance"

@@ -9,18 +9,13 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "environment" / "configs" / "untrusted_orchestration.yaml"
 
 _REQUIRED = {
-    "input": {"scenes", "reports", "base_episodes"},
+    "input": {"scenes", "reports"},
     "generation": {
         "output_dir", "max_scenes", "branches_per_scene", "seed",
-        "fault_modes", "persistence", "multi_target_probability",
         "max_rounds", "max_cost", "max_retries", "max_parallel_tasks",
-        "workers", "mode", "report_mode", "main_mode",
-        "max_revisions", "report_max_revisions", "main_max_revisions",
-        "sub_model", "model_alias",
-        "overwrite", "no_progress",
-        "scenario_mode", "atomic_fault_kinds",
-        "max_fault_atoms", "delayed_evidence_probability",
-        "candidate_strategy", "max_candidates_per_round",
+        "workers", "mode", "report_max_revisions", "main_max_revisions",
+        "sub_model", "model_alias", "overwrite", "no_progress",
+        "atomic_fault_kinds", "max_candidates_per_round",
         "max_distractors_per_fault", "max_selected_per_round",
         "max_language_attempts_per_round",
     },
@@ -64,14 +59,13 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
     config = {
         "scenes_path": _path(source.get("scenes")),
         "reports_path": _path(source.get("reports")),
-        "base_episodes_path": _path(source.get("base_episodes")),
         "output_dir": _path(run.get("output_dir")),
         "max_scenes": run.get("max_scenes"),
         "branches_per_scene": run.get("branches_per_scene"),
         "seed": run.get("seed", 17),
-        "fault_modes": run.get("fault_modes", ["missing", "partial", "wrong"]),
-        "scenario_mode": run.get("scenario_mode", "round_fork"),
-        "candidate_strategy": run.get("candidate_strategy", "sample_one"),
+        "fault_modes": ["missing", "partial", "wrong"],
+        "scenario_mode": "event_driven",
+        "candidate_strategy": "enumerate",
         "max_candidates_per_round": run.get(
             "max_candidates_per_round", 24
         ),
@@ -89,21 +83,17 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             "wrong_entity_binding", "report_missing",
             "result_summary_conflict", "fabricated_claim",
         ]),
-        "max_fault_atoms": run.get("max_fault_atoms", 1),
-        "delayed_evidence_probability": run.get(
-            "delayed_evidence_probability", 0.0
-        ),
-        "persistence": run.get("persistence", "once"),
-        "multi_target_probability": run.get("multi_target_probability", 0.0),
+        "max_fault_atoms": 1,
+        "delayed_evidence_probability": 0.0,
+        "persistence": "once",
+        "multi_target_probability": 0.0,
         "max_rounds": run.get("max_rounds", 16),
         "max_cost": run.get("max_cost", 80),
         "max_retries": run.get("max_retries", 1),
         "max_parallel_tasks": run.get("max_parallel_tasks", 4),
         "workers": run.get("workers", 4),
         "mode": run.get("mode", "template"),
-        "report_mode": run.get("report_mode", "inherit"),
-        "main_mode": run.get("main_mode", "inherit"),
-        "max_revisions": run.get("max_revisions", 2),
+        "max_revisions": 2,
         "report_max_revisions": run.get("report_max_revisions", 2),
         "main_max_revisions": run.get("main_max_revisions", 2),
         "sub_model": run.get("sub_model", "qwen3-8b"),
@@ -155,9 +145,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             raise ValueError("untrusted_invalid_" + key)
     if config["mode"] not in {"llm", "template"}:
         raise ValueError("untrusted_mode_requires_template_or_llm")
-    for key in ("main_mode", "report_mode"):
-        if config[key] not in {"llm", "template", "inherit"}:
-            raise ValueError("untrusted_invalid_" + key)
     if config["persistence"] not in {"once", "same_path"}:
         raise ValueError("untrusted_persistence_invalid")
     modes = config["fault_modes"]
@@ -208,10 +195,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
     for key in ("sub_model", "model_alias"):
         if not isinstance(config[key], str) or not config[key].strip():
             raise ValueError("untrusted_missing_" + key)
-    main_mode = (config["mode"] if config["main_mode"] == "inherit"
-                 else config["main_mode"])
-    report_mode = (config["mode"] if config["report_mode"] == "inherit"
-                   else config["report_mode"])
+    main_mode = report_mode = config["mode"]
     for mode, keys in (
         (main_mode, ("author_api_base", "author_model")),
         (report_mode, ("report_author_api_base", "report_author_model")),
@@ -232,17 +216,13 @@ def generate_from_config(
             raise ValueError("unknown_untrusted_override:" + key)
         if value is not None:
             cfg[key] = value
-    for key in ("scenes_path", "reports_path",
-                "base_episodes_path", "output_dir"):
+    for key in ("scenes_path", "reports_path", "output_dir"):
         cfg[key] = _path(cfg[key])
 
     from environment.generate_question.backend import OpenAICompatibleBackend
     from .generate_turns import generate_turns
 
-    main_mode = (cfg["mode"] if cfg["main_mode"] == "inherit"
-                 else cfg["main_mode"])
-    report_mode = (cfg["mode"] if cfg["report_mode"] == "inherit"
-                   else cfg["report_mode"])
+    main_mode = report_mode = cfg["mode"]
     author = critic = report_author = report_critic = None
 
     if main_mode == "llm":
@@ -287,7 +267,7 @@ def generate_from_config(
     # endpoint secrets and local Author/Critic clients never enter public
     # main_turns.jsonl or private fault-alignment metadata.
     for key in (
-        "mode", "main_mode", "report_mode",
+        "mode",
         "author_api_base", "critic_api_base", "temperature",
         "author_max_tokens", "critic_max_tokens", "api_key_env",
         "report_author_api_base", "report_critic_api_base",

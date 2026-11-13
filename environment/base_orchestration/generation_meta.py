@@ -28,7 +28,18 @@ GENERATION_PROCESS_RE = re.compile(
     r"(?:says|instructs|requested)\b"
     r"|\b(?:my|the)\s+(?:tool|action)\s+(?:choice|selection)\s+"
     r"(?:was|is)\s+(?:wrong|invalid)\b"
-    r"|\brevision\s+(?:attempt|feedback)\b",
+    r"|\brevision\s+(?:attempt|feedback)\b"
+    r"|\bevidence\s+planner\b"
+    r"|\b(?:delegate_task|requested_not_executed)\b"
+    r"|\b(?:locked|frozen|preselected|pre-selected|predetermined)\s+"
+    r"(?:main\s+)?(?:decision|facts?|plan|assignment|delegation|contract)\b"
+    r"|\b(?:internal|deterministic)\s+"
+    r"(?:planner|contract|compiler|teacher)\b"
+    r"|\b(?:the|this)\s+(?:plan|action|task)\s+"
+    r"(?:was|has\s+been|is)\s+"
+    r"(?:already\s+)?(?:selected|fixed|chosen)\s+"
+    r"by\s+(?:the\s+)?(?:planner|teacher|compiler)\b"
+    r"|\b(?:code-owned|planner-owned)\b",
     re.I,
 )
 

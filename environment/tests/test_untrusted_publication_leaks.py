@@ -29,6 +29,12 @@ LEAKS = [
     "As the reviewer identified, the draft was incorrect.",
     "The critic's assessment said that the evidence was incomplete.",
     "According to the critic feedback, we must retry.",
+    "The evidence planner has selected the next investigation.",
+    "The evidence planner already chose a delegate_task action.",
+    "The pending request is requested_not_executed.",
+    "The locked decision requires a lookup.",
+    "The plan has been selected by the compiler.",
+    "This is a code-owned decision contract.",
 ]
 
 
@@ -73,6 +79,16 @@ class PublicationLeakRegressionTests(unittest.TestCase):
                         },
                     }),
                 )
+
+    def test_normal_main_planning_language_is_not_internal_machinery(self):
+        for prose in (
+            "The previous reports disagree, so I should request a source check.",
+            "The remaining task depends on the returned key.",
+            "The report's plan lists a scheduled exhibition in 2017.",
+            "The review of the public archive reports an incomplete record.",
+        ):
+            with self.subTest(prose=prose):
+                self.assertFalse(generation_process_leak(prose))
 
     def test_real_world_film_criticism_is_not_meta_feedback(self):
         prose = (

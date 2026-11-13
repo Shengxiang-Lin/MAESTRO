@@ -16,17 +16,34 @@ def _normalize_field(field: str) -> str:
     return re.sub(r"[\s_-]+", "_", field.strip().lower())
 
 
-def _field_value(text: str, field: str) -> str | None:
+def _field_values(text: str, field: str) -> set[str]:
+    """Read explicit field values in one or several delivered rows.
+
+    A summary may legitimately mention only one of several returned
+    rows. We only infer a contradiction if a *claimed* explicit value
+    is absent from the entire Result set. No hidden source is consulted.
+    """
     if not isinstance(text, str):
-        return None
+        return set()
     try:
         rows = json.loads(text)
         if isinstance(rows, dict):
             rows = [rows]
-        if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict):
-            for key, value in rows[0].items():
-                if _normalize_field(key) == _normalize_field(field):
-                    return str(value).lower() if value is not None else None
+        if isinstance(rows, list) and rows and all(
+            isinstance(row, dict) for row in rows
+        ):
+            values = set()
+            for row in rows:
+                payload = row.get("values") if isinstance(
+                    row.get("values"), dict
+                ) else row
+                for key, value in payload.items():
+                    if (_normalize_field(key) == _normalize_field(field)
+                            and value is not None
+                            and not isinstance(value, (list, dict, bool))):
+                        values.add(str(value).strip().lower())
+            if values:
+                return values
     except (ValueError, TypeError):
         pass
     matches = set()
@@ -36,7 +53,7 @@ def _field_value(text: str, field: str) -> str | None:
             + r"\s*(?::|=|is|was)\s*(" + _VALUE + r")\b", re.I,
         )
         matches.update(m.group(1).lower() for m in pattern.finditer(text))
-    return next(iter(matches)) if len(matches) == 1 else None
+    return matches
 
 
 def _visible_finish(report: dict) -> dict | None:
@@ -90,26 +107,24 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
         if status in {"partial", "missing", "stale"}:
             gaps.append({"report_index": position, "status": status})
         for field in sorted(fields):
-            result_value = _field_value(finish.get("result"), field)
-            summary_value = _field_value(finish.get("summary"), field)
-            if not result_value or not summary_value or result_value == summary_value:
+            result_values = _field_values(finish.get("result"), field)
+            summary_values = _field_values(finish.get("summary"), field)
+            # Summary may accurately cite only a subset of the Result.
+            # An absent value is a genuine *observable* discrepancy.
+            unsupported = summary_values - result_values
+            if not result_values or not unsupported:
                 continue
             conflicts.append({
-                "field": field, "result_value": result_value,
-                "summary_value": summary_value, "report_index": position,
+                "field": field,
+                "result_value": ", ".join(sorted(result_values)[:8]),
+                "summary_value": ", ".join(sorted(unsupported)[:4]),
+                "report_index": position,
                 "observed_round": latest,
                 "basis": "same visible Sub-Agent Result and Summary",
                 "state": "unverified",
             })
-    anchors = [
-        "The returned Sub-Agent result lists " + c["field"].replace("_", " ")
-        + " = " + c["result_value"] + ", while its summary says "
-        + c["field"].replace("_", " ") + " = " + c["summary_value"]
-        + ". These statements conflict; verification remains pending."
-        for c in conflicts[:2]
-    ]
     return {
-        "contract_version": "v10_4",
+        "contract_version": "v10_4_2",
         "visible_evidence": {"latest_round": latest, "delivery_gaps": gaps,
                              "confirmed_result_summary_conflicts": conflicts},
         "pending_requests": [{
@@ -120,7 +135,6 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
         } for g in goals],
         "next_decision": {"action": "delegate_task",
                           "number_of_tasks": number_of_tasks},
-        "locked_visible_fact_core": " ".join(anchors),
     }
 
 

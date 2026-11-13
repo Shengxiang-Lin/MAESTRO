@@ -540,17 +540,43 @@ def author_delegate_action(
                     "Never claim a pending cross-check already succeeded."
                 )
             if decision_contract is not None:
-                request["locked_main_visible_decision_facts"] = decision_contract
-                request["authoring_schema"] = {"reasoning": "grounded rationale"}
-                request["authoring_obligation"] = (
-                    "Return reasoning text, not a new action choice. "
-                    "The current decision is already a validated delegate_task. "
-                    "A confirmed Result/Summary difference in the locked "
-                    "facts is observable evidence of uncertainty, NOT proof "
-                    "that either value is correct or that verification ended. "
-                    "Explain what evidence still needs checking. "
-                    "Do not introduce or infer another task or source."
-                )
+                # Stage-4-only author surface: do not put private
+                # compiler/teacher vocabulary, action names, reference
+                # actions, or raw Critic dialogue in the model input.
+                # The Critic receives the full contract separately.
+                visible = decision_contract["visible_evidence"]
+                request = {
+                    "question_and_subagent_history": prompt,
+                    "observed_disagreements": visible[
+                        "confirmed_result_summary_conflicts"
+                    ],
+                    "recent_delivery_gaps": visible["delivery_gaps"],
+                    "information_still_needed": [
+                        {
+                            "fields": item.get("target_fields", []),
+                            "reason": item.get(
+                                "main_visible_justification", ""
+                            ),
+                        } for item in reasoning_goals or []
+                    ],
+                    "work_to_explain": [
+                        {
+                            "instruction": item["target_instruction"],
+                            "context": item["context"],
+                        } for item in assignments
+                    ],
+                    "output_format": {
+                        "reasoning": "natural explanation of the next investigation"
+                    },
+                    "writing_guidance": (
+                        "Write as the investigator making a decision from "
+                        "the observations above. Distinguish observed "
+                        "disagreements from verified truth, explain why "
+                        "the requested investigations are needed, and "
+                        "avoid inventing completed checks or results. "
+                        "Return only the reasoning field."
+                    ),
+                }
         try:
             candidate = author.complete_json(
                 author_system, json.dumps(request, ensure_ascii=False)
@@ -563,24 +589,9 @@ def author_delegate_action(
         authored_reasoning = (
             candidate.get("reasoning") if isinstance(candidate, dict) else None
         )
-        locked_core = (
-            decision_contract.get("locked_visible_fact_core", "")
-            if decision_contract is not None else ""
-        )
         if (decision_contract is not None and isinstance(candidate, dict)
                 and "action" not in candidate):
             candidate = {**candidate, "action": "delegate_task"}
-        if (decision_contract is not None
-                and isinstance(candidate, dict)
-                and candidate.get("action") == "delegate_task"
-                and isinstance(authored_reasoning, str)
-                and locked_core):
-            candidate = {
-                **candidate,
-                "reasoning": (
-                    locked_core + " " + authored_reasoning.strip()
-                ),
-            }
         # Stage-4C can explicitly freeze the entire evidence dispatch
         # contract. The Author writes *reasoning*, while all task language,
         # handoff context, tool routing and parallelism come from the
@@ -675,9 +686,9 @@ def author_delegate_action(
                     "review_scope": (
                         "Evaluate factual claims ADDED by the Author and "
                         "their coherence with the code-owned visible facts. "
-                        "The locked fact core, if supplied, is an exact "
-                        "comparison of two fields in the same returned "
-                        "Sub-Agent report; do not re-evaluate its existence "
+                        "The confirmed observed conflicts, if present, "
+                        "come from explicit field comparisons of returned "
+                        "Sub-Agent reports; do not deny their existence "
                         "or treat Result as independently verified. "
                         "Never approve an invented source, premature "
                         "verification, hidden reviewer dialogue or an "
@@ -795,7 +806,6 @@ def author_delegate_action(
                             "confirmed_result_summary_conflicts"
                         ]
                     ),
-                    "locked_visible_fact_core_applied": bool(locked_core),
                     "critic_conflict_rereviewed": conflict_rereviewed,
                 } if decision_contract is not None else {}),
             }

@@ -52,27 +52,20 @@ class TrajectoryConfigurationTests(TestCase):
                           DEFAULT_CONFIG.parent}, {DEFAULT_CONFIG.parent})
         self.assertEqual(set(parser()._subparsers._group_actions[0].choices), {
             "generate-questions", "quality", "implement-subtasks",
-            "naturalize-subtasks", "generate-main-turns",
-            "generate-untrusted-turns",
+            "naturalize-subtasks", "generate-untrusted-turns", "run",
         })
 
-    def test_cli_config_only_and_optional_overrides(self):
-        with patch("environment.__main__.generate_from_config",
-                   return_value={"status": "done"}) as runner:
-            self.assertEqual(main(["generate-main-turns",
-                                   "--config", str(DEFAULT_CONFIG)]), 0)
-            self.assertEqual(runner.call_args.args[0], DEFAULT_CONFIG)
-            self.assertEqual(runner.call_args.kwargs, {})
-        with patch("environment.__main__.generate_from_config",
-                   return_value={"status": "partial"}) as runner:
+    def test_public_cli_runs_stage1_to_stage2_to_stage4(self):
+        with patch("environment.__main__.run_pipeline",
+                   return_value={
+                       "status": "done", "published_main_turns": 4,
+                   }) as runner:
             self.assertEqual(main([
-                "generate-main-turns", "--config", str(DEFAULT_CONFIG),
-                "--max-scenes", "10", "--workers", "2",
-                "--output-dir", "environment/data/config_override",
+                "run", "--mode", "template", "--max-scenes", "5",
                 "--no-progress",
             ]), 0)
-            self.assertEqual(runner.call_args.kwargs["max_scenes"], 10)
-            self.assertEqual(runner.call_args.kwargs["workers"], 2)
+            self.assertEqual(runner.call_args.kwargs["mode"], "template")
+            self.assertEqual(runner.call_args.kwargs["max_scenes"], 5)
             self.assertTrue(runner.call_args.kwargs["no_progress"])
 
     def test_runner_uses_yaml_values_without_hidden_defaults(self):

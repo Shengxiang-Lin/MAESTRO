@@ -1,36 +1,22 @@
-# V10.3: all eligible question/round/atomic candidates -> broad 4A search;
-# 4B uses a code-owned evidence/delivery fact contract before LLM authoring,
-# 4C reviews Main decisions; accepted Stage-3 episodes remain the baseline.
-# Only selected recovered trajectories enter expensive 4B/4C LLM authoring.
-# Legacy V9 behavior remains available with candidate_strategy: sample_one.
-# Requires frozen Questions, reviewed Sub-Agent reports, and accepted Base Episodes.
+# MAESTRO trusted evidence -> untrusted Main decision training.
+# Inputs: Stage-1 frozen scenes + Stage-2 reviewed reports ONLY.
+# A deterministic clean O1 prefix is compiled internally; Stage 3 is not run.
 version: 1
 
 input:
   scenes: environment/data/maestro_current_100/questions/scenes.jsonl
   reports: environment/data/maestro_subagent_reports_100/subtasks.jsonl
-  base_episodes: environment/data/maestro_base_orchestration_100/episodes.jsonl
 
 generation:
-  output_dir: environment/data/maestro_untrusted_orchestration_100
-  # null = process every Question that has an accepted Stage-3 episode.
+  output_dir: environment/data/maestro_untrusted_rounds_v10_4_2
   max_scenes: null
-  # null = extract EVERY Main decision round with newly returned feedback.
-  # Set an integer only for a small debugging run (chronological round cap).
-  branches_per_scene: null
+  branches_per_scene: null  # optional debugging cap
   seed: 17
-  # One event engine. round_fork reproduces V8 as the single-atom case.
-  # event_driven uses the typed fault catalogue and may defer an unexecuted
-  # independent evidence task when the frozen DAG makes that legal.
-  scenario_mode: event_driven    # round_fork | event_driven
-  # 4A enumerates legal real-executor candidates before any LLM.
-  # sample_one retains the exact V9 one-random-fault-per-round workflow.
-  candidate_strategy: enumerate  # enumerate | sample_one
-  max_candidates_per_round: 24    # hard cap on deterministic 4A trials
-  max_distractors_per_fault: 2    # real alternate rows/claims, not invented facts
-  max_selected_per_round: 1      # target accepted reviews per feedback round
-  max_language_attempts_per_round: 3 # including primary; replacements only after review failure
-  fault_modes: [missing, partial, wrong]  # legacy round_fork compatibility
+  # Enumerate executable one-atom variants with provenance-grounded distractors.
+  max_candidates_per_round: 24
+  max_distractors_per_fault: 2
+  max_selected_per_round: 1
+  max_language_attempts_per_round: 3
   atomic_fault_kinds:
     - no_result
     - incomplete_retrieval
@@ -39,20 +25,12 @@ generation:
     - report_missing
     - result_summary_conflict
     - fabricated_claim
-  max_fault_atoms: 1            # 1 | 2; set 2 for compound experiments
-  delayed_evidence_probability: 0.35
-  persistence: once           # once | same_path (persist on same-task retry)
-  multi_target_probability: 0.0
   max_rounds: 16
   max_cost: 80
   max_retries: 1
   max_parallel_tasks: 4
   workers: 8
-  # Common default. Each Author/Critic can be enabled independently below.
-  mode: template              # template | llm
-  report_mode: inherit        # inherit | template | llm
-  main_mode: inherit          # inherit | template | llm
-  max_revisions: 2            # fallback for callers of the Python API
+  mode: template         # template | llm (both report and Main authors)
   report_max_revisions: 2
   main_max_revisions: 2
   sub_model: qwen3-8b
@@ -60,7 +38,7 @@ generation:
   overwrite: false
   no_progress: false
 
-# Stage-3-style Main-Agent Action Author/Critic.
+# Stage-4 Main reasoning Author + independent Critic.
 model:
   author_api_base: http://127.0.0.1:8807/v1
   author_model: local-qwen3.5-9b
@@ -71,8 +49,7 @@ model:
   critic_max_tokens: 1200
   api_key_env: OPENAI_API_KEY
 
-# Stage-2-style Sub-Agent finish-result Author/Critic.
-# This model may differ from the Main action model.
+# Stage-4 Sub-Agent report naturalization Author + independent Critic.
 subagent_model:
   author_api_base: http://127.0.0.1:8807/v1
   author_model: local-qwen3.5-9b

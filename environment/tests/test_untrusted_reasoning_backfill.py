@@ -237,7 +237,7 @@ class Stage4BackfillTests(unittest.TestCase):
                               side_effect=reject_first):
                 summary = runner.generate_turns(
                     scenes_path=scenes, reports_path=report_path,
-                    base_episodes_path=base_path, output_dir=root / "out",
+ output_dir=root / "out",
                     max_scenes=1, branches_per_scene=1, workers=2,
                     no_progress=True, scenario_mode="event_driven",
                     candidate_strategy="enumerate",
