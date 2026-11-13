@@ -51,6 +51,12 @@ def _describe_operation(node: dict) -> str:
             f"Align the two input workproducts by "
             f"{node['left_on']} = {node['right_on']}"
         )
+    if op == "claim_relation_filter":
+        return (
+            "Check whether the two independent source claims about "
+            f"{node['attribute']} disagree for each {node['subject_field']}, "
+            "retaining both source fact references"
+        )
     if op == "compare_fields":
         comparison = {
             "gte": "is at least", "lte": "is at most", "eq": "equals",

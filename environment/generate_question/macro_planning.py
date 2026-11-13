@@ -783,9 +783,21 @@ def compile_macro_solvers(spec: dict) -> dict:
             )
             matched = add("join", *ordered_parents, left_on="case_id",
                           right_on="case_id")
-            selected = add("compare_fields", matched,
-                           left_field="reported_year_a",
-                           right_field="reported_year_b", comparison="ne")
+            selected = (
+                add("claim_relation_filter", matched,
+                    subject_field="case_id",
+                    left_field="reported_year_a",
+                    right_field="reported_year_b",
+                    left_source_id="report_a",
+                    right_source_id="report_b",
+                    attribute="reported_event_year",
+                    valid_scope="same_reported_event",
+                    relation="contradicts")
+                if spec.get("evidence_trust_version") else
+                add("compare_fields", matched,
+                    left_field="reported_year_a",
+                    right_field="reported_year_b", comparison="ne")
+            )
             last = add("project", selected, fields=["case_id"])
         elif role == "dispute_context_candidates":
             rows = add("scan", source_id="context")

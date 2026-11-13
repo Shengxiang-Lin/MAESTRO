@@ -27,7 +27,8 @@ _ARITY = {
     "scan": 0, "filter_eq": 1, "filter_gte": 1,
     "project": 1, "unique": 1, "join": 2, "count": 1,
     "sort": 1, "take": 1, "group_count": 1,
-    "compare_fields": 1, "attach_evidence": 1,
+    "compare_fields": 1, "claim_relation_filter": 1,
+    "attach_evidence": 1,
     "lookup_by_key": 1,
     "derive_comparison": 1, "derive_percentage": 1,
 }
@@ -74,6 +75,17 @@ def validate_program(program: dict) -> list[str]:
             len(set(node["fields"])) != len(node["fields"])
         ):
             issues.append("project_invalid_fields")
+        if op == "claim_relation_filter" and (
+            node.get("relation") != "contradicts"
+            or not all(isinstance(node.get(k), str) and node[k]
+                       for k in (
+                           "subject_field", "left_field", "right_field",
+                           "left_source_id", "right_source_id", "attribute",
+                           "valid_scope",
+                       ))
+            or node.get("left_source_id") == node.get("right_source_id")
+        ):
+            issues.append("claim_relation_filter_invalid_contract")
         if op == "compare_fields" and (
             not isinstance(node.get("left_field"), str)
             or not isinstance(node.get("right_field"), str)
@@ -236,6 +248,29 @@ def _apply(node: dict, inputs: list[Relation]) -> Relation:
                     "support": tuple(sorted(set(a["support"]) | set(b["support"]))),
                 })
         return Relation(columns, tuple(rows))
+    if op == "claim_relation_filter":
+        src = inputs[0]
+        for field in ("subject_field", "left_field", "right_field"):
+            _check(src, node[field])
+        a_source, b_source = node["left_source_id"], node["right_source_id"]
+        left, right = node["left_field"], node["right_field"]
+        def provably_conflicting(row):
+            refs = row["support"]
+            if not any(x.startswith(a_source + ":") for x in refs):
+                raise ProgramError("claim_relation_missing_left_provenance")
+            if not any(x.startswith(b_source + ":") for x in refs):
+                raise ProgramError("claim_relation_missing_right_provenance")
+            values = row["values"]
+            if (not isinstance(values[node["subject_field"]], str)
+                    or type(values[left]) is not type(values[right])):
+                raise ProgramError("claim_relation_incomparable_types")
+            return values[left] != values[right]
+        # Keep the original values and their union provenance for subsequent
+        # projections. Without two independent source witnesses, fail closed
+        # instead of turning a textual disagreement into truth.
+        return Relation(src.columns, tuple(
+            row for row in src.rows if provably_conflicting(row)
+        ))
     if op == "compare_fields":
         src = inputs[0]
         left_name, right_name = node["left_field"], node["right_field"]
