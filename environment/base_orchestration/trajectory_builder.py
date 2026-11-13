@@ -371,10 +371,30 @@ def build_episode(
                 tasks[tid], catalog, delivered, model_alias=model_alias
             ) for tid in wave
         ]
+        # An overlap witness is legal only for a true two-parent
+        # identifier join and must be reconstructed from the ACTUALLY
+        # delivered public Result strings (never the Oracle/Gold rows).
+        visible_parent_groups = []
+        for tid in wave:
+            target = tasks[tid]
+            parents = target["depends_on"]
+            eligible = (
+                len(parents) == 2
+                and target["outputs"]["typed_relation"] == ["case_id"]
+                and any(step["op"] == "join"
+                        for step in target["operator_chain"])
+            )
+            visible_parent_groups.append(
+                [
+                    delivered[parent]["finish_result"]["result"]
+                    for parent in parents
+                ] if eligible else None
+            )
         evidence_contract = (
             build_round_evidence_contract(
                 assignment, delivered,
                 has_later_delegation=wave_number < len(scheduled),
+                upstream_result_groups=visible_parent_groups,
             ) if freeze_trusted_dispatch else None
         )
         saved = (saved_rounds[wave_number - 1]
