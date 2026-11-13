@@ -102,6 +102,40 @@ class ReasoningFidelityTests(unittest.TestCase):
             [],
         )
 
+    def test_named_current_source_cannot_claim_later_year_or_counts(self):
+        year_contract = build_round_evidence_contract(
+            [pending("index_2", "record_key_2")], returned(),
+            has_later_delegation=True,
+        )
+        self.assertIn(
+            "reasoning_current_output_field_mismatch",
+            check_reasoning_fidelity(
+                "The index_2 lookup will retrieve the exhibition year.",
+                year_contract,
+            ),
+        )
+        self.assertIn(
+            "reasoning_current_output_field_mismatch",
+            check_reasoning_fidelity(
+                "This lookup will provide the completed and total counts.",
+                year_contract,
+            ),
+        )
+        self.assertEqual(
+            check_reasoning_fidelity(
+                "The index_2 lookup will return record_key_2, enabling a "
+                "later archive lookup for the exhibition year.",
+                year_contract,
+            ), [],
+        )
+        self.assertIn(
+            "reasoning_premature_final_step",
+            check_reasoning_fidelity(
+                "Executing this lookup is the final necessary step.",
+                year_contract,
+            ),
+        )
+
     def test_future_fields_never_enter_author_contract(self):
         contract = build_round_evidence_contract(
             [pending()], returned(), has_later_delegation=True,
