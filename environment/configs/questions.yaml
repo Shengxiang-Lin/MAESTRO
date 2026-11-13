@@ -7,11 +7,10 @@ input:
   max_records: 1000
 
 generation:
-  output_dir: environment/data/maestro_stage1_operator_v1_100
+  output_dir: environment/data/maestro_current_100
   target: 100
   seed: 17
   macro_planning_share: 100  # use the current Macro planning grammar for medium/hard tasks
-  operator_grammar_share: 100  # new typed query-plan variants for medium/hard; 0 replays legacy behavior
   difficulty_mix: [17, 33, 50]  # Initial candidate mix only; never an accepted quota
   overwrite: false
   flush_every: 1   # persist every completed LLM decision (safe to resume)

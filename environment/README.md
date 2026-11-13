@@ -7,11 +7,11 @@ prefix from accepted Stage-1 scenes and Stage-2 reviewed reports.
 
 ## Stage-1 typed operator grammar (opt-in V1)
 
-The current Stage-1 default config enables `generation.operator_grammar_share:
-100` for **new** Medium/Hard Macro-first v2 Scenes. It writes to a *new*
-output directory so previously frozen V10.4.x Scene/World/Program banks are
-not modified. Set `operator_grammar_share: 0` to retain their exact legacy
-operator programs.
+The pilot config `environment/configs/questions_typed_operators.yaml`
+enables `generation.operator_grammar_share: 100` for **new**
+Medium/Hard Macro-first v2 Scenes. The normal `questions.yaml` stays
+unchanged and defaults to legacy solver programs. This preserves existing
+V10.4.x Scene/World/Program banks and their output directories.
 
 `generate_question/operator_grammar.py` selects a deterministic, role- and
 modality-compatible relational plan using a stable per-Macro hash. It does
@@ -31,17 +31,28 @@ operator-sequence distributions. This is **algebraic query-plan diversity**,
 not yet a new information-need or independent cross-source verification
 relation.
 
-To generate the new bank:
+To generate only the new Stage-1 bank:
 
 ```bash
 python -m environment generate-questions \
-  --config environment/configs/questions.yaml
+  --config environment/configs/questions_typed_operators.yaml
 ```
 
-For a fully connected Stage 1→2→4 run, `python -m environment run` wires
-the new Stage-1 output into Stage 2 and Stage 4 automatically. Standalone
-Stage 4 continues to read only the two explicit paths in its own config;
-it does not silently switch to new scenes.
+To run a **separate** new Stage 1→2→4 experiment, use the three matching
+pilot configs (all have fresh output directories):
+
+```bash
+python -m environment run \
+  --questions-config environment/configs/questions_typed_operators.yaml \
+  --reports-config environment/configs/subagent_reports_typed_operators.yaml \
+  --untrusted-config environment/configs/untrusted_typed_operators.yaml \
+  --mode llm
+```
+
+The `run` command wires the Stage-1 and Stage-2 artifact paths itself.
+The original default 1→2→4 configuration remains unchanged. Standalone
+Stage 4 continues to read only the two paths in the selected YAML config;
+it does not silently switch between Scene banks.
 
 ## One command
 
