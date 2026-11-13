@@ -13,9 +13,7 @@ WARRANT_POLICY = "independent_confirmation"
 
 
 def extract_claim(source: dict, observation: dict, *, field: str,
-                  attribute: str, valid_scope: str = "event",
-                  revision_seq: int = 1, revision_of: str | None = None,
-                  authoritative: bool = False) -> dict:
+                  attribute: str, valid_scope: str = "event") -> dict:
     """Extract a source-grounded assertion with a canonical Claim key."""
     sid = source.get("source_id")
     root = source.get("evidence_origin_id")
@@ -32,6 +30,15 @@ def extract_claim(source: dict, observation: dict, *, field: str,
         raise ValueError("claim_attribute_missing")
     if not isinstance(valid_scope, str) or not valid_scope:
         raise ValueError("claim_valid_scope_missing")
+    # Credentials and version history are source/observation facts; callers
+    # cannot grant authority or invent a revision by a keyword argument.
+    revision_seq = observation.get("revision_seq", 1)
+    revision_of = observation.get("revision_of")
+    authoritative = source.get("authority_designation") == "official_registry"
+    if revision_of is not None and (
+        not isinstance(revision_of, str) or not revision_of
+    ):
+        raise ValueError("claim_revision_reference_invalid")
     if type(revision_seq) is not int or revision_seq < 1:
         raise ValueError("claim_revision_seq_invalid")
     oid = observation.get("observation_id")

@@ -20,16 +20,18 @@ def _claim(source_id: str, origin: str, value: int, *,
            subject: str = "Case-001", seq: int = 1,
            revision_of=None, authoritative=False):
     source = {"source_id": source_id, "evidence_origin_id": origin}
+    if authoritative:
+        source["authority_designation"] = "official_registry"
     obs = {
         "observation_id": source_id + ".OBS001",
         "fact_refs": [source_id + ":F001"],
         "values": {"case_id": subject, "reported_year": value},
+        "revision_seq": seq,
+        **({"revision_of": revision_of} if revision_of is not None else {}),
     }
     return extract_claim(
         source, obs, field="reported_year",
         attribute="reported_event_year", valid_scope="same_reported_event",
-        revision_seq=seq, revision_of=revision_of,
-        authoritative=authoritative,
     )
 
 
