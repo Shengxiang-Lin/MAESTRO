@@ -295,6 +295,9 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     witness_critic_rereviews = 0
     retained_language_exceptions = 0
     local_candidates, local_qualified, local_rejections = [], [], []
+    claim_state_supervision = []
+    claim_state_diagnostics = []
+    claim_state_statuses = Counter()
     wrong_visibility_rows = []
     wrong_visibility_counts = Counter()
     wrong_visibility_outcomes: dict[str, Counter] = defaultdict(Counter)
@@ -370,6 +373,40 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         if data.get("private_audit") is not None:
             audit = data["private_audit"]
             audits.append(audit)
+            # Keep every observational state in private diagnostics, but
+            # expose the standalone training-side state labels ONLY when
+            # this exact Episode passed global recovery and review.
+            claim_audit = audit.get("visible_claim_state") or {}
+            for snapshot in claim_audit.get("rounds", []):
+                state_label = {
+                    "round_sample_id": plan["sample_id"],
+                    "task_id": data["task_id"],
+                    "main_can_act_from_round":
+                        snapshot["main_can_act_from_round"],
+                    "schema": claim_audit.get("schema"),
+                    "schema_version": claim_audit.get("schema_version"),
+                    "claim_nodes": snapshot.get("claim_nodes", []),
+                    "claim_states": snapshot.get("claim_states", {}),
+                    "claim_relations": snapshot.get("claim_relations", []),
+                    "claim_dependency_edges":
+                        snapshot.get("claim_dependency_edges", []),
+                    "task_dependency_edges":
+                        snapshot.get("task_dependency_edges", []),
+                    "report_events":
+                        snapshot.get("returned_source_reports", []),
+                    "transitions": snapshot.get("state_changes", []),
+                    "source": "main_visible_received_reports_only",
+                    "private_only": True,
+                }
+                claim_state_diagnostics.append({
+                    **state_label, "global_publication_status": status,
+                })
+                if status == "recovered":
+                    claim_state_supervision.append(state_label)
+                    claim_state_statuses.update(
+                        node["status"] for node in
+                        state_label["claim_states"].values()
+                    )
             retained_language_exceptions += bool(
                 audit.get("language_exception")
             )
@@ -569,6 +606,14 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     _atomic_jsonl(output / "main_turns.jsonl", positive_turns)
     _atomic_jsonl(output / "failed.jsonl", failures)
     _atomic_jsonl(output / "private" / "fault_alignment.jsonl", audits)
+    _atomic_jsonl(
+        output / "private" / "claim_state_supervision.jsonl",
+        claim_state_supervision,
+    )
+    _atomic_jsonl(
+        output / "private" / "claim_state_diagnostics.jsonl",
+        claim_state_diagnostics,
+    )
     _atomic_jsonl(output / "private" / "publication_guard.jsonl",
                   publication_guard_rows)
     _atomic_jsonl(output / "private" / "event_timeline.jsonl",
@@ -691,6 +736,15 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "subagent_witness_critic_rereviews": witness_critic_rereviews,
         "subagent_guard_failure_causes": dict(report_guard_failures),
         "subagent_review_failure_stages": dict(report_review_failures),
+        "claim_state_supervision_rounds": len(claim_state_supervision),
+        "claim_state_diagnostic_rounds": len(claim_state_diagnostics),
+        "claim_state_status_distribution": dict(claim_state_statuses),
+        "claim_state_supervision": str(
+            output / "private" / "claim_state_supervision.jsonl"
+        ),
+        "claim_state_diagnostics": str(
+            output / "private" / "claim_state_diagnostics.jsonl"
+        ),
         "main_action_generation_modes": dict(main_modes),
         "main_action_review_statuses": dict(main_statuses),
     }
@@ -1423,7 +1477,7 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_stage1_stage2_stage4_v10_4_3",
+        "pipeline": "maestro_untrusted_orchestration",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
         "max_candidates_per_feedback_round": max_candidates_per_round,
@@ -1435,7 +1489,7 @@ def generate_turns(
             output / "private" / "candidate_selection.jsonl"
         ),
         "candidate_backfill_diversity": (
-            "v10_1_causal_recovery_rank_distinct_behavior"
+            "causal_recovery_rank_distinct_behavior"
         ),
         "evidence_affordance_diagnostics": str(
             output / "private" / "scene_evidence_affordances.jsonl"
@@ -1550,6 +1604,7 @@ def generate_turns(
             "LLM-mode fallback reports are diagnostic only, never silently counted as reviewed positive turns.",
             "4C action task_instruction and context are fixed against the current 4A/4B executable evidence contract; LLM edits only decision reasoning.",
             "Per-turn local eligibility is diagnostic in private/main_turns_local_review.jsonl; it is never silently merged into globally verified reviewed turns.",
+            "Claim–Source–Dependency supervision is private and derived from actually returned report text only; unknown text remains unknown and no future Gold is materialized.",
         ],
     }
     _atomic_json(output / "summary.json", summary)
