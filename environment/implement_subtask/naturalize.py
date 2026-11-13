@@ -221,6 +221,7 @@ def naturalize_subtasks(
     max_scenes: int | None = None, no_progress: bool = False,
     overwrite: bool = False, flush_every: int = 1,
     reuse_from: Path | None = None,
+    result_policy: str = "llm_authored",
     clients: tuple | None = None,
 ) -> dict:
     """Stream per-Macro reviews, publish complete scenes, and resume safely.
@@ -241,6 +242,8 @@ def naturalize_subtasks(
         raise ValueError("max_revisions must be between 0 and 8")
     if type(flush_every) is not int or flush_every < 1:
         raise ValueError("flush_every must be a positive integer")
+    if result_policy not in {"llm_authored", "code_owned"}:
+        raise ValueError("unknown_subagent_result_policy")
     if max_scenes is not None and (
         type(max_scenes) is not int or max_scenes < 1
     ):
@@ -326,7 +329,8 @@ def naturalize_subtasks(
                 row, question=question, author=author, critic=critic,
                 max_revisions=max_revisions, is_terminal=is_terminal,
                 result_policy=(
-                    "code_owned" if row.get("evidence_trust_version")
+                    "code_owned" if result_policy == "code_owned"
+                    and row.get("evidence_trust_version")
                     else "llm_authored"
                 ),
             )
@@ -373,6 +377,7 @@ def naturalize_subtasks(
         "critic_model": critic_model or model,
         "critic_endpoint": critic_api_base or api_base,
         "max_revisions": max_revisions, "timeout": timeout,
+        "result_policy": result_policy,
         "reuse_source_fingerprint": previous_fingerprint,
         "prompt_code_hash": file_digest(code_root / "reporting.py"),
         "visible_evidence_code_hash": file_digest(
