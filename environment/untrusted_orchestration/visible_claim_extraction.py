@@ -134,14 +134,17 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
                     for case in ids:
                         add(case, "identifier_present", True, "result")
 
-    if isinstance(summary, str):
-        for match in _SUMMARY_PAIR.finditer(summary):
-            # A free-form summary pair must explicitly name its subject
-            # and one of this delegated task's output fields.
+    for surface, prose in (("result", result), ("summary", summary)):
+        if not isinstance(prose, str):
+            continue
+        for match in _SUMMARY_PAIR.finditer(prose):
+            # A free-form assertion must explicitly name its subject
+            # and a field in this delegated task's output contract.
+            # This cannot infer missing fields from task/World metadata.
             if match.group("field") in declared:
                 add(match.group("subject"), match.group("field"),
-                    _parse_scalar(match.group("value")), "summary")
-                modes.add("explicit_summary_pair")
+                    _parse_scalar(match.group("value")), surface)
+                modes.add("explicit_" + surface + "_pair")
 
     if source_id in {"report_a", "report_b"}:
         for item in visible_year_claims(report, source_id):
