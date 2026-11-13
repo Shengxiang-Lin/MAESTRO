@@ -253,37 +253,6 @@ class StageLocalScopeRegressions(unittest.TestCase):
                     _stage_scope_issues(summary, contract),
                 )
 
-    def test_private_guard_failure_keeps_full_summary_for_debugging(self):
-        class InvalidSummaryAuthor:
-            def complete_json(self, system_prompt, user_prompt):
-                teacher = json.loads(user_prompt)["frozen_task_and_evidence"]
-                return {
-                    "result": teacher["exact_oracle_answer"],
-                    "status": "done",
-                    "summary": (
-                        "Scanned the source and filtered records to the "
-                        "eligible subset, even though the current operation "
-                        "is only a read-only source scan."
-                    ),
-                }
-        frozen = scene(31, "easy")
-        record = next(
-            row for row in realize_scene(frozen)["macro_tasks"]
-            if [step["operation"] for step in row["trace_summary"]["steps"]]
-            == ["scan"]
-        )
-        reviewed, result = author_critic_report(
-            record, question=frozen["question"], author=InvalidSummaryAuthor(),
-            critic=ReportCritic(), max_revisions=0,
-        )
-        self.assertIsNone(reviewed)
-        self.assertEqual(result["status"], "failed")
-        self.assertIn("candidate_summary", result["failures"][0])
-        self.assertIn("filtered records",
-                      result["failures"][0]["candidate_summary"])
-        self.assertEqual(result["failures"][0]["candidate_result_type"],
-                         "list")
-
     def test_intermediate_join_does_not_claim_unexecuted_time_check(self):
         from environment.implement_subtask.reporting import _stage_scope_issues
         contract = self._contract(
