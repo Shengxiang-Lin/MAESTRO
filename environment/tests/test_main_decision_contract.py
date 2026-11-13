@@ -229,7 +229,7 @@ class GuardedMainAuthorTests(unittest.TestCase):
             [review_pass()],
         )
         self.assertEqual(status["status"], "accepted", status)
-        self.assertEqual(status["decision_contract_version"], "v10_4_2")
+        self.assertEqual(status["decision_contract_version"], "v10_4_3")
         self.assertEqual(status["confirmed_visible_conflicts"], 1)
         self.assertNotIn("locked_visible_fact_core_applied", status)
         self.assertEqual(action["action"], "delegate_task")

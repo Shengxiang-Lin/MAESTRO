@@ -24,6 +24,7 @@ from environment.generate_question.program_ir import Relation
 from .report_author import naturalize_report
 from .public_language import sanitize_public_report
 from .reasoning_fidelity import reasoning_evidence_issues
+from .visible_history import visible_history_reasoning_issues
 from .main_decision_contract import (
     build_main_decision_contract, critic_denies_confirmed_conflict,
 )
@@ -336,7 +337,12 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                         )
                     ),
                     reasoning_guard=(
-                        lambda text: reasoning_evidence_issues(text, visible_goals)
+                        lambda text: (
+                            reasoning_evidence_issues(text, visible_goals)
+                            + visible_history_reasoning_issues(
+                                text, decision_contract["prior_field_activity"]
+                            )
+                        )
                     ) if author is not None else None,
                 )
                 # The final Main instruction/context must be exactly the

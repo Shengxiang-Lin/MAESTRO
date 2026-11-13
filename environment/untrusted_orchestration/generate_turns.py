@@ -73,6 +73,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "event_scheduler.py", "scenario_generator.py",
         "candidate_exploration.py", "candidate_selection.py",
         "evidence_affordances.py", "reasoning_fidelity.py",
+        "visible_history.py",
         "main_decision_contract.py",
         "report_contract.py", "report_evidence.py",
         "report_validation.py", "public_language.py",
@@ -303,6 +304,8 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     revalidations_total = 0
     late_conflicts_total = 0
     recovered_after_actual_invalidation = 0
+    published_with_downstream_invalidation = 0
+    published_with_invalidation_and_visible_conflict = 0
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -366,6 +369,13 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             invalidations = runtime.get("invalidations", [])
             conflicts = runtime.get("detected_conflicts", [])
             invalidations_total += len(invalidations)
+            if status == "recovered" and invalidations:
+                # Count only globally recovered and language-reviewed
+                # published branches, never 4A-only simulated candidates.
+                published_with_downstream_invalidation += 1
+                published_with_invalidation_and_visible_conflict += bool(
+                    conflicts
+                )
             revalidations_total += len(runtime.get("revalidations", []))
             late_conflicts_total += len(conflicts)
             recovered_after_actual_invalidation += (
@@ -482,7 +492,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 result = review["authoring"]
                 main_modes[result["mode"]] += 1
                 main_statuses[result.get("status", "unknown")] += 1
-                contracted = result.get("decision_contract_version") == "v10_4_2"
+                contracted = result.get("decision_contract_version") == "v10_4_3"
                 main_decision_contract_reviews += bool(contracted)
                 main_decision_contract_accepted += (
                     bool(contracted) and result.get("status") == "accepted"
@@ -622,6 +632,10 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "visible_late_conflicts_detected": late_conflicts_total,
         "execution_recovered_after_invalidation":
             recovered_after_actual_invalidation,
+        "published_with_downstream_invalidation":
+            published_with_downstream_invalidation,
+        "published_with_invalidation_and_visible_conflict":
+            published_with_invalidation_and_visible_conflict,
         "event_timeline_diagnostics": str(
             output / "private" / "event_timeline.jsonl"
         ),
@@ -1399,7 +1413,7 @@ def generate_turns(
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
-        "pipeline": "maestro_stage1_stage2_stage4_v10_4_2",
+        "pipeline": "maestro_stage1_stage2_stage4_v10_4_3",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
         "max_candidates_per_feedback_round": max_candidates_per_round,

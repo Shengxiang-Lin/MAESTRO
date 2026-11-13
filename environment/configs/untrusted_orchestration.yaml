@@ -8,7 +8,7 @@ input:
   reports: environment/data/maestro_subagent_reports_100/subtasks.jsonl
 
 generation:
-  output_dir: environment/data/maestro_untrusted_rounds_v10_4_2
+  output_dir: environment/data/maestro_untrusted_rounds_v10_4_3
   max_scenes: null
   branches_per_scene: null  # optional debugging cap
   seed: 17
