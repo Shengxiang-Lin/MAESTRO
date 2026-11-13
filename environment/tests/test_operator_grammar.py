@@ -145,6 +145,46 @@ class TypedOperatorGrammarTests(unittest.TestCase):
         self.assertIn("invalid_operator_grammar_version",
                       validate_spec(altered))
 
+    def test_stage2_oracle_and_stage4_trusted_prefix_accept_new_program(self):
+        import json
+        from environment.implement_subtask.realize import realize_scene
+        from environment.untrusted_orchestration.trusted_prefix import (
+            compile_trusted_prefixes,
+        )
+        from environment.untrusted_orchestration.trajectory_builder import (
+            build_branch,
+        )
+        from environment.untrusted_orchestration.faults import Fault
+
+        typed = sample(3, share=100)
+        scene = compile_and_validate(typed, reference_question(typed))
+        oracle = realize_scene(scene, strict=True)
+        self.assertEqual(oracle["macro_task_count"],
+                         scene["macro_graph"]["macro_task_count"])
+        reports = [{
+            **row,
+            "finish_result": {
+                "status": "done",
+                "result": "Observed: " + json.dumps(row["answer"]),
+                "summary": "Grounded observations " + json.dumps(row["answer"]),
+            },
+            "report_authoring": {"status": "accepted"},
+        } for row in oracle["macro_tasks"]]
+        episodes, reviews = compile_trusted_prefixes(
+            [scene], reports, max_rounds=16,
+            sub_model="qwen3-8b", model_alias="model_1",
+        )
+        self.assertEqual(reviews[0]["status"], "accepted", reviews)
+        clean = episodes[scene["task_id"]]
+        self.assertEqual(clean["trajectory"][-1]["action"], "complete")
+        first = scene["macro_graph"]["reference_waves"][0][0]
+        _episode, turns, audit = build_branch(
+            scene, reports, clean, branch_round=2,
+            faults=[Fault(first, "missing")],
+        )
+        self.assertEqual(audit["outcome"], "recovered")
+        self.assertTrue(turns)
+
     def test_old_scene_exact_gold_remains_valid(self):
         legacy = sample(2, share=0)
         scene = compile_and_validate(legacy, reference_question(legacy))
