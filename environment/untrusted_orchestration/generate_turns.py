@@ -399,9 +399,14 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                     "source": "main_visible_received_reports_only",
                     "private_only": True,
                 }
-                claim_state_diagnostics.append({
-                    **state_label, "global_publication_status": status,
-                })
+                # Nonselected 4A candidates have only deterministic
+                # preview text, not finalized 4B/4C reports. Keep their
+                # exploratory audit elsewhere; never present those state
+                # snapshots as reviewed language diagnostics.
+                if status != "not_selected_for_language_review":
+                    claim_state_diagnostics.append({
+                        **state_label, "global_publication_status": status,
+                    })
                 if status == "recovered":
                     claim_state_supervision.append(state_label)
                     claim_state_statuses.update(
