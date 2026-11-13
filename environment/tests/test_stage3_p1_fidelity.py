@@ -73,6 +73,14 @@ class ReasoningFidelityTests(unittest.TestCase):
             ),
             [],
         )
+        self.assertEqual(
+            check_reasoning_fidelity(
+                "This lookup will return record_key_1 to retrieve "
+                "the exhibition year from a subsequent source.",
+                contract,
+            ),
+            [],
+        )
 
     def test_counts_sources_separately_from_subagent_tasks(self):
         contract = build_round_evidence_contract(
