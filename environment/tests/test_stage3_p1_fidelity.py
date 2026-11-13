@@ -94,6 +94,91 @@ class ReasoningFidelityTests(unittest.TestCase):
         self.assertIn("private_limits", contract)
         self.assertNotIn("private_limits", json.dumps(contract["public"]))
 
+    def test_set_relation_critic_rereview_does_not_auto_accept(self):
+        first = (
+            "The current task returned 3 case identifiers: "
+            "Case-010, Case-012, Case-011."
+        )
+        second = (
+            "The current task returned 3 case identifiers: "
+            "Case-013, Case-011, Case-005."
+        )
+        assignments = [pending("context", "case_id")]
+        contract = build_round_evidence_contract(
+            assignments, returned(), has_later_delegation=True,
+            upstream_result_groups=[[first, second]],
+        )
+
+        class Author:
+            def complete_json(self, system, request):
+                return {"reasoning": (
+                    "The two already returned public identifier lists "
+                    "have only Case-011 in common. I will cross-reference "
+                    "the existing records to produce the matching case "
+                    "identifier without claiming the year is confirmed."
+                )}
+
+        class Critic:
+            def __init__(self, second_pass=True):
+                self.second_pass, self.calls = second_pass, []
+            def complete_json(self, system, request):
+                self.calls.append((system, json.loads(request)))
+                correct = self.second_pass and len(self.calls) == 2
+                return {
+                    "verdict": "pass" if correct else "fail",
+                    "grounded": correct,
+                    "assignment_fidelity": correct,
+                    "o1_style": correct,
+                    "reason": (
+                        "The intersection also contains Case-013."
+                        if not correct else "The visible overlap is Case-011."
+                    ),
+                    "repair_hint": "Check both lists carefully.",
+                }
+
+        critic = Critic(second_pass=True)
+        action, status = author_delegate_action(
+            assignments=assignments,
+            prompt="==== QUESTION ==== Determine a confirmed match year.",
+            author=Author(), critic=critic, max_revisions=0,
+            freeze_assignment_prose=True, reasoning_only_stage3=True,
+            round_evidence_contract=contract,
+            author_system=STAGE3_REASONING_AUTHOR_SYSTEM,
+            critic_system=STAGE3_REASONING_CRITIC_SYSTEM,
+            reasoning_guard=lambda reasoning: check_reasoning_fidelity(
+                reasoning, contract,
+            ),
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(len(critic.calls), 2)
+        self.assertTrue(status["visible_set_relation_rereviewed"])
+        self.assertIn(
+            "SECOND INDEPENDENT REVIEW", critic.calls[1][0],
+        )
+        self.assertIn("Case-011", action["reasoning"])
+        self.assertEqual(
+            critic.calls[1][1]["current_round_evidence_contract"]
+                ["observed_identifier_set_relations"][0]
+                ["shared_identifiers"],
+            ["Case-011"],
+        )
+        rejecting = Critic(second_pass=False)
+        rejected_action, rejected = author_delegate_action(
+            assignments=assignments,
+            prompt="==== QUESTION ==== Determine a confirmed match year.",
+            author=Author(), critic=rejecting, max_revisions=0,
+            freeze_assignment_prose=True, reasoning_only_stage3=True,
+            round_evidence_contract=contract,
+            author_system=STAGE3_REASONING_AUTHOR_SYSTEM,
+            critic_system=STAGE3_REASONING_CRITIC_SYSTEM,
+            reasoning_guard=lambda reasoning: check_reasoning_fidelity(
+                reasoning, contract,
+            ),
+        )
+        self.assertIsNone(rejected_action)
+        self.assertEqual(rejected["status"], "failed")
+        self.assertEqual(len(rejecting.calls), 2)
+
     def test_relation_witness_fails_closed_on_unsupported_result_text(self):
         first = (
             "The current task returned 3 case identifiers: "
