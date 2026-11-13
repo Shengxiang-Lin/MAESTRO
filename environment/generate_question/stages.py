@@ -44,6 +44,7 @@ def _construction_identity(args) -> str:
             for name in (
                 "spec.py", "macro_planning.py",
                 "operator_grammar.py", "numeric_goal_world.py",
+                "evidence_operators.py", "evidence_relations.py",
                 "question_semantic_lock.py", "macro_evidence_world.py", "information_necessity.py",
                 "source_title_contract.py", "difficulty_proxy.py",
                 "scenario_fields.py", "topic_quality.py",

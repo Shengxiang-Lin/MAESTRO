@@ -1,32 +1,42 @@
-# Stage 1 — canonical V1.2
+# Stage 1 — canonical V1.3
 
-Run from the repository root:
+From the repository root:
 
 ```bash
 python -m environment generate-questions --config environment/configs/questions.yaml
 ```
 
-The single supported generation configuration enables typed equivalent
-operator variants, diverse numeric Goal witnesses and exact one-output
-Question semantics for Medium/Hard Macro-first V2 scenes. Easy remains
-a one-source approval baseline.
+Stage 1 deterministically builds an executable synthetic World, frozen Macro DAG,
+Gold Program, Gold Answer and source-grounded FactRefs. Existing Scenario Author/
+Critic and Question Author/Critic LLMs only naturalize the user-facing context
+and question; **no LLM is used for evidence operators, relations or warrant
+states**. The Easy approval baseline is unchanged.
 
-The persisted `reasoning_pattern: macro_first_v2` is a **data-format
-identifier**, not a reference to the retired v1 source generator.
-Stage 2 and Stage 4 depend on this frozen Scene and its FactRefs.
+## Evidence relations (V1.3)
 
-Key modules:
+- `evidence_operators.py` implements `extract_claim`, `align_claims`,
+  `relate_claims`, `resolve_claim` and `check_warrant`.
+- `evidence_relations.py` derives a **private** Claim Ledger from actual
+  `report_a` and `report_b` source observations already consumed by
+  `first_report` and `second_report` Macros. It verifies real
+  same-subject, same-attribute and same-temporal-scope pairs, including
+  **corroborates** and **contradicts**.
+- Each source has an explicitly generated provenance origin. Same-origin
+  duplicates are not independent confirmation. `supersedes` is available
+  only with an explicit same-lineage higher-version `revision_of` claim;
+  ordinary timestamp differences cannot create revisions.
+- `warrant_transitions` evaluate holding out one source and restoring
+  independent evidence. These are **source-ablation counterfactual states**,
+  not a fabricated sequence of actual Main-Agent message arrivals.
+- `quality.py` checks strict reproducibility of this private ledger
+  alongside ordinary World/Program/FactRefs replay; `quality_report.json`
+  summarizes comparable pairs and evidence-state sensitivity.
 
-- `macro_planning.py`, `operator_grammar.py`: frozen Macro DAG and
-  bounded typed query plans, checked for per-Macro witness equivalence
-- `macro_evidence_world.py`, `numeric_goal_world.py`: synthetic
-  sources, numeric Gold and source counterfactual mutation
-- `question_semantic_lock.py`, `semantic_evidence.py`:
-  Question/Program consistency checks
-- `world.py`, `compiler.py`, `quality.py`: execution, replay,
-  provenance and difficulty diagnostics
-- `stages.py`, `pipeline.py`: independent Author/Critic reviews,
-  ordered journals and quality reports.
+This first vertical slice deliberately **does not** manufacture supersession
+events or delayed Main-visible rounds. Existing Stage 1 question semantics,
+Gold answers and Macro operator plans remain unchanged. Subsequent work
+can add actual versioned sources and a policy/availability-aware decision
+oracle without weakening the existing answer counterfactual checks.
 
-`generation.target` is a candidate count, not an accepted quota.
-The versioned output directory must not resume an older pilot checkpoint.
+Old V1.2 Scenes without an `evidence_relation_version` marker retain
+their original World and replay semantics; new V1.3 output paths are isolated.

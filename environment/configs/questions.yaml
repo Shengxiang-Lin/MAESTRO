@@ -1,4 +1,4 @@
-# Canonical Stage 1 V1.2: typed Macro operators, diverse numeric witnesses, semantic lock.
+# Canonical Stage 1 V1.3: typed Macro operators, diverse numeric witnesses, semantic lock.
 # Paths are relative to the repository root; secrets must be environment vars.
 version: 1
 
@@ -7,7 +7,7 @@ input:
   max_records: 1000
 
 generation:
-  output_dir: environment/data/maestro_stage1_current_v1_2_100
+  output_dir: environment/data/maestro_stage1_current_v1_3_100
   target: 100
   seed: 17
   macro_planning_share: 100  # use the current Macro planning grammar for medium/hard tasks

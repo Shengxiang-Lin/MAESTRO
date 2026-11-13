@@ -173,6 +173,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         issues.append("missing_gold_answer")
     if not isinstance(scene.get("public"), dict) or set(scene["public"]) & {
         "world", "gold_program", "gold_answer", "entities", "gold_trace",
+        "evidence_ledger", "evidence_relation_audit",
     }:
         issues.append("privileged_world_leaked_to_public")
     if scene["public"].get("question") != scene["question"]:
@@ -192,7 +193,28 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         # references; the Critic alone is not a formal equivalence proof.
         issues.extend(guard_question(scene["question"], spec, scene.get("macro_graph")))
         issues.extend(semantic_scenario_issues(spec, expected_contract))
+    evidence_relation_audit = None
     try:
+        if spec.get("evidence_relation_version"):
+            from .evidence_relations import (
+                VERSION as RELATION_VERSION, compile_evidence_ledger,
+            )
+            if spec["evidence_relation_version"] != RELATION_VERSION:
+                issues.append("unsupported_evidence_relation_version")
+            ledger = compile_evidence_ledger(scene)
+            if scene.get("evidence_ledger") != ledger:
+                issues.append("evidence_ledger_not_reproducible")
+            evidence_relation_audit = {
+                "version": ledger["version"],
+                "independent_comparable_pairs":
+                    ledger["independent_comparable_pairs"],
+                "verification_sensitive_pairs":
+                    ledger["verification_sensitive_pairs"],
+                "relation_counts": ledger["relation_counts"],
+                "source_first_wave": ledger["source_first_wave"],
+            }
+        elif "evidence_ledger" in scene:
+            issues.append("unversioned_evidence_ledger")
         execution = evaluate_program(program, sources=world["sources"])
         answer = answer_values(execution)
         if answer != scene["gold_answer"]:
@@ -342,6 +364,8 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             "policy": "register_only_naive_filter_optional_sort_no_join",
         },
         "counterfactual_source_tests": counterfactual,
+        **({"evidence_relation_audit": evidence_relation_audit}
+           if evidence_relation_audit is not None else {}),
         "replay_exact": True,
         "answer_provenance": macro["answer_with_provenance"],
         "limitations": [
@@ -398,6 +422,9 @@ def compile_and_validate(spec: dict, question: str) -> dict:
     scene["task_feedback"] = run_macro_tasks(
         graph, sources=scene["world"]["sources"]
     )["task_feedback"]
+    if spec.get("evidence_relation_version"):
+        from .evidence_relations import compile_evidence_ledger
+        scene["evidence_ledger"] = compile_evidence_ledger(scene)
     report = audit_scene(scene)
     if report["status"] != "valid":
         raise ValueError(
