@@ -268,6 +268,24 @@ class GeneralVisibleClaimStateTests(unittest.TestCase):
             "unverified",
         )
 
+    def test_explicit_field_claim_in_result_prose_is_visible(self):
+        from environment.untrusted_orchestration.visible_claim_extraction import (
+            extract_visible_claims,
+        )
+        claims, parse = extract_visible_claims({
+            "finish_result": {
+                "status": "done",
+                "result": "Found Case-011, completed_count=4.",
+                "summary": "The search returned the matching record.",
+            }
+        }, output_fields=["case_id", "completed_count"],
+           source_id="alpha")
+        self.assertTrue(parse["parsed"])
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["surface"], "result")
+        self.assertEqual(claims[0]["subject"], "Case-011")
+        self.assertEqual(claims[0]["value"], 4)
+
     def test_source_only_metric_is_retained_without_entity_invention(self):
         from environment.untrusted_orchestration.visible_claim_extraction import (
             extract_visible_claims,
