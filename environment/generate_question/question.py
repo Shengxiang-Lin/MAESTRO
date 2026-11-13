@@ -331,6 +331,7 @@ def guard_question(question: str, spec: dict,
             mentions_goal = bool(
                 re.search(r"\b(?:higher|larger|greater)\b", q, re.I)
                 and re.search(r"\b(?:counts?|totals?)\b", q, re.I)
+                and re.search(r"\b(?:two|both|first|second)\b", q, re.I)
                 and re.search(r"\b(?:which|determine|identify|compare)\b",
                               q, re.I)
             )
