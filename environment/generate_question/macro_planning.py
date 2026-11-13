@@ -9,12 +9,20 @@ from __future__ import annotations
 import random
 
 from environment.schema import digest
-from .macro_first import _source
 from .evidence_tools import (
     EVIDENCE_TOOL_CONTRACT_VERSION, LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION,
     source_acquisition_policy, acquisition_for_operator,
     synthetic_page_url, web_acquisition_route,
 )
+
+def _source(sid, topic, modality, schema, *, key=None, purpose):
+    return ({
+        "source_id": sid, "title": f"{topic}: {sid.replace('_', ' ')} records",
+        "modality": modality, "purpose": purpose,
+        "access_mode": "keyed_lookup" if key else "browse",
+        **({"key_field": key} if key else {}),
+    }, schema)
+
 
 VERSION = "maestro.macro_plan.v2"
 INFORMATION_NECESSITY_VERSION = "maestro.cross_branch_candidates.v1"
