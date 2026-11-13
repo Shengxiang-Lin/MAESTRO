@@ -19,7 +19,8 @@ implementation:
 reporting:
   source_subtasks: environment/data/maestro_stage2_oracle_current_v1_4_100/subtasks.jsonl
   source_scene_index: environment/data/maestro_stage2_oracle_current_v1_4_100/scene_index.jsonl
-  output_dir: environment/data/maestro_stage2_reports_current_v1_4_100
+  # Canonical reviewed bank after the one-Macro repair (577/577 accepted).
+  output_dir: environment/data/maestro_stage2_reports_v1_4_repaired
   api_base: http://127.0.0.1:8807/v1
   model: local-qwen3.5-9b
   critic_api_base: null
