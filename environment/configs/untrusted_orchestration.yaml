@@ -5,7 +5,7 @@ version: 1
 
 input:
   scenes: environment/data/maestro_stage1_current_v1_4_100/questions/scenes.jsonl
-  reports: environment/data/maestro_stage2_reports_current_v1_4_100/subtasks.jsonl
+  reports: environment/data/maestro_stage2_reports_v1_4_repaired/subtasks.jsonl
 
 generation:
   output_dir: environment/data/maestro_stage4_current_v1_4_100
