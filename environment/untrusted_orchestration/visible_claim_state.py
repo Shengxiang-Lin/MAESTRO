@@ -182,7 +182,7 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
         if (not isinstance(tids, list) or not isinstance(reports, list)
                 or len(tids) != len(reports)):
             raise ValueError("visible_claim_dispatch_alignment_invalid")
-        events, dependencies = [], []
+        events = []
         for tid, report in zip(tids, reports):
             if tid not in tasks:
                 raise ValueError("visible_claim_unknown_macro")
@@ -227,12 +227,6 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
                 counters["unparsed_completed_report_slots"] += 1
             if parse["status"] != "done":
                 counters["noncompleted_report_slots"] += 1
-            dependencies.extend({
-                "parent_task_id": parent,
-                "child_task_id": tid,
-                "parent_report_observed": parent in latest_by_task,
-                "relation": "executed_task_depends_on",
-            } for parent in task.get("depends_on", []))
             events.append({
                 "macro_task_id": tid, "source_id": source_id,
                 "status": parse["status"],
