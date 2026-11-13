@@ -185,42 +185,28 @@ class TypedOperatorGrammarTests(unittest.TestCase):
         self.assertEqual(audit["outcome"], "recovered")
         self.assertTrue(turns)
 
-    def test_pilot_1_2_4_configs_are_isolated_from_defaults(self):
+    def test_canonical_1_2_4_configs_share_latest_stage1_bank(self):
         from pathlib import Path
         from environment.config import load_config as load_questions_config
         import yaml
 
         cfg = Path(__file__).resolve().parents[1] / "configs"
-        default = load_questions_config(cfg / "questions.yaml")
-        questions = load_questions_config(
-            cfg / "questions_typed_operators.yaml"
-        )
-        reports = yaml.safe_load(
-            (cfg / "subagent_reports_typed_operators.yaml").read_text()
-        )
+        questions = load_questions_config(cfg / "questions.yaml")
+        reports = yaml.safe_load((cfg / "subagent_reports.yaml").read_text())
         untrusted = yaml.safe_load(
-            (cfg / "untrusted_typed_operators.yaml").read_text()
+            (cfg / "untrusted_orchestration.yaml").read_text()
         )
-        self.assertEqual(default["generation"].get(
-            "operator_grammar_share", 0
-        ), 0)
-        self.assertEqual(questions["generation"]["operator_grammar_share"], 100)
-        self.assertNotEqual(
-            default["generation"]["output_dir"],
-            questions["generation"]["output_dir"],
-        )
-        scene_path = questions["generation"]["output_dir"] + (
-            "/questions/scenes.jsonl"
-        )
+        generation = questions["generation"]
+        self.assertEqual(generation["macro_planning_share"], 100)
+        self.assertEqual(generation["operator_grammar_share"], 100)
+        self.assertEqual(generation["numeric_goal_diversity_share"], 100)
+        self.assertEqual(generation["question_semantic_lock_share"], 100)
+        scene_path = generation["output_dir"] + "/questions/scenes.jsonl"
         self.assertEqual(reports["implementation"]["scenes"], scene_path)
         self.assertEqual(untrusted["input"]["scenes"], scene_path)
         self.assertEqual(
             untrusted["input"]["reports"],
             reports["reporting"]["output_dir"] + "/subtasks.jsonl",
-        )
-        self.assertNotEqual(
-            untrusted["generation"]["output_dir"],
-            "environment/data/maestro_untrusted_rounds_v10_4_3",
         )
 
     def test_old_scene_exact_gold_remains_valid(self):

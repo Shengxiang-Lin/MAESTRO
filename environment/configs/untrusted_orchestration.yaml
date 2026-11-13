@@ -4,11 +4,11 @@
 version: 1
 
 input:
-  scenes: environment/data/maestro_current_100/questions/scenes.jsonl
-  reports: environment/data/maestro_subagent_reports_100/subtasks.jsonl
+  scenes: environment/data/maestro_stage1_current_v1_2_100/questions/scenes.jsonl
+  reports: environment/data/maestro_stage2_reports_current_v1_2_100/subtasks.jsonl
 
 generation:
-  output_dir: environment/data/maestro_untrusted_rounds_v10_4_3
+  output_dir: environment/data/maestro_stage4_current_v1_2_100
   max_scenes: null
   branches_per_scene: null  # optional debugging cap
   seed: 17

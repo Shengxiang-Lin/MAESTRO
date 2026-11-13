@@ -1,31 +1,32 @@
-# Question construction
+# Stage 1 — canonical V1.2
 
-`python -m environment generate-questions --config environment/configs/questions.yaml`
+Run from the repository root:
 
-The source-code modules use **functional filenames**, while version markers
-inside already published Scene formats remain stable for Replay:
+```bash
+python -m environment generate-questions --config environment/configs/questions.yaml
+```
 
-| File | Responsibility |
-| --- | --- |
-| `macro_planning.py` | Current Macro task graph, evidence and frozen goal planning |
-| `macro_evidence_world.py` | Typed synthetic evidence and witness mutation |
-| `prompt_templates.py` | Question/Scenario author and critic prompts |
-| `spec.py` | Scene input contracts and valid reasoning patterns |
-| `world.py` | Typed World construction, public source projection |
-| `compiler.py` | Compile Macro DAGs and source-scoped executable WorkProducts |
-| `evidence_tools.py` | Frozen O1 tool policies and simulated Web Search→Extract chains |
-| `stages.py` | Scenario and Question candidate review with durable journals |
-| `pipeline.py` | Fixed candidate batch, final strict quality audit, summary |
-| `quality.py` | Replay, counterfactual and evidence consistency checks |
+The single supported generation configuration enables typed equivalent
+operator variants, diverse numeric Goal witnesses and exact one-output
+Question semantics for Medium/Hard Macro-first V2 scenes. Easy remains
+a one-source approval baseline.
 
-The initial `target` is a **candidate count**, not an accepted quota.
-Every independently accepted Question is published; no additional candidates
-are generated to refill rejected slots. Progress bars show Scenario
-Author/Critic, Compile/difficulty audit and Question Author/Critic.
-Extra Replay detail is only shown when requested.
+The persisted `reasoning_pattern: macro_first_v2` is a **data-format
+identifier**, not a reference to the retired v1 source generator.
+Stage 2 and Stage 4 depend on this frozen Scene and its FactRefs.
 
-The current Macro planning grammar's persisted schema identifier is
-`macro_first_v2` for backward-compatible validation. This identifier is
-not a Python filename or module name; renaming it inside old data would
-break provenance. The earlier Macro-first implementation remains available
-for archived-Scene Replay, but is not the default generation path.
+Key modules:
+
+- `macro_planning.py`, `operator_grammar.py`: frozen Macro DAG and
+  bounded typed query plans, checked for per-Macro witness equivalence
+- `macro_evidence_world.py`, `numeric_goal_world.py`: synthetic
+  sources, numeric Gold and source counterfactual mutation
+- `question_semantic_lock.py`, `semantic_evidence.py`:
+  Question/Program consistency checks
+- `world.py`, `compiler.py`, `quality.py`: execution, replay,
+  provenance and difficulty diagnostics
+- `stages.py`, `pipeline.py`: independent Author/Critic reviews,
+  ordered journals and quality reports.
+
+`generation.target` is a candidate count, not an accepted quota.
+The versioned output directory must not resume an older pilot checkpoint.

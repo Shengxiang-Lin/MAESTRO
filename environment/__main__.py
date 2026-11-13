@@ -48,9 +48,6 @@ def parser() -> argparse.ArgumentParser:
                           help="Override generation.output_dir from YAML")
     generate.add_argument("--target", type=int,
                           help="Override generation.target from YAML")
-    generate.add_argument("--macro-planning-share", "--macro-first-v2-share",
-                          dest="macro_first_v2_share", type=int,
-                          help="Percent of medium/hard tasks using the current Macro planning grammar")
     generate.add_argument("--no-progress", action="store_true")
     generate.add_argument("--verbose-progress", action="store_true",
                           help="Also show auxiliary validation and Replay audit progress")
@@ -214,10 +211,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         if cli.flush_every is not None:
             options.flush_every = cli.flush_every
-        if cli.macro_first_v2_share is not None:
-            if not 0 <= cli.macro_first_v2_share <= 100:
-                p.error("--macro-first-v2-share must be 0..100")
-            options.macro_first_v2_share = cli.macro_first_v2_share
         options.verbose_progress = cli.verbose_progress
         result = generate_questions(options)
         report_location = options.output_dir / "summary.json"
