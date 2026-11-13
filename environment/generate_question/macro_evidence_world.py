@@ -340,8 +340,19 @@ def mutate_witness(sources: dict, sid: str, gold_rows: list[dict],
     elif sid in {"stat_a", "stat_b"}:
         plan = spec["macro_plan"]
         kind = plan["goal_resolution"]["kind"]
-        key = plan["macro_tasks"][-2]["output_schema"]
-        key_field = next(iter(key))
+        # The correlation key is the unique shared field of the two
+        # independent statistic source schemas. Never infer it from dict
+        # insertion order: with an index hop, metric_b sorts before
+        # record_key_1/2 in the frozen JSON Output Schema.
+        left_schema = plan["source_schemas"]["stat_a"]
+        right_schema = plan["source_schemas"]["stat_b"]
+        common_fields = set(left_schema) & set(right_schema)
+        if (len(common_fields) != 1 or any(
+            left_schema[field] != right_schema[field]
+            for field in common_fields
+        )):
+            raise ValueError("statistic_source_key_contract_ambiguous")
+        key_field = next(iter(common_fields))
         peer_id = "stat_b" if sid == "stat_a" else "stat_a"
         peer = next(
             row["values"] for row in revised[peer_id]["observations"]
