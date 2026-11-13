@@ -75,6 +75,11 @@ def _validate_reused_result(accepted: dict, teacher: dict) -> None:
                 else finish["summary"]
             )):
         raise StreamingError("previous_accepted_invalid_finish_contract")
+    if teacher.get("evidence_trust_version"):
+        from .visible_evidence import witnessed_source_summary
+        witness = witnessed_source_summary(teacher)
+        if witness and witness not in finish["summary"]:
+            raise StreamingError("previous_accepted_missing_public_claim_witness")
     critic = review.get("review", {})
     if not isinstance(critic, dict) or critic.get("verdict") != "pass":
         raise StreamingError("previous_accepted_missing_critic_pass")

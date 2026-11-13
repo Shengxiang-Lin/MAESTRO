@@ -371,6 +371,9 @@ def naturalize_subtasks(
         "max_revisions": max_revisions, "timeout": timeout,
         "reuse_source_fingerprint": previous_fingerprint,
         "prompt_code_hash": file_digest(code_root / "reporting.py"),
+        "visible_evidence_code_hash": file_digest(
+            code_root / "visible_evidence.py"
+        ),
         "stage_local_claim_code_hash": file_digest(
             code_root / "stage_local_claims.py"
         ),

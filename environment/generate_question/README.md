@@ -44,7 +44,11 @@ absence of task data dependencies: report B can depend on case IDs from
 report A without copying its year assertion.
 
 Stage 2 materializes frozen Macro WorkProducts and naturalizes reviewed
-Sub-Agent reports. Stage 4 provides adversarial feedback and runtime
+Sub-Agent reports. For V1.4 source-report Macros, a compact list of actual
+returned case/year rows is added deterministically to the reviewed summary.
+Stage 4 separately parses literal returned text and records private
+`visible_claim_state` transitions (including faulty/missing reports and
+retries) without reconstructing unseen facts from the World. Stage 4 provides adversarial feedback and runtime
 Main-Agent recovery behavior; truthful source disagreements are not
 themselves Sub-Agent faults.
 
