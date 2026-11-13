@@ -107,7 +107,9 @@ def compile_claim_contract(record: dict) -> dict:
     sources = set(record["trace_summary"]["available_evidence_source_ids"])
     comparisons = [
         step["action"] for step in steps
-        if step.get("operation") == "compare_fields"
+        if step.get("operation") in {
+            "compare_fields", "claim_relation_filter",
+        }
     ]
     local_year_disagreement = (
         {"report_a", "report_b"}.issubset(sources)

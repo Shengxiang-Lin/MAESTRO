@@ -118,10 +118,13 @@ def compile_semantic_contract(
                 raise ValueError("semantic_unknown_source:" + sid)
             scopes.add(sid)
         provenance[node["id"]] = sorted(scopes)
-        if op in {"filter_eq", "filter_gte", "compare_fields"}:
-            if op == "compare_fields":
+        if op in {"filter_eq", "filter_gte", "compare_fields",
+                  "claim_relation_filter"}:
+            if op in {"compare_fields", "claim_relation_filter"}:
                 predicates.append({
-                    "operator": node["comparison"],
+                    "operator": (
+                        node["comparison"] if op == "compare_fields" else "ne"
+                    ),
                     "left_field": node["left_field"],
                     "right_field": node["right_field"],
                     "source_scopes": sorted(scopes),

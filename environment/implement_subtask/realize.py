@@ -53,9 +53,9 @@ def _describe_operation(node: dict) -> str:
         )
     if op == "claim_relation_filter":
         return (
-            "Check whether the two independent source claims about "
-            f"{node['attribute']} disagree for each {node['subject_field']}, "
-            "retaining both source fact references"
+            f"Check that {node['left_field']} differs from "
+            f"{node['right_field']} for each {node['subject_field']} "
+            "using the two independent source fact references"
         )
     if op == "compare_fields":
         comparison = {
