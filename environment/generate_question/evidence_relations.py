@@ -10,7 +10,7 @@ from collections import Counter
 
 from .evidence_operators import (
     VERSION as OPERATORS_VERSION, WARRANT_POLICY,
-    extract_claim, relate_claims, check_warrant,
+    extract_claim, align_claims, relate_claims, check_warrant, resolve_claim,
 )
 
 VERSION = "maestro.evidence_relation_ledger.v1"
@@ -34,7 +34,7 @@ def compile_evidence_ledger(scene: dict) -> dict:
         "visibility": "private_oracle_audit_not_main_input",
         "warrant_policy": WARRANT_POLICY,
         "pattern": pattern,
-        "claims": [], "relations": [],
+        "claims": [], "relations": [], "reference_evidence_program": [],
         "relation_counts": {},
         "warrant_transitions": [],
         "independent_comparable_pairs": 0,
@@ -85,6 +85,46 @@ def compile_evidence_ledger(scene: dict) -> dict:
             with_first["sufficient_to_accept"] !=
             with_both["sufficient_to_accept"]
         )
+        # This is an executable PRIVATE evidence-program trace whose inputs
+        # are existing Source observations, not fabricated Gold labels.
+        # Real Main-Agent turns are assembled later from actual reports.
+        output["reference_evidence_program"].extend([
+            {
+                "op": "ExtractClaim", "output": first["claim_id"],
+                "source_id": first["source_id"],
+                "fact_refs": first["fact_refs"],
+            },
+            {
+                "op": "ExtractClaim", "output": second["claim_id"],
+                "source_id": second["source_id"],
+                "fact_refs": second["fact_refs"],
+            },
+            {
+                "op": "AlignClaims",
+                "inputs": [first["claim_id"], second["claim_id"]],
+                "output": align_claims(first, second),
+            },
+            {
+                "op": "RelateClaims",
+                "inputs": [first["claim_id"], second["claim_id"]],
+                "output": relation,
+            },
+            {
+                "op": "CheckWarrant",
+                "inputs": [first["claim_id"]],
+                "output": with_first,
+            },
+            {
+                "op": "CheckWarrant",
+                "inputs": [first["claim_id"], second["claim_id"]],
+                "output": with_both,
+            },
+            {
+                "op": "ResolveClaim",
+                "inputs": [first["claim_id"], second["claim_id"]],
+                "output": resolve_claim([first, second]),
+            },
+        ])
         output["claims"].extend([first, second])
         output["relations"].append({
             "subject": subject, "left_claim_id": first["claim_id"],

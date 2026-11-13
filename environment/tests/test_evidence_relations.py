@@ -154,6 +154,15 @@ class SceneEvidenceLedgerTests(unittest.TestCase):
             "source_ablation_not_real_arrival_order"
             for item in ledger["warrant_transitions"]
         ))
+        self.assertEqual(
+            {step["op"] for step in ledger["reference_evidence_program"]},
+            {"ExtractClaim", "AlignClaims", "RelateClaims",
+             "CheckWarrant", "ResolveClaim"},
+        )
+        self.assertEqual(
+            len(ledger["reference_evidence_program"]),
+            ledger["independent_comparable_pairs"] * 7,
+        )
 
     def test_late_context_pattern_uses_same_source_grounded_claims(self):
         spec = _spec_of("corroborated_dispute")
