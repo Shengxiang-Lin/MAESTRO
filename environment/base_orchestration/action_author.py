@@ -299,8 +299,16 @@ def action_issues(action: dict, assignments: list[dict],
     all_action_text = json.dumps(action, ensure_ascii=False)
     if _FORBIDDEN.search(all_action_text):
         errors.append("internal_teacher_language")
-    # Author revision feedback is not part of the Main's O1 history.
-    if _GENERATION_META.search(all_action_text):
+    # The machine-readable action label is legitimately "delegate_task".
+    # Scan natural-language fields ONLY: internal planning vocabulary in
+    # Main prose is forbidden, but the O1 action schema is not prose.
+    prose = [reasoning] if isinstance(reasoning, str) else []
+    prose.extend(
+        value for task in tasks if isinstance(task, dict)
+        for value in (task.get("task_instruction"), task.get("context"))
+        if isinstance(value, str)
+    )
+    if any(_GENERATION_META.search(text) for text in prose):
         errors.append("generation_process_leak")
     for i, (task, expected) in enumerate(zip(tasks, assignments)):
         if not isinstance(task, dict):
