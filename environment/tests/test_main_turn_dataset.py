@@ -52,6 +52,94 @@ def reviewed_rows(scene):
 
 
 class MainTurnDatasetTests(unittest.TestCase):
+
+    def test_v14_frozen_dispatch_ignores_wrong_llm_batch_size(self):
+        scene = fixture(7)
+        self.assertTrue(scene["problem_spec"].get("evidence_trust_version"))
+        requests = []
+
+        class BadBatchAuthor:
+            def complete_json(self, system, request):
+                content = json.loads(request)
+                if "reference_action_for_structure_only" in content:
+                    # The final answer stays code-fixed, though its
+                    # completion explanation can be reviewed as before.
+                    return content["reference_action_for_structure_only"]
+                requests.append(content)
+                return {
+                    "action": "delegate_task",
+                    "reasoning": (
+                        "The next source checks can be investigated now. "
+                        "I will collect their returned observations before "
+                        "deciding which downstream evidence is needed."
+                    ),
+                    "params": {"tasks": [{"task_instruction": "wrong"}]},
+                }
+
+        class GoodCritic:
+            def complete_json(self, system, request):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        episode, turns, audit, status = build_episode(
+            scene, reviewed_rows(scene), author=BadBatchAuthor(),
+            critic=GoodCritic(), max_revisions=0,
+            freeze_dispatch=True,
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertTrue(requests)
+        self.assertTrue(all(
+            "reference_action_for_structure_only" not in request
+            and "current_round_assignments_in_required_order" not in request
+            for request in requests
+        ))
+        for turn, record in zip(turns, audit):
+            if turn["output"]["action"] != "delegate_task":
+                continue
+            self.assertEqual(
+                turn["generation_mode"], "llm_reviewed_contract_frozen"
+            )
+            self.assertEqual(
+                len(turn["output"]["params"]["tasks"]),
+                len(record["private_macro_alignment"]),
+            )
+            self.assertTrue(record["authoring"]["assignment_contract_frozen"])
+            self.assertEqual(record["authoring"]["authored_fields"], ["reasoning"])
+        self.assertEqual(len(episode["trajectory"]), len(turns))
+
+    def test_v14_reasoning_guard_uses_prior_visible_status_only(self):
+        from environment.base_orchestration.action_author import (
+            stage3_reasoning_issues,
+        )
+        delivered = {
+            "public_slot": {"finish_result": {
+                "status": "done", "result": "Case-016",
+                "summary": "The assigned record was found.",
+            }}
+        }
+        self.assertIn(
+            "invented_prior_subagent_failure",
+            stage3_reasoning_issues(
+                "The previous retrieval failed, so I must repeat the search.",
+                delivered,
+            ),
+        )
+        self.assertEqual(
+            stage3_reasoning_issues(
+                "Both independent sources disagree; I will compare them "
+                "before choosing the final case.", delivered,
+            ), [],
+        )
+        self.assertIn(
+            "internal_reference_action_leak",
+            stage3_reasoning_issues(
+                "Follow reference_action_for_structure_only for this round.",
+                delivered,
+            ),
+        )
+
     def test_one_training_example_per_o1_main_decision(self):
         for i in range(15):
             scene = fixture(i)
