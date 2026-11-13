@@ -192,6 +192,30 @@ class SceneEvidenceLedgerTests(unittest.TestCase):
         self.assertEqual(audit["status"], "invalid")
         self.assertIn("evidence_ledger_not_reproducible", audit["issues"])
 
+    def test_private_ledger_is_not_rendered_in_main_prompt(self):
+        from environment.base_orchestration.o1_compat import o1_prompt
+        spec = _spec_of("disputed_reports")
+        scene = compile_and_validate(spec, reference_question(spec))
+        prompt = o1_prompt(
+            scene, [], attempt=1, max_attempts=16,
+            sub_model="qwen3-8b",
+        )
+        self.assertNotIn("evidence_relation_ledger", prompt)
+        self.assertNotIn("private_oracle_audit_not_main_input", prompt)
+        self.assertNotIn("independent_stream:report_a", prompt)
+        self.assertNotIn("report_a.OBS001::reported_year_a", prompt)
+
+    def test_source_origin_tamper_invalidates_the_oracle(self):
+        spec = _spec_of("disputed_reports")
+        scene = compile_and_validate(spec, reference_question(spec))
+        corrupted = copy.deepcopy(scene)
+        corrupted["world"]["sources"]["report_b"]["evidence_origin_id"] = (
+            corrupted["world"]["sources"]["report_a"]["evidence_origin_id"]
+        )
+        report = validate_replay(corrupted)
+        self.assertEqual(report["status"], "invalid")
+        self.assertIn("world_not_reproducible_from_frozen_spec", report["issues"])
+
     def test_legacy_scene_without_marker_does_not_get_a_new_ledger(self):
         spec = _spec_of("disputed_reports")
         spec.pop("evidence_relation_version")
