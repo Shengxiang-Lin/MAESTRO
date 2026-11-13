@@ -54,12 +54,12 @@ Run a clean pilot in a fresh directory (old checkpoints have different
 code hashes):
 
 ```bash
-python -m environment.base_orchestration.generate_turns \\
-  --scenes environment/data/maestro_stage1_current_v1_4_100/questions/scenes.jsonl \\
-  --reports environment/data/maestro_stage2_reports_v1_4_repaired/subtasks.jsonl \\
-  --output-dir environment/data/maestro_stage3_v1_4_p1_10 \\
-  --max-scenes 10 --mode llm \\
-  --author-api-base http://127.0.0.1:8807/v1 \\
+python -m environment.base_orchestration.generate_turns \
+  --scenes environment/data/maestro_stage1_current_v1_4_100/questions/scenes.jsonl \
+  --reports environment/data/maestro_stage2_reports_v1_4_repaired/subtasks.jsonl \
+  --output-dir environment/data/maestro_stage3_v1_4_p1_10 \
+  --max-scenes 10 --mode llm \
+  --author-api-base http://127.0.0.1:8807/v1 \
   --author-model local-qwen3.5-9b --workers 8 --freeze-dispatch
 ```
 
