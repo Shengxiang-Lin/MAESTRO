@@ -1,14 +1,13 @@
 # Base orchestration: trusted Main-Agent decision trajectories
 
-Run from the repository root:
+Run from the repository root using the supported low-level
+`environment.base_orchestration.generate_turns` entrypoint and its explicit
+V1.4 flags below. The `environment` root CLI does not expose a
+`generate-main-turns` command.
 
-```bash
-python -m environment generate-main-turns --config environment/configs/base_orchestration.yaml
-```
-
-All Scene/report inputs, output directories, model endpoints, token/attempt
-constraints and worker settings are in the YAML. Optional CLI flags can
-override paths, max-scenes, mode, worker count and progress.
+Stage-3 configuration is in `environment/configs/base_orchestration.yaml`
+and may also be invoked via
+`environment.base_orchestration.config.generate_from_config()`.
 
 
 ## V1.4 pilot: code-owned dispatch and evidence-grounded reasoning
