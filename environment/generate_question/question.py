@@ -474,6 +474,11 @@ def guard_question(question: str, spec: dict,
             errors.extend(semantic_text_issues(
                 q, spec, compile_semantic_contract(spec),
             ))
+        if spec.get("question_semantic_lock_version"):
+            from .question_semantic_lock import (
+                question_semantic_lock_issues,
+            )
+            errors.extend(question_semantic_lock_issues(q, spec))
     elif pattern == "macro_first":
         plan = spec["macro_plan"]
         visual = plan["clues"]
@@ -660,8 +665,41 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                     instruction["semantic_evidence_contract"],
             } if "semantic_evidence_contract" in instruction else {}),
         }
+        if spec.get("question_semantic_lock_version"):
+            from .question_semantic_lock import question_author_requirements
+            author_contract["mandatory_question_semantics"] = (
+                question_author_requirements(spec)
+            )
         if attempt > 0:
             author_contract["repair_reference_question"] = initial
+            prior = failures[-1]
+            prior_errors = prior.get("errors", [])
+            author_contract["repair_priority"] = [
+                "Keep every mandatory semantic requirement EXACT while "
+                "changing natural sentence structure.",
+                "Request ONLY the final typed output; identity matching "
+                "must be a subordinate clause, not a second answer.",
+                "Do not copy the deterministic reference question.",
+            ]
+            if spec.get("question_semantic_lock_version"):
+                if spec["macro_plan"]["goal_resolution"]["kind"] == "calculation":
+                    author_contract["repair_priority"].append(
+                        "Explicitly state rounded DOWN to a WHOLE percent."
+                    )
+                if spec["macro_plan"]["pattern"] in {
+                    "corroborated_dispute", "multimodal_event",
+                }:
+                    author_contract["repair_priority"].append(
+                        "Preserve the exact independent event-log tag: "
+                        + spec["macro_plan"]["clues"]["case_tag"]
+                    )
+                if ("too_similar_to_reference_question" in prior_errors
+                        or "semantic_additional_output_requested" in prior_errors):
+                    author_contract["repair_priority"].append(
+                        "Use a different single-output sentence pattern: "
+                        "'What [single Goal] applies to the record matching "
+                        "[all evidence predicates]?'"
+                    )
             if "topic_missing" in failures[-1].get("errors", ()):
                 author_contract["topic_repair"] = (
                     ("Mention the exact topic naturally in the supplied "

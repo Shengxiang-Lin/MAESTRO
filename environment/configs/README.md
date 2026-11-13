@@ -60,3 +60,33 @@ The new quality report includes a role-level variant histogram, unique
 operator sequences, and execution-based equivalence to the original
 Macro solver on the *same* synthesized World; it does not claim that
 operator reordering by itself increases reasoning difficulty.
+
+## Pilot v1.2: numerically diverse Answers and Question semantic lock
+
+The opt-in `questions_typed_operators.yaml` pilot now additionally sets:
+
+```yaml
+generation:
+  operator_grammar_share: 100
+  numeric_goal_diversity_share: 100
+  question_semantic_lock_share: 100
+```
+
+These are deterministic per-Scene, and disabled by default for existing
+`questions.yaml`. They only change **new** Macro-first v2 scenes; legacy
+Scene/World snapshots without the version markers replay unchanged.
+
+The comparison winner is sampled from first/second (never a tie because
+the existing Question asks for a higher source). Calculation answers
+come from nondegenerate legal integer completed/total pairs, with the
+existing floor percentage formula and verified source counterfactuals.
+A strict Question Author contract requires one final output, exact
+dispute tags and an explicit "rounded down to a whole percent" rule
+where applicable. The public Question never includes the private Gold.
+
+Fresh pilot output directory:
+`environment/data/maestro_stage1_operator_v1_2_100`. The other two
+`*_typed_operators.yaml` configs have matching Stage 2/4 inputs and
+new output directories. Do not resume a v1.1 journal against new source
+code; use the new directory. Check the new answer histograms in the
+Stage-1 `quality_report.json`.
