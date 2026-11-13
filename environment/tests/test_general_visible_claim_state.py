@@ -186,6 +186,68 @@ class GeneralVisibleClaimStateTests(unittest.TestCase):
             data["summary"]["unparsed_completed_report_slots"], 1,
         )
 
+    def test_state_is_recomputed_from_final_4b_feedback_and_visible_4c_prefix(self):
+        from environment.untrusted_orchestration.offline_pipeline import (
+            _refresh_visible_claim_supervision,
+        )
+        world = scene()
+        world["macro_graph"]["reference_waves"] = [
+            ["a"], ["b"], ["join"],
+        ]
+        episode = {
+            "trajectory": [
+                {"attempt": 1, "action": "delegate_task",
+                 "result": {"subtask_results": [report(4)]}},
+                {"attempt": 2, "action": "delegate_task",
+                 "result": {"subtask_results": [report(7)]}},
+            ]
+        }
+        audit = {
+            "branch_round": 2,
+            "decision_audit": [{
+                "round": 2, "decision_kind": "delegate", "task_ids": ["b"]
+            }],
+        }
+        _refresh_visible_claim_supervision(world, episode, audit)
+        self.assertEqual(
+            match_state(audit["visible_claim_state"]["rounds"][-1])["status"],
+            "disputed",
+        )
+        # 4B's final visible report, not 4A's stale preliminary text.
+        episode["trajectory"][1]["result"]["subtask_results"][0] = report(4)
+        _refresh_visible_claim_supervision(world, episode, audit)
+        self.assertEqual(
+            match_state(audit["visible_claim_state"]["rounds"][-1])["status"],
+            "corroborated",
+        )
+        # If Main 4C failed before dispatching round 2, the simulated
+        # future report must not appear in its private visible-state label.
+        _refresh_visible_claim_supervision(
+            world, episode, audit, observed_rounds={1},
+        )
+        self.assertEqual(len(audit["visible_claim_state"]["rounds"]), 1)
+        self.assertEqual(
+            match_state(audit["visible_claim_state"]["rounds"][0])["status"],
+            "unverified",
+        )
+
+    def test_source_only_metric_is_retained_without_entity_invention(self):
+        from environment.untrusted_orchestration.visible_claim_extraction import (
+            extract_visible_claims,
+        )
+        claims, parse = extract_visible_claims({
+            "finish_result": {
+                "status": "done",
+                "result": '[{"values":{"metric_a":7}}]',
+                "summary": "Metric returned.",
+            }
+        }, output_fields=["metric_a"], source_id="stat_a")
+        self.assertTrue(parse["parsed"])
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["subject"], "source:stat_a")
+        self.assertEqual(claims[0]["attribute"], "metric_a")
+        self.assertEqual(claims[0]["value"], 7)
+
     def test_round_alignment_failure_is_detected(self):
         world = scene()
         with self.assertRaisesRegex(
