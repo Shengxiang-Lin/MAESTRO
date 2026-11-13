@@ -248,6 +248,13 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                         seed=seed, ordinal=ordinal, record_id=record_id,
                         source_id=sid,
                     )
+                    if (sid == "report_b"
+                            and verification_mode == "keyed_followup"
+                            and route == "direct_extract"):
+                        # This report is accessible only after the first
+                        # Macro exposes actual case IDs. A globally known
+                        # direct URL would bypass the source-access intent.
+                        route = "search_then_extract"
                     item["acquisition_route"] = route
                     if route != "search_only":
                         item["simulated_page_url"] = synthetic_page_url(
