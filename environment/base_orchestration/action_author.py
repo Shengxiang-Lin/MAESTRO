@@ -102,6 +102,15 @@ current_round_task_contract and what has already been returned, NOT against
 a proposed alternative plan or immediate completion of the entire question.
 A valid criticism must identify a concrete ungrounded claim in the authored
 reasoning. Never object merely that a later task remains necessary.
+
+If current_round_evidence_contract.observed_identifier_set_relations is
+nonempty, its literal overlap was calculated deterministically from two
+ALREADY RETURNED public Result lists. The correct set intersection is
+exactly shared_identifiers. Do not hallucinate membership in either list.
+This proves only the textual overlap, NOT that the source claims are true,
+nor that a downstream archival answer has already been obtained. If a
+reasoning draft disputes this overlap, reject it; if the reasoning uses
+the overlap faithfully, do not invent a mathematical objection.
 Do not ask for changes to task prose or frozen dispatch. Return the normal
 three axes.
 """
@@ -638,7 +647,11 @@ def author_delegate_action(
                 "writing_guidance": (
                     "Explain only CURRENT-round investigations, using "
                     "the exact pending task instructions and previously "
-                    "returned Sub-Agent facts. The overall question may "
+                    "returned Sub-Agent facts. If the evidence contract "
+                    "contains observed_identifier_set_relations, use "
+                    "exactly the public shared identifiers, but do NOT "
+                    "confuse candidate selection with confirmed archival "
+                    "year or claim the current batch performs later steps. The overall question may "
                     "require additional dependent source lookups later; "
                     "do not claim all sources must be queried now, or "
                     "that a previous lookup failed just because another "
@@ -882,7 +895,12 @@ def author_delegate_action(
                         "returned fields from later dependent evidence, "
                         "and distinguish the number of sources from the "
                         "number of independently delegated tasks. "
-                        "Reject unsupported final-step claims."
+                        "Reject unsupported final-step claims. "
+                        "When a public literal set-intersection witness "
+                        "exists, verify membership against that witness "
+                        "rather than inventing extra shared Case IDs. "
+                        "The witness is NOT proof that the final answer "
+                        "or a source's truth has been verified."
                     ),
                 }
             else:
