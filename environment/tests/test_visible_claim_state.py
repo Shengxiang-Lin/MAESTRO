@@ -186,6 +186,76 @@ class MainVisibleStateTests(unittest.TestCase):
             state["rounds"][1]["states"][case]["sufficient_to_accept"],
         )
 
+    def test_reviewed_stage2_report_includes_code_owned_witness(self):
+        from environment.implement_subtask.reporting import author_critic_report
+
+        class Author:
+            def complete_json(self, system_prompt, user_prompt):
+                contract = json.loads(user_prompt)["frozen_task_and_evidence"]
+                return {
+                    "result": contract["exact_oracle_answer"],
+                    "status": "done",
+                    "summary": "Read the assigned report and returned the source rows.",
+                }
+
+        class Critic:
+            def complete_json(self, system_prompt, user_prompt):
+                return {
+                    "verdict": "pass",
+                    "grounded": True,
+                    "answer_scope_preserved": True,
+                    "evidence_scope_respected": True,
+                    "natural": True,
+                }
+
+        scene = serial_dispute()
+        teacher = realize_scene(scene)
+        record = next(x for x in teacher["macro_tasks"]
+                      if x["macro_task_id"] == "work_M1")
+        reviewed, status = author_critic_report(
+            record, question=scene["question"],
+            author=Author(), critic=Critic(), max_revisions=0,
+        )
+        self.assertEqual(status["status"], "accepted")
+        digest = witnessed_source_summary(record)
+        self.assertIn(digest, reviewed["finish_result"]["summary"])
+        self.assertEqual(
+            {x["subject"] for x in visible_year_claims(reviewed, "report_a")},
+            {x["case_id"] for x in record["answer"]},
+        )
+
+    def test_real_stage4_branch_keeps_visible_state_in_private_audit(self):
+        from environment.base_orchestration.trajectory_builder import build_episode
+        from environment.untrusted_orchestration.trajectory_builder import build_branch
+        from environment.untrusted_orchestration.faults import Fault
+
+        scene = serial_dispute()
+        records = realize_scene(scene)["macro_tasks"]
+        reports = [{
+            **record,
+            "finish_result": {
+                "status": "done",
+                "result": json.dumps(record["answer"]),
+                "summary": (
+                    "Read and returned the assigned source. " +
+                    witnessed_source_summary(record)
+                ),
+            },
+            "report_authoring": {"status": "accepted"},
+        } for record in records]
+        base, _, _, status = build_episode(scene, reports)
+        self.assertEqual(status["status"], "accepted")
+        ep, turns, audit = build_branch(
+            scene, reports, base, branch_round=2,
+            faults=[Fault("work_M1", "missing")],
+            max_rounds=16,
+        )
+        self.assertTrue(audit["visible_claim_state"]["applicable"])
+        self.assertTrue(audit["visible_claim_state"]["rounds"])
+        self.assertNotIn("visible_claim_state", json.dumps(ep))
+        self.assertNotIn("visible_claim_state", json.dumps(turns))
+        self.assertNotIn("evidence_ledger", json.dumps(turns))
+
     def test_witness_text_only_contains_returned_source_rows(self):
         scene = serial_dispute()
         teacher = realize_scene(scene)
