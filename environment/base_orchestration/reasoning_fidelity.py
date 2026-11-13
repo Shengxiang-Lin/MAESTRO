@@ -32,6 +32,14 @@ _DISPATCH_COUNT = re.compile(
 
 # Match only a direct assertion that THIS step produces a value.
 # The scope ends at discourse transitions introducing later work.
+_ROUND_CONTAINS = re.compile(
+    r"\b(?:this\s+)?(?:round|batch|delegation)\s+"
+    r"(?:consists?\s+of|contains?|has|will\s+dispatch)\s+"
+    r"(?:exactly\s+)?(?P<count>\d+|one|two|three|four|five|six|seven|eight)\s+"
+    r"(?:(?:parallel|independent|separate)\s+)?"
+    r"(?:tasks?|sub[ -]?agents?|delegations?)\b",
+    re.I,
+)
 _DIRECT_RETURN = re.compile(
     r"\b(?:this|the|current|next|pending)\s+"
     r"(?:(?:specific|assigned|index|source|keyed|current)\s+){0,3}"
@@ -41,6 +49,17 @@ _DIRECT_RETURN = re.compile(
     r"(?:return|retrieve|yield|provide|produce|output|obtain|"
     r"extract|report|give|identify)\s+"
     r"(?P<claim>[^.!?;\n]{1,150})",
+    re.I,
+)
+# A named current source may be described as returning a field even
+# when the reasoning avoids "this lookup". Never analyze a different,
+# future source this way.
+_SOURCE_RETURN = re.compile(
+    r"\b(?P<source>index_1|index_2|stat_a|stat_b|archive)\s+"
+    r"(?:(?:lookup|query|search)\s+)?"
+    r"(?:(?:will|should|can|is\s+expected\s+to)\s+)?"
+    r"(?:return|retrieve|yield|provide|produce|obtain|"
+    r"extract|report|give)\s+(?P<claim>[^.!?;\n]{1,150})",
     re.I,
 )
 _FUTURE_CLAUSE = re.compile(
@@ -57,7 +76,9 @@ _FINAL_STEP = re.compile(
     r"(?:task|lookup|step|query|investigation)\s+"
     r"(?:is|will\s+be|marks|represents)\s+"
     r"(?:the\s+)?(?:last|final)\s+"
-    r"(?:task|lookup|step|stage)\b",
+    r"(?:necessary\s+)?(?:task|lookup|step|stage)\b"
+    r"|\bexecuting\s+(?:this|the)\s+(?:task|lookup|step|query)\s+"
+    r"is\s+(?:the\s+)?(?:last|final)\s+(?:necessary\s+)?step\b",
     re.I,
 )
 _FINAL_ANSWER = re.compile(
@@ -146,7 +167,9 @@ def check_reasoning_fidelity(reasoning: str, contract: dict) -> list[str]:
     public = contract["public"]
     count = public["current_round_task_count"]
     issues = []
-    for mention in _DISPATCH_COUNT.finditer(reasoning):
+    for mention in list(_DISPATCH_COUNT.finditer(reasoning)) + list(
+        _ROUND_CONTAINS.finditer(reasoning)
+    ):
         token = mention.group("count").casefold()
         observed = int(token) if token.isdigit() else _NUMBERS[token]
         if observed != count:
@@ -162,14 +185,38 @@ def check_reasoning_fidelity(reasoning: str, contract: dict) -> list[str]:
         for field in task["output_fields"]
     }
     known = _FIELD_VOCAB | allowed
-    for mention in _DIRECT_RETURN.finditer(reasoning):
+    current_sources = {
+        source.casefold()
+        for task in public["current_round_tasks"]
+        for source in task["source_ids"]
+    }
+    direct = [
+        match.group("claim")
+        for match in _DIRECT_RETURN.finditer(reasoning)
+    ]
+    direct.extend(
+        match.group("claim")
+        for match in _SOURCE_RETURN.finditer(reasoning)
+        if match.group("source").casefold() in current_sources
+    )
+    for claim in direct:
         # "The next lookup returns key1, so I can later retrieve year"
         # must be accepted: only inspect the directly returned object.
-        clause = _FUTURE_CLAUSE.split(mention.group("claim"), maxsplit=1)[0]
-        for field in sorted(known - allowed):
-            if _field_alias(field).search(clause):
-                issues.append("reasoning_current_output_field_mismatch")
-                break
-        if "reasoning_current_output_field_mismatch" in issues:
+        clause = _FUTURE_CLAUSE.split(claim, maxsplit=1)[0]
+        missing_specific_field = any(
+            _field_alias(field).search(clause)
+            for field in sorted(known - allowed)
+        )
+        missing_count_pair = (
+            (re.search(r"\bcompleted\s+(?:and|/)\s+total\s+counts?\b",
+                       clause, re.I)
+             and not {"completed_count", "total_count"} <= allowed)
+            or
+            (re.search(r"\bfirst\s+(?:and|/)\s+second\s+counts?\b",
+                       clause, re.I)
+             and not {"metric_a", "metric_b"} <= allowed)
+        )
+        if missing_specific_field or missing_count_pair:
+            issues.append("reasoning_current_output_field_mismatch")
             break
     return sorted(set(issues))
