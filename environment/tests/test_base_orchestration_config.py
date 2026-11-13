@@ -22,12 +22,12 @@ class TrajectoryConfigurationTests(TestCase):
         self.assertIsNotNone(base_orchestration)
         self.assertTrue(callable(build_episode))
         self.assertTrue(callable(generate_turns))
-        self.assertEqual(DEFAULT_CONFIG.name, "base_orchestration.yaml")
+        self.assertEqual(DEFAULT_CONFIG.name, "main_orchestration.yaml")
         self.assertTrue(DEFAULT_CONFIG.is_file())
 
     def test_configs_are_independent_and_root_relative(self):
         cfg = load_config()
-        self.assertEqual(DEFAULT_CONFIG.name, "base_orchestration.yaml")
+        self.assertEqual(DEFAULT_CONFIG.name, "main_orchestration.yaml")
         self.assertTrue(cfg["scenes_path"].is_absolute())
         self.assertTrue(cfg["reports_path"].is_absolute())
         self.assertTrue(cfg["output_dir"].is_absolute())
@@ -52,7 +52,7 @@ class TrajectoryConfigurationTests(TestCase):
                           DEFAULT_CONFIG.parent}, {DEFAULT_CONFIG.parent})
         self.assertEqual(set(parser()._subparsers._group_actions[0].choices), {
             "generate-questions", "quality", "implement-subtasks",
-            "naturalize-subtasks", "generate-untrusted-turns", "run",
+            "naturalize-subtasks", "generate-main-turns", "generate-untrusted-turns", "run",
         })
 
     def test_public_cli_runs_stage1_to_stage2_to_stage4(self):

@@ -1,4 +1,4 @@
-"""P1A/P1B: no future-gold reasoning and no silent report-fact rewrites."""
+"""Main reasoning and reviewed report: no future-gold reasoning and no silent report-fact rewrites."""
 from __future__ import annotations
 
 from copy import deepcopy

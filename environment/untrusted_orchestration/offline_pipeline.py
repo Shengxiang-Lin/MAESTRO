@@ -29,6 +29,7 @@ from .main_decision_contract import (
     build_main_decision_contract, critic_denies_confirmed_conflict,
 )
 from .state_machine import Attempt
+from .visible_claim_state import audit_visible_claim_states
 from .trajectory_builder import (
     _MAIN_DECISION_AUTHOR_SYSTEM, _MAIN_REASONING_CRITIC_SYSTEM, _history_batch,
     _as_public,
@@ -53,6 +54,39 @@ def _attempt_from_audit(task: dict, entry: dict) -> Attempt:
         available_fields=tuple(runtime.get("available_fields", [])),
         used_parent_versions=entry["used_parent_versions"],
         runtime=deepcopy(runtime), cost=entry["cost"],
+    )
+
+
+def _refresh_visible_claim_supervision(
+    scene: dict, episode: dict, audit: dict, *,
+    observed_rounds: set[int] | None = None,
+) -> None:
+    """Recompute teacher-only evidence state from FINAL Main-visible reports.
+
+    4A's preliminary text and 4B's finalized Sub-Agent prose are NOT
+    interchangeable. When 4C stops at an invalid Main turn, only reports
+    received before that failure may contribute to the diagnostic state.
+    """
+    fork = audit["branch_round"]
+    plan = {d["round"]: d["task_ids"]
+            for d in audit.get("decision_audit", [])
+            if d.get("decision_kind") == "delegate"}
+    waves = scene["macro_graph"]["reference_waves"]
+    bindings, visible_steps = {}, []
+    for step in episode["trajectory"]:
+        if step.get("action") != "delegate_task":
+            continue
+        number = step["attempt"]
+        if observed_rounds is not None and number not in observed_rounds:
+            continue
+        if number < fork:
+            ids = waves[number - 1]
+        else:
+            ids = plan[number]
+        bindings[number] = ids
+        visible_steps.append(step)
+    audit["visible_claim_state"] = audit_visible_claim_states(
+        scene, visible_steps, task_ids_by_round=bindings,
     )
 
 
@@ -113,6 +147,7 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
         if on_report is not None:
             on_report(status)
     audit["subagent_report_reviews"] = review_rows
+    _refresh_visible_claim_supervision(scene, episode, audit)
     return episode, audit
 
 
@@ -446,6 +481,13 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
     # per-round audit even when a later report or terminal result invalidates
     # the complete branch. The publisher may review *local* decisions
     # separately, but cannot silently promote them to globally correct reviewed-turn.
+    # Use only the reports actually added to Main's O1 history.
+    # A failed 4C turn does not grant access to this turn's future
+    # simulated Sub-Agent returns, even if 4A/4B precomputed them.
+    _refresh_visible_claim_supervision(
+        scene, episode, audit,
+        observed_rounds={item["attempt"] for item in entries},
+    )
     audit["candidate_local_turns"] = deepcopy(turns)
     audit["main_action_reviews"] = reviews
     audit["outcome"] = outcome

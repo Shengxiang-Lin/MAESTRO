@@ -16,6 +16,13 @@ from environment.untrusted_orchestration.visible_claim_state import (
 )
 
 
+def year_state(round_snapshot: dict, subject: str) -> dict:
+    """Find a specific reported-year Claim state in the unified state map."""
+    return next(item for item in round_snapshot["claim_states"].values()
+                if item["subject"] == subject
+                and item["attribute"] == "reported_event_year")
+
+
 def serial_dispute():
     for i in range(180):
         spec = make_spec(
@@ -79,8 +86,8 @@ class MainVisibleStateTests(unittest.TestCase):
         }
         self.assertTrue(relevant)
         for subject in relevant:
-            self.assertEqual(first["states"][subject]["status"], "unverified")
-            self.assertEqual(second["states"][subject]["status"], "disputed")
+            self.assertEqual(year_state(first, subject)["status"], "unverified")
+            self.assertEqual(year_state(second, subject)["status"], "disputed")
         self.assertGreater(
             state["summary"]["late_visible_disputes"], 0,
         )
@@ -97,8 +104,8 @@ class MainVisibleStateTests(unittest.TestCase):
             scene, trajectory, task_ids_by_round=bindings,
         )
         self.assertEqual(state["summary"].get("late_visible_disputes", 0), 0)
-        first = state["rounds"][0]["states"]
-        second_state = state["rounds"][1]["states"]
+        first = state["rounds"][0]["claim_states"]
+        second_state = state["rounds"][1]["claim_states"]
         self.assertEqual(first, second_state)
 
     def test_wrong_delivered_value_is_not_silently_replaced_by_gold(self):
@@ -126,7 +133,7 @@ class MainVisibleStateTests(unittest.TestCase):
             scene, trajectory, task_ids_by_round=bindings,
         )
         self.assertEqual(
-            state["rounds"][1]["states"][target]["status"],
+            year_state(state["rounds"][1], target)["status"],
             "corroborated",
         )
         # This is a surface-only trust annotation, not true ground truth.
@@ -160,7 +167,7 @@ class MainVisibleStateTests(unittest.TestCase):
             ]["transitions"] if t["answer_supporting_claim_pair"]
         )
         self.assertEqual(
-            state["rounds"][-1]["states"][target]["status"], "unverified",
+            year_state(state["rounds"][-1], target)["status"], "unverified",
         )
         self.assertGreater(state["summary"].get("source_report_replacements", 0), 0)
 
@@ -179,11 +186,11 @@ class MainVisibleStateTests(unittest.TestCase):
             scene, trajectory, task_ids_by_round=bindings,
         )
         self.assertEqual(
-            state["rounds"][1]["states"][case]["status"],
+            year_state(state["rounds"][1], case)["status"],
             "intra_report_conflict",
         )
         self.assertFalse(
-            state["rounds"][1]["states"][case]["sufficient_to_accept"],
+            year_state(state["rounds"][1], case)["sufficient_to_accept"],
         )
 
     def test_reviewed_stage2_report_includes_code_owned_witness(self):

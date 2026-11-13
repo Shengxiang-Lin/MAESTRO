@@ -1,4 +1,4 @@
-"""V1.4 cross-wave trust-state, guarded evidence IR and Question paraphrases."""
+"""Current cross-wave trust-state, guarded evidence IR and Question paraphrases."""
 from __future__ import annotations
 
 import copy

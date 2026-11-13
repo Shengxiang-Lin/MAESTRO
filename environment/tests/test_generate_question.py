@@ -60,7 +60,7 @@ class ConfigAndCliTests(unittest.TestCase):
     def test_yaml_is_canonical_and_fully_resolved(self):
         values = load_config(DEFAULT_CONFIG)
         args = args_from_config(values)
-        self.assertEqual(args.target, 100)
+        self.assertEqual(args.target, 1000)
         self.assertEqual(args.difficulty_mix, "17,33,50")
         self.assertFalse(hasattr(args, "quota_refill"))
         self.assertFalse(hasattr(args, "max_candidate_multiplier"))
@@ -72,7 +72,7 @@ class ConfigAndCliTests(unittest.TestCase):
     def test_cli_exposes_one_generation_command(self):
         sub = parser()._subparsers._group_actions[0].choices
         self.assertEqual(
-            set(sub), {"generate-questions", "quality", "implement-subtasks", "naturalize-subtasks", "generate-untrusted-turns", "run"}
+            set(sub), {"generate-questions", "quality", "implement-subtasks", "naturalize-subtasks", "generate-main-turns", "generate-untrusted-turns", "run"}
         )
         self.assertNotIn("build-v2", sub)
         self.assertNotIn("refine-questions", sub)

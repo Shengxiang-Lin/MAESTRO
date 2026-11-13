@@ -51,7 +51,8 @@ def _signature(scenes: Path, reports: Path, *, max_scenes, sub_model,
     root = Path(__file__).parent
     tracked = (
         "trajectory_builder.py", "action_author.py",
-        "o1_compat.py", "generate_turns.py",
+        "reasoning_fidelity.py", "o1_compat.py", "generate_turns.py",
+        "../implement_subtask/public_surface.py",
         "../generate_question/evidence_tools.py",
         "../../orchestra/base_main_agent.py",
         "../../orchestra/prompts/omnigaia.py",

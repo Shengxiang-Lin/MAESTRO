@@ -4,8 +4,8 @@ version: 1
 
 implementation:
   # Must match questions.yaml generation.output_dir + /questions/scenes.jsonl.
-  scenes: environment/data/maestro_stage1_current_v1_4_100/questions/scenes.jsonl
-  output_dir: environment/data/maestro_stage2_oracle_current_v1_4_100
+  scenes: environment/data/stage1/questions/scenes.jsonl
+  output_dir: environment/data/stage2/oracle
   max_records: null
   evidence_limit: 12
   strict_replay: true
@@ -17,10 +17,10 @@ implementation:
 # of a real Sub-Agent's finish(result/status/summary) to Main-Agent.
 # This NEVER changes structured answer or teacher evidence.
 reporting:
-  source_subtasks: environment/data/maestro_stage2_oracle_current_v1_4_100/subtasks.jsonl
-  source_scene_index: environment/data/maestro_stage2_oracle_current_v1_4_100/scene_index.jsonl
-  # Canonical reviewed bank after the one-Macro repair (577/577 accepted).
-  output_dir: environment/data/maestro_stage2_reports_v1_4_repaired
+  source_subtasks: environment/data/stage2/oracle/subtasks.jsonl
+  source_scene_index: environment/data/stage2/oracle/scene_index.jsonl
+  # Reviewed Sub-Agent report bank; stable path across datasets.
+  output_dir: environment/data/stage2
   api_base: http://127.0.0.1:8807/v1
   model: local-qwen3.5-9b
   critic_api_base: null
@@ -29,7 +29,7 @@ reporting:
   critic_api_key_env: null
   workers: 8
   max_revisions: 2
-  # V1.4: LLM writes only a stage-local Summary; Result is compiled from
+  # LLM writes only a stage-local Summary; Result is compiled from
   # this Macro's exact delivered WorkProduct. Older scenes retain legacy mode.
   result_policy: code_owned
   flush_every: 1  # save accepted/rejected Macro reviews + checkpoint as they finish
