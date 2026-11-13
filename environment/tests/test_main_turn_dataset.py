@@ -109,6 +109,88 @@ class MainTurnDatasetTests(unittest.TestCase):
             self.assertEqual(record["authoring"]["authored_fields"], ["reasoning"])
         self.assertEqual(len(episode["trajectory"]), len(turns))
 
+    def test_v14_critic_receives_current_intermediate_lookup_scope(self):
+        from environment.base_orchestration.action_author import (
+            author_delegate_action,
+            STAGE3_REASONING_AUTHOR_SYSTEM,
+            STAGE3_REASONING_CRITIC_SYSTEM,
+        )
+        # Final question asks to compare two metric tables, but this
+        # current round is only the first dependency-key lookup.
+        assignment = {
+            "target_instruction": (
+                "Use the visible marker code MK-6787 to query index_1 "
+                "for its matching first record key. Return record_key_1 "
+                "without claiming the final comparison is complete."
+            ),
+            "context": (
+                "Previously returned result: the unique matching marker "
+                "is MK-6787, associated with Case-005."
+            ),
+            "source_ids": ["index_1"],
+            "output_fields": ["record_key_1"],
+            "needs_upstream": True,
+            "model": "model_1",
+            "tools": [],
+        }
+        review_requests = []
+
+        class Author:
+            def complete_json(self, system, payload):
+                request = json.loads(payload)
+                assert "reference_action_for_structure_only" not in request
+                return {"reasoning": (
+                    "The previous report identified marker code MK-6787. "
+                    "I will resolve the corresponding first index key "
+                    "before querying dependent sources for the final count "
+                    "comparison."
+                )}
+
+        class Critic:
+            def complete_json(self, system, payload):
+                request = json.loads(payload)
+                review_requests.append(request)
+                current = request["current_round_task_contract"]
+                scoped = (
+                    len(current) == 1
+                    and current[0]["source_ids"] == ["index_1"]
+                    and current[0]["output_fields"] == ["record_key_1"]
+                    and "stat_a" not in current[0]["source_ids"]
+                )
+                return {
+                    "verdict": "pass" if scoped else "fail",
+                    "grounded": scoped,
+                    "assignment_fidelity": scoped,
+                    "o1_style": scoped,
+                }
+
+        action, review = author_delegate_action(
+            assignments=[assignment],
+            prompt=(
+                "==== QUESTION ==== Which count is higher, stat_a or stat_b?\n"
+                "==== SUBTASK HISTORY ==== A returned report identifies "
+                "Case-005 and marker MK-6787."
+            ),
+            author=Author(), critic=Critic(), max_revisions=0,
+            freeze_assignment_prose=True, reasoning_only_stage3=True,
+            author_system=STAGE3_REASONING_AUTHOR_SYSTEM,
+            critic_system=STAGE3_REASONING_CRITIC_SYSTEM,
+        )
+        self.assertEqual(review["status"], "accepted")
+        self.assertEqual(review["mode"], "llm_reviewed_contract_frozen")
+        self.assertEqual(
+            action["params"]["tasks"][0]["task_instruction"],
+            assignment["target_instruction"],
+        )
+        self.assertTrue(review_requests)
+        self.assertIn("current_round_task_contract", review_requests[0])
+        self.assertNotIn(
+            "locked_main_visible_decision_facts", review_requests[0],
+        )
+        self.assertIn(
+            "First compare", review_requests[0]["review_scope_priority"],
+        )
+
     def test_v14_reasoning_guard_uses_prior_visible_status_only(self):
         from environment.base_orchestration.action_author import (
             stage3_reasoning_issues,
