@@ -80,6 +80,10 @@ def _validate_reused_result(accepted: dict, teacher: dict) -> None:
         witness = witnessed_source_summary(teacher)
         if witness and witness not in finish["summary"]:
             raise StreamingError("previous_accepted_missing_public_claim_witness")
+    if review.get("result_policy") == "code_owned":
+        from .reporting import code_owned_result
+        if finish["result"] != code_owned_result(teacher):
+            raise StreamingError("reused_code_owned_result_drift")
     critic = review.get("review", {})
     if not isinstance(critic, dict) or critic.get("verdict") != "pass":
         raise StreamingError("previous_accepted_missing_critic_pass")

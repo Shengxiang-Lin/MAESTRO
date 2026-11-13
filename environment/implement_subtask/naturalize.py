@@ -325,6 +325,10 @@ def naturalize_subtasks(
             accepted, feedback = author_critic_report(
                 row, question=question, author=author, critic=critic,
                 max_revisions=max_revisions, is_terminal=is_terminal,
+                result_policy=(
+                    "code_owned" if row.get("evidence_trust_version")
+                    else "llm_authored"
+                ),
             )
         except (KeyError, TypeError, ValueError) as exc:
             accepted, feedback = None, {
