@@ -559,6 +559,9 @@ def author_delegate_action(
                         "confirmed_result_summary_conflicts"
                     ],
                     "recent_delivery_gaps": visible["delivery_gaps"],
+                    "earlier_field_requests": decision_contract.get(
+                        "prior_field_activity", []
+                    ),
                     "information_still_needed": [
                         {
                             "fields": item.get("target_fields", []),
@@ -582,6 +585,11 @@ def author_delegate_action(
                         "disagreements from verified truth, explain why "
                         "the requested investigations are needed, and "
                         "avoid inventing completed checks or results. "
+                        "Do not say an earlier retrieval for a requested "
+                        "field failed unless earlier Sub-Agent feedback "
+                        "actually shows that request; a field not yet "
+                        "requested is simply outstanding. Avoid synthetic "
+                        "workspace handles and placeholder URLs in prose. "
                         "Return only the reasoning field."
                     ),
                 }

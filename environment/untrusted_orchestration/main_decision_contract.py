@@ -8,8 +8,10 @@ from __future__ import annotations
 import json
 import re
 
+from .visible_history import public_field_activity
+
 _FIELD = re.compile(r"disagree\s+about\s+([A-Za-z][A-Za-z0-9 _-]{0,75})\s*:", re.I)
-_VALUE = r"(?:Case-\d+|Entry-\d+|MK-\d+|RK-\d+|KEY[12]-\w+|-?\d+(?:\.\d+)?)"
+_VALUE = r"(?:Case-\d+|Entry-\d+|MK-\d+|RK-\d+|KEY[12]-\w+|true|false|yes|no|-?\d+(?:\.\d+)?)"
 
 
 def _normalize_field(field: str) -> str:
@@ -40,7 +42,7 @@ def _field_values(text: str, field: str) -> set[str]:
                 for key, value in payload.items():
                     if (_normalize_field(key) == _normalize_field(field)
                             and value is not None
-                            and not isinstance(value, (list, dict, bool))):
+                            and not isinstance(value, (list, dict))):
                         values.add(str(value).strip().lower())
             if values:
                 return values
@@ -124,9 +126,10 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
                 "state": "unverified",
             })
     return {
-        "contract_version": "v10_4_2",
+        "contract_version": "v10_4_3",
         "visible_evidence": {"latest_round": latest, "delivery_gaps": gaps,
                              "confirmed_result_summary_conflicts": conflicts},
+        "prior_field_activity": public_field_activity(history, goals),
         "pending_requests": [{
             "operation": g.get("operation"),
             "target_fields": list(g.get("target_fields", [])),
@@ -151,6 +154,12 @@ def critic_denies_confirmed_conflict(review: dict, contract: dict) -> bool:
         r"|(?:conflict|contradiction|mismatch|discrepancy)\s+"
         r"(?:is not present|does not exist)"
         r"|summary\s+(?:is|was)\s+(?:a\s+)?hallucination"
-        r"|result\s+(?:is|was)\s+(?:already\s+)?verified",
+        r"|result\s+(?:is|was)\s+(?:already\s+)?verified"
+        r"|(?:no|not\s+a|without\s+(?:a|any))\s+(?:actual\s+)?"
+        r"(?:conflict|contradiction|mismatch|discrepancy)"
+        r"|(?:claim|assertion|statement)\s+(?:that\s+)?"
+        r"(?:the\s+)?(?:result|summary).{0,45}"
+        r"(?:conflict|contradict|disagree|mismatch).{0,50}"
+        r"(?:unsupported|unfounded|invented|false)"
         reason,
     ))

@@ -11,6 +11,7 @@ from environment.base_orchestration.generation_meta import (
     GENERATION_PROCESS_RE,
 )
 from .public_language import internal_labels_in_text
+from .visible_history import visible_history_reasoning_issues
 
 
 # Kept as an alias for existing callers; canonical rules live in one module.
@@ -39,6 +40,16 @@ def review_turn_surface(turn: dict) -> list[str]:
         "generation_process_leak:" + name
         for name, value in candidates
         if isinstance(value, str) and _GENERATION_PROCESS.search(value)
+    ]
+    # Only Main's authored reasoning is banned from repeating synthetic
+    # workspace handles / reserved fixture URLs. Public instructions and
+    # source history can legitimately carry known synthetic URLs needed for
+    # the frozen tool-acquisition contract.
+    problems += [
+        issue + ":reasoning"
+        for issue in visible_history_reasoning_issues(
+            str(output.get("reasoning") or ""), []
+        )
     ]
     problems += [
         "synthetic_execution_identifier_leak:" + name

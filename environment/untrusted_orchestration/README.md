@@ -1,5 +1,45 @@
 # Stage 4 — Untrusted Main orchestration
 
+## V10.4.3: public-history grounding and publication hygiene
+
+The Stage-4C Author now sees a compact **public-history-only** count of
+which requested fields were explicitly named by earlier delegated Sub-Agent
+instructions and whether such requests delivered or were missing/partial.
+The new `visible_history.py` guard rejects high-confidence misstatements
+such as *"previous attempts failed to retrieve these counts"* when no
+previous assignment asked for either count. It deliberately allows
+*"the counts have not yet been retrieved"* and actual failed requests.
+This is a narrow provenance check, not a replacement for semantic review.
+
+Main-visible Result/Summary conflicts now also recognize explicit Boolean
+values (`true` versus `false`). False-denial Critic reviews can receive
+one independent re-review; this never overrides an independent failure.
+The Author still emits **reasoning only**, with fixed 4A task dispatch;
+Stage 4B already emits only naturalized Summary/Trace while the executor
+supplies the immutable Result. No duplicate report-author path was added.
+
+Synthetic `workspace://` handles and `.example.invalid` URLs are
+disallowed in **Main-authored reasoning** and rejected before release.
+Explicitly available synthetic source URLs remain legal in earlier history
+or frozen tool assignment text, because those fields can be necessary
+source-acquisition references and are not invented Main reasoning.
+
+The private summary now separately counts
+`published_with_downstream_invalidation` and
+`published_with_invalidation_and_visible_conflict`. These metrics
+measure fully reviewed, globally recovered and released branches only,
+not the larger number of 4A simulated recoveries.
+
+Run into a **new** output directory:
+
+```bash
+python -m environment generate-untrusted-turns \
+  --config environment/configs/untrusted_orchestration.yaml \
+  --mode llm \
+  --output-dir environment/data/maestro_untrusted_rounds_v10_4_3
+```
+
+
 The current public runner is `python -m environment generate-untrusted-turns`.
 It reads **Stage-1 scenes + Stage-2 reviewed reports**, not an externally
 generated trusted Main episode file.
@@ -56,7 +96,7 @@ asynchronous partial-batch decisions are not implemented.
 python -m environment generate-untrusted-turns \
   --config environment/configs/untrusted_orchestration.yaml \
   --mode llm \
-  --output-dir environment/data/maestro_untrusted_rounds_v10_4_2
+  --output-dir environment/data/maestro_untrusted_rounds_v10_4_3
 ```
 
 Useful artifacts:
