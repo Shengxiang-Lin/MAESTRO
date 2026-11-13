@@ -176,6 +176,28 @@ class GeneralVisibleClaimStateTests(unittest.TestCase):
         self.assertEqual(result["claim_dependency_edges"][0]["relation"],
                          "same_subject_task_dependency")
 
+    def test_derived_duplicate_does_not_revoke_independent_confirmation(self):
+        data = replay([
+            ("a", 4, "done", None),
+            ("b", 4, "done", None),
+            ("join", 4, "done", None),
+        ])
+        state = match_state(data["rounds"][-1])
+        self.assertEqual(state["status"], "corroborated")
+        self.assertEqual(state["independent_origins"], 2)
+        self.assertTrue(state["sufficient_to_accept"])
+        self.assertTrue(data["rounds"][-1]["claim_dependency_edges"])
+        # An actually different derived observation remains a visible
+        # discrepancy requiring investigation, not a new independent root.
+        wrong = replay([
+            ("a", 4, "done", None),
+            ("b", 4, "done", None),
+            ("join", 9, "done", None),
+        ])
+        self.assertEqual(
+            match_state(wrong["rounds"][-1])["status"], "disputed",
+        )
+
     def test_missing_or_unparseable_feedback_does_not_create_claim(self):
         data = replay([
             ("a", None, "done", "Maybe the count was probably 7."),
