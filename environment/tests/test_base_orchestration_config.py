@@ -52,7 +52,7 @@ class TrajectoryConfigurationTests(TestCase):
                           DEFAULT_CONFIG.parent}, {DEFAULT_CONFIG.parent})
         self.assertEqual(set(parser()._subparsers._group_actions[0].choices), {
             "generate-questions", "quality", "implement-subtasks",
-            "naturalize-subtasks", "generate-untrusted-turns", "run",
+            "naturalize-subtasks", "generate-main-turns", "generate-untrusted-turns", "run",
         })
 
     def test_public_cli_runs_stage1_to_stage2_to_stage4(self):
