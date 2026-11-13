@@ -227,7 +227,9 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
             if (
                 {"report_a", "report_b"}.issubset(accessible)
                 and any(
-                    step["operation"] == "compare_fields"
+                    step["operation"] in {
+                        "compare_fields", "claim_relation_filter",
+                    }
                     and "reported_year_a" in step["action"]
                     and "reported_year_b" in step["action"]
                     and "differs from" in step["action"]
