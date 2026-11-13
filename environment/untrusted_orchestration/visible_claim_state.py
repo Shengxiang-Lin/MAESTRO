@@ -44,6 +44,9 @@ def _state_for(claims: list[dict]) -> dict:
             (type(claim["value"]).__name__, repr(claim["value"]))
         )
     local_conflict = any(len(v) > 1 for v in report_values.values())
+    partial_observed = any(
+        claim.get("delivery_status") == "partial" for claim in claims
+    )
     origins_known = all(claim["evidence_origin_id"] for claim in claims)
     if local_conflict:
         warrant = {
@@ -75,6 +78,16 @@ def _state_for(claims: list[dict]) -> dict:
                 else "resolve_disagreement"
             ],
         }
+    # A partial handoff can still expose a real contradiction, but it
+    # cannot independently establish complete evidence for acceptance.
+    if partial_observed and warrant["status"] not in {
+        "disputed", "intra_report_conflict",
+    }:
+        warrant = {
+            **warrant, "status": "partial",
+            "sufficient_to_accept": False,
+            "missing_evidence": ["complete_partial_delivery"],
+        }
     return {
         "status": warrant["status"],
         "sufficient_to_accept": warrant["sufficient_to_accept"],
@@ -91,7 +104,9 @@ def _state_for(claims: list[dict]) -> dict:
             if warrant["sufficient_to_accept"] else
             "reconcile" if warrant["status"] in {
                 "disputed", "intra_report_conflict"
-            } else "obtain_independent_evidence"
+            } else "complete_partial_delivery"
+            if warrant["status"] == "partial" else
+            "obtain_independent_evidence"
         ),
     }
 
@@ -180,6 +195,7 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
             latest_by_task[tid] = [{
                 **c, "claim_id": _claim_id(tid, round_number, c),
                 "report_task_id": tid, "observed_in_round": round_number,
+                "delivery_status": parse["status"],
                 "evidence_origin_id": (
                     origin_by_source.get(source_id)
                     if source_id is not None else None
@@ -188,7 +204,7 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
                 "authoritative": False,
             } for c in found]
             counters["literal_claims_extracted"] += len(found)
-            if parse["status"] == "done" and not found:
+            if parse["status"] in {"done", "partial"} and not found:
                 counters["unparsed_completed_report_slots"] += 1
             if parse["status"] != "done":
                 counters["noncompleted_report_slots"] += 1
