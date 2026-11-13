@@ -212,6 +212,19 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
                     ledger["verification_sensitive_pairs"],
                 "relation_counts": ledger["relation_counts"],
                 "source_first_wave": ledger["source_first_wave"],
+                **({"reference_wave_trust": {
+                    "mode": ledger["reference_wave_trust"]["mode"],
+                    "cross_wave_claim_pairs":
+                        ledger["reference_wave_trust"]["cross_wave_claim_pairs"],
+                    "answer_relevant_claim_pairs":
+                        ledger["reference_wave_trust"]["answer_relevant_claim_pairs"],
+                    "answer_relevant_cross_wave_pairs":
+                        ledger["reference_wave_trust"][
+                            "answer_relevant_cross_wave_pairs"],
+                    "trust_state_transitions": len(
+                        ledger["reference_wave_trust"]["transitions"]
+                    ),
+                }} if "reference_wave_trust" in ledger else {}),
             }
         elif "evidence_ledger" in scene:
             issues.append("unversioned_evidence_ledger")

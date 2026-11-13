@@ -1,42 +1,53 @@
-# Stage 1 — canonical V1.3
-
-From the repository root:
+# Stage 1 — V1.4 evidence-aware Macro programs
 
 ```bash
 python -m environment generate-questions --config environment/configs/questions.yaml
 ```
 
-Stage 1 deterministically builds an executable synthetic World, frozen Macro DAG,
-Gold Program, Gold Answer and source-grounded FactRefs. Existing Scenario Author/
-Critic and Question Author/Critic LLMs only naturalize the user-facing context
-and question; **no LLM is used for evidence operators, relations or warrant
-states**. The Easy approval baseline is unchanged.
+Stage 1 constructs frozen synthetic sources, a fully executable Macro DAG,
+Gold Program, Gold Answer, FactRefs, and (for report-dispute patterns) a
+private evidence relation ledger. The existing Scenario/Question Author and
+Critic LLMs only naturalize the user-facing task; **no LLM judges Claim
+relations, provenance or trust-state reference updates**.
 
-## Evidence relations (V1.3)
+## New in V1.4
 
-- `evidence_operators.py` implements `extract_claim`, `align_claims`,
-  `relate_claims`, `resolve_claim` and `check_warrant`.
-- `evidence_relations.py` derives a **private** Claim Ledger from actual
-  `report_a` and `report_b` source observations already consumed by
-  `first_report` and `second_report` Macros. It verifies real
-  same-subject, same-attribute and same-temporal-scope pairs, including
-  **corroborates** and **contradicts**.
-- Each source has an explicitly generated provenance origin. Same-origin
-  duplicates are not independent confirmation. `supersedes` is available
-  only with an explicit same-lineage higher-version `revision_of` claim;
-  ordinary timestamp differences cannot create revisions.
-- `warrant_transitions` evaluate holding out one source and restoring
-  independent evidence. These are **source-ablation counterfactual states**,
-  not a fabricated sequence of actual Main-Agent message arrivals.
-- `quality.py` checks strict reproducibility of this private ledger
-  alongside ordinary World/Program/FactRefs replay; `quality_report.json`
-  summarizes comparable pairs and evidence-state sensitivity.
+- `surface_quality.py` and `question.py` accept grounded `locate` requests
+  and compositional two-source higher-count paraphrases without relaxing
+  mandatory output and numerical constraints.
+- New eligible disputed-report Specs sample `claim_verification_mode` as
+  `parallel` or `keyed_followup` using a separate deterministic hash stream.
+  Keyed follow-up can only retrieve records from independent report B
+  **after** report A has supplied candidate case IDs. It is a real typed
+  `lookup_by_key` with Source A provenance, not a manufactured delay.
+- `dispute_resolution` now executes `claim_relation_filter`, a typed
+  provenance-checked primitive. Rows must carry FactRefs from both report
+  sources; compared year fields must be comparable. Historical V1.3
+  scenes without `evidence_trust_version` retain the old `compare_fields`
+  program and exact Replay behavior.
+- `evidence_relations.py` restricts the Claim Ledger to facts actually
+  accessible to their source Macro. New `reference_wave_trust`
+  annotations track when evidence becomes **eligible** following each
+  frozen Macro wave and which target-related Claim pairs gain independent
+  support or become disputed.
+- `quality_report.json` separates raw Claim-pair counts from
+  answer-relevant, genuinely cross-wave pairs and state transitions.
+  All ledgers and reference schedule annotations are **private**, never
+  added to the user Question or Orchestra-o1 Main prompt.
 
-This first vertical slice deliberately **does not** manufacture supersession
-events or delayed Main-visible rounds. Existing Stage 1 question semantics,
-Gold answers and Macro operator plans remain unchanged. Subsequent work
-can add actual versioned sources and a policy/availability-aware decision
-oracle without weakening the existing answer counterfactual checks.
+`reference_wave_trust` means *source evidence became available to a
+Macro*, **not** that every item was necessarily stated in a natural-language
+Sub-Agent finish report. Main-visible state supervision must be computed
+from actual delivered reports, with no hidden World-to-prompt shortcut.
+Evidence source independence means independent authorship/lineage, not the
+absence of task data dependencies: report B can depend on case IDs from
+report A without copying its year assertion.
 
-Old V1.2 Scenes without an `evidence_relation_version` marker retain
-their original World and replay semantics; new V1.3 output paths are isolated.
+Stage 2 materializes frozen Macro WorkProducts and naturalizes reviewed
+Sub-Agent reports. Stage 4 provides adversarial feedback and runtime
+Main-Agent recovery behavior; truthful source disagreements are not
+themselves Sub-Agent faults.
+
+Previous V1.3 data are retained in distinct directories. Strict Replay
+must continue to work on old frozen scenes; use a fresh output directory
+for any new generation run.

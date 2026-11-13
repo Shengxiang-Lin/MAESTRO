@@ -4,8 +4,8 @@ version: 1
 
 implementation:
   # Must match questions.yaml generation.output_dir + /questions/scenes.jsonl.
-  scenes: environment/data/maestro_stage1_current_v1_3_100/questions/scenes.jsonl
-  output_dir: environment/data/maestro_stage2_oracle_current_v1_3_100
+  scenes: environment/data/maestro_stage1_current_v1_4_100/questions/scenes.jsonl
+  output_dir: environment/data/maestro_stage2_oracle_current_v1_4_100
   max_records: null
   evidence_limit: 12
   strict_replay: true
@@ -17,9 +17,9 @@ implementation:
 # of a real Sub-Agent's finish(result/status/summary) to Main-Agent.
 # This NEVER changes structured answer or teacher evidence.
 reporting:
-  source_subtasks: environment/data/maestro_stage2_oracle_current_v1_3_100/subtasks.jsonl
-  source_scene_index: environment/data/maestro_stage2_oracle_current_v1_3_100/scene_index.jsonl
-  output_dir: environment/data/maestro_stage2_reports_current_v1_3_100
+  source_subtasks: environment/data/maestro_stage2_oracle_current_v1_4_100/subtasks.jsonl
+  source_scene_index: environment/data/maestro_stage2_oracle_current_v1_4_100/scene_index.jsonl
+  output_dir: environment/data/maestro_stage2_reports_current_v1_4_100
   api_base: http://127.0.0.1:8807/v1
   model: local-qwen3.5-9b
   critic_api_base: null
