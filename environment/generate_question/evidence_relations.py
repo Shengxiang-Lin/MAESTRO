@@ -46,6 +46,19 @@ def compile_evidence_ledger(scene: dict) -> dict:
     if not {"report_a", "report_b"} <= set(sources):
         raise ValueError("claim_pair_sources_missing")
     by_source = {}
+    # In keyed follow-up cases the second source can contain more rows than
+    # the Macro is allowed to retrieve. Its unseen rows must NOT become
+    # Claim evidence just because they exist privately in the World.
+    accessible_refs = {}
+    if spec.get("evidence_trust_version"):
+        for task_feedback in scene["task_feedback"]:
+            for sid in task_feedback["used_source_ids"]:
+                if sid in {"report_a", "report_b"}:
+                    accessible_refs.setdefault(sid, set()).update(
+                        ref for row in task_feedback["workproduct"]
+                        for ref in row["source_fact_refs"]
+                        if ref.startswith(sid + ":")
+                    )
     for sid, field in (("report_a", "reported_year_a"),
                        ("report_b", "reported_year_b")):
         source = sources[sid]
@@ -53,6 +66,9 @@ def compile_evidence_ledger(scene: dict) -> dict:
             raise ValueError("claim_pair_independence_not_declared")
         index = {}
         for obs in source["observations"]:
+            if (spec.get("evidence_trust_version")
+                    and not set(obs["fact_refs"]) & accessible_refs.get(sid, set())):
+                continue
             claim = extract_claim(
                 source, obs, field=field,
                 attribute="reported_event_year",
