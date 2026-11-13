@@ -11,6 +11,7 @@ from environment.base_orchestration.action_author import (
 )
 from environment.base_orchestration.reasoning_fidelity import (
     build_round_evidence_contract, check_reasoning_fidelity,
+    visible_identifier_set_witness,
 )
 from environment.implement_subtask.public_surface import (
     clean_public_prose, reviewed_public_view,
@@ -47,6 +48,68 @@ def returned():
 
 
 class ReasoningFidelityTests(unittest.TestCase):
+    def test_visible_literal_intersection_prevents_false_critic_membership(self):
+        disagreement = (
+            "The current task returned 3 case identifiers: "
+            "Case-010, Case-012, Case-011."
+        )
+        reviewed = (
+            "The current task returned 3 case identifiers: "
+            "Case-013, Case-011, Case-005."
+        )
+        contract = build_round_evidence_contract(
+            [pending("context", "case_id")], returned(),
+            has_later_delegation=True,
+            upstream_result_groups=[[disagreement, reviewed]],
+        )
+        witness = contract["public"]["observed_identifier_set_relations"]
+        self.assertEqual(len(witness), 1)
+        self.assertEqual(
+            witness[0]["input_identifier_sets"],
+            [
+                ["Case-010", "Case-012", "Case-011"],
+                ["Case-013", "Case-011", "Case-005"],
+            ],
+        )
+        self.assertEqual(witness[0]["shared_identifiers"], ["Case-011"])
+        self.assertNotIn(
+            "Case-013", witness[0]["input_identifier_sets"][0],
+        )
+        self.assertEqual(witness[0]["current_round_task_slot"], 0)
+        self.assertNotIn("oracle", json.dumps(contract).lower())
+        self.assertNotIn("work_M", json.dumps(contract))
+        self.assertIn("private_limits", contract)
+        self.assertNotIn("private_limits", json.dumps(contract["public"]))
+
+    def test_relation_witness_fails_closed_on_unsupported_result_text(self):
+        first = (
+            "The current task returned 3 case identifiers: "
+            "Case-010, Case-012, Case-011."
+        )
+        second = (
+            "The current task returned 3 case identifiers: "
+            "Case-013, Case-011, Case-005."
+        )
+        self.assertIsNone(visible_identifier_set_witness(
+            [first, second], output_fields=["record_key_1"],
+        ))
+        self.assertIsNone(visible_identifier_set_witness(
+            [first, "Maybe Case-011 is included."],
+            output_fields=["case_id"],
+        ))
+        self.assertIsNone(visible_identifier_set_witness(
+            [first, second.replace("3 case", "4 case")],
+            output_fields=["case_id"],
+        ))
+        self.assertIsNone(visible_identifier_set_witness(
+            [first, second.replace("Case-005", "Case-011")],
+            output_fields=["case_id"],
+        ))
+        self.assertIsNone(visible_identifier_set_witness(
+            [first, second, first],
+            output_fields=["case_id"],
+        ))
+
     def test_current_handoff_cannot_be_final_exhibition_year(self):
         contract = build_round_evidence_contract(
             [pending()], returned(), has_later_delegation=True,
