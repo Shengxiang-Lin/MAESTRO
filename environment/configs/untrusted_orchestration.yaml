@@ -5,7 +5,7 @@ version: 1
 
 input:
   scenes: environment/data/stage1/questions/scenes.jsonl
-  reports: environment/data/stage2/reports/subtasks.jsonl
+  reports: environment/data/stage2/subtasks.jsonl
 
 generation:
   output_dir: environment/data/stage4
