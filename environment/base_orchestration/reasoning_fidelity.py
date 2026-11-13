@@ -72,6 +72,19 @@ _FUTURE_CLAUSE = re.compile(
     re.I,
 )
 
+# A decisive *assertion* about the overlap can be checked without an
+# LLM when the two complete Result lists are already visible. Ambiguous
+# phrases such as "we should calculate the overlap" are left alone.
+_LITERAL_OVERLAP_ASSERTION = re.compile(
+    r"\b(?:intersection|overlap)"
+    r"(?:\s+of\s+[^.!?;\n]{0,90}?)?"
+    r"\s+(?:is|equals|yields|contains|includes|isolates)\s+"
+    r"(?:only\s+)?(?P<ids>Case-\d+"
+    r"(?:\s*(?:,|and)\s*Case-\d+)*)",
+    re.I,
+)
+
+
 _FINAL_STEP = re.compile(
     r"\b(?:this|the|current|next)\s+"
     r"(?:(?:assigned|index|keyed)\s+){0,2}"
@@ -249,6 +262,15 @@ def check_reasoning_fidelity(reasoning: str, contract: dict) -> list[str]:
         if observed != count:
             issues.append("reasoning_dispatch_task_count_mismatch")
             break
+
+    witnesses = public.get("observed_identifier_set_relations", [])
+    if len(witnesses) == 1:
+        public_overlap = set(witnesses[0]["shared_identifiers"])
+        for assertion in _LITERAL_OVERLAP_ASSERTION.finditer(reasoning):
+            claimed = set(re.findall(r"Case-\d+", assertion.group("ids")))
+            if claimed != public_overlap:
+                issues.append("reasoning_visible_intersection_mismatch")
+                break
 
     if contract["private_limits"]["has_later_delegation"]:
         if _FINAL_STEP.search(reasoning) or _FINAL_ANSWER.search(reasoning):
