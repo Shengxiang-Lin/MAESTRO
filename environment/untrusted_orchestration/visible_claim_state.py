@@ -222,6 +222,20 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
                 "replaced_earlier_report": replaced,
             })
 
+        # Claim-level lineage only links actual returned child and parent
+        # assertions of the same entity. It is a dependency indicator,
+        # NOT a claim that the parent or child value is factually correct.
+        claim_dependency_edges = []
+        for tid, claims in latest_by_task.items():
+            for parent in tasks[tid].get("depends_on", []):
+                for child_claim in claims:
+                    for parent_claim in latest_by_task.get(parent, []):
+                        if child_claim["subject"] == parent_claim["subject"]:
+                            claim_dependency_edges.append({
+                                "parent_claim_id": parent_claim["claim_id"],
+                                "child_claim_id": child_claim["claim_id"],
+                                "relation": "same_subject_task_dependency",
+                            })
         grouped = defaultdict(list)
         active_claims = [
             c for claims in latest_by_task.values() for c in claims
@@ -279,6 +293,7 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
             "claim_nodes": active_claims,
             "claim_states": current,
             "claim_relations": relations,
+            "claim_dependency_edges": claim_dependency_edges,
             "task_dependency_edges": dependencies,
             "state_changes": transitions,
             "states": year_states,
