@@ -227,7 +227,7 @@ def topic_mentioned(text: str, topic: str) -> bool:
 
 
 REQUEST_VERB = (
-    r"(?:identify|list|find|determine|report|return|select|count|provide|"
+    r"(?:identify|list|find|locate|determine|report|return|select|count|provide|"
     r"show|give|tell|extract|name|calculate|check|filter|compare)"
 )
 

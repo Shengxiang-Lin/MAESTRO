@@ -321,8 +321,20 @@ def guard_question(question: str, spec: dict,
         from .macro_planning import GOAL_PHRASES
         label = plan["goal"]["public_label"]
         goal_field = plan["goal"]["answer_field"]
-        if not any(phrase in q.casefold()
-                   for phrase in GOAL_PHRASES.get(goal_field, (label,))):
+        mentions_goal = any(
+            phrase in q.casefold()
+            for phrase in GOAL_PHRASES.get(goal_field, (label,))
+        )
+        if goal_field == "higher_count_source" and not mentions_goal:
+            # "Which of the two independently recorded counts is the higher
+            # one?" is a valid single-output comparison paraphrase.
+            mentions_goal = bool(
+                re.search(r"\b(?:higher|larger|greater)\b", q, re.I)
+                and re.search(r"\b(?:counts?|totals?)\b", q, re.I)
+                and re.search(r"\b(?:which|determine|identify|compare)\b",
+                              q, re.I)
+            )
+        if not mentions_goal:
             errors.append("macro_first_v2_goal_semantics_missing")
         if mode in {"disputed_reports", "corroborated_dispute"} and not re.search(
             r"\b(disagree\w*|disput\w*|differ\w*|conflict\w*|"
