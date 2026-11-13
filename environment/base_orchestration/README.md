@@ -10,6 +10,59 @@ and may also be invoked via
 `environment.base_orchestration.config.generate_from_config()`.
 
 
+## P1A + P1B: Main reasoning fidelity and shared public report presentation
+
+P1A is enabled automatically when the versioned V1.4 runner receives
+`--freeze-dispatch` (or `generation.freeze_dispatch: true` in YAML):
+
+1. Before each delegation, build an **evidence contract** from only the
+   Main-visible reports received so far and this round's immutable
+   task instructions, source IDs, task count and output field names.
+2. The Author sees the *public* contract, not a future Gold/Oracle output.
+   A conservative deterministic Guard rejects precise claims that the
+   current handoff returns an unavailable field, wrongly counts delegated
+   tasks, or says a nonfinal delegation finishes the user question.
+   Ambiguous source observations and future-looking language are left to
+   the independent semantic Critic.
+3. The Critic receives the same public contract and current-round
+   instructions; it must distinguish current returned fields from
+   downstream prerequisites. Only the Main `reasoning` is authored.
+   If the Guard rejects a draft, the Author gets a typed repair hint,
+   never the private Critic dialogue or future ground-truth values.
+4. Private `teacher_alignment.jsonl` contains
+   `reasoning_fidelity_contract` and `reasoning_fidelity_checked`
+   for independent dataset audits. Public `main_turns.jsonl`
+   retains the exact O1-compatible `input.subtask_history` /
+   `output` shape and does not expose this metadata.
+
+P1B uses `environment.implement_subtask.public_surface.reviewed_public_view`
+to make a **copy** of a previously reviewed Stage-2 report before it enters
+Main-visible clean history. It safely replaces limited self-references such
+as "this Macro" and "this stage" with "this task" / "this step" in
+`summary` and the natural-language trace narrative. The original Stage-2
+JSONL and the exact `finish_result.result`, `status`, field values,
+FactRefs, task answer and structured trace are never altered. As a result,
+a historical result containing "macro" itself is intentionally preserved:
+removing that phrase would violate the immutable-result constraint.
+
+This same view is used in the Stage-4 trusted prefix and in
+`deterministic_report` for a completed clean, reviewed retry.
+**Never** run this normalizer on a purposely corrupted 4B feedback
+message, because doing so could erase an intended observable discrepancy.
+
+Run a clean pilot in a fresh directory (old checkpoints have different
+code hashes):
+
+```bash
+python -m environment.base_orchestration.generate_turns \
+  --scenes environment/data/maestro_stage1_current_v1_4_100/questions/scenes.jsonl \
+  --reports environment/data/maestro_stage2_reports_v1_4_repaired/subtasks.jsonl \
+  --output-dir environment/data/maestro_stage3_v1_4_p1_10 \
+  --max-scenes 10 --mode llm \
+  --author-api-base http://127.0.0.1:8807/v1 \
+  --author-model local-qwen3.5-9b --workers 8 --freeze-dispatch
+```
+
 ## V1.4 pilot: code-owned dispatch and evidence-grounded reasoning
 
 Stage 1 V1.4 and the completed Stage-2 repaired report bank are the

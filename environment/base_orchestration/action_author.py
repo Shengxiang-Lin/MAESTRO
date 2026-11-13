@@ -590,6 +590,7 @@ def author_delegate_action(
     critic_system: str | None = None,
     freeze_assignment_prose: bool = False,
     reasoning_only_stage3: bool = False,
+    round_evidence_contract: dict | None = None,
     reasoning_goals: list[dict] | None = None,
     reasoning_guard=None,
     decision_contract: dict | None = None,
@@ -630,6 +631,10 @@ def author_delegate_action(
                 "output_format": {
                     "reasoning": "grounded explanation of next investigations"
                 },
+                **({
+                    "round_evidence_contract":
+                        round_evidence_contract["public"],
+                } if round_evidence_contract is not None else {}),
                 "writing_guidance": (
                     "Explain only CURRENT-round investigations, using "
                     "the exact pending task instructions and previously "
@@ -648,6 +653,28 @@ def author_delegate_action(
                      "stage": row.get("stage", "")}
                     for row in failures[-2:]
                 ]
+                # Deliver only general issue-specific repair guidance.
+                # Do not expose private reviewer dialogue to the Author.
+                repairs = {
+                    "reasoning_dispatch_task_count_mismatch":
+                        "Describe the number of delegated tasks accurately; "
+                        "the number of evidence sources may differ.",
+                    "reasoning_current_output_field_mismatch":
+                        "Only describe this round's output fields as "
+                        "returned, not later dependent fields.",
+                    "reasoning_premature_final_step":
+                        "Do not claim the investigation finishes in this "
+                        "round while further work remains.",
+                    "invented_prior_subagent_failure":
+                        "Do not describe a previously completed Sub-Agent "
+                        "handoff as a failed retrieval.",
+                }
+                request["repair_guidance"] = list(dict.fromkeys(
+                    repairs[code]
+                    for failed in failures[-2:]
+                    for code in failed.get("errors", [])
+                    if code in repairs
+                ))
         if freeze_assignment_prose and not reasoning_only_stage3:
             request["authoring_scope"] = (
                 "Generate natural grounded reasoning ONLY. The assigned "
@@ -824,6 +851,11 @@ def author_delegate_action(
                         ),
                     } if freeze_assignment_prose
                     and reasoning_only_stage3 else {}),
+                    **({
+                        "current_round_evidence_contract":
+                            round_evidence_contract["public"],
+                    } if reasoning_only_stage3
+                    and round_evidence_contract is not None else {}),
                     "candidate_reasoning_only": (
                         authored_reasoning if decision_contract is not None
                         else candidate["reasoning"]
@@ -845,7 +877,12 @@ def author_delegate_action(
                         "verification, hidden reviewer dialogue or an "
                         "incorrect dependency claim. Do not assess or "
                         "rewrite task_instruction, context, model, tools, "
-                        "or the overall frozen delegation plan."
+                        "or the overall frozen delegation plan. "
+                        "In trusted Stage-3 review, distinguish this round's "
+                        "returned fields from later dependent evidence, "
+                        "and distinguish the number of sources from the "
+                        "number of independently delegated tasks. "
+                        "Reject unsupported final-step claims."
                     ),
                 }
             else:
@@ -948,6 +985,13 @@ def author_delegate_action(
                     ["reasoning", "task_instruction", "context"]
                 ),
                 "attempts": revision + 1, "review": review,
+                **({
+                    "reasoning_fidelity_rejections": [
+                        {"errors": list(failed.get("errors", []))}
+                        for failed in failures
+                        if failed.get("stage") == "evidence_reasoning_guard"
+                    ],
+                } if reasoning_only_stage3 else {}),
                 **({
                     "decision_contract_version": decision_contract.get(
                         "contract_version", "unknown"

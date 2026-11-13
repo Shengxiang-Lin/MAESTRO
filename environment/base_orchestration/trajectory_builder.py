@@ -18,6 +18,7 @@ from typing import Any
 
 from environment.generate_question.quality import validate_replay
 from environment.implement_subtask.realize import realize_scene
+from environment.implement_subtask.public_surface import reviewed_public_view
 
 from .o1_compat import o1_prompt, o1_history, o1_prompt_from_turn, source_catalog
 from .action_author import (
@@ -25,6 +26,9 @@ from .action_author import (
     author_delegate_action, author_complete_action,
     STAGE3_REASONING_AUTHOR_SYSTEM, STAGE3_REASONING_CRITIC_SYSTEM,
     stage3_reasoning_issues,
+)
+from .reasoning_fidelity import (
+    build_round_evidence_contract, check_reasoning_fidelity,
 )
 
 
@@ -293,7 +297,12 @@ def build_episode(
         raise ValueError("stage3_max_attempts_too_small")
     if not isinstance(model_alias, str) or not model_alias:
         raise ValueError("stage3_invalid_model_alias")
-    reports = _strict_reports(scene, stage2_rows)
+    # The reviewed Stage-2 bank remains immutable. Main consumes a
+    # non-destructive display copy. Stage-4 clean prefixes reuse it.
+    reports = {
+        tid: reviewed_public_view(row)
+        for tid, row in _strict_reports(scene, stage2_rows).items()
+    }
     graph = scene["macro_graph"]
     # Versioned V1.4 scenes train Main reasoning over a frozen
     # dependency-safe dispatch, not redundant action-structure synthesis.
@@ -362,6 +371,12 @@ def build_episode(
                 tasks[tid], catalog, delivered, model_alias=model_alias
             ) for tid in wave
         ]
+        evidence_contract = (
+            build_round_evidence_contract(
+                assignment, delivered,
+                has_later_delegation=wave_number < len(scheduled),
+            ) if freeze_trusted_dispatch else None
+        )
         saved = (saved_rounds[wave_number - 1]
                  if wave_number <= len(saved_rounds) else None)
         if saved is not None:
@@ -404,10 +419,14 @@ def build_episode(
                     if freeze_trusted_dispatch else None
                 ),
                 reasoning_guard=(
-                    (lambda reasoning: stage3_reasoning_issues(
-                        reasoning, delivered,
+                    (lambda reasoning: (
+                        stage3_reasoning_issues(reasoning, delivered)
+                        + check_reasoning_fidelity(
+                            reasoning, evidence_contract,
+                        )
                     )) if freeze_trusted_dispatch else None
                 ),
+                round_evidence_contract=evidence_contract,
             )
             if action is None:
                 return None, [], [], {
@@ -454,6 +473,10 @@ def build_episode(
             "o1_history_sha256": _hash(history),
             "dependencies_satisfied": True,
             "authoring": status,
+            **({
+                "reasoning_fidelity_contract": evidence_contract,
+                "reasoning_fidelity_checked": True,
+            } if evidence_contract is not None else {}),
             "private_only": True,
         }
         examples.append(example)

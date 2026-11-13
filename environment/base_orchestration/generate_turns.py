@@ -369,6 +369,19 @@ def generate_turns(
         for attempt in failure.get("authoring", {}).get("failures", []):
             failure_stages[attempt.get("stage", "unknown")] += 1
             guard_issues.update(attempt.get("errors") or [])
+    fidelity_rows = [
+        row for row in private
+        if row.get("action") == "delegate_task"
+        and row.get("reasoning_fidelity_checked") is True
+    ]
+    fidelity_issues = Counter(
+        code
+        for row in fidelity_rows
+        for failed in row.get("authoring", {}).get(
+            "reasoning_fidelity_rejections", []
+        )
+        for code in failed.get("errors", [])
+    )
     completion_modes = Counter(
         row.get("authoring", {}).get("mode", "unknown")
         for row in private if row.get("action") == "complete"
@@ -392,6 +405,12 @@ def generate_turns(
         "actions": dict(action_counts),
         "completion_generation_modes": dict(completion_modes),
         "visible_answer_shortcuts": shortcut_count,
+        "reasoning_fidelity_checked_delegate_turns": len(fidelity_rows),
+        "reasoning_fidelity_guard_rejections": dict(fidelity_issues),
+        "reasoning_fidelity_revised_delegate_turns": sum(
+            bool(row.get("authoring", {}).get("reasoning_fidelity_rejections"))
+            for row in fidelity_rows
+        ),
         "mean_turns_per_scene": round(
             len(turns) / max(1, len(episodes)), 3
         ),
