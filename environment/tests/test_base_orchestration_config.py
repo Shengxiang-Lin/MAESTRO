@@ -22,12 +22,12 @@ class TrajectoryConfigurationTests(TestCase):
         self.assertIsNotNone(base_orchestration)
         self.assertTrue(callable(build_episode))
         self.assertTrue(callable(generate_turns))
-        self.assertEqual(DEFAULT_CONFIG.name, "base_orchestration.yaml")
+        self.assertEqual(DEFAULT_CONFIG.name, "main_orchestration.yaml")
         self.assertTrue(DEFAULT_CONFIG.is_file())
 
     def test_configs_are_independent_and_root_relative(self):
         cfg = load_config()
-        self.assertEqual(DEFAULT_CONFIG.name, "base_orchestration.yaml")
+        self.assertEqual(DEFAULT_CONFIG.name, "main_orchestration.yaml")
         self.assertTrue(cfg["scenes_path"].is_absolute())
         self.assertTrue(cfg["reports_path"].is_absolute())
         self.assertTrue(cfg["output_dir"].is_absolute())
