@@ -88,9 +88,22 @@ machinery. Respond with the reasoning field only.
 STAGE3_REASONING_CRITIC_SYSTEM = _CRITIC_SYSTEM + """
 The Stage-3 model authored ONLY reasoning; task instructions, count, order,
 tools and model are fixed by the executable plan. Review factual claims in
-reasoning against actually Main-visible Sub-Agent results. Reject invented
-earlier errors/retries, completed checks or premature findings. Do not ask
-for changes to task prose or frozen dispatch. Return the normal three axes.
+reasoning against actually Main-visible Sub-Agent results and the supplied
+CURRENT-ROUND tasks. Reject invented earlier errors/retries, completed checks
+or premature findings.
+
+IMPORTANT MACRO SCOPE: The overall user question is a MULTI-STEP goal.
+The fixed current-round tasks may perform just one intermediate key lookup,
+even when the eventual answer requires comparing two later sources. An index
+lookup that returns the record key for a dependent index is legitimate:
+DO NOT demand that the Main skip this dependency and retrieve the final
+metric tables now. Validate the author's explanation against the exact
+current_round_task_contract and what has already been returned, NOT against
+a proposed alternative plan or immediate completion of the entire question.
+A valid criticism must identify a concrete ungrounded claim in the authored
+reasoning. Never object merely that a later task remains necessary.
+Do not ask for changes to task prose or frozen dispatch. Return the normal
+three axes.
 """
 
 # A narrow check for a claim of a previous failed tool/Sub-Agent execution
@@ -618,8 +631,13 @@ def author_delegate_action(
                     "reasoning": "grounded explanation of next investigations"
                 },
                 "writing_guidance": (
-                    "Explain only current evidence needs using already "
-                    "returned Sub-Agent facts. No invented past failures, "
+                    "Explain only CURRENT-round investigations, using "
+                    "the exact pending task instructions and previously "
+                    "returned Sub-Agent facts. The overall question may "
+                    "require additional dependent source lookups later; "
+                    "do not claim all sources must be queried now, or "
+                    "that a previous lookup failed just because another "
+                    "key must still be resolved. No invented past failures, "
                     "completed checks, or hidden future results. "
                     "Return only the reasoning field."
                 ),
@@ -784,6 +802,28 @@ def author_delegate_action(
                         ),
                         "needs_upstream": item["needs_upstream"],
                     } for item in assignments],
+                    **({
+                        # These are the exact PUBLIC task instructions which
+                        # Main is about to dispatch, never future DAG tasks.
+                        # Without them the critic may try to jump straight
+                        # to the final user goal and reject a legal indexed
+                        # intermediate lookup.
+                        "current_round_task_contract": [{
+                            "task_instruction": item["target_instruction"],
+                            "context": item["context"],
+                            "source_ids": item["source_ids"],
+                            "output_fields": item["output_fields"],
+                            "needs_upstream": item["needs_upstream"],
+                        } for item in assignments],
+                        "review_scope_priority": (
+                            "First compare reasoning with CURRENT-ROUND "
+                            "task contract and visible prior history. "
+                            "Do not replace this round with the final "
+                            "question's later dependent tasks. Reject "
+                            "only unsupported claims in authored reasoning."
+                        ),
+                    } if freeze_assignment_prose
+                    and reasoning_only_stage3 else {}),
                     "candidate_reasoning_only": (
                         authored_reasoning if decision_contract is not None
                         else candidate["reasoning"]
