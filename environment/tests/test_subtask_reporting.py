@@ -18,7 +18,7 @@ from environment.implement_subtask.config import (
 )
 from environment.implement_subtask.realize import realize_scene
 from environment.implement_subtask.naturalize import naturalize_subtasks
-from environment.implement_subtask.reporting import author_critic_report, trace_narrative
+from environment.implement_subtask.reporting import author_critic_report, trace_narrative, code_owned_result
 
 
 def scene(i, difficulty="medium"):
@@ -647,6 +647,138 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertIsNotNone(reviewed)
         self.assertEqual(info["attempts"], 2)
         self.assertEqual(len(critic.calls), 2)
+
+
+    def test_v14_code_owned_result_blocks_downstream_disagreement_hallucination(self):
+        from environment.tests.test_evidence_readiness import pattern_spec
+        from environment.implement_subtask.reporting import code_owned_result
+
+        spec = pattern_spec("corroborated_dispute")
+        frozen = compile_and_validate(spec, reference_question(spec))
+        context = next(
+            row for row in realize_scene(frozen)["macro_tasks"]
+            if row["macro_task_id"] == "work_M4"
+        )
+
+        class MisleadingResultAuthor:
+            def __init__(self):
+                self.contracts = []
+            def complete_json(self, system_prompt, user_prompt):
+                contract = json.loads(user_prompt)["frozen_task_and_evidence"]
+                self.contracts.append(contract)
+                self_summary = (
+                    "Checked the independent context log for the flagged "
+                    "tag and returned the matching case identifiers. "
+                    "Comparing the independently reported years is a "
+                    "separate downstream task."
+                )
+                return {
+                    "result": (
+                        "These four cases have independently verified "
+                        "disagreements between the report years."
+                    ),
+                    "summary": self_summary,
+                    "status": "done",
+                }
+
+        author, critic = MisleadingResultAuthor(), ReportCritic()
+        reviewed, info = author_critic_report(
+            context, question=frozen["question"], author=author,
+            critic=critic, max_revisions=0,
+            result_policy="code_owned",
+        )
+        self.assertEqual(info["status"], "accepted")
+        self.assertEqual(info["result_policy"], "code_owned")
+        self.assertTrue(info["ignored_model_result"])
+        self.assertEqual(
+            reviewed["finish_result"]["result"],
+            code_owned_result(context),
+        )
+        self.assertIn("case identifiers", reviewed["finish_result"]["result"])
+        self.assertNotIn(
+            "disagree", reviewed["finish_result"]["result"].lower()
+        )
+        for row in context["answer"]:
+            self.assertIn(
+                row["case_id"], reviewed["finish_result"]["result"],
+            )
+        self.assertNotIn(
+            "overall_question_for_context_only", author.contracts[0],
+        )
+        self.assertEqual(
+            critic.calls[0]["result_policy"], "code_owned",
+        )
+
+    def test_v14_code_owned_rejects_overclaim_in_llm_summary(self):
+        from environment.tests.test_evidence_readiness import pattern_spec
+        spec = pattern_spec("corroborated_dispute")
+        frozen = compile_and_validate(spec, reference_question(spec))
+        context = next(
+            row for row in realize_scene(frozen)["macro_tasks"]
+            if row["macro_task_id"] == "work_M4"
+        )
+        class OverclaimingSummary:
+            def complete_json(self, system_prompt, user_prompt):
+                return {
+                    "summary": (
+                        "The context scan returned the flagged records. "
+                        "For all of these cases the year disagreement "
+                        "condition was met."
+                    )
+                }
+        reviewed, info = author_critic_report(
+            context, question=frozen["question"],
+            author=OverclaimingSummary(), critic=ReportCritic(),
+            max_revisions=1, result_policy="code_owned",
+        )
+        self.assertIsNone(reviewed)
+        self.assertEqual(info["status"], "failed")
+        self.assertTrue(all(
+            "summary_claims_unverified_independent_report_disagreement"
+            in str(failure.get("errors", []))
+            for failure in info["failures"]
+        ))
+
+    def test_v14_code_owned_batch_mode_uses_only_llm_summary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            oracle, index = ReportingBatchTests()._teacher_inputs(root, [42])
+            class SummaryOnlyAuthor:
+                def __init__(self):
+                    self.calls = 0
+                def complete_json(self, system_prompt, user_prompt):
+                    self.calls += 1
+                    self.assert_summary_system = ("ONLY" in system_prompt)
+                    return {
+                        "summary": (
+                            "Inspected the currently assigned source or "
+                            "upstream handoff and returned the exactly "
+                            "observed records for this local step."
+                        )
+                    }
+            author = SummaryOnlyAuthor()
+            reports = naturalize_subtasks(
+                source_subtasks=oracle, source_scene_index=index,
+                output_dir=root / "code_owned", api_base="http://mock/v1",
+                model="mock", workers=2, max_revisions=0,
+                result_policy="code_owned", no_progress=True,
+                clients=(author, ReportCritic()),
+            )
+            self.assertEqual(reports["status"], "done")
+            outputs = [
+                json.loads(line) for line in
+                (root / "code_owned/subtasks.jsonl").read_text().splitlines()
+            ]
+            self.assertTrue(outputs)
+            self.assertEqual(len(outputs), reports["attempted_macro_tasks"])
+            self.assertTrue(all(
+                row["report_authoring"]["result_policy"] == "code_owned"
+                for row in outputs if row.get("evidence_trust_version")
+            ))
+            self.assertTrue(all(
+                row["finish_result"]["result"] == code_owned_result(row)
+                for row in outputs if row.get("evidence_trust_version")
+            ))
 
     def test_config_has_model_roles_and_does_not_break_oracle_mode(self):
         cfg = load_reporting_config(DEFAULT_CONFIG)

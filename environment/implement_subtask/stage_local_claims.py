@@ -43,6 +43,15 @@ _UNKNOWN_DISAGREEMENT = re.compile(
     r"(?:compare|verify|check|establish|confirm)\b",
     re.I,
 )
+_CLAIMED_DISAGREEMENT_CONDITION_MET = re.compile(
+    r"\b(?:year|report(?:ed)?)\s+"
+    r"(?:disagreement|discrepancy|conflict|mismatch)\s+"
+    r"(?:condition|criterion|criteria)\s+"
+    r"(?:was|were|is|has\s+been|have\s+been)\s+"
+    r"(?:met|satisfied|verified|established)\b",
+    re.I,
+)
+
 _REFUTED_DISAGREEMENT = re.compile(
     r"\b(?:the\s+)?(?:two\s+)?(?:reports?|years?|sources?)\b"
     r"[^.!?]{0,65}\b(?:agree|match|coincide|are\s+equal)\b",
@@ -153,6 +162,10 @@ def stage_local_claim_issues(text: str, contract: dict) -> list[str]:
         return []
     if contract.get("reported_year_disagreement_established"):
         return []
+    if (_CLAIMED_DISAGREEMENT_CONDITION_MET.search(text)
+            or any(_asserts_report_disagreement(sentence) for sentence in
+                   re.split(r"(?<=[.!?])\s+", text))):
+        return ["claims_unverified_independent_report_disagreement"]
     if any(_asserts_report_disagreement(sentence) for sentence in
            re.split(r"(?<=[.!?])\s+", text)):
         return ["claims_unverified_independent_report_disagreement"]

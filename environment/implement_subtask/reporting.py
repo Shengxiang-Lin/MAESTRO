@@ -544,10 +544,83 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
     return sorted(set(errors))
 
 
+
+
+CODE_OWNED_AUTHOR_SYSTEM = """You are a specialized Sub-Agent describing
+ONLY the work already performed for ONE delegated task. Return JSON with
+ONLY {"summary":"..."} containing 1-2 concise, grounded sentences.
+
+The program will supply Result and status from the current Macro's frozen
+executed WorkProduct. DO NOT write a result or status.
+You must respect the local operation and provenance contract supplied in
+observed_operator_steps: a context-log filter yields context candidates,
+NOT cases independently verified to have disagreeing report years.
+Do not claim a downstream year disagreement or final eligibility condition
+has been established until a step here explicitly checked it. A different
+independent Macro may do that later.
+
+Only describe local evidence and actual upstream handoffs. Do not invent
+facts, sources, numeric values, checks or tool/media execution. The trace
+represents simulated evidence; never claim to have actually searched
+the web, watched a video or visited a real source. Empty results mean a
+successfully executed step with no matching records, not a failed lookup.
+"""
+
+CODE_OWNED_CRITIC_SYSTEM = CRITIC_SYSTEM + """
+candidate_finish.result is PROGRAM-OWNED and has already been rendered from
+the complete frozen current Macro output. It was not model-authored. Review
+ONLY the model-authored summary for grounding, stage-local evidence scope and
+naturalness. Do not demand changes to the program-owned Result, add filters,
+or infer the overall question was completed by an intermediate Macro.
+Return the same four boolean axes.
+"""
+
+
+def code_owned_result(record: dict) -> str:
+    """Render all delivered Macro rows as neutral, stage-local observations.
+
+    Never replace a context candidate with a claimed year disagreement.
+    Fail rather than truncate an oversized relation: hiding rows would
+    corrupt downstream Main handoffs.
+    """
+    rows, fields = record["answer"], record["output_schema"]
+    if not isinstance(rows, list) or not fields:
+        raise ValueError("code_owned_invalid_oracle_relation")
+    if any(not isinstance(row, dict) or set(row) != set(fields)
+           for row in rows):
+        raise ValueError("code_owned_oracle_schema_mismatch")
+    if not rows:
+        return "No records matched the assigned task."
+    if fields == ["case_id"]:
+        text = (
+            f"The current task returned {len(rows)} case identifiers: "
+            + ", ".join(str(row["case_id"]) for row in rows) + "."
+        )
+    elif fields == ["entry_label"]:
+        text = "Entries returned by this task: " + ", ".join(
+            str(row["entry_label"]) for row in rows
+        ) + "."
+    else:
+        def label(field: str) -> str:
+            return SCHEMA_LABELS.get(field, field.replace("_", " "))
+        def render(row: dict) -> str:
+            return ", ".join(
+                f"{label(field)}: {_readable_value(row[field])}"
+                for field in fields
+            )
+        text = (
+            f"The current task returned {len(rows)} record(s): "
+            + "; ".join(render(row) for row in rows) + "."
+        )
+    if len(text) > 1600:
+        raise ValueError("code_owned_result_exceeds_finish_budget")
+    return text
+
 def author_critic_report(
     teacher_record: dict, *, question: str | None,
     author, critic, max_revisions: int = 2,
     is_terminal: bool = False,
+    result_policy: str = "llm_authored",
 ) -> tuple[dict | None, dict]:
     """Generate, check and repair a Main-facing finish result.
 
@@ -556,6 +629,8 @@ def author_critic_report(
     """
     if type(max_revisions) is not int or not 0 <= max_revisions <= 8:
         raise ValueError("max_revisions must be 0..8")
+    if result_policy not in {"llm_authored", "code_owned"}:
+        raise ValueError("invalid_report_result_policy")
     contract = _teacher_contract(
         teacher_record, question=question, is_terminal=is_terminal
     )
@@ -563,10 +638,19 @@ def author_critic_report(
         ref for step in teacher_record["trace_summary"]["steps"]
         for ref in step["supporting_fact_refs"]
     } | set(teacher_record["trace_summary"]["answer_supporting_fact_refs"]))
+    frozen_result = (
+        code_owned_result(teacher_record)
+        if result_policy == "code_owned" else None
+    )
+    author_contract = deepcopy(contract)
+    if result_policy == "code_owned":
+        # The overall question often mentions downstream conditions that
+        # are not established in the current source-only Macro.
+        author_contract.pop("overall_question_for_context_only", None)
     failures = []
     for revision in range(max_revisions + 1):
         request = {
-            "frozen_task_and_evidence": contract,
+            "frozen_task_and_evidence": author_contract,
             "previous_review_feedback": [{
                 "stage": f.get("stage"),
                 "errors": f.get("errors", []),
@@ -589,8 +673,23 @@ def author_critic_report(
         }
         try:
             candidate = author.complete_json(
-                AUTHOR_SYSTEM, json.dumps(request, ensure_ascii=False)
+                CODE_OWNED_AUTHOR_SYSTEM if result_policy == "code_owned"
+                else AUTHOR_SYSTEM,
+                json.dumps(request, ensure_ascii=False),
             )
+            ignored_model_result = bool(
+                isinstance(candidate, dict)
+                and result_policy == "code_owned"
+                and "result" in candidate
+            )
+            if isinstance(candidate, dict) and result_policy == "code_owned":
+                # Neither a model's wrong result nor an invented status
+                # may overwrite the actual delivered WorkProduct.
+                candidate = {
+                    "result": frozen_result,
+                    "summary": candidate.get("summary"),
+                    "status": candidate.get("status", "done"),
+                }
             surface_rewrites = []
             if isinstance(candidate, dict):
                 fields = {
@@ -644,8 +743,9 @@ def author_critic_report(
                 normalized_result, contract["exact_oracle_answer"],
             )
             decision = critic.complete_json(
-                VERIFIED_ENTRY_CRITIC_SYSTEM if verified_entry_list
-                else CRITIC_SYSTEM, json.dumps({
+                CODE_OWNED_CRITIC_SYSTEM if result_policy == "code_owned"
+                else (VERIFIED_ENTRY_CRITIC_SYSTEM if verified_entry_list
+                      else CRITIC_SYSTEM), json.dumps({
                     "frozen_task_and_evidence": contract,
                     "candidate_finish": {
                         "result": normalized_result,
@@ -655,6 +755,7 @@ def author_critic_report(
                     "author_result_was_structured": not isinstance(
                         candidate["result"], str
                     ),
+                    "result_policy": result_policy,
                 }, ensure_ascii=False)
             )
             axes = (
@@ -714,6 +815,8 @@ def author_critic_report(
                 }
                 row["report_authoring"] = {
                     "status": "accepted",
+                    "result_policy": result_policy,
+                    "ignored_model_result": ignored_model_result,
                     "attempts": revision + 1,
                     "surface_rewrites": surface_rewrites,
                     "review": decision,
