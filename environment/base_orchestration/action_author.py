@@ -986,6 +986,13 @@ def author_delegate_action(
                 ),
                 "attempts": revision + 1, "review": review,
                 **({
+                    "reasoning_fidelity_rejections": [
+                        {"errors": list(failed.get("errors", []))}
+                        for failed in failures
+                        if failed.get("stage") == "evidence_reasoning_guard"
+                    ],
+                } if reasoning_only_stage3 else {}),
+                **({
                     "decision_contract_version": decision_contract.get(
                         "contract_version", "unknown"
                     ),
