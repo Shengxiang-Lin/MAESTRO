@@ -134,6 +134,21 @@ class GeneralVisibleClaimStateTests(unittest.TestCase):
             data["summary"].get("source_report_replacements", 0), 1,
         )
 
+    def test_retried_claim_retains_visible_revision_lineage(self):
+        data = replay([
+            ("a", 4, "done", None),
+            ("a", 7, "done", None),
+        ])
+        first = data["rounds"][0]["claim_nodes"][0]
+        second = data["rounds"][1]["claim_nodes"][0]
+        self.assertEqual(first["revision_seq"], 1)
+        self.assertEqual(second["revision_seq"], 2)
+        self.assertEqual(second["revision_of"], first["claim_id"])
+        event = data["rounds"][1]["returned_source_reports"][0]
+        self.assertEqual(event["superseded_claim_ids"], [first["claim_id"]])
+        self.assertEqual(second["value"], 7)
+        self.assertEqual(len(data["rounds"][1]["claim_nodes"]), 1)
+
     def test_unknown_source_origin_never_counts_as_independent(self):
         data = replay([
             ("a", 4, "done", None),
