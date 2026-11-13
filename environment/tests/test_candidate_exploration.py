@@ -300,8 +300,8 @@ class CandidateExplorationTests(unittest.TestCase):
         with TemporaryDirectory() as td:
             f = Path(td) / "config.yaml"
             f.write_text(content.replace(
-                "  mode: template",
-                "  candidate_strategy: sample_one\n  mode: template",
+                "  mode: llm",
+                "  candidate_strategy: sample_one\n  mode: llm",
                 1,
             ))
             with self.assertRaisesRegex(
