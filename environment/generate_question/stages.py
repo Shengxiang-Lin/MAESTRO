@@ -32,6 +32,12 @@ def _construction_identity(args) -> str:
         "macro_first_share": getattr(args, "macro_first_share", 0),
         "macro_first_v2_share": getattr(args, "macro_first_v2_share", 0),
         "operator_grammar_share": getattr(args, "operator_grammar_share", 0),
+        "numeric_goal_diversity_share": getattr(
+            args, "numeric_goal_diversity_share", 0
+        ),
+        "question_semantic_lock_share": getattr(
+            args, "question_semantic_lock_share", 0
+        ),
         "mmqa": str(args.mmqa),
         "mmqa_sha256": (
             file_digest(args.mmqa) if Path(args.mmqa).is_file() else None
@@ -42,8 +48,8 @@ def _construction_identity(args) -> str:
                 "spec.py", "clue_chain.py", "graph_grammar.py",
                 "world_synthesizer.py", "macro_first.py",
                 "macro_first_world.py", "macro_planning.py",
-                "operator_grammar.py",
-                "macro_evidence_world.py", "information_necessity.py",
+                "operator_grammar.py", "numeric_goal_world.py",
+                "question_semantic_lock.py", "macro_evidence_world.py", "information_necessity.py",
                 "source_title_contract.py", "difficulty_proxy.py",
                 "scenario_fields.py", "topic_quality.py",
                 "topic_domain.py", "question_fidelity.py",
@@ -79,6 +85,8 @@ def _question_signature(args, rows: list[dict]) -> str:
             Path(__file__).with_name("semantic_evidence.py")),
         "question_fidelity_code": file_digest(
             Path(__file__).with_name("question_fidelity.py")),
+        "question_semantic_lock_code": file_digest(
+            Path(__file__).with_name("question_semantic_lock.py")),
         "intent_code": file_digest(Path(__file__).with_name("intent.py")),
         "surface_quality_code": file_digest(
             Path(__file__).with_name("surface_quality.py")),
@@ -213,6 +221,12 @@ def construct_scenes(args) -> dict:
                 macro_first_share=getattr(args, "macro_first_share", 0),
                 macro_first_v2_share=getattr(args, "macro_first_v2_share", 0),
                 operator_grammar_share=getattr(args, "operator_grammar_share", 0),
+                numeric_goal_diversity_share=getattr(
+                    args, "numeric_goal_diversity_share", 0
+                ),
+                question_semantic_lock_share=getattr(
+                    args, "question_semantic_lock_share", 0
+                ),
             )
             q = reference_question(spec)
             normalized = normalize_label(q)

@@ -453,7 +453,9 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
 
 def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
               difficulty: str, topic: str, record_id: str, version: str,
-              operator_grammar_enabled: bool = False) -> dict:
+              operator_grammar_enabled: bool = False,
+              numeric_goal_diversity_enabled: bool = False,
+              question_semantic_lock_enabled: bool = False) -> dict:
     from .topic_domain import infer_topic_domain, TOPIC_DOMAIN_VERSION
     category_cue = infer_topic_domain(seed_record)
     domain = classify_domain_from_explicit_cue(
@@ -522,6 +524,13 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     if operator_grammar_enabled:
         from .operator_grammar import VERSION as OPERATOR_GRAMMAR_VERSION
         spec["operator_grammar_version"] = OPERATOR_GRAMMAR_VERSION
+    if numeric_goal_diversity_enabled and plan["goal_resolution"]["kind"] in {
+        "comparison", "calculation",
+    }:
+        from .numeric_goal_world import NUMERIC_GOAL_WORLD_VERSION
+        spec["numeric_goal_world_version"] = NUMERIC_GOAL_WORLD_VERSION
+    if question_semantic_lock_enabled:
+        spec["question_semantic_lock_version"] = "maestro.question_semantic_lock.v1"
     title_by_source = expected_source_titles(spec)
     for source in spec["sources"]:
         source["title"] = title_by_source[source["source_id"]]
@@ -534,6 +543,20 @@ def validate_spec(spec: dict) -> list[str]:
         return ["invalid_macro_first_v2_plan"]
     from .semantic_evidence import CONTRACT_VERSION
     from .operator_grammar import VERSION as OPERATOR_GRAMMAR_VERSION
+    from .numeric_goal_world import NUMERIC_GOAL_WORLD_VERSION
+    if spec.get("numeric_goal_world_version") not in {
+        None, NUMERIC_GOAL_WORLD_VERSION,
+    }:
+        return ["invalid_numeric_goal_world_version"]
+    if (spec.get("numeric_goal_world_version")
+            and plan["goal_resolution"]["kind"] not in {
+                "comparison", "calculation",
+            }):
+        return ["numeric_goal_world_requires_numeric_goal"]
+    if spec.get("question_semantic_lock_version") not in {
+        None, "maestro.question_semantic_lock.v1",
+    }:
+        return ["invalid_question_semantic_lock_version"]
     if spec.get("operator_grammar_version") not in {
         None, OPERATOR_GRAMMAR_VERSION,
     }:

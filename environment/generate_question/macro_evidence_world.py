@@ -188,6 +188,16 @@ def generate_world(spec: dict) -> dict:
             item[f"record_key_{j}"] = f"KEY{j}-{keys[i]:05d}"
         objects.append(item)
 
+    if spec.get("numeric_goal_world_version"):
+        # Separate PRNG stream: only the two numeric source payloads change.
+        # Older frozen worlds without this marker preserve 90/25, 36/48.
+        from .numeric_goal_world import generate_numeric_goal_rows
+        sampled = generate_numeric_goal_rows(
+            spec, entity_count=entity_count,
+        )
+        for row, numbers in zip(objects, sampled):
+            row.update(numbers)
+
     if variable_profile:
         # Every candidate that survives either branch must lead to a
         # different final answer from the target; alternative candidates

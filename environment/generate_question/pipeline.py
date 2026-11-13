@@ -75,6 +75,11 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     macro_v2_modes = Counter()
     macro_v2_resolution_modes = Counter()
     macro_v2_goals = Counter()
+    numeric_goal_answer_counts = {
+        "comparison": Counter(), "calculation": Counter(),
+    }
+    numeric_goal_versioned = 0
+    question_semantic_lock_versioned = 0
     macro_v2_evidence_sizes = []
     macro_v2_local_source_counts = []
     macro_v2_media_pairs = Counter()
@@ -146,6 +151,17 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                             "enforcement_versioned": has_semantic_contract(spec),
                         })
                     plan = spec["macro_plan"]
+                    question_semantic_lock_versioned += int(
+                        bool(spec.get("question_semantic_lock_version"))
+                    )
+                    if spec.get("numeric_goal_world_version"):
+                        numeric_goal_versioned += 1
+                        kind = plan["goal_resolution"]["kind"]
+                        field = plan["goal"]["answer_field"]
+                        if (kind in numeric_goal_answer_counts
+                                and len(scene.get("gold_answer", [])) == 1):
+                            value = scene["gold_answer"][0][field]
+                            numeric_goal_answer_counts[kind][str(value)] += 1
                     if spec.get("operator_grammar_version"):
                         typed_grammar_scenes += 1
                         evidence_audit = scene.get(
@@ -474,6 +490,30 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     "Type-safe equivalent relational execution plans; "
                     "structural variation is not by itself new evidence "
                     "or increased reasoning hardness."
+                ),
+            },
+            "numeric_goal_diversity": {
+                "versioned_numeric_scenes": numeric_goal_versioned,
+                "versioned_question_semantic_lock_scenes":
+                    question_semantic_lock_versioned,
+                "histogram_by_goal": {
+                    kind: dict(sorted(values.items()))
+                    for kind, values in numeric_goal_answer_counts.items()
+                },
+                "distinct_answers_by_goal": {
+                    kind: len(values)
+                    for kind, values in numeric_goal_answer_counts.items()
+                },
+                "max_answer_frequency_share_by_goal": {
+                    kind: (
+                        round(max(values.values()) / sum(values.values()), 4)
+                        if values else None
+                    ) for kind, values in numeric_goal_answer_counts.items()
+                },
+                "interpretation": (
+                    "Distribution over successfully published scenes; "
+                    "a seeded sampler does not guarantee a perfectly "
+                    "balanced accepted subset."
                 ),
             },
             "pattern_distribution": dict(macro_v2_modes),

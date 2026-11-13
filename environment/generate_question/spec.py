@@ -91,7 +91,9 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
               evidence_graph_share: int = 0,
               macro_first_share: int = 0,
               macro_first_v2_share: int = 0,
-              operator_grammar_share: int = 0) -> dict:
+              operator_grammar_share: int = 0,
+              numeric_goal_diversity_share: int = 0,
+              question_semantic_lock_share: int = 0) -> dict:
     if difficulty not in DIFFICULTIES:
         raise ValueError("difficulty must be easy, medium or hard")
     if (type(clue_chain_share) is not int
@@ -106,6 +108,12 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     if (type(operator_grammar_share) is not int
             or not 0 <= operator_grammar_share <= 100):
         raise ValueError("operator_grammar_share must be between 0 and 100")
+    for name, share in (
+        ("numeric_goal_diversity_share", numeric_goal_diversity_share),
+        ("question_semantic_lock_share", question_semantic_lock_share),
+    ):
+        if type(share) is not int or not 0 <= share <= 100:
+            raise ValueError(name + " must be between 0 and 100")
     topic = normalize_topic(seed_record.get("topic", ""))
     record_id = str(seed_record.get("record_id") or seed_record.get("scene_id")
                     or f"topic-{ordinal}")
@@ -124,6 +132,16 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
                 int(digest(run_seed, ordinal, record_id,
                            "typed-operator-grammar-mix-v1")[:8], 16) % 100
                 < operator_grammar_share
+            ),
+            numeric_goal_diversity_enabled=(
+                int(digest(run_seed, ordinal, record_id,
+                           "numeric-goal-diversity-mix-v1")[:8], 16) % 100
+                < numeric_goal_diversity_share
+            ),
+            question_semantic_lock_enabled=(
+                int(digest(run_seed, ordinal, record_id,
+                           "question-semantic-lock-mix-v1")[:8], 16) % 100
+                < question_semantic_lock_share
             ),
         )
     # Select the Macro-level DAG FIRST, before any primitive solver or

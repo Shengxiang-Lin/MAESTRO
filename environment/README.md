@@ -54,6 +54,46 @@ The original default 1→2→4 configuration remains unchanged. Standalone
 Stage 4 continues to read only the two paths in the selected YAML config;
 it does not silently switch between Scene banks.
 
+## Stage-1 numeric witnesses and exact Question semantics (V1.2)
+
+The separate typed-operator pilot config now opts in to *two*
+additional versioned features, while the original default config and
+previously frozen v1/v1.1 Scene banks remain unchanged:
+
+- `generation.numeric_goal_diversity_share: 100` generates comparison
+  values with both first/second winners and varying legal completed/total
+  pairs. The Gold Answer is still computed by the original
+  `derive_comparison` / floor `derive_percentage` primitive; no
+  values are inserted into LLM Question prompts. Candidate distractors
+  have an answer different from the target, and source counterfactual
+  tests remain mandatory.
+- `generation.question_semantic_lock_share: 100` adds a strict
+  *single-output semantic authoring contract*: exact topic, necessary
+  clues, dispute tag, correct answer scope, and explicit floor-to-whole-
+  percent rule for calculation questions. Deterministic checks reject
+  calculation questions that omit rounding-down or whole-percent units.
+  The Critic and existing semantic guards remain unchanged otherwise.
+
+The two flags affect only newly generated Macro-first v2 Scenes and
+are validated in the Stage-1 config. Missing version markers preserve
+the old World and Question Guard semantics for historical Replay.
+
+The pilot now writes to
+`environment/data/maestro_stage1_operator_v1_2_100`; its paired
+Stage 2 and Stage 4 pilot YAML files point to similarly isolated new
+output directories. Run with:
+
+```bash
+python -m environment generate-questions \
+  --config environment/configs/questions_typed_operators.yaml
+```
+
+Inspect `quality_report.json` under
+`macro_first_v2.numeric_goal_diversity` for the actual published
+answer histograms, maximum answer frequency and enabled-Scene counts.
+Random sampling aims to remove degenerate shortcuts; perfect 50/50
+comparison class balance is not promised for any finite accepted subset.
+
 ## One command
 
 From the repository root:
