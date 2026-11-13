@@ -160,6 +160,6 @@ def critic_denies_confirmed_conflict(review: dict, contract: dict) -> bool:
         r"|(?:claim|assertion|statement)\s+(?:that\s+)?"
         r"(?:the\s+)?(?:result|summary).{0,45}"
         r"(?:conflict|contradict|disagree|mismatch).{0,50}"
-        r"(?:unsupported|unfounded|invented|false)"
+        r"(?:unsupported|unfounded|invented|false)",
         reason,
     ))
