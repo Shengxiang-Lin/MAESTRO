@@ -166,6 +166,7 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
         if item.get("answer_supporting_claim_pair")
     }
     latest_by_task = {}
+    versions_by_task = {}
     snapshots, prior_states = [], {}
     counters = Counter()
     last_round = 0
@@ -194,11 +195,21 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
             found, parse = extract_visible_claims(
                 report, output_fields=fields, source_id=source_id,
             )
+            previous_claims = latest_by_task.get(tid, [])
             replaced = tid in latest_by_task
             if replaced:
                 counters["source_report_replacements"] += 1
-            # The returned content of a retry replaces, not accumulates,
-            # that task's previous observations, even if missing/partial.
+            versions_by_task[tid] = versions_by_task.get(tid, 0) + 1
+            # A revision link means a newer REPORT replaced a prior
+            # visible assertion; it never proves which value is true.
+            def prior_claim(item):
+                return next((c["claim_id"] for c in previous_claims
+                             if c["subject"] == item["subject"]
+                             and c["attribute"] == item["attribute"]
+                             and c["valid_scope"] == item["valid_scope"]
+                             and c["surface"] == item["surface"]), None)
+            # A retry replaces the entire task's earlier observations,
+            # even if the new delivery is missing or partial.
             latest_by_task[tid] = [{
                 **c, "claim_id": _claim_id(tid, round_number, c),
                 "report_task_id": tid, "observed_in_round": round_number,
@@ -207,7 +218,8 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
                     origin_by_source.get(source_id)
                     if source_id is not None else None
                 ),
-                "revision_seq": 1, "revision_of": None,
+                "revision_seq": versions_by_task[tid],
+                "revision_of": prior_claim(c),
                 "authoritative": False,
             } for c in found]
             counters["literal_claims_extracted"] += len(found)
@@ -227,6 +239,9 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
                 "parse_mode": parse["parse_mode"],
                 "visible_claim_count": len(found),
                 "replaced_earlier_report": replaced,
+                "superseded_claim_ids": [
+                    c["claim_id"] for c in previous_claims
+                ] if replaced else [],
             })
 
         # Claim-level lineage only links actual returned child and parent
