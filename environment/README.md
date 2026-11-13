@@ -5,94 +5,16 @@ It does not require a separate Stage-3 Main LLM run or a
 `base_episodes.jsonl` input. Stage 4 derives a clean deterministic O1
 prefix from accepted Stage-1 scenes and Stage-2 reviewed reports.
 
-## Stage-1 typed operator grammar (opt-in V1)
+## Canonical Stage 1 (V1.2)
 
-The pilot config `environment/configs/questions_typed_operators.yaml`
-enables `generation.operator_grammar_share: 100` for **new**
-Medium/Hard Macro-first v2 Scenes. The normal `questions.yaml` stays
-unchanged and defaults to legacy solver programs. This preserves existing
-V10.4.x Scene/World/Program banks and their output directories.
+`environment/configs/questions.yaml` is the sole supported Stage-1
+configuration. New Medium/Hard Scenes use typed Macro-first V2 query
+plans, numeric witness diversity and Question semantic locks. Easy
+remains a one-source approval baseline. The old opt-in pilot YAMLs and
+Stage-1 CLI aliases have been retired.
 
-`generate_question/operator_grammar.py` selects a deterministic, role- and
-modality-compatible relational plan using a stable per-Macro hash. It does
-not consume the World sampling RNG. Current legal rewrites include:
-- swapping independent attribute/temporal Filter order,
-- changing the orientation of a symmetric inner Join,
-- placing Video/Audio source predicates before or after their inner Join.
-
-Every selected plan remains source-scoped and typed. A new Stage-1 audit
-executes the **canonical and variant program on the same World**, checks
-*each Macro WorkProduct* for identical output schema, values and FactRefs,
-and checks the final Gold answer and provenance. A failing rewrite is
-rejected; no extra filler operators are inserted to inflate difficulty.
-The private `quality_report.json` contains
-`macro_first_v2.typed_operator_grammar` with per-role variant and
-operator-sequence distributions. This is **algebraic query-plan diversity**,
-not yet a new information-need or independent cross-source verification
-relation.
-
-To generate only the new Stage-1 bank:
-
-```bash
-python -m environment generate-questions \
-  --config environment/configs/questions_typed_operators.yaml
-```
-
-To run a **separate** new Stage 1→2→4 experiment, use the three matching
-pilot configs (all have fresh output directories):
-
-```bash
-python -m environment run \
-  --questions-config environment/configs/questions_typed_operators.yaml \
-  --reports-config environment/configs/subagent_reports_typed_operators.yaml \
-  --untrusted-config environment/configs/untrusted_typed_operators.yaml \
-  --mode llm
-```
-
-The `run` command wires the Stage-1 and Stage-2 artifact paths itself.
-The original default 1→2→4 configuration remains unchanged. Standalone
-Stage 4 continues to read only the two paths in the selected YAML config;
-it does not silently switch between Scene banks.
-
-## Stage-1 numeric witnesses and exact Question semantics (V1.2)
-
-The separate typed-operator pilot config now opts in to *two*
-additional versioned features, while the original default config and
-previously frozen v1/v1.1 Scene banks remain unchanged:
-
-- `generation.numeric_goal_diversity_share: 100` generates comparison
-  values with both first/second winners and varying legal completed/total
-  pairs. The Gold Answer is still computed by the original
-  `derive_comparison` / floor `derive_percentage` primitive; no
-  values are inserted into LLM Question prompts. Candidate distractors
-  have an answer different from the target, and source counterfactual
-  tests remain mandatory.
-- `generation.question_semantic_lock_share: 100` adds a strict
-  *single-output semantic authoring contract*: exact topic, necessary
-  clues, dispute tag, correct answer scope, and explicit floor-to-whole-
-  percent rule for calculation questions. Deterministic checks reject
-  calculation questions that omit rounding-down or whole-percent units.
-  The Critic and existing semantic guards remain unchanged otherwise.
-
-The two flags affect only newly generated Macro-first v2 Scenes and
-are validated in the Stage-1 config. Missing version markers preserve
-the old World and Question Guard semantics for historical Replay.
-
-The pilot now writes to
-`environment/data/maestro_stage1_operator_v1_2_100`; its paired
-Stage 2 and Stage 4 pilot YAML files point to similarly isolated new
-output directories. Run with:
-
-```bash
-python -m environment generate-questions \
-  --config environment/configs/questions_typed_operators.yaml
-```
-
-Inspect `quality_report.json` under
-`macro_first_v2.numeric_goal_diversity` for the actual published
-answer histograms, maximum answer frequency and enabled-Scene counts.
-Random sampling aims to remove degenerate shortcuts; perfect 50/50
-comparison class balance is not promised for any finite accepted subset.
+The `macro_first_v2` Scene marker remains part of the frozen data
+contract used by Stages 2 and 4.
 
 ## One command
 
@@ -125,7 +47,7 @@ python -m environment naturalize-subtasks \
 python -m environment generate-untrusted-turns \
   --config environment/configs/untrusted_orchestration.yaml \
   --mode llm \
-  --output-dir environment/data/maestro_untrusted_rounds_v10_4_2
+  --output-dir environment/data/maestro_stage4_current_v1_2_100
 ```
 
 The two `input` paths in the Stage-4 YAML must point to the actual

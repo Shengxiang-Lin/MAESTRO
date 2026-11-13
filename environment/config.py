@@ -13,7 +13,7 @@ SECTIONS = {
     "input": {"mmqa", "max_records"},
     "generation": {"output_dir", "target", "seed", "difficulty_mix",
                    "overwrite", "no_progress", "flush_every",
-                   "macro_planning_share", "macro_first_v2_share",
+                   "macro_planning_share",
                    "operator_grammar_share",
                    "numeric_goal_diversity_share",
                    "question_semantic_lock_share"},
@@ -87,13 +87,9 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     flush_every = generation.get("flush_every", 1)
     if type(flush_every) is not int or flush_every < 1:
         raise ValueError("generation.flush_every must be a positive integer")
-    if "macro_planning_share" in generation and "macro_first_v2_share" in generation:
-        raise ValueError("Specify only one of macro_planning_share or legacy macro_first_v2_share")
-    macro_first_v2_share = generation.get(
-        "macro_planning_share", generation.get("macro_first_v2_share", 0)
-    )
-    if type(macro_first_v2_share) is not int or not 0 <= macro_first_v2_share <= 100:
-        raise ValueError("generation.macro_first_v2_share must be 0..100")
+    macro_first_v2_share = generation.get("macro_planning_share", 100)
+    if type(macro_first_v2_share) is not int or macro_first_v2_share != 100:
+        raise ValueError("generation.macro_planning_share must be 100 for the supported Stage-1 pipeline")
     operator_grammar_share = generation.get("operator_grammar_share", 0)
     if (type(operator_grammar_share) is not int
             or not 0 <= operator_grammar_share <= 100):
@@ -124,7 +120,6 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         difficulty_mix=",".join(map(str, mix)),
         overwrite=bool(generation.get("overwrite", False)),
         flush_every=flush_every,
-        # Legacy share flags intentionally omitted from public args.
         macro_first_v2_share=macro_first_v2_share,
         operator_grammar_share=operator_grammar_share,
         numeric_goal_diversity_share=numeric_goal_diversity_share,

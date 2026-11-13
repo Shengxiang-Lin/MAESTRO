@@ -131,7 +131,7 @@ class Stage2TraceTests(unittest.TestCase):
                     self.assertTrue(step["evidence_atoms_truncated"])
 
     def test_modified_source_scene_is_refused_before_export(self):
-        invalid = _scene(13, "hard")
+        invalid = _scene(13, "easy")
         invalid["world"]["sources"]["register"]["observations"][0][
             "values"]["active"] = "tampered"
         with self.assertRaises(ValueError):

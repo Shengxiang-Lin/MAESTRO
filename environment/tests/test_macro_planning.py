@@ -39,24 +39,24 @@ def spec_for(i, difficulty=None):
 
 
 class DiverseMacroTests(unittest.TestCase):
-    def test_new_mode_is_opt_in_without_changing_v1(self):
+    def test_current_medium_hard_use_macro_v2_and_easy_stays_simple(self):
         seed = {"record_id": "source-3", "topic": "Premier League",
                 "domain_hint": "sports"}
-        old = make_spec(seed_record=seed, ordinal=12, run_seed=28,
-                        difficulty="medium", macro_first_share=100)
-        unchanged = make_spec(seed_record=seed, ordinal=12, run_seed=28,
-                              difficulty="medium", macro_first_share=100,
-                              macro_first_v2_share=0)
-        self.assertEqual(old, unchanged)
-        v2 = make_spec(seed_record=seed, ordinal=12, run_seed=28,
-                       difficulty="medium", macro_first_share=100,
-                       macro_first_v2_share=100)
-        self.assertEqual(v2["reasoning_pattern"], "macro_first_v2")
-        self.assertEqual(v2, make_spec(seed_record=seed, ordinal=12, run_seed=28,
-                       difficulty="medium", macro_first_v2_share=100))
-        easy = make_spec(seed_record=seed, ordinal=12, run_seed=28,
-                         difficulty="easy", macro_first_v2_share=100)
-        self.assertNotEqual(easy["reasoning_pattern"], "macro_first_v2")
+        current = make_spec(
+            seed_record=seed, ordinal=12, run_seed=28, difficulty="medium",
+        )
+        self.assertEqual(current["reasoning_pattern"], "macro_first_v2")
+        self.assertEqual(current["reasoning_pattern"], make_spec(
+            seed_record=seed, ordinal=12, run_seed=28, difficulty="medium",
+            macro_first_v2_share=100,
+        )["reasoning_pattern"])
+        easy = make_spec(
+            seed_record=seed, ordinal=12, run_seed=28, difficulty="easy",
+        )
+        self.assertEqual(easy["reasoning_pattern"], "approval")
+        with self.assertRaisesRegex(ValueError, "macro_planning_share"):
+            make_spec(seed_record=seed, ordinal=12, run_seed=28,
+                      difficulty="medium", macro_first_v2_share=0)
 
     def test_frozen_output_schema_key_order_is_semantically_irrelevant(self):
         # Scenario round-trip serialization may sort JSON object keys; a

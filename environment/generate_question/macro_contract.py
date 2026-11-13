@@ -116,15 +116,7 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
     family = spec["family"]
     compares = [step.get("comparison") for step in steps
                 if step["op"] == "compare_fields"]
-    if pattern == "time_window" and not (
-        "gte" in compares and "lte" in compares
-    ):
-        raise ValueError("macro_question_missing_inclusive_window_operations")
-    if pattern == "status_disagreement" and "ne" not in compares:
-        raise ValueError("macro_question_missing_disagreement_operation")
-    if pattern == "dynamic_threshold" and "gte" not in compares:
-        raise ValueError("macro_question_missing_threshold_operation")
-    if pattern in {"macro_first", "macro_first_v2"}:
+    if pattern == "macro_first_v2":
         plan = spec["macro_plan"]
         if (len(graph["tasks"]) != len(plan["macro_tasks"])
                 or graph.get("plan_origin") != "macro_first"):
@@ -138,28 +130,6 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         if (graph["terminal_task_id"] != "work_" + plan["terminal_macro_id"]
                 or not ops["lookup_by_key"]):
             raise ValueError("macro_first_terminal_or_lookup_missing")
-    if pattern == "evidence_graph":
-        expected_lookups = spec["evidence_graph"]["lookup_hops"]
-        if ops["lookup_by_key"] != expected_lookups:
-            raise ValueError("macro_question_wrong_evidence_lookup_count")
-        mode = spec["evidence_graph"]["archetype"]
-        if mode in {"parallel", "disambiguation", "conflict"} and not ops["join"]:
-            raise ValueError("macro_question_missing_evidence_fusion")
-        if mode == "conflict" and "ne" not in compares:
-            raise ValueError("macro_question_missing_conflict_comparison")
-    if pattern == "clue_chain":
-        lookups = [step for step in steps if step["op"] == "lookup_by_key"]
-        if len(lookups) != 2 or [
-            (x.get("source_id"), x.get("input_key_field"),
-             x.get("source_key_field")) for x in lookups
-        ] != [
-            ("index", "marker_code", "marker_code"),
-            ("archive", "accession_id", "accession_id"),
-        ]:
-            raise ValueError("macro_question_missing_keyed_acquisition_chain")
-        if (sum(step["op"] == "scan" for step in steps) != 1
-                or sum(step["op"] == "filter_eq" for step in steps) < 2):
-            raise ValueError("macro_question_missing_visual_identification")
     if family == "evidence_reconcile" and not ops["attach_evidence"]:
         raise ValueError("macro_question_missing_evidence_output")
     sorts = [step for step in steps if step["op"] == "sort"]
@@ -241,3 +211,48 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         "no_extra_question_conditions": True,
         "no_private_world_values_disclosed": True,
     }
+
+
+def validate_handoffs(scene: dict) -> dict:
+    """Prove each frozen edge matters under a controlled empty handoff.
+
+    Removing the *edge input product* differs from removing a source. Every
+    edge must affect the terminal Gold Answer, not merely the execution graph.
+    """
+    from .compiler import execute_task
+    from .program_ir import Relation
+    from .dag import compile_waves
+
+    graph = scene["macro_graph"]
+    tasks = {row["task_id"]: row for row in graph["tasks"]}
+    world = scene["world"]["sources"]
+    expected = scene["gold_answer"]
+    passed, edges = 0, []
+    for child in graph["tasks"]:
+        for parent_id in child["depends_on"]:
+            products = {}
+            for wave in graph["reference_waves"]:
+                for tid in wave:
+                    task = tasks[tid]
+                    inputs = [
+                        Relation(products[p].columns, tuple())
+                        if tid == child["task_id"] and p == parent_id
+                        else products[p]
+                        for p in task["depends_on"]
+                    ]
+                    products[tid] = execute_task(
+                        task, input_products=inputs,
+                        visible_sources={sid: world[sid]
+                                         for sid in task["source_ids"]},
+                    )
+            terminal = products[graph["terminal_task_id"]]
+            got = sorted([row["values"] for row in terminal.rows],
+                         key=lambda x: str(sorted(x.items())))
+            sensitive = got != expected
+            passed += int(sensitive)
+            edges.append({"upstream": parent_id,
+                          "downstream": child["task_id"],
+                          "blank_handoff_changes_answer": sensitive})
+    return {"edge_count": len(edges), "sensitive_edges": passed,
+            "all_handoffs_necessary": passed == len(edges),
+            "edges": edges}

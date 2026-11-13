@@ -146,127 +146,20 @@ def _intent_reference_question(spec: dict) -> str:
             f"Among the {topic} materials, which confirmed {goal} belongs "
             f"to the item identified by {visual}?"
         )
-    if spec["reasoning_pattern"] == "macro_first":
-        plan = spec["macro_plan"]
-        pattern = plan["pattern"]
-        goal = plan["goal"]["answer_field"].replace("_", " ")
-        if pattern == "conflict_reconciliation":
-            return (
-                f"Two independent inventories in a fictional {topic} "
-                "reference collection disagree about one case. "
-                f"What is the authoritative {goal} for that disputed case?"
-            )
-        visual = plan["clues"]
-        color, motif = visual["emblem_color"], visual["emblem_shape"]
-        if pattern == "parallel_resolution":
-            return (
-                f"In a fictional {topic} reference collection, an illustration "
-                f"shows a {color} emblem and separate notes mention a "
-                f"{motif} motif. What is the authoritative {goal} for "
-                "the item identified by both clues?"
-            )
-        return (
-            f"A fictional {topic} reference collection has an illustrated "
-            f"item with a {color} emblem and a {motif} motif. "
-            f"What is its authoritative {goal}?"
-        )
-    if spec["reasoning_pattern"] == "evidence_graph":
-        graph = spec["evidence_graph"]
-        mode = graph["archetype"]
-        if mode == "conflict":
-            return (
-                f"In the fictional {topic} collection, two independent "
-                "inventories disagree about the reported year of one exhibit. "
-                "What accession year does the authoritative record give for "
-                "that disputed exhibit?"
-            )
-        visual = graph["visual_features"]
-        color, motif = visual["emblem_color"], visual["emblem_shape"]
-        if mode == "parallel":
-            return (
-                f"In the fictional {topic} collection, the illustration "
-                f"records a {color} emblem while the independent caption "
-                f"describes a {motif} motif. Which accession year belongs "
-                "to the exhibit identified by both clues?"
-            )
-        if mode == "disambiguation":
-            return (
-                f"In the fictional {topic} illustration, more than one "
-                f"exhibit has a {color} emblem. The independent identification "
-                f"notes describe a {motif} motif. What accession year belongs "
-                "to the exhibit matching both clues?"
-            )
-        return (
-            f"In the fictional {topic} exhibit illustration, an item has "
-            f"a {color} emblem and a {motif} motif. What accession year "
-            "belongs to that item in the accompanying collection records?"
-        )
-    if spec["reasoning_pattern"] == "clue_chain":
-        visual = spec["investigation"]["visual_features"]
-        return (
-            f"In the fictional {topic} exhibit illustration, a pictured item "
-            f"has a {visual['emblem_color']} emblem and a "
-            f"{visual['emblem_shape']} motif. What year was that exhibit "
-            "accessioned? Use the marker visible in the illustration to "
-            "locate its index entry and then its archive record."
-        )
-    pattern = spec["reasoning_pattern"]
-    constraints = {
-        "approval": (
-            "Consider only active register entries, resolve their category "
-            "codes through the glossary, and use the annotation source to "
-            "retain independently approved categories."
-        ),
-        "time_window": (
-            "For active register entries, map their session codes with the "
-            "glossary and compare each event step with the corresponding "
-            "annotation's inclusive time window."
-        ),
-        "status_disagreement": (
-            "For active register entries, resolve group codes through the "
-            "glossary and compare reported statuses with independent "
-            "annotation statuses; retain only disagreements."
-        ),
-        "dynamic_threshold": (
-            "For active register entries, resolve policy codes with the "
-            "glossary and compare each measured value with its group's "
-            "independently recorded minimum threshold."
-        ),
-    }[pattern]
-    if spec["difficulty_target"] == "easy":
-        constraints = "Consider only active entries from the register."
-    if spec["difficulty_target"] == "hard":
-        constraints += (
-            " Also require each selected entry to have a separate "
-            "entry-specific clearance marked cleared."
-        )
+    if spec["reasoning_pattern"] != "approval":
+        raise ValueError("unsupported_stage1_reasoning_pattern")
     outputs = {
         "reconcile": "Which entries meet these conditions?",
         "eligibility": "Which entries meet these conditions?",
         "evidence_reconcile": (
-            "Which entries qualify, and what source fact references "
-            "support each entry?"
+            "Which entries qualify, and what source fact references support each entry?"
         ),
         "coverage_count": "How many distinct entries qualify?",
-        "category_distribution": (
-            "How many qualifying entries occur in each resolved category?"
-        ),
-        "priority": (
-            "Which qualifying entry has the highest recorded priority?"
-        ),
-        "chronology": (
-            "Which qualifying entry has the earliest relative step?"
-        ),
-        "window_alignment": (
-            "Which entries fall inside their matching annotation time windows?"
-        ),
-        "status_disagreement": (
-            "Which entries have different statuses across the two records?"
-        ),
-        "threshold_eligibility": (
-            "Which entries meet their independently defined minimum values?"
-        ),
+        "category_distribution": "How many qualifying entries occur in each resolved category?",
+        "priority": "Which qualifying entry has the highest recorded priority?",
+        "chronology": "Which qualifying entry has the earliest relative step?",
     }
+    constraints = "Consider only active entries from the register."
     beginning = [
         f"For a fictional {topic} reference collection,",
         f"I'm examining fictional {topic} records.",
@@ -464,8 +357,14 @@ def guard_question(question: str, spec: dict,
                 r"\b(before|after|follow\w*|later|preced\w*)\b", q, re.I
             ):
                 errors.append("macro_first_v2_temporal_order_missing")
+        # Topic names are verbatim, user-visible material titles. A topic
+        # containing "Fictional" must not trigger the metafiction guard.
+        topic_masked = re.sub(
+            re.escape(spec["scenario"]["topic"]), "__topic__", q,
+            flags=re.I,
+        )
         if re.search(r"\b(fictional|simulated|synthetic|hypothetical|imaginary)\b",
-                     q, re.I):
+                     topic_masked, re.I):
             errors.append("macro_first_v2_meta_fiction_framing")
         if spec.get("semantic_evidence_contract_version"):
             from .semantic_evidence import (
@@ -479,94 +378,9 @@ def guard_question(question: str, spec: dict,
                 question_semantic_lock_issues,
             )
             errors.extend(question_semantic_lock_issues(q, spec))
-    elif pattern == "macro_first":
-        plan = spec["macro_plan"]
-        visual = plan["clues"]
-        if visual and not all(
-            str(visual[key]).lower() in q.lower()
-            for key in ("emblem_color", "emblem_shape")
-        ):
-            errors.append("macro_first_missing_distinguishing_clues")
-        if plan["pattern"] == "conflict_reconciliation" and not re.search(
-            r"\b(disagree\w*|disput\w*|differ\w*|conflict\w*|"
-            r"discrepanc\w*|mismatch\w*)\b", q, re.I
-        ):
-            errors.append("macro_first_missing_dispute_intent")
-        if not re.search(r"\byear\b", q, re.I):
-            errors.append("macro_first_missing_year_answer")
-        required_name = plan["goal"]["answer_field"].replace("_", " ")
-        if required_name not in q.lower():
-            errors.append("macro_first_wrong_goal_field")
-    elif pattern == "evidence_graph":
-        graph = spec["evidence_graph"]
-        visual = graph["visual_features"]
-        if visual and not all(
-            str(visual[field]).lower() in q.lower()
-            for field in ("emblem_color", "emblem_shape")
-        ):
-            errors.append("evidence_graph_clues_missing")
-        if graph["archetype"] == "conflict" and not re.search(
-            r"\b(?:disagree|disagreement|disputed|discrepanc\w*|conflict\w*|"
-            r"differ\w*|mismatch\w*|inconsisten\w*)\b", q, re.I
-        ):
-            errors.append("evidence_graph_conflict_missing")
-        if not re.search(r"\byear\b", q, re.I):
-            errors.append("evidence_graph_answer_year_missing")
-    elif pattern == "clue_chain":
-        visual = spec["investigation"]["visual_features"]
-        if not all(
-            str(visual[field]).lower() in q.lower()
-            for field in ("emblem_color", "emblem_shape")
-        ):
-            errors.append("visual_clue_features_missing")
-        if not re.search(r"\b(?:image|illustrat\w*|diagram|picture\w*|pictured)\b",
-                         q, re.I):
-            errors.append("visual_source_not_expressed")
-        if not re.search(r"\b(?:marker|symbol|label)\b", q, re.I):
-            errors.append("marker_acquisition_missing")
-        if not re.search(r"\bindex\b", q, re.I):
-            errors.append("keyed_index_step_missing")
-        if not re.search(r"\barchiv\w*\b", q, re.I):
-            errors.append("keyed_archive_step_missing")
-        if not re.search(r"\b(?:accession\w*|acquir\w*)\b", q, re.I):
-            errors.append("accession_output_intent_missing")
-        if not re.search(r"\byear\b", q, re.I):
-            errors.append("accession_year_output_missing")
     else:
         if not re.search(r"\bactive\b", q, flags=re.I):
             errors.append("active_condition_missing")
-    if pattern not in {"approval", "clue_chain", "evidence_graph", "macro_first", "macro_first_v2"}:
-        if not re.search(r"\b(codes?|glossary|map|mapped|mapping|crosswalk|translat\w*|resolv\w*)\b", q, re.I):
-            errors.append("cross_source_code_mapping_missing")
-        if pattern == "time_window":
-            if not re.search(r"\b(window|interval|range|between|within|inside|boundary|boundaries)\b", q, re.I):
-                errors.append("temporal_interval_missing")
-            if not re.search(r"\b(time|step|event|moment|frame|timestamp)\b", q, re.I):
-                errors.append("temporal_event_missing")
-        elif pattern == "status_disagreement":
-            if not re.search(r"\b(disagree(?:s|ment|ments|d)?|discrepanc(?:y|ies)|"
-            r"differ(?:s|ed|ing|ence|ences|ent)?|mismatch(?:es|ed)?|"
-            r"conflict(?:s|ing|ed)?|contradict(?:s|ion|ions)?|"
-            r"inconsisten\w*)\b", q, re.I):
-                errors.append("status_disagreement_missing")
-            if not re.search(r"\b(status|statuses|mark|reported|observed)\b", q, re.I):
-                errors.append("binary_status_missing")
-        elif pattern == "dynamic_threshold":
-            if not re.search(r"\b(threshold|minimum|at least|exceed|above|meet|qualify)\w*", q, re.I):
-                errors.append("dynamic_threshold_missing")
-            if not re.search(r"\b(measur\w*|value\w*|rating\w*|score\w*|"
-            r"metric\w*|amount\w*|quantity|reading\w*|level\w*)\b", q, re.I):
-                errors.append("measured_value_missing")
-    elif pattern == "approval" and spec["difficulty_target"] != "easy":
-        if not re.search(r"\b(code|codes|abbreviat|glossary|mapped|mapping|translat|resolv)", q, re.I):
-            errors.append("alias_resolution_not_expressed")
-        if not re.search(r"\b(approv|review|annotat)", q, re.I):
-            errors.append("review_condition_not_expressed")
-    if spec["difficulty_target"] == "hard" and pattern not in {
-        "clue_chain", "evidence_graph", "macro_first", "macro_first_v2"
-    }:
-        if not re.search(r"\b(clear|clearance|authoriz)", q, re.I):
-            errors.append("clearance_condition_missing")
     family = spec["family"]
     if family in {"coverage_count", "category_distribution"} and not re.search(r"\b(how many|count|number of)\b", q, re.I):
         errors.append("count_answer_scope_missing")

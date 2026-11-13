@@ -6,28 +6,14 @@ Its scene/topic/source hints are used only to create new fictional tasks.
 from __future__ import annotations
 
 import random
-import re
 from environment.schema import digest
 
 VERSION = "maestro.problem_spec.v4"
-RELATION_PATTERNS = (
-    "approval", "time_window", "status_disagreement", "dynamic_threshold", "clue_chain", "evidence_graph", "macro_first", "macro_first_v2",
-)
+RELATION_PATTERNS = ("approval", "macro_first_v2")
 
 FAMILIES = (
-    "reconcile",
-    "coverage_count",
-    "eligibility",
-    "priority",
-    "chronology",
-    "evidence_reconcile",
-    "category_distribution",
-    "window_alignment",
-    "status_disagreement",
-    "threshold_eligibility",
-    "accession_year",
-    "evidence_answer",
-    "macro_first",
+    "reconcile", "coverage_count", "eligibility", "priority",
+    "chronology", "evidence_reconcile", "category_distribution",
     "macro_first_v2",
 )
 DIFFICULTIES = ("easy", "medium", "hard")
@@ -70,45 +56,18 @@ def source_profile(domain_hint: str) -> tuple[str, str, str]:
     return SCENE_PROFILES["general"]
 
 
-def _choose_media(seed_record: dict, ordinal: int, rng: random.Random) -> str:
-    given = [
-        x for x in seed_record.get("source_modalities", [])
-        if x in MEDIA
-    ]
-    if not given:
-        given = [
-            x.get("modality") for x in seed_record.get("supporting_sources", [])
-            if isinstance(x, dict) and x.get("modality") in MEDIA
-        ]
-    # MMQA only provides image/table/text roles. Permit simulated video/audio
-    # as NEW fictional source roles, clearly distinct from MMQA provenance.
-    desired = ("image", "video", "audio", "table", "text")[ordinal % 5]
-    return desired if ordinal % 3 == 0 else (rng.choice(given) if given else desired)
-
-
 def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
-              difficulty: str, clue_chain_share: int = 0,
-              evidence_graph_share: int = 0,
-              macro_first_share: int = 0,
-              macro_first_v2_share: int = 0,
-              operator_grammar_share: int = 0,
-              numeric_goal_diversity_share: int = 0,
-              question_semantic_lock_share: int = 0) -> dict:
+              difficulty: str, macro_first_v2_share: int = 100,
+              operator_grammar_share: int = 100,
+              numeric_goal_diversity_share: int = 100,
+              question_semantic_lock_share: int = 100) -> dict:
+    """Canonical Stage 1: Easy approval and Medium/Hard Macro-first V2."""
     if difficulty not in DIFFICULTIES:
         raise ValueError("difficulty must be easy, medium or hard")
-    if (type(clue_chain_share) is not int
-            or not 0 <= clue_chain_share <= 100):
-        raise ValueError("clue_chain_share must be between 0 and 100")
-    if type(evidence_graph_share) is not int or not 0 <= evidence_graph_share <= 100:
-        raise ValueError("evidence_graph_share must be between 0 and 100")
-    if type(macro_first_share) is not int or not 0 <= macro_first_share <= 100:
-        raise ValueError("macro_first_share must be between 0 and 100")
-    if type(macro_first_v2_share) is not int or not 0 <= macro_first_v2_share <= 100:
-        raise ValueError("macro_first_v2_share must be between 0 and 100")
-    if (type(operator_grammar_share) is not int
-            or not 0 <= operator_grammar_share <= 100):
-        raise ValueError("operator_grammar_share must be between 0 and 100")
+    if type(macro_first_v2_share) is not int or macro_first_v2_share != 100:
+        raise ValueError("macro_planning_share_must_be_100")
     for name, share in (
+        ("operator_grammar_share", operator_grammar_share),
         ("numeric_goal_diversity_share", numeric_goal_diversity_share),
         ("question_semantic_lock_share", question_semantic_lock_share),
     ):
@@ -117,14 +76,9 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     topic = normalize_topic(seed_record.get("topic", ""))
     record_id = str(seed_record.get("record_id") or seed_record.get("scene_id")
                     or f"topic-{ordinal}")
-    rng = random.Random(int(digest(run_seed, ordinal, record_id, "v2")[:15], 16))
-    # New heterogeneous Macro-first pilot takes precedence when selected.
-    # Frozen v1 scenes and the original --macro-first-share remain unchanged.
-    if (difficulty in {"medium", "hard"} and
-            int(digest(run_seed, ordinal, "macro-first-v2-mix")[:8], 16) % 100
-            < macro_first_v2_share):
-        from .macro_planning import make_spec as make_macro_first_v2_spec
-        return make_macro_first_v2_spec(
+    if difficulty != "easy":
+        from .macro_planning import make_spec as make_macro_v2_spec
+        return make_macro_v2_spec(
             seed_record=seed_record, ordinal=ordinal, run_seed=run_seed,
             difficulty=difficulty, topic=topic, record_id=record_id,
             version=VERSION,
@@ -144,198 +98,11 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
                 < question_semantic_lock_share
             ),
         )
-    # Select the Macro-level DAG FIRST, before any primitive solver or
-    # evidence World is sampled. This opt-in overrides the older
-    # primitive-first evidence graph only for selected medium/hard scenes.
-    if (difficulty in {"medium", "hard"} and
-            int(digest(run_seed, ordinal, "macro-first-mix-v1")[:8], 16) % 100
-            < macro_first_share):
-        from .macro_first import make_macro_first_spec
-        return make_macro_first_spec(
-            seed_record=seed_record, ordinal=ordinal, run_seed=run_seed,
-            difficulty=difficulty, topic=topic, record_id=record_id,
-            version=VERSION,
-        )
-    # Opt-in seeded graph grammar. Legacy specs and clue-chain remain
-    # byte-identical when this flag is zero.
-    if (difficulty in {"medium", "hard"} and
-            int(digest(run_seed, ordinal, "evidence-graph-mix-v1")[:8], 16) % 100
-            < evidence_graph_share):
-        from .graph_grammar import make_evidence_spec
-        return make_evidence_spec(
-            seed_record=seed_record, ordinal=ordinal, run_seed=run_seed,
-            difficulty=difficulty, topic=topic, record_id=record_id,
-            version=VERSION,
-        )
-    # Semantic families change the actual relations/predicates, not only
-    # the execution order. Easy remains a one-source independent task.
-    # Opt-in: a bounded share of MEDIUM tasks uses real keyed evidence
-    # acquisition, not static scan/join computation. No old mode changes.
-    keyed = (
-        difficulty == "medium"
-        and int(digest(run_seed, ordinal, "clue-mix-v1")[:8], 16) % 100
-        < clue_chain_share
-    )
-    pattern = (
-        "clue_chain" if keyed else
-        "approval" if difficulty == "easy" else
-        ("approval", "time_window", "status_disagreement", "dynamic_threshold")[
-            (ordinal + run_seed) % 4
-        ]
-    )
-    legacy_families = FAMILIES[:7]
-    family = (
-        "accession_year" if keyed else
-        legacy_families[(ordinal + run_seed) % len(legacy_families)]
-        if pattern == "approval" else
-        {
-            "time_window": "window_alignment",
-            "status_disagreement": "status_disagreement",
-            "dynamic_threshold": "threshold_eligibility",
-            "clue_chain": "accession_year",
-            "evidence_graph": "evidence_answer",
-            "macro_first": "macro_first",
-            "macro_first_v2": "macro_first_v2",
-        }[pattern]
-    )
-    if keyed:
-        from .clue_chain import clue_features
-        feature = clue_features(ordinal)
-        return {
-            "version": VERSION,
-            "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
-            "scene_id": record_id,
-            "source_anchor": {
-                "dataset": "MultiModalQA_topic_only" if seed_record.get("record_id")
-                           else "scene_bank_topic_only",
-                "source_record_id": record_id,
-                "original_question_reused": False,
-                "original_answer_reused": False,
-                "original_media_used": False,
-            },
-            "difficulty_target": "medium",
-            "family": "accession_year",
-            "reasoning_pattern": "clue_chain",
-            "macro_plan_variant": 0,
-            "scenario": {
-                "topic": topic,
-                "setting": (
-                    f"a fictional exhibit catalog dedicated to {topic}"
-                ),
-                "user_role": "collection researcher",
-                "purpose": (
-                    "identify an exhibit from a pictured visual clue "
-                    "and retrieve its accession year"
-                ),
-                "motivation": (
-                    "the illustrated emblem is the only starting clue "
-                    "to locate the archival accession record"
-                ),
-                "entity_kind": "exhibits",
-            },
-            "sources": [
-                {
-                    "source_id": "illustration", "modality": "image",
-                    "title": f"{topic} exhibit illustration",
-                    "purpose": (
-                        "simulated visual features and pictured marker codes"
-                    ),
-                    "access_mode": "browse",
-                },
-                {
-                    "source_id": "index", "modality": "text",
-                    "title": f"{topic} exhibit marker index",
-                    "purpose": (
-                        "lookup an accession identifier using the observed "
-                        "marker code; records are keyed, not browseable"
-                    ),
-                    "access_mode": "keyed_lookup",
-                },
-                {
-                    "source_id": "archive", "modality": "table",
-                    "title": f"{topic} accession archive",
-                    "purpose": (
-                        "lookup an accession year by the identifier returned "
-                        "from the marker index; records are keyed"
-                    ),
-                    "access_mode": "keyed_lookup",
-                },
-            ],
-            "investigation": {
-                "visual_features": feature,
-                "acquisition_chain": [
-                    {"source_id": "illustration", "mode": "browse",
-                     "produces": "marker_code"},
-                    {"source_id": "index", "mode": "keyed_lookup",
-                     "input_key": "marker_code", "produces": "accession_id"},
-                    {"source_id": "archive", "mode": "keyed_lookup",
-                     "input_key": "accession_id", "produces": "accession_year"},
-                ],
-            },
-            "requirements": {
-                "must_resolve_aliases": False,
-                "must_match_independent_reviews": False,
-                "must_check_independent_clearance": False,
-                "answer_kind": "accession_year",
-                "must_preserve_source_provenance": True,
-                "simulation_only": True,
-            },
-            "seed": run_seed,
-            "ordinal": ordinal,
-        }
-    if difficulty == "easy" and family == "category_distribution":
+    # Easy: preserve the existing one-source semantic and answer contract.
+    family = FAMILIES[:7][(ordinal + run_seed) % 7]
+    if family == "category_distribution":
         family = "coverage_count"
     role, purpose, entity_kind = source_profile(seed_record.get("domain_hint", ""))
-    media = _choose_media(seed_record, ordinal, rng)
-    scenario = {
-        "topic": topic,
-        "setting": f"a fictional reference collection organized around {topic}",
-        "user_role": role,
-        "purpose": purpose,
-        "motivation": PURPOSES[(ordinal + run_seed * 3) % len(PURPOSES)],
-        "entity_kind": entity_kind,
-    }
-    source_roles = [{
-        "source_id": "register",
-        "modality": "table",
-        "title": f"{topic} working register",
-        "purpose": "the tracked entries, their abbreviated labels, and recorded status",
-    }]
-    if difficulty != "easy":
-        source_roles += [
-            {"source_id": "glossary", "modality": "text",
-             "title": f"{topic} terminology crosswalk",
-             "purpose": "translate source-specific codes to shared labels"},
-            {"source_id": "annotations", "modality": media,
-             "title": f"{topic} independent annotation record",
-             "purpose": "review judgments, sequence and category descriptions"},
-        ]
-    if pattern != "approval":
-        semantics = {
-            "time_window": (
-                "tracked events with recorded relative occurrence steps",
-                "map event codes to simulated sessions",
-                "simulated event windows and their time boundaries",
-            ),
-            "status_disagreement": (
-                "tracked entries and their reported binary status",
-                "resolve status codes to their record groups",
-                "independently reported binary status by group",
-            ),
-            "dynamic_threshold": (
-                "tracked entries with numerical measured quantities",
-                "translate policy codes to policy groups",
-                "independent per-group minimum acceptable values",
-            ),
-        }[pattern]
-        for entry, meaning in zip(source_roles, semantics):
-            entry["purpose"] = meaning
-    if difficulty == "hard":
-        source_roles.append({
-            "source_id": "clearance", "modality": "text",
-            "title": f"{topic} clearance notes",
-            "purpose": "independent entry-specific clearance conditions",
-        })
     return {
         "version": VERSION,
         "task_id": f"question-{ordinal:06d}-{digest(record_id, run_seed)[:8]}",
@@ -348,116 +115,88 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
             "original_answer_reused": False,
             "original_media_used": False,
         },
-        "difficulty_target": difficulty,
-        "family": family,
-        "reasoning_pattern": pattern,
-        # An executable alternative join/filter dependency plan; this
-        # affects the MacroGraph, NOT just names or prompt wording.
+        "difficulty_target": "easy",
+        "family": family, "reasoning_pattern": "approval",
         "macro_plan_variant": int(digest(
             run_seed, ordinal, record_id, "macro-graph-plan-v1"
         )[:8], 16) % 4,
-        "scenario": scenario,
-        "sources": source_roles,
+        "scenario": {
+            "topic": topic,
+            "setting": f"a fictional reference collection organized around {topic}",
+            "user_role": role, "purpose": purpose,
+            "motivation": PURPOSES[(ordinal + run_seed * 3) % len(PURPOSES)],
+            "entity_kind": entity_kind,
+        },
+        "sources": [{
+            "source_id": "register", "modality": "table",
+            "title": f"{topic} working register",
+            "purpose": "the tracked entries, their abbreviated labels, and recorded status",
+        }],
         "requirements": {
-            "must_resolve_aliases": difficulty != "easy",
-            "must_match_independent_reviews": difficulty != "easy",
-            "must_check_independent_clearance": difficulty == "hard",
+            "must_resolve_aliases": False,
+            "must_match_independent_reviews": False,
+            "must_check_independent_clearance": False,
             "answer_kind": (
                 "count" if family == "coverage_count" else
-                "category_counts" if family == "category_distribution" else
                 "single_entry" if family in {"priority", "chronology"} else
-                "entry_evidence" if family == "evidence_reconcile" else
-                "entry_list"
+                "entry_evidence" if family == "evidence_reconcile" else "entry_list"
             ),
             "must_preserve_source_provenance": True,
             "simulation_only": True,
         },
-        "seed": run_seed,
-        "ordinal": ordinal,
+        "seed": run_seed, "ordinal": ordinal,
     }
 
 
 def spec_issues(spec: dict) -> list[str]:
+    """Reject old graph generators; preserve current source and output contracts."""
     errors = []
     if spec.get("version") != VERSION:
         errors.append("invalid_problem_version")
-    if spec.get("difficulty_target") not in DIFFICULTIES:
+    difficulty = spec.get("difficulty_target")
+    if difficulty not in DIFFICULTIES:
         errors.append("invalid_difficulty")
-    if spec.get("family") not in FAMILIES:
+    family = spec.get("family")
+    if family not in FAMILIES:
         errors.append("invalid_family")
-    if spec.get("version") == VERSION:
-        pattern = spec.get("reasoning_pattern")
-        mapped = {
-            "time_window": "window_alignment",
-            "status_disagreement": "status_disagreement",
-            "dynamic_threshold": "threshold_eligibility",
-            "clue_chain": "accession_year",
-            "evidence_graph": "evidence_answer",
-            "macro_first": "macro_first",
-            "macro_first_v2": "macro_first_v2",
-        }
-        if pattern not in RELATION_PATTERNS:
-            errors.append("invalid_reasoning_pattern")
-        elif pattern == "approval":
-            if spec.get("family") not in FAMILIES[:7]:
-                errors.append("approval_family_mismatch")
-        elif spec.get("family") != mapped[pattern]:
-            errors.append("reasoning_pattern_family_mismatch")
-    plan_variant = spec.get("macro_plan_variant")
-    if plan_variant is not None and (
-        type(plan_variant) is not int or plan_variant not in range(4)
+    pattern = spec.get("reasoning_pattern")
+    if pattern not in RELATION_PATTERNS:
+        errors.append("invalid_reasoning_pattern")
+    if pattern == "approval" and (difficulty != "easy" or family not in FAMILIES[:7]):
+        errors.append("approval_requires_easy")
+    if pattern == "macro_first_v2" and (
+        difficulty not in {"medium", "hard"} or family != "macro_first_v2"
     ):
+        errors.append("macro_first_v2_requires_medium_or_hard")
+    variant = spec.get("macro_plan_variant")
+    if variant is not None and (type(variant) is not int or variant not in range(4)):
         errors.append("invalid_macro_plan_variant")
     scenario = spec.get("scenario", {})
     for key in ("topic", "setting", "user_role", "purpose", "motivation", "entity_kind"):
         if not isinstance(scenario.get(key), str) or not scenario[key].strip():
             errors.append("missing_scenario_" + key)
     sources = spec.get("sources", [])
-    keyed = spec.get("reasoning_pattern") == "clue_chain"
-    evidence = spec.get("reasoning_pattern") == "evidence_graph"
-    macro_first = spec.get("reasoning_pattern") in {
-        "macro_first", "macro_first_v2"
-    }
-    n = (len(sources) if (evidence or macro_first) else 3 if keyed else
-         {"easy": 1, "medium": 3, "hard": 4}.get(
-             spec.get("difficulty_target"), -1))
-    if len(sources) != n:
-        errors.append("wrong_source_count")
-    ids = [s.get("source_id") for s in sources]
+    ids = [source.get("source_id") for source in sources]
     if len(ids) != len(set(ids)):
         errors.append("duplicate_source_id")
-    expected_ids = ([s.get("source_id") for s in sources]
-                    if (evidence or macro_first) else
-                    ["illustration", "index", "archive"] if keyed else ["register"])
-    if not keyed and not (evidence or macro_first) and spec.get("difficulty_target") in {"medium", "hard"}:
-        expected_ids.extend(["glossary", "annotations"])
-    if not keyed and not (evidence or macro_first) and spec.get("difficulty_target") == "hard":
-        expected_ids.append("clearance")
-    if ids != expected_ids:
+    if pattern == "approval" and ids != ["register"]:
         errors.append("source_role_contract_mismatch")
+    if pattern == "macro_first_v2" and not sources:
+        errors.append("wrong_source_count")
     needs = spec.get("requirements", {})
     expected_answer = (
-        "macro_value" if macro_first else
-        "accession_year" if (keyed or evidence) else
-        "count" if spec.get("family") == "coverage_count"
-        else "category_counts" if spec.get("family") == "category_distribution"
-        else "single_entry" if spec.get("family") in {"priority", "chronology"}
-        else "entry_evidence" if (
-            spec.get("version") == VERSION
-            and spec.get("family") == "evidence_reconcile"
-        ) else "entry_list"
+        "macro_value" if pattern == "macro_first_v2" else
+        "count" if family == "coverage_count" else
+        "category_counts" if family == "category_distribution" else
+        "single_entry" if family in {"priority", "chronology"} else
+        "entry_evidence" if family == "evidence_reconcile" else "entry_list"
     )
     if needs.get("answer_kind") != expected_answer:
         errors.append("answer_kind_contract_mismatch")
-    required_aliases = False if (keyed or evidence or macro_first) else spec.get("difficulty_target") != "easy"
-    if needs.get("must_resolve_aliases") is not required_aliases:
-        errors.append("alias_requirement_contract_mismatch")
-    if needs.get("must_match_independent_reviews") is not required_aliases:
-        errors.append("review_requirement_contract_mismatch")
-    if needs.get("must_check_independent_clearance") is not (
-        spec.get("difficulty_target") == "hard" and not (keyed or evidence or macro_first)
-    ):
-        errors.append("clearance_requirement_contract_mismatch")
+    for field in ("must_resolve_aliases", "must_match_independent_reviews",
+                  "must_check_independent_clearance"):
+        if needs.get(field) is not False:
+            errors.append(field + "_contract_mismatch")
     if needs.get("must_preserve_source_provenance") is not True:
         errors.append("provenance_requirement_missing")
     for source in sources:
@@ -466,37 +205,10 @@ def spec_issues(spec: dict) -> list[str]:
         for key in ("source_id", "title", "purpose"):
             if not isinstance(source.get(key), str) or not source[key].strip():
                 errors.append("source_missing_" + key)
-    if keyed:
-        if spec.get("difficulty_target") != "medium":
-            errors.append("clue_chain_requires_medium")
-        if [(role.get("access_mode")) for role in sources] != [
-            "browse", "keyed_lookup", "keyed_lookup"
-        ]:
-            errors.append("clue_chain_access_mode_contract")
-        investigation = spec.get("investigation", {})
-        from .clue_chain import clue_features
-        if investigation.get("visual_features") != clue_features(
-            spec.get("ordinal", 0)
-        ):
-            errors.append("clue_chain_visual_feature_mismatch")
-        path = investigation.get("acquisition_chain", [])
-        if [(x.get("source_id"), x.get("mode"), x.get("input_key"),
-             x.get("produces")) for x in path if isinstance(x, dict)] != [
-            ("illustration", "browse", None, "marker_code"),
-            ("index", "keyed_lookup", "marker_code", "accession_id"),
-            ("archive", "keyed_lookup", "accession_id", "accession_year"),
-        ]:
-            errors.append("clue_chain_acquisition_path_mismatch")
-    if spec.get("reasoning_pattern") == "macro_first_v2":
+    if pattern == "macro_first_v2":
         from .macro_planning import validate_spec
         errors.extend(validate_spec(spec))
-    elif macro_first:
-        from .macro_first import validate_macro_first_spec
-        errors.extend(validate_macro_first_spec(spec))
-    if evidence:
-        from .graph_grammar import validate_evidence_spec
-        errors.extend(validate_evidence_spec(spec))
-    if spec.get("requirements", {}).get("simulation_only") is not True:
+    if needs.get("simulation_only") is not True:
         errors.append("non_simulated_spec")
     return sorted(set(errors))
 

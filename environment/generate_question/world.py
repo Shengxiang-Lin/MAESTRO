@@ -190,132 +190,14 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 
 
 def compile_program(spec: dict) -> dict:
-    """Compile semantic branches into source-scoped executable programs."""
+    """Compile only supported Easy or Macro-first V2 task programs."""
     if spec.get("reasoning_pattern") == "macro_first_v2":
         from .macro_planning import compile_macro_solvers
         return compile_macro_solvers(spec)
-    if spec.get("reasoning_pattern") == "macro_first":
-        from .macro_first import compile_macro_solvers
-        return compile_macro_solvers(spec)
-    if spec.get("reasoning_pattern") == "evidence_graph":
-        from .graph_grammar import compile_evidence_program
-        return compile_evidence_program(spec)
-    if spec.get("reasoning_pattern") == "clue_chain":
-        from .clue_chain import compile_clue_program
-        return compile_clue_program(spec)
-    if spec.get("reasoning_pattern") != "approval":
-        from .pattern_world import compile_pattern_program
-        return compile_pattern_program(spec)
     issues = spec_issues(spec)
     if issues:
         raise ValueError("invalid_spec:" + ",".join(issues))
-    difficulty, family = spec["difficulty_target"], spec["family"]
-    variant = int(digest(spec["seed"], spec["task_id"],
-                         "program-variant")[:8], 16) % 4
-
-    if difficulty == "easy" or variant == 0:
-        program = _compile_approval_base(spec)
-        return _finalize_current_program(program, spec)
-
-    if variant == 1:
-        # Apply active/approval filters only AFTER their two join boundaries.
-        nodes = [
-            _node("register_rows", "scan", source_id="register"),
-            _node("glossary_rows", "scan", source_id="glossary"),
-            _node("resolved_categories", "join",
-                  "register_rows", "glossary_rows",
-                  left_on="label_code", right_on="label_code"),
-            _node("annotation_rows", "scan", source_id="annotations"),
-            _node("joined_annotations", "join",
-                  "resolved_categories", "annotation_rows",
-                  left_on="category_name", right_on="category_name"),
-            _node("active_entries", "filter_eq", "joined_annotations",
-                  field="active", value=True),
-            _node("approved_entries", "filter_eq", "active_entries",
-                  field="approved", value=True),
-        ]
-    elif variant == 2:
-        # Join filtered annotation labels to the glossary FIRST, then
-        # bind the resulting category crosswalk to active entries.
-        nodes = [
-            _node("annotation_rows", "scan", source_id="annotations"),
-            _node("approved_annotations", "filter_eq", "annotation_rows",
-                  field="approved", value=True),
-            _node("glossary_rows", "scan", source_id="glossary"),
-            _node("approved_codebook", "join",
-                  "glossary_rows", "approved_annotations",
-                  left_on="category_name", right_on="category_name"),
-            _node("register_rows", "scan", source_id="register"),
-            _node("active_entries", "filter_eq", "register_rows",
-                  field="active", value=True),
-            _node("approved_entries", "join",
-                  "active_entries", "approved_codebook",
-                  left_on="label_code", right_on="label_code"),
-        ]
-    else:
-        # Read and filter two source roots before reconciling them with
-        # the already resolved register records.
-        nodes = [
-            _node("register_rows", "scan", source_id="register"),
-            _node("active_entries", "filter_eq", "register_rows",
-                  field="active", value=True),
-            _node("annotation_rows", "scan", source_id="annotations"),
-            _node("approved_annotations", "filter_eq", "annotation_rows",
-                  field="approved", value=True),
-            _node("glossary_rows", "scan", source_id="glossary"),
-            _node("reviewed_codes", "join",
-                  "approved_annotations", "glossary_rows",
-                  left_on="category_name", right_on="category_name"),
-            _node("approved_entries", "join",
-                  "active_entries", "reviewed_codes",
-                  left_on="label_code", right_on="label_code"),
-        ]
-    final = "approved_entries"
-    if difficulty == "hard":
-        nodes += [
-            _node("clearance_rows", "scan", source_id="clearance"),
-            _node("cleared_entries", "filter_eq", "clearance_rows",
-                  field="cleared", value=True),
-            _node("fully_cleared", "join", final, "cleared_entries",
-                  left_on="entry_label", right_on="entry_label"),
-        ]
-        final = "fully_cleared"
-    if family == "priority":
-        nodes += [
-            _node("ranked", "sort", final, field="recorded_priority",
-                  descending=True),
-            _node("top_one", "take", "ranked", limit=1),
-        ]
-        final = "top_one"
-    elif family == "chronology":
-        nodes += [
-            _node("ordered", "sort", final, field="relative_step",
-                  descending=False),
-            _node("earliest", "take", "ordered", limit=1),
-        ]
-        final = "earliest"
-    if family == "category_distribution":
-        nodes.append(_node("category_summary", "group_count", final,
-                           field="category_name"))
-        output = "category_summary"
-    elif family == "coverage_count":
-        nodes.append(_node("answer_count", "count", final))
-        output = "answer_count"
-    else:
-        nodes += [
-            _node("answer_entries", "project", final, fields=["entry_label"]),
-            _node("distinct_answer", "unique", "answer_entries"),
-        ]
-        output = "distinct_answer"
-    return _finalize_current_program({
-        "version": "maestro.reasoning_program.v4",
-        "nodes": nodes,
-        "output": output,
-        "authorized_source_ids": [
-            source["source_id"] for source in spec["sources"]
-        ],
-        "frozen_problem_spec_id": spec["task_id"],
-    }, spec)
+    return _finalize_current_program(_compile_approval_base(spec), spec)
 
 
 def generate_world(spec: dict) -> dict:
@@ -323,18 +205,6 @@ def generate_world(spec: dict) -> dict:
     if spec.get("reasoning_pattern") == "macro_first_v2":
         from .macro_evidence_world import generate_world as generate_v2_world
         return generate_v2_world(spec)
-    if spec.get("reasoning_pattern") == "macro_first":
-        from .macro_first_world import generate_macro_first_world
-        return generate_macro_first_world(spec)
-    if spec.get("reasoning_pattern") == "evidence_graph":
-        from .world_synthesizer import generate_evidence_world
-        return generate_evidence_world(spec)
-    if spec.get("reasoning_pattern") == "clue_chain":
-        from .clue_chain import generate_clue_world
-        return generate_clue_world(spec)
-    if spec.get("reasoning_pattern") != "approval":
-        from .pattern_world import generate_pattern_world
-        return generate_pattern_world(spec)
     issues = spec_issues(spec)
     if issues:
         raise ValueError("invalid_spec:" + ",".join(issues))
