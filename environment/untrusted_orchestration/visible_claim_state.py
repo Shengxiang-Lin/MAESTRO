@@ -47,7 +47,12 @@ def _state_for(claims: list[dict]) -> dict:
     partial_observed = any(
         claim.get("delivery_status") == "partial" for claim in claims
     )
-    origins_known = all(claim["evidence_origin_id"] for claim in claims)
+    # Source-free derived reports may repeat previously returned facts.
+    # They must neither manufacture an independent witness nor erase
+    # two genuinely independent primary-source confirmations.
+    primary = [claim for claim in claims if claim["evidence_origin_id"]]
+    all_values = {(type(c["value"]).__name__, repr(c["value"]))
+                  for c in claims}
     if local_conflict:
         warrant = {
             "status": "intra_report_conflict",
@@ -58,25 +63,27 @@ def _state_for(claims: list[dict]) -> dict:
             }),
             "missing_evidence": ["reconcile_inconsistent_report"],
         }
-    elif origins_known:
-        warrant = check_warrant(claims)
-    else:
-        # Unknown or multi-source provenance can never count as TWO
-        # independent confirmations. Contradicting literal values can
-        # still be observed as disagreement without identifying truth.
-        values = {(type(c["value"]).__name__, repr(c["value"]))
-                  for c in claims}
+    elif len(all_values) > 1:
         warrant = {
-            "status": "disputed" if len(values) > 1 else "unverified",
+            "status": "disputed",
+            "sufficient_to_accept": False,
+            "independent_origins": len({
+                c["evidence_origin_id"] for c in primary
+            }),
+            "missing_evidence": ["resolve_disagreement"],
+        }
+    elif primary:
+        warrant = check_warrant(primary)
+    else:
+        # Unknown provenance never counts as an independent root.
+        warrant = {
+            "status": "unverified",
             "sufficient_to_accept": False,
             "independent_origins": len({
                 c["evidence_origin_id"] for c in claims
                 if c["evidence_origin_id"]
             }),
-            "missing_evidence": [
-                "clarify_provenance" if len(values) == 1
-                else "resolve_disagreement"
-            ],
+            "missing_evidence": ["clarify_provenance"],
         }
     # A partial handoff can still expose a real contradiction, but it
     # cannot independently establish complete evidence for acceptance.
@@ -286,7 +293,13 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
             "claim_states": current,
             "claim_relations": relations,
             "claim_dependency_edges": claim_dependency_edges,
-            "task_dependency_edges": dependencies,
+            "task_dependency_edges": [{
+                "parent_task_id": parent,
+                "child_task_id": tid,
+                "parent_report_observed": parent in latest_by_task,
+                "relation": "executed_task_depends_on",
+            } for tid in latest_by_task
+                for parent in tasks[tid].get("depends_on", [])],
             "state_changes": transitions,
         })
         prior_states = current
