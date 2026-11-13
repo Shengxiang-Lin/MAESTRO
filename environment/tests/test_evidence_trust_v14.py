@@ -134,6 +134,21 @@ class ClaimRelationOperatorTests(unittest.TestCase):
             scene["world"]["sources"]["report_b"]["access_policy"]["mode"],
             "keyed_lookup",
         )
+        report_b = next(
+            role for role in spec["sources"]
+            if role["source_id"] == "report_b"
+        )
+        self.assertIn(
+            report_b["acquisition_route"],
+            {"search_only", "search_then_extract"},
+        )
+        self.assertNotIn(
+            "resource_url", scene["world"]["sources"]["report_b"],
+        )
+        self.assertEqual(
+            report_b["evidence_access"]["tool_steps"][0]["input_binding"],
+            "upstream_key_query",
+        )
         m1 = next(r for r in scene["task_feedback"] if r["task_id"] == "work_M1")
         m2 = next(r for r in scene["task_feedback"] if r["task_id"] == "work_M2")
         self.assertLessEqual(
