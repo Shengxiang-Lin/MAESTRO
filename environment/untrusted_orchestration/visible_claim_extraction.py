@@ -60,7 +60,9 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
     to Result claims. No private relation rows are substituted.
     """
     finish = report.get("finish_result")
-    if not isinstance(finish, dict) or finish.get("status") != "done":
+    if not isinstance(finish, dict) or finish.get("status") not in {
+        "done", "partial",
+    }:
         return [], {"status": (finish or {}).get("status", "missing"),
                     "parsed": False, "parse_mode": "not_completed"}
     result, summary = finish.get("result"), finish.get("summary")
@@ -148,7 +150,7 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
         x["subject"], x["attribute"], x["surface"], repr(x["value"]),
     ))
     return dedup, {
-        "status": "done",
+        "status": finish.get("status"),
         "parsed": bool(dedup),
         "parse_mode": "+".join(sorted(modes)) or "unparsed",
         "explicit_claim_count": len(dedup),
