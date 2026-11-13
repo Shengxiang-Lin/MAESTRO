@@ -21,7 +21,7 @@ def pending(source="index_1", field="record_key_1"):
     return {
         "target_instruction": (
             "Use the previously returned marker key to inspect the "
-            "assigned index source, return only the matching "
+            + source + " source, return only the matching "
             + field + " field and explain the local observation."
         ),
         "context": (
