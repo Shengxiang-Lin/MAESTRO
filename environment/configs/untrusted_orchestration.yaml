@@ -4,11 +4,11 @@
 version: 1
 
 input:
-  scenes: environment/data/maestro_stage1_current_v1_4_100/questions/scenes.jsonl
-  reports: environment/data/maestro_stage2_reports_v1_4_repaired/subtasks.jsonl
+  scenes: environment/data/stage1/questions/scenes.jsonl
+  reports: environment/data/stage2/reports/subtasks.jsonl
 
 generation:
-  output_dir: environment/data/maestro_stage4_current_v1_4_100
+  output_dir: environment/data/stage4
   max_scenes: null
   branches_per_scene: null  # optional debugging cap
   seed: 17
@@ -30,7 +30,7 @@ generation:
   max_retries: 1
   max_parallel_tasks: 4
   workers: 8
-  mode: template         # template | llm (both report and Main authors)
+  mode: llm              # reviewed Sub-Agent and Main language generation
   report_max_revisions: 2
   main_max_revisions: 2
   sub_model: qwen3-8b
