@@ -620,6 +620,7 @@ def author_delegate_action(
         raise ValueError("stage3_llm_author_requires_independent_critic")
     failures = []
     conflict_rereviewed = False
+    visible_set_relation_rereviewed = False
     for revision in range(max_revisions + 1):
         request = {
             "current_main_visible_prompt": prompt,
@@ -669,6 +670,9 @@ def author_delegate_action(
                 # Deliver only general issue-specific repair guidance.
                 # Do not expose private reviewer dialogue to the Author.
                 repairs = {
+                    "reasoning_visible_intersection_mismatch":
+                        "Recalculate the overlap using only the returned "
+                        "identifier sets in the visible evidence contract.",
                     "reasoning_dispatch_task_count_mismatch":
                         "Describe the number of delegated tasks accurately; "
                         "the number of evidence sources may differ.",
@@ -929,6 +933,50 @@ def author_delegate_action(
                 "stage": "critic_backend", "reason": str(exc)[:200],
             })
             continue
+        # Reviewers can miscompute even a trivial set overlap. If a
+        # rejection disputes a publicly witnessed intersection, request
+        # another INDEPENDENT judgment against the SAME public evidence.
+        # Never auto-pass or erase a genuine unsupported Author claim.
+        if (freeze_assignment_prose and reasoning_only_stage3
+                and round_evidence_contract is not None
+                and not _critic_review_passes(review)
+                and round_evidence_contract["public"].get(
+                    "observed_identifier_set_relations"
+                )):
+            critique = (
+                str(review.get("reason", "")) + " "
+                + str(review.get("repair_hint", ""))
+                if isinstance(review, dict) else ""
+            ).casefold()
+            if any(word in critique for word in (
+                "intersection", "overlap", "both lists",
+                "both sets", "shared identifier",
+            )):
+                visible_set_relation_rereviewed = True
+                try:
+                    review = critic.complete_json(
+                        critic_system + (
+                            "\nSECOND INDEPENDENT REVIEW: The provided "
+                            "observed_identifier_set_relations were "
+                            "computed deterministically from TWO literal "
+                            "Main-visible Sub-Agent Result lists. Check "
+                            "whether the disputed identifier is actually "
+                            "in both lists before alleging faulty "
+                            "arithmetic. The witness is NOT proof of "
+                            "source truth or the downstream final answer. "
+                            "Reject any other unsupported factual claim "
+                            "or incorrect task boundary as usual. "
+                            "Do not auto-accept just because the "
+                            "intersection itself is correct.\n"
+                        ),
+                        json.dumps(review_payload, ensure_ascii=False),
+                    )
+                except Exception as exc:
+                    failures.append({
+                        "stage": "visible_set_relation_rereview_backend",
+                        "reason": str(exc)[:200],
+                    })
+                    continue
         # The Critic cannot overturn a code-confirmed *visible* conflict
         # solely by asserting that the two delivered statements agree.
         # Invalid critiques trigger a second independent review, never
@@ -1009,6 +1057,8 @@ def author_delegate_action(
                         for failed in failures
                         if failed.get("stage") == "evidence_reasoning_guard"
                     ],
+                    "visible_set_relation_rereviewed":
+                        visible_set_relation_rereviewed,
                 } if reasoning_only_stage3 else {}),
                 **({
                     "decision_contract_version": decision_contract.get(
