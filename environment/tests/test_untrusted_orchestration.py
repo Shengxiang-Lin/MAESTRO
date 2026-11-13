@@ -63,7 +63,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
     def test_config_only_entrypoint_and_model_paths(self):
         config = load_config()
         self.assertEqual(DEFAULT_CONFIG.name, "untrusted_orchestration.yaml")
-        self.assertEqual(config["mode"], "template")
+        self.assertEqual(config["mode"], "llm")
         self.assertTrue(config["scenes_path"].is_absolute())
         self.assertEqual(config["candidate_strategy"], "enumerate")
         self.assertEqual(config["max_fault_atoms"], 1)
