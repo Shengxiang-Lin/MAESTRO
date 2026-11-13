@@ -75,6 +75,19 @@ class ReasoningFidelityTests(unittest.TestCase):
         self.assertNotIn(
             "Case-013", witness[0]["input_identifier_sets"][0],
         )
+        self.assertEqual(
+            check_reasoning_fidelity(
+                "The intersection of the two sets is only Case-011.",
+                contract,
+            ), [],
+        )
+        self.assertIn(
+            "reasoning_visible_intersection_mismatch",
+            check_reasoning_fidelity(
+                "The intersection of the two sets is Case-011 and Case-013.",
+                contract,
+            ),
+        )
         self.assertEqual(witness[0]["current_round_task_slot"], 0)
         self.assertNotIn("oracle", json.dumps(contract).lower())
         self.assertNotIn("work_M", json.dumps(contract))
