@@ -695,6 +695,35 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             x["verification_sensitive_pairs"] for x in ledgers
         ),
         "relation_counts": dict(evidence_counts),
+        "reference_wave_trust": {
+            "versioned_scenes": sum(
+                "reference_wave_trust" in x for x in ledgers
+            ),
+            "scheduling_modes": dict(Counter(
+                x["reference_wave_trust"]["mode"] for x in ledgers
+                if "reference_wave_trust" in x
+            )),
+            "cross_wave_claim_pairs": sum(
+                x["reference_wave_trust"]["cross_wave_claim_pairs"]
+                for x in ledgers if "reference_wave_trust" in x
+            ),
+            "answer_relevant_claim_pairs": sum(
+                x["reference_wave_trust"]["answer_relevant_claim_pairs"]
+                for x in ledgers if "reference_wave_trust" in x
+            ),
+            "answer_relevant_cross_wave_pairs": sum(
+                x["reference_wave_trust"]["answer_relevant_cross_wave_pairs"]
+                for x in ledgers if "reference_wave_trust" in x
+            ),
+            "trust_state_transitions": sum(
+                len(x["reference_wave_trust"]["transitions"])
+                for x in ledgers if "reference_wave_trust" in x
+            ),
+            "scope": (
+                "Potential visibility from completed reference Macro waves;"
+                " distinct from actual freeform Main-visible report text."
+            ),
+        },
         "scope": (
             "Exact source-grounded comparable Claim pairs. Warrant changes "
             "are source-ablation counterfactuals, not chronological Main actions; "

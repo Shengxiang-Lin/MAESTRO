@@ -27,6 +27,7 @@ def _source(sid, topic, modality, schema, *, key=None, purpose):
 VERSION = "maestro.macro_plan.v2"
 INFORMATION_NECESSITY_VERSION = "maestro.cross_branch_candidates.v1"
 GRAMMAR_VERSION = "maestro.macro_grammar.v3"
+EVIDENCE_TRUST_VERSION = "maestro.evidence_trust_schedule.v1"
 PATTERNS = ("serial_identity", "parallel_cues",
             "disputed_reports", "multimodal_event")
 EXTENDED_PATTERNS = PATTERNS + ("corroborated_dispute",)
@@ -170,6 +171,7 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                       evidence_tools_enabled: bool = False,
                       evidence_tools_version: str | None = None,
                       operator_grammar_enabled: bool = False,
+                      evidence_trust_enabled: bool = False,
                       ) -> tuple[dict, list[dict]]:
     if difficulty not in {"medium", "hard"}:
         raise ValueError("macro_first_v2_requires_medium_or_hard")
@@ -180,6 +182,15 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
     )[:15], 16))
     pattern = rng.choice(
         EXTENDED_PATTERNS if extended_grammar else PATTERNS
+    )
+    # Stable independent draw: adding this schedule feature must not change
+    # the random choices for question patterns, answer types, or source rows.
+    verification_mode = (
+        "keyed_followup" if evidence_trust_enabled and
+        pattern in {"disputed_reports", "corroborated_dispute"}
+        and int(digest(seed, ordinal, record_id,
+                       "evidence-trust-keyed-followup-v1")[:10], 16) % 2 == 0
+        else "parallel"
     )
     candidate_profile = None
     if realism_v3 and pattern in {
@@ -237,6 +248,13 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                         seed=seed, ordinal=ordinal, record_id=record_id,
                         source_id=sid,
                     )
+                    if (sid == "report_b"
+                            and verification_mode == "keyed_followup"
+                            and route == "direct_extract"):
+                        # This report is accessible only after the first
+                        # Macro exposes actual case IDs. A globally known
+                        # direct URL would bypass the source-access intent.
+                        route = "search_then_extract"
                     item["acquisition_route"] = route
                     if route != "search_only":
                         item["simulated_page_url"] = synthetic_page_url(
@@ -341,10 +359,15 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                "first record of a reported event year")
         source("report_b", "table",
                {"case_id": "str", "reported_year_b": "int"},
-               "independent record of the same event")
+               "independent record of the same event",
+               key="case_id" if verification_mode == "keyed_followup" else None)
         first = macro("first_report", [],
                       {"case_id": "str", "reported_year_a": "int"}, ["report_a"])
-        second = macro("second_report", [],
+        # The second source is independently authored, but its *retrieval*
+        # can require case IDs returned by the first Macro. This creates
+        # a genuine later feedback wave without fabricating a sleep/delay.
+        second = macro("second_report",
+                       [first] if verification_mode == "keyed_followup" else [],
                        {"case_id": "str", "reported_year_b": "int"}, ["report_b"])
         prior = macro("dispute_resolution", [first, second], {"case_id": "str"})
         if pattern == "corroborated_dispute":
@@ -427,6 +450,8 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         "macro_tasks": tasks, "terminal_macro_id": terminal,
         "source_schemas": schemas, "index_hops": hops,
         "media_interpretation": "simulated_typed_observations_not_media_decoding",
+        **({"claim_verification_mode": verification_mode}
+           if evidence_trust_enabled else {}),
     }
     if goal_resolution_enabled:
         from .goal_resolution import GOAL_RESOLUTION_VERSION
@@ -479,6 +504,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         evidence_tools_enabled=True,
         evidence_tools_version=EVIDENCE_TOOL_CONTRACT_VERSION,
         operator_grammar_enabled=operator_grammar_enabled,
+        evidence_trust_enabled=True,
     )
     from .goal_resolution import GOAL_RESOLUTION_VERSION
     from .semantic_evidence import CONTRACT_VERSION
@@ -543,6 +569,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     # It does not alter the Macro Gold program or add a model call.
     from .evidence_relations import VERSION as EVIDENCE_RELATION_VERSION
     spec["evidence_relation_version"] = EVIDENCE_RELATION_VERSION
+    spec["evidence_trust_version"] = EVIDENCE_TRUST_VERSION
     title_by_source = expected_source_titles(spec)
     for source in spec["sources"]:
         source["title"] = title_by_source[source["source_id"]]
@@ -596,6 +623,13 @@ def validate_spec(spec: dict) -> list[str]:
         return ["invalid_topic_domain_version"]
     if spec.get("macro_grammar_version") not in {None, GRAMMAR_VERSION}:
         return ["invalid_macro_grammar_version"]
+    if spec.get("evidence_trust_version") not in {
+        None, EVIDENCE_TRUST_VERSION,
+    }:
+        return ["invalid_evidence_trust_version"]
+    if (spec.get("evidence_trust_version") and
+            not spec.get("evidence_relation_version")):
+        return ["evidence_trust_requires_evidence_relation"]
     from .goal_resolution import GOAL_RESOLUTION_VERSION
     if spec.get("goal_resolution_version") not in {
         None, GOAL_RESOLUTION_VERSION
@@ -636,6 +670,7 @@ def validate_spec(spec: dict) -> list[str]:
             evidence_tools_enabled=bool(spec.get("evidence_tool_contract_version")),
             evidence_tools_version=spec.get("evidence_tool_contract_version"),
             operator_grammar_enabled=bool(spec.get("operator_grammar_version")),
+            evidence_trust_enabled=bool(spec.get("evidence_trust_version")),
         )
         errors = []
         if plan != expected:
@@ -729,7 +764,13 @@ def compile_macro_solvers(spec: dict) -> dict:
             last = add("project", matched, fields=["candidate_id"])
         elif role in {"first_report", "second_report"}:
             sid = "report_a" if role == "first_report" else "report_b"
-            src = add("scan", source_id=sid)
+            src = (
+                add("lookup_by_key", *parents, source_id=sid,
+                    input_key_field="case_id", source_key_field="case_id")
+                if role == "second_report"
+                and plan.get("claim_verification_mode") == "keyed_followup"
+                else add("scan", source_id=sid)
+            )
             last = add("project", src, fields=[
                 "case_id", ("reported_year_a" if sid == "report_a"
                             else "reported_year_b"),
@@ -749,9 +790,21 @@ def compile_macro_solvers(spec: dict) -> dict:
             )
             matched = add("join", *ordered_parents, left_on="case_id",
                           right_on="case_id")
-            selected = add("compare_fields", matched,
-                           left_field="reported_year_a",
-                           right_field="reported_year_b", comparison="ne")
+            selected = (
+                add("claim_relation_filter", matched,
+                    subject_field="case_id",
+                    left_field="reported_year_a",
+                    right_field="reported_year_b",
+                    left_source_id="report_a",
+                    right_source_id="report_b",
+                    attribute="reported_event_year",
+                    valid_scope="same_reported_event",
+                    relation="contradicts")
+                if spec.get("evidence_trust_version") else
+                add("compare_fields", matched,
+                    left_field="reported_year_a",
+                    right_field="reported_year_b", comparison="ne")
+            )
             last = add("project", selected, fields=["case_id"])
         elif role == "dispute_context_candidates":
             rows = add("scan", source_id="context")

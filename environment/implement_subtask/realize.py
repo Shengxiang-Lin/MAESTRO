@@ -51,6 +51,12 @@ def _describe_operation(node: dict) -> str:
             f"Align the two input workproducts by "
             f"{node['left_on']} = {node['right_on']}"
         )
+    if op == "claim_relation_filter":
+        return (
+            f"Check that {node['left_field']} differs from "
+            f"{node['right_field']} for each {node['subject_field']} "
+            "using the two independent source fact references"
+        )
     if op == "compare_fields":
         comparison = {
             "gte": "is at least", "lte": "is at most", "eq": "equals",
@@ -221,7 +227,9 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
             if (
                 {"report_a", "report_b"}.issubset(accessible)
                 and any(
-                    step["operation"] == "compare_fields"
+                    step["operation"] in {
+                        "compare_fields", "claim_relation_filter",
+                    }
                     and "reported_year_a" in step["action"]
                     and "reported_year_b" in step["action"]
                     and "differs from" in step["action"]
@@ -254,6 +262,9 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
             )
             records.append({
                 "scene_task_id": scene["task_id"],
+                **({"evidence_trust_version":
+                    scene["problem_spec"]["evidence_trust_version"]}
+                   if scene["problem_spec"].get("evidence_trust_version") else {}),
                 "macro_task_id": macro_id,
                 "depends_on": list(macro["depends_on"]),
                 "authorized_source_ids": list(macro["source_ids"]),

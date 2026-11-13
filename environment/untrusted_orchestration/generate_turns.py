@@ -73,7 +73,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "event_scheduler.py", "scenario_generator.py",
         "candidate_exploration.py", "candidate_selection.py",
         "evidence_affordances.py", "reasoning_fidelity.py",
-        "visible_history.py",
+        "visible_history.py", "visible_claim_state.py",
         "main_decision_contract.py",
         "report_contract.py", "report_evidence.py",
         "report_validation.py", "public_language.py",
@@ -89,6 +89,8 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "../base_orchestration/action_author.py",
         "../base_orchestration/generation_meta.py",
         "../implement_subtask/reporting.py",
+        "../implement_subtask/visible_evidence.py",
+        "../generate_question/evidence_operators.py",
         "config.py",
         "../../orchestra/base_main_agent.py",
     )

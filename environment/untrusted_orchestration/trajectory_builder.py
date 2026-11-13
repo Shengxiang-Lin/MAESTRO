@@ -706,6 +706,27 @@ def build_branch(
     ):
         stopped = "language_review_unaccepted"
     success = stopped == "recovered"
+    # Teacher-side state is computed from the ACTUAL public report text in
+    # each returned batch, including injected faults and retry replacements.
+    # It is never passed to Main (which still sees only O1 formatted history).
+    from .visible_claim_state import audit_visible_claim_states
+    decision_bindings = {
+        d["round"]: d["task_ids"] for d in decisions
+        if d.get("decision_kind") == "delegate"
+    }
+    report_bindings = {}
+    for action in trajectory:
+        if action.get("action") != "delegate_task":
+            continue
+        number = action["attempt"]
+        report_bindings[number] = (
+            graph["reference_waves"][number - 1]
+            if number < branch_round
+            else decision_bindings[number]
+        )
+    visible_claim_state = audit_visible_claim_states(
+        scene, trajectory, task_ids_by_round=report_bindings,
+    )
     episode = {
         "task_id": scene["task_id"], "question": scene["question"],
         "format": "maestro_untrusted_round_branch.v1",
@@ -720,6 +741,7 @@ def build_branch(
         "faults": injected,
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
+        "visible_claim_state": visible_claim_state,
         "event_scenario": scenario_plan,
         "event_timeline": scheduler.audit(),
         "fault_events_applied": applied_fault_events,

@@ -217,8 +217,31 @@ class SceneEvidenceLedgerTests(unittest.TestCase):
         self.assertIn("world_not_reproducible_from_frozen_spec", report["issues"])
 
     def test_legacy_scene_without_marker_does_not_get_a_new_ledger(self):
+        from environment.generate_question.macro_planning import (
+            sample_macro_plan, classify_domain_from_explicit_cue,
+        )
+        from environment.generate_question.source_title_contract import (
+            expected_source_titles,
+        )
         spec = _spec_of("disputed_reports")
         spec.pop("evidence_relation_version")
+        spec.pop("evidence_trust_version")
+        plan, roles = sample_macro_plan(
+            seed=spec["seed"], ordinal=spec["ordinal"],
+            record_id=spec["source_anchor"]["source_record_id"],
+            topic=spec["scenario"]["topic"],
+            difficulty=spec["difficulty_target"],
+            domain=spec["macro_plan"]["domain"],
+            information_need=True, realism_v3=True, extended_grammar=True,
+            goal_resolution_enabled=True, evidence_tools_enabled=True,
+            evidence_tools_version=spec["evidence_tool_contract_version"],
+            operator_grammar_enabled=bool(spec.get("operator_grammar_version")),
+            evidence_trust_enabled=False,
+        )
+        spec["macro_plan"], spec["sources"] = plan, roles
+        titles = expected_source_titles(spec)
+        for source in roles:
+            source["title"] = titles[source["source_id"]]
         scene = compile_and_validate(spec, reference_question(spec))
         self.assertNotIn("evidence_ledger", scene)
         self.assertNotIn("evidence_origin_id",

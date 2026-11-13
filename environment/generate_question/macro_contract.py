@@ -114,8 +114,12 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
     ops = Counter(step["op"] for step in steps)
     pattern = spec.get("reasoning_pattern", "approval")
     family = spec["family"]
-    compares = [step.get("comparison") for step in steps
-                if step["op"] == "compare_fields"]
+    compares = [
+        (step.get("comparison") if step["op"] == "compare_fields"
+         else "ne")
+        for step in steps
+        if step["op"] in {"compare_fields", "claim_relation_filter"}
+    ]
     if pattern == "macro_first_v2":
         plan = spec["macro_plan"]
         if (len(graph["tasks"]) != len(plan["macro_tasks"])
@@ -179,10 +183,13 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         raise ValueError("macro_question_wrong_entry_output_schema")
     comparison_contract = [
         {
-            "comparison": step["comparison"],
+            "comparison": (
+                step["comparison"] if step["op"] == "compare_fields" else "ne"
+            ),
             "left_field": step["left_field"],
             "right_field": step["right_field"],
-        } for step in steps if step["op"] == "compare_fields"
+        } for step in steps
+        if step["op"] in {"compare_fields", "claim_relation_filter"}
     ]
     selection_contract = (
         {

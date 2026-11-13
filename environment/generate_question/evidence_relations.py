@@ -46,6 +46,19 @@ def compile_evidence_ledger(scene: dict) -> dict:
     if not {"report_a", "report_b"} <= set(sources):
         raise ValueError("claim_pair_sources_missing")
     by_source = {}
+    # In keyed follow-up cases the second source can contain more rows than
+    # the Macro is allowed to retrieve. Its unseen rows must NOT become
+    # Claim evidence just because they exist privately in the World.
+    accessible_refs = {}
+    if spec.get("evidence_trust_version"):
+        for task_feedback in scene["task_feedback"]:
+            for sid in task_feedback["used_source_ids"]:
+                if sid in {"report_a", "report_b"}:
+                    accessible_refs.setdefault(sid, set()).update(
+                        ref for row in task_feedback["workproduct"]
+                        for ref in row["source_fact_refs"]
+                        if ref.startswith(sid + ":")
+                    )
     for sid, field in (("report_a", "reported_year_a"),
                        ("report_b", "reported_year_b")):
         source = sources[sid]
@@ -53,6 +66,9 @@ def compile_evidence_ledger(scene: dict) -> dict:
             raise ValueError("claim_pair_independence_not_declared")
         index = {}
         for obs in source["observations"]:
+            if (spec.get("evidence_trust_version")
+                    and not set(obs["fact_refs"]) & accessible_refs.get(sid, set())):
+                continue
             claim = extract_claim(
                 source, obs, field=field,
                 attribute="reported_event_year",
@@ -144,4 +160,67 @@ def compile_evidence_ledger(scene: dict) -> dict:
         output["independent_comparable_pairs"] += 1
         output["verification_sensitive_pairs"] += int(changed)
     output["relation_counts"] = dict(sorted(counts.items()))
+    if spec.get("evidence_trust_version"):
+        # Actual Macro availability differs from a hypothetical ablation:
+        # a keyed follow-up cannot return until the case IDs are available.
+        final_refs = {
+            ref for row in scene["task_feedback"][-1]["workproduct"]
+            for ref in row["source_fact_refs"]
+        }
+        reference_waves = sorted(set(output["source_first_wave"].values()))
+        transitions = []
+        answer_relevant = 0
+        answer_relevant_late = 0
+        cross_wave = 0
+        for item in output["relations"]:
+            subject = item["subject"]
+            a = by_source["report_a"][subject]
+            b = by_source["report_b"][subject]
+            target = set(item["source_fact_refs"]) <= final_refs
+            answer_relevant += int(target)
+            a_wave = output["source_first_wave"]["report_a"]
+            b_wave = output["source_first_wave"]["report_b"]
+            cross_wave += int(a_wave != b_wave)
+            answer_relevant_late += int(target and a_wave != b_wave)
+            prior = check_warrant([])
+            for wave in reference_waves:
+                present = [
+                    claim for claim in (a, b)
+                    if output["source_first_wave"][claim["source_id"]] <= wave
+                ]
+                current = check_warrant(present)
+                if (current["status"] != prior["status"] or
+                        current["sufficient_to_accept"] !=
+                        prior["sufficient_to_accept"]):
+                    transitions.append({
+                        "subject": subject,
+                        "reference_wave": wave,
+                        "new_source_ids": sorted(
+                            sid for sid in ("report_a", "report_b")
+                            if output["source_first_wave"][sid] == wave
+                        ),
+                        "before_status": prior["status"],
+                        "after_status": current["status"],
+                        "before_sufficient": prior["sufficient_to_accept"],
+                        "after_sufficient": current["sufficient_to_accept"],
+                        "evidence_count": current["evidence_count"],
+                        "missing_evidence": current["missing_evidence"],
+                        "answer_supporting_claim_pair": target,
+                    })
+                prior = current
+        output["reference_wave_trust"] = {
+            "visibility_scope": (
+                "eligible_macro_workproducts_after_reference_wave;"
+                "not_a_claim_that_freeform_finish_text_stated_every_row"
+            ),
+            "mode": plan.get("claim_verification_mode", "parallel"),
+            "cross_wave_claim_pairs": cross_wave,
+            "answer_relevant_claim_pairs": answer_relevant,
+            "answer_relevant_cross_wave_pairs": answer_relevant_late,
+            "transitions": sorted(
+                transitions, key=lambda x: (
+                    x["reference_wave"], x["subject"],
+                )
+            ),
+        }
     return output
