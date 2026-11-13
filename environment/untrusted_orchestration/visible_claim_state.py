@@ -278,14 +278,6 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
             if before == "unverified" and after == "corroborated":
                 counters["late_visible_corroborations"] += 1
 
-        # A narrowly scoped legacy subject projection is kept solely
-        # for historical year-claim audits. General consumers must use
-        # the unambiguous, attribute-aware claim_states map.
-        year_states = {
-            label["subject"]: label
-            for label in current.values()
-            if label["attribute"] == "reported_event_year"
-        }
         snapshots.append({
             "delegation_round": round_number,
             "main_can_act_from_round": round_number + 1,
@@ -296,7 +288,6 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
             "claim_dependency_edges": claim_dependency_edges,
             "task_dependency_edges": dependencies,
             "state_changes": transitions,
-            "states": year_states,
         })
         prior_states = current
 
