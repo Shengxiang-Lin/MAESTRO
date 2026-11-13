@@ -39,7 +39,7 @@ def compile_evidence_ledger(scene: dict) -> dict:
         "warrant_transitions": [],
         "independent_comparable_pairs": 0,
         "verification_sensitive_pairs": 0,
-        "source_first_wave": {},
+        "source_first_wave": {}, "unpaired_claims": {},
     }
     if pattern not in _REPORT_PATTERNS:
         return output
@@ -63,10 +63,15 @@ def compile_evidence_ledger(scene: dict) -> dict:
             index[claim["subject"]] = claim
         by_source[sid] = index
         output["source_first_wave"][sid] = wave_of_source[sid]
-    if set(by_source["report_a"]) != set(by_source["report_b"]):
-        raise ValueError("claim_pair_subject_coverage_mismatch")
+    # Source-specific observation budgets can differ. Only claims about a
+    # shared case are comparable; unpaired claims remain unverified.
+    common = set(by_source["report_a"]) & set(by_source["report_b"])
+    output["unpaired_claims"] = {
+        sid: len(set(index) - common)
+        for sid, index in sorted(by_source.items())
+    }
     counts = Counter()
-    for subject in sorted(by_source["report_a"]):
+    for subject in sorted(common):
         first = by_source["report_a"][subject]
         second = by_source["report_b"][subject]
         relation = relate_claims(first, second)
