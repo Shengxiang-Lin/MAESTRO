@@ -27,9 +27,6 @@ def _construction_identity(args) -> str:
         "max_records": args.max_records,
         "seed": args.seed,
         "difficulty_mix": args.difficulty_mix,
-        "clue_chain_share": getattr(args, "clue_chain_share", 0),
-        "evidence_graph_share": getattr(args, "evidence_graph_share", 0),
-        "macro_first_share": getattr(args, "macro_first_share", 0),
         "macro_first_v2_share": getattr(args, "macro_first_v2_share", 0),
         "operator_grammar_share": getattr(args, "operator_grammar_share", 0),
         "numeric_goal_diversity_share": getattr(
@@ -45,9 +42,7 @@ def _construction_identity(args) -> str:
         "generation_code": {
             name: file_digest(Path(__file__).with_name(name))
             for name in (
-                "spec.py", "clue_chain.py", "graph_grammar.py",
-                "world_synthesizer.py", "macro_first.py",
-                "macro_first_world.py", "macro_planning.py",
+                "spec.py", "macro_planning.py",
                 "operator_grammar.py", "numeric_goal_world.py",
                 "question_semantic_lock.py", "macro_evidence_world.py", "information_necessity.py",
                 "source_title_contract.py", "difficulty_proxy.py",
