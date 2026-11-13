@@ -20,7 +20,7 @@ reporting:
   source_subtasks: environment/data/stage2/oracle/subtasks.jsonl
   source_scene_index: environment/data/stage2/oracle/scene_index.jsonl
   # Reviewed Sub-Agent report bank; stable path across datasets.
-  output_dir: environment/data/stage2/reports
+  output_dir: environment/data/stage2
   api_base: http://127.0.0.1:8807/v1
   model: local-qwen3.5-9b
   critic_api_base: null
