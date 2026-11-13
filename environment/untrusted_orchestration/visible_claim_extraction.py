@@ -103,7 +103,20 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
                     if isinstance(row.get(k), str) and row[k].strip()
                 ), None)
                 if subject_field is None:
-                    continue
+                    # Single-source scalar statistics often return only
+                    # e.g. {metric_a: 7}, without an entity key. Retain
+                    # them as SOURCE-SCOPED observations, not as a shared
+                    # entity that could produce false corroboration.
+                    scalar_fields = [
+                        field for field, value in row.items()
+                        if field in declared and _typed_scalar(value)
+                    ]
+                    if (source_id is None or len(declared) != 1
+                            or len(scalar_fields) != 1):
+                        continue
+                    subject = "source:" + source_id
+                else:
+                    subject = row[subject_field]
                 refs = item.get("source_fact_refs", [])
                 if not isinstance(refs, list) or not all(
                     isinstance(ref, str) for ref in refs
@@ -111,7 +124,7 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
                     refs = []
                 for field, value in row.items():
                     if field != subject_field and _typed_scalar(value):
-                        add(row[subject_field], field, value, "result", refs)
+                        add(subject, field, value, "result", refs)
         else:
             match = _CASE_LIST.fullmatch(result.strip())
             if match:
