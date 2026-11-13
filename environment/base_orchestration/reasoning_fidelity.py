@@ -65,6 +65,8 @@ _SOURCE_RETURN = re.compile(
 _FUTURE_CLAUSE = re.compile(
     r"\s*(?:,|\band\s+then\b|\bthen\b|\bbefore\b|"
     r"\bso\s+that\b|\bin\s+order\s+to\b|\bto\s+enable\b|"
+    r"\bto\s+(?:(?:later|subsequently)\s+)?"
+    r"(?:retrieve|look\s+up|obtain|calculate|compute|verify)\b|"
     r"\bwhich\s+(?:will|can|should)\b|\bfor\s+(?:later|subsequent)\b)"
     r"\s*",
     re.I,
