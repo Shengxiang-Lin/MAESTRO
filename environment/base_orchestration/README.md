@@ -1,14 +1,53 @@
 # Base orchestration: trusted Main-Agent decision trajectories
 
-Run from the repository root:
+Run from the repository root using the supported low-level
+`environment.base_orchestration.generate_turns` entrypoint and its explicit
+V1.4 flags below. The `environment` root CLI does not expose a
+`generate-main-turns` command.
+
+Stage-3 configuration is in `environment/configs/base_orchestration.yaml`
+and may also be invoked via
+`environment.base_orchestration.config.generate_from_config()`.
+
+
+## V1.4 pilot: code-owned dispatch and evidence-grounded reasoning
+
+Stage 1 V1.4 and the completed Stage-2 repaired report bank are the
+inputs configured in `environment/configs/base_orchestration.yaml`.
 
 ```bash
-python -m environment generate-main-turns --config environment/configs/base_orchestration.yaml
+# Generate the trusted Stage-3 V1.4 bank with the configured frozen
+# dispatch mode (generation.freeze_dispatch: true).
+python -m environment.base_orchestration.generate_turns \
+  --scenes environment/data/maestro_stage1_current_v1_4_100/questions/scenes.jsonl \
+  --reports environment/data/maestro_stage2_reports_v1_4_repaired/subtasks.jsonl \
+  --output-dir environment/data/maestro_stage3_v1_4_fixed_10 \
+  --max-scenes 10 --mode llm \
+  --author-api-base http://127.0.0.1:8807/v1 \
+  --author-model local-qwen3.5-9b --workers 8 \
+  --freeze-dispatch
 ```
 
-All Scene/report inputs, output directories, model endpoints, token/attempt
-constraints and worker settings are in the YAML. Optional CLI flags can
-override paths, max-scenes, mode, worker count and progress.
+`--freeze-dispatch` is explicitly opt-in on the low-level CLI.
+For versioned V1.4 scenes, it freezes the entire parallel task batch
+(instruction, context, source scope, model and tools) to the verified
+Macro schedule. The LLM now authors only `reasoning`; Critic
+reviews the reasoning against the Main-visible Sub-Agent history.
+A narrow deterministic Guard rejects clearly invented earlier
+Sub-Agent/tool failures in an otherwise completed trusted history and
+private reference-action identifiers. The new generation mode is
+`llm_reviewed_contract_frozen`; legacy callers may continue with
+`llm_reviewed` to compare results.
+
+Generation signatures distinguish frozen and legacy behavior, so
+use a fresh output directory rather than reusing the old partial
+pilot checkpoints. The canonical YAML `generation.freeze_dispatch`
+is set to true for this V1.4 dataset.
+
+Stage-4 public `episodes.jsonl` and `main_turns.jsonl` now share
+the same strict recovered-and-reviewed publication predicate.
+Failed candidate Episodes remain in private journals and `failed.jsonl`
+but must never appear as positive Episode training data.
 
 The input is a **frozen accepted Scene** (Question + public source catalog
 + teacher Macro DAG) and its complete reviewed **Sub-Agent report bank**.

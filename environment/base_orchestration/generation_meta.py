@@ -39,7 +39,9 @@ GENERATION_PROCESS_RE = re.compile(
     r"(?:was|has\s+been|is)\s+"
     r"(?:already\s+)?(?:selected|fixed|chosen)\s+"
     r"by\s+(?:the\s+)?(?:planner|teacher|compiler)\b"
-    r"|\b(?:code-owned|planner-owned)\b",
+    r"|\b(?:code-owned|planner-owned)\b"
+    r"|\b(?:reference_action_for_structure_only|"
+    r"current_round_assignments_in_required_order)\b",
     re.I,
 )
 

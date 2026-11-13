@@ -65,6 +65,74 @@ Return JSON only:
 "reason":"short reason","repair_hint":"specific prose-only change"}
 """
 
+
+# V1.4 trusted orchestration fixes each dependency-safe Main dispatch.
+# The Author writes grounded reasoning ONLY, not task count or tool routing.
+STAGE3_REASONING_AUTHOR_SYSTEM = """You are the Main-Agent deciding the next
+investigation from the user question and the Sub-Agent feedback ACTUALLY
+returned so far. Output JSON with ONLY {"reasoning":"..."}.
+
+The assigned investigations are supplied as context. Their number, order,
+instructions, source permissions, tools and model are fixed. Explain WHY
+these tasks are appropriate at this round and what remains to be checked;
+do not author an action, task list or new assignment. Use ONLY evidence
+visible in prior Sub-Agent results. Never assert an earlier retrieval or
+Sub-Agent failed unless the provided history shows that failure. A completed
+intermediate lookup is NOT a failure just because downstream work remains.
+Contradictory independent source documents do NOT imply a malfunctioning
+Sub-Agent. Do not claim to have executed pending verification or seen
+future results. Do not mention internal reference actions or model-review
+machinery. Respond with the reasoning field only.
+"""
+
+STAGE3_REASONING_CRITIC_SYSTEM = _CRITIC_SYSTEM + """
+The Stage-3 model authored ONLY reasoning; task instructions, count, order,
+tools and model are fixed by the executable plan. Review factual claims in
+reasoning against actually Main-visible Sub-Agent results. Reject invented
+earlier errors/retries, completed checks or premature findings. Do not ask
+for changes to task prose or frozen dispatch. Return the normal three axes.
+"""
+
+# A narrow check for a claim of a previous failed tool/Sub-Agent execution
+# in trusted history consisting entirely of completed Sub-Agent reports.
+_PAST_FAILED_ATTEMPT = re.compile(
+    r"\b(?:previous|prior|earlier|last|initial|upstream)\s+"
+    r"(?:\w+\s+){0,4}"
+    r"(?:search|lookup|retrieval|sub[ -]?agent|task|attempt|"
+    r"investigation|result|step)\s+"
+    r"(?:\w+\s+){0,5}"
+    r"(?:failed|errored|timed\s+out|was\s+unsuccessful|"
+    r"returned\s+an?\s+error)\b"
+    r"|\b(?:retry|re-?run|repeat)\s+"
+    r"(?:\w+\s+){0,6}"
+    r"(?:because|due\s+to|since)\s+"
+    r"(?:\w+\s+){0,5}"
+    r"(?:failed|error|unsuccessful|timed\s+out)\b",
+    re.I,
+)
+
+
+def stage3_reasoning_issues(reasoning: str, delivered: dict) -> list[str]:
+    """Validate only unsupported claims refutable from public report status."""
+    if not isinstance(reasoning, str):
+        return ["invalid_main_reasoning"]
+    if re.search(
+        r"\b(?:reference_action_for_structure_only|"
+        r"current_round_assignments_in_required_order)\b",
+        reasoning, re.I,
+    ):
+        return ["internal_reference_action_leak"]
+    if not _PAST_FAILED_ATTEMPT.search(reasoning):
+        return []
+    statuses = [
+        record.get("finish_result", {}).get("status")
+        for record in delivered.values()
+    ]
+    if not statuses or all(status == "done" for status in statuses):
+        return ["invented_prior_subagent_failure"]
+    return []
+
+
 _FORBIDDEN = re.compile(
     r"\b(?:work_[A-Za-z0-9_]+|oracle|gold\s+(?:program|dag|answer)|"
     r"teacher\s+(?:task|answer|state)|macro\s*(?:task|id)|"
@@ -508,6 +576,7 @@ def author_delegate_action(
     author_system: str | None = None,
     critic_system: str | None = None,
     freeze_assignment_prose: bool = False,
+    reasoning_only_stage3: bool = False,
     reasoning_goals: list[dict] | None = None,
     reasoning_guard=None,
     decision_contract: dict | None = None,
@@ -535,7 +604,33 @@ def author_delegate_action(
             "reference_action_for_structure_only": template,
             "previous_feedback": failures[-2:],
         }
-        if freeze_assignment_prose:
+        if freeze_assignment_prose and reasoning_only_stage3:
+            # Stage-3 Author sees public Main history and pending work,
+            # never the private reference action or Critic dialogue.
+            request = {
+                "question_and_subagent_history": prompt,
+                "pending_investigations": [
+                    {"instruction": item["target_instruction"],
+                     "context": item["context"]}
+                    for item in assignments
+                ],
+                "output_format": {
+                    "reasoning": "grounded explanation of next investigations"
+                },
+                "writing_guidance": (
+                    "Explain only current evidence needs using already "
+                    "returned Sub-Agent facts. No invented past failures, "
+                    "completed checks, or hidden future results. "
+                    "Return only the reasoning field."
+                ),
+            }
+            if failures:
+                request["revision_issue_types"] = [
+                    {"errors": row.get("errors", []),
+                     "stage": row.get("stage", "")}
+                    for row in failures[-2:]
+                ]
+        if freeze_assignment_prose and not reasoning_only_stage3:
             request["authoring_scope"] = (
                 "Generate natural grounded reasoning ONLY. The assigned "
                 "task instructions and contexts are already determined "
@@ -829,7 +924,9 @@ def author_delegate_action(
                          "reason": str(review.get("reason", ""))[:250],
                          "repair_hint": str(review.get("repair_hint", ""))[:250]})
     return None, {
-        "status": "failed", "mode": "llm_reviewed",
+        "status": "failed",
+        "mode": ("llm_reviewed_contract_frozen"
+                 if freeze_assignment_prose else "llm_reviewed"),
         "attempts": max_revisions + 1, "failures": failures,
         **({
             "decision_contract_version": decision_contract.get(

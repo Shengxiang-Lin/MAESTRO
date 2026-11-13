@@ -3,14 +3,15 @@
 version: 1
 
 input:
-  scenes: environment/data/maestro_current_100/questions/scenes.jsonl
-  reports: environment/data/maestro_subagent_reports_100/subtasks.jsonl
+  scenes: environment/data/maestro_stage1_current_v1_4_100/questions/scenes.jsonl
+  reports: environment/data/maestro_stage2_reports_v1_4_repaired/subtasks.jsonl
 
 generation:
-  output_dir: environment/data/maestro_base_orchestration_100
+  output_dir: environment/data/maestro_stage3_v1_4_100
   max_scenes: null    # null means every accepted Scene
   workers: 8
   mode: llm           # llm or template
+  freeze_dispatch: true  # V1.4: code owns task batches; LLM writes reasoning only
   max_revisions: 2
   max_attempts: 16
   sub_model: qwen3-8b

@@ -342,13 +342,20 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             raise RuntimeError(
                 "untrusted_unsafe_parallel_batch_cannot_publish_positive_sft"
             )
-        if data.get("episode") is not None:
+        # A private branch journal may retain an Episode even after its
+        # final language/action review failed. Such Episodes are never
+        # positive training data. Apply the SAME acceptance predicate to
+        # public episodes and public Main turns.
+        if status == "recovered":
+            if not isinstance(data.get("episode"), dict):
+                raise RuntimeError(
+                    "untrusted_recovered_branch_missing_public_episode"
+                )
             public_episode = deepcopy(data["episode"])
             # Truth labels belong in private audit, never public reviewed-turn.
             public_episode.pop("outcome", None)
             public_episode.pop("recovered", None)
             episodes.append(public_episode)
-        if status == "recovered":
             positive_turns.extend(data["turns"])
         elif status != "not_selected_for_language_review":
             failures.append({
@@ -590,6 +597,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             counters["skipped_unsupported"] +
             counters["rejected_validation"]
         ),
+        "published_episodes": len(episodes),
         "main_training_turns": len(positive_turns),
         "reviewed_branches": counters["recovered"],
         "reviewed_turns": len(positive_turns),

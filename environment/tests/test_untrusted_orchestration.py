@@ -939,6 +939,58 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             for turn in turns
         ))
 
+
+    def test_failed_reviewed_episodes_remain_private_not_public(self):
+        from environment.untrusted_orchestration.generate_turns import _publish
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "journal").mkdir()
+            plans = []
+            for index, status in enumerate((
+                "language_review_unaccepted", "main_action_not_accepted",
+            )):
+                task_id = f"question-failed-{index}"
+                plans.append({
+                    "index": index, "task_id": task_id,
+                    "sample_id": f"{task_id}-round-2",
+                    "branch_round": 2, "faults": [],
+                    "scenario_plan": {
+                        "blueprint": "test_fixture", "fault_atoms": [],
+                    },
+                })
+                # The journal deliberately contains a full Episode even
+                # though its language/action review failed.
+                (root / "journal" / f"{index:06d}.json").write_text(
+                    json.dumps({
+                        "task_id": task_id, "status": status,
+                        "episode": {
+                            "task_id": task_id,
+                            "trajectory": [{"action": "complete"}],
+                            "outcome": "recovered",
+                        },
+                        "turns": [], "private_audit": None,
+                    }), encoding="utf-8",
+                )
+            metrics = _publish(root, plans)
+            self.assertEqual(metrics["published_episodes"], 0)
+            self.assertEqual(metrics["main_training_turns"], 0)
+            self.assertEqual(
+                (root / "episodes.jsonl").read_text(encoding="utf-8"), ""
+            )
+            self.assertEqual(
+                (root / "main_turns.jsonl").read_text(encoding="utf-8"), ""
+            )
+            failures = [
+                json.loads(line) for line in
+                (root / "failed.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(len(failures), 2)
+            self.assertTrue(all(
+                (root / "journal" / f"{i:06d}.json").exists()
+                for i in range(2)
+            ))
+
     def test_journal_resume_positive_publication_and_manifest(self):
         with TemporaryDirectory() as td:
             root = Path(td)

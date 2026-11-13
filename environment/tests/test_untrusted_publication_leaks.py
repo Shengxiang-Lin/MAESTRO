@@ -35,6 +35,7 @@ LEAKS = [
     "The locked decision requires a lookup.",
     "The plan has been selected by the compiler.",
     "This is a code-owned decision contract.",
+    "Use reference_action_for_structure_only from the action template.",
 ]
 
 

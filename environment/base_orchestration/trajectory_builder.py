@@ -23,6 +23,8 @@ from .o1_compat import o1_prompt, o1_history, o1_prompt_from_turn, source_catalo
 from .action_author import (
     _assignment, action_issues, completion_issues,
     author_delegate_action, author_complete_action,
+    STAGE3_REASONING_AUTHOR_SYSTEM, STAGE3_REASONING_CRITIC_SYSTEM,
+    stage3_reasoning_issues,
 )
 
 
@@ -284,6 +286,7 @@ def build_episode(
     sub_model: str = "qwen3-8b", model_alias: str = "model_1",
     resume_rounds: list[dict] | None = None,
     on_round=None, on_episode_start=None,
+    freeze_dispatch: bool = False,
 ) -> tuple[dict | None, list[dict], list[dict], dict]:
     """Return (public Episode, reviewed-turn turns, PRIVATE alignments, status)."""
     if max_attempts < 2:
@@ -292,6 +295,12 @@ def build_episode(
         raise ValueError("stage3_invalid_model_alias")
     reports = _strict_reports(scene, stage2_rows)
     graph = scene["macro_graph"]
+    # Versioned V1.4 scenes train Main reasoning over a frozen
+    # dependency-safe dispatch, not redundant action-structure synthesis.
+    freeze_trusted_dispatch = bool(
+        freeze_dispatch
+        and scene.get("problem_spec", {}).get("evidence_trust_version")
+    )
     tasks = {row["task_id"]: row for row in graph["tasks"]}
     if len(tasks) != len(graph["tasks"]):
         raise ValueError("stage3_duplicate_graph_task")
@@ -368,7 +377,11 @@ def build_episode(
                     ) != main_prompt):
                 raise RuntimeError("stage3_checkpoint_prompt_mismatch")
             action = deepcopy(prior_turn.get("output"))
-            expected_mode = "llm_reviewed" if author is not None else "template"
+            expected_mode = (
+                "llm_reviewed_contract_frozen" if freeze_trusted_dispatch
+                and author is not None else
+                "llm_reviewed" if author is not None else "template"
+            )
             status = prior_audit.get("authoring")
             if (prior_turn.get("generation_mode") != expected_mode
                     or not isinstance(status, dict)
@@ -380,6 +393,21 @@ def build_episode(
             action, status = author_delegate_action(
                 assignments=assignment, prompt=main_prompt,
                 author=author, critic=critic, max_revisions=max_revisions,
+                freeze_assignment_prose=freeze_trusted_dispatch,
+                reasoning_only_stage3=freeze_trusted_dispatch,
+                author_system=(
+                    STAGE3_REASONING_AUTHOR_SYSTEM
+                    if freeze_trusted_dispatch else None
+                ),
+                critic_system=(
+                    STAGE3_REASONING_CRITIC_SYSTEM
+                    if freeze_trusted_dispatch else None
+                ),
+                reasoning_guard=(
+                    (lambda reasoning: stage3_reasoning_issues(
+                        reasoning, delivered,
+                    )) if freeze_trusted_dispatch else None
+                ),
             )
             if action is None:
                 return None, [], [], {
