@@ -262,6 +262,9 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
             )
             records.append({
                 "scene_task_id": scene["task_id"],
+                **({"evidence_trust_version":
+                    scene["problem_spec"]["evidence_trust_version"]}
+                   if scene["problem_spec"].get("evidence_trust_version") else {}),
                 "macro_task_id": macro_id,
                 "depends_on": list(macro["depends_on"]),
                 "authorized_source_ids": list(macro["source_ids"]),

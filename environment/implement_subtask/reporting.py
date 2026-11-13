@@ -695,10 +695,22 @@ def author_critic_report(
                 row["trace_summary"]["narrative"] = trace_narrative(
                     teacher_record["trace_summary"]
                 )
+                # Code-owned, source-scoped observations are added AFTER
+                # the LLM's natural-language prose has been independently
+                # reviewed. They are taken from THIS Macro's delivered answer
+                # rows, never from an unseen Source or downstream Gold.
+                from .visible_evidence import witnessed_source_summary
+                witnessed = (
+                    witnessed_source_summary(teacher_record)
+                    if teacher_record.get("evidence_trust_version") else ""
+                )
                 row["finish_result"] = {
                     "result": normalized_result,
                     "status": "done",
-                    "summary": summary_text,
+                    "summary": (
+                        summary_text + " " + witnessed
+                        if witnessed else summary_text
+                    ),
                 }
                 row["report_authoring"] = {
                     "status": "accepted",
