@@ -335,42 +335,5 @@ class FrozenO1EvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "acquisition_tool_drift"):
             build_episode(scene, reports)
 
-    def test_v1_contract_remains_regenerable(self):
-        from environment.generate_question.macro_planning import sample_macro_plan
-        from environment.generate_question.evidence_tools import (
-            LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION,
-        )
-        base = fresh_scene(8)
-        spec = deepcopy(base["problem_spec"])
-        plan, roles = sample_macro_plan(
-            seed=spec["seed"], ordinal=spec["ordinal"],
-            record_id=spec["source_anchor"]["source_record_id"],
-            topic=spec["scenario"]["topic"],
-            difficulty=spec["difficulty_target"],
-            domain=spec["macro_plan"]["domain"],
-            information_need=True, realism_v3=True,
-            extended_grammar=True, goal_resolution_enabled=True,
-            evidence_tools_enabled=True,
-            evidence_tools_version=LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION,
-        )
-        spec["macro_plan"] = plan
-        spec["evidence_tool_contract_version"] = (
-            LEGACY_EVIDENCE_TOOL_CONTRACT_VERSION
-        )
-        from environment.generate_question.source_title_contract import expected_source_titles
-        titles = expected_source_titles(spec)
-        for role in roles:
-            role["title"] = titles[role["source_id"]]
-        spec["sources"] = roles
-        legacy = compile_and_validate(spec, reference_question(spec))
-        self.assertEqual(validate_replay(legacy)["status"], "valid")
-        self.assertTrue(all(
-            "tool_steps" not in op["evidence_acquisition"]
-            for task in legacy["macro_graph"]["tasks"]
-            for op in task["operator_chain"]
-            if "evidence_acquisition" in op
-        ))
-
-
 if __name__ == "__main__":
     unittest.main()

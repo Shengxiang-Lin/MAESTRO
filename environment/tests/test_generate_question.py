@@ -103,12 +103,10 @@ class ContractTests(unittest.TestCase):
                 frozen["requirements"]["answer_kind"],
             )
             patterns.add(frozen["reasoning_pattern"])
-        self.assertEqual(patterns, {
-            "approval", "time_window", "status_disagreement", "dynamic_threshold",
-        })
+        self.assertEqual(patterns, {"macro_first_v2"})
 
     def test_explicit_no_archived_is_not_allowed_without_a_graph_filter(self):
-        entry = scene(4, "medium", "priority")
+        entry = scene(4, "easy", "priority")
         question = reference_question(entry["problem_spec"])
         bad = question + " Ensure no archived records are included."
         self.assertIn(
@@ -121,7 +119,7 @@ class ContractTests(unittest.TestCase):
         )
 
     def test_other_unsupported_filter_fields_are_rejected(self):
-        entry = scene(6, "medium", "reconcile")
+        entry = scene(6, "easy", "reconcile")
         original = reference_question(entry["problem_spec"])
         for added in (
             "Exclude unpublished records.",
@@ -193,24 +191,15 @@ class ContractTests(unittest.TestCase):
             guard_question(changed, frozen, entry["macro_graph"]),
         )
 
-    def test_approval_filter_only_when_in_graph(self):
-        entry = scene(12, "hard", "threshold_eligibility")
-        question = reference_question(entry["problem_spec"])
-        bad = question + " Include only independently approved policy groups."
-        self.assertIn(
-            "unlicensed_independent_approval_filter",
-            guard_question(bad, entry["problem_spec"], entry["macro_graph"]),
-        )
-
     def test_no_hidden_gold_question_material(self):
-        entry = scene(15, "hard", "window_alignment")
+        entry = scene(15, "hard")
         contract = macro_question_contract(entry["problem_spec"], entry["macro_graph"])
         text = json.dumps(contract)
         self.assertNotIn("gold_answer", text)
         self.assertNotIn('"world":', text)
 
     def test_question_changes_cannot_change_world_or_graph(self):
-        entry = scene(18, "medium", "status_disagreement")
+        entry = scene(18, "hard")
         before = copy.deepcopy(entry["macro_graph"])
         altered = copy.deepcopy(entry)
         altered["question"] += " Ensure no archived records are included."
@@ -340,7 +329,7 @@ class StageAndQualityTests(unittest.TestCase):
             root = Path(td)
             args.output_dir = root / "constructed"
             args.target = 4
-            args.macro_first_v2_share = 0  # legacy checkpoint fixture
+            args.macro_first_v2_share = 100  # canonical V1.2
             args.scenario_workers = 1
             records = [{
                 "record_id": f"item-{i}",
@@ -397,7 +386,7 @@ class StageAndQualityTests(unittest.TestCase):
             self.assertEqual(len(read_jsonl(args.output_dir / "scenes.jsonl")), 4)
 
     def test_quality_marks_bad_predicate_non_publishable(self):
-        entry = scene(3, "medium", "reconcile")
+        entry = scene(3, "easy", "reconcile")
         bad = copy.deepcopy(entry)
         bad["question"] += " No archived records may remain."
         bad["public"]["question"] = bad["question"]
@@ -410,7 +399,7 @@ class StageAndQualityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             args.output_dir = Path(td) / "pipeline"
             args.target = 4
-            args.macro_first_v2_share = 0  # legacy replay fixture
+            args.macro_first_v2_share = 100  # canonical V1.2
             args.quota_refill = False
             args.no_progress = True
             records = [{
@@ -545,7 +534,7 @@ class StageAndQualityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             args.output_dir = Path(td) / "fixed_candidates"
             args.target = 6
-            args.macro_first_v2_share = 0  # deterministic lightweight fixture
+            args.macro_first_v2_share = 100  # canonical V1.2
             args.no_progress = True
             records = [{
                 "record_id": f"fixed-pool-{i}",

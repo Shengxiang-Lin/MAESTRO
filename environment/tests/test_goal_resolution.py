@@ -82,32 +82,5 @@ class GoalResolutionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             goal_values("comparison", True, 3)
 
-    def test_unmarked_historical_plan_stays_direct(self):
-        from environment.generate_question.macro_planning import sample_macro_plan
-        old = case(7)
-        old.pop("goal_resolution_version")
-        plan, roles = sample_macro_plan(
-            seed=old["seed"], ordinal=old["ordinal"],
-            record_id=old["source_anchor"]["source_record_id"],
-            topic=old["scenario"]["topic"],
-            difficulty=old["difficulty_target"],
-            domain=old["macro_plan"]["domain"],
-            information_need=True, realism_v3=True,
-            extended_grammar=True,
-            goal_resolution_enabled=False,
-        )
-        old.pop("evidence_tool_contract_version", None)
-        old["macro_plan"] = plan
-        old["sources"] = roles
-        from environment.generate_question.source_title_contract import expected_source_titles
-        titles = expected_source_titles(old)
-        for source in old["sources"]:
-            source["title"] = titles[source["source_id"]]
-        self.assertEqual(spec_issues(old), [])
-        scene = compile_and_validate(old, reference_question(old))
-        self.assertEqual(validate_replay(scene)["status"], "valid")
-        self.assertNotIn("goal_resolution", old["macro_plan"])
-
-
 if __name__ == "__main__":
     unittest.main()

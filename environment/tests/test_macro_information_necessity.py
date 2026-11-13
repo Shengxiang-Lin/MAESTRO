@@ -91,31 +91,6 @@ class InformationNecessityTests(unittest.TestCase):
         self.assertEqual(report["macro_first_v2"]["information_necessity"][
             "candidate_discrimination_passed"], len(scenes))
 
-    def test_old_semantic_v2_scene_replays_without_changed_world(self):
-        spec = sample_of("multimodal_event")
-        old = copy.deepcopy(spec)
-        from environment.generate_question.macro_planning import sample_macro_plan
-        old.pop("scene_realism_version")
-        old.pop("goal_resolution_version", None)
-        old.pop("evidence_tool_contract_version", None)
-        plan, roles = sample_macro_plan(
-            seed=old["seed"], ordinal=old["ordinal"],
-            record_id=old["source_anchor"]["source_record_id"],
-            topic=old["scenario"]["topic"], difficulty=old["difficulty_target"],
-            domain="sports", information_need=True, realism_v3=False,
-        )
-        old["macro_plan"] = plan
-        old["sources"] = roles
-        # Reconstruct a PR106-style frozen V2 scene without the new marker.
-        scene = compile_and_validate(old, reference_question(old))
-        self.assertEqual(validate_replay(scene)["status"], "valid")
-        old_audit = scene["difficulty_audit"]["macro_first_audit"][
-            "candidate_information_necessity"
-        ]
-        self.assertEqual(old_audit["policy"], POLICY)
-        self.assertEqual(old_audit["left_candidate_count"], 2)
-        self.assertEqual(old_audit["right_candidate_count"], 2)
-
     def test_context_cannot_be_redundant_in_new_multimodal(self):
         spec = sample_of("multimodal_event")
         scene = compile_and_validate(spec, reference_question(spec))

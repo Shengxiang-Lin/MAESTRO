@@ -5,6 +5,7 @@ Its scene/topic/source hints are used only to create new fictional tasks.
 """
 from __future__ import annotations
 
+import random
 from environment.schema import digest
 
 VERSION = "maestro.problem_spec.v4"

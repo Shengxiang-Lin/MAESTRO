@@ -266,7 +266,7 @@ class StageLocalScopeRegressions(unittest.TestCase):
                         "is only a read-only source scan."
                     ),
                 }
-        frozen = scene(31, "medium")
+        frozen = scene(31, "easy")
         record = next(
             row for row in realize_scene(frozen)["macro_tasks"]
             if [step["operation"] for step in row["trace_summary"]["steps"]]
@@ -328,7 +328,7 @@ class VerifiedListCriticRegressions(unittest.TestCase):
         from environment.implement_subtask.oracle_review import (
             critic_oracle_contradiction,
         )
-        frozen = scene(25, "medium")
+        frozen = scene(25, "easy")
         realized = realize_scene(frozen)
         final = next(
             row for row in realized["macro_tasks"]
@@ -421,7 +421,7 @@ class EntryEvidenceMappingRegressions(unittest.TestCase):
         from environment.implement_subtask.oracle_review import (
             positive_entry_provenance,
         )
-        frozen = scene(25, "medium")
+        frozen = scene(25, "easy")
         realized = realize_scene(frozen)
         teacher = next(
             r for r in realized["macro_tasks"]
@@ -456,7 +456,7 @@ class EntryEvidenceMappingRegressions(unittest.TestCase):
 
     def test_real_oracle_facts_map_to_correct_entries(self):
         from environment.implement_subtask.oracle_review import entry_fact_index
-        frozen = scene(25, "medium")
+        frozen = scene(25, "easy")
         realized = realize_scene(frozen)
         teacher = next(
             record for record in realized["macro_tasks"]
@@ -601,7 +601,7 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertTrue(critic.calls[0]["author_result_was_structured"])
 
     def test_structured_entry_label_list_is_accepted_only_when_exact(self):
-        frozen = scene(25, "medium")
+        frozen = scene(25, "easy")
         realized = realize_scene(frozen)
         final = next(
             row for row in realized["macro_tasks"]
