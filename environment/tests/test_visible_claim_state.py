@@ -140,7 +140,7 @@ class MainVisibleStateTests(unittest.TestCase):
         scene = serial_dispute()
         _, trajectory, bindings = world_trajectory(scene)
         # A later retry of report B fails: no earlier B claims are retained.
-        trajectory.insert(2, {
+        trajectory.append({
             "attempt": len(trajectory) + 1,
             "action": "delegate_task",
             "result": {"subtask_results": [{
@@ -148,7 +148,7 @@ class MainVisibleStateTests(unittest.TestCase):
                 "task_instruction": "Retry the second independent report",
             }]},
         })
-        retry_round = trajectory[2]["attempt"]
+        retry_round = trajectory[-1]["attempt"]
         bindings[retry_round] = ["work_M2"]
         # Keep the duplicate round out of the standard reference schedule.
         state = audit_visible_claim_states(
@@ -160,7 +160,7 @@ class MainVisibleStateTests(unittest.TestCase):
             ]["transitions"] if t["answer_supporting_claim_pair"]
         )
         self.assertEqual(
-            state["rounds"][2]["states"][target]["status"], "unverified",
+            state["rounds"][-1]["states"][target]["status"], "unverified",
         )
         self.assertGreater(state["summary"].get("source_report_replacements", 0), 0)
 

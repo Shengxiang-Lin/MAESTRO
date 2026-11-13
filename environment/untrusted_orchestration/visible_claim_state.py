@@ -55,15 +55,15 @@ def audit_visible_claim_states(
     latest_by_task = {}
     snapshots, old_states = [], {}
     counts = Counter()
-    seen_dispatch_rounds = set()
+    last_dispatch_round = 0
     for step in trajectory:
         if step.get("action") != "delegate_task":
             continue
         round_number = step.get("attempt")
-        if (type(round_number) is not int or round_number < 1 or
-                round_number in seen_dispatch_rounds):
+        if (type(round_number) is not int or
+                round_number <= last_dispatch_round):
             raise ValueError("visible_claim_invalid_dispatch_round")
-        seen_dispatch_rounds.add(round_number)
+        last_dispatch_round = round_number
         tids = task_ids_by_round.get(round_number)
         reports = (step.get("result") or {}).get("subtask_results")
         if (not isinstance(tids, list) or not isinstance(reports, list)
