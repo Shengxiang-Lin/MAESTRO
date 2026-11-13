@@ -121,6 +121,62 @@ def _needed_operator_depth(program: dict) -> int:
     return depths[program["output"]]
 
 
+def _audit_operator_grammar_equivalence(scene: dict, execution: dict) -> dict:
+    """Compare EVERY Macro output with the pre-grammar canonical solver.
+
+    A different final answer is insufficient: an intermediate Macro must
+    hand off the same typed values with the same supporting fact references.
+    This verifies concrete witness equivalence, not universal theorem-level
+    equivalence across all possible World values.
+    """
+    from .operator_grammar import canonical_spec
+    from .macro_planning import compile_macro_solvers
+
+    canonical = compile_macro_solvers(canonical_spec(scene["problem_spec"]))
+    baseline = evaluate_program(canonical, sources=scene["world"]["sources"])
+    variant_groups = scene["gold_program"]["macro_solver_groups"]
+    canonical_groups = canonical["macro_solver_groups"]
+    if [g["macro_id"] for g in variant_groups] != [
+        g["macro_id"] for g in canonical_groups
+    ]:
+        raise ValueError("operator_grammar_macro_group_identity_changed")
+
+    def signature(product) -> list[tuple[str, tuple]]:
+        return sorted(
+            (json.dumps(row["values"], sort_keys=True, ensure_ascii=False),
+             tuple(sorted(set(row["support"]))))
+            for row in product.rows
+        )
+
+    per_macro = []
+    for actual_group, baseline_group in zip(variant_groups, canonical_groups):
+        observed = execution["products"][actual_group["output_node_id"]]
+        expected = baseline["products"][baseline_group["output_node_id"]]
+        equivalent = (
+            set(observed.columns) == set(expected.columns)
+            and signature(observed) == signature(expected)
+        )
+        per_macro.append({
+            "macro_id": actual_group["macro_id"],
+            "same_values_schema_and_factrefs": equivalent,
+        })
+    final_same = (
+        answer_values(execution) == answer_values(baseline)
+        and [tuple(x["source_fact_refs"]) for x in execution["answer"]]
+        == [tuple(x["source_fact_refs"]) for x in baseline["answer"]]
+    )
+    return {
+        "version": scene["problem_spec"]["operator_grammar_version"],
+        "all_macro_outputs_equivalent": all(
+            row["same_values_schema_and_factrefs"] for row in per_macro
+        ),
+        "final_answer_and_provenance_equivalent": final_same,
+        "verified_macro_outputs": len(per_macro),
+        "per_macro": per_macro,
+        "scope": "Exact current synthetic Witness equivalence, not all Worlds",
+    }
+
+
 def audit_scene(scene: dict, *, strict: bool = True) -> dict:
     issues = []
     spec = scene["problem_spec"]
@@ -233,6 +289,15 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         handoff_report = validate_handoffs(scene)
         if not handoff_report["all_handoffs_necessary"]:
             issues.append("macro_first_redundant_macro_handoffs")
+    operator_grammar_report = None
+    if spec.get("operator_grammar_version"):
+        operator_grammar_report = _audit_operator_grammar_equivalence(
+            scene, execution
+        )
+        if not operator_grammar_report["all_macro_outputs_equivalent"]:
+            issues.append("typed_operator_grammar_changed_macro_workproduct")
+        if not operator_grammar_report["final_answer_and_provenance_equivalent"]:
+            issues.append("typed_operator_grammar_changed_final_answer")
     information_report = None
     if (spec.get("macro_information_necessity_version")
             and spec.get("macro_plan", {}).get("information_necessity_policy")):
@@ -435,6 +500,8 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
                 x["changing_source_changes_answer"]
                 for x in counterfactual.values()
             ),
+            **({"operator_grammar_equivalence": operator_grammar_report}
+               if operator_grammar_report is not None else {}),
             **({"candidate_information_necessity": information_report}
                if information_report is not None else {}),
         }

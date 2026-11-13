@@ -82,6 +82,11 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     macro_v2_output_contracts = 0
     macro_v2_difficulty_profiles = {"medium": [], "hard": []}
     macro_v2_realism_scenes = 0
+    typed_grammar_scenes = 0
+    typed_grammar_variants = Counter()
+    typed_grammar_local_sequences = Counter()
+    typed_grammar_equivalence_checked = 0
+    typed_grammar_equivalence_passed = 0
     macro_first_handoffs = 0
     macro_first_handoff_passes = 0
     macro_first_local_ops = []
@@ -141,6 +146,42 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                             "enforcement_versioned": has_semantic_contract(spec),
                         })
                     plan = spec["macro_plan"]
+                    if spec.get("operator_grammar_version"):
+                        typed_grammar_scenes += 1
+                        evidence_audit = scene.get(
+                            "difficulty_audit", {}
+                        ).get("macro_first_audit", {}).get(
+                            "operator_grammar_equivalence", {}
+                        )
+                        typed_grammar_equivalence_checked += int(
+                            bool(evidence_audit)
+                        )
+                        typed_grammar_equivalence_passed += int(
+                            evidence_audit.get(
+                                "all_macro_outputs_equivalent", False
+                            ) and evidence_audit.get(
+                                "final_answer_and_provenance_equivalent", False
+                            )
+                        )
+                        for role, group in zip(
+                            plan["macro_tasks"],
+                            scene["gold_program"]["macro_solver_groups"],
+                        ):
+                            variant = role["solver_variant"]
+                            typed_grammar_variants[
+                                role["role"] + "::" + variant
+                            ] += 1
+                            nodes_by_id = {
+                                node["id"]: node
+                                for node in scene["gold_program"]["nodes"]
+                            }
+                            sequence = tuple(
+                                nodes_by_id[node_id]["op"]
+                                for node_id in group["node_ids"]
+                            )
+                            typed_grammar_local_sequences[
+                                role["role"] + "::" + ">".join(sequence)
+                            ] += 1
                     if spec.get("scene_realism_version"):
                         macro_v2_realism_scenes += 1
                         proxy = scene.get("difficulty_audit", {}).get(
@@ -418,6 +459,23 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
         },
         "macro_first_v2": {
             "scenes": sum(macro_v2_modes.values()),
+            "typed_operator_grammar": {
+                "versioned_scenes": typed_grammar_scenes,
+                "witness_equivalence_checked": typed_grammar_equivalence_checked,
+                "witness_equivalence_passed": typed_grammar_equivalence_passed,
+                "variant_histogram": dict(sorted(typed_grammar_variants.items())),
+                "distinct_role_operator_sequences": len(
+                    typed_grammar_local_sequences
+                ),
+                "role_operator_sequence_histogram": dict(sorted(
+                    typed_grammar_local_sequences.items()
+                )),
+                "interpretation": (
+                    "Type-safe equivalent relational execution plans; "
+                    "structural variation is not by itself new evidence "
+                    "or increased reasoning hardness."
+                ),
+            },
             "pattern_distribution": dict(macro_v2_modes),
             "goal_resolution_distribution": dict(macro_v2_resolution_modes),
             "goal_field_distribution": dict(macro_v2_goals),

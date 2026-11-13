@@ -31,6 +31,7 @@ def _construction_identity(args) -> str:
         "evidence_graph_share": getattr(args, "evidence_graph_share", 0),
         "macro_first_share": getattr(args, "macro_first_share", 0),
         "macro_first_v2_share": getattr(args, "macro_first_v2_share", 0),
+        "operator_grammar_share": getattr(args, "operator_grammar_share", 0),
         "mmqa": str(args.mmqa),
         "mmqa_sha256": (
             file_digest(args.mmqa) if Path(args.mmqa).is_file() else None
@@ -41,6 +42,7 @@ def _construction_identity(args) -> str:
                 "spec.py", "clue_chain.py", "graph_grammar.py",
                 "world_synthesizer.py", "macro_first.py",
                 "macro_first_world.py", "macro_planning.py",
+                "operator_grammar.py",
                 "macro_evidence_world.py", "information_necessity.py",
                 "source_title_contract.py", "difficulty_proxy.py",
                 "scenario_fields.py", "topic_quality.py",
@@ -210,6 +212,7 @@ def construct_scenes(args) -> dict:
                 evidence_graph_share=getattr(args, "evidence_graph_share", 0),
                 macro_first_share=getattr(args, "macro_first_share", 0),
                 macro_first_v2_share=getattr(args, "macro_first_v2_share", 0),
+                operator_grammar_share=getattr(args, "operator_grammar_share", 0),
             )
             q = reference_question(spec)
             normalized = normalize_label(q)
@@ -391,6 +394,10 @@ def construct_scenes(args) -> dict:
             s["difficulty_audit"]["reasoning"]["necessary_structural_operator_depth"]
             for s in generated
         ) / len(generated), 3) if generated else None,
+        "operator_grammar_scenes": sum(
+            bool(s["problem_spec"].get("operator_grammar_version"))
+            for s in generated
+        ),
         "mean_macro_task_count": round(sum(
             s["macro_graph"]["macro_task_count"] for s in generated
         ) / len(generated), 3) if generated else None,

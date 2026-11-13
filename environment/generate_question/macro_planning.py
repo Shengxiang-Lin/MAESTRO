@@ -161,6 +161,7 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
                       goal_resolution_enabled: bool = False,
                       evidence_tools_enabled: bool = False,
                       evidence_tools_version: str | None = None,
+                      operator_grammar_enabled: bool = False,
                       ) -> tuple[dict, list[dict]]:
     if difficulty not in {"medium", "hard"}:
         raise ValueError("macro_first_v2_requires_medium_or_hard")
@@ -440,11 +441,19 @@ def sample_macro_plan(*, seed: int, ordinal: int, record_id: str, topic: str,
         )
         if candidate_profile is not None:
             plan["candidate_profile"] = candidate_profile
+    if operator_grammar_enabled:
+        from .operator_grammar import choose_solver_variant
+        for task in tasks:
+            task["solver_variant"] = choose_solver_variant(
+                seed=seed, ordinal=ordinal, record_id=record_id,
+                macro_id=task["macro_id"], role=task["role"], clues=plan["clues"],
+            )
     return plan, sources
 
 
 def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
-              difficulty: str, topic: str, record_id: str, version: str) -> dict:
+              difficulty: str, topic: str, record_id: str, version: str,
+              operator_grammar_enabled: bool = False) -> dict:
     from .topic_domain import infer_topic_domain, TOPIC_DOMAIN_VERSION
     category_cue = infer_topic_domain(seed_record)
     domain = classify_domain_from_explicit_cue(
@@ -459,6 +468,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         goal_resolution_enabled=True,
         evidence_tools_enabled=True,
         evidence_tools_version=EVIDENCE_TOOL_CONTRACT_VERSION,
+        operator_grammar_enabled=operator_grammar_enabled,
     )
     from .goal_resolution import GOAL_RESOLUTION_VERSION
     from .semantic_evidence import CONTRACT_VERSION
@@ -509,6 +519,9 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
         },
         "seed": run_seed, "ordinal": ordinal,
     }
+    if operator_grammar_enabled:
+        from .operator_grammar import VERSION as OPERATOR_GRAMMAR_VERSION
+        spec["operator_grammar_version"] = OPERATOR_GRAMMAR_VERSION
     title_by_source = expected_source_titles(spec)
     for source in spec["sources"]:
         source["title"] = title_by_source[source["source_id"]]
@@ -520,6 +533,11 @@ def validate_spec(spec: dict) -> list[str]:
     if not isinstance(plan, dict) or plan.get("version") != VERSION:
         return ["invalid_macro_first_v2_plan"]
     from .semantic_evidence import CONTRACT_VERSION
+    from .operator_grammar import VERSION as OPERATOR_GRAMMAR_VERSION
+    if spec.get("operator_grammar_version") not in {
+        None, OPERATOR_GRAMMAR_VERSION,
+    }:
+        return ["invalid_operator_grammar_version"]
     if spec.get("semantic_evidence_contract_version") not in {
         None, CONTRACT_VERSION
     }:
@@ -582,6 +600,7 @@ def validate_spec(spec: dict) -> list[str]:
             goal_resolution_enabled=bool(spec.get("goal_resolution_version")),
             evidence_tools_enabled=bool(spec.get("evidence_tool_contract_version")),
             evidence_tools_version=spec.get("evidence_tool_contract_version"),
+            operator_grammar_enabled=bool(spec.get("operator_grammar_version")),
         )
         errors = []
         if plan != expected:
@@ -632,6 +651,9 @@ def compile_macro_solvers(spec: dict) -> dict:
     )
     for task in plan["macro_tasks"]:
         mid, role = task["macro_id"], task["role"]
+        variant = task.get("solver_variant", "canonical")
+        from .operator_grammar import validate_solver_variant
+        validate_solver_variant(role, variant, clues)
         local = []
         def add(op, *inputs, **fields):
             nid = f"{mid.lower()}_op{len(local)+1:02d}"
@@ -646,17 +668,19 @@ def compile_macro_solvers(spec: dict) -> dict:
         parents = [outputs[pid] for pid in task["depends_on"]]
         if role in {"visual_identity", "visual_candidates"}:
             src = add("scan", source_id="visual")
-            if clues["visual_modality"] == "image":
-                selected = add("filter_eq", src, field="emblem_color",
-                               value=clues["emblem_color"])
-                if role == "visual_identity":
-                    selected = add("filter_eq", selected, field="emblem_shape",
-                                   value=clues["emblem_shape"])
-            else:
-                selected = add("filter_eq", src, field="scene_action",
-                               value=clues["scene_action"])
-                selected = add("filter_gte", selected, field="frame_time_ms",
-                               value=clues["time_threshold_ms"])
+            predicates = (
+                [("filter_eq", "emblem_color", clues["emblem_color"])]
+                + ([("filter_eq", "emblem_shape", clues["emblem_shape"])]
+                   if role == "visual_identity" else [])
+                if clues["visual_modality"] == "image" else
+                [("filter_eq", "scene_action", clues["scene_action"]),
+                 ("filter_gte", "frame_time_ms", clues["time_threshold_ms"])]
+            )
+            if variant == "reverse_filters":
+                predicates.reverse()
+            selected = src
+            for operator, field, value in predicates:
+                selected = add(operator, selected, field=field, value=value)
             last = add("project", selected, fields=(
                 ["marker_code"] if role == "visual_identity"
                 else ["candidate_id", "marker_code"]
@@ -676,11 +700,19 @@ def compile_macro_solvers(spec: dict) -> dict:
                             else "reported_year_b"),
             ])
         elif role in {"candidate_fusion", "event_fusion"}:
-            matched = add("join", *parents, left_on="candidate_id",
+            ordered_parents = (
+                list(reversed(parents)) if variant == "right_first"
+                else parents
+            )
+            matched = add("join", *ordered_parents, left_on="candidate_id",
                           right_on="candidate_id")
             last = add("project", matched, fields=["marker_code"])
         elif role == "dispute_resolution":
-            matched = add("join", *parents, left_on="case_id",
+            ordered_parents = (
+                list(reversed(parents)) if variant == "right_first"
+                else parents
+            )
+            matched = add("join", *ordered_parents, left_on="case_id",
                           right_on="case_id")
             selected = add("compare_fields", matched,
                            left_field="reported_year_a",
@@ -692,18 +724,37 @@ def compile_macro_solvers(spec: dict) -> dict:
                            value=clues["case_tag"])
             last = add("project", matching, fields=["case_id"])
         elif role == "dispute_context_fusion":
-            aligned = add("join", *parents, left_on="case_id",
+            ordered_parents = (
+                list(reversed(parents)) if variant == "right_first"
+                else parents
+            )
+            aligned = add("join", *ordered_parents, left_on="case_id",
                           right_on="case_id")
             last = add("project", aligned, fields=["case_id"])
         elif role == "video_audio_alignment":
+            # Equivalent relational plans: filter before an inner Join,
+            # after the Join, or one branch on either side. These are
+            # actual operator-dependency rewrites, not filler operations.
             video = add("scan", source_id="footage")
-            event = add("filter_eq", video, field="scene_action",
-                        value=clues["scene_action"])
+            video_early = variant in {"canonical", "pushdown_video_only"}
+            audio_early = variant in {"canonical", "pushdown_audio_only"}
+            event = (
+                add("filter_eq", video, field="scene_action",
+                    value=clues["scene_action"]) if video_early else video
+            )
             audio = add("scan", source_id="commentary")
-            spoken = add("filter_eq", audio, field="spoken_cue",
-                         value=clues["spoken_cue"])
+            spoken = (
+                add("filter_eq", audio, field="spoken_cue",
+                    value=clues["spoken_cue"]) if audio_early else audio
+            )
             matched = add("join", event, spoken, left_on="candidate_id",
                           right_on="candidate_id")
+            if not video_early:
+                matched = add("filter_eq", matched, field="scene_action",
+                              value=clues["scene_action"])
+            if not audio_early:
+                matched = add("filter_eq", matched, field="spoken_cue",
+                              value=clues["spoken_cue"])
             ordered = add("compare_fields", matched,
                           left_field="footage_time_ms",
                           right_field="commentary_time_ms", comparison="lte")
@@ -742,7 +793,11 @@ def compile_macro_solvers(spec: dict) -> dict:
                        fields=[prior_key, metric_field])
         elif role == "goal_resolution":
             kind = plan["goal_resolution"]["kind"]
-            paired = add("join", *parents, left_on=prior_key,
+            ordered_parents = (
+                list(reversed(parents)) if variant == "right_first"
+                else parents
+            )
+            paired = add("join", *ordered_parents, left_on=prior_key,
                          right_on=prior_key)
             if kind == "comparison":
                 resolved = add(

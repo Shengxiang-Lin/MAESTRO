@@ -5,6 +5,55 @@ It does not require a separate Stage-3 Main LLM run or a
 `base_episodes.jsonl` input. Stage 4 derives a clean deterministic O1
 prefix from accepted Stage-1 scenes and Stage-2 reviewed reports.
 
+## Stage-1 typed operator grammar (opt-in V1)
+
+The pilot config `environment/configs/questions_typed_operators.yaml`
+enables `generation.operator_grammar_share: 100` for **new**
+Medium/Hard Macro-first v2 Scenes. The normal `questions.yaml` stays
+unchanged and defaults to legacy solver programs. This preserves existing
+V10.4.x Scene/World/Program banks and their output directories.
+
+`generate_question/operator_grammar.py` selects a deterministic, role- and
+modality-compatible relational plan using a stable per-Macro hash. It does
+not consume the World sampling RNG. Current legal rewrites include:
+- swapping independent attribute/temporal Filter order,
+- changing the orientation of a symmetric inner Join,
+- placing Video/Audio source predicates before or after their inner Join.
+
+Every selected plan remains source-scoped and typed. A new Stage-1 audit
+executes the **canonical and variant program on the same World**, checks
+*each Macro WorkProduct* for identical output schema, values and FactRefs,
+and checks the final Gold answer and provenance. A failing rewrite is
+rejected; no extra filler operators are inserted to inflate difficulty.
+The private `quality_report.json` contains
+`macro_first_v2.typed_operator_grammar` with per-role variant and
+operator-sequence distributions. This is **algebraic query-plan diversity**,
+not yet a new information-need or independent cross-source verification
+relation.
+
+To generate only the new Stage-1 bank:
+
+```bash
+python -m environment generate-questions \
+  --config environment/configs/questions_typed_operators.yaml
+```
+
+To run a **separate** new Stage 1→2→4 experiment, use the three matching
+pilot configs (all have fresh output directories):
+
+```bash
+python -m environment run \
+  --questions-config environment/configs/questions_typed_operators.yaml \
+  --reports-config environment/configs/subagent_reports_typed_operators.yaml \
+  --untrusted-config environment/configs/untrusted_typed_operators.yaml \
+  --mode llm
+```
+
+The `run` command wires the Stage-1 and Stage-2 artifact paths itself.
+The original default 1→2→4 configuration remains unchanged. Standalone
+Stage 4 continues to read only the two paths in the selected YAML config;
+it does not silently switch between Scene banks.
+
 ## One command
 
 From the repository root:
