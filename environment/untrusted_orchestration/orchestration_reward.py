@@ -132,9 +132,14 @@ def score_decision(candidate, state) -> dict:
         1.0,
         sum(len(x["evidence_units"]) for x in selected) / ideal_coverage,
     )
+    # A task may target the correct evidence fields yet merely re-retrieve
+    # values when the current goal actually calls for reconciliation or
+    # refresh. Give only partial priority credit absent an explicit intent.
     priority = min(
         1.0,
-        sum(x["priority"] for x in selected) / ideal_priority,
+        sum(x["priority"] * intent
+            for x, intent in zip(selected, binding["operation_alignment"]))
+        / ideal_priority,
     )
     parallel = min(1.0, len(selected) / max_width)
     nonredundancy = binding["scope_precision"]
@@ -151,6 +156,9 @@ def score_decision(candidate, state) -> dict:
         "max_legal_parallelism": max_width,
         "ideal_coverage": ideal_coverage,
         "ideal_priority": round(ideal_priority, 6),
+        "operation_alignment": round(
+            sum(binding["operation_alignment"]) / len(selected), 6
+        ),
     }
 
 
