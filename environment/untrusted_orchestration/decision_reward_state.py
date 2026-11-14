@@ -61,6 +61,15 @@ def capture_decision_state(
                if parent != tid):
             continue
         feasible.append(tid)
+    # Future-event holds are private to the simulator. If a task is
+    # otherwise ready but secretly held, Main has no public way to know it
+    # cannot be dispatched yet. Do not grade that decision state.
+    released = set(repairs) | set(ready)
+    privately_held_ready = sorted(
+        tid for tid in state.tasks
+        if tid not in state.current and tid not in released
+        and state.ready(tid)
+    )
     actions = []
     for tid in feasible:
         task = state.tasks[tid]
@@ -104,8 +113,9 @@ def capture_decision_state(
         "max_parallel_tasks": max_parallel_tasks,
         "can_complete": bool(can_complete),
         "event_pending": bool(event_pending),
-        "scorable": not unobservable,
+        "scorable": not unobservable and not privately_held_ready,
         "unobservable_private_repairs": sorted(unobservable),
+        "unobservable_event_held_ready": privately_held_ready,
         "actionable": actions,
         "blocked_task_ids": list(blocked),
         "completed_task_ids": sorted(tid for tid in state.current
