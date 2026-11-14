@@ -1,126 +1,162 @@
-# MAESTRO 8B — latent window-risk pretraining
+# MAESTRO 8B — two-stage latent evidence-risk orchestration
 
-This is the proposed MAESTRO trainable Main-Agent path, **outside baseline/**.
-It replaces the former macro-action SFT and consequence-critic code with
-**Stage 1: non-generative, weakly supervised evidence-risk pretraining**.
-Stage 2 will train the same PEFT causal-LM adapter with an interactive GRPO
-policy objective; the auxiliary risk head does **not** appear in the runtime
-prompt or required policy output.
+This is the proposed trainable Main-Agent implementation **outside baseline/**.
+It preserves the existing Stage-4 observable-claim data export and O1 public
+Main prompt. No private Gold, injected-fault identity, hidden dependency
+diagnostic, or teacher action is appended to the model-visible prompt.
 
-## Learning problem
+## Architecture
 
-At Main decision round t the student sees the **full native O1 prompt**,
-including question, previous dispatches and every returned Sub-Agent
-Result / Summary / Trace summary. Each report can contain multiple implicit
-claims and may depend on previous reports. No claim extraction is performed
-at student inference time.
+Stage 1: **Frozen full Qwen3-8B -> window features -> Risk Head only.**
 
-The student processes the full input **once**, then partitions each existing
-Sub-Agent report into approximately 128-token windows (stride 96). Local
-last-layer window representations are conditioned on the last valid
-full-history hidden state. A small shared MLP scores each window, and a
-top-k mean over window logits predicts **one observable-warning label per
-report**, with masked BCE. This is weakly supervised MIL: the highest-scored
-window is **not** guaranteed to be the erroneous fact. Training updates both
-the LoRA backbone and the MLP, not just a frozen probe.
+- Each Main decision sees the original question and all earlier Sub-Agent
+  Result, Summary and Trace summary text (up to 16K tokens, no silent cut).
+- Each returned report is split into 128-token windows with 96-token stride;
+  windows never cross report boundaries.
+- A single frozen 8B forward gives local window vectors and the final
+  full-context vector. The trainable Risk Head outputs per-window warning
+  logits; report-wise top-k pooling supports masked weak-label BCE.
+- **No LoRA in Stage 1.** The saved artifact is risk_head.pt and risk_config.json.
+- Risk = observable conflict, missing/partial return, or similar visible
+  warning. Risk=0 does not mean truth; unparseable or ambiguous feedback is
+  masked. MIL scores are not verified fine-grained fact localizations.
+- Feature extraction can be performed once and sharded to BF16 tensors to
+  train the head repeatedly without rerunning the full 8B.
 
-Risk label semantics:
+Stage 2: **Frozen base + frozen Risk Head -> steered KV -> LoRA-only decoder.**
 
-- risk=1: an observable partial/missing delivery or a delivered claim in a
-  visible disagreement / intra-report conflict.
-- risk=0: a completed, parseable report with no such observed warning.
-- mask=0: unparsable reports, superseded deliveries, ambiguous dependent
-  reports, or cases without dependable evidence-based supervision.
+- Run the **same original full 8B** with adapters disabled over the Main
+  prompt; collect final-layer states and a frozen prefix DynamicCache.
+- Reuse Stage-1 Risk Head. Map window scores to source-token spans; keep
+  non-report tokens at zero risk.
+- Adjust only the cached **Values** in the selected last N attention
+  layers with a bounded risk threshold/strength. No cache Keys or original
+  prompt text are modified. This implementation tests positive steering;
+  it must be compared with no-risk/random-risk and negative steering.
+- A fixed newline Decision Anchor is fed **after** risk steering with LoRA
+  enabled, ensuring even the first generated action token uses the risk
+  signal. Later generated tokens continue with a private mutable cache.
+- The original Qwen weights, Risk Head and frozen prefill remain fixed.
+  **Only the PEFT LoRA parameters are updated** by the Stage-2 policy loss.
+- Sampling and differentiable action-token log probability calculations
+  share RiskAwarePolicy, including the same anchor, cache treatment, and
+  temperature, to avoid off-policy errors.
 
-**Risk=0 does not mean the report is factually true, corroborated, or safe to
-accept without further verification.** The simulator may know a private
-single root fault, but its hidden identity and true answer are NOT supervised
-as if Main could observe them. There can be several affected reports from
-a single root fault. Current release learns observable risk; future work
-can add independently justified support and context-pair ranking targets.
+The implementation currently uses standard Hugging Face DynamicCache. Static
+KV, offloaded/quantized/paged caches and vLLM are not supported. The policy
+suffix path keeps gradients only for Anchor and Action tokens, so the long
+frozen prefix is not replayed during LoRA backward.
 
-## Inputs
-
-Environment paths from the current canonical pipeline:
-
-- environment/data/stage1/questions/scenes.jsonl
-- environment/data/stage4/episodes.jsonl
-- environment/data/stage4/private/claim_state_supervision.jsonl
-
-The exporter accepts **globally recovered, reviewed** branches only, because
-that is what the current published claim-state supervision covers. It does
-not silently promote Stage-4 diagnostics / non-reviewed candidates to
-positive labels. The exporter joins by scene ID, fault-branch decision round
-and Main decision round; it rebuilds the complete O1 prompt via
-environment.base_orchestration.o1_compat and maps the formatted report-block
-offsets to weak supervision. It excludes private state/Gold from the prompt.
-
-Potentially important current limitation: typed claim extraction does not
-cover every free-form Result/Summary format. Reports with no parsed claims
-and no explicit partial/missing status are **masked**, not negatives.
-
-## Export
-
-Run the environment first using the canonical YAMLs, then:
+## Step 0 — export observational risk examples
 
     python -m train_maestro_8b.export_reliability \
-      --scenes environment/data/stage1/questions/scenes.jsonl \
-      --episodes environment/data/stage4/episodes.jsonl \
-      --states environment/data/stage4/private/claim_state_supervision.jsonl \
       --output_dir environment/data/stage4/private/window_risk
 
-Output:
+Inputs should already exist from the canonical Stage1-4 generator.
+The exporter intentionally only uses globally recovered and language-reviewed
+Stage-4 branches, because these are the branches released in the accepted
+claim-state supervision file. Reports that do not yield dependable labels
+are masked. Check summary.json for positive, negative and mask coverage.
 
-- train.jsonl / val.jsonl: Main prompt, report offsets, risk labels/masks
-- summary.json: number of samples and label-reason coverage
+## Stage 1 — frozen risk learning (recommended cached workflow)
 
-The split is stable **per scene**, not per history row or failure candidate.
-Use the summary to check parsed coverage and positive/negative balance
-before committing GPU time.
+Run feature extraction separately for training and validation, with the exact
+same frozen model/tokenizer and window hyperparameters:
 
-## Train
+    python -m train_maestro_8b.extract_features \
+      --model /path/to/Qwen3-8B \
+      --input environment/data/stage4/private/window_risk/train.jsonl \
+      --output_dir workspace/cache/risk-train \
+      --max_length 16384 --window_size 128 --window_stride 96
 
-Install torch, transformers, peft, accelerate and a fast tokenizer.
-For 24 GB GPUs try QLoRA with small microbatches; 16K training still needs
-memory profiling. Mixing shorter real history prefixes with a few 16K
-histories is preferable to forcing everything to 16K.
+    python -m train_maestro_8b.extract_features \
+      --model /path/to/Qwen3-8B \
+      --input environment/data/stage4/private/window_risk/val.jsonl \
+      --output_dir workspace/cache/risk-val
+
+Train only the small MLP head:
+
+    accelerate launch -m train_maestro_8b.train_reliability \
+      --model /path/to/Qwen3-8B \
+      --features_dir workspace/cache/risk-train \
+      --eval_features_dir workspace/cache/risk-val \
+      --output_dir workspace/checkpoints/maestro-risk-head \
+      --epochs 3 --batch_size 8
+
+The online no-cache alternative is:
 
     accelerate launch -m train_maestro_8b.train_reliability \
       --model /path/to/Qwen3-8B \
       --train_file environment/data/stage4/private/window_risk/train.jsonl \
       --eval_file environment/data/stage4/private/window_risk/val.jsonl \
-      --output_dir workspace/checkpoints/maestro-window-risk \
-      --max_length 16384 --window_size 128 --window_stride 96 \
-      --batch_size 1 --grad_accum 8 --load_in_4bit \
-      --gradient_checkpointing
+      --output_dir workspace/checkpoints/maestro-risk-head \
+      --load_in_4bit --batch_size 1
 
-The loader indexes JSONL byte offsets (not all prompts in memory), validates
-a fast tokenizer's character-to-token offset mapping, does not cross report
-boundaries, pads on the right, and **skips overlong histories** instead of
-silently truncating dependencies. The model invokes the inner Qwen
-transformer rather than the language-model head to avoid large vocabulary
-logits. The head uses report-wise top-2 window-logit pooling; loss is first
-averaged across labeled reports within a history.
+The cached approach needs disk space (about ~1 MiB per 128-window context at
+BF16/4096 dimensions), but repeated epochs of Risk Head training are fast.
+Train/val should be split by scene/world, not individual history prefix.
 
-The checkpoint contains:
+## Stage 2 — risk-steered LoRA policy
 
-- adapter_config.json and adapter_model.safetensors: **standard PEFT LoRA**
-  adapter, loadable onto the original CausalLM for Stage-2 GRPO.
-- window_risk_head.pt and window_risk_config.json: optional diagnostic
-  readout, not part of the inference policy.
-- tokenizer files.
+Join the risk examples with accepted Stage-4 teacher decisions:
 
-No special <orch> token is added and no novel LM head is required; Stage-2
-should load the original causal LM and attach this adapter. The auxiliary
-head may be dropped after pretraining.
+    python -m train_maestro_8b.export_grpo \
+      --risk_dir environment/data/stage4/private/window_risk \
+      --main_turns environment/data/stage4/main_turns.jsonl \
+      --output_dir environment/data/stage4/private/risk_grpo
 
-## Testing
+Run a small *offline plumbing* pilot:
 
-    python -m unittest train_maestro_8b.test_reliability -v
+    python -m train_maestro_8b.train_grpo \
+      --model /path/to/Qwen3-8B \
+      --risk_checkpoint workspace/checkpoints/maestro-risk-head \
+      --train_file environment/data/stage4/private/risk_grpo/train.jsonl \
+      --output_dir workspace/checkpoints/maestro-risk-policy \
+      --load_in_4bit --max_length 16384 \
+      --steer_last_n 8 --steer_strength 0.1 \
+      --sft_warmup 1 --num_generations 4 --max_prompts 20
+
+An SFT warmup, when enabled, updates **only LoRA**, never the Risk Head.
+The default offline reward is an intentionally limited JSON/action-matching
+*teacher proxy*, **NOT** a simulator recovery reward. An actual online
+recovery RL run requires an action-executing environment evaluator:
+
+    --reward_callable your_package.reward_module:score
+
+The callable receives (candidate_text, record) and returns a finite float.
+The current Stage-4 offline trajectory producer does not provide a general
+step() method for arbitrary natural-language Main assignments; implementing
+that online adapter remains separate work. Do not report offline
+teacher-proxy rewards as recovery success.
+
+## Important consistency / performance conditions
+
+- The Stage-1 and Stage-2 base model *must* be identical. Use the same
+  tokenizer, prompt format and Risk Head window/stride configuration.
+- The longest prompt is encoded **once** for each decision, but a GRPO group
+  requires a private *clone* of the steered prefix KV for each candidate.
+  16K KV copies consume significant memory; the reference trainer evaluates
+  candidates sequentially.
+- The decision anchor is consumed with LoRA after steering, not before.
+- For sampling and logprob loss, only the Anchor+Action suffix is forwarded
+  through LoRA; the prefix never recomputes under LoRA.
+- No vLLM or arbitrary-action online rollout support is claimed.
+- Validate that Risk Head learns content conflicts rather than only
+  detecting words like "partial", and compare no-risk/random/true-risk
+  steering before attributing policy gains to risk representations.
+
+## Tests
+
     python -m compileall -q train_maestro_8b
+    python -m unittest train_maestro_8b.test_reliability \
+      train_maestro_8b.test_runtime_alignment -v
+    python -m unittest train_maestro_8b.test_risk_model -v
+    python -m unittest train_maestro_8b.test_risk_policy -v
 
-**Not yet established:** throughput on 16K / Qwen3-8B GPU, learned
-localization accuracy, additional gains from counterfactual ranking, and
-GRPO transfer. Probe accuracy is not sufficient evidence that policy actions
-use the latent representation; compare against GRPO-only and compute-matched
-SFT+GRPO baselines.
+The last test instantiates a tiny Qwen3 on CPU, requiring Transformers and
+PEFT; it tests shared frozen-prefix caching, exact sampling/teacher-forced
+log-prob agreement, and that only LoRA receives Stage-2 gradients.
+
+Full Qwen3-8B GPU throughput, cache-steering gain, long-history temporal
+robustness and real Environment GRPO improvements are NOT established until
+evaluated on your own training machine.
