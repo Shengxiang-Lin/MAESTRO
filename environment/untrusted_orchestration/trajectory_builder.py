@@ -431,6 +431,7 @@ def build_branch(
     } for item in injected]
     main_reviews = []
     evidence_plan = []
+    decision_reward_states = []
     stopped = None
     final_mode = None
     graph = scene["macro_graph"]
@@ -481,8 +482,21 @@ def build_branch(
             # WorkProducts. No future Oracle/clean report can leak.
             state.register(terminal)
             ready.remove(terminal)
-        if (not repairs and state.effective_answer() is not None
-                and not ready and not event_pending):
+        can_complete = (
+            not repairs and state.effective_answer() is not None
+            and not ready and not event_pending
+        )
+        # Record the FULL decision choice set before the Author or any new
+        # Sub-Agent observations. The record is private training metadata.
+        from .decision_reward_state import capture_decision_state
+        decision_reward_states.append(capture_decision_state(
+            state, round_number=round_number, repairs=repairs,
+            ready=ready, blocked=scheduling["blocked"],
+            max_parallel_tasks=max_parallel_tasks, catalog=catalog,
+            model_alias=model_alias, event_pending=event_pending,
+            can_complete=can_complete,
+        ))
+        if can_complete:
             # A fabricated result can be unseen as wrong when Main has
             # no independent evidence. Do not publish a "successful"
             # recovery merely because the PRIVATE executor still holds
@@ -750,6 +764,7 @@ def build_branch(
         ),
         "decision_audit": decisions,
         "evidence_plan": evidence_plan,
+        "decision_reward_states": decision_reward_states,
         "subagent_report_reviews": report_reviews,
         "main_action_reviews": main_reviews,
         "completion_generation_mode": final_mode,
