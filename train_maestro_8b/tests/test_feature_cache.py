@@ -9,12 +9,12 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from train_maestro_8b.risk_data import RiskDataset, RiskCollator
-from train_maestro_8b.risk_features import (
+from train_maestro_8b.data.dataset import RiskDataset, RiskCollator
+from train_maestro_8b.data.features import (
     CachedRiskDataset, collate_cached, write_feature_cache,
 )
-from train_maestro_8b.risk_model import WindowRiskHead
-from train_maestro_8b.risk_schema import VERSION
+from train_maestro_8b.risk.model import WindowRiskHead
+from train_maestro_8b.data.contracts import VERSION
 
 
 class FakeFastTokenizer:

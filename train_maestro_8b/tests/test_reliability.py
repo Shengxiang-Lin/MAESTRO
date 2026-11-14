@@ -1,9 +1,9 @@
 """Tests for window boundaries and conservative Stage-4 risk-label export."""
 import unittest
 
-from train_maestro_8b.risk_schema import VERSION, validate
-from train_maestro_8b.risk_windows import windows, span_to_tokens
-from train_maestro_8b.export_reliability import (
+from train_maestro_8b.data.contracts import VERSION, validate
+from train_maestro_8b.data.contracts import windows, span_to_tokens
+from train_maestro_8b.data.export_risk import (
     branch_from_sample_id, history_spans, label_reports,
 )
 

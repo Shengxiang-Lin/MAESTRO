@@ -6,11 +6,11 @@ DynamicCache replay is checked on a CUDA GPU via --preflight_only.
 import unittest
 import torch
 
-from train_maestro_8b.risk_grpo_trainer import (
+from train_maestro_8b.policy.trainer import (
     group_advantages, clipped_policy_loss, MainDecisionDataset,
     decision_collator,
 )
-from train_maestro_8b.train_grpo_unsloth import parse_args, validate_args
+from train_maestro_8b.policy.train import parse_args, validate_args
 
 
 def arguments(*extra):

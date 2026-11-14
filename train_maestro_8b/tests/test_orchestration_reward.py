@@ -160,7 +160,7 @@ class DeterministicRewardTests(unittest.TestCase):
         from environment.tests.test_untrusted_orchestration import sample
         from environment.untrusted_orchestration.faults import Fault
         from environment.untrusted_orchestration.trajectory_builder import build_branch
-        from train_maestro_8b.backfill_reward_states import replay_reward_states
+        from train_maestro_8b.data.backfill_rewards import replay_reward_states
 
         scene, reports, base = sample(0)
         target = scene["macro_graph"]["reference_waves"][0][0]
