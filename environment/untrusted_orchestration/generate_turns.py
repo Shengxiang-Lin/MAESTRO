@@ -297,6 +297,8 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     retained_language_exceptions = 0
     local_candidates, local_qualified, local_rejections = [], [], []
     claim_state_supervision = []
+    decision_reward_states = []
+    decision_reward_missing = 0
     claim_state_diagnostics = []
     claim_state_statuses = Counter()
     wrong_visibility_rows = []
@@ -364,10 +366,31 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             # It is dataset metadata only, never included in the Main prompt.
             public_episode["round_sample_id"] = plan["sample_id"]
             episodes.append(public_episode)
+            private_states = (
+                data["private_audit"].get("decision_reward_states") or []
+            )
+            state_by_round = {
+                row["decision_round"]: row for row in private_states
+            }
+            if len(state_by_round) != len(private_states):
+                raise RuntimeError("duplicate private decision reward round")
             for turn in data["turns"]:
                 positive_turns.append({
                     **turn, "round_sample_id": plan["sample_id"]
                 })
+                snapshot = state_by_round.get(turn["round"])
+                if snapshot is None:
+                    # Legacy journals have no pre-action snapshot: never
+                    # invent a choice set from the teacher action alone.
+                    decision_reward_missing += 1
+                else:
+                    decision_reward_states.append({
+                        "task_id": data["task_id"],
+                        "round_sample_id": plan["sample_id"],
+                        "decision_round": turn["round"],
+                        "state": deepcopy(snapshot),
+                        "private_only": True,
+                    })
         elif status != "not_selected_for_language_review":
             failures.append({
                 "task_id": data["task_id"],
@@ -620,6 +643,10 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     _atomic_jsonl(output / "failed.jsonl", failures)
     _atomic_jsonl(output / "private" / "fault_alignment.jsonl", audits)
     _atomic_jsonl(
+        output / "private" / "decision_reward_states.jsonl",
+        decision_reward_states,
+    )
+    _atomic_jsonl(
         output / "private" / "claim_state_supervision.jsonl",
         claim_state_supervision,
     )
@@ -659,6 +686,15 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "main_training_turns": len(positive_turns),
         "reviewed_branches": counters["recovered"],
         "reviewed_turns": len(positive_turns),
+        "decision_reward_states": len(decision_reward_states),
+        "decision_reward_missing": decision_reward_missing,
+        "decision_reward_replay_failures": sum(
+            bool((audit or {}).get("decision_reward_replay_error"))
+            for audit in audits
+        ),
+        "decision_reward_unscorable": sum(
+            not row["state"]["scorable"] for row in decision_reward_states
+        ),
         "local_decisions_reviewed": len(local_candidates),
         "local_decisions_qualified_diagnostic": len(local_qualified),
         "local_decisions_rejected_diagnostic": len(local_rejections),

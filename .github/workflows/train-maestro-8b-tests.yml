@@ -55,7 +55,7 @@ jobs:
       - name: Install minimal environment dependencies
         run: python -m pip install "tqdm>=4.65" "PyYAML>=6.0" "pydantic>=2,<3" "openai>=1,<3"
       - name: Test real O1 history and round risk labels
-        run: python -m unittest train_maestro_8b.test_runtime_alignment -v
+        run: python -m unittest train_maestro_8b.test_runtime_alignment train_maestro_8b.test_orchestration_reward -v
 
   qwen3-cache-policy:
     runs-on: ubuntu-latest

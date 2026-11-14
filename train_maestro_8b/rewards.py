@@ -1,6 +1,8 @@
-"""Conservative OFFLINE teacher-proxy reward; not environment execution.
+"""Stage-2 reward selection.
 
-Use an independently implemented reward hook for true task-outcome GRPO.
+DEFAULT is deterministic, private-state evidence orchestration quality.
+Legacy Teacher Action text-matching remains explicitly opt-in only for
+comparison/debugging; neither function performs future environment rollouts.
 """
 from __future__ import annotations
 from difflib import SequenceMatcher
@@ -62,7 +64,10 @@ def teacher_proxy_reward(candidate, record):
 
 def resolve_reward(spec=None):
     if spec is None:
-        return teacher_proxy_reward
+        from environment.untrusted_orchestration.orchestration_reward import (
+            orchestration_reward,
+        )
+        return orchestration_reward
     module, separator, function_name = spec.partition(":")
     if not separator or not module or not function_name:
         raise ValueError("expected reward callable as module.path:function")
