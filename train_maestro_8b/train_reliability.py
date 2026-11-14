@@ -108,6 +108,7 @@ def main():
             or train_set.model_name != eval_set.model_name
             or train_set.window_size != eval_set.window_size
             or train_set.window_stride != eval_set.window_stride
+            or train_set.quantization != eval_set.quantization
         ):
             raise ValueError("incompatible train/eval features")
         hidden_size = train_set.hidden_size
@@ -181,6 +182,10 @@ def main():
             "window_stride": args.window_stride,
             "max_length": args.max_length,
             "trained_parameters": "risk_head_only",
+            "feature_model_quantization": (
+                train_set.quantization if args.features_dir else
+                "nf4" if args.load_in_4bit else "none"
+            ),
             "target": "observable_warning_not_oracle_correctness",
         }
         (directory / "risk_config.json").write_text(
