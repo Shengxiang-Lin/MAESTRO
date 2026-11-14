@@ -18,7 +18,13 @@ def reference_key(turn):
     )
     if match is None or int(match.group(2)) != decision_round:
         raise ValueError("unrecognized accepted Stage-4 Main turn ID")
-    return task, int(match.group(1)), int(decision_round)
+    scenario_id = turn.get("round_sample_id")
+    if not scenario_id:
+        raise ValueError(
+            "Stage4 main_turns lacks round_sample_id; republish from "
+            "existing Stage4 journals using the updated writer"
+        )
+    return task, scenario_id, int(decision_round)
 
 
 def export(risk_dir, main_turns, output_dir):
@@ -44,7 +50,7 @@ def export(risk_dir, main_turns, output_dir):
         with (out / (split + ".jsonl")).open("w", encoding="utf-8") as dest:
             for sample in iter_jsonl(path):
                 validate(sample)
-                key = (sample["scene_id"], sample["branch_round"], sample["decision_round"])
+                key = (sample["scene_id"], sample["round_sample_id"], sample["decision_round"])
                 if key not in reference:
                     stats["missing_reference"] += 1
                     continue
