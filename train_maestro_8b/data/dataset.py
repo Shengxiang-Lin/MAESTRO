@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from torch.utils.data import Dataset
-from .risk_schema import validate
-from .risk_windows import windows, span_to_tokens
+from train_maestro_8b.data.contracts import validate
+from train_maestro_8b.data.contracts import windows, span_to_tokens
 
 class RiskDataset(Dataset):
     """Indexes byte offsets, not all 16K-token prompts, in RAM.

@@ -30,8 +30,8 @@ def load_risk_engine(args):
         ) from exc
 
     import torch
-    from .risk_model import WindowRiskHead
-    from .risk_policy import RiskAwarePolicy
+    from train_maestro_8b.risk.model import WindowRiskHead
+    from train_maestro_8b.policy.model import RiskAwarePolicy
 
     checkpoint = Path(args.risk_checkpoint)
     cfg = json.loads((checkpoint / "risk_config.json").read_text(encoding="utf-8"))
