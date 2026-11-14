@@ -359,8 +359,15 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             # Truth labels belong in private audit, never public reviewed-turn.
             public_episode.pop("outcome", None)
             public_episode.pop("recovered", None)
+            # Stable *candidate identity*, not a fault label. Stage 4 may
+            # publish multiple distinct fault candidates for one fork round.
+            # It is dataset metadata only, never included in the Main prompt.
+            public_episode["round_sample_id"] = plan["sample_id"]
             episodes.append(public_episode)
-            positive_turns.extend(data["turns"])
+            for turn in data["turns"]:
+                positive_turns.append({
+                    **turn, "round_sample_id": plan["sample_id"]
+                })
         elif status != "not_selected_for_language_review":
             failures.append({
                 "task_id": data["task_id"],
