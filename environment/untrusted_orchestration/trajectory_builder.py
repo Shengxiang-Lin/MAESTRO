@@ -763,6 +763,11 @@ def build_branch(
             set(future_atoms) - applied_future_atoms
         ),
         "decision_audit": decisions,
+        "decision_reward_settings": {
+            "max_parallel_tasks": max_parallel_tasks,
+            "max_retries": max_retries,
+            "model_alias": model_alias,
+        },
         "evidence_plan": evidence_plan,
         "decision_reward_states": decision_reward_states,
         "subagent_report_reviews": report_reviews,
