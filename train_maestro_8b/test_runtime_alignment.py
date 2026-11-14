@@ -27,6 +27,7 @@ class RuntimeAlignmentTests(unittest.TestCase):
         }
         episode = {
             "task_id": scene["task_id"], "branch_round": 2,
+            "round_sample_id": "integration-1-fork-round-02-candidate-001",
             "trajectory": [{"attempt": 1, "action": "delegate_task",
                             "result": {"subtask_results": [report]}}],
         }
