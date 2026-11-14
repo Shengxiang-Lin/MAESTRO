@@ -67,6 +67,7 @@ class CachedRiskDataset(Dataset):
         self.model_name = str(manifest["model"])
         self.window_size = int(manifest["window_size"])
         self.window_stride = int(manifest["window_stride"])
+        self.quantization = manifest.get("feature_model_quantization", "unknown")
         if not self.entries:
             raise ValueError("empty feature cache")
 
@@ -107,7 +108,7 @@ def collate_cached(rows):
 
 def write_feature_cache(backbone, loader, out_dir, *, model_name,
                         window_size, window_stride, max_length,
-                        shard_size=128):
+                        shard_size=128, quantization="unknown"):
     from tqdm import tqdm
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -144,6 +145,7 @@ def write_feature_cache(backbone, loader, out_dir, *, model_name,
     manifest = {
         "schema": "maestro.risk_features.v1",
         "model": model_name, "hidden_size": dim,
+        "feature_model_quantization": quantization,
         "window_size": window_size, "window_stride": window_stride,
         "max_length": max_length, "shards": shards,
         "examples": sum(x[1] for x in shards),
