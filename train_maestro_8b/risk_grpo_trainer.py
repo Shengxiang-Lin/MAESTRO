@@ -51,7 +51,7 @@ class MainDecisionDataset(torch.utils.data.Dataset):
         if not self.records:
             raise ValueError("empty Stage2 training dataset")
         for row in self.records:
-            if not isinstance(row.get("prompt"), str) or not row.get("reports") is not None:
+            if not isinstance(row.get("prompt"), str) or not isinstance(row.get("reports"), list):
                 raise ValueError("missing Stage2 prompt or historical report spans")
             if not isinstance(row.get("decision_state"), dict):
                 raise ValueError(
