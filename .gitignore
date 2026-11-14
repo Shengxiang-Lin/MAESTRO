@@ -59,3 +59,10 @@ work/
 # Versioned DA-GRPO training reference config
 !baseline/da-grpo/ds_config.json
 unsloth_compiled_cache/
+# Track reorganized MAESTRO 8B modules despite generic data/ and tests/ ignores.
+!/train_maestro_8b/data/
+!/train_maestro_8b/data/*.py
+!/train_maestro_8b/tests/
+!/train_maestro_8b/tests/*.py
+# Machine-local training overrides
+/train_maestro_8b/run/config.env

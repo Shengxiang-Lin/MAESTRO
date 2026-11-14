@@ -26,6 +26,11 @@ jobs:
           python-version: "3.11"
       - name: Compile training modules
         run: python -m compileall -q train_maestro_8b
+      - name: Verify one-command shell syntax and commands
+        run: |
+          bash -n train_maestro_8b/run/pipeline.sh
+          bash train_maestro_8b/run/pipeline.sh help
+          bash train_maestro_8b/run/pipeline.sh status
       - name: Test risk schema, history alignment and masks
         run: python -m unittest train_maestro_8b.tests.test_reliability train_maestro_8b.tests.test_candidate_alignment -v
 
