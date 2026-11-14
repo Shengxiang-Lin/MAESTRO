@@ -69,8 +69,14 @@ This script DOES NOT generate Environment data or launch a local LLM.
 EOF
 }
 verify_cache() {
-  local folder="$1"
+  local folder="$1" source="$2"
   need "$folder/manifest.json"
+  need "$source"
+  need "$folder/.input_sha256"
+  local expected saved
+  expected="$(sha256sum "$source" | cut -d' ' -f1)"
+  saved="$(cat "$folder/.input_sha256")"
+  [[ "$saved" == "$expected" ]] || die "Frozen feature cache input changed: $folder (use a new RUN_ROOT)"
   python - "$folder/manifest.json" "$MODEL" "$MAX_LENGTH" "$WINDOW_SIZE" "$WINDOW_STRIDE" <<'PY'
 import json,sys
 from pathlib import Path
@@ -119,7 +125,7 @@ features_one() {
   local split="$1" folder="$2"
   need "$RISK_DATA/$split.jsonl"
   if [[ -f "$folder/manifest.json" ]]; then
-    verify_cache "$folder"
+    verify_cache "$folder" "$RISK_DATA/$split.jsonl"
     [[ "$SKIP_COMPLETED" == "1" ]] && return
     die "Refusing to overwrite existing features. Use another RUN_ROOT."
   fi
@@ -132,7 +138,8 @@ features_one() {
     --output_dir "$folder" --load_in_4bit \
     --max_length "$MAX_LENGTH" \
     --window_size "$WINDOW_SIZE" --window_stride "$WINDOW_STRIDE"
-  verify_cache "$folder"
+  sha256sum "$RISK_DATA/$split.jsonl" | cut -d' ' -f1 > "$folder/.input_sha256"
+  verify_cache "$folder" "$RISK_DATA/$split.jsonl"
 }
 extract_features() {
   need_model
@@ -140,8 +147,8 @@ extract_features() {
   features_one val "$FEATURES_VAL"
 }
 train_risk() {
-  verify_cache "$FEATURES_TRAIN"
-  verify_cache "$FEATURES_VAL"
+  verify_cache "$FEATURES_TRAIN" "$RISK_DATA/train.jsonl"
+  verify_cache "$FEATURES_VAL" "$RISK_DATA/val.jsonl"
   if [[ -f "$RISK_CKPT/risk_config.json" ]]; then
     verify_risk
     [[ "$SKIP_COMPLETED" == "1" ]] && { say "Reusing Risk Head"; return; }
