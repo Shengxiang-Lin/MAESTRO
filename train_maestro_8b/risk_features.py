@@ -64,6 +64,9 @@ class CachedRiskDataset(Dataset):
         self._last_shard = None
         self._rows = None
         self.hidden_size = int(manifest["hidden_size"])
+        self.model_name = str(manifest["model"])
+        self.window_size = int(manifest["window_size"])
+        self.window_stride = int(manifest["window_stride"])
         if not self.entries:
             raise ValueError("empty feature cache")
 
