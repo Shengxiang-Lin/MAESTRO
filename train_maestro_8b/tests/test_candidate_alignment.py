@@ -5,12 +5,45 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from train_maestro_8b.data.export_risk import index_states
-from train_maestro_8b.data.export_policy import export
+from train_maestro_8b.data.export_policy import export, reference_key
 from train_maestro_8b.data.contracts import VERSION, iter_jsonl
 from environment.untrusted_orchestration.decision_reward_state import SCHEMA
 
 
 class CandidateAlignmentTests(unittest.TestCase):
+    def test_main_turn_id_is_not_a_provenance_contract(self):
+        candidate = "task-[7].1-fork-round-02-candidate-004"
+        structured = {
+            "task_id": "task-[7].1",
+            "round": 5,
+            "round_sample_id": candidate,
+            # Historic and new Stage4 turn ids may have different formats.
+            "sample_id": "reviewed-main-turn-abc-no-round-suffix",
+        }
+        self.assertEqual(
+            reference_key(structured),
+            ("task-[7].1", candidate, 5),
+        )
+        self.assertEqual(
+            reference_key({**structured, "sample_id": None}),
+            ("task-[7].1", candidate, 5),
+        )
+
+    def test_missing_candidate_identity_does_not_guess(self):
+        valid = {
+            "task_id": "task-1",
+            "round": 2,
+            "round_sample_id": "task-1-fork-round-02-candidate-001",
+        }
+        with self.assertRaisesRegex(ValueError, "round_sample_id"):
+            reference_key({**valid, "round_sample_id": ""})
+        with self.assertRaisesRegex(ValueError, "valid integer round"):
+            reference_key({**valid, "round": "2"})
+        with self.assertRaisesRegex(ValueError, "valid integer round"):
+            reference_key({**valid, "round": True})
+        with self.assertRaisesRegex(ValueError, "valid task_id"):
+            reference_key({**valid, "task_id": ""})
+
     def test_same_scene_fork_multiple_candidates_are_not_mixed(self):
         with TemporaryDirectory() as tmp:
             folder = Path(tmp)
@@ -47,7 +80,7 @@ class CandidateAlignmentTests(unittest.TestCase):
             with turns.open("w", encoding="utf-8") as handle:
                 for cid, answer in [(a,"first"),(b,"second")]:
                     handle.write(json.dumps({
-                        "sample_id": "task-1-branch-02-round-02",
+                        "sample_id": f"reviewed-main-turn-{answer}",
                         "round_sample_id": cid,
                         "task_id": "task-1", "round": 2,
                         "output": {"action": "complete",
