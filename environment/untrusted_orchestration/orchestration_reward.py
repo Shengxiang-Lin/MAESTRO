@@ -97,7 +97,8 @@ def score_decision(candidate, state) -> dict:
     if action is None:
         return invalid("invalid_json")
     if action.get("action") == "complete":
-        answer = action.get("params", {}).get("answer")
+        params = action.get("params")
+        answer = params.get("answer") if isinstance(params, dict) else None
         if not isinstance(answer, str) or not answer.strip():
             return invalid("missing_completion_answer")
         if not state.get("can_complete", False):
