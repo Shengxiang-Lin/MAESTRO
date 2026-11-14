@@ -1,182 +1,126 @@
-# Learnable MAESTRO Main Agent
+# MAESTRO 8B — latent window-risk pretraining
 
-This directory contains the trainable small-Main path for MAESTRO. It is deliberately **outside `baseline/`**: baseline methods remain comparison implementations, while this directory trains the proposed MAESTRO Main policy.
+This is the proposed MAESTRO trainable Main-Agent path, **outside baseline/**.
+It replaces the former macro-action SFT and consequence-critic code with
+**Stage 1: non-generative, weakly supervised evidence-risk pretraining**.
+Stage 2 will train the same PEFT causal-LM adapter with an interactive GRPO
+policy objective; the auxiliary risk head does **not** appear in the runtime
+prompt or required policy output.
 
-## Observation contract
+## Learning problem
 
-The trainable Main must receive the same public information available to the Orchestra-o1 Main:
+At Main decision round t the student sees the **full native O1 prompt**,
+including question, previous dispatches and every returned Sub-Agent
+Result / Summary / Trace summary. Each report can contain multiple implicit
+claims and may depend on previous reports. No claim extraction is performed
+at student inference time.
 
-- original question;
-- accumulated subtask history;
-- SubAgent result / summary / trace summary;
-- model/tool choices;
-- remaining attempt budget.
+The student processes the full input **once**, then partitions each existing
+Sub-Agent report into approximately 128-token windows (stride 96). Local
+last-layer window representations are conditioned on the last valid
+full-history hidden state. A small shared MLP scores each window, and a
+top-k mean over window logits predicts **one observable-warning label per
+report**, with masked BCE. This is weakly supervised MIL: the highest-scored
+window is **not** guaranteed to be the erroneous fact. Training updates both
+the LoRA backbone and the MLP, not just a frozen probe.
 
-Do not place privileged simulator labels, ground-truth error types, or oracle belief states into the Main input.
+Risk label semantics:
 
-Real MAESTRO runtime trajectories store `state_before.o1_equivalent_prompt`. The synthetic Stage-3 `rounds` generator independently builds the same native `OmniGAIAMainAgentPrompt` into each JSONL row's `input` field (it does not require a complete episode).
+- risk=1: an observable partial/missing delivery or a delivered claim in a
+  visible disagreement / intra-report conflict.
+- risk=0: a completed, parseable report with no such observed warning.
+- mask=0: unparsable reports, superseded deliveries, ambiguous dependent
+  reports, or cases without dependable evidence-based supervision.
 
-## Model
+**Risk=0 does not mean the report is factually true, corroborated, or safe to
+accept without further verification.** The simulator may know a private
+single root fault, but its hidden identity and true answer are NOT supervised
+as if Main could observe them. There can be several affected reports from
+a single root fault. Current release learns observable risk; future work
+can add independently justified support and context-pair ranking targets.
 
-The first implementation is intentionally minimal:
+## Inputs
 
-```text
-O1-equivalent Main prompt
-        |
-      <|orch|>
-        |
-   Qwen shared backbone
-      /         \
- Macro head    Critic head
- pi(m|s)        Q(s,m)
-        \
-     original LM head
-          |
-   O1-compatible JSON
-```
+Environment paths from the current canonical pipeline:
 
-Semantic macro modes:
+- environment/data/stage1/questions/scenes.jsonl
+- environment/data/stage4/episodes.jsonl
+- environment/data/stage4/private/claim_state_supervision.jsonl
 
-`advance`, `verify`, `retry`, `reformulate`, `switch`, `rollback`, `complete`.
+The exporter accepts **globally recovered, reviewed** branches only, because
+that is what the current published claim-state supervision covers. It does
+not silently promote Stage-4 diagnostics / non-reviewed candidates to
+positive labels. The exporter joins by scene ID, fault-branch decision round
+and Main decision round; it rebuilds the complete O1 prompt via
+environment.base_orchestration.o1_compat and maps the formatted report-block
+offsets to weak supervision. It excludes private state/Gold from the prompt.
 
-The original Qwen LM head is retained. The two new heads read the hidden state of the final `<|orch|>` token. Public runtime actions remain only `delegate_task` and `complete`.
+Potentially important current limitation: typed claim extraction does not
+cover every free-form Result/Summary format. Reports with no parsed claims
+and no explicit partial/missing status are **masked**, not negatives.
 
-## Data views
+## Export
 
-One episode/trajectory can be projected into different supervision views.
+Run the environment first using the canonical YAMLs, then:
 
-### Clean teacher-forced Main rounds (recommended)
+    python -m train_maestro_8b.export_reliability \
+      --scenes environment/data/stage1/questions/scenes.jsonl \
+      --episodes environment/data/stage4/episodes.jsonl \
+      --states environment/data/stage4/private/claim_state_supervision.jsonl \
+      --output_dir environment/data/stage4/private/window_risk
 
-Stage 3 has two **separate, sequential invocations**. First generate a complete
-Sub-Agent feedback bank with public-source-verified exact answers and grounded
-natural `summary` / `trace_summary` for every subtask. Only after that
-is complete should you use the bank to compose Main scheduling SFT examples.
+Output:
 
-```bash
-# Phase 1: correct Sub-Agent feedback (can be inspected/reused independently).
-python environment/simulate_trajectories.py subtasks \
-  --provider openai-compatible --schedule compact \
-  --max-records 100 --output work/subtasks_100.jsonl
+- train.jsonl / val.jsonl: Main prompt, report offsets, risk labels/masks
+- summary.json: number of samples and label-reason coverage
 
-# Phase 2: only bank input, never regenerate Sub-Agent feedback.
-python environment/simulate_trajectories.py rounds \
-  --provider openai-compatible --bank work/subtasks_100.jsonl \
-  --output work/clean_main_rounds_100.jsonl
+The split is stable **per scene**, not per history row or failure candidate.
+Use the summary to check parsed coverage and positive/negative balance
+before committing GPU time.
 
-# Train the clean Main.
-accelerate launch -m train_maestro_8b.train_stage1 \
-  --model /path/to/Qwen3-8B \
-  --train_file work/clean_main_rounds_100.jsonl \
-  --output_dir workspace/checkpoints/maestro-clean-sft \
-  --gradient_checkpointing
-```
+## Train
 
-The Main dataset already matches the Stage-1 training schema and uses the
-real O1 Main prompt. It contains one label per selected Main decision round;
-no complete episode is required. Phase 1 is teacher-private and must not be
-provided to the Main as input. Its full Gold DAG, results and public evidence
-are released to simulated Main states in causal topological order only.
+Install torch, transformers, peft, accelerate and a fast tokenizer.
+For 24 GB GPUs try QLoRA with small microbatches; 16K training still needs
+memory profiling. Mixing shorter real history prefixes with a few 16K
+histories is preferable to forcing everything to 16K.
 
-The clean macro labels are `advance` / `complete`; error intervention
-labels will be trained later from actual erroneous Sub-Agent histories.
-Natural delegation rewrites that fail strict checks still provide valid
-teacher histories but are omitted as SFT targets by default. Use
-`--include-fallback-rounds` only to evaluate template-target baselines.
-Split by task or source World before sampling rounds to avoid leakage.
+    accelerate launch -m train_maestro_8b.train_reliability \
+      --model /path/to/Qwen3-8B \
+      --train_file environment/data/stage4/private/window_risk/train.jsonl \
+      --eval_file environment/data/stage4/private/window_risk/val.jsonl \
+      --output_dir workspace/checkpoints/maestro-window-risk \
+      --max_length 16384 --window_size 128 --window_stride 96 \
+      --batch_size 1 --grad_accum 8 --load_in_4bit \
+      --gradient_checkpointing
 
-### Stage 1: LM + macro supervision
+The loader indexes JSONL byte offsets (not all prompts in memory), validates
+a fast tokenizer's character-to-token offset mapping, does not cross report
+boundaries, pads on the right, and **skips overlong histories** instead of
+silently truncating dependencies. The model invokes the inner Qwen
+transformer rather than the language-model head to avoid large vocabulary
+logits. The head uses report-wise top-2 window-logit pooling; loss is first
+averaged across labeled reports within a history.
 
-JSONL:
+The checkpoint contains:
 
-```json
-{
-  "id": "task-1:2",
-  "input": "<O1-equivalent Main prompt>",
-  "macro_label": "verify",
-  "target_json": "{\"action\":\"delegate_task\",...}"
-}
-```
+- adapter_config.json and adapter_model.safetensors: **standard PEFT LoRA**
+  adapter, loadable onto the original CausalLM for Stage-2 GRPO.
+- window_risk_head.pt and window_risk_config.json: optional diagnostic
+  readout, not part of the inference policy.
+- tokenizer files.
 
-Objective:
+No special <orch> token is added and no novel LM head is required; Stage-2
+should load the original causal LM and attach this adapter. The auxiliary
+head may be dropped after pretraining.
 
-```text
-L_stage1 = L_LM + lambda_macro * L_macro
-```
+## Testing
 
-Run a first Stage-1 experiment with:
+    python -m unittest train_maestro_8b.test_reliability -v
+    python -m compileall -q train_maestro_8b
 
-```bash
-accelerate launch -m train_maestro_8b.train_stage1 \
-  --model /path/to/Qwen3-8B \
-  --train_file workspace/train_maestro/stage1.jsonl \
-  --output_dir workspace/checkpoints/maestro-8b-stage1 \
-  --gradient_checkpointing
-```
-
-The LM learns how to formulate the concrete O1 delegation. The macro head learns the higher-level intervention category.
-
-Export current MAESTRO trajectories with:
-
-```bash
-python -m train_maestro_8b.export_stage1 \
-  --trajectory_path workspace/logs/trajectories \
-  --output workspace/train_maestro/stage1.jsonl
-```
-
-### Stage 2: consequence critic
-
-JSONL:
-
-```json
-{
-  "id": "task-1:2",
-  "input": "<same O1-equivalent Main prompt>",
-  "macro_values": {
-    "verify": 0.91,
-    "retry": 0.28,
-    "advance": 0.05
-  }
-}
-```
-
-`macro_values` is intentionally sparse. Only actions that were actually rolled out / evaluated should receive targets; missing actions are masked, not silently assigned zero.
-
-Recommended first pass:
-
-1. load the Stage-1 checkpoint;
-2. freeze the LM and macro head;
-3. train only the 7-way critic head;
-4. optionally unfreeze the last few backbone layers with a much smaller LR.
-
-```bash
-accelerate launch -m train_maestro_8b.train_critic \
-  --model workspace/checkpoints/maestro-8b-stage1 \
-  --train_file workspace/train_maestro/critic.jsonl \
-  --output_dir workspace/checkpoints/maestro-8b-critic
-```
-
-Counterfactual action values should be added only for selected decision states, not invented from the chosen action.
-
-### Stage 3: trajectory RL
-
-After Stage 1/2 are stable, optimize complete episodes. A starting reward is:
-
-```text
-R = final_correctness
-    - lambda_call * extra_delegations
-    - lambda_token * token_cost
-    - lambda_repeat * redundant_retry
-```
-
-This stage is intentionally not hard-coded yet because the rollout dataset and budget-controlled RL protocol are still experimental.
-
-## Files
-
-- `schema.py`: dataset validation and macro indexing.
-- `data.py`: Stage-1 and critic datasets/collators.
-- `modeling.py`: Qwen wrapper with macro + critic heads.
-- `export_stage1.py`: trajectory -> Stage-1 JSONL exporter.
-- `train_stage1.py`: Accelerate Stage-1 trainer.
-- `train_critic.py`: frozen-backbone critic trainer with optional last-layer unfreezing.
-
-The model/data code is separated from the rollout environment so future training backends (Transformers/Accelerate, DeepSpeed, verl/GRPO) can be swapped without changing the benchmark runtime.
+**Not yet established:** throughput on 16K / Qwen3-8B GPU, learned
+localization accuracy, additional gains from counterfactual ranking, and
+GRPO transfer. Probe accuracy is not sufficient evidence that policy actions
+use the latent representation; compare against GRPO-only and compute-matched
+SFT+GRPO baselines.

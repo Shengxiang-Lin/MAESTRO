@@ -1,12 +1,9 @@
-"""Learnable MAESTRO Main-Agent components."""
+"""MAESTRO 8B risk pretraining; GRPO-compatible PEFT policy checkpoint."""
 
-from .schema import ORCH_TOKEN
-
-__all__ = ["ORCH_TOKEN", "MaestroOrchestratorModel"]
-
+__all__ = ["WindowRiskModel"]
 
 def __getattr__(name):
-    if name == "MaestroOrchestratorModel":
-        from .modeling import MaestroOrchestratorModel
-        return MaestroOrchestratorModel
+    if name == "WindowRiskModel":
+        from .risk_model import WindowRiskModel
+        return WindowRiskModel
     raise AttributeError(name)
