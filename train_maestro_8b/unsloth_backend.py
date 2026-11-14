@@ -1,0 +1,136 @@
+"""Stage-2 Unsloth + PEFT backend for risk-steered Qwen3 decoding.
+
+Unsloth is intentionally loaded lazily, *before* transformers/peft imports.
+fast_inference/vLLM is OFF: its independent text rollout cannot inherit our
+custom risk-edited HF DynamicCache. This backend cannot claim vLLM speedups.
+"""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+
+def load_risk_engine(args):
+    """Load the frozen Stage-1 Risk Head plus trainable Unsloth QLoRA model."""
+    if args.backend != "unsloth":
+        raise ValueError("this loader requires --backend unsloth")
+    if not getattr(args, "load_in_4bit", False):
+        raise ValueError("first Unsloth integration currently requires --load_in_4bit")
+    # This must be set before importing Unsloth so custom GRPO can always
+    # access the real per-token LM logits for exact policy log probabilities.
+    os.environ["UNSLOTH_RETURN_LOGITS"] = "1"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    try:
+        from unsloth import FastLanguageModel
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise RuntimeError(
+            "Unsloth CUDA installation missing. Install compatible "
+            "unsloth / unsloth_zoo / trl packages (see README)."
+        ) from exc
+
+    import torch
+    from .risk_model import WindowRiskHead
+    from .risk_policy import RiskAwarePolicy
+
+    checkpoint = Path(args.risk_checkpoint)
+    cfg = json.loads((checkpoint / "risk_config.json").read_text(encoding="utf-8"))
+    if cfg.get("schema") != "maestro.frozen_window_risk.v1":
+        raise ValueError("Stage-1 Risk Head version is incompatible")
+    if cfg.get("base_model") != args.model:
+        raise ValueError(
+            "Stage1 Risk Head must use exactly the same Qwen3-8B model ID "
+            "as the Stage2 frozen backbone"
+        )
+    if cfg.get("trained_parameters") != "risk_head_only":
+        raise ValueError("Stage1 checkpoint did not freeze the backbone")
+    precision = cfg.get("feature_model_quantization")
+    if precision is not None and precision != "nf4":
+        raise ValueError(
+            "Risk Head was trained on non-NF4 features, but Stage2 uses "
+            "4-bit QLoRA; regenerate frozen Stage1 features in NF4 or "
+            "use the matching BF16 backend"
+        )
+
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=args.model,
+        max_seq_length=args.max_length + args.max_new_tokens + 8,
+        load_in_4bit=True,
+        fast_inference=False,
+        max_lora_rank=args.lora_rank,
+    )
+    tokenizer.padding_side = "right"
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    # Intentionally disable gradient checkpointing here: this research
+    # policy *requires* use_cache=True throughout the LoRA suffix.
+    # Checkpointing and use_cache can conflict in patched model forwards.
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=args.lora_rank,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=0,
+        bias="none",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        use_gradient_checkpointing=False,
+        random_state=args.seed,
+    )
+    if not hasattr(model, "disable_adapter") or not hasattr(model, "get_base_model"):
+        raise RuntimeError("Unsloth returned a policy without PEFT adapter controls")
+    if any(p.requires_grad and "lora_" not in name
+           for name, p in model.named_parameters()):
+        raise RuntimeError("non-LoRA parameter is trainable in Stage2")
+    if not any(p.requires_grad and "lora_" in name
+               for name, p in model.named_parameters()):
+        raise RuntimeError("Unsloth failed to create trainable LoRA weights")
+    model.config.use_cache = True
+
+    head = WindowRiskHead(cfg["hidden_size"], cfg["head_size"], cfg["top_k"])
+    head.load_state_dict(torch.load(
+        checkpoint / "risk_head.pt", map_location="cpu", weights_only=True,
+    ))
+    device = next(model.parameters()).device
+    head.to(device).eval().requires_grad_(False)
+    engine = RiskAwarePolicy(
+        model, tokenizer, head, cfg,
+        max_length=args.max_length,
+        last_n_layers=args.steer_last_n,
+        strength=args.steer_strength,
+        threshold=args.steer_threshold,
+    )
+    return engine
+
+
+def check_risk_cache_contract(engine, record, *, temperature=0.8):
+    """Fail early if a particular Unsloth version breaks cache continuation.
+
+    This is a semantic consistency probe, not a 16K throughput benchmark.
+    The frozen RiskHead is never modified by the test.
+    """
+    import torch
+    policy = engine.policy
+    policy.eval()
+    state = engine.prefill(record["prompt"], record["reports"])
+    ids, old = engine.sample(
+        state, max_new_tokens=3, temperature=temperature, eos_token_id=-1,
+    )
+    with torch.no_grad():
+        replay = engine.log_probs(state, ids, temperature=temperature)
+    if not torch.isfinite(replay).all() or not torch.isfinite(old).all():
+        raise RuntimeError("Unsloth GRPO probe returned nonfinite log probabilities")
+    if not torch.allclose(old, replay, atol=5e-3, rtol=5e-3):
+        raise RuntimeError(
+            "Unsloth forward cannot replay risk-edited DynamicCache exactly: "
+            "sampling/logprob distributions differ. STOP, do not train "
+            "with incompatible fast inference/KV kernels."
+        )
+    if not any(row["window_probs"].numel() for row in [state]) and record["reports"]:
+        raise RuntimeError("reported feedback was not assigned any risk windows")
+    return {
+        "prefix_tokens": state.length,
+        "probe_tokens": len(ids),
+        "max_abs_logprob_drift": float((old - replay).abs().max().item()),
+        "risk_windows": int(state.window_probs.numel()),
+        "max_window_risk": float(state.window_probs.max().item())
+        if state.window_probs.numel() else None,
+    }
