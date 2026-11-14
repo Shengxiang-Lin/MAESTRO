@@ -1,73 +1,53 @@
-"""Small CPU tests for one-pass window risk and backbone LoRA gradient flow."""
+"""Stage1 unit tests: only Risk Head gets gradients; frozen features reused."""
 import unittest
-from types import SimpleNamespace
-
 import torch
-from torch import nn
 
-from train_maestro_8b.risk_model import WindowRiskModel
-
-
-class FakeTransformer(nn.Module):
-    def __init__(self, dim=8):
-        super().__init__()
-        self.emb = nn.Embedding(32, dim)
-        self.proj = nn.Linear(dim, dim)
-        self.forwards = 0
-
-    def forward(self, input_ids, attention_mask, use_cache, return_dict):
-        self.forwards += 1
-        # Each token has a locally encoded feature; global state is final token.
-        hidden = self.proj(self.emb(input_ids))
-        return SimpleNamespace(last_hidden_state=hidden)
+from train_maestro_8b.risk_model import WindowRiskHead, extract_window_features
 
 
-class FakePolicy(nn.Module):
-    def __init__(self, dim=8):
-        super().__init__()
-        self.model = FakeTransformer(dim)
-
-    def get_base_model(self):
-        return self
-
-
-class RiskModelTests(unittest.TestCase):
-    def test_one_forward_multiple_windows_and_backbone_gradient(self):
+class RiskHeadTests(unittest.TestCase):
+    def test_risk_head_gradient_and_report_pooling(self):
         torch.manual_seed(7)
-        policy = FakePolicy()
-        model = WindowRiskModel(policy, hidden_size=8, top_k=2)
-        batch = dict(
-            input_ids=torch.tensor([[1, 2, 3, 4, 5, 0],
-                                    [6, 7, 8, 9, 0, 0]]),
-            attention_mask=torch.tensor([[1, 1, 1, 1, 1, 0],
-                                         [1, 1, 1, 1, 0, 0]]),
-            window_starts=torch.tensor([[0, 2, 3], [0, 1, 0]]),
-            window_ends=torch.tensor([[2, 4, 5], [2, 4, 0]]),
-            window_owner=torch.tensor([[0, 0, 1], [0, 0, -1]]),
-            report_labels=torch.tensor([[1., 0.], [0., 0.]]),
-            report_mask=torch.tensor([[1., 1.], [1., 0.]]),
+        hidden = torch.randn(2, 8, 16, requires_grad=False)
+        attention = torch.tensor([
+            [1,1,1,1,1,1,0,0], [1,1,1,1,0,0,0,0],
+        ])
+        starts = torch.tensor([[0,2,4], [0,2,0]])
+        ends = torch.tensor([[2,4,6], [2,4,0]])
+        owners = torch.tensor([[0,0,1], [0,1,-1]])
+        window, global_ = extract_window_features(
+            hidden, attention, starts, ends, owners
         )
-        result = model(**batch)
-        self.assertEqual(policy.model.forwards, 1)
-        self.assertEqual(tuple(result["report_logits"].shape), (2, 2))
-        self.assertTrue(torch.isfinite(result["loss"]))
-        result["loss"].backward()
-        self.assertIsNotNone(policy.model.emb.weight.grad)
-        self.assertGreater(policy.model.emb.weight.grad.abs().sum().item(), 0)
-        self.assertGreater(model.risk_head[-1].weight.grad.abs().sum().item(), 0)
+        self.assertEqual(tuple(window.shape), (2,3,16))
+        self.assertEqual(tuple(global_.shape), (2,16))
+        head = WindowRiskHead(16, head_size=12, top_k=2)
+        output = head(
+            window, global_, owners,
+            report_labels=torch.tensor([[1.,0.], [0.,1.]]),
+            report_mask=torch.tensor([[1.,1.], [1.,0.]]),
+        )
+        self.assertEqual(tuple(output["report_logits"].shape), (2,2))
+        output["loss"].backward()
+        self.assertIsNone(hidden.grad)
+        self.assertGreater(head.risk_head[-1].weight.grad.abs().sum().item(), 0)
 
-    def test_all_masked_refused(self):
-        model = WindowRiskModel(FakePolicy(), hidden_size=8)
+    def test_inference_without_report_labels(self):
+        head = WindowRiskHead(4)
+        result = head(
+            torch.randn(1,2,4), torch.randn(1,4),
+            torch.tensor([[0,1]]),
+        )
+        self.assertEqual(tuple(result["window_logits"].shape), (1,2))
+        self.assertEqual(tuple(result["report_logits"].shape), (1,2))
+        self.assertNotIn("loss", result)
+
+    def test_masked_labels_rejected(self):
+        head = WindowRiskHead(4)
         with self.assertRaises(ValueError):
-            model(
-                input_ids=torch.tensor([[1, 2]]),
-                attention_mask=torch.tensor([[1, 1]]),
-                window_starts=torch.tensor([[0]]),
-                window_ends=torch.tensor([[2]]),
-                window_owner=torch.tensor([[0]]),
-                report_labels=torch.tensor([[0.]]),
-                report_mask=torch.tensor([[0.]]),
-            )
+            head(torch.randn(1,1,4), torch.randn(1,4),
+                 torch.tensor([[0]]),
+                 report_labels=torch.zeros(1,1),
+                 report_mask=torch.zeros(1,1))
 
 
 if __name__ == "__main__":
