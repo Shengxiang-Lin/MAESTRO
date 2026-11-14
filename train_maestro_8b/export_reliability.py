@@ -27,13 +27,14 @@ def branch_from_sample_id(task_id: str, sample_id: str) -> int:
 
 
 def index_states(path):
-    """Key states by (scene, branch round, next Main decision round)."""
+    """Key states by (scene, exact candidate ID, next Main decision round)."""
     out = defaultdict(dict)
     for row in iter_jsonl(path):
         scene = row["task_id"]
-        fork = branch_from_sample_id(scene, row["round_sample_id"])
+        scenario_id = row["round_sample_id"]
+        branch_from_sample_id(scene, scenario_id)  # validates provenance
         rd = row["main_can_act_from_round"]
-        key = (scene, fork)
+        key = (scene, scenario_id)
         if rd in out[key]:
             raise ValueError("ambiguous duplicate state round: " + repr((key, rd)))
         out[key][rd] = row
@@ -171,7 +172,8 @@ def render_samples(scene: dict, episode: dict, states: dict, max_attempts: int):
             continue
         yield validate(dict(
             schema=VERSION,
-            sample_id=f"{scene['task_id']}:fork-{episode['branch_round']}:round-{next_round}",
+            sample_id=f"{episode['round_sample_id']}-decision-{next_round:02d}",
+            round_sample_id=episode["round_sample_id"],
             scene_id=scene["task_id"], branch_round=episode["branch_round"],
             decision_round=next_round, prompt=prompt, reports=reports_out,
         ))
@@ -192,12 +194,31 @@ def export(scenes_path, episodes_path, states_path, output_dir,
          (out / "val.jsonl").open("w", encoding="utf-8") as val:
         for ep in iter_jsonl(episodes_path):
             scene_id, fork = ep["task_id"], ep["branch_round"]
-            key = (scene_id, fork)
+            scenario_id = ep.get("round_sample_id")
+            if scenario_id is None:
+                # Legacy Stage4 output predates candidate IDs. Only permit
+                # an unambiguous fallback; never mix distinct fault variants.
+                candidates = [
+                    sid for (s, sid) in state_map
+                    if s == scene_id
+                    and branch_from_sample_id(scene_id, sid) == fork
+                ]
+                if len(candidates) != 1:
+                    raise ValueError(
+                        "legacy Stage4 episode lacks round_sample_id and "
+                        "has ambiguous candidate branches; republish Stage4 "
+                        "from the existing journal with the updated writer"
+                    )
+                scenario_id = candidates[0]
+                ep["round_sample_id"] = scenario_id
+            if branch_from_sample_id(scene_id, scenario_id) != fork:
+                raise ValueError("episode branch does not match candidate ID")
+            key = (scene_id, scenario_id)
             if key in seen:
-                raise ValueError("duplicate accepted scene/branch in public episodes")
+                raise ValueError("duplicate accepted scene/candidate in episodes")
             seen.add(key)
             if scene_id not in scene_map or key not in state_map:
-                raise ValueError("missing scene or accepted branch supervision")
+                raise ValueError("missing scene or exact candidate supervision")
             bucket = int(sha256(f"{seed}:{scene_id}".encode()).hexdigest()[:12], 16) / 16**12
             writer = val if bucket < val_fraction else train
             for row in render_samples(scene_map[scene_id], ep, state_map[key], max_attempts):
