@@ -187,7 +187,7 @@ class DeterministicRewardTests(unittest.TestCase):
                     for t in ("A","B","C")
                 }
                 self.current = {
-                    "A": SimpleNamespace(status="disputed")
+                    "A": SimpleNamespace(status="disputed", product=object())
                 }
             def ready(self, tid):
                 return True
@@ -221,6 +221,25 @@ class DeterministicRewardTests(unittest.TestCase):
             )
         self.assertTrue(reward_state["scorable"])
         self.assertEqual({x["task_id"] for x in reward_state["actionable"]},{"A","B"})
+        # A hidden executor failure under a publicly DONE report must NOT
+        # be rewarded as an observable reason to retry.
+        hidden_state = FakeState()
+        hidden_state.current["A"].product = None
+        with patch(
+            "environment.untrusted_orchestration.decision_reward_state.evidence_request",
+            side_effect=fake_req
+        ), patch(
+            "environment.untrusted_orchestration.decision_reward_state.evidence_assignment",
+            side_effect=fake_assignment
+        ):
+            masked = capture_decision_state(
+                hidden_state, round_number=3, repairs=["A"],
+                ready=["B","C"], blocked=[], max_parallel_tasks=4,
+                catalog={}, model_alias="model_1", event_pending=False,
+                can_complete=False,
+            )
+        self.assertFalse(masked["scorable"])
+        self.assertIn("A", masked["unobservable_private_repairs"])
 
 
 if __name__ == "__main__":
