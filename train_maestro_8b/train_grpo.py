@@ -1,9 +1,9 @@
-"""Stage 2: frozen risk-encoder prefill + Risk-KV steering + LoRA GRPO.
+"""Stage 2: risk-conditioned KV + LoRA-only grouped policy optimization.
 
-Single-process reference trainer. The built-in teacher_proxy reward is only
-an offline plumbing pilot, NOT an environment-level task-success score.
-For grounded recovery optimization, supply --reward_callable module:function
-(candidate_text, record)->float using a real action-executing evaluator.
+Default reward is a deterministic CURRENT-ROUND orchestration score using
+private, pre-action Stage-4 DAG/evidence state. It does not judge teacher
+text similarity or require a future environment rollout. External reward
+hooks remain available for alternate research conditions.
 """
 from __future__ import annotations
 
@@ -29,7 +29,12 @@ def parse_args():
     p.add_argument("--risk_checkpoint", required=True)
     p.add_argument("--train_file", required=True)
     p.add_argument("--output_dir", required=True)
-    p.add_argument("--reward_callable", help="module.path:function(candidate_text, record)")
+    p.add_argument("--reward_callable", help=(
+        "override deterministic default with module.path:function(candidate_text, record)"
+    ))
+    p.add_argument("--reward_debug_jsonl", help=(
+        "optional private diagnostics of sampled actions and reward components"
+    ))
     p.add_argument("--epochs", type=int, default=1)
     p.add_argument("--num_generations", type=int, default=4)
     p.add_argument("--max_prompts", type=int, default=0)
@@ -149,23 +154,47 @@ def main():
             optimizer.step()
         print(f"sft_warmup_epoch={epoch+1} complete", flush=True)
     updates = 0
+    debug_path = Path(args.reward_debug_jsonl) if args.reward_debug_jsonl else None
+    if debug_path:
+        debug_path.parent.mkdir(parents=True, exist_ok=True)
+    from environment.untrusted_orchestration.orchestration_reward import score_decision
+    skipped_groups = 0
     for epoch in range(args.epochs):
         random.shuffle(data)
         for row in data:
             prefix = engine.prefill(row["prompt"], row["reports"])
-            samples, rewards = [], []
+            samples, rewards, details = [], [], []
             for _ in range(args.num_generations):
                 ids, old = engine.sample(
                     prefix, max_new_tokens=args.max_new_tokens,
                     temperature=args.temperature,
                 )
-                reward = float(reward_fn(engine.decode(ids), row))
+                candidate = engine.decode(ids)
+                info = (
+                    score_decision(candidate, row["decision_state"])
+                    if args.reward_callable is None else None
+                )
+                reward = float(
+                    info["reward"] if info is not None
+                    else reward_fn(candidate, row)
+                )
                 if not (-1e8 < reward < 1e8):
                     raise ValueError("invalid reward; must be finite and bounded")
                 samples.append((ids, old))
                 rewards.append(reward)
+                if info is not None:
+                    details.append(info)
+                    if debug_path:
+                        with debug_path.open("a", encoding="utf-8") as debug:
+                            debug.write(json.dumps({
+                                "sample_id": row["sample_id"],
+                                "epoch": epoch + 1,
+                                "score": info,
+                                "candidate": candidate,
+                            }, ensure_ascii=False) + "\n")
             advantage = group_advantages(rewards).to(engine.device)
             if advantage.abs().max().item() < 1e-6:
+                skipped_groups += 1
                 continue
             optimizer.zero_grad(set_to_none=True)
             losses = []
@@ -183,9 +212,15 @@ def main():
             optimizer.step()
             updates += 1
             if updates % args.log_every == 0:
-                print(f"epoch={epoch+1} updates={updates} "
-                      f"reward={sum(rewards)/len(rewards):.4f} "
-                      f"pg_loss={sum(losses)/len(losses):.4f}", flush=True)
+                msg = (f"epoch={epoch+1} updates={updates} "
+                       f"reward={sum(rewards)/len(rewards):.4f} "
+                       f"pg_loss={sum(losses)/len(losses):.4f} "
+                       f"zero_adv_groups={skipped_groups}")
+                if details:
+                    for metric in ("coverage", "priority", "parallel", "nonredundancy"):
+                        msg += f" {metric}={sum(x[metric] for x in details)/len(details):.3f}"
+                    msg += f" invalid={sum(not x['valid'] for x in details)}/{len(details)}"
+                print(msg, flush=True)
     dest = Path(args.output_dir)
     dest.mkdir(parents=True, exist_ok=True)
     engine.policy.save_pretrained(str(dest))
@@ -197,8 +232,9 @@ def main():
         "steer_strength": args.steer_strength,
         "steer_threshold": args.steer_threshold,
         "anchor_ids": engine.anchor_ids,
-        "reward_type": "custom" if args.reward_callable else "offline_teacher_proxy",
+        "reward_type": "custom" if args.reward_callable else "deterministic_orchestration",
         "grpo_updates": updates,
+        "zero_advantage_groups": skipped_groups,
     }, indent=2), encoding="utf-8")
     print(f"saved LoRA adapter to {dest}", flush=True)
 
