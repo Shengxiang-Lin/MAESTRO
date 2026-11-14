@@ -171,6 +171,8 @@ def main(argv=None):
         fp16=args.dtype == "fp16",
         remove_unused_columns=False,
         gradient_checkpointing=False,
+        activation_checkpointing=False,
+        use_cache=True,
         warmup_ratio=args.warmup_ratio,
         lr_scheduler_type="cosine",
         logging_steps=args.logging_steps,
