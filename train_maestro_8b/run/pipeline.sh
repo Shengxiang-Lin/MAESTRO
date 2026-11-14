@@ -219,6 +219,12 @@ preflight() {
 }
 pilot() {
   need_model; verify_risk; need "$GRPO_DATA/train.jsonl"
+  if [[ "$SKIP_COMPLETED" == "1" && -f "$PILOT_CKPT/risk_policy_config.json" ]]; then
+    say "Reusing completed GRPO pilot"; return
+  fi
+  if [[ -d "$PILOT_CKPT" && -n "$(ls -A "$PILOT_CKPT")" ]]; then
+    die "Incomplete GRPO pilot at $PILOT_CKPT; use a new PILOT_CKPT or move old files aside."
+  fi
   init_grpo_args
   say "Pilot GRPO"
   python -m train_maestro_8b.policy.train "${common_args[@]}" \
