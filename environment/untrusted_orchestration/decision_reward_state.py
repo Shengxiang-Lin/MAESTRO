@@ -45,6 +45,12 @@ def capture_decision_state(
         observed_status = state.public_status(tid)
         current = state.current.get(tid)
         issue = state.visible_discrepancy(tid)
+        # The current state_machine also uses the private WorkProduct to
+        # detect an absent result. If Main was actually sent a DONE report,
+        # absence of the private product is NOT itself visible evidence.
+        if (observed_status == "done" and current is not None
+                and current.product is None):
+            issue = None
         # A stale dependent result follows a changed earlier report; this
         # can be inferred from versioned deliveries and the public DAG.
         stale = current is not None and current.status == "stale"
