@@ -142,6 +142,30 @@ class DeterministicRewardTests(unittest.TestCase):
                                              "reference_action":{}})
         self.assertEqual(r1,r2)
 
+    def test_logged_attempt_replay_matches_live_stage4_snapshots(self):
+        # Real deterministic Stage4 branch, without any LLM calls.
+        from environment.tests.test_untrusted_orchestration import sample
+        from environment.untrusted_orchestration.faults import Fault
+        from environment.untrusted_orchestration.trajectory_builder import build_branch
+        from train_maestro_8b.backfill_reward_states import replay_reward_states
+
+        scene, reports, base = sample(0)
+        target = scene["macro_graph"]["reference_waves"][0][0]
+        episode, turns, audit = build_branch(
+            scene, reports, base, branch_round=2,
+            faults=[Fault(target, "missing")],
+        )
+        self.assertEqual(audit["outcome"], "recovered")
+        self.assertTrue(turns)
+        reconstructed = replay_reward_states(scene, episode, audit)
+        expected = audit["decision_reward_states"]
+        self.assertEqual(len(reconstructed), len(expected))
+        for old, new in zip(expected, reconstructed):
+            self.assertEqual(old["decision_round"], new["decision_round"])
+            self.assertEqual(old["can_complete"], new["can_complete"])
+            self.assertEqual(old["scorable"], new["scorable"])
+            self.assertEqual(old["actionable"], new["actionable"])
+
     def test_capture_excludes_descendant_of_repair(self):
         class FakeState:
             def __init__(self):
