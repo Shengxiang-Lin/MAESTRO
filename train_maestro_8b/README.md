@@ -43,9 +43,11 @@ Stage 2: **Frozen base + frozen Risk Head -> steered KV -> LoRA-only decoder.**
   temperature, to avoid off-policy errors.
 
 The implementation currently uses standard Hugging Face DynamicCache. Static
-KV, offloaded/quantized/paged caches and vLLM are not supported. The policy
-suffix path keeps gradients only for Anchor and Action tokens, so the long
-frozen prefix is not replayed during LoRA backward.
+KV, offloaded/quantized/paged caches and vLLM are not supported. Stage 2's
+primary CLI uses Unsloth QLoRA plus TRL GRPOConfig/HF Trainer scheduling,
+with a custom risk-KV rollout and streaming loss (NOT stock GRPOTrainer's
+rollout engine). The policy suffix path keeps gradients only for Anchor
+and Action tokens, so the long frozen prefix is not replayed during LoRA backward.
 
 ## Step 0 — export observational risk examples
 
@@ -67,12 +69,14 @@ same frozen model/tokenizer and window hyperparameters:
       --model /path/to/Qwen3-8B \
       --input environment/data/stage4/private/window_risk/train.jsonl \
       --output_dir workspace/cache/risk-train \
+      --load_in_4bit \
       --max_length 16384 --window_size 128 --window_stride 96
 
     python -m train_maestro_8b.extract_features \
       --model /path/to/Qwen3-8B \
       --input environment/data/stage4/private/window_risk/val.jsonl \
-      --output_dir workspace/cache/risk-val
+      --output_dir workspace/cache/risk-val \
+      --load_in_4bit
 
 Train only the small MLP head:
 
@@ -95,6 +99,56 @@ The online no-cache alternative is:
 The cached approach needs disk space (about ~1 MiB per 128-window context at
 BF16/4096 dimensions), but repeated epochs of Risk Head training are fast.
 Train/val should be split by scene/world, not individual history prefix.
+
+**Stage2 NF4 parity:** when using Unsloth QLoRA, extract Stage1 frozen
+features with --load_in_4bit as above. Newly saved Risk Head checkpoints
+record feature_model_quantization (nf4/none/unknown). Unsloth Stage2 fails
+closed on non-NF4/unknown feature provenance. Old Stage1 checkpoints must
+be retrained from verifiably NF4-extracted features before this backend is used.
+
+## Stage 2 runtime: Unsloth + TRL (default)
+
+The default `python -m train_maestro_8b.train_grpo` now launches the
+**Unsloth FastLanguageModel + TRL GRPOConfig / HF Trainer** integration.
+This is a deliberately customized GRPO training_step, not the unmodified
+`trl.GRPOTrainer`, because both rollout and new-logprob evaluation must
+consume the SAME risk-steered prefix cache. The previous plain PyTorch
+reference is retained in `train_grpo_reference.py`.
+
+Install the CUDA training backend on the Qwen3 machine, in an isolated
+environment with a compatible CUDA / Torch combination:
+
+    python -m pip install -r train_maestro_8b/requirements-unsloth.txt
+
+Official reference: https://unsloth.ai/docs/get-started/reinforcement-learning-rl-guide
+
+**Do not turn on vLLM / fast_inference** in this version: a separate vLLM
+text-generation backend will bypass the custom DynamicCache. Unsloth's
+FastLanguageModel accelerated QLoRA and TRL's Trainer lifecycle are used,
+but **vLLM's speedups are not claimed**. The trainer supports ONE CUDA
+process; rollout completions are evaluated sequentially to limit KV memory.
+
+Before training, validate the GPU/Unsloth implementation with:
+
+    python -m train_maestro_8b.train_grpo \
+      --model /path/to/Qwen3-8B \
+      --risk_checkpoint workspace/checkpoints/maestro-risk-head \
+      --train_file environment/data/stage4/private/risk_grpo/train.jsonl \
+      --output_dir workspace/checkpoints/maestro-risk-policy \
+      --backend unsloth --preflight_only
+
+This probe checks that Risk-Aware Prefill yields a valid DynamicCache,
+rollout logprobs match teacher-forced replay and gradients affect only
+LoRA weights. If Unsloth's patched forward fails to preserve this contract,
+**do not disable the probe and continue training**; use --backend hf as a
+controlled fallback or fix the underlying version compatibility.
+
+TRL GRPOConfig uses gradient accumulation divisible by the number of
+completions. For example, `--num_generations 4 --gradient_accumulation_steps 4`
+means 4 completions for EACH of four prompt microbatches per update.
+The streaming backward keeps only one action-completion graph alive at
+a time. The default reward is the existing deterministic decision-quality
+reward, not a teacher string-matching score.
 
 ## Stage 2 — risk-steered LoRA policy
 
@@ -149,9 +203,10 @@ Run a small *offline plumbing* pilot:
       --risk_checkpoint workspace/checkpoints/maestro-risk-head \
       --train_file environment/data/stage4/private/risk_grpo/train.jsonl \
       --output_dir workspace/checkpoints/maestro-risk-policy \
-      --load_in_4bit --max_length 16384 \
+      --backend unsloth --load_in_4bit --max_length 16384 \
       --steer_last_n 8 --steer_strength 0.1 \
-      --sft_warmup 1 --num_generations 4 --max_prompts 20 \
+      --num_generations 4 --gradient_accumulation_steps 4 \
+      --max_prompts 20 --max_steps 2 \
       --reward_debug_jsonl workspace/checkpoints/maestro-reward-debug.jsonl
 
 An SFT warmup, when enabled, updates **only LoRA**, never the Risk Head.
@@ -226,6 +281,9 @@ separate action-executing online simulator.
     python -m unittest train_maestro_8b.test_risk_policy -v
     python -m unittest train_maestro_8b.test_orchestration_reward \
       train_maestro_8b.test_candidate_alignment -v
+    python -m unittest train_maestro_8b.test_grpo_trainer -v
+    # With TRL / Transformers / PEFT installed on CPU:
+    python -m unittest train_maestro_8b.test_trl_integration -v
 
 The last test instantiates a tiny Qwen3 on CPU, requiring Transformers and
 PEFT; it tests shared frozen-prefix caching, exact sampling/teacher-forced
