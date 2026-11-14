@@ -46,6 +46,12 @@ Stage-3 LLM dataset is **not** required as input.
   to positive SFT decisions.
 - `private/fault_alignment.jsonl`, `private/main_turns_local_review.jsonl`:
   causal/reviewer supervision and local qualification diagnostics.
+- `private/decision_reward_states.jsonl`: exact-candidate, **pre-action**
+  state for deterministic per-round Main dispatch reward: all currently
+  executable evidence goals, source/tool contracts, task dependencies,
+  priority, parallel capacity and completion eligibility. This is PRIVATE
+  scorer metadata, never part of the Main prompt or O1 public action.
+  Hidden-only repair requirements make a row unscorable.
 - `summary.json`: generation counts plus round-wise claim state
   labels and status distribution.
 
@@ -56,6 +62,23 @@ evidence. `corroborated` means a declared independent-source warrant,
 not absolute ground truth; `disputed` calls for reconciliation.
 Partial evidence and missing/invalid reports never silently inherit
 a clean Oracle value.
+
+## Deterministic per-round orchestration reward
+
+The Stage-2 scorer in
+`environment/untrusted_orchestration/orchestration_reward.py`
+uses action binding, evidence coverage, priority, legal parallel utilization
+and focused field requests. It does **not** compare with Teacher natural
+language or run a future-outcome simulator. Broken dependency, duplicate,
+ambiguous, unauthorized or premature actions receive a hard negative reward.
+The evaluator may inspect the global current-round execution structure,
+but does not require the Main to predict hidden fault sources.
+
+For historical Stage-4 journals that predate this field, use the
+no-LLM `python -m train_maestro_8b.backfill_reward_states` command
+documented in `train_maestro_8b/README.md`. This replays audited attempts
+and verifies each old Teacher batch against reconstructed admissible choices
+before exporting a private score state.
 
 Only synchronous Sub-Agent result batches and single atomic injected
 faults are supported. Delayed network responses, partial asynchronous
