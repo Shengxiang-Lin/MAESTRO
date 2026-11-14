@@ -687,7 +687,11 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         "reviewed_branches": counters["recovered"],
         "reviewed_turns": len(positive_turns),
         "decision_reward_states": len(decision_reward_states),
-        "decision_reward_missing_legacy": decision_reward_missing,
+        "decision_reward_missing": decision_reward_missing,
+        "decision_reward_replay_failures": sum(
+            bool((audit or {}).get("decision_reward_replay_error"))
+            for audit in audits
+        ),
         "decision_reward_unscorable": sum(
             not row["state"]["scorable"] for row in decision_reward_states
         ),
