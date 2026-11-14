@@ -7,6 +7,7 @@ import unittest
 from train_maestro_8b.export_reliability import index_states
 from train_maestro_8b.export_grpo import export
 from train_maestro_8b.risk_schema import VERSION, iter_jsonl
+from environment.untrusted_orchestration.decision_reward_state import SCHEMA
 
 
 class CandidateAlignmentTests(unittest.TestCase):
@@ -52,9 +53,23 @@ class CandidateAlignmentTests(unittest.TestCase):
                         "output": {"action": "complete",
                                    "params": {"answer": answer}},
                     }) + "\n")
+            private_states = folder / "decision_reward_states.jsonl"
+            with private_states.open("w", encoding="utf-8") as handle:
+                for cid in [a, b]:
+                    handle.write(json.dumps({
+                        "task_id": "task-1", "round_sample_id": cid,
+                        "decision_round": 2,
+                        "state": {
+                            "schema": SCHEMA, "decision_round":2,
+                            "max_parallel_tasks":4, "scorable":True,
+                            "can_complete":True, "actionable":[],
+                            "event_pending":False,
+                        },
+                    }) + "\n")
             output_dir = folder / "grpo"
-            summary = export(risk_dir, turns, output_dir)
+            summary = export(risk_dir, turns, output_dir, private_states)
             self.assertEqual(summary["train"], 2)
+            self.assertEqual(summary["missing_decision_state"], 0)
             rows = list(iter_jsonl(output_dir / "train.jsonl"))
             mapping = {
                 row["sample_id"].split("-decision-")[0]:
@@ -62,6 +77,8 @@ class CandidateAlignmentTests(unittest.TestCase):
                 for row in rows
             }
             self.assertEqual(mapping, {a:"first", b:"second"})
+            self.assertTrue(all(row["decision_state"]["can_complete"]
+                                for row in rows))
 
 
 if __name__ == "__main__":
