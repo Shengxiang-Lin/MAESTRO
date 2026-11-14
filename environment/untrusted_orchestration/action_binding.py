@@ -21,6 +21,25 @@ def _mentions(text: str, literal: str) -> bool:
     return False
 
 
+# Lightweight, auditable operation-intent evidence, not LLM semantics.
+# Missing an explicit verb reduces Priority credit but does not invalidate
+# a scoped, otherwise legal request. More synonyms can be added with tests.
+_OPERATION_CUES = {
+    "verify_conflicting_evidence": r"\b(?:verify|reconcile|cross.check|validate|conflict|contradict|independent)\b",
+    "retry_missing_evidence": r"\b(?:retry|repeat|re.run|missing|recover|again)\b",
+    "complete_partial_evidence": r"\b(?:partial|remaining|incomplete|missing|complete)\b",
+    "refresh_dependent_evidence": r"\b(?:refresh|recompute|recalculate|superseded|changed|update)\b",
+    "derive_from_returned_evidence": r"\b(?:derive|combine|compute|calculate|synthesize|aggregate)\b",
+}
+
+
+def _operation_alignment(operation: str, instruction: str) -> float:
+    pattern = _OPERATION_CUES.get(operation)
+    return 1.0 if pattern is None or re.search(
+        pattern, instruction, re.IGNORECASE
+    ) else 0.5
+
+
 def bind_tasks(tasks: list[dict], state: dict) -> dict:
     """Unique eligible task ID per candidate slot, or a structured failure.
 
@@ -33,6 +52,7 @@ def bind_tasks(tasks: list[dict], state: dict) -> dict:
     })
     candidates = []
     focus = []
+    operation_focus = []
     if not isinstance(tasks, list) or not tasks:
         return {"valid": False, "reason": "empty_task_batch"}
     for i, task in enumerate(tasks):
@@ -90,6 +110,9 @@ def bind_tasks(tasks: list[dict], state: dict) -> dict:
         needed = set(chosen["target_fields"])
         precision = len(needed) / max(len(needed), len(mentioned))
         focus.append(min(1.0, precision))
+        operation_focus.append(
+            _operation_alignment(chosen["operation"], instruction)
+        )
         candidates.append(chosen)
     ids = [opt["task_id"] for opt in candidates]
     if len(ids) != len(set(ids)):
@@ -104,4 +127,5 @@ def bind_tasks(tasks: list[dict], state: dict) -> dict:
         "task_ids": ids,
         "selected": candidates,
         "scope_precision": sum(focus) / len(focus),
+        "operation_alignment": operation_focus,
     }
