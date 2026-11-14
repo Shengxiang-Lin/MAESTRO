@@ -41,6 +41,7 @@ class WindowRiskModel(nn.Module):
         last = attention_mask.long().sum(dim=1) - 1
         global_context = hidden[torch.arange(batch, device=hidden.device), last]
         logits = hidden.new_zeros(report_labels.shape, dtype=torch.float32)
+        raw_window_logits = hidden.new_full(window_owner.shape, float('nan'), dtype=torch.float32)
         for b in range(batch):
             valid = (window_owner[b] >= 0).nonzero(as_tuple=True)[0]
             if valid.numel() == 0:
@@ -52,6 +53,7 @@ class WindowRiskModel(nn.Module):
             global_ = global_context[b].unsqueeze(0).expand_as(local)
             features = torch.cat([local, global_, local * global_], dim=-1)
             window_logits = self.risk_head(features).float().view(-1)
+            raw_window_logits[b, valid] = window_logits
             for rid in torch.unique(window_owner[b, valid]).tolist():
                 group = window_logits[window_owner[b, valid] == rid]
                 logits[b, rid] = group.topk(min(group.numel(), self.top_k)).values.mean()
@@ -65,7 +67,8 @@ class WindowRiskModel(nn.Module):
         per_history = (bce * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1)
         active = (weights.sum(dim=1) > 0).float()
         loss = (per_history * active).sum() / active.sum().clamp_min(1)
-        return {"loss": loss, "report_logits": logits, "n_labels": weights.sum()}
+        return {"loss": loss, "report_logits": logits,
+                "window_logits": raw_window_logits, "n_labels": weights.sum()}
 
     def save_pretrained(self, path, tokenizer, metadata):
         out = Path(path)
