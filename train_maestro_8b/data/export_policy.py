@@ -6,27 +6,32 @@ and NEVER part of the student-visible prompt.
 from __future__ import annotations
 import argparse
 import json
-import re
 from pathlib import Path
 from train_maestro_8b.data.contracts import iter_jsonl, validate
 
 
 def reference_key(turn):
-    task, decision_round = turn["task_id"], turn["round"]
-    match = re.fullmatch(
-        re.escape(task) + r"-branch-(\d+)-round-(\d+)",
-        turn.get("sample_id", ""),
-    )
-    if match is None or int(match.group(2)) != decision_round:
-        raise ValueError("unrecognized accepted Stage-4 Main turn ID")
+    """Join Stage4 reference actions with risk/reward state by stable identity.
+
+    ``sample_id`` is a display/trajectory identifier whose formatting is not
+    a data contract: Stage4 may produce branch-round, fault-candidate, or
+    reviewed-turn variants. The publisher already exports the exact
+    ``round_sample_id`` candidate key on every accepted turn, which is also
+    used by risk labels and private reward states.
+    """
+    task = turn.get("task_id")
+    decision_round = turn.get("round")
     scenario_id = turn.get("round_sample_id")
-    if not scenario_id:
+    if not isinstance(task, str) or not task.strip():
+        raise ValueError("Stage4 Main turn lacks a valid task_id")
+    if type(decision_round) is not int or decision_round < 1:
+        raise ValueError("Stage4 Main turn lacks a valid integer round")
+    if not isinstance(scenario_id, str) or not scenario_id.strip():
         raise ValueError(
             "Stage4 main_turns lacks round_sample_id; republish from "
             "existing Stage4 journals using the updated writer"
         )
-    return task, scenario_id, int(decision_round)
-
+    return task, scenario_id, decision_round
 
 def export(risk_dir, main_turns, output_dir, decision_states=None):
     out = Path(output_dir)
