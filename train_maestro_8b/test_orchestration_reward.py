@@ -37,7 +37,7 @@ def delegate(*specs):
         "action": "delegate_task",
         "reasoning": "These evidence requests can proceed independently.",
         "params": {"tasks": [
-            {"task_instruction": f"Use {src} to return {field} evidence.",
+            {"task_instruction": f"Retrieve evidence from {src}; return {field}.",
              "context": "Current question requires this evidence.",
              "model": "model_1", "tools": ["GoogleSearchAction"]}
             for src, field in specs
@@ -86,6 +86,19 @@ class DeterministicRewardTests(unittest.TestCase):
         wrong_tool = json.loads(delegate(("source_A","project_id")))
         wrong_tool["params"]["tasks"][0]["tools"] = ["ExecuteCodeAction"]
         self.assertEqual(score_decision(wrong_tool,self.env)["reward"], -1)
+
+    def test_verification_intent_matters_beyond_matching_fields(self):
+        verify = option("A","project_id","source_A", priority=1.0)
+        verify["operation"] = "verify_conflicting_evidence"
+        weak = delegate(("source_A","project_id"))
+        strong = json.loads(weak)
+        strong["params"]["tasks"][0]["task_instruction"] = (
+            "Reconcile conflicting project_id values against source_A."
+        )
+        self.assertGreater(
+            score_decision(strong, state(verify))["reward"],
+            score_decision(weak, state(verify))["reward"],
+        )
 
     def test_same_batch_dependency_is_illegal(self):
         a = option("A","project_id","source_A",descendants=["D"])
