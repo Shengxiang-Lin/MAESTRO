@@ -46,7 +46,7 @@ class CacheSteeringTests(unittest.TestCase):
         self.assertEqual(risk[0].item(), 0)
         self.assertAlmostEqual(risk[3].item(), 0.5)
         self.assertEqual(risk[7].item(), 0)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             steer_value_cache(SimpleNamespace(layers=[]), risk[None])
 
 
