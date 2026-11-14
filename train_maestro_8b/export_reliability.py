@@ -187,6 +187,7 @@ def export(scenes_path, episodes_path, states_path, output_dir,
     out.mkdir(parents=True, exist_ok=True)
     counts = Counter()
     seen = set()
+    seen_prompts = {}
     with (out / "train.jsonl").open("w", encoding="utf-8") as train, \
          (out / "val.jsonl").open("w", encoding="utf-8") as val:
         for ep in iter_jsonl(episodes_path):
@@ -200,6 +201,15 @@ def export(scenes_path, episodes_path, states_path, output_dir,
             bucket = int(sha256(f"{seed}:{scene_id}".encode()).hexdigest()[:12], 16) / 16**12
             writer = val if bucket < val_fraction else train
             for row in render_samples(scene_map[scene_id], ep, state_map[key], max_attempts):
+                signature = sha256(row["prompt"].encode("utf-8")).hexdigest()
+                supervision = [(r["start"], r["end"], r["risk"], r["mask"])
+                               for r in row["reports"]]
+                if signature in seen_prompts:
+                    if seen_prompts[signature] != supervision:
+                        raise ValueError("identical Main prompt has inconsistent risk labels")
+                    counts["duplicate_prompts_skipped"] += 1
+                    continue
+                seen_prompts[signature] = supervision
                 writer.write(json.dumps(row, ensure_ascii=False) + "\n")
                 counts["total"] += 1
                 counts["val" if writer is val else "train"] += 1
