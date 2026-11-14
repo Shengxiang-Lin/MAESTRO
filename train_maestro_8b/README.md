@@ -128,8 +128,9 @@ private/reward_backfill_failures.jsonl; the previous sidecar is preserved.
 Use exactly the original Stage4 scenes, parallel cap and retry budget.
 For very large journals the replay is CPU/disk-bound, not an LLM run.
 
-Cases where the only available "repair" is a private, Main-unobservable
-fault label are explicitly marked unscorable and excluded from RL.
+Cases requiring a private, Main-unobservable fault diagnosis or
+an unreleased future-evidence event not announced to Main are marked
+unscorable and excluded from RL.
 
 Before running GRPO, inspect whether Teacher actions themselves
 can be bound deterministically and what their achievable rewards are:
