@@ -27,7 +27,7 @@ jobs:
       - name: Compile training modules
         run: python -m compileall -q train_maestro_8b
       - name: Test risk schema, history alignment and masks
-        run: python -m unittest train_maestro_8b.test_reliability -v
+        run: python -m unittest train_maestro_8b.test_reliability train_maestro_8b.test_candidate_alignment -v
 
   risk-head-gradient:
     runs-on: ubuntu-latest
