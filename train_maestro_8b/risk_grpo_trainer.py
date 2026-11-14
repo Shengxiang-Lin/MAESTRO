@@ -123,6 +123,13 @@ def make_trainer_class():
                     "RiskAwarePolicy and TRL Trainer were wrapped separately; "
                     "cannot guarantee rollout/gradient equivalence"
                 )
+            # TRL / Transformers can activate gradient checkpointing in
+            # Trainer.train(), even when the loader initially disabled it.
+            # It discards past_key_values and would silently break RiskKV.
+            if hasattr(model, "gradient_checkpointing_disable"):
+                model.gradient_checkpointing_disable()
+            if getattr(model, "config", None) is not None:
+                model.config.use_cache = True
             model.eval()
             row = inputs["records"][0]
             prefix = self.engine.prefill(row["prompt"], row["reports"])
