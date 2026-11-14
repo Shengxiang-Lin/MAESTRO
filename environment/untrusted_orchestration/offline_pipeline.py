@@ -488,6 +488,25 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
         scene, episode, audit,
         observed_rounds={item["attempt"] for item in entries},
     )
+    # Stage4B/4C may replace the original 4A report prose. Refresh reward
+    # states using the FINAL reports actually delivered to Main; never train
+    # on 4A-only snapshots which might disagree with final visible history.
+    if outcome == "recovered":
+        from .decision_reward_replay import replay_reward_states
+        settings = audit.get("decision_reward_settings") or {}
+        try:
+            audit["decision_reward_states"] = replay_reward_states(
+                scene, episode, audit,
+                max_parallel_tasks=settings.get("max_parallel_tasks", 4),
+                max_retries=settings.get("max_retries", 1),
+                model_alias=settings.get("model_alias", model_alias),
+            )
+            audit["decision_reward_replay_error"] = None
+        except (ValueError, KeyError, TypeError) as exc:
+            # Preserve accepted SFT turns; exclude ONLY unsafe reward rows.
+            # The private publisher records the explicit missing coverage.
+            audit["decision_reward_states"] = []
+            audit["decision_reward_replay_error"] = str(exc)[:300]
     audit["candidate_local_turns"] = deepcopy(turns)
     audit["main_action_reviews"] = reviews
     audit["outcome"] = outcome
