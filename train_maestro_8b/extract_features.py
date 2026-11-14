@@ -45,6 +45,7 @@ def main():
         model, loader, args.output_dir, model_name=args.model,
         window_size=args.window_size, window_stride=args.window_stride,
         max_length=args.max_length, shard_size=args.shard_size,
+        quantization="nf4" if args.load_in_4bit else "none",
     )
     print(json.dumps({**manifest, "overlong_skipped": ds.overlong}, indent=2))
 

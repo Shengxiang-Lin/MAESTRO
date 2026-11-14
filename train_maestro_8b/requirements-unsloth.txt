@@ -1,0 +1,7 @@
+# Stage-2 only: CUDA Unsloth/Qwen3 loader, TRL GRPOConfig and Trainer.
+# Keep the resolver free to choose a mutually compatible release set.
+# For CPU-only CI, use requirements from the trl-grpo-cpu-integration job.
+unsloth
+unsloth_zoo
+trl
+accelerate
