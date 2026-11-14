@@ -98,9 +98,18 @@ def main():
     backbone = None
     if args.features_dir:
         train_set = CachedRiskDataset(args.features_dir)
+        if (train_set.model_name != args.model
+                or train_set.window_size != args.window_size
+                or train_set.window_stride != args.window_stride):
+            raise ValueError("cached features do not match base model or window settings")
         eval_set = CachedRiskDataset(args.eval_features_dir) if args.eval_features_dir else None
-        if eval_set is not None and train_set.hidden_size != eval_set.hidden_size:
-            raise ValueError("incompatible train/eval feature dimensions")
+        if eval_set is not None and (
+            train_set.hidden_size != eval_set.hidden_size
+            or train_set.model_name != eval_set.model_name
+            or train_set.window_size != eval_set.window_size
+            or train_set.window_stride != eval_set.window_stride
+        ):
+            raise ValueError("incompatible train/eval features")
         hidden_size = train_set.hidden_size
         collator = collate_cached
     else:
