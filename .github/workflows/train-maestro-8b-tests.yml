@@ -42,7 +42,7 @@ jobs:
       - name: Install feature-cache progress dependency
         run: python -m pip install tqdm
       - name: Verify frozen-backbone MIL and Risk Head gradients
-        run: python -m unittest train_maestro_8b.test_risk_model train_maestro_8b.test_feature_cache -v
+        run: python -m unittest train_maestro_8b.test_risk_model train_maestro_8b.test_feature_cache train_maestro_8b.test_grpo_trainer -v
 
   o1-prompt-integration:
     runs-on: ubuntu-latest
