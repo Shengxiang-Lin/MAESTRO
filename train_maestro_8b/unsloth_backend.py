@@ -45,11 +45,11 @@ def load_risk_engine(args):
     if cfg.get("trained_parameters") != "risk_head_only":
         raise ValueError("Stage1 checkpoint did not freeze the backbone")
     precision = cfg.get("feature_model_quantization")
-    if precision is not None and precision != "nf4":
+    if precision != "nf4":
         raise ValueError(
-            "Risk Head was trained on non-NF4 features, but Stage2 uses "
-            "4-bit QLoRA; regenerate frozen Stage1 features in NF4 or "
-            "use the matching BF16 backend"
+            "Risk Head frozen features were not verified as NF4. "
+            "Re-extract Stage1 features with --load_in_4bit, retrain Risk Head, "
+            "and use the same base model and tokenizer; Stage2 Unsloth is NF4."
         )
 
     model, tokenizer = FastLanguageModel.from_pretrained(
@@ -124,8 +124,24 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8):
             "sampling/logprob distributions differ. STOP, do not train "
             "with incompatible fast inference/KV kernels."
         )
-    if not any(row["window_probs"].numel() for row in [state]) and record["reports"]:
+    if not state.window_probs.numel() and record["reports"]:
         raise RuntimeError("reported feedback was not assigned any risk windows")
+    # This also verifies that the accelerated suffix remains differentiable
+    # and freezes all non-LoRA weights, not merely sampling correctly.
+    policy.train()
+    for param in policy.parameters():
+        param.grad = None
+    replay_with_grad = engine.log_probs(state, ids, temperature=temperature)
+    (-replay_with_grad.mean()).backward()
+    if not any(p.grad is not None and bool((p.grad != 0).any())
+               for name, p in policy.named_parameters() if "lora_" in name):
+        raise RuntimeError("no nonzero LoRA gradients through RiskKV suffix")
+    if any(p.grad is not None for name, p in policy.named_parameters()
+           if "lora_" not in name):
+        raise RuntimeError("frozen backbone unexpectedly received gradients")
+    if any(p.grad is not None for p in engine.risk_head.parameters()):
+        raise RuntimeError("frozen Risk Head unexpectedly received gradients")
+    policy.zero_grad(set_to_none=True)
     return {
         "prefix_tokens": state.length,
         "probe_tokens": len(ids),
