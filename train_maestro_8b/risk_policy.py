@@ -172,7 +172,8 @@ class RiskAwarePolicy:
         old_logps = []
         for _ in range(max_new_tokens):
             n = ids.shape[1]
-            mask = torch.ones((1, prefix.length + n + len(seq) - (0 if len(seq) == 0 else 1)),
+            consumed = 0 if not seq else len(self.anchor_ids) + len(seq) - 1
+            mask = torch.ones((1, prefix.length + consumed + n),
                               dtype=torch.long, device=self.device)
             # First call consumes all anchor tokens. Later calls consume the
             # previously generated token only; do not replay the prefix.
