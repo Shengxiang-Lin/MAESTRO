@@ -6,10 +6,10 @@ import unittest
 from types import SimpleNamespace
 import torch
 
-from train_maestro_8b.cache_steering import (
+from train_maestro_8b.policy.cache import (
     clone_cache, steer_value_cache, token_risk_from_windows,
 )
-from train_maestro_8b.risk_model import WindowRiskHead
+from train_maestro_8b.risk.model import WindowRiskHead
 
 
 class CacheSteeringTests(unittest.TestCase):
@@ -72,7 +72,7 @@ class TinyModelTests(unittest.TestCase):
     def test_qwen3_cache_replay_and_only_lora_gradients(self):
         from transformers import Qwen3Config, Qwen3ForCausalLM
         from peft import LoraConfig, TaskType, get_peft_model
-        from train_maestro_8b.risk_policy import RiskAwarePolicy
+        from train_maestro_8b.policy.model import RiskAwarePolicy
 
         torch.manual_seed(13)
         cfg = Qwen3Config(

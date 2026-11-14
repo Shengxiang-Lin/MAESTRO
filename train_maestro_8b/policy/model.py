@@ -12,9 +12,9 @@ from typing import Any
 
 import torch
 
-from .cache_steering import clone_cache, steer_value_cache, token_risk_from_windows
-from .risk_model import WindowRiskHead, extract_window_features
-from .risk_windows import span_to_tokens, windows
+from train_maestro_8b.policy.cache import clone_cache, steer_value_cache, token_risk_from_windows
+from train_maestro_8b.risk.model import WindowRiskHead, extract_window_features
+from train_maestro_8b.data.contracts import span_to_tokens, windows
 
 
 @dataclass

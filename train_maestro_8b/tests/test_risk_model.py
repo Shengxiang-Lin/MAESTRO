@@ -2,7 +2,7 @@
 import unittest
 import torch
 
-from train_maestro_8b.risk_model import WindowRiskHead, extract_window_features
+from train_maestro_8b.risk.model import WindowRiskHead, extract_window_features
 
 
 class RiskHeadTests(unittest.TestCase):

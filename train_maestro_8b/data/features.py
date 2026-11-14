@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
-from .risk_model import extract_window_features
+from train_maestro_8b.risk.model import extract_window_features
 
 
 def create_frozen_backbone(model_name: str, *, dtype=torch.bfloat16,

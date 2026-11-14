@@ -41,9 +41,9 @@ class TRLTrainerTinyQwen3Tests(unittest.TestCase):
         from peft import LoraConfig, TaskType, get_peft_model
         from trl import GRPOConfig
 
-        from train_maestro_8b.risk_model import WindowRiskHead
-        from train_maestro_8b.risk_policy import RiskAwarePolicy
-        from train_maestro_8b.risk_grpo_trainer import (
+        from train_maestro_8b.risk.model import WindowRiskHead
+        from train_maestro_8b.policy.model import RiskAwarePolicy
+        from train_maestro_8b.policy.trainer import (
             MainDecisionDataset, make_trainer_class,
         )
 
