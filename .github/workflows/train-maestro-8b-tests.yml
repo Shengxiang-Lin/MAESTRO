@@ -28,3 +28,16 @@ jobs:
         run: python -m compileall -q train_maestro_8b
       - name: Test risk schema, history alignment and masks
         run: python -m unittest train_maestro_8b.test_reliability -v
+
+  risk-model-gradient:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install CPU PyTorch
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Verify one-pass MIL and backbone gradients
+        run: python -m unittest train_maestro_8b.test_risk_model -v
