@@ -27,9 +27,12 @@ RISK_EPOCHS="${RISK_EPOCHS:-3}"
 RISK_BATCH_SIZE="${RISK_BATCH_SIZE:-8}"
 GRPO_EPOCHS="${GRPO_EPOCHS:-3}"
 GRPO_MAX_STEPS="${GRPO_MAX_STEPS:--1}"
-GRPO_GENERATIONS="${GRPO_GENERATIONS:-4}"
-GRPO_GRAD_ACCUM="${GRPO_GRAD_ACCUM:-4}"
-GRPO_MAX_NEW_TOKENS="${GRPO_MAX_NEW_TOKENS:-256}"
+GRPO_GENERATIONS="${GRPO_GENERATIONS:-8}"
+GRPO_GRAD_ACCUM="${GRPO_GRAD_ACCUM:-1}"
+GRPO_MAX_NEW_TOKENS="${GRPO_MAX_NEW_TOKENS:-4096}"
+GRPO_MAX_PROMPT_TOKENS="${GRPO_MAX_PROMPT_TOKENS:-12288}"
+GRPO_TEMPERATURE="${GRPO_TEMPERATURE:-1.0}"
+PILOT_MAX_NEW_TOKENS="${PILOT_MAX_NEW_TOKENS:-512}"
 GRPO_LR="${GRPO_LR:-1e-5}"
 GRPO_ROLLOUT_ATTENTION="${GRPO_ROLLOUT_ATTENTION:-sdpa}"
 GRPO_VLLM_ENGINE="${GRPO_VLLM_ENGINE:-0}"
@@ -38,8 +41,8 @@ GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT="${GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT:-}"
 GRPO_STEER_LAYERS="${GRPO_STEER_LAYERS:-8}"
 GRPO_STEER_STRENGTH="${GRPO_STEER_STRENGTH:-0.1}"
 GRPO_STEER_THRESHOLD="${GRPO_STEER_THRESHOLD:-0.5}"
-PILOT_PROMPTS="${PILOT_PROMPTS:-20}"
-PILOT_STEPS="${PILOT_STEPS:-2}"
+PILOT_PROMPTS="${PILOT_PROMPTS:-4}"
+PILOT_STEPS="${PILOT_STEPS:-1}"
 SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
 GRPO_RESUME_FROM="${GRPO_RESUME_FROM:-}"
 
@@ -58,15 +61,18 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
   risk          Train Risk Head only, using cached NF4 features
   prepare-grpo  Backfill missing private states, export and audit GRPO rows
   preflight     Check Unsloth KV/logprob/LoRA gradient compatibility
-  pilot         Short GRPO run (20 prompts, 2 optimizer steps by default)
+  pilot         DA-style short GRPO run (1 prompt x 8 candidates, 512 output cap)
   grpo          Full Unsloth+TRL GRPO training
+  inspect-io    Audit real O1 prompt tokens and reference action lengths
   status        Show generated data and checkpoint files
   help          This help
 
 Override settings via environment variables or run/config.env:
   MODEL, STAGE1_DIR, STAGE4_DIR, RUN_ROOT, MAX_LENGTH,
   RISK_EPOCHS, RISK_BATCH_SIZE, GRPO_EPOCHS, GRPO_GENERATIONS,
-  GRPO_GRAD_ACCUM, GRPO_MAX_STEPS, SKIP_COMPLETED, GRPO_RESUME_FROM,
+  GRPO_GRAD_ACCUM, GRPO_MAX_PROMPT_TOKENS, GRPO_MAX_NEW_TOKENS,
+  GRPO_TEMPERATURE, PILOT_MAX_NEW_TOKENS, GRPO_MAX_STEPS,
+  SKIP_COMPLETED, GRPO_RESUME_FROM,
   GRPO_VLLM_ENGINE, GRPO_VLLM_MEMORY_UTILIZATION, GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT
 
 Run on a NEW RUN_ROOT to avoid mixing stale caches or experiments.
@@ -200,9 +206,9 @@ init_grpo_args() {
   common_args=(
     --model "$MODEL" --risk_checkpoint "$RISK_CKPT"
     --train_file "$GRPO_DATA/train.jsonl"
-    --backend unsloth --load_in_4bit --max_length "$MAX_LENGTH"
+    --backend unsloth --load_in_4bit --max_length "$GRPO_MAX_PROMPT_TOKENS"
     --rollout_attention "$GRPO_ROLLOUT_ATTENTION"
-    --max_new_tokens "$GRPO_MAX_NEW_TOKENS"
+    --max_new_tokens "$GRPO_MAX_NEW_TOKENS" --temperature "$GRPO_TEMPERATURE"
     --num_generations "$GRPO_GENERATIONS"
     --gradient_accumulation_steps "$GRPO_GRAD_ACCUM"
     --steer_last_n "$GRPO_STEER_LAYERS"
@@ -215,6 +221,17 @@ init_grpo_args() {
   if [[ -n "$GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT" ]]; then
     common_args+=(--preflight_max_logprob_drift "$GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT")
   fi
+}
+inspect_io() {
+  need_model
+  need "$GRPO_DATA/train.jsonl"
+  say "Inspect actual Main prompts and reference Action budgets (no GPU)"
+  python -m train_maestro_8b.data.inspect_io \
+    --model "$MODEL" --data "$GRPO_DATA/train.jsonl" \
+    --max_prompt_tokens "$GRPO_MAX_PROMPT_TOKENS" \
+    --max_completion_tokens "$GRPO_MAX_NEW_TOKENS" \
+    --num_generations "$GRPO_GENERATIONS" \
+    --out "$RUN_ROOT/io_inspection.json"
 }
 preflight() {
   need_model; verify_risk; need "$GRPO_DATA/train.jsonl"
@@ -234,6 +251,7 @@ pilot() {
   init_grpo_args
   say "Pilot GRPO"
   python -m train_maestro_8b.policy.train "${common_args[@]}" \
+    --max_new_tokens "$PILOT_MAX_NEW_TOKENS" \
     --output_dir "$PILOT_CKPT" \
     --max_prompts "$PILOT_PROMPTS" --max_steps "$PILOT_STEPS" \
     --logging_steps 1 --reward_debug_jsonl "$RUN_ROOT/reward_pilot.jsonl"
@@ -270,11 +288,12 @@ status() {
   done
 }
 case "${1:-help}" in
-  all) export_data; extract_features; train_risk; prepare_grpo; preflight; pilot; grpo; status ;;
+  all) export_data; extract_features; train_risk; prepare_grpo; inspect_io; preflight; pilot; grpo; status ;;
   export) export_data ;;
   features) extract_features ;;
   risk) train_risk ;;
   prepare-grpo) prepare_grpo ;;
+  inspect-io) inspect_io ;;
   preflight) preflight ;;
   pilot) pilot ;;
   grpo) grpo ;;
