@@ -8,12 +8,13 @@ from pathlib import Path
 
 from .composer import compose_scene, replay_scene
 from .v31 import compose_v31, validate_v31
+from .typed_scene import compose_scene as compose_v32, validate_scene as validate_v32
 from .yago import load_yago
 
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="YAGO-grounded Macro-first v3 pilot")
-    p.add_argument("--variant", choices=("v3", "v3.1"), default="v3",
+    p.add_argument("--variant", choices=("v3", "v3.1", "v3.2"), default="v3",
                    help="Keep v3 historical behavior unless explicitly selecting v3.1")
     p.add_argument("--yago", type=Path, default=Path("data/world-source/YAGO-4.6"))
     p.add_argument("--output-dir", type=Path, default=Path("environment/data/stage1_v3_pilot"))
@@ -24,6 +25,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--min-hops", type=int, default=1)
     p.add_argument("--max-hops", type=int, default=3)
     p.add_argument("--max-branches", type=int, default=4)
+    p.add_argument("--max-macros", type=int, default=12,
+                   help="v3.2 maximum typed Macro nodes")
+    p.add_argument("--max-parallel", type=int, default=3,
+                   help="v3.2 maximum concurrent macros per reference wave")
+    p.add_argument("--max-waves", type=int, default=7,
+                   help="v3.2 maximum topological waves")
     p.add_argument("--overwrite", action="store_true")
     return p
 
@@ -49,7 +56,17 @@ def main(argv: list[str] | None = None) -> int:
             if accepted >= args.target:
                 break
             try:
-                if args.variant == "v3.1":
+                if args.variant == "v3.2":
+                    scene = compose_v32(
+                        graph, seed=args.seed, ordinal=attempt,
+                        min_hops=args.min_hops, max_hops=args.max_hops,
+                        max_branches=min(args.max_branches, 3),
+                        max_macros=args.max_macros,
+                        max_parallel=args.max_parallel,
+                        max_waves=args.max_waves,
+                    )
+                    validate_v32(scene, graph)
+                elif args.variant == "v3.1":
                     scene = compose_v31(
                         graph, seed=args.seed, ordinal=attempt,
                         min_hops=args.min_hops, max_hops=args.max_hops,
@@ -70,7 +87,13 @@ def main(argv: list[str] | None = None) -> int:
             stream.flush()
             accepted += 1
             stats["macro_count:" + str(scene["macro_graph"]["macro_task_count"])] += 1
-            if args.variant == "v3.1":
+            if args.variant == "v3.2":
+                report = scene["quality_report"]
+                stats["graph_signature:" + report["graph_signature"]] += 1
+                stats["wave_count:" + str(report["wave_count"])] += 1
+                stats["roles:" + ",".join(sorted(report["role_counts"]))] += 1
+                stats["cross_wave:" + str(bool(report["cross_wave_edges"]))] += 1
+            elif args.variant == "v3.1":
                 stats["evidence_sources:" + str(scene["quality_report"]["evidence_source_count"])] += 1
                 stats["real_hops:" + str(scene["quality_report"]["real_yago_hops"])] += 1
                 stats["review:" + str(scene["quality_report"]["uses_conflict_resolution"])] += 1
