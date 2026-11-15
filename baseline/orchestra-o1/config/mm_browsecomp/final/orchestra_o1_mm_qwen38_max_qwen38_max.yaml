@@ -1,3 +1,4 @@
+# Frozen MM-BrowseComp final / Orchestra-o1.
 # Orchestra-o1: MM-BrowseComp; Main-Agent qwen3.8-max; Sub-Agent qwen3.8-max.
 main_model: "qwen3.8-max"
 sub_models:
@@ -26,9 +27,11 @@ dataset_path: "data/MM-BrowseComp/data/MMBrowseComp_400_decrypted.jsonl"
 dataset_jsonl_path: "data/MM-BrowseComp/data/test_metadata.jsonl"
 attachments_dir: "data/MM-BrowseComp"
 level_filter: null
-max_tasks: 40
+# Frozen final 100 tasks from the official MM-BrowseComp-400 dataset.
+task_ids_file: "data/MM-BrowseComp/splits/final_100_ids.txt"
+max_tasks: null
 max_attempts: 10
 max_concurrency: 10
 
-result_folder: "logs/mm_browsecomp_o1_qwen38_max_qwen38_max_40"
-trajectory_folder: "logs/mm_browsecomp_o1_qwen38_max_qwen38_max_40/trajectories"
+result_folder: "logs/mm_browsecomp_final/orchestra_o1_mm_qwen38_max_qwen38_max"
+trajectory_folder: "logs/mm_browsecomp_final/orchestra_o1_mm_qwen38_max_qwen38_max/trajectories"

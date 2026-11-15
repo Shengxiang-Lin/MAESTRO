@@ -1,22 +1,20 @@
-# Orchestra-o1: local Qwen3.8-27B-FP8 for both Main-Agent and Sub-Agents.
-# Main/Sub share one vLLM service across GPUs 0 and 1 (48 GiB each).
+# Frozen OmniGAIA final / Orchestra-o1.
+# Orchestra-o1: Qwen3.8-Max Main-Agent + local Qwen3.8-27B-FP8 Sub-Agent.
 # Metadata source: data/OmniGAIA/test_metadata.json (converted losslessly to JSONL).
-main_model: "local-qwen-27b"
+main_model: "qwen3.8-max"
 sub_models:
   - "local-qwen-27b"
 
 models:
   local-qwen-27b:
-    model_path: "/root/autodl-tmp/MAESTRO/base_models/Qwen3.8-27B-FP8"
-    gpus: [0, 1]
-    tensor_parallel_size: 2
+    model_path: "${QWEN3_27B_MODEL_PATH}"
+    gpus: [0]
+    tensor_parallel_size: 1
     dtype: "auto"
     quantization: "fp8"
     max_model_len: 32768
     max_num_seqs: 10
     gpu_memory_utilization: 0.90
-    env:
-      VLLM_USE_FLASHINFER_SAMPLER: "0"
 
 search:
   provider: "dashscope"
@@ -33,14 +31,15 @@ tool_models:
   video_audio: "qwen3.5-omni-flash"
   video_summary: "qwen3.7-flash"
 evaluation_model: "qwen3.7-plus"
-trace_summary_model: "qwen3.7-plus"
 
 dataset_type: "OmniGAIA"
 dataset_path: "data/OmniGAIA/test_metadata.jsonl"
 attachments_dir: "data/OmniGAIA"
 level_filter: null
-max_tasks: 10
+# Fixed OmniGAIA final evaluation (100 questions).
+task_ids_file: "data/OmniGAIA/splits/final_100_ids.txt"
+max_tasks: null
 max_attempts: 10
 max_concurrency: 10
-result_folder: "logs/omnigaia_o1_local_qwen27b_fp8_10"
-trajectory_folder: "logs/omnigaia_o1_local_qwen27b_fp8_10/trajectories"
+result_folder: "logs/omnigaia_final/orchestra_o1_qwen38_max_local_fp8"
+trajectory_folder: "logs/omnigaia_final/orchestra_o1_qwen38_max_local_fp8/trajectories"

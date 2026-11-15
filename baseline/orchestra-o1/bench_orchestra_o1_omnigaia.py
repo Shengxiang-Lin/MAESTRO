@@ -2,7 +2,7 @@
 
 From the MAESTRO repository root:
     python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
-      --config baseline/orchestra-o1/config/benchmarks/orchestra_o1_omnigaia.yaml
+      --config baseline/orchestra-o1/config/omnigaia/pretest/orchestra_o1_omnigaia.yaml
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ from orchestra_o1.main_agent import MainAgent as O1MainAgent
 from orchestra_o1.prompts.omnigaia import OmniGAIAMainAgentPrompt
 
 DEFAULT_CONFIG_PATH = (
-    BASELINE_ROOT / "config/benchmarks/orchestra_o1_omnigaia.yaml"
+    BASELINE_ROOT / "config/omnigaia/pretest/orchestra_o1_omnigaia.yaml"
 )
 
 

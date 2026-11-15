@@ -1,0 +1,36 @@
+# Frozen OmniGAIA final / Orchestra-o1.
+# Orchestra-o1: OmniGAIA; Main-Agent qwen3.8-max; Sub-Agent qwen3.7-flash.
+main_model: "qwen3.8-max"
+sub_models:
+  - "qwen3.7-flash"
+
+search:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+browse:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+tool_models:
+  image_analysis: "qwen3.7-flash"
+  audio_analysis: "qwen3.5-omni-flash"
+  video_vision: "qwen3.7-flash"
+  video_audio: "qwen3.5-omni-flash"
+  video_summary: "qwen3.7-flash"
+
+evaluation_model: "qwen3.7-plus"
+trace_summary_model: "qwen3.7-plus"
+
+dataset_type: "OmniGAIA"
+dataset_path: "data/OmniGAIA/test_metadata.jsonl"
+attachments_dir: "data/OmniGAIA"
+level_filter: null
+# Fixed OmniGAIA final evaluation (100 questions).
+task_ids_file: "data/OmniGAIA/splits/final_100_ids.txt"
+max_tasks: null
+max_attempts: 10
+max_concurrency: 10
+
+result_folder: "logs/omnigaia_final/orchestra_o1_omnigaia_qwen38_max_qwen37_flash"
+trajectory_folder: "logs/omnigaia_final/orchestra_o1_omnigaia_qwen38_max_qwen37_flash/trajectories"

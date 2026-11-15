@@ -1,7 +1,8 @@
-# OmniGAIA Benchmark Configuration (Orchestra-o1 baseline)
-main_model: "qwen3.7-plus"
+# Frozen OmniGAIA final / Orchestra-o1.
+# Orchestra-o1: OmniGAIA; Main-Agent qwen3.8-max; Sub-Agent qwen3.7-plus.
+main_model: "qwen3.8-max"
 sub_models:
-  - "qwen3.7-plus"
+  - "qwen3.8-max"
 
 search:
   provider: "dashscope"
@@ -21,15 +22,15 @@ tool_models:
 evaluation_model: "qwen3.7-plus"
 trace_summary_model: "qwen3.7-plus"
 
+dataset_type: "OmniGAIA"
 dataset_path: "data/OmniGAIA/test_metadata.jsonl"
 attachments_dir: "data/OmniGAIA"
 level_filter: null
-# Pretest; for final evaluation use data/OmniGAIA/splits/final_100_ids.txt.
-task_ids_file: "data/OmniGAIA/splits/pretest_60_ids.txt"
-
+# Fixed OmniGAIA final evaluation (100 questions).
+task_ids_file: "data/OmniGAIA/splits/final_100_ids.txt"
 max_tasks: null
 max_attempts: 10
 max_concurrency: 10
 
-result_folder: "logs/omnigaia_orchestra_o1_qwen3.7_plus"
-trajectory_folder: "logs/omnigaia_orchestra_o1_qwen3.7_plus/trajectories"
+result_folder: "logs/omnigaia_final/orchestra_o1_omnigaia_qwen38_max_qwen38_max"
+trajectory_folder: "logs/omnigaia_final/orchestra_o1_omnigaia_qwen38_max_qwen38_max/trajectories"

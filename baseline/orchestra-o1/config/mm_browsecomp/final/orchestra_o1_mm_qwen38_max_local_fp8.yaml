@@ -1,0 +1,49 @@
+# Frozen MM-BrowseComp final / Orchestra-o1.
+# MM-BrowseComp configuration; model roles can match your existing experiment.
+main_model: "qwen3.8-max"
+sub_models:
+  - "local-qwen-27b"
+
+models:
+  local-qwen-27b:
+    model_path: "${QWEN3_27B_MODEL_PATH}"
+    gpus: [0]
+    tensor_parallel_size: 1
+    dtype: "auto"
+    quantization: "fp8"
+    max_model_len: 32768
+    max_num_seqs: 10
+    gpu_memory_utilization: 0.90
+
+search:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+browse:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+tool_models:
+  image_analysis: "qwen3.7-flash"
+  audio_analysis: "qwen3.5-omni-flash"
+  video_vision: "qwen3.7-flash"
+  video_audio: "qwen3.5-omni-flash"
+  video_summary: "qwen3.7-flash"
+
+evaluation_model: "qwen3.7-plus"
+
+dataset_type: "MM-BrowseComp"
+# Accepts JSON, plaintext JSONL, or the official encrypted JSONL.
+dataset_path: "data/MM-BrowseComp/data/MMBrowseComp_400_decrypted.jsonl"
+dataset_jsonl_path: "data/MM-BrowseComp/data/test_metadata.jsonl"
+attachments_dir: "data/MM-BrowseComp"
+level_filter: null
+# Frozen final 100 tasks from the official MM-BrowseComp-400 dataset.
+task_ids_file: "data/MM-BrowseComp/splits/final_100_ids.txt"
+
+max_tasks: null
+max_attempts: 10
+max_concurrency: 10
+
+result_folder: "logs/mm_browsecomp_final/orchestra_o1_mm_qwen38_max_local_fp8"
+trajectory_folder: "logs/mm_browsecomp_final/orchestra_o1_mm_qwen38_max_local_fp8/trajectories"

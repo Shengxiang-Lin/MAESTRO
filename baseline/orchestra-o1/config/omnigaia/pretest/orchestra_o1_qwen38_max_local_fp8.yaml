@@ -1,4 +1,6 @@
-# MM-BrowseComp configuration; model roles can match your existing experiment.
+# Frozen OmniGAIA pretest / Orchestra-o1.
+# Orchestra-o1: Qwen3.8-Max Main-Agent + local Qwen3.8-27B-FP8 Sub-Agent.
+# Metadata source: data/OmniGAIA/test_metadata.json (converted losslessly to JSONL).
 main_model: "qwen3.8-max"
 sub_models:
   - "local-qwen-27b"
@@ -28,19 +30,16 @@ tool_models:
   video_vision: "qwen3.7-flash"
   video_audio: "qwen3.5-omni-flash"
   video_summary: "qwen3.7-flash"
-
 evaluation_model: "qwen3.7-plus"
 
-dataset_type: "MM-BrowseComp"
-# Accepts JSON, plaintext JSONL, or the official encrypted JSONL.
-dataset_path: "data/MM-BrowseComp/data/MMBrowseComp_400_decrypted.jsonl"
-dataset_jsonl_path: "data/MM-BrowseComp/data/test_metadata.jsonl"
-attachments_dir: "data/MM-BrowseComp"
+dataset_type: "OmniGAIA"
+dataset_path: "data/OmniGAIA/test_metadata.jsonl"
+attachments_dir: "data/OmniGAIA"
 level_filter: null
-
-max_tasks: 10
+# Fixed OmniGAIA pre-experiment (60 questions).
+task_ids_file: "data/OmniGAIA/splits/pretest_60_ids.txt"
+max_tasks: null
 max_attempts: 10
 max_concurrency: 10
-
-result_folder: "logs/mm_browsecomp_orchestra_o1_qwen37_plus_local_qwen35_9b"
-trajectory_folder: "logs/mm_browsecomp_orchestra_o1_qwen37_plus_local_qwen35_9b/trajectories"
+result_folder: "logs/omnigaia_pretest/orchestra_o1_qwen38_max_local_fp8"
+trajectory_folder: "logs/omnigaia_pretest/orchestra_o1_qwen38_max_local_fp8/trajectories"
