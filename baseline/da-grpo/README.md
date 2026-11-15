@@ -39,6 +39,92 @@ dependency and no fall-back to the old trainer.
   Ground truth, Stage 3/4 reference action, and other expert metadata
   are separate dataset columns passed to the **reward only**.
 
+
+## Phase 0: train current Stage-4 decisions with the exact DA-GRPO baseline
+
+When testing the GRPO training/reward pipeline **before** introducing
+Stage-1 Risk Head / edited KV Cache, use `run_stage4.sh`. It reuses the
+existing `train.py`, `reward_adapter.py` and `reward_fn.py` unchanged:
+Qwen3-8B Chat Template, Unsloth + TRL `GRPOTrainer`, colocated vLLM,
+DAPO+KL(0.01), and the *original DA four-dimensional LLM Judge prompt*
+(0.10 format, 0.10 action, 0.20 tool, 0.60 decision).
+
+The only differences from the established DA training are **which
+offline Stage-4 Main turns are used**, an isolated output directory, and
+an optional smaller smoke-test subset. The policy does **not** see
+reference actions, gold answers, hidden fault origin or private
+decision states in its prompt. **Important: the DA LLM Judge does
+receive the gold answer, Main/Sub-Agent visible history and reference
+expert decision as reward-only metadata**, matching the DA baseline;
+this is *not* the privacy-restricted Judge from RiskKV Hybrid mode.
+
+```bash
+# From MAESTRO repo root, after Stage4 published main_turns.jsonl exists:
+git pull origin main
+
+# Needs environment/data/stage1/questions/scenes.jsonl
+# and environment/data/stage4/main_turns.jsonl plus Stage4 manifest.json.
+bash baseline/da-grpo/run_stage4.sh prepare
+
+# Validate dataset and judge API separately:
+bash baseline/da-grpo/run_stage4.sh check
+export DASHSCOPE_API_KEY='your_key'   # do not write keys in config or Git
+bash baseline/da-grpo/run_stage4.sh judge
+
+# First learn whether the original DA pipeline yields nonzero GRPO gradients:
+DA_SMOKE_STEPS=3 DA_SMOKE_ROWS=16 DA_SMOKE_COMPLETION_TOKENS=1536 \
+  bash baseline/da-grpo/run_stage4.sh smoke
+
+# Then a bounded experiment, not an automatic three-epoch 14k-turn run:
+DA_MAX_STEPS=100 bash baseline/da-grpo/run_stage4.sh train
+```
+
+Default Stage4-only Parquet: `dataset/data/da-grpo-stage4/train.parquet`.
+Smoke adapter: `baseline/da-grpo/output_stage4_smoke/final_adapter`.
+Regular adapter: `baseline/da-grpo/output_stage4/final_adapter`.
+Set `DA_STAGE4_DATA`, `DA_STAGE4_OUTPUT`, and
+`DA_STAGE4_SMOKE_OUTPUT` to isolate experiments. For alternative
+Scene/output locations use `DA_STAGE4_SCENES`, `DA_STAGE4_TURNS`.
+
+`prepare` checks the original Stage4 manifest source hashes, keeps
+recovered/reviewed turns only, re-renders the **exact O1 user prompt**
+and optionally validates its Qwen3 Chat Template token count. In modern
+Stage4 data, `round_sample_id` is used to uniquely bind each candidate
+scenario/round; older Stage4 rows without it still use their historical
+branch identity. It does not silently drop overlong inputs or promote
+rejected Stage4 branches into positive training samples.
+
+Alternative direct invocation (skip script):
+
+```bash
+python -m dataset.prepare_da_grpo --stage4-only \
+  --scenes environment/data/stage1/questions/scenes.jsonl \
+  --untrusted-turns environment/data/stage4/main_turns.jsonl \
+  --output-dir dataset/data/da-grpo-stage4 \
+  --tokenizer base_models/Qwen3-8B --max-prompt-tokens 12288
+
+python baseline/da-grpo/train.py \
+  --train-parquet dataset/data/da-grpo-stage4/train.parquet \
+  --max-train-rows 16 --max-steps 3 \
+  --max-completion-tokens 1536 \
+  --output-dir baseline/da-grpo/output_stage4_smoke
+```
+
+For this first stage, acceptance requires (i) useful completion lengths
+well below the cap, (ii) at least some nonzero within-group reward
+variance, and (iii) nonzero GRPO gradients; `reward_diagnostics.jsonl`
+records all four Judge dimensions per candidate. An all-equal reward
+group can still have a KL-related gradient in DA; inspect the reward
+variance *as well as* grad_norm. Do **not** claim this isolates Risk Head
+quality until comparing the same train set and evaluation prompts.
+
+**Stage 1 is intentionally not connected here.** Adding a Risk Head
+later requires preserving the same formatted prompt tokenization,
+correct Report-span indices, and identical sampling/scoring
+probabilities after cache editing. It should be implemented and
+benchmarked as an independent RiskKV ablation, not added by quietly
+changing DA's reward model.
+
 ## Install (new environment recommended)
 
 Use an **unused** Python 3.11+ environment, not the environment used

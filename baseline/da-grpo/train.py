@@ -381,7 +381,7 @@ def build_grpo_kwargs(cfg: dict) -> dict:
     }
 
 
-def train(cfg: dict, *, resume: str | None = None) -> None:
+def train(cfg: dict, *, resume: str | None = None, max_train_rows: int = 0) -> None:
     configure_runtime(cfg)
     print("[da-grpo] Unsloth FlashInfer disabled for SM120; using vLLM native compatible attention/sampler", flush=True)
     import torch
@@ -398,6 +398,10 @@ def train(cfg: dict, *, resume: str | None = None) -> None:
     from reward_adapter import make_reward_function
 
     rows = load_dataset_rows(cfg["paths"]["train_parquet"])
+    if max_train_rows:
+        rows = rows[:max_train_rows]
+    if not rows:
+        raise ValueError("No DA-GRPO training rows selected")
     print(f"[da-grpo] {len(rows)} offline O1 Main-Agent turns; batch plan: {batch_plan(cfg)}", flush=True)
     model_cfg, rollout = cfg["model"], cfg["rollout"]
 
@@ -453,6 +457,10 @@ def train(cfg: dict, *, resume: str | None = None) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--train-parquet", type=Path,
+                        help="Override only the input Parquet; keep the DA-GRPO trainer/reward unchanged")
+    parser.add_argument("--max-train-rows", type=int, default=0,
+                        help="Optional pilot cap on selected Main turns; 0 = all")
     parser.add_argument("--dry-run", action="store_true", help="Inspect config without GPU or network")
     parser.add_argument("--check", action="store_true", help="Check required packages and files")
     parser.add_argument("--test-judge", action="store_true", help="Probe API without loading a GPU model")
@@ -466,6 +474,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resume", type=Path, help="TRL checkpoint path (old custom checkpoints unsupported)")
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
+    if args.train_parquet is not None:
+        cfg["paths"]["train_parquet"] = repo_path(args.train_parquet)
+    if args.max_train_rows < 0:
+        parser.error("--max-train-rows cannot be negative")
     if args.max_steps is not None:
         if args.max_steps < 1:
             parser.error("--max-steps must be positive")
@@ -504,7 +516,10 @@ def main(argv: list[str] | None = None) -> int:
     probe_judge(cfg, key)
     if args.test_judge:
         return 0
-    train(cfg, resume=str(repo_path(args.resume)) if args.resume else None)
+    train(
+        cfg, resume=str(repo_path(args.resume)) if args.resume else None,
+        max_train_rows=args.max_train_rows,
+    )
     return 0
 
 

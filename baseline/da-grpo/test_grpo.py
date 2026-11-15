@@ -20,6 +20,24 @@ from reward_adapter import completion_text, make_reward_function
 
 
 class TestConfig(unittest.TestCase):
+    def test_stage4_training_input_override_preserves_da_reward(self):
+        import io
+        from contextlib import redirect_stdout
+        with redirect_stdout(io.StringIO()) as captured:
+            train.main([
+                "--dry-run", "--train-parquet", "dataset/data/da-grpo-stage4/train.parquet",
+                "--max-train-rows", "16", "--max-steps", "3",
+            ])
+        config = json.loads(captured.getvalue())
+        self.assertTrue(config["train_parquet"].endswith(
+            "/dataset/data/da-grpo-stage4/train.parquet"
+        ))
+        self.assertEqual(config["backend"], "Unsloth + TRL GRPOTrainer + colocated vLLM")
+        self.assertEqual(config["batch_plan"]["num_generations"], 8)
+        self.assertEqual(config["judge"]["model"], "qwen3.7-flash")
+        with self.assertRaises(SystemExit):
+            train.main(["--dry-run", "--max-train-rows", "-1"])
+
     def test_one_prompt_eight_generations(self):
         cfg = train.load_config()
         plan = train.batch_plan(cfg)

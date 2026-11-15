@@ -128,9 +128,20 @@ def make_examples(
     experts = defaultdict(list)
     modes = Counter()
     for turn in turns:
-        sample_id = turn.get("sample_id")
+        original_sample_id = turn.get("sample_id")
+        sample_id = original_sample_id
         scene_id = turn.get("task_id")
         round_number = turn.get("round")
+        # New Stage-4 journals expose a stable candidate identity in
+        # round_sample_id. The public display sample_id is not guaranteed
+        # unique across separate fault scenarios.
+        scenario_id = turn.get("round_sample_id")
+        if source == "stage4" and scenario_id is not None:
+            if not isinstance(scenario_id, str) or not scenario_id.startswith(
+                str(scene_id) + "-"
+            ):
+                raise ValueError(f"Stage 4 candidate identity invalid: {scenario_id}")
+            sample_id = f"{scenario_id}-round-{round_number:02d}"
         if not isinstance(sample_id, str) or "-round-" not in sample_id:
             raise ValueError(f"{source}: invalid sample_id: {sample_id}")
         if sample_id in seen:
@@ -144,7 +155,9 @@ def make_examples(
             raise ValueError(f"{source}: invalid round budget for {sample_id}")
         if source == "stage3" and episode_id != str(scene_id):
             raise ValueError(f"{source}: sample_id/task_id mismatch: {sample_id}")
-        if source == "stage4" and not episode_id.startswith(str(scene_id) + "-branch-"):
+        if source == "stage4" and scenario_id is None and not episode_id.startswith(
+            str(scene_id) + "-branch-"
+        ):
             raise ValueError(f"Stage 4 sample has no matching branch identity: {sample_id}")
         action = turn.get("output")
         if not isinstance(action, dict) or action.get("action") not in {"delegate_task", "complete"}:
@@ -186,6 +199,7 @@ def make_examples(
         tasks = params.get("tasks", []) if action["action"] == "delegate_task" else []
         extra_info = {
             "sample_id": sample_id,
+            "original_sample_id": original_sample_id,
             "question": scene["question"],
             "answer": answer,
             "subtask_history": history,
@@ -244,19 +258,23 @@ def validate_prompt_lengths(rows: list[dict], tokenizer_path: str | None, limit:
 
 
 def export(
-    scenes_path: Path, base_turns: Path, output_dir: Path, *,
+    scenes_path: Path, base_turns: Path | None, output_dir: Path, *,
     untrusted_turns: Path | None = None,
     tokenizer: str | None = None,
     max_prompt_tokens: int = 24576,
     require_llm: bool = False,
     dry_run: bool = False,
 ) -> dict:
-    scenes_path, base_turns, output_dir = map(Path, (scenes_path, base_turns, output_dir))
+    scenes_path, output_dir = map(Path, (scenes_path, output_dir))
+    if base_turns is not None:
+        base_turns = Path(base_turns)
+    if base_turns is None and untrusted_turns is None:
+        raise ValueError("At least one Stage-3/Stage-4 turn source is required")
     scenes_list = read_jsonl(scenes_path)
     scenes = {row["task_id"]: row for row in scenes_list}
     if len(scenes) != len(scenes_list):
         raise ValueError("Duplicate task_id in Scenes")
-    inputs = [("stage3", base_turns)]
+    inputs = [("stage3", base_turns)] if base_turns is not None else []
     if untrusted_turns is not None:
         inputs.append(("stage4", Path(untrusted_turns)))
     rows, all_experts, mode_counts, seen = [], defaultdict(list), Counter(), set()
@@ -322,6 +340,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-turns", type=Path, default=DEFAULT_BASE)
     parser.add_argument("--untrusted-turns", type=Path, default=None,
                         help="Optional Stage 4 positive main_turns.jsonl")
+    parser.add_argument("--stage4-only", action="store_true",
+                        help="Export current Stage-4 reviewed turns without Stage-3 dependency")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--tokenizer", default=None,
                         help="Optional Qwen3-8B tokenizer path for exact token checks")
@@ -333,8 +353,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.max_prompt_tokens < 1:
         parser.error("--max-prompt-tokens must be positive")
+    if args.stage4_only and args.untrusted_turns is None:
+        args.untrusted_turns = ROOT / "environment/data/stage4/main_turns.jsonl"
     result = export(
-        args.scenes, args.base_turns, args.output_dir,
+        args.scenes, None if args.stage4_only else args.base_turns, args.output_dir,
         untrusted_turns=args.untrusted_turns, tokenizer=args.tokenizer,
         max_prompt_tokens=args.max_prompt_tokens,
         require_llm=args.require_llm_expert, dry_run=args.dry_run,
