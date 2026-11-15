@@ -12,9 +12,10 @@ STAGE1_DIR="${STAGE1_DIR:-$ROOT/environment/data/stage1}"
 STAGE4_DIR="${STAGE4_DIR:-$ROOT/environment/data/stage4}"
 RUN_ROOT="${RUN_ROOT:-$ROOT/workspace/maestro_8b}"
 STAGE2_TRAINER="${STAGE2_TRAINER:-da}"     # da (default) or riskkv
+DA_REWARD_MODE="${DA_REWARD_MODE:-hybrid}"  # hybrid | deterministic | judge_only | da
 DA_DATA="${DA_DATA:-$RUN_ROOT/stage2_da}"
-DA_GRPO_CKPT="${DA_GRPO_CKPT:-$RUN_ROOT/checkpoints/stage2-da-grpo}"
-DA_PILOT_CKPT="${DA_PILOT_CKPT:-$RUN_ROOT/checkpoints/stage2-da-pilot}"
+DA_GRPO_CKPT="${DA_GRPO_CKPT:-$RUN_ROOT/checkpoints/stage2-${DA_REWARD_MODE}-grpo}"
+DA_PILOT_CKPT="${DA_PILOT_CKPT:-$RUN_ROOT/checkpoints/stage2-${DA_REWARD_MODE}-pilot}"
 DA_PILOT_STEPS="${DA_PILOT_STEPS:-3}"
 DA_PILOT_ROWS="${DA_PILOT_ROWS:-16}"
 DA_PILOT_NEW_TOKENS="${DA_PILOT_NEW_TOKENS:-1536}"
@@ -91,17 +92,18 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
   risk          Train Risk Head only, using cached NF4 features
   prepare-grpo  DA: export Stage4 -> Parquet; RiskKV: private-state reward rows
   preflight     DA: baseline package/input checks; RiskKV: cache/logprob
-  pilot         DA: 3-step 16-row 1536-token smoke + reward variance gate
+  pilot         DA: 3-step smoke; hybrid: local validity + LLM semantic Judge
                 RiskKV: previous strict Action-reward pilot
   audit-pilot   DA: review Judge reward diagnostics; RiskKV: invalid reasons
   grpo          Main Stage2 GRPO, defaults to native DA/TRL training
   inspect-io    DA: export preflight; RiskKV: native prompt/reference audit
-  judge         DA: check remote LLM Judge endpoint without loading GPU
+  judge         Stage2: check semantic Judge API (or DA reference API) without GPU
   status        Show generated data and checkpoint files
   help          This help
 
 Override settings via environment variables or run/config.env:
-  STAGE2_TRAINER (da|riskkv), DA_DATA, DA_GRPO_CKPT, DA_PILOT_CKPT,
+  STAGE2_TRAINER (da|riskkv), DA_REWARD_MODE (hybrid|deterministic|judge_only|da),
+  DA_DATA, DA_GRPO_CKPT, DA_PILOT_CKPT,
   DA_PILOT_STEPS, DA_PILOT_ROWS, DA_PILOT_NEW_TOKENS, DA_REVIEWED_ONLY,
   MODEL, STAGE1_DIR, STAGE4_DIR, RUN_ROOT, MAX_LENGTH,
   RISK_EPOCHS, RISK_BATCH_SIZE, GRPO_EPOCHS, GRPO_GENERATIONS,
@@ -220,6 +222,9 @@ prepare_grpo() {
   if [[ "$STAGE2_TRAINER" == "da" ]]; then
     need "$STAGE1_DIR/questions/scenes.jsonl"
     need "$STAGE4_DIR/main_turns.jsonl"
+    if [[ "$DA_REWARD_MODE" != "da" ]]; then
+      need "$REWARD_STATES"
+    fi
     if [[ "$SKIP_COMPLETED" == "1" && -s "$DA_DATA/train.parquet" && -f "$DA_DATA/summary.json" ]] &&
       python - "$DA_DATA/summary.json" "$STAGE1_DIR/questions/scenes.jsonl" "$STAGE4_DIR/main_turns.jsonl" <<'PY'
 import hashlib,json,sys
@@ -296,6 +301,12 @@ init_stage2_da_args() {
     --judge_model "$GRPO_JUDGE_MODEL"
     --judge_api_key_env "$GRPO_JUDGE_API_KEY_ENV"
     --judge_workers "$GRPO_JUDGE_WORKERS"
+    --reward_mode "$DA_REWARD_MODE"
+    --decision_states "$REWARD_STATES"
+    --judge_weight "$GRPO_JUDGE_WEIGHT"
+    --judge_timeout "$GRPO_JUDGE_TIMEOUT"
+    --judge_retries "$GRPO_JUDGE_RETRIES"
+    --judge_cache_jsonl "$GRPO_JUDGE_CACHE_JSONL"
     --logging_steps "$GRPO_LOGGING_STEPS"
     --save_steps "$GRPO_SAVE_STEPS"
   )
@@ -321,7 +332,7 @@ stage2_da_pilot() {
     die "Stage2 DA pilot output exists: $DA_PILOT_CKPT; choose fresh DA_PILOT_CKPT"
   fi
   init_stage2_da_args
-  say "Stage2 DA/TRL Pilot: 8 candidates per prompt, original four-dimensional Judge"
+  say "Stage2 native TRL Pilot: reward=$DA_REWARD_MODE; risk head OFF"
   python -m train_maestro_8b.policy.train da "${stage2_da_args[@]}" \
     --output_dir "$DA_PILOT_CKPT" --max_steps "$DA_PILOT_STEPS" \
     --max_train_rows "$DA_PILOT_ROWS" --max_new_tokens "$DA_PILOT_NEW_TOKENS"
@@ -334,9 +345,19 @@ for line in open(sys.argv[1], encoding="utf-8"):
     x=json.loads(line)
     groups[(x["batch_id"],x["group_index"])].append(float(x["reward"]))
 nonzero=sum(max(vals)-min(vals)>1e-7 for vals in groups.values())
-print(f"Stage2 DA Pilot: {len(groups)} GRPO groups; {nonzero} with nonzero reward variance",flush=True)
+valid=judged=0
+for line in open(sys.argv[1], encoding="utf-8"):
+    row=json.loads(line)
+    valid+=int(row.get("valid") is True)
+    judged+=int(row.get("judge_reward") is not None)
+print(f"Stage2 Pilot: {len(groups)} groups, {nonzero} nonzero-variance, {valid} valid Actions, {judged} semantic Judge scores",flush=True)
 if not groups or not nonzero:
-    raise SystemExit("No preference signal in Stage2 DA pilot; inspect Judge diagnostic scores before full training")
+    raise SystemExit("No GRPO preference signal; inspect action validity and JSON normalization before full training")
+if valid == 0 and judged == 0 and any(
+    "valid" in json.loads(line)
+    for line in open(sys.argv[1], encoding="utf-8")
+):
+    raise SystemExit("Stage2 Hybrid Pilot has no valid Action; stop before full GRPO")
 PY
 }
 stage2_da_grpo() {
@@ -350,7 +371,7 @@ stage2_da_grpo() {
   init_stage2_da_args
   local resume=()
   [[ -n "$GRPO_RESUME_FROM" ]] && resume=(--resume_from_checkpoint "$GRPO_RESUME_FROM")
-  say "Main Stage2 training: DA Unsloth + TRL GRPOTrainer, Risk Head disabled"
+  say "Main Stage2 training: Unsloth + TRL GRPOTrainer, reward=$DA_REWARD_MODE, Risk Head OFF"
   python -m train_maestro_8b.policy.train da "${stage2_da_args[@]}" \
     --output_dir "$DA_GRPO_CKPT" --epochs "$GRPO_EPOCHS" \
     --max_steps "$GRPO_MAX_STEPS" "${resume[@]}"

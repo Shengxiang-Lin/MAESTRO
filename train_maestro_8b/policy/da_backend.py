@@ -4,8 +4,9 @@ This is a Stage-2-owned entrypoint. For the first stable GRPO baseline, use
 the already tested DA implementation as a library without modifying it:
 - Unsloth FastLanguageModel BF16 LoRA + colocated vLLM
 - Qwen3 Chat Template and TRL GRPOTrainer, DAPO + 0.01 KL
-- Original 4D O1 LLM Judge prompt/weights and concurrent adapter
-The private expert/gold columns are accessible to the reward only.
+- Native MAESTRO environment reward + semantic Judge (default 0.6/0.4)
+- Original DA 4D Judge remains an explicit comparison-only reward mode.
+Private decision states are loaded by the reward only, never by the policy.
 """
 from __future__ import annotations
 
@@ -93,12 +94,11 @@ def build_stage2_config(args, baseline):
     return cfg
 
 
-def train_stage2(cfg: dict, baseline, *, resume: str | None,
-                 max_train_rows: int = 0):
-    """Native Stage2 training loop using DA's stable helpers/reward contract.
+def train_stage2(cfg: dict, baseline, *, resume: str | None, args):
+    """Native Stage2 GRPO. Keep DA's trainer mechanics; replace only reward.
 
-    Unlike the previous attempt this actually constructs and trains the
-    GRPO model in train_maestro_8b. No baseline trainer entrypoint runs.
+    Constructs and trains the policy here. The original DA reward is an
+    explicit ablation; hybrid uses private Environment + semantic Judge.
     """
     baseline.configure_runtime(cfg)
     print("[MAESTRO/Stage2] native DA GRPO; no Stage1 Risk Head/KV steering", flush=True)
@@ -111,16 +111,42 @@ def train_stage2(cfg: dict, baseline, *, resume: str | None,
     baseline.disable_vllm_flashinfer_autotune()
     from trl import GRPOConfig, GRPOTrainer
     from datasets import Dataset
-    # Reuse the original four-dimensional LLM Judge and its exact prompt.
-    from reward_adapter import make_reward_function
+    from reward_adapter import make_reward_function as make_da_reference_reward
 
     rows = baseline.load_dataset_rows(cfg["paths"]["train_parquet"])
-    if max_train_rows:
-        if max_train_rows > len(rows):
-            raise ValueError(f"pilot asks for {max_train_rows} rows, only {len(rows)} available")
-        rows = rows[:max_train_rows]
+    private_states = None
+    if args.reward_mode != "da":
+        from train_maestro_8b.policy.trl_reward_adapter import (
+            load_private_states, select_scorable_rows, prompt_lookup,
+            make_stage2_reward_function,
+        )
+        private_states = load_private_states(args.decision_states)
+        rows, selected_report = select_scorable_rows(rows, private_states)
+        print("[MAESTRO/Stage2] state-aligned rows: " +
+              json.dumps(selected_report, ensure_ascii=False), flush=True)
+    if args.max_train_rows:
+        if args.max_train_rows > len(rows):
+            raise ValueError(
+                f"pilot asks for {args.max_train_rows} scorable rows, "
+                f"only {len(rows)} available"
+            )
+        rows = rows[:args.max_train_rows]
     if not rows:
-        raise ValueError("Empty Stage2 DA training set")
+        raise ValueError("Empty Stage2 training set")
+    if args.reward_mode == "da":
+        reward_function = make_da_reference_reward(
+            cfg["judge"]["workers"],
+            diagnostics_path=cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl",
+            num_generations=cfg["rollout"]["num_generations"],
+        )
+    else:
+        judge = make_semantic_judge(args, cfg) if args.reward_mode != "deterministic" else None
+        reward_function = make_stage2_reward_function(
+            private_states=private_states, prompts=prompt_lookup(rows),
+            mode=args.reward_mode, judge=judge, judge_weight=args.judge_weight,
+            num_generations=cfg["rollout"]["num_generations"],
+            diagnostics_path=cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl",
+        )
     print(f"[MAESTRO/Stage2] {len(rows)} Stage4 Main decisions; "
           f"batch_plan={baseline.batch_plan(cfg)}", flush=True)
     model_cfg, rollout = cfg["model"], cfg["rollout"]
@@ -152,11 +178,7 @@ def train_stage2(cfg: dict, baseline, *, resume: str | None,
         model=policy,
         processing_class=tokenizer,
         train_dataset=Dataset.from_list(rows),
-        reward_funcs=[make_reward_function(
-            cfg["judge"]["workers"],
-            diagnostics_path=cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl",
-            num_generations=rollout["num_generations"],
-        )],
+        reward_funcs=[reward_function],
         args=training_config,
     )
     if not getattr(trainer, "use_vllm", False):
@@ -167,32 +189,79 @@ def train_stage2(cfg: dict, baseline, *, resume: str | None,
     tokenizer.save_pretrained(str(dest))
 
 
+def make_semantic_judge(args, cfg):
+    """Create the previously defined semantic Judge without DA/O1 prompt changes."""
+    from train_maestro_8b.policy.semantic_judge import SemanticJudge
+    cache = args.judge_cache_jsonl or str(
+        cfg["paths"]["output_dir"] / "semantic_judge_cache.jsonl"
+    )
+    return SemanticJudge.from_registry(
+        registry_path=cfg["judge"]["registry"],
+        model=cfg["judge"]["model"],
+        api_key_env=cfg["judge"]["api_key_env"],
+        workers=cfg["judge"]["workers"],
+        timeout=args.judge_timeout, retries=args.judge_retries,
+        cache_path=cache, enable_thinking=False,
+    )
+
+
+def verify_private_reward_data(args, cfg, baseline):
+    from train_maestro_8b.policy.trl_reward_adapter import (
+        load_private_states, select_scorable_rows,
+    )
+    states = load_private_states(args.decision_states)
+    rows = baseline.load_dataset_rows(cfg["paths"]["train_parquet"])
+    _, summary = select_scorable_rows(rows, states)
+    print("[MAESTRO/Stage2] private reward alignment: " +
+          json.dumps(summary, ensure_ascii=False), flush=True)
+
+
 def run(args):
     baseline = get_da_baseline()
     cfg = build_stage2_config(args, baseline)
-    if args.max_train_rows < 0:
-        raise ValueError("max_train_rows must be >=0")
+    if args.max_train_rows < 0 or not 0 <= args.judge_weight <= 1:
+        raise ValueError("Invalid pilot size / semantic Judge weight")
+    if args.judge_timeout <= 0 or args.judge_retries < 0:
+        raise ValueError("Invalid semantic Judge timeout/retries")
     if args.dry_run:
         baseline.show_config(cfg)
+        print("[MAESTRO/Stage2] reward_mode=" + args.reward_mode +
+              " decision_states=" + str(args.decision_states))
         return
     checks = baseline.environment_checks(cfg)
     if args.check:
         baseline.show_config(cfg)
         if not all(checks.values()):
-            raise RuntimeError("Stage2 DA missing requirements: " + str(checks))
+            raise RuntimeError("Stage2 missing requirements: " + str(checks))
+        if args.reward_mode != "da":
+            verify_private_reward_data(args, cfg, baseline)
         return
     if not args.test_judge and not all(checks.values()):
-        raise RuntimeError("Stage2 DA preflight failed: " + str(checks))
-    key = baseline.judge_key(cfg["judge"]["api_key_env"])
-    baseline.setup_judge(cfg, key)
-    baseline.probe_judge(cfg, key)
+        raise RuntimeError("Stage2 preflight failed: " + str(checks))
+    if args.reward_mode == "da":
+        key = baseline.judge_key(cfg["judge"]["api_key_env"])
+        baseline.setup_judge(cfg, key)
+        baseline.probe_judge(cfg, key)
+    elif args.reward_mode in ("hybrid", "judge_only"):
+        judge = make_semantic_judge(args, cfg)
+        if args.test_judge:
+            # Make a fresh, uncached live request to verify the rubric output.
+            result = judge._request(
+                "A Main-Agent has not yet received enough evidence to answer.",
+                '{"action":"delegate_task","reasoning":"Find missing evidence",'
+                '"params":{"tasks":[{"task_instruction":"Verify the missing'
+                ' evidence.","model":"model_1","tools":["GoogleSearchAction"]}]}}',
+            )
+            print("[MAESTRO/Stage2] semantic Judge HTTP OK: " +
+                  json.dumps(result, ensure_ascii=False), flush=True)
+    elif args.test_judge:
+        print("[MAESTRO/Stage2] deterministic reward requires no LLM Judge")
     if args.test_judge:
         return
-    print("[MAESTRO/Stage2] backend=DA/Unsloth+TRL/vLLM; risk_head=off; "
-          "reward=original_DA_4D_Judge; formatter=Qwen3_chat_template", flush=True)
+    print("[MAESTRO/Stage2] backend=Unsloth+TRL/vLLM; risk_head=off; "
+          f"reward={args.reward_mode}; formatter=Qwen3_chat_template", flush=True)
     train_stage2(
-        cfg, baseline, resume=args.resume_from_checkpoint,
-        max_train_rows=args.max_train_rows,
+        cfg, baseline, resume=args.resume_from_checkpoint, args=args,
     )
     destination = cfg["paths"]["output_dir"] / "stage2_da_training.json"
     destination.write_text(json.dumps({
@@ -201,7 +270,12 @@ def run(args):
         "rollout": "unsloth_colocated_vllm",
         "stage1_risk_head": False,
         "riskkv": False,
-        "reward": "baseline_da_four_dimension_llm_judge",
+        "reward": args.reward_mode,
+        "reward_formula": ("0.6*environment+0.4*semantic" if
+                           args.reward_mode == "hybrid" and args.judge_weight == 0.4
+                           else f"environment_weight={1-args.judge_weight};semantic_weight={args.judge_weight}" if args.reward_mode == "hybrid"
+                           else args.reward_mode),
+        "decision_states": str(args.decision_states) if args.reward_mode != "da" else None,
         "data_source": str(cfg["paths"]["train_parquet"]),
         "num_generations": cfg["rollout"]["num_generations"],
         "max_prompt_tokens": cfg["rollout"]["max_prompt_tokens"],
@@ -242,6 +316,17 @@ def main(argv=None):
     p.add_argument("--judge_model", default="qwen3.7-flash")
     p.add_argument("--judge_api_key_env", default="DASHSCOPE_API_KEY")
     p.add_argument("--judge_workers", type=int, default=4)
+    p.add_argument("--reward_mode",
+                   choices=("hybrid", "deterministic", "judge_only", "da"),
+                   default="hybrid",
+                   help="Stage2 native hybrid is the default; da=old 4D baseline ablation")
+    p.add_argument("--decision_states",
+                   default="environment/data/stage4/private/decision_reward_states.jsonl",
+                   help="Local private pre-action state sidecar, never sent to policy/Judge")
+    p.add_argument("--judge_weight", type=float, default=0.4)
+    p.add_argument("--judge_timeout", type=float, default=90.0)
+    p.add_argument("--judge_retries", type=int, default=2)
+    p.add_argument("--judge_cache_jsonl", default=None)
     p.add_argument("--check", action="store_true")
     p.add_argument("--test_judge", action="store_true")
     p.add_argument("--dry_run", action="store_true")
