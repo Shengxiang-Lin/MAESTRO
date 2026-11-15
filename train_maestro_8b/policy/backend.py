@@ -126,18 +126,30 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
         incremental = engine.log_probs_incremental(state, ids, temperature=temperature)
         replay = engine.log_probs(state, ids, temperature=temperature)
 
-        # An autoregressive causal decoder must not let changing a FUTURE
-        # suffix token affect logits at earlier positions. Mutate the
-        # second sampled token, then compare the first two probabilities:
-        # changing y[1] can influence prediction of y[2], but NOT y[0:2].
+        # To test causal independence, modify the ACTUAL future input
+        # token while keeping the TARGET ids in gather() unchanged. Calling
+        # log_probs(prefix, mutated_targets) would be a false-positive:
+        # it also changes the target token at that position, so its own
+        # log probability naturally differs even with a correct mask.
         causal_future_sensitivity = None
         if ids.numel() >= 3:
-            mutated = ids.clone()
+            anchor = torch.tensor(
+                engine.anchor_ids, dtype=torch.long, device=engine.device,
+            )
+            suffix = torch.cat((anchor, ids[:-1]), dim=0)[None]
+            changed_suffix = suffix.clone()
             vocab_size = int(policy.get_input_embeddings().weight.shape[0])
-            mutated[1] = (mutated[1] + 1) % vocab_size
-            altered = engine.log_probs(state, mutated, temperature=temperature)
+            changed_suffix[0, -1] = (changed_suffix[0, -1] + 1) % vocab_size
+            changed_logits = engine._forward_suffix(state, changed_suffix).logits
+            changed_logps = changed_logits[:, -ids.numel():].float().div(
+                temperature
+            ).log_softmax(dim=-1).gather(
+                2, ids.view(1, -1, 1)
+            ).squeeze(0).squeeze(-1)
+            # The last suffix input affects the final prediction, not the
+            # first two. Compare probabilities of the SAME target tokens.
             causal_future_sensitivity = float(
-                (replay[:-1] - altered[:-1]).abs().max().item()
+                (replay[:-1] - changed_logps[:-1]).abs().max().item()
             )
 
         # Distinguish the SDPA attention implementation from NF4 GEMV/GEMM
