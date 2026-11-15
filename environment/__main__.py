@@ -46,7 +46,7 @@ def parser() -> argparse.ArgumentParser:
                           default="llm")
     workflow.add_argument("--max-scenes", type=int)
     workflow.add_argument("--no-progress", action="store_true")
-    generate = sub.add_parser("generate-questions",
+    sub.add_parser("generate-macro-v3",\n                   help="Stage 1 v3 YAGO-grounded Macro-first pilot (separate contracts)")\n    generate = sub.add_parser("generate-questions",
                               help="Run the complete config-driven generation pipeline")
     generate.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     generate.add_argument("--output-dir", type=Path,
