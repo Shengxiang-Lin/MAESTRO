@@ -21,6 +21,30 @@ import time
 import torch
 
 
+def reference_action_ids(tokenizer, reference_action, *, device, max_new_tokens):
+    """Encode a complete supervised Action + EOS; never truncate targets.
+
+    The target JSON string is generated from the legal teacher action, but
+    is NEVER incorporated into the O1 prompt or the Risk Head prefix.
+    """
+    if not isinstance(reference_action, dict):
+        raise ValueError("SFT fallback needs a structured reference_action")
+    text = json.dumps(
+        reference_action, ensure_ascii=False, separators=(",", ":"),
+    )
+    ids = list(tokenizer.encode(text, add_special_tokens=False))
+    eos_id = getattr(tokenizer, "eos_token_id", None)
+    if eos_id is not None:
+        ids.append(int(eos_id))
+    if not ids or len(ids) > max_new_tokens:
+        raise ValueError(
+            "Reference Action JSON+EOS needs "
+            f"{len(ids)} tokens, exceeds cap {max_new_tokens}; "
+            "do not truncate supervised targets"
+        )
+    return torch.tensor(ids, dtype=torch.long, device=device)
+
+
 def group_advantages(rewards):
     values = torch.as_tensor(rewards, dtype=torch.float32)
     if values.ndim != 1 or values.numel() < 2 or not torch.isfinite(values).all():
@@ -81,7 +105,9 @@ def make_trainer_class():
     class RiskSteeredGRPOTrainer(Trainer):
         def __init__(self, *, engine, reward_fn, num_generations,
                      temperature, max_new_tokens, clip_epsilon,
-                     debug_path=None, fail_on_zero_adv=False, **kwargs):
+                     debug_path=None, fail_on_zero_adv=False,
+                     reward_mode="curriculum", zero_adv_strategy="reference_sft",
+                     zero_adv_sft_weight=0.25, **kwargs):
             self.engine = engine
             self.reward_fn = reward_fn
             self.num_generations = num_generations
@@ -90,6 +116,17 @@ def make_trainer_class():
             self.clip_epsilon = clip_epsilon
             self.debug_path = Path(debug_path) if debug_path else None
             self.fail_on_zero_adv = bool(fail_on_zero_adv)
+            if reward_mode not in ("strict", "curriculum"):
+                raise ValueError("reward_mode must be strict or curriculum")
+            if zero_adv_strategy not in ("skip", "reference_sft"):
+                raise ValueError("zero_adv_strategy must be skip or reference_sft")
+            if not 0 < zero_adv_sft_weight <= 1:
+                raise ValueError("zero_adv_sft_weight must be in (0,1]")
+            self.reward_mode = reward_mode
+            self.zero_adv_strategy = zero_adv_strategy
+            self.zero_adv_sft_weight = zero_adv_sft_weight
+            self.grpo_gradient_groups = 0
+            self.reference_sft_fallback_groups = 0
             self.seen_groups = 0
             self.zero_adv_groups = 0
             self.invalid_total = 0
@@ -148,7 +185,7 @@ def make_trainer_class():
             actions = []
             rewards = []
             metadata = []
-            from environment.untrusted_orchestration.orchestration_reward import score_decision
+            from train_maestro_8b.policy.rewards import score_training_candidate
             with torch.no_grad():
                 candidates = self.engine.sample_group(
                     prefix, count=self.num_generations, max_new_tokens=self.max_new_tokens,
@@ -157,8 +194,10 @@ def make_trainer_class():
                 for ids, sampled in candidates:
                     candidate = self.engine.decode(ids)
                     if self.reward_fn is None:
-                        info = score_decision(candidate, row["decision_state"])
-                        reward = info["reward"]
+                        info = score_training_candidate(
+                            candidate, row["decision_state"], mode=self.reward_mode,
+                        )
+                        reward = info["training_reward"]
                     else:
                         info = None
                         reward = float(self.reward_fn(candidate, row))
@@ -175,7 +214,9 @@ def make_trainer_class():
                                 "candidate": candidate,
                                 "prompt_tokens": prefix.length,
                                 "completion_tokens": int(ids.numel()),
-                                "reward": reward, "components": info,
+                                "reward": reward,
+                                "strict_reward": info.get("strict_reward") if info else None,
+                                "components": info,
                             }, ensure_ascii=False) + "\n")
             if gpu:
                 torch.cuda.synchronize(self.engine.device)
@@ -190,11 +231,52 @@ def make_trainer_class():
             model.train()
             if float(advantages.abs().max()) < 1e-6:
                 self.zero_adv_groups += 1
-                # Report why the run did not learn, rather than only 'loss=0'.
+                # The group carries NO GRPO preference information. Do NOT
+                # manufacture advantages or misreport a supervised gradient
+                # as GRPO. Optionally learn the same format/decision contract
+                # from a verified legal reference on this specific sample.
+                fallback_loss = None
+                if self.zero_adv_strategy == "reference_sft":
+                    if self.reward_fn is not None:
+                        raise ValueError(
+                            "Reference SFT fallback is incompatible with a "
+                            "custom reward plugin; use zero_adv_strategy=skip"
+                        )
+                    from environment.untrusted_orchestration.orchestration_reward import (
+                        score_decision,
+                    )
+                    reference = row.get("reference_action")
+                    if reference is None or not score_decision(
+                        reference, row["decision_state"],
+                    )["valid"]:
+                        raise RuntimeError(
+                            "No legal reference Action for zero-advantage fallback; "
+                            "never train on an invalid or private-only target"
+                        )
+                    target = reference_action_ids(
+                        self.engine.tokenizer, reference, device=self.engine.device,
+                        max_new_tokens=self.max_new_tokens,
+                    )
+                    with self.compute_loss_context_manager():
+                        nll = -self.engine.log_probs(
+                            prefix, target, temperature=1.0,
+                        ).mean()
+                        fallback_loss = nll * self.zero_adv_sft_weight
+                    self.accelerator.backward(fallback_loss)
+                    self.reference_sft_fallback_groups += 1
+
                 self.last_components = {
                     "reward": sum(rewards) / len(rewards),
                     "reward_unique": len(set(rewards)),
                     "reward_std": float(torch.as_tensor(rewards).std(unbiased=False)),
+                    "strict_valid_fraction": sum(
+                        info is not None and info["valid"] for _, info in metadata
+                    ) / len(actions),
+                    "json_valid_fraction": sum(
+                        info is not None and info.get("json_valid", False)
+                        for _, info in metadata
+                    ) / len(actions),
+                    "reward_mode": self.reward_mode,
                     "invalid_fraction": sum(
                         info is not None and not info["valid"] for _, info in metadata
                     ) / len(actions),
@@ -205,6 +287,12 @@ def make_trainer_class():
                     "rollout_and_score_s": round(t2 - t1, 4),
                     "backward_s": 0.0,
                     "zero_adv_groups": self.zero_adv_groups,
+                    "grpo_gradient_groups": self.grpo_gradient_groups,
+                    "reference_sft_fallback_groups": self.reference_sft_fallback_groups,
+                    "fallback_sft_loss": (
+                        round(float(fallback_loss.detach()), 6)
+                        if fallback_loss is not None else None
+                    ),
                 }
                 if gpu:
                     self.last_components["cuda_peak_allocated_gib"] = round(
@@ -215,8 +303,9 @@ def make_trainer_class():
                     )
                 if self.seen_groups % max(1, self.args.logging_steps) == 0:
                     self.log({f"risk_grpo/{k}": v
-                              for k, v in self.last_components.items()})
-                if self.fail_on_zero_adv:
+                              for k, v in self.last_components.items()
+                              if v is not None and not isinstance(v, str)})
+                if self.fail_on_zero_adv and fallback_loss is None:
                     from collections import Counter
                     reasons = Counter(
                         info.get("reason", "custom_reward")
@@ -224,15 +313,15 @@ def make_trainer_class():
                         for _, info in metadata
                     )
                     raise RuntimeError(
-                        "GRPO PILOT HAS NO LEARNING SIGNAL: all candidates "
-                        f"received identical reward {rewards[0]!r}; "
-                        f"invalid={self.last_components['invalid_fraction']:.1%}; "
-                        f"failure_reasons={dict(reasons)}; "
-                        "see reward_pilot.jsonl. An untrained policy may "
-                        "need --sft_warmup using legally validated "
-                        "reference Actions. No checkpoint was marked successful."
+                        "GRPO group has zero advantage and no supervised fallback: "
+                        f"rewards={rewards}, invalid_reasons={dict(reasons)}"
                     )
-                return torch.tensor(0.0, device=self.engine.device)
+                return (
+                    fallback_loss.detach()
+                    if fallback_loss is not None
+                    else torch.tensor(0.0, device=self.engine.device)
+                )
+            self.grpo_gradient_groups += 1
             group_losses = []
             importance_ratio_min = float("inf")
             importance_ratio_max = 0.0
@@ -289,6 +378,15 @@ def make_trainer_class():
                     info is not None and not info["valid"] for _, info in metadata
                 ) / len(actions),
                 "zero_adv_groups": self.zero_adv_groups,
+                "grpo_gradient_groups": self.grpo_gradient_groups,
+                "reference_sft_fallback_groups": self.reference_sft_fallback_groups,
+                "strict_valid_fraction": sum(
+                    info is not None and info["valid"] for _, info in metadata
+                ) / len(actions),
+                "json_valid_fraction": sum(
+                    info is not None and info.get("json_valid", False)
+                    for _, info in metadata
+                ) / len(actions),
                 "importance_ratio_min": round(importance_ratio_min, 6),
                 "importance_ratio_max": round(importance_ratio_max, 6),
                 "importance_ratio_clipped_fraction": round(
