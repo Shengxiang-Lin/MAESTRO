@@ -32,17 +32,23 @@ GRPO_GRAD_ACCUM="${GRPO_GRAD_ACCUM:-1}"
 GRPO_MAX_NEW_TOKENS="${GRPO_MAX_NEW_TOKENS:-4096}"
 GRPO_MAX_PROMPT_TOKENS="${GRPO_MAX_PROMPT_TOKENS:-12288}"
 GRPO_TEMPERATURE="${GRPO_TEMPERATURE:-1.0}"
-PILOT_MAX_NEW_TOKENS="${PILOT_MAX_NEW_TOKENS:-512}"
-GRPO_LR="${GRPO_LR:-1e-5}"
-GRPO_REWARD_MODE="${GRPO_REWARD_MODE:-curriculum}"
-GRPO_ZERO_ADV_STRATEGY="${GRPO_ZERO_ADV_STRATEGY:-reference_sft}"
+PILOT_MAX_NEW_TOKENS="${PILOT_MAX_NEW_TOKENS:-4096}"
+GRPO_LR="${GRPO_LR:-5e-5}"
+GRPO_WEIGHT_DECAY="${GRPO_WEIGHT_DECAY:-0.01}"
+GRPO_OPTIM="${GRPO_OPTIM:-adamw_8bit}"
+GRPO_MAX_GRAD_NORM="${GRPO_MAX_GRAD_NORM:-1.0}"
+GRPO_LORA_RANK="${GRPO_LORA_RANK:-32}"
+GRPO_LORA_ALPHA="${GRPO_LORA_ALPHA:-64}"
+GRPO_LOGGING_STEPS="${GRPO_LOGGING_STEPS:-1}"
+GRPO_SAVE_STEPS="${GRPO_SAVE_STEPS:-50}"
+GRPO_ZERO_ADV_STRATEGY="${GRPO_ZERO_ADV_STRATEGY:-skip}"
 GRPO_ZERO_ADV_SFT_WEIGHT="${GRPO_ZERO_ADV_SFT_WEIGHT:-0.25}"
 GRPO_SFT_WARMUP="${GRPO_SFT_WARMUP:-0}"
-GRPO_SFT_WARMUP_SAMPLES="${GRPO_SFT_WARMUP_SAMPLES:-32}"
+GRPO_SFT_WARMUP_SAMPLES="${GRPO_SFT_WARMUP_SAMPLES:-0}"
 PILOT_REQUIRE_GRAD="${PILOT_REQUIRE_GRAD:-1}"
 GRPO_ROLLOUT_ATTENTION="${GRPO_ROLLOUT_ATTENTION:-sdpa}"
-GRPO_VLLM_ENGINE="${GRPO_VLLM_ENGINE:-0}"
-GRPO_VLLM_MEMORY_UTILIZATION="${GRPO_VLLM_MEMORY_UTILIZATION:-0.45}"
+GRPO_VLLM_ENGINE="${GRPO_VLLM_ENGINE:-1}"
+GRPO_VLLM_MEMORY_UTILIZATION="${GRPO_VLLM_MEMORY_UTILIZATION:-0.70}"
 GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT="${GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT:-}"
 GRPO_STEER_LAYERS="${GRPO_STEER_LAYERS:-8}"
 GRPO_STEER_STRENGTH="${GRPO_STEER_STRENGTH:-0.1}"
@@ -67,8 +73,7 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
   risk          Train Risk Head only, using cached NF4 features
   prepare-grpo  Backfill missing private states, export and audit GRPO rows
   preflight     Check Unsloth KV/logprob/LoRA gradient compatibility
-  pilot         Free-form GRPO smoke with progressive format feedback
-  (reward/zero-adv controls via GRPO_REWARD_MODE and GRPO_ZERO_ADV_STRATEGY)
+  pilot         Strict Action-reward smoke; 1 prompt x G candidates, full token cap
   audit-pilot   Review recent candidate outputs and invalid reward reasons (CPU)
   grpo          Full Unsloth+TRL GRPO training
   inspect-io    Audit real O1 prompt tokens and reference action lengths
@@ -81,7 +86,9 @@ Override settings via environment variables or run/config.env:
   GRPO_GRAD_ACCUM, GRPO_MAX_PROMPT_TOKENS, GRPO_MAX_NEW_TOKENS,
   GRPO_TEMPERATURE, PILOT_MAX_NEW_TOKENS, GRPO_MAX_STEPS,
   GRPO_SFT_WARMUP, GRPO_SFT_WARMUP_SAMPLES, PILOT_REQUIRE_GRAD,
-  GRPO_REWARD_MODE, GRPO_ZERO_ADV_STRATEGY, GRPO_ZERO_ADV_SFT_WEIGHT,
+  GRPO_LR, GRPO_WEIGHT_DECAY, GRPO_OPTIM, GRPO_MAX_GRAD_NORM,
+  GRPO_LORA_RANK, GRPO_LORA_ALPHA, GRPO_LOGGING_STEPS, GRPO_SAVE_STEPS,
+  GRPO_ZERO_ADV_STRATEGY, GRPO_ZERO_ADV_SFT_WEIGHT,
   SKIP_COMPLETED, GRPO_RESUME_FROM,
   GRPO_VLLM_ENGINE, GRPO_VLLM_MEMORY_UTILIZATION, GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT
 
@@ -224,7 +231,9 @@ init_grpo_args() {
     --steer_last_n "$GRPO_STEER_LAYERS"
     --steer_strength "$GRPO_STEER_STRENGTH"
     --steer_threshold "$GRPO_STEER_THRESHOLD" --lr "$GRPO_LR"
-    --grpo_reward_mode "$GRPO_REWARD_MODE"
+    --weight_decay "$GRPO_WEIGHT_DECAY" --optim "$GRPO_OPTIM"
+    --max_grad_norm "$GRPO_MAX_GRAD_NORM"
+    --lora_rank "$GRPO_LORA_RANK" --lora_alpha "$GRPO_LORA_ALPHA"
     --zero_adv_strategy "$GRPO_ZERO_ADV_STRATEGY"
     --zero_adv_sft_weight "$GRPO_ZERO_ADV_SFT_WEIGHT"
   )
@@ -292,7 +301,8 @@ grpo() {
     --sft_warmup "$GRPO_SFT_WARMUP" \
     --sft_warmup_samples "$GRPO_SFT_WARMUP_SAMPLES" \
     --output_dir "$GRPO_CKPT" --epochs "$GRPO_EPOCHS" \
-    --max_steps "$GRPO_MAX_STEPS" --logging_steps 5 --save_steps 100 \
+    --max_steps "$GRPO_MAX_STEPS" --logging_steps "$GRPO_LOGGING_STEPS" \
+    --save_steps "$GRPO_SAVE_STEPS" \
     --reward_debug_jsonl "$RUN_ROOT/reward_grpo.jsonl" "${resume[@]}"
 }
 audit_pilot() {

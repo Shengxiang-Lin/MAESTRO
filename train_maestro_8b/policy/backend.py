@@ -72,7 +72,10 @@ def load_risk_engine(args):
         lora_alpha=args.lora_alpha,
         lora_dropout=0,
         bias="none",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=[
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ],
         use_gradient_checkpointing=False,
         random_state=args.seed,
     )

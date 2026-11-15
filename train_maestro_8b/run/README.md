@@ -44,7 +44,7 @@ invalid-binding fraction in the reward audit is a signal to investigate
 the evaluator before spending time on GRPO.
 
 Stage2 Unsloth uses a single GPU and a customized GRPO rollout/loss, not
-stock TRL GRPOTrainer; the full vLLM engine is optional (GRPO_VLLM_ENGINE=1).
+stock TRL GRPOTrainer; the separate vLLM RiskKV rollout engine is enabled by default (GRPO_VLLM_ENGINE=1).
 Run the mandatory preflight on
 the target CUDA host. Environment's data-generation LLM is not required
 by these steps. No changes to Environment generation counts occur.
@@ -55,70 +55,83 @@ vLLM server:
     python -m pip install -r train_maestro_8b/requirements-unsloth.txt
 
 
-## DA-GRPO comparison profile (default)
+## DA-GRPO-aligned 83 GiB training profile (default)
 
-The production policy budget matches the **count/length** in
-`baseline/da-grpo/config.yaml`, not its underlying model execution:
+The original baseline is `baseline/da-grpo/config.yaml`.
+Current MAESTRO Stage2 defaults match its training and generation
+hyperparameters where the existing NF4 RiskKV training architecture allows.
 
 | Setting | DA-GRPO | MAESTRO RiskKV |
 |---|---|---|
-| Distinct O1 Main prompts / optimizer step | 1 | 1 |
-| Candidates per prompt | 8 | 8 |
-| Generated completions / update | 8 | 8 |
-| Prompt cap | 12,288 tokens | 12,288 *raw O1* tokens |
-| Completion cap (full run) | 4,096 tokens | 4,096 tokens |
-| Completion cap (one-step smoke) | 512 | 512 |
-| Sampling temperature | 1.0 | 1.0 |
-| Trainer accumulation field | 8 | **1** |
+| Qwen3 model and dtype | 8B BF16 LoRA | 8B NF4 + BF16 compute |
+| LoRA rank / alpha | 32 / 64 | 32 / 64 |
+| LoRA projection modules | Q/K/V/O + gate/up/down | Q/K/V/O + gate/up/down |
+| Prompts per optimizer update | 1 | 1 |
+| Generations per prompt | 8 | 8 |
+| Prompt/output tokens | 12,288 / 4,096 | 12,288 / 4,096 |
+| Temperature / top-p | 1.0 / 1.0 | 1.0 / full-vocab |
+| Learning rate | 5e-5 | 5e-5 |
+| Optimizer / weight decay | 8-bit AdamW / 0.01 | 8-bit AdamW / 0.01 |
+| Max grad norm | 1.0 | 1.0 |
+| Epochs / save / log | 3 / 50 / 1 | 3 / 50 / 1 |
+| PPO epsilon | 0.2 | 0.2 |
+| vLLM memory utilization | 0.70 | 0.70 (independent worker) |
+| Trainer gradient accumulation field | 8 | **1 (same effective batch)** |
+| Reward | DA's external judge | Strict deterministic current-round scorer |
+| Training loss | TRL DAPO + KL 0.01 | RiskKV custom clipped GRPO, no KL |
 
-The final row differs **by design**. DA-GRPO's TRL GRPOTrainer takes one
-completion per microstep, so 8 accumulation steps means one O1 prompt
-and its eight variations per update. MAESTRO's custom
-`RiskSteeredGRPOTrainer.training_step` already generates, scores and
-backpropagates an **entire 8-completion group in a single microstep**.
-Therefore `GRPO_GRAD_ACCUM=1` is the equivalent one-prompt batch.
-Setting it to 8 would mean EIGHT distinct prompts / 64 completions per
-optimizer update, not DA parity.
+The trainer accumulation field **must differ**: DA-GRPO's stock TRL
+backprops one candidate per microstep and accumulates 8. MAESTRO's
+custom `training_step` backprops all G=8 candidates for one prompt inside
+each microstep. Setting `GRPO_GRAD_ACCUM=8` would create eight prompts /
+64 candidates per optimizer step, and is NOT the same effective batch.
 
-Run an actual data audit **before** loading Qwen3-8B onto GPU:
+**Do not switch MAESTRO to BF16 with a flag.** Its frozen Stage1 Risk Head
+was trained from NF4 backbone features; a BF16 prefill would change
+those features. Similarly, MAESTRO's risk-edited cache cannot be sent
+through DA's unmodified colocated vLLM path. MAESTRO instead loads a
+second, BF16 materialized vLLM model for sampling. 0.70 is the baseline
+requested reservation, but it is **not proven safe** for all MAESTRO
+training activations even with 83 GiB: if the full-engine preflight or
+backward hits OOM, try
+`GRPO_VLLM_MEMORY_UTILIZATION=0.35` to leave more GPU memory to LoRA
+backpropagation. The PyTorch allocator peak excludes the vLLM worker;
+check total GPU memory with `nvidia-smi`.
+
+Run the actual data audit without a GPU:
 
     bash train_maestro_8b/run/pipeline.sh inspect-io
 
-This prints per-sample counts, raw prompt token quantiles, the analogous
-Qwen chat-template-wrapped token counts used by DA, reference JSON Action
-token quantiles, Action type distribution and small previews of the exact
-Main-visible prompt/reference Action. Full report:
-`workspace/maestro_8b/io_inspection.json`.
-Any prompt over 12,288 tokens FAILS CLOSED. Neither the O1 history nor
-the original private evidence state is silently truncated or added to
-the model-visible context.
+The 257 reference Actions were all legal in the user's audit; the
+longest required about 1051 tokens. However 8/8 and 2/2 untrained
+generations hit the 1536-token pilot cap, and every output was invalid
+JSON. The cap may truncate an in-progress Action; it is not the sole
+reason: some outputs begin with free-form analysis, and 4096 does NOT
+guarantee valid JSON or an EOS. Sampling remains unconstrained; the
+original O1 prompt already specifies a JSON Action. Invalid outputs
+continue to score exactly -1.
 
-**Not full model/runtime parity:** DA uses BF16 LoRA r=32,
-Q/K/V/O+MLP, stock TRL DAPO and 0.01 KL, and Unsloth colocated shared
-vLLM. MAESTRO uses NF4 QLoRA r=16, Q/K/V/O only, Risk Head + custom
-Value-KV cache + reward + clipped loss with no KL. Optional MAESTRO
-full vLLM is a SECOND inference model and synchronizes its frozen weights,
-LoRA snapshots and edited paged KV per group. The same batch token budget
-therefore does not imply similar VRAM or tokens/s. Run identical cases and
-compare measured times and external `nvidia-smi` peak usage.
+A 1-step smoke now uses the full 4096-token completion budget by
+default. If every sampled reward ties, `PILOT_REQUIRE_GRAD=1` fails
+with a useful reason histogram instead of falsely claiming a policy
+update. In normal `grpo` training the strict `skip` strategy
+does not fabricate an advantage for such a group. Warmup with legal
+SFT references remains **optional** and off by default; no reward
+shaping, JSON prefix/repair, or automatic SFT fallback is enabled.
 
-The GRPO trainer now emits `risk_grpo/prompt_tokens`,
-`risk_grpo/completion_tokens`, `risk_grpo/prefill_s`,
-`risk_grpo/rollout_and_score_s`, `risk_grpo/backward_s`,
-`risk_grpo/reward_unique` and `risk_grpo/zero_adv_groups`, plus
-CUDA allocated/reserved peaks. These CUDA allocator peaks do not count a
-separate vLLM worker's GPU allocations; use `nvidia-smi` for total GPU
-consumption. If `reward_unique=1`, the GRPO advantage is zero and that
-prompt group does not produce a policy gradient.
+The trainer reports token counts, reward uniqueness, strict validity,
+zero-advantage group count, prefill/rollout/backward times and initial
+sampling-vs-training importance ratio clipping. Check actual total
+VRAM externally and don't equate a clean 3-token preflight with
+long-context training success.
 
-To test the actual FULL vLLM backend rather than only its FlashAttention:
+To test native full vLLM on the actual 83-GiB GPU:
 
-    GRPO_VLLM_ENGINE=1 GRPO_ROLLOUT_ATTENTION=sdpa \
-      GRPO_VLLM_MEMORY_UTILIZATION=0.35 \
+    GRPO_VLLM_ENGINE=1 GRPO_VLLM_MEMORY_UTILIZATION=0.70 \
       bash train_maestro_8b/run/pipeline.sh preflight
 
-Use a fresh `PILOT_CKPT` for each independent comparison; a completed
-pilot is intentionally reused when `SKIP_COMPLETED=1`.
+Use a fresh `PILOT_CKPT` for each experiment; a completed checkpoint
+is reused with `SKIP_COMPLETED=1`.
 
 ## NF4 one-token versus three-token numerical parity
 
@@ -185,131 +198,55 @@ Optional LEGACY strict logprob equality check:
 
 Do not silently raise PPO clipping merely to pass a failing contract.
 
-## Pilot all-invalid / zero-gradient cold start (8/8 invalid)
+## Strict reward and zero-gradient handling
 
-If the Pilot reports G=8, all 1,536-token generations reached the cap,
-reward=-1 and reward_unique=1, the optimization did NOT happen:
-zero_adv_groups=1, grad_norm=0 and backward_s=0. The 10-minute time
-comes from 8 sequential Transformers generations, not LoRA backward.
+The strict deterministic scorer remains unchanged. It parses the
+**entire output** as one JSON Action. Any invalid JSON or illegal Action
+scores exactly `-1`; an otherwise plausible JSON fragment surrounded
+by prose remains invalid. The generator is not forcibly constrained to
+produce JSON and does not stop at a closing brace; it stops naturally
+on EOS or the completion-token cap. Full vLLM is configured to honor
+EOS instead of ignoring it.
 
-Check the ACTUAL most recent generated texts and fail reasons first.
-This uses CPU only, and does not expose private reference/reward state:
+Historical observations on the RTX 6000D:
+- G=8 with 1536 cap: 8/8 invalid_json, all 1536 tokens, 611s rollout
+  via slow Transformers decoding, zero GRPO gradient;
+- SFT warmup (32 legal references, one epoch) then G=2 with 1536 cap:
+  both invalid_json and zero GRPO gradient.
+
+The current default `GRPO_ZERO_ADV_STRATEGY=skip` leaves tied-reward
+GRPO groups without gradients; this is the mathematically correct
+behavior for a strictly uniform reward. The Pilot uses
+`PILOT_REQUIRE_GRAD=1` to fail clearly if that happens. It does not
+imply the model/optimizer is broken.
+
+Inspect the last candidate texts and exact failure reasons (CPU only):
 
     bash train_maestro_8b/run/pipeline.sh audit-pilot
 
-You may also run the underlying tool and specify the max token count
-for this particular run:
+For a STRICT GRPO-only 83GiB pilot with the new full-length defaults:
 
-    python -m train_maestro_8b.data.audit_rollouts --input workspace/maestro_8b/reward_pilot.jsonl --tail 8 --token_cap 1536
+    GRPO_VLLM_ENGINE=1 GRPO_VLLM_MEMORY_UTILIZATION=0.70 \
+      GRPO_GENERATIONS=8 GRPO_GRAD_ACCUM=1 \
+      PILOT_MAX_NEW_TOKENS=4096 \
+      PILOT_CKPT="$PWD/workspace/maestro_8b/checkpoints/strict-g8-$(date +%Y%m%d-%H%M%S)" \
+      bash train_maestro_8b/run/pipeline.sh pilot
 
-The audit distinguishes invalid_json, malformed/empty delegate tasks,
-premature complete, unbound evidence source/field, and other deterministic
-binding failures. Do NOT assume invalid_json until the audit confirms it.
+If a strict group repeatedly has no signal, it cannot learn from GRPO
+until some candidates pass strict validation. One explicit experiment
+is SFT warmup on the full 257 legal reference Actions (this is supervised
+learning, NOT part of GRPO reward), then rerun strict GRPO:
 
-The default model receives the exact RAW O1 prompt without chat template
-(as required for consistency with the existing frozen Risk Head). This is
-not a guarantee that an initially untrained LoRA policy will emit valid JSON
-or immediately name the correct evidence sources, fields, tools and models.
+    GRPO_SFT_WARMUP=1 GRPO_SFT_WARMUP_SAMPLES=0 \
+      GRPO_VLLM_ENGINE=1 \
+      PILOT_MAX_NEW_TOKENS=4096 \
+      PILOT_CKPT="$PWD/workspace/maestro_8b/checkpoints/sft-all-strict-$(date +%Y%m%d-%H%M%S)" \
+      bash train_maestro_8b/run/pipeline.sh pilot
 
-An optional **supervised cold start** exists in the same RiskKV policy:
-it selects only legal existing Stage4 reference Actions using
-score_decision (private state used ONLY for label filtering), computes
-supervised NLL against complete reference JSON+EOS, and updates LoRA
-before the first GRPO rollout. It does not alter the prompt, risk feature
-distribution, Risk Head, GRPO reward, or PPO clipping. Although the Pilot
-uses only ONE prompt for GRPO, the warmup selects references from the
-FULL 257-row file rather than that one prompt.
-
-    GRPO_VLLM_ENGINE=0 GRPO_SFT_WARMUP=1 GRPO_SFT_WARMUP_SAMPLES=32 \
-    PILOT_MAX_NEW_TOKENS=1536 \
-    PILOT_CKPT="$PWD/workspace/maestro_8b/checkpoints/pilot-sft32-$(date +%Y%m%d-%H%M%S)" \
-    bash train_maestro_8b/run/pipeline.sh pilot
-
-The warmup prints risk_sft_warmup_plan (eligible/rejected reference
-count), then risk_sft_warmup_epoch (samples and supervised NLL).
-If all references are invalid, it fails rather than teaching the model
-bad actions. If a complete legal reference Action exceeds the Pilot
-max_new_tokens, it fails rather than silently truncating supervision.
-Consider a shorter first diagnostic with G=2 / 256 output tokens
-ONLY to inspect formatting, not to compare the full 8-way objective.
-
-Pilot defaults to PILOT_REQUIRE_GRAD=1. When the default reference_sft
-fallback is enabled, tied rewards trigger a legal supervised update
-with explicit metrics. Only when fallback is disabled does a tied-reward
-group raise a diagnostic RuntimeError instead of silently succeeding.
-For normal GRPO training this strict per-group check is off: some
-individual groups can legitimately have zero advantage.
-When SFT warmup is enabled for full training, the same options apply to
-all legally valid reference Actions (cap of 32 by default); training
-itself retains 1 prompt x 8 candidates per optimizer update.
-
-Important: even with warmup, prompt-to-action semantics must be checked
-using both the deterministic reward audit and a real Pilot. The sample
-count and validity distribution may vary. The starter dataset contains
-reference supervision, but GRPO's private scorer is still independently
-evaluated and never receives teacher text similarity as a reward.
-
-## GRPO actually training from the Qwen3-8B Base cold start
-
-The original O1 prompt, Risk Head, Value-KV editing, and unconstrained
-sampling remain unchanged. Formatting is a learnable part of the policy.
-On the RTX 6000D cold start, 8/8 and later 2/2 completions hit 1536 tokens,
-all failed strict JSON and all scored -1. SFT-32 alone did not immediately
-fix generation. This yielded zero GRPO preference gradient.
-
-Stage2 now has TWO independent, explicitly reported learning paths:
-
-1. GRPO **curriculum reward** (default): the same strict
-   score_decision validates every sampled Action; successful legal Actions
-   earn 0.65 + 0.35 * strict_orchestration_reward. Invalid JSON receives
-   a conservative 0.0-0.335 graded structural/proximity signal, never
-   treated as a valid Action. Well-formed JSON with illegal MainAgent
-   dispatch can earn up to 0.55, below ANY legal Action. Premature complete
-   earns only 0.35, discouraging the easiest shortcut. The strictly scored
-   Action remains in the candidate log as strict_reward and valid, and
-   the private reference Action is NEVER used to compute a GRPO reward.
-   Use GRPO_REWARD_MODE=strict to reproduce the old -1 behavior.
-2. **Reference-SFT fallback** only when an ENTIRE group has zero GRPO
-   reward variance (default GRPO_ZERO_ADV_STRATEGY=reference_sft):
-   the existing legitimate reference Action is independently verified
-   against that round's private decision_state. The model's frozen RiskKV
-   history and LoRA suffix train on this complete JSON+EOS with auxiliary
-   coefficient GRPO_ZERO_ADV_SFT_WEIGHT=0.25. This produces a supervised
-   gradient but is **NOT** counted as a GRPO gradient. No fabricated
-   advantages or reward fixing is allowed. The original
-   GRPO_ZERO_ADV_STRATEGY=skip is available for clean ablations.
-
-The training log separately reports strict_reward vs reward,
-json_valid_fraction, strict_valid_fraction, format_progress,
-grpo_gradient_groups, reference_sft_fallback_groups, and
-zero_adv_groups. A fixed-reference fallback is never interpreted as
-successful on-policy reward learning. If a reference is invalid or too
-long for the output budget, fallback FAILS CLOSED rather than silently
-truncating the reference.
-
-Start with a controlled 1-step pilot (after updating the repo). This
-is a genuine optimizer update: if GRPO has no preference signal, the
-legitimate reference loss trains the LoRA suffix instead.
-
-    GRPO_VLLM_ENGINE=0 GRPO_ROLLOUT_ATTENTION=sdpa \
-    GRPO_REWARD_MODE=curriculum GRPO_ZERO_ADV_STRATEGY=reference_sft \
-    GRPO_GENERATIONS=2 GRPO_GRAD_ACCUM=1 \
-    PILOT_MAX_NEW_TOKENS=1536 \
-    PILOT_CKPT="$PWD/workspace/maestro_8b/checkpoints/pilot-learn-$(date +%Y%m%d-%H%M%S)" \
-    bash train_maestro_8b/run/pipeline.sh pilot
-
-Only when this succeeds should the full GRPO rollout run: set
-GRPO_GENERATIONS=8, GRPO_MAX_NEW_TOKENS=1536 for initial safe throughput
-checks; use 4096 again only after observing actual valid JSON and EOS
-termination. Optional GRPO_SFT_WARMUP=1 and
-GRPO_SFT_WARMUP_SAMPLES=0 uses all currently legal reference Actions
-before GRPO rather than starting from a format-untrained base model.
-Setting GRPO_SFT_WARMUP=0 does not disable the honest zero-advantage
-reference fallback. Compare curriculum vs strict and reference fallback
-vs skip as separate experimental ablations.
-
-This is an OPTIMIZATION readiness change, not a guarantee of high
-successful action rates: also track json_valid_fraction and
-strict_valid_fraction as learning progresses, and evaluate with the
-original strict scorer. 3-token preflight still cannot guarantee
-importance ratio bounds over full-length completions.
+This remains opt-in. The observed 32-reference warmup alone was
+insufficient, and even full-dataset SFT is not guaranteed to make every
+free-form sample strictly valid. A legal reference is never used in
+a GRPO reward or leaked into the Main-visible prompt. The optional
+zero-advantage `reference_sft` fallback is also disabled by default;
+if enabled for an ablation it is counted as supervised training,
+not GRPO policy gradient.

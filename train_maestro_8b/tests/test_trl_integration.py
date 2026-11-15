@@ -162,7 +162,7 @@ class TRLTrainerTinyQwen3Tests(unittest.TestCase):
                 engine=engine, reward_fn=None, num_generations=2,
                 temperature=1.0, max_new_tokens=64,
                 clip_epsilon=0.2, fail_on_zero_adv=True,
-                reward_mode="curriculum", zero_adv_strategy="reference_sft",
+                zero_adv_strategy="reference_sft",
                 zero_adv_sft_weight=0.25,
                 args=fallback_args, train_dataset=MainDecisionDataset([row]),
             )

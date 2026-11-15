@@ -106,7 +106,7 @@ def make_trainer_class():
         def __init__(self, *, engine, reward_fn, num_generations,
                      temperature, max_new_tokens, clip_epsilon,
                      debug_path=None, fail_on_zero_adv=False,
-                     reward_mode="curriculum", zero_adv_strategy="reference_sft",
+                     zero_adv_strategy="skip",
                      zero_adv_sft_weight=0.25, **kwargs):
             self.engine = engine
             self.reward_fn = reward_fn
@@ -116,13 +116,10 @@ def make_trainer_class():
             self.clip_epsilon = clip_epsilon
             self.debug_path = Path(debug_path) if debug_path else None
             self.fail_on_zero_adv = bool(fail_on_zero_adv)
-            if reward_mode not in ("strict", "curriculum"):
-                raise ValueError("reward_mode must be strict or curriculum")
             if zero_adv_strategy not in ("skip", "reference_sft"):
                 raise ValueError("zero_adv_strategy must be skip or reference_sft")
             if not 0 < zero_adv_sft_weight <= 1:
                 raise ValueError("zero_adv_sft_weight must be in (0,1]")
-            self.reward_mode = reward_mode
             self.zero_adv_strategy = zero_adv_strategy
             self.zero_adv_sft_weight = zero_adv_sft_weight
             self.grpo_gradient_groups = 0
@@ -185,7 +182,7 @@ def make_trainer_class():
             actions = []
             rewards = []
             metadata = []
-            from train_maestro_8b.policy.rewards import score_training_candidate
+            from environment.untrusted_orchestration.orchestration_reward import score_decision
             with torch.no_grad():
                 candidates = self.engine.sample_group(
                     prefix, count=self.num_generations, max_new_tokens=self.max_new_tokens,
@@ -194,10 +191,8 @@ def make_trainer_class():
                 for ids, sampled in candidates:
                     candidate = self.engine.decode(ids)
                     if self.reward_fn is None:
-                        info = score_training_candidate(
-                            candidate, row["decision_state"], mode=self.reward_mode,
-                        )
-                        reward = info["training_reward"]
+                        info = score_decision(candidate, row["decision_state"])
+                        reward = info["reward"]
                     else:
                         info = None
                         reward = float(self.reward_fn(candidate, row))
@@ -215,7 +210,7 @@ def make_trainer_class():
                                 "prompt_tokens": prefix.length,
                                 "completion_tokens": int(ids.numel()),
                                 "reward": reward,
-                                "strict_reward": info.get("strict_reward") if info else None,
+                                "strict_reward": info["reward"] if info else None,
                                 "components": info,
                             }, ensure_ascii=False) + "\n")
             if gpu:
@@ -271,11 +266,7 @@ def make_trainer_class():
                 self.last_components = {
                     "reward": sum(rewards) / len(rewards),
                     "strict_reward": sum(
-                        info["strict_reward"] for _, info in metadata
-                        if info is not None
-                    ) / len(actions) if self.reward_fn is None else None,
-                    "format_progress": sum(
-                        info.get("format_progress", 0.0) for _, info in metadata
+                        info["reward"] for _, info in metadata
                         if info is not None
                     ) / len(actions) if self.reward_fn is None else None,
                     "reward_unique": len(set(rewards)),
@@ -284,10 +275,9 @@ def make_trainer_class():
                         info is not None and info["valid"] for _, info in metadata
                     ) / len(actions),
                     "json_valid_fraction": sum(
-                        info is not None and info.get("json_valid", False)
+                        info is not None and info.get("reason") != "invalid_json"
                         for _, info in metadata
                     ) / len(actions),
-                    "reward_mode": self.reward_mode,
                     "invalid_fraction": sum(
                         info is not None and not info["valid"] for _, info in metadata
                     ) / len(actions),
@@ -380,10 +370,6 @@ def make_trainer_class():
                     info["strict_reward"] for _, info in metadata
                     if info is not None
                 ) / len(actions) if self.reward_fn is None else None,
-                "format_progress": sum(
-                    info.get("format_progress", 0.0) for _, info in metadata
-                    if info is not None
-                ) / len(actions) if self.reward_fn is None else None,
                 "reward_unique": len(set(rewards)),
                 "reward_std": float(torch.as_tensor(rewards).std(unbiased=False)),
                 "prompt_tokens": prefix.length,
@@ -403,7 +389,7 @@ def make_trainer_class():
                     info is not None and info["valid"] for _, info in metadata
                 ) / len(actions),
                 "json_valid_fraction": sum(
-                    info is not None and info.get("json_valid", False)
+                    info is not None and info.get("reason") != "invalid_json"
                     for _, info in metadata
                 ) / len(actions),
                 "importance_ratio_min": round(importance_ratio_min, 6),

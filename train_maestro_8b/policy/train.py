@@ -25,10 +25,10 @@ def parse_args(argv=None):
     p.add_argument("--rollout_attention", choices=("sdpa", "vllm"), default="sdpa",
                    help="Attention kernel for RiskKV sampling; replay uses Transformers")
     p.add_argument("--vllm_engine", action="store_true", help="Full vLLM RiskKV rollout")
-    p.add_argument("--vllm_memory_utilization", type=float, default=0.45)
+    p.add_argument("--vllm_memory_utilization", type=float, default=0.70)
     p.add_argument("--reward_callable", help="optional module.path:function(candidate, record)")
     p.add_argument("--reward_debug_jsonl", default=None)
-    p.add_argument("--epochs", type=float, default=1.0)
+    p.add_argument("--epochs", type=float, default=3.0)
     p.add_argument("--max_steps", type=int, default=-1)
     p.add_argument("--num_generations", type=int, default=8,
                    help="GRPO completions PER Main prompt (DA-GRPO default: 8)")
@@ -40,18 +40,19 @@ def parse_args(argv=None):
     p.add_argument("--max_new_tokens", type=int, default=4096,
                    help="maximum generated Action tokens (DA cap: 4096)")
     p.add_argument("--temperature", type=float, default=1.0)
-    p.add_argument("--lr", type=float, default=1e-5)
-    p.add_argument("--lora_rank", type=int, default=16)
-    p.add_argument("--lora_alpha", type=int, default=32)
+    p.add_argument("--lr", type=float, default=5e-5)
+    p.add_argument("--weight_decay", type=float, default=0.01)
+    p.add_argument("--max_grad_norm", type=float, default=1.0)
+    p.add_argument("--optim", choices=("adamw_8bit", "adamw_torch"),
+                   default="adamw_8bit")
+    p.add_argument("--lora_rank", type=int, default=32)
+    p.add_argument("--lora_alpha", type=int, default=64)
     p.add_argument("--steer_last_n", type=int, default=8)
     p.add_argument("--steer_strength", type=float, default=0.1)
     p.add_argument("--steer_threshold", type=float, default=0.5)
     p.add_argument("--clip_epsilon", type=float, default=0.2)
-    p.add_argument("--grpo_reward_mode", choices=("strict", "curriculum"),
-                   default="curriculum",
-                   help="Self-learned JSON/Action graded feedback or original strict -1 scorer")
     p.add_argument("--zero_adv_strategy", choices=("skip", "reference_sft"),
-                   default="reference_sft",
+                   default="skip",
                    help="When every completion scores equally, use an independently "
                         "verified reference Action as auxiliary SFT, never fake GRPO advantage")
     p.add_argument("--zero_adv_sft_weight", type=float, default=0.25,
@@ -65,8 +66,8 @@ def parse_args(argv=None):
     p.add_argument("--dtype", choices=("bf16", "fp16"), default="bf16")
     p.add_argument("--load_in_4bit", dest="load_in_4bit", action="store_true", default=True)
     p.add_argument("--no_4bit", dest="load_in_4bit", action="store_false")
-    p.add_argument("--logging_steps", type=int, default=5)
-    p.add_argument("--save_steps", type=int, default=100)
+    p.add_argument("--logging_steps", type=int, default=1)
+    p.add_argument("--save_steps", type=int, default=50)
     p.add_argument("--save_total_limit", type=int, default=2)
     p.add_argument("--warmup_ratio", type=float, default=0.03)
     p.add_argument("--resume_from_checkpoint", default=None)
@@ -90,7 +91,9 @@ def validate_args(args):
     if (args.epochs <= 0 or args.num_generations < 2 or args.max_length < 1
             or args.max_new_tokens < 1 or args.lora_rank < 1
             or args.temperature <= 0 or not 0 < args.clip_epsilon < 1
-            or not 0 < args.zero_adv_sft_weight <= 1):
+            or not 0 < args.zero_adv_sft_weight <= 1
+            or args.lora_alpha < 1 or args.lr <= 0
+            or args.weight_decay < 0 or args.max_grad_norm <= 0):
         raise ValueError("invalid GRPO/LoRA hyperparameters")
     if args.gradient_accumulation_steps < 1:
         raise ValueError("gradient accumulation counts FULL prompt groups and must be >=1")
@@ -246,7 +249,6 @@ def run(args, stack):
     print("risk_grpo_batch_plan=" + json.dumps({
         "distinct_prompts_per_optimizer_step": args.gradient_accumulation_steps,
         "num_generations_per_prompt": args.num_generations,
-        "reward_mode": args.grpo_reward_mode,
         "zero_adv_strategy": args.zero_adv_strategy,
         "completions_per_optimizer_step":
             args.gradient_accumulation_steps * args.num_generations,
@@ -292,6 +294,9 @@ def run(args, stack):
             args.gradient_accumulation_steps * args.num_generations
         ),
         learning_rate=args.lr,
+        weight_decay=args.weight_decay,
+        max_grad_norm=args.max_grad_norm,
+        optim=args.optim,
         num_generations=args.num_generations,
         max_completion_length=args.max_new_tokens,
         beta=0.0,
@@ -324,7 +329,6 @@ def run(args, stack):
         clip_epsilon=args.clip_epsilon,
         debug_path=args.reward_debug_jsonl,
         fail_on_zero_adv=args.fail_on_zero_adv,
-        reward_mode=args.grpo_reward_mode,
         zero_adv_strategy=args.zero_adv_strategy,
         zero_adv_sft_weight=args.zero_adv_sft_weight,
         args=cfg,
@@ -352,11 +356,16 @@ def run(args, stack):
         "zero_advantage_groups": trainer.zero_adv_groups,
         "grpo_gradient_groups": trainer.grpo_gradient_groups,
         "reference_sft_fallback_groups": trainer.reference_sft_fallback_groups,
-        "grpo_reward_mode": args.grpo_reward_mode,
         "zero_adv_strategy": args.zero_adv_strategy,
         "zero_adv_sft_weight": args.zero_adv_sft_weight,
         "total_groups": trainer.seen_groups,
         "num_generations": args.num_generations,
+        "lora_rank": args.lora_rank,
+        "lora_alpha": args.lora_alpha,
+        "learning_rate": args.lr,
+        "weight_decay": args.weight_decay,
+        "optim": args.optim,
+        "max_grad_norm": args.max_grad_norm,
         "sft_warmup_epochs": args.sft_warmup,
         "sft_warmup_samples": args.sft_warmup_samples,
         "prompts_per_optimizer_step": args.gradient_accumulation_steps,
