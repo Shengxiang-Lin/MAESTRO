@@ -1,7 +1,74 @@
+## Main Stage 2 training: native Environment + Semantic Judge reward
+
+The main Stage2 **generation/training framework stays exactly the working
+DA-style Unsloth + TRL GRPOTrainer + Qwen3 Chat Template + colocated vLLM**.
+Only its reward function changes by default:
+
+```text
+Illegal Action or invalid JSON: R = -1 (no remote Judge call)
+Valid Action: R = (1-w) * R_environment + w * R_semantic
+w = 0.4 (default)
+```
+
+Environment Reward is the original private-state 0.35 Evidence Coverage,
+0.25 Priority, 0.25 Safe Parallelism, 0.15 Nonredundancy. Semantic
+Judge is the earlier 0.30 Evidence Grounding, 0.30 Recovery Strategy,
+0.20 Subtask Quality and 0.20 Reasoning Quality rubric. Only the current
+Main-visible O1 Prompt and candidate Action reach the remote Judge.
+Private pre-action states remain in
+`environment/data/stage4/private/decision_reward_states.jsonl`,
+never in the policy Prompt or remote API request. Gold/expert fields
+can remain in the DA-format Parquet for compatibility but are **not used**
+by the hybrid evaluator.
+
+The training adapter is
+`train_maestro_8b/policy/trl_reward_adapter.py`. It joins private states
+to published Stage4 samples by
+`round_sample_id + decision_round`, reports missing/unscorable rows,
+and selects only the subset with valid private reward contracts.
+The original DA Parquet can be reused without regeneration. If the
+original 689 rows have fewer valid private snapshots, a smaller training
+set is expected and explicitly reported (no invented fallback states).
+Qwen3's complete `<think>...</think>` envelope and an optional JSON
+fence are removed before strict Action validation; **multiple JSON
+objects, unfinished thinking or arbitrary prose remain invalid**.
+The normalizer does not change the local action legality rules.
+
+```bash
+cd /root/autodl-tmp/MAESTRO
+git pull origin main
+# Do not run in parallel with the prior DA experiment.
+bash train_maestro_8b/run/pipeline.sh prepare-grpo
+bash train_maestro_8b/run/pipeline.sh preflight
+export DASHSCOPE_API_KEY='your-key'
+bash train_maestro_8b/run/pipeline.sh judge
+bash train_maestro_8b/run/pipeline.sh pilot
+GRPO_MAX_STEPS=100 bash train_maestro_8b/run/pipeline.sh grpo
+```
+
+The default is `STAGE2_TRAINER=da DA_REWARD_MODE=hybrid`. Experiment
+output paths automatically use `stage2-hybrid-pilot/` and
+`stage2-hybrid-grpo/` to avoid overwriting the earlier DA-judge run.
+Inspect `reward_diagnostics.jsonl` for local validity/failure reason,
+environment reward, semantic reward, their combination, semantic
+dimension scores and wrapped-JSON normalization. The Pilot fails if
+there is no within-group reward difference; even with KL>0 an
+all-identical group is **not** evidence of GRPO preference learning.
+Old optimizers/checkpoints from a different reward mode should **not**
+be blindly resumed as a same-objective run.
+
+For comparisons, set `DA_REWARD_MODE=deterministic` (same legality gate
+and local objective, no API), `judge_only` (semantics on legal Actions
+only), or `da` (original DA four-dimensional Judge including
+expert/gold references). No baseline source file is modified.
+Stage1 Risk Head / RiskKV remains a separate experimental route:
+`STAGE2_TRAINER=riskkv`.
+
 ## Main Stage 2 training (default): DA-style Unsloth + TRL GRPO
 
 The current main Stage2 training path is **`train_maestro_8b`**, not
-`baseline/da-grpo`. After Stage4 has published accepted Main turns, run:
+`baseline/da-grpo`. The commands below also use hybrid reward by default
+(as described above). After Stage4 has published accepted Main turns, run:
 
 ```bash
 git pull origin main
@@ -17,11 +84,12 @@ The pipeline defaults to `STAGE2_TRAINER=da`, with Stage2-owned
 `data/export_da_grpo.py`, `policy/da_backend.py` and
 `policy/train.py da ...`. **No Stage1 Risk Head/features/checkpoint is
 required for this run.** The original baseline source remains unchanged.
-The main Stage2 backend **constructs and runs** BF16 LoRA + Unsloth/vLLM
-with TRL GRPOTrainer and DAPO+KL 0.01 inside `train_maestro_8b/policy/da_backend.py`.
-It reuses the unmodified DA baseline configuration/tokenization helpers
-and the exact four-dimension LLM Judge prompt/weights
-(format .1, action .1, tool .2, decision .6).
+The Stage2 backend **constructs and runs** BF16 LoRA + Unsloth/vLLM
+with TRL GRPOTrainer and DAPO+KL 0.01 inside
+`train_maestro_8b/policy/da_backend.py`.
+It reuses the DA baseline configuration/tokenization helpers;
+the old four-dimension Judge is now available only via
+`DA_REWARD_MODE=da` for a controlled ablation.
 It sends public task/history plus the private gold/expert reference to
 the external Judge **for reward only**, never to the Main policy prompt.
 
