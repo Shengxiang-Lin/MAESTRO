@@ -38,6 +38,7 @@ class GAIAOrchestraConfig:
     dataset_type: str = "omnigaia"
     dataset_jsonl_path: Path | None = None
     dataset_source_path: Path | None = None
+    task_ids_file: Path | None = None
 
     @classmethod
     def load(cls, config_path: Path | str) -> "GAIAOrchestraConfig":
@@ -67,6 +68,10 @@ class GAIAOrchestraConfig:
             dataset_jsonl_path=(
                 cls._resolve_path(raw["dataset_jsonl_path"], config_path)
                 if raw.get("dataset_jsonl_path") else None
+            ),
+            task_ids_file=(
+                cls._resolve_path(raw["task_ids_file"], config_path)
+                if raw.get("task_ids_file") else None
             ),
             main_model=str(main_model),
             sub_models=[str(model) for model in sub_models],
