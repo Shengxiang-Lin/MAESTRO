@@ -1,4 +1,4 @@
-"""Unsloth + TRL Stage2 launcher for KV-steered, LoRA-only GRPO.
+"""MAESTRO Stage2 orchestrator: DA-style GRPO now, optional RiskKV experiment.
 
 This intentionally uses Unsloth FastLanguageModel and TRL GRPOConfig with
 HF Trainer/Accelerate optimization hooks, NOT stock TRL GRPOTrainer rollout:
@@ -223,7 +223,19 @@ def _sft_warmup(engine, full_records, args):
 
 
 def main(argv=None):
-    args = parse_args(argv)
+    """Select main Stage-2 trainer explicitly, preserving legacy RiskKV CLI.
+
+    'da' is the initial Stage2 policy training phase (no Stage1 Risk Head).
+    'riskkv' retains the experimental cache-steered implementation.
+    """
+    import sys
+    args_list = list(sys.argv[1:] if argv is None else argv)
+    if args_list and args_list[0] == "da":
+        from train_maestro_8b.policy.da_backend import main as stage2_da_main
+        return stage2_da_main(args_list[1:])
+    if args_list and args_list[0] == "riskkv":
+        args_list = args_list[1:]
+    args = parse_args(args_list)
     validate_args(args)
     with ExitStack() as stack:
         run(args, stack)

@@ -1,3 +1,27 @@
+## Stage2 DA-first: recommended current training path
+
+```bash
+# after publishing Stage4 reviewed Main-Agent turns
+STAGE2_TRAINER=da bash train_maestro_8b/run/pipeline.sh prepare-grpo
+STAGE2_TRAINER=da bash train_maestro_8b/run/pipeline.sh preflight
+export DASHSCOPE_API_KEY='...'
+STAGE2_TRAINER=da bash train_maestro_8b/run/pipeline.sh judge
+STAGE2_TRAINER=da bash train_maestro_8b/run/pipeline.sh pilot
+GRPO_MAX_STEPS=100 STAGE2_TRAINER=da bash train_maestro_8b/run/pipeline.sh grpo
+```
+
+The default already is `STAGE2_TRAINER=da`. Data conversion, trainer
+selection and run outputs are all owned by `train_maestro_8b/`.
+The Stage2 backend constructs its own Unsloth + TRL GRPOTrainer, while
+reusing the **unmodified** DA baseline's helper/reward modules as a
+reference. No edited-KV RiskKV prefill and no Risk Head are loaded.
+Training uses native Qwen3 chat template, Unsloth+TRL GRPOTrainer,
+colocated vLLM, DAPO+KL and exact baseline four-dimension LLM Judge
+(including the expert and ground truth in **reward-only** data).
+
+To compare RiskKV, set `STAGE2_TRAINER=riskkv` explicitly. The older
+instructions below concern that **experimental** mode.
+
 # MAESTRO 8B — one-command run
 
 Stage4 already generated? Run the complete Qwen3-8B training pipeline:

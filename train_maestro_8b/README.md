@@ -1,3 +1,43 @@
+## Main Stage 2 training (default): DA-style Unsloth + TRL GRPO
+
+The current main Stage2 training path is **`train_maestro_8b`**, not
+`baseline/da-grpo`. After Stage4 has published accepted Main turns, run:
+
+```bash
+git pull origin main
+bash train_maestro_8b/run/pipeline.sh prepare-grpo
+bash train_maestro_8b/run/pipeline.sh preflight
+export DASHSCOPE_API_KEY='your-key'
+bash train_maestro_8b/run/pipeline.sh judge
+bash train_maestro_8b/run/pipeline.sh pilot
+GRPO_MAX_STEPS=100 bash train_maestro_8b/run/pipeline.sh grpo
+```
+
+The pipeline defaults to `STAGE2_TRAINER=da`, with Stage2-owned
+`data/export_da_grpo.py`, `policy/da_backend.py` and
+`policy/train.py da ...`. **No Stage1 Risk Head/features/checkpoint is
+required for this run.** The original baseline source remains unchanged.
+The main Stage2 backend **constructs and runs** BF16 LoRA + Unsloth/vLLM
+with TRL GRPOTrainer and DAPO+KL 0.01 inside `train_maestro_8b/policy/da_backend.py`.
+It reuses the unmodified DA baseline configuration/tokenization helpers
+and the exact four-dimension LLM Judge prompt/weights
+(format .1, action .1, tool .2, decision .6).
+It sends public task/history plus the private gold/expert reference to
+the external Judge **for reward only**, never to the Main policy prompt.
+
+The Stage2-specific outputs are `workspace/maestro_8b/stage2_da/train.parquet`
+and `workspace/maestro_8b/checkpoints/stage2-da-{pilot,grpo}/`.
+The default pilot runs 3 updates with 16 training rows and 1536 generated
+tokens per candidate, then checks if any group had nonzero reward variance.
+This is an early training diagnostic, not an end-to-end GPU validation.
+The remote Judge requires credentials; do not commit API keys.
+
+**Legacy RiskKV mode**: `STAGE2_TRAINER=riskkv bash
+train_maestro_8b/run/pipeline.sh all`. That experimental mode still
+trains the Stage1 Risk Head, uses edited KV caches and the private
+deterministic/hybrid rewards. It is retained for controlled Stage1
+ablations, not silently mixed into this DA-first Stage2 run.
+
 # MAESTRO 8B — risk-aware Main-Agent training
 
 This package trains the Main orchestrator on **exact Stage4 O1 histories**.
