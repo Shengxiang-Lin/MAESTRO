@@ -137,35 +137,14 @@ class RiskAwarePolicy:
             raise ValueError("one unpadded completion per suffix forward")
         cache = clone_cache(prefix.cache)
         input_len = suffix_ids.shape[1]
-        total = prefix.length + input_len
-
-        # Transformers 5.x can produce a different causal mask for a
-        # multi-token suffix with an existing DynamicCache than for a single
-        # token decode. In a GRPO teacher-forced forward that can let FUTURE
-        # suffix inputs influence earlier predictions. Never infer causality
-        # from a 2D all-ones padding mask: explicitly use ABSOLUTE positions
-        # in the cached sequence.
-        #
-        # Use an additive 4D mask, not a bool mask, so both SDPA and eager
-        # attention correctly interpret disallowed positions as -infinity.
-        # Qwen3-8B has full-attention layers only; reject architectures with
-        # local/sliding attention until their corresponding mask is provided.
-        config = self.policy.get_base_model().config
-        if any(kind != "full_attention"
-               for kind in getattr(config, "layer_types", ())):
-            raise ValueError("explicit RiskKV mask currently supports full attention only")
-        positions = torch.arange(total, device=suffix_ids.device)
-        queries = positions[prefix.length:]
-        allowed = positions[None, :] <= queries[:, None]
-        dtype = self.policy.get_input_embeddings().weight.dtype
-        mask = torch.zeros(
-            (1, 1, input_len, total), dtype=dtype, device=suffix_ids.device,
-        ).masked_fill_(~allowed[None, None], torch.finfo(dtype).min)
+        mask = torch.ones((1, prefix.length + input_len),
+                          dtype=torch.long, device=suffix_ids.device)
         out = self.policy(
             input_ids=suffix_ids, attention_mask=mask,
             past_key_values=cache, use_cache=True, return_dict=True,
             cache_position=torch.arange(
-                prefix.length, total, device=suffix_ids.device
+                prefix.length, prefix.length + input_len,
+                device=suffix_ids.device
             ),
         )
         return out
