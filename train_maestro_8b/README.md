@@ -81,7 +81,9 @@ supervises LoRA using *only evaluator-legal* reference Actions from
 the full dataset (even for a one-prompt Pilot), with the same frozen
 RiskKV context. Use `PILOT_MAX_NEW_TOKENS=1536` for legal Actions
 whose JSON target exceeds the 512-token smoke cap. An all-zero-reward
-Pilot now fails explicitly when `PILOT_REQUIRE_GRAD=1` (default).
+Pilot now trains using the explicitly logged reference_sft fallback by
+default; with `GRPO_ZERO_ADV_STRATEGY=skip` and
+`PILOT_REQUIRE_GRAD=1` it fails instead of silently skipping gradients.
 See [run/README.md](run/README.md) for commands.
 
 The recommended NF4 feature cache **must** match the default Unsloth NF4
