@@ -103,15 +103,17 @@ def _attempt(rng: random.Random, *, max_branches: int) -> dict:
         )
         nodes.append(compare)
 
-    # Every terminal information product must contribute to FinalResult.
-    # This removes fake 'decorative' Macro nodes and keeps the graph connected.
-    consumed = {link["from_macro"] for node in nodes
-                for link in node["input_ports"].values()}
+    # The Question requests all investigated links and any verification /
+    # comparison findings. Do not silently drop an intermediate VerifiedClaim
+    # simply because a later Investigation consumed it as context. Every
+    # requested work product must reach the terminal goal with its own typed
+    # port, even when the information is also used by another Macro.
     final_inputs = {"entity": bind(identify, "entity")}
-    frontier = [node for node in nodes
-                if node["role"] in {"investigation", "verification", "comparison"}
-                and node["macro_id"] not in consumed]
-    for i, node in enumerate(frontier, 1):
+    deliverables = [
+        node for node in nodes
+        if node["role"] in {"investigation", "verification", "comparison"}
+    ]
+    for i, node in enumerate(deliverables, 1):
         port = next(iter(node["output_ports"]))
         final_inputs[f"result_{i}"] = bind(node, port)
     assert "result_1" in final_inputs
