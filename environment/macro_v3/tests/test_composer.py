@@ -62,6 +62,20 @@ class MacroV3Tests(unittest.TestCase):
                 replay_scene(scene, graph)
         self.assertGreater(checked, 0)
 
+    def test_progressive_clue_edges_are_executable(self):
+        graph = graph_fixture()
+        progressive = []
+        for ordinal in range(35):
+            scene = compose_scene(graph, seed=91, ordinal=ordinal)
+            if scene["quality_report"]["progressive_clue_tasks"]:
+                progressive.append(scene)
+                replay_scene(scene, graph)
+                branches = [t for t in scene["macro_plan"]["macro_tasks"]
+                            if t["solver_strategy"] == "filter_candidates"]
+                for task in branches:
+                    self.assertEqual(set(task["input_contract"]), set(task["depends_on"]))
+        self.assertTrue(progressive, "at least one graph must have progressive evidence")
+
     def test_replay_tamper_detection(self):
         graph = graph_fixture()
         scene = compose_scene(graph, seed=3, ordinal=1)
