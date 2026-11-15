@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import random
+import time
 
 import torch
 
@@ -93,6 +94,8 @@ def make_trainer_class():
             self.invalid_total = 0
             self.generated_total = 0
             self.last_components = {}
+            self.completion_tokens_total = 0
+            self.prefill_tokens_total = 0
             if self.debug_path:
                 self.debug_path.parent.mkdir(parents=True, exist_ok=True)
             super().__init__(
@@ -132,7 +135,15 @@ def make_trainer_class():
                 model.config.use_cache = True
             model.eval()
             row = inputs["records"][0]
+            gpu = self.engine.device.type == "cuda"
+            if gpu:
+                torch.cuda.synchronize(self.engine.device)
+                torch.cuda.reset_peak_memory_stats(self.engine.device)
+            t0 = time.perf_counter()
             prefix = self.engine.prefill(row["prompt"], row["reports"])
+            if gpu:
+                torch.cuda.synchronize(self.engine.device)
+            t1 = time.perf_counter()
             actions = []
             rewards = []
             metadata = []
@@ -161,9 +172,16 @@ def make_trainer_class():
                                 "sample_id": row.get("sample_id"),
                                 "step": int(self.state.global_step),
                                 "candidate": candidate,
+                                "prompt_tokens": prefix.length,
+                                "completion_tokens": int(ids.numel()),
                                 "reward": reward, "components": info,
                             }, ensure_ascii=False) + "\n")
+            if gpu:
+                torch.cuda.synchronize(self.engine.device)
+            t2 = time.perf_counter()
             self.seen_groups += 1
+            self.prefill_tokens_total += prefix.length
+            self.completion_tokens_total += sum(int(ids.numel()) for ids, _ in actions)
             self.generated_total += len(actions)
             self.invalid_total += sum(info is not None and not info["valid"]
                                       for _, info in metadata)
@@ -171,6 +189,32 @@ def make_trainer_class():
             model.train()
             if float(advantages.abs().max()) < 1e-6:
                 self.zero_adv_groups += 1
+                # Report why the run did not learn, rather than only 'loss=0'.
+                self.last_components = {
+                    "reward": sum(rewards) / len(rewards),
+                    "reward_unique": len(set(rewards)),
+                    "reward_std": float(torch.as_tensor(rewards).std(unbiased=False)),
+                    "invalid_fraction": sum(
+                        info is not None and not info["valid"] for _, info in metadata
+                    ) / len(actions),
+                    "prompt_tokens": prefix.length,
+                    "completion_tokens": sum(int(ids.numel()) for ids, _ in actions),
+                    "completions_per_group": len(actions),
+                    "prefill_s": round(t1 - t0, 4),
+                    "rollout_and_score_s": round(t2 - t1, 4),
+                    "backward_s": 0.0,
+                    "zero_adv_groups": self.zero_adv_groups,
+                }
+                if gpu:
+                    self.last_components["cuda_peak_allocated_gib"] = round(
+                        torch.cuda.max_memory_allocated(self.engine.device) / 2**30, 3
+                    )
+                    self.last_components["cuda_peak_reserved_gib"] = round(
+                        torch.cuda.max_memory_reserved(self.engine.device) / 2**30, 3
+                    )
+                if self.seen_groups % max(1, self.args.logging_steps) == 0:
+                    self.log({f"risk_grpo/{k}": v
+                              for k, v in self.last_components.items()})
                 return torch.tensor(0.0, device=self.engine.device)
             group_losses = []
             for i, (ids, old_logps) in enumerate(actions):
@@ -186,14 +230,32 @@ def make_trainer_class():
                     ) / self.num_generations
                 self.accelerator.backward(loss)
                 group_losses.append(loss.detach())
+            if gpu:
+                torch.cuda.synchronize(self.engine.device)
+            t3 = time.perf_counter()
             self.last_components = {
                 "reward": sum(rewards) / len(rewards),
+                "reward_unique": len(set(rewards)),
+                "reward_std": float(torch.as_tensor(rewards).std(unbiased=False)),
+                "prompt_tokens": prefix.length,
+                "completion_tokens": sum(int(ids.numel()) for ids, _ in actions),
+                "completions_per_group": len(actions),
+                "prefill_s": round(t1 - t0, 4),
+                "rollout_and_score_s": round(t2 - t1, 4),
+                "backward_s": round(t3 - t2, 4),
                 "loss": float(torch.stack(group_losses).sum()),
                 "invalid_fraction": sum(
                     info is not None and not info["valid"] for _, info in metadata
                 ) / len(actions),
                 "zero_adv_groups": self.zero_adv_groups,
             }
+            if gpu:
+                self.last_components["cuda_peak_allocated_gib"] = round(
+                    torch.cuda.max_memory_allocated(self.engine.device) / 2**30, 3
+                )
+                self.last_components["cuda_peak_reserved_gib"] = round(
+                    torch.cuda.max_memory_reserved(self.engine.device) / 2**30, 3
+                )
             for metric in ("coverage", "priority", "parallel", "nonredundancy"):
                 valid_infos = [info for _, info in metadata if info is not None]
                 if valid_infos:
