@@ -31,6 +31,8 @@ GRPO_GENERATIONS="${GRPO_GENERATIONS:-4}"
 GRPO_GRAD_ACCUM="${GRPO_GRAD_ACCUM:-4}"
 GRPO_MAX_NEW_TOKENS="${GRPO_MAX_NEW_TOKENS:-256}"
 GRPO_LR="${GRPO_LR:-1e-5}"
+GRPO_ROLLOUT_ATTENTION="${GRPO_ROLLOUT_ATTENTION:-sdpa}"
+GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT="${GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT:-0.01}"
 GRPO_STEER_LAYERS="${GRPO_STEER_LAYERS:-8}"
 GRPO_STEER_STRENGTH="${GRPO_STEER_STRENGTH:-0.1}"
 GRPO_STEER_THRESHOLD="${GRPO_STEER_THRESHOLD:-0.5}"
@@ -196,6 +198,8 @@ init_grpo_args() {
     --model "$MODEL" --risk_checkpoint "$RISK_CKPT"
     --train_file "$GRPO_DATA/train.jsonl"
     --backend unsloth --load_in_4bit --max_length "$MAX_LENGTH"
+    --rollout_attention "$GRPO_ROLLOUT_ATTENTION"
+    --preflight_max_logprob_drift "$GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT"
     --max_new_tokens "$GRPO_MAX_NEW_TOKENS"
     --num_generations "$GRPO_GENERATIONS"
     --gradient_accumulation_steps "$GRPO_GRAD_ACCUM"
@@ -207,15 +211,9 @@ init_grpo_args() {
 preflight() {
   need_model; verify_risk; need "$GRPO_DATA/train.jsonl"
   say "Unsloth RiskKV preflight: sampling/logprob/LoRA gradients"
-  python -m train_maestro_8b.policy.train \
-    --model "$MODEL" --risk_checkpoint "$RISK_CKPT" \
-    --train_file "$GRPO_DATA/train.jsonl" \
-    --output_dir "$GRPO_CKPT" --backend unsloth \
-    --load_in_4bit --max_length "$MAX_LENGTH" \
-    --max_new_tokens "$GRPO_MAX_NEW_TOKENS" \
-    --steer_last_n "$GRPO_STEER_LAYERS" \
-    --steer_strength "$GRPO_STEER_STRENGTH" \
-    --steer_threshold "$GRPO_STEER_THRESHOLD" --preflight_only
+  init_grpo_args
+  python -m train_maestro_8b.policy.train "${common_args[@]}" \
+    --output_dir "$GRPO_CKPT" --preflight_only
 }
 pilot() {
   need_model; verify_risk; need "$GRPO_DATA/train.jsonl"

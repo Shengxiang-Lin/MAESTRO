@@ -12,9 +12,12 @@ The pipeline has two learned stages:
   parallelism / nonredundancy reward from private Environment state.
 
 Default backend: **Unsloth QLoRA + TRL GRPOConfig / HF Trainer** with
-a custom risk-cache-preserving rollout and logprob implementation. It does
-not use an unmodified `trl.GRPOTrainer` or vLLM rollout. One CUDA process is
-supported, and full Qwen3-8B 16K throughput must be measured on your GPU.
+a custom risk-cache-preserving rollout and logprob implementation. One CUDA
+process is supported. The optional `GRPO_ROLLOUT_ATTENTION=vllm` uses the CUDA
+FlashAttention kernel from the installed vLLM package for rollout attention,
+over the same edited Transformers cache. The Transformers forward owns
+prefix prefill, token sampling, cache updates and differentiable replay.
+This mode does not start the vLLM engine or use paged KV caching.
 
 ## Run (from Environment outputs to training)
 
@@ -39,7 +42,10 @@ View every subcommand and adjustable environment variable in
 The recommended NF4 feature cache **must** match the default Unsloth NF4
 training backbone. Preflight validates sampling/recomputed logprobs, cache
 continuation, and LoRA-only gradients. If compatibility checks fail, do
-not disable them before training.
+not disable them before training. The preflight checks the maximum absolute
+sampled-versus-differentiable log-probability gap. Use
+`GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT` to set the bound for a numerical smoke test
+and inspect the measured drift before setting a training tolerance.
 
 ## Code structure
 

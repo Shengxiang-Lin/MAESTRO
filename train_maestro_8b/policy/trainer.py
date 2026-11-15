@@ -7,8 +7,8 @@ Risk-Head-steered KV cache as the SAME distribution in rollout and loss.
 
 One sample/prompt per microbatch; per prompt G sequential completions.
 Each completion's gradient is accumulated *immediately* to avoid holding
-G suffix graphs simultaneously in GPU memory. No vLLM, no policy/ref KL,
-no DDP, and no invented environment rollout.
+G suffix graphs simultaneously in GPU memory. The custom policy owns
+rollout, scoring and loss in a single process.
 """
 from __future__ import annotations
 

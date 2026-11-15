@@ -64,6 +64,7 @@ class RiskAwarePolicy:
         self.tokenizer = tokenizer
         self.risk_head = risk_head
         self.config = risk_config
+        self.rollout_attention = None
         self.max_length = max_length
         self.last_n_layers = last_n_layers
         self.strength = strength
@@ -162,7 +163,18 @@ class RiskAwarePolicy:
     @torch.no_grad()
     def sample(self, prefix: RiskPrefix, *, max_new_tokens=256,
                temperature=1.0, eos_token_id=None):
-        """Autoregressive LoRA suffix; all candidate caches stay independent."""
+        """Autoregressive LoRA suffix with the selected inference attention."""
+        config = self.policy.config
+        original = config._attn_implementation if self.rollout_attention else None
+        if self.rollout_attention:
+            config._attn_implementation = self.rollout_attention
+        try:
+            return self._sample(prefix, max_new_tokens, temperature, eos_token_id)
+        finally:
+            if self.rollout_attention:
+                config._attn_implementation = original
+
+    def _sample(self, prefix, max_new_tokens, temperature, eos_token_id):
         if max_new_tokens < 1 or temperature <= 0:
             raise ValueError("invalid generation settings")
         eos = self.tokenizer.eos_token_id if eos_token_id is None else eos_token_id
