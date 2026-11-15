@@ -47,7 +47,12 @@ def parse_args(argv=None):
     p.add_argument("--steer_strength", type=float, default=0.1)
     p.add_argument("--steer_threshold", type=float, default=0.5)
     p.add_argument("--clip_epsilon", type=float, default=0.2)
-    p.add_argument("--sft_warmup", type=int, default=0)
+    p.add_argument("--sft_warmup", type=int, default=0,
+                   help="Optional reference-Action supervised warmup epochs before GRPO")
+    p.add_argument("--sft_warmup_samples", type=int, default=0,
+                   help="Select up to N legal reference Actions from FULL train set; 0 means all")
+    p.add_argument("--fail_on_zero_adv", action="store_true",
+                   help="Fail one-step Pilot if all candidates receive the same reward")
     p.add_argument("--dtype", choices=("bf16", "fp16"), default="bf16")
     p.add_argument("--load_in_4bit", dest="load_in_4bit", action="store_true", default=True)
     p.add_argument("--no_4bit", dest="load_in_4bit", action="store_false")
@@ -88,7 +93,8 @@ def validate_args(args):
         raise ValueError("invalid risk-steering settings")
     if args.backend == "unsloth" and not args.load_in_4bit:
         raise ValueError("initial Unsloth integration is NF4-only; remove --no_4bit")
-    if args.sft_warmup < 0 or args.save_steps < 1 or args.logging_steps < 1:
+    if (args.sft_warmup < 0 or args.sft_warmup_samples < 0
+            or args.save_steps < 1 or args.logging_steps < 1):
         raise ValueError("invalid warmup/save/logging settings")
     # Legacy strict absolute-logp gate stays available as an explicit
     # diagnostic override. By default we validate hard RiskKV invariants
@@ -104,22 +110,71 @@ def validate_args(args):
         raise ValueError("--max_steps must be -1 (epoch) or positive")
 
 
-def _sft_warmup(engine, dataset, args):
-    """Optional reference-action warmup, always with the same risk KV path."""
+def select_warmup_records(records, *, seed, limit):
+    """Cold-start only from legal reference Actions; never teach invalid goals.
+
+    Full private reward state is passed ONLY to this offline selector and the
+    deterministic validator. The student still sees only the original O1
+    prompt with RiskKV and the target JSON Action.
+    """
+    from collections import Counter
+    from environment.untrusted_orchestration.orchestration_reward import score_decision
+    selected = []
+    rejected = Counter()
+    for row in records:
+        action = row.get("reference_action")
+        if not isinstance(action, dict):
+            rejected["missing_reference_action"] += 1
+            continue
+        state = row.get("decision_state")
+        result = score_decision(action, state)
+        if result["valid"]:
+            selected.append(row)
+        else:
+            rejected[result["reason"]] += 1
+    available = len(selected)
+    rng = random.Random(seed)
+    rng.shuffle(selected)
+    if limit:
+        selected = selected[:limit]
+    if not selected:
+        raise ValueError(
+            "No legal reference Actions available for SFT cold-start; "
+            f"rejection reasons: {dict(rejected)}"
+        )
+    print("risk_sft_warmup_plan=" + json.dumps({
+        "eligible_reference_actions": available,
+        "selected_samples": len(selected),
+        "reference_rejections": dict(rejected),
+        "selection_seed": seed,
+    }), flush=True)
+    return selected
+
+
+def _sft_warmup(engine, full_records, args):
+    """Optional label-grounded RiskKV LoRA warmup for untrained JSON policy.
+
+    The GRPO pilot is often one Main prompt, but warmup MUST sample legal
+    references from the complete 257-row dataset, not the pilot subset.
+    """
     import torch
     from torch.optim import AdamW
+    selected = select_warmup_records(
+        full_records, seed=args.seed, limit=args.sft_warmup_samples,
+    )
     params = [p for p in engine.policy.parameters() if p.requires_grad]
     optim = AdamW(params, lr=args.lr)
     engine.policy.train()
     for epoch in range(args.sft_warmup):
-        indices = list(range(len(dataset)))
+        # Keep legal samples reproducible while changing order by epoch.
+        indices = list(range(len(selected)))
         random.Random(args.seed + epoch).shuffle(indices)
+        total_loss = 0.0
         for j in indices:
-            row = dataset[j]
-            action = row.get("reference_action")
-            if not isinstance(action, dict):
-                raise ValueError("SFT warmup requires reference_action; GRPO does not")
-            text = json.dumps(action, ensure_ascii=False, separators=(",", ":"))
+            row = selected[j]
+            text = json.dumps(
+                row["reference_action"], ensure_ascii=False, separators=(",", ":")
+            )
             if engine.tokenizer.eos_token:
                 text += engine.tokenizer.eos_token
             target = torch.tensor(
@@ -127,10 +182,11 @@ def _sft_warmup(engine, dataset, args):
                 device=engine.device, dtype=torch.long,
             )
             if len(target) > args.max_new_tokens:
-                # The warmup target must not be silently truncated.
                 raise ValueError(
-                    "SFT teacher target exceeds --max_new_tokens; "
-                    "increase the limit or disable --sft_warmup"
+                    f"SFT reference Action {row.get('sample_id')} requires "
+                    f"{len(target)} tokens, exceeds --max_new_tokens="
+                    f"{args.max_new_tokens}; increase the cap rather than "
+                    "silently truncating supervised Actions"
                 )
             prefix = engine.prefill(row["prompt"], row["reports"])
             optim.zero_grad(set_to_none=True)
@@ -138,7 +194,14 @@ def _sft_warmup(engine, dataset, args):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, 1.0)
             optim.step()
-        print(f"sft_warmup_epoch={epoch+1} complete", flush=True)
+            total_loss += float(loss.detach().item())
+        print(
+            "risk_sft_warmup_epoch=" + json.dumps({
+                "epoch": epoch + 1, "samples": len(indices),
+                "mean_token_nll": round(total_loss / len(indices), 5),
+            }), flush=True,
+        )
+    engine.policy.zero_grad(set_to_none=True)
 
 
 def main(argv=None):
@@ -175,9 +238,8 @@ def run(args, stack):
 
     torch.manual_seed(args.seed)
     random.seed(args.seed)
-    records = list(iter_jsonl(args.train_file))
-    if args.max_prompts > 0:
-        records = records[:args.max_prompts]
+    full_records = list(iter_jsonl(args.train_file))
+    records = full_records[:args.max_prompts] if args.max_prompts > 0 else full_records
     dataset = MainDecisionDataset(records)
     # One policy/training microstep owns a WHOLE GRPO group of completions.
     # Unlike stock TRL GRPOTrainer, gradient_accumulation_steps therefore
@@ -207,7 +269,7 @@ def run(args, stack):
     if args.sft_warmup:
         if args.resume_from_checkpoint:
             raise ValueError("cannot combine SFT warmup with Trainer checkpoint resume")
-        _sft_warmup(engine, dataset, args)
+        _sft_warmup(engine, full_records, args)
 
     # TRL's configuration and HF Trainer's lifecycle are shared, but the
     # default GRPOTrainer rollout/loss are deliberately bypassed.
@@ -255,6 +317,7 @@ def run(args, stack):
         max_new_tokens=args.max_new_tokens,
         clip_epsilon=args.clip_epsilon,
         debug_path=args.reward_debug_jsonl,
+        fail_on_zero_adv=args.fail_on_zero_adv,
         args=cfg,
         train_dataset=dataset,
     )
@@ -280,6 +343,8 @@ def run(args, stack):
         "zero_advantage_groups": trainer.zero_adv_groups,
         "total_groups": trainer.seen_groups,
         "num_generations": args.num_generations,
+        "sft_warmup_epochs": args.sft_warmup,
+        "sft_warmup_samples": args.sft_warmup_samples,
         "prompts_per_optimizer_step": args.gradient_accumulation_steps,
         "max_prompt_tokens": args.max_length,
         "max_completion_tokens": args.max_new_tokens,

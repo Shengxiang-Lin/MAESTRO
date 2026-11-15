@@ -184,3 +184,66 @@ Optional LEGACY strict logprob equality check:
     GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT=0.01 GRPO_VLLM_ENGINE=0 GRPO_ROLLOUT_ATTENTION=sdpa bash train_maestro_8b/run/pipeline.sh preflight
 
 Do not silently raise PPO clipping merely to pass a failing contract.
+
+## Pilot all-invalid / zero-gradient cold start (8/8 invalid)
+
+If the Pilot reports G=8, all 1,536-token generations reached the cap,
+reward=-1 and reward_unique=1, the optimization did NOT happen:
+zero_adv_groups=1, grad_norm=0 and backward_s=0. The 10-minute time
+comes from 8 sequential Transformers generations, not LoRA backward.
+
+Check the ACTUAL most recent generated texts and fail reasons first.
+This uses CPU only, and does not expose private reference/reward state:
+
+    bash train_maestro_8b/run/pipeline.sh audit-pilot
+
+You may also run the underlying tool and specify the max token count
+for this particular run:
+
+    python -m train_maestro_8b.data.audit_rollouts --input workspace/maestro_8b/reward_pilot.jsonl --tail 8 --token_cap 1536
+
+The audit distinguishes invalid_json, malformed/empty delegate tasks,
+premature complete, unbound evidence source/field, and other deterministic
+binding failures. Do NOT assume invalid_json until the audit confirms it.
+
+The default model receives the exact RAW O1 prompt without chat template
+(as required for consistency with the existing frozen Risk Head). This is
+not a guarantee that an initially untrained LoRA policy will emit valid JSON
+or immediately name the correct evidence sources, fields, tools and models.
+
+An optional **supervised cold start** exists in the same RiskKV policy:
+it selects only legal existing Stage4 reference Actions using
+score_decision (private state used ONLY for label filtering), computes
+supervised NLL against complete reference JSON+EOS, and updates LoRA
+before the first GRPO rollout. It does not alter the prompt, risk feature
+distribution, Risk Head, GRPO reward, or PPO clipping. Although the Pilot
+uses only ONE prompt for GRPO, the warmup selects references from the
+FULL 257-row file rather than that one prompt.
+
+    GRPO_VLLM_ENGINE=0 GRPO_SFT_WARMUP=1 GRPO_SFT_WARMUP_SAMPLES=32 \
+    PILOT_MAX_NEW_TOKENS=1536 \
+    PILOT_CKPT="$PWD/workspace/maestro_8b/checkpoints/pilot-sft32-$(date +%Y%m%d-%H%M%S)" \
+    bash train_maestro_8b/run/pipeline.sh pilot
+
+The warmup prints risk_sft_warmup_plan (eligible/rejected reference
+count), then risk_sft_warmup_epoch (samples and supervised NLL).
+If all references are invalid, it fails rather than teaching the model
+bad actions. If a complete legal reference Action exceeds the Pilot
+max_new_tokens, it fails rather than silently truncating supervision.
+Consider a shorter first diagnostic with G=2 / 256 output tokens
+ONLY to inspect formatting, not to compare the full 8-way objective.
+
+Pilot now defaults to PILOT_REQUIRE_GRAD=1, so an all-identical-reward
+group raises a diagnostic RuntimeError with the failure reason histogram
+and does NOT produce a misleading successfully-trained checkpoint.
+For normal GRPO training this strict per-group check is off: some
+individual groups can legitimately have zero advantage.
+When SFT warmup is enabled for full training, the same options apply to
+all legally valid reference Actions (cap of 32 by default); training
+itself retains 1 prompt x 8 candidates per optimizer update.
+
+Important: even with warmup, prompt-to-action semantics must be checked
+using both the deterministic reward audit and a real Pilot. The sample
+count and validity distribution may vary. The starter dataset contains
+reference supervision, but GRPO's private scorer is still independently
+evaluated and never receives teacher text similarity as a reward.

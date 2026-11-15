@@ -52,6 +52,23 @@ View every subcommand and adjustable environment variable in
     bash train_maestro_8b/run/pipeline.sh pilot
     bash train_maestro_8b/run/pipeline.sh grpo
 
+### Diagnose zero-gradient pilots and optionally bootstrap legal JSON Actions
+
+The exact O1 prompt/return format is not guaranteed to be learned
+from the initial Qwen3-8B weights alone. In particular, an 8/8 invalid
+candidate group (all reward=-1, all completions reach token cap)
+returns zero GRPO gradient and no effective update. Run
+`bash train_maestro_8b/run/pipeline.sh audit-pilot` to inspect last
+candidate previews and reason counts without a GPU.
+
+Optional `GRPO_SFT_WARMUP=1 GRPO_SFT_WARMUP_SAMPLES=32` first
+supervises LoRA using *only evaluator-legal* reference Actions from
+the full dataset (even for a one-prompt Pilot), with the same frozen
+RiskKV context. Use `PILOT_MAX_NEW_TOKENS=1536` for legal Actions
+whose JSON target exceeds the 512-token smoke cap. An all-zero-reward
+Pilot now fails explicitly when `PILOT_REQUIRE_GRAD=1` (default).
+See [run/README.md](run/README.md) for commands.
+
 The recommended NF4 feature cache **must** match the default Unsloth NF4
 training backbone. Preflight checks cache continuation, causal isolation,
 local incremental-replay integrity and LoRA-only gradients. Since NF4

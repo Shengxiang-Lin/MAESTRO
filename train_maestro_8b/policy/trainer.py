@@ -81,7 +81,7 @@ def make_trainer_class():
     class RiskSteeredGRPOTrainer(Trainer):
         def __init__(self, *, engine, reward_fn, num_generations,
                      temperature, max_new_tokens, clip_epsilon,
-                     debug_path=None, **kwargs):
+                     debug_path=None, fail_on_zero_adv=False, **kwargs):
             self.engine = engine
             self.reward_fn = reward_fn
             self.num_generations = num_generations
@@ -89,6 +89,7 @@ def make_trainer_class():
             self.max_new_tokens = max_new_tokens
             self.clip_epsilon = clip_epsilon
             self.debug_path = Path(debug_path) if debug_path else None
+            self.fail_on_zero_adv = bool(fail_on_zero_adv)
             self.seen_groups = 0
             self.zero_adv_groups = 0
             self.invalid_total = 0
@@ -215,6 +216,22 @@ def make_trainer_class():
                 if self.seen_groups % max(1, self.args.logging_steps) == 0:
                     self.log({f"risk_grpo/{k}": v
                               for k, v in self.last_components.items()})
+                if self.fail_on_zero_adv:
+                    from collections import Counter
+                    reasons = Counter(
+                        info.get("reason", "custom_reward")
+                        if info is not None else "custom_reward"
+                        for _, info in metadata
+                    )
+                    raise RuntimeError(
+                        "GRPO PILOT HAS NO LEARNING SIGNAL: all candidates "
+                        f"received identical reward {rewards[0]!r}; "
+                        f"invalid={self.last_components['invalid_fraction']:.1%}; "
+                        f"failure_reasons={dict(reasons)}; "
+                        "see reward_pilot.jsonl. An untrained policy may "
+                        "need --sft_warmup using legally validated "
+                        "reference Actions. No checkpoint was marked successful."
+                    )
                 return torch.tensor(0.0, device=self.engine.device)
             group_losses = []
             importance_ratio_min = float("inf")
