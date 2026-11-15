@@ -1,3 +1,4 @@
+# Frozen OmniGAIA final / Orchestra-o1.
 # OmniGAIA baseline with Orchestra-o1 and a local Qwen3-8B MainAgent.
 # Deployment details are defined in config/model_config.yaml.
 # Before running:
@@ -23,13 +24,16 @@ tool_models:
 
 evaluation_model: "qwen3.7-plus"
 
+dataset_type: "OmniGAIA"
 dataset_path: "data/OmniGAIA/test_metadata.jsonl"
 attachments_dir: "data/OmniGAIA"
 level_filter: null
+# Fixed OmniGAIA final evaluation (100 questions).
+task_ids_file: "data/OmniGAIA/splits/final_100_ids.txt"
 
-max_tasks: 360
+max_tasks: null
 max_attempts: 10
 max_concurrency: 5
 
-result_folder: "logs/omnigaia_orchestra_o1_qwen3_8b_base"
-trajectory_folder: "logs/omnigaia_orchestra_o1_qwen3_8b_base/trajectories"
+result_folder: "logs/omnigaia_final/omnigaia_orchestra_o1_qwen3_8b_base"
+trajectory_folder: "logs/omnigaia_final/omnigaia_orchestra_o1_qwen3_8b_base/trajectories"

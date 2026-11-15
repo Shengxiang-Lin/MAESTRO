@@ -1,3 +1,4 @@
+# Frozen OmniGAIA final / Orchestra-o1.
 # Orchestra-o1: Qwen3.8-Max Main-Agent + local Qwen3.8-27B-FP8 Sub-Agent.
 # Metadata source: data/OmniGAIA/test_metadata.json (converted losslessly to JSONL).
 main_model: "qwen3.8-max"
@@ -31,11 +32,14 @@ tool_models:
   video_summary: "qwen3.7-flash"
 evaluation_model: "qwen3.7-plus"
 
+dataset_type: "OmniGAIA"
 dataset_path: "data/OmniGAIA/test_metadata.jsonl"
 attachments_dir: "data/OmniGAIA"
 level_filter: null
-max_tasks: 10
+# Fixed OmniGAIA final evaluation (100 questions).
+task_ids_file: "data/OmniGAIA/splits/final_100_ids.txt"
+max_tasks: null
 max_attempts: 10
 max_concurrency: 10
-result_folder: "logs/omnigaia_o1_qwen38_max_local_fp8_10"
-trajectory_folder: "logs/omnigaia_o1_qwen38_max_local_fp8_10/trajectories"
+result_folder: "logs/omnigaia_final/omnigaia_o1_qwen38_max_local_fp8_10"
+trajectory_folder: "logs/omnigaia_final/omnigaia_o1_qwen38_max_local_fp8_10/trajectories"
