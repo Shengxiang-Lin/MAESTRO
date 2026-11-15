@@ -61,7 +61,7 @@ def parse_args(argv=None):
     p.add_argument("--sft_warmup_samples", type=int, default=0,
                    help="Select up to N legal reference Actions from FULL train set; 0 means all")
     p.add_argument("--fail_on_zero_adv", action="store_true",
-                   help="Fail one-step Pilot if all candidates receive the same reward")
+                   help="Fail Pilot only when all candidate advantages tie AND no legal supervised fallback is enabled")
     p.add_argument("--dtype", choices=("bf16", "fp16"), default="bf16")
     p.add_argument("--load_in_4bit", dest="load_in_4bit", action="store_true", default=True)
     p.add_argument("--no_4bit", dest="load_in_4bit", action="store_false")
