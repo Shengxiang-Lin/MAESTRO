@@ -52,7 +52,22 @@ View every subcommand and adjustable environment variable in
     bash train_maestro_8b/run/pipeline.sh pilot
     bash train_maestro_8b/run/pipeline.sh grpo
 
-### Diagnose zero-gradient pilots and optionally bootstrap legal JSON Actions
+### GRPO cold-start training: progressive reward and legal fallback
+
+
+The GRPO trainer now supports free-form JSON learning: the
+GRPO_REWARD_MODE=curriculum training reward grades unsuccessful output
+structure and reserves stronger feedback for strict legal Actions,
+without altering the deterministic evaluation scorer. When an entire
+group has no reward variance, the default
+GRPO_ZERO_ADV_STRATEGY=reference_sft performs a separately counted
+supervised LoRA update using the independently verified legal Action
+for that record. This is NOT reported as a GRPO gradient. Use
+GRPO_ZERO_ADV_STRATEGY=skip and GRPO_REWARD_MODE=strict to restore
+strict GRPO-only behavior. Never equate a nonzero supervised fallback
+gradient with successful policy optimization. No JSON prefix,
+constrained decoding, or output repair is introduced.
+
 
 The exact O1 prompt/return format is not guaranteed to be learned
 from the initial Qwen3-8B weights alone. In particular, an 8/8 invalid
