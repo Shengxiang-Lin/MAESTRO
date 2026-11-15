@@ -66,17 +66,3 @@ unsloth_compiled_cache/
 !/train_maestro_8b/tests/*.py
 # Machine-local training overrides
 /train_maestro_8b/run/config.env
-
-# Version control fixed experiment IDs, not underlying benchmark data.
-!/data/
-/data/*
-!/data/OmniGAIA/
-/data/OmniGAIA/*
-!/data/OmniGAIA/splits/
-/data/OmniGAIA/splits/*
-!/data/OmniGAIA/splits/*.txt
-!/data/MM-BrowseComp/
-/data/MM-BrowseComp/*
-!/data/MM-BrowseComp/splits/
-/data/MM-BrowseComp/splits/*
-!/data/MM-BrowseComp/splits/*.txt
