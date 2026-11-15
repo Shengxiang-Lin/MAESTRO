@@ -41,6 +41,7 @@ class TRLTrainerTinyQwen3Tests(unittest.TestCase):
         from peft import LoraConfig, TaskType, get_peft_model
         from trl import GRPOConfig
 
+        from environment.untrusted_orchestration.decision_reward_state import SCHEMA
         from train_maestro_8b.risk.model import WindowRiskHead
         from train_maestro_8b.policy.model import RiskAwarePolicy
         from train_maestro_8b.policy.trainer import (
@@ -72,7 +73,15 @@ class TRLTrainerTinyQwen3Tests(unittest.TestCase):
             "sample_id": "toy-0001",
             "prompt": "abcde fghij",
             "reports": [{"start":1,"end":6}],
-            "decision_state": {"scorable":True, "actionable":[]},
+            "decision_state": {
+                "schema": SCHEMA, "scorable": True,
+                "can_complete": True,
+                "actionable": [], "max_parallel_tasks": 1,
+            },
+            "reference_action": {
+                "action": "complete",
+                "params": {"answer": "verified"},
+            },
         }
         count = [0]
         def deterministic_sample(prefix, *, temperature, **kwargs):
@@ -128,6 +137,45 @@ class TRLTrainerTinyQwen3Tests(unittest.TestCase):
                 p.grad is None for n, p in model.named_parameters()
                 if "lora_" not in n
             ))
+
+            # All samples are short nonsensical text: the strict evaluator
+            # marks them invalid, so GRPO advantage is zero. The explicit
+            # reference-SFT fallback must still perform a REAL LoRA update,
+            # while admitting that it is NOT a GRPO preference update.
+            fallback_before = {
+                n: p.detach().clone() for n, p in model.named_parameters()
+                if "lora_" in n and p.requires_grad
+            }
+            fallback_args = GRPOConfig(
+                output_dir=str(Path(tmp) / "fallback"), max_steps=1,
+                num_generations=2, per_device_train_batch_size=1,
+                gradient_accumulation_steps=1,
+                generation_batch_size=2, max_completion_length=64,
+                learning_rate=1e-3, beta=0.0,
+                loss_type="grpo", use_vllm=False,
+                bf16=False, fp16=False,
+                logging_steps=50, save_strategy="no",
+                remove_unused_columns=False, report_to="none",
+                disable_tqdm=True,
+            )
+            fallback_trainer = make_trainer_class()(
+                engine=engine, reward_fn=None, num_generations=2,
+                temperature=1.0, max_new_tokens=64,
+                clip_epsilon=0.2, fail_on_zero_adv=True,
+                reward_mode="curriculum", zero_adv_strategy="reference_sft",
+                zero_adv_sft_weight=0.25,
+                args=fallback_args, train_dataset=MainDecisionDataset([row]),
+            )
+            fallback_trainer.train()
+            self.assertEqual(fallback_trainer.state.global_step, 1)
+            self.assertEqual(fallback_trainer.zero_adv_groups, 1)
+            self.assertEqual(fallback_trainer.reference_sft_fallback_groups, 1)
+            self.assertEqual(fallback_trainer.grpo_gradient_groups, 0)
+            self.assertTrue(any(
+                not torch.equal(p.detach(), fallback_before[n])
+                for n, p in model.named_parameters() if n in fallback_before
+            ), "no LoRA update from the legal-reference fallback")
+            self.assertTrue(all(p.grad is None for p in head.parameters()))
 
 
 if __name__ == "__main__":

@@ -34,6 +34,9 @@ GRPO_MAX_PROMPT_TOKENS="${GRPO_MAX_PROMPT_TOKENS:-12288}"
 GRPO_TEMPERATURE="${GRPO_TEMPERATURE:-1.0}"
 PILOT_MAX_NEW_TOKENS="${PILOT_MAX_NEW_TOKENS:-512}"
 GRPO_LR="${GRPO_LR:-1e-5}"
+GRPO_REWARD_MODE="${GRPO_REWARD_MODE:-curriculum}"
+GRPO_ZERO_ADV_STRATEGY="${GRPO_ZERO_ADV_STRATEGY:-reference_sft}"
+GRPO_ZERO_ADV_SFT_WEIGHT="${GRPO_ZERO_ADV_SFT_WEIGHT:-0.25}"
 GRPO_SFT_WARMUP="${GRPO_SFT_WARMUP:-0}"
 GRPO_SFT_WARMUP_SAMPLES="${GRPO_SFT_WARMUP_SAMPLES:-32}"
 PILOT_REQUIRE_GRAD="${PILOT_REQUIRE_GRAD:-1}"
@@ -64,7 +67,8 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
   risk          Train Risk Head only, using cached NF4 features
   prepare-grpo  Backfill missing private states, export and audit GRPO rows
   preflight     Check Unsloth KV/logprob/LoRA gradient compatibility
-  pilot         DA-style smoke; optional legal-reference SFT cold start
+  pilot         Free-form GRPO smoke with progressive format feedback
+  (reward/zero-adv controls via GRPO_REWARD_MODE and GRPO_ZERO_ADV_STRATEGY)
   audit-pilot   Review recent candidate outputs and invalid reward reasons (CPU)
   grpo          Full Unsloth+TRL GRPO training
   inspect-io    Audit real O1 prompt tokens and reference action lengths
@@ -77,6 +81,7 @@ Override settings via environment variables or run/config.env:
   GRPO_GRAD_ACCUM, GRPO_MAX_PROMPT_TOKENS, GRPO_MAX_NEW_TOKENS,
   GRPO_TEMPERATURE, PILOT_MAX_NEW_TOKENS, GRPO_MAX_STEPS,
   GRPO_SFT_WARMUP, GRPO_SFT_WARMUP_SAMPLES, PILOT_REQUIRE_GRAD,
+  GRPO_REWARD_MODE, GRPO_ZERO_ADV_STRATEGY, GRPO_ZERO_ADV_SFT_WEIGHT,
   SKIP_COMPLETED, GRPO_RESUME_FROM,
   GRPO_VLLM_ENGINE, GRPO_VLLM_MEMORY_UTILIZATION, GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT
 
@@ -219,6 +224,9 @@ init_grpo_args() {
     --steer_last_n "$GRPO_STEER_LAYERS"
     --steer_strength "$GRPO_STEER_STRENGTH"
     --steer_threshold "$GRPO_STEER_THRESHOLD" --lr "$GRPO_LR"
+    --grpo_reward_mode "$GRPO_REWARD_MODE"
+    --zero_adv_strategy "$GRPO_ZERO_ADV_STRATEGY"
+    --zero_adv_sft_weight "$GRPO_ZERO_ADV_SFT_WEIGHT"
   )
   if [[ "$GRPO_VLLM_ENGINE" == "1" ]]; then
     common_args+=(--vllm_engine --vllm_memory_utilization "$GRPO_VLLM_MEMORY_UTILIZATION")

@@ -233,9 +233,10 @@ max_new_tokens, it fails rather than silently truncating supervision.
 Consider a shorter first diagnostic with G=2 / 256 output tokens
 ONLY to inspect formatting, not to compare the full 8-way objective.
 
-Pilot now defaults to PILOT_REQUIRE_GRAD=1, so an all-identical-reward
-group raises a diagnostic RuntimeError with the failure reason histogram
-and does NOT produce a misleading successfully-trained checkpoint.
+Pilot defaults to PILOT_REQUIRE_GRAD=1. When the default reference_sft
+fallback is enabled, tied rewards trigger a legal supervised update
+with explicit metrics. Only when fallback is disabled does a tied-reward
+group raise a diagnostic RuntimeError instead of silently succeeding.
 For normal GRPO training this strict per-group check is off: some
 individual groups can legitimately have zero advantage.
 When SFT warmup is enabled for full training, the same options apply to
@@ -247,3 +248,68 @@ using both the deterministic reward audit and a real Pilot. The sample
 count and validity distribution may vary. The starter dataset contains
 reference supervision, but GRPO's private scorer is still independently
 evaluated and never receives teacher text similarity as a reward.
+
+## GRPO actually training from the Qwen3-8B Base cold start
+
+The original O1 prompt, Risk Head, Value-KV editing, and unconstrained
+sampling remain unchanged. Formatting is a learnable part of the policy.
+On the RTX 6000D cold start, 8/8 and later 2/2 completions hit 1536 tokens,
+all failed strict JSON and all scored -1. SFT-32 alone did not immediately
+fix generation. This yielded zero GRPO preference gradient.
+
+Stage2 now has TWO independent, explicitly reported learning paths:
+
+1. GRPO **curriculum reward** (default): the same strict
+   score_decision validates every sampled Action; successful legal Actions
+   earn 0.65 + 0.35 * strict_orchestration_reward. Invalid JSON receives
+   a conservative 0.0-0.335 graded structural/proximity signal, never
+   treated as a valid Action. Well-formed JSON with illegal MainAgent
+   dispatch can earn up to 0.55, below ANY legal Action. Premature complete
+   earns only 0.35, discouraging the easiest shortcut. The strictly scored
+   Action remains in the candidate log as strict_reward and valid, and
+   the private reference Action is NEVER used to compute a GRPO reward.
+   Use GRPO_REWARD_MODE=strict to reproduce the old -1 behavior.
+2. **Reference-SFT fallback** only when an ENTIRE group has zero GRPO
+   reward variance (default GRPO_ZERO_ADV_STRATEGY=reference_sft):
+   the existing legitimate reference Action is independently verified
+   against that round's private decision_state. The model's frozen RiskKV
+   history and LoRA suffix train on this complete JSON+EOS with auxiliary
+   coefficient GRPO_ZERO_ADV_SFT_WEIGHT=0.25. This produces a supervised
+   gradient but is **NOT** counted as a GRPO gradient. No fabricated
+   advantages or reward fixing is allowed. The original
+   GRPO_ZERO_ADV_STRATEGY=skip is available for clean ablations.
+
+The training log separately reports strict_reward vs reward,
+json_valid_fraction, strict_valid_fraction, format_progress,
+grpo_gradient_groups, reference_sft_fallback_groups, and
+zero_adv_groups. A fixed-reference fallback is never interpreted as
+successful on-policy reward learning. If a reference is invalid or too
+long for the output budget, fallback FAILS CLOSED rather than silently
+truncating the reference.
+
+Start with a controlled 1-step pilot (after updating the repo). This
+is a genuine optimizer update: if GRPO has no preference signal, the
+legitimate reference loss trains the LoRA suffix instead.
+
+    GRPO_VLLM_ENGINE=0 GRPO_ROLLOUT_ATTENTION=sdpa \
+    GRPO_REWARD_MODE=curriculum GRPO_ZERO_ADV_STRATEGY=reference_sft \
+    GRPO_GENERATIONS=2 GRPO_GRAD_ACCUM=1 \
+    PILOT_MAX_NEW_TOKENS=1536 \
+    PILOT_CKPT="$PWD/workspace/maestro_8b/checkpoints/pilot-learn-$(date +%Y%m%d-%H%M%S)" \
+    bash train_maestro_8b/run/pipeline.sh pilot
+
+Only when this succeeds should the full GRPO rollout run: set
+GRPO_GENERATIONS=8, GRPO_MAX_NEW_TOKENS=1536 for initial safe throughput
+checks; use 4096 again only after observing actual valid JSON and EOS
+termination. Optional GRPO_SFT_WARMUP=1 and
+GRPO_SFT_WARMUP_SAMPLES=0 uses all currently legal reference Actions
+before GRPO rather than starting from a format-untrained base model.
+Setting GRPO_SFT_WARMUP=0 does not disable the honest zero-advantage
+reference fallback. Compare curriculum vs strict and reference fallback
+vs skip as separate experimental ablations.
+
+This is an OPTIMIZATION readiness change, not a guarantee of high
+successful action rates: also track json_valid_fraction and
+strict_valid_fraction as learning progresses, and evaluate with the
+original strict scorer. 3-token preflight still cannot guarantee
+importance ratio bounds over full-length completions.

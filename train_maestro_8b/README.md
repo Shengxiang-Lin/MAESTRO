@@ -52,7 +52,22 @@ View every subcommand and adjustable environment variable in
     bash train_maestro_8b/run/pipeline.sh pilot
     bash train_maestro_8b/run/pipeline.sh grpo
 
-### Diagnose zero-gradient pilots and optionally bootstrap legal JSON Actions
+### GRPO cold-start training: progressive reward and legal fallback
+
+
+The GRPO trainer now supports free-form JSON learning: the
+GRPO_REWARD_MODE=curriculum training reward grades unsuccessful output
+structure and reserves stronger feedback for strict legal Actions,
+without altering the deterministic evaluation scorer. When an entire
+group has no reward variance, the default
+GRPO_ZERO_ADV_STRATEGY=reference_sft performs a separately counted
+supervised LoRA update using the independently verified legal Action
+for that record. This is NOT reported as a GRPO gradient. Use
+GRPO_ZERO_ADV_STRATEGY=skip and GRPO_REWARD_MODE=strict to restore
+strict GRPO-only behavior. Never equate a nonzero supervised fallback
+gradient with successful policy optimization. No JSON prefix,
+constrained decoding, or output repair is introduced.
+
 
 The exact O1 prompt/return format is not guaranteed to be learned
 from the initial Qwen3-8B weights alone. In particular, an 8/8 invalid
@@ -66,7 +81,9 @@ supervises LoRA using *only evaluator-legal* reference Actions from
 the full dataset (even for a one-prompt Pilot), with the same frozen
 RiskKV context. Use `PILOT_MAX_NEW_TOKENS=1536` for legal Actions
 whose JSON target exceeds the 512-token smoke cap. An all-zero-reward
-Pilot now fails explicitly when `PILOT_REQUIRE_GRAD=1` (default).
+Pilot now trains using the explicitly logged reference_sft fallback by
+default; with `GRPO_ZERO_ADV_STRATEGY=skip` and
+`PILOT_REQUIRE_GRAD=1` it fails instead of silently skipping gradients.
 See [run/README.md](run/README.md) for commands.
 
 The recommended NF4 feature cache **must** match the default Unsloth NF4
