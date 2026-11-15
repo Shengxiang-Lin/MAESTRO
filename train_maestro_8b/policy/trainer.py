@@ -264,9 +264,20 @@ def make_trainer_class():
                         fallback_loss = nll * self.zero_adv_sft_weight
                     self.accelerator.backward(fallback_loss)
                     self.reference_sft_fallback_groups += 1
+                if gpu:
+                    torch.cuda.synchronize(self.engine.device)
+                t3 = time.perf_counter()
 
                 self.last_components = {
                     "reward": sum(rewards) / len(rewards),
+                    "strict_reward": sum(
+                        info["strict_reward"] for _, info in metadata
+                        if info is not None
+                    ) / len(actions) if self.reward_fn is None else None,
+                    "format_progress": sum(
+                        info.get("format_progress", 0.0) for _, info in metadata
+                        if info is not None
+                    ) / len(actions) if self.reward_fn is None else None,
                     "reward_unique": len(set(rewards)),
                     "reward_std": float(torch.as_tensor(rewards).std(unbiased=False)),
                     "strict_valid_fraction": sum(
@@ -285,7 +296,7 @@ def make_trainer_class():
                     "completions_per_group": len(actions),
                     "prefill_s": round(t1 - t0, 4),
                     "rollout_and_score_s": round(t2 - t1, 4),
-                    "backward_s": 0.0,
+                    "backward_s": round(t3 - t2, 4) if fallback_loss is not None else 0.0,
                     "zero_adv_groups": self.zero_adv_groups,
                     "grpo_gradient_groups": self.grpo_gradient_groups,
                     "reference_sft_fallback_groups": self.reference_sft_fallback_groups,
@@ -365,6 +376,14 @@ def make_trainer_class():
             t3 = time.perf_counter()
             self.last_components = {
                 "reward": sum(rewards) / len(rewards),
+                "strict_reward": sum(
+                    info["strict_reward"] for _, info in metadata
+                    if info is not None
+                ) / len(actions) if self.reward_fn is None else None,
+                "format_progress": sum(
+                    info.get("format_progress", 0.0) for _, info in metadata
+                    if info is not None
+                ) / len(actions) if self.reward_fn is None else None,
                 "reward_unique": len(set(rewards)),
                 "reward_std": float(torch.as_tensor(rewards).std(unbiased=False)),
                 "prompt_tokens": prefix.length,
@@ -409,7 +428,8 @@ def make_trainer_class():
                     ) / len(valid_infos)
             if self.seen_groups % max(1, self.args.logging_steps) == 0:
                 self.log({f"risk_grpo/{k}": v
-                          for k, v in self.last_components.items()})
+                          for k, v in self.last_components.items()
+                          if v is not None and not isinstance(v, str)})
             return torch.stack(group_losses).sum().detach()
 
     return RiskSteeredGRPOTrainer
