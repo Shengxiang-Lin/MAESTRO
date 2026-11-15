@@ -30,12 +30,16 @@ def parse_args(argv=None):
     p.add_argument("--reward_debug_jsonl", default=None)
     p.add_argument("--epochs", type=float, default=1.0)
     p.add_argument("--max_steps", type=int, default=-1)
-    p.add_argument("--num_generations", type=int, default=4)
-    p.add_argument("--gradient_accumulation_steps", type=int, default=4)
+    p.add_argument("--num_generations", type=int, default=8,
+                   help="GRPO completions PER Main prompt (DA-GRPO default: 8)")
+    p.add_argument("--gradient_accumulation_steps", type=int, default=1,
+                   help="MAIN PROMPT groups accumulated per optimizer step, not completions; DA parity is 1")
     p.add_argument("--max_prompts", type=int, default=0)
-    p.add_argument("--max_length", type=int, default=16384)
-    p.add_argument("--max_new_tokens", type=int, default=256)
-    p.add_argument("--temperature", type=float, default=0.8)
+    p.add_argument("--max_length", type=int, default=12288,
+                   help="maximum raw O1 Main prompt tokens, no truncation (DA cap: 12288)")
+    p.add_argument("--max_new_tokens", type=int, default=4096,
+                   help="maximum generated Action tokens (DA cap: 4096)")
+    p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--lr", type=float, default=1e-5)
     p.add_argument("--lora_rank", type=int, default=16)
     p.add_argument("--lora_alpha", type=int, default=32)
@@ -57,7 +61,7 @@ def parse_args(argv=None):
                    help="disables risk-cache replay sanity check; not recommended")
     p.add_argument("--preflight_only", action="store_true",
                    help="load the GPU model and verify cache/logprob, then exit")
-    p.add_argument("--seed", type=int, default=17)
+    p.add_argument("--seed", type=int, default=42)
     return p.parse_args(argv)
 
 
@@ -70,13 +74,12 @@ def validate_args(args):
             or args.max_new_tokens < 1 or args.lora_rank < 1
             or args.temperature <= 0 or not 0 < args.clip_epsilon < 1):
         raise ValueError("invalid GRPO/LoRA hyperparameters")
-    if args.gradient_accumulation_steps < args.num_generations or (
-        args.gradient_accumulation_steps % args.num_generations
-    ):
+    if args.gradient_accumulation_steps < 1:
+        raise ValueError("gradient accumulation counts FULL prompt groups and must be >=1")
+    if args.max_length + args.max_new_tokens > 16384:
         raise ValueError(
-            "TRL GRPOConfig effective batch must be divisible by "
-            "num_generations: set --gradient_accumulation_steps to "
-            "num_generations or its multiple"
+            "DA-compatible token budget requires prompt + completion <= 16384; "
+            "the RiskKV decision anchor is separately reserved by the model loader"
         )
     if not 0 <= args.steer_threshold <= 1 or args.steer_strength < 0:
         raise ValueError("invalid risk-steering settings")
@@ -167,6 +170,20 @@ def run(args, stack):
     if args.max_prompts > 0:
         records = records[:args.max_prompts]
     dataset = MainDecisionDataset(records)
+    # One policy/training microstep owns a WHOLE GRPO group of completions.
+    # Unlike stock TRL GRPOTrainer, gradient_accumulation_steps therefore
+    # counts PROMPTS, never generated completions.
+    print("risk_grpo_batch_plan=" + json.dumps({
+        "distinct_prompts_per_optimizer_step": args.gradient_accumulation_steps,
+        "num_generations_per_prompt": args.num_generations,
+        "completions_per_optimizer_step":
+            args.gradient_accumulation_steps * args.num_generations,
+        "max_prompt_tokens": args.max_length,
+        "max_completion_tokens": args.max_new_tokens,
+        "raw_o1_prompt": True,
+        "model_backend": "NF4 RiskKV + separate vLLM" if args.vllm_engine
+                         else "NF4 RiskKV + Transformers",
+    }), flush=True)
     if not args.skip_preflight:
         probe = check_risk_cache_contract(
             engine, next((row for row in records if row["reports"]), records[0]),
@@ -190,6 +207,12 @@ def run(args, stack):
         max_steps=args.max_steps,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+        # TRL GRPOConfig validates that a *generation* batch contains a
+        # multiple of G completions. Our custom Trainer creates its own
+        # per-prompt G completions, so this is configuration metadata only.
+        generation_batch_size=(
+            args.gradient_accumulation_steps * args.num_generations
+        ),
         learning_rate=args.lr,
         num_generations=args.num_generations,
         max_completion_length=args.max_new_tokens,
@@ -247,6 +270,10 @@ def run(args, stack):
         "zero_advantage_groups": trainer.zero_adv_groups,
         "total_groups": trainer.seen_groups,
         "num_generations": args.num_generations,
+        "prompts_per_optimizer_step": args.gradient_accumulation_steps,
+        "max_prompt_tokens": args.max_length,
+        "max_completion_tokens": args.max_new_tokens,
+        "temperature": args.temperature,
     }, indent=2), encoding="utf-8")
     print(f"Saved Unsloth+TRL risk-aware LoRA adapter to {dest}", flush=True)
 
