@@ -254,7 +254,8 @@ pilot() {
     --max_new_tokens "$PILOT_MAX_NEW_TOKENS" \
     --output_dir "$PILOT_CKPT" \
     --max_prompts "$PILOT_PROMPTS" --max_steps "$PILOT_STEPS" \
-    --logging_steps 1 --reward_debug_jsonl "$RUN_ROOT/reward_pilot.jsonl"
+    --warmup_ratio 0 --logging_steps 1 \
+    --reward_debug_jsonl "$RUN_ROOT/reward_pilot.jsonl"
 }
 grpo() {
   need_model; verify_risk; need "$GRPO_DATA/train.jsonl"
