@@ -74,10 +74,15 @@ def _structural_plan(rng: random.Random, *, n_branches: int, n_hops: int,
     for i in range(n_branches):
         mid = f"M{i+1}"
         role = ("identification", "discovery", "investigation", "verification")[i]
+        # A later investigation can narrow an earlier candidate handoff.
+        # The dependency is meaningful: execution restricts inspected records.
+        parent = rng.choice(tasks[:i])["macro_id"] if i and rng.random() < 0.4 else None
         tasks.append(_macro(
             mid, role,
-            f"Identify candidate items using the independent source group {i+1}",
-            [], [f"clue_{i+1}"], {"candidate_ids": "list[str]"},
+            ("Refine prior candidates with " if parent else "Identify candidates from ")
+            + f"source group {i+1}",
+            [parent] if parent else [], [f"clue_{i+1}"],
+            {"candidate_ids": "list[str]"},
             "filter_candidates", cue_source=i,
         ))
     merge = f"M{len(tasks)+1}"
@@ -113,6 +118,11 @@ def _structural_plan(rng: random.Random, *, n_branches: int, n_hops: int,
             [previous, check], [], {"answer": "str", "verification_status": "str"},
             "synthesize",
         ))
+    schemas = {t["macro_id"]: t["output_schema"] for t in tasks}
+    for task in tasks:
+        task["input_contract"] = {
+            parent: dict(schemas[parent]) for parent in task["depends_on"]
+        }
     return tasks
 
 
@@ -209,16 +219,26 @@ def _run(tasks: list[dict], sources: dict, graph: KnowledgeGraph) -> tuple[list[
         if strategy == "filter_candidates":
             source = scoped[task["source_scope"][0]]
             cue = task["solver_params"]["cue"]
+            upstream = (set(parents[0]["values"]["candidate_ids"])
+                        if parents else None)
             matches = {row["values"]["candidate_id"]: row["fact_refs"]
                        for row in source["observations"]
-                       if row["values"]["cue"] == cue}
-            if len(matches) < 2:
+                       if row["values"]["cue"] == cue
+                       and (upstream is None or row["values"]["candidate_id"] in upstream)}
+            if not matches or (not parents and len(matches) < 2):
                 raise ValueError("unreasonably_easy_candidate_filter")
             value = {"candidate_ids": sorted(matches)}
             refs = sorted({x for items in matches.values() for x in items})
-            witness = matches
-            steps = ["observe_or_search_source", "extract_attributes",
-                     "filter_candidates", "record_evidence"]
+            witness = {
+                key: sorted(set(row_refs) | set(parents[0]["witness"][key]))
+                if parents else row_refs
+                for key, row_refs in matches.items()
+            }
+            refs = sorted({x for items in witness.values() for x in items})
+            steps = (["reuse_upstream_candidates"] if parents else []) + [
+                "observe_or_search_source", "extract_attributes",
+                "filter_candidates", "record_evidence",
+            ]
         elif strategy == "resolve_identity":
             if not parents:
                 raise ValueError("identity_missing_branches")
@@ -315,6 +335,10 @@ def validate_scene(scene: dict) -> dict:
         if task["macro_id"] in known or any(p not in known for p in task["depends_on"]):
             raise ValueError("duplicate_macro_or_non_topological_dependency")
         known.add(task["macro_id"])
+        expected_inputs = {m["macro_id"]: m["output_schema"]
+                           for m in tasks if m["macro_id"] in task["depends_on"]}
+        if task.get("input_contract") != expected_inputs:
+            raise ValueError("macro_typed_input_contract_mismatch")
         if not set(task["source_scope"]) <= set(scene["world"]["sources"]):
             raise ValueError("missing_source_scope")
         if not task["objective"] or not task["output_schema"]:
@@ -356,6 +380,9 @@ def validate_scene(scene: dict) -> dict:
         "all_branch_sources_necessary": True,
         "real_yago_hops": len(scene["world"]["real_fact_path"]),
         "role_distribution": dict(Counter(t["role"] for t in tasks)),
+        "progressive_clue_tasks": sum(
+            bool(t["depends_on"]) for t in branches
+        ),
     }
 
 
