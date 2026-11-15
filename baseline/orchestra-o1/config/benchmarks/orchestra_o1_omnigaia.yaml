@@ -24,8 +24,10 @@ trace_summary_model: "qwen3.7-plus"
 dataset_path: "data/OmniGAIA/test_metadata.jsonl"
 attachments_dir: "data/OmniGAIA"
 level_filter: null
+# Pretest; for final evaluation use data/OmniGAIA/splits/final_100_ids.txt.
+task_ids_file: "data/OmniGAIA/splits/pretest_60_ids.txt"
 
-max_tasks: 100
+max_tasks: null
 max_attempts: 10
 max_concurrency: 10
 
