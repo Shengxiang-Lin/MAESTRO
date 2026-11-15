@@ -1,4 +1,4 @@
-# Frozen OmniGAIA pretest / Orchestra-o1.
+# Frozen OmniGAIA final / Orchestra-o1.
 # Orchestra-o1: local Qwen3.8-27B-FP8 for both Main-Agent and Sub-Agents.
 # Main/Sub share one vLLM service across GPUs 0 and 1 (48 GiB each).
 # Metadata source: data/OmniGAIA/test_metadata.json (converted losslessly to JSONL).
@@ -40,10 +40,10 @@ dataset_type: "OmniGAIA"
 dataset_path: "data/OmniGAIA/test_metadata.jsonl"
 attachments_dir: "data/OmniGAIA"
 level_filter: null
-# Fixed OmniGAIA pre-experiment (60 questions).
-task_ids_file: "data/OmniGAIA/splits/pretest_60_ids.txt"
+# Fixed OmniGAIA final evaluation (100 questions).
+task_ids_file: "data/OmniGAIA/splits/final_100_ids.txt"
 max_tasks: null
 max_attempts: 10
 max_concurrency: 10
-result_folder: "logs/omnigaia_pretest/omnigaia_o1_local_qwen27b_fp8_10"
-trajectory_folder: "logs/omnigaia_pretest/omnigaia_o1_local_qwen27b_fp8_10/trajectories"
+result_folder: "logs/omnigaia_final/omnigaia_o1_local_qwen27b_fp8"
+trajectory_folder: "logs/omnigaia_final/omnigaia_o1_local_qwen27b_fp8/trajectories"
