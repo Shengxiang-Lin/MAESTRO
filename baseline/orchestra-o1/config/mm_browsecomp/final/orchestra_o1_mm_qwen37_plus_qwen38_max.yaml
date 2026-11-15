@@ -1,7 +1,8 @@
-# Orchestra-o1: MM-BrowseComp; Main-Agent qwen3.8-max; Sub-Agent qwen3.7-flash.
-main_model: "qwen3.8-max"
+# Frozen MM-BrowseComp final / Orchestra-o1.
+# Orchestra-o1: MM-BrowseComp; Main-Agent qwen3.7-plus; Sub-Agent qwen3.8-max.
+main_model: "qwen3.7-plus"
 sub_models:
-  - "qwen3.7-flash"
+  - "qwen3.8-max"
 
 search:
   provider: "dashscope"
@@ -26,9 +27,11 @@ dataset_path: "data/MM-BrowseComp/data/MMBrowseComp_400_decrypted.jsonl"
 dataset_jsonl_path: "data/MM-BrowseComp/data/test_metadata.jsonl"
 attachments_dir: "data/MM-BrowseComp"
 level_filter: null
-max_tasks: 400
+# Frozen final 100 tasks from the official MM-BrowseComp-400 dataset.
+task_ids_file: "data/MM-BrowseComp/splits/final_100_ids.txt"
+max_tasks: null
 max_attempts: 10
 max_concurrency: 10
 
-result_folder: "logs/mm_browsecomp_o1_qwen38_max_qwen37_flash_400"
-trajectory_folder: "logs/mm_browsecomp_o1_qwen38_max_qwen37_flash_10/trajectories"
+result_folder: "logs/mm_browsecomp_final/mm_browsecomp_o1_qwen37_plus_qwen38_max_400"
+trajectory_folder: "logs/mm_browsecomp_final/mm_browsecomp_o1_qwen37_plus_qwen38_max_400/trajectories"
