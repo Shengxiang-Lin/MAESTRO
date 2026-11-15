@@ -8,6 +8,7 @@ Optional vLLM attention kernels consume the same edited KV during sampling.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import random
@@ -23,6 +24,8 @@ def parse_args(argv=None):
                    help="Unsloth QLoRA default; HF baseline for comparison/debugging")
     p.add_argument("--rollout_attention", choices=("sdpa", "vllm"), default="sdpa",
                    help="Attention kernel for RiskKV sampling; replay uses Transformers")
+    p.add_argument("--vllm_engine", action="store_true", help="Full vLLM RiskKV rollout")
+    p.add_argument("--vllm_memory_utilization", type=float, default=0.45)
     p.add_argument("--reward_callable", help="optional module.path:function(candidate, record)")
     p.add_argument("--reward_debug_jsonl", default=None)
     p.add_argument("--epochs", type=float, default=1.0)
@@ -49,7 +52,7 @@ def parse_args(argv=None):
     p.add_argument("--save_total_limit", type=int, default=2)
     p.add_argument("--warmup_ratio", type=float, default=0.03)
     p.add_argument("--resume_from_checkpoint", default=None)
-    p.add_argument("--preflight_max_logprob_drift", type=float, default=0.01)
+    p.add_argument("--preflight_max_logprob_drift", type=float)
     p.add_argument("--skip_preflight", action="store_true",
                    help="disables risk-cache replay sanity check; not recommended")
     p.add_argument("--preflight_only", action="store_true",
@@ -59,6 +62,10 @@ def parse_args(argv=None):
 
 
 def validate_args(args):
+    if args.vllm_engine and (args.backend != "unsloth" or args.rollout_attention != "sdpa"):
+        raise ValueError("--vllm_engine requires Unsloth and replaces --rollout_attention")
+    if not 0 < args.vllm_memory_utilization < 1:
+        raise ValueError("--vllm_memory_utilization must be in (0, 1)")
     if (args.epochs <= 0 or args.num_generations < 2 or args.max_length < 1
             or args.max_new_tokens < 1 or args.lora_rank < 1
             or args.temperature <= 0 or not 0 < args.clip_epsilon < 1):
@@ -77,6 +84,8 @@ def validate_args(args):
         raise ValueError("initial Unsloth integration is NF4-only; remove --no_4bit")
     if args.sft_warmup < 0 or args.save_steps < 1 or args.logging_steps < 1:
         raise ValueError("invalid warmup/save/logging settings")
+    if args.preflight_max_logprob_drift is None:
+        args.preflight_max_logprob_drift = 0.05 if args.vllm_engine else 0.01
     if not 0 < args.preflight_max_logprob_drift < 1:
         raise ValueError("preflight log-probability drift bound must be in (0, 1)")
     if args.max_steps == 0:
@@ -123,6 +132,11 @@ def _sft_warmup(engine, dataset, args):
 def main(argv=None):
     args = parse_args(argv)
     validate_args(args)
+    with ExitStack() as stack:
+        run(args, stack)
+
+
+def run(args, stack):
     # Import Unsloth FIRST, before importing transformers/trl/peft.
     # For the HF reference backend the module is never imported.
     if args.backend == "unsloth":
@@ -133,6 +147,10 @@ def main(argv=None):
         from train_maestro_8b.policy.backend import check_risk_cache_contract
         engine = build_engine(args)
 
+    if args.vllm_engine:
+        from train_maestro_8b.policy.vllm_engine import VLLMRiskRollout
+        engine.rollout_engine = VLLMRiskRollout(engine.policy, args)
+        stack.callback(engine.rollout_engine.close)
     if args.rollout_attention == "vllm":
         from train_maestro_8b.policy.vllm_attention import register_vllm_attention
         engine.rollout_attention = register_vllm_attention()
@@ -215,7 +233,8 @@ def main(argv=None):
         "schema": "maestro.risk_steered_lora.v2",
         "backend": args.backend,
         "trainer": "trl_grpo_config_hf_trainer_custom_risk_rollout",
-        "vllm": False,  # TRL/vLLM engine, separate from the rollout attention kernel.
+        "vllm": args.vllm_engine,
+        "preflight_max_logprob_drift": args.preflight_max_logprob_drift,
         "rollout_attention": args.rollout_attention,
         "gradient_checkpointing": False,
         "risk_checkpoint": str(Path(args.risk_checkpoint).resolve()),

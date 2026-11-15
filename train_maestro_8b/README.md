@@ -17,7 +17,19 @@ process is supported. The optional `GRPO_ROLLOUT_ATTENTION=vllm` uses the CUDA
 FlashAttention kernel from the installed vLLM package for rollout attention,
 over the same edited Transformers cache. The Transformers forward owns
 prefix prefill, token sampling, cache updates and differentiable replay.
-This mode does not start the vLLM engine or use paged KV caching.
+
+For full engine rollout on vLLM 0.32, use `GRPO_VLLM_ENGINE=1` with
+`GRPO_ROLLOUT_ATTENTION=sdpa`. MAESTRO still computes the frozen prefix and
+Risk Head scores. A KV connector writes the edited prefix into vLLM's paged
+KV cache, including an incomplete final page. vLLM decodes from the decision
+anchor using the current LoRA snapshot and returns temperature-adjusted
+sampled log probabilities. The training forward and loss run in Transformers
+with the same RiskKV prefix.
+
+The engine uses a temporary 16-bit materialization of the frozen NF4 weights,
+so it keeps a second model copy on the same GPU. Allow roughly 16 GiB of
+temporary disk space next to the checkpoint as well. The memory budget for
+vLLM is configured through `GRPO_VLLM_MEMORY_UTILIZATION` (default 0.45).
 
 ## Run (from Environment outputs to training)
 
@@ -45,7 +57,8 @@ continuation, and LoRA-only gradients. If compatibility checks fail, do
 not disable them before training. The preflight checks the maximum absolute
 sampled-versus-differentiable log-probability gap. Use
 `GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT` to set the bound for a numerical smoke test
-and inspect the measured drift before setting a training tolerance.
+and inspect the measured drift before setting a training tolerance. The full
+engine defaults to 0.05 for its distinct inference kernels.
 
 ## Code structure
 

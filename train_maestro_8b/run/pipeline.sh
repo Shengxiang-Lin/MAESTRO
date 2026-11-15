@@ -32,7 +32,9 @@ GRPO_GRAD_ACCUM="${GRPO_GRAD_ACCUM:-4}"
 GRPO_MAX_NEW_TOKENS="${GRPO_MAX_NEW_TOKENS:-256}"
 GRPO_LR="${GRPO_LR:-1e-5}"
 GRPO_ROLLOUT_ATTENTION="${GRPO_ROLLOUT_ATTENTION:-sdpa}"
-GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT="${GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT:-0.01}"
+GRPO_VLLM_ENGINE="${GRPO_VLLM_ENGINE:-0}"
+GRPO_VLLM_MEMORY_UTILIZATION="${GRPO_VLLM_MEMORY_UTILIZATION:-0.45}"
+GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT="${GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT:-}"
 GRPO_STEER_LAYERS="${GRPO_STEER_LAYERS:-8}"
 GRPO_STEER_STRENGTH="${GRPO_STEER_STRENGTH:-0.1}"
 GRPO_STEER_THRESHOLD="${GRPO_STEER_THRESHOLD:-0.5}"
@@ -64,7 +66,8 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
 Override settings via environment variables or run/config.env:
   MODEL, STAGE1_DIR, STAGE4_DIR, RUN_ROOT, MAX_LENGTH,
   RISK_EPOCHS, RISK_BATCH_SIZE, GRPO_EPOCHS, GRPO_GENERATIONS,
-  GRPO_GRAD_ACCUM, GRPO_MAX_STEPS, SKIP_COMPLETED, GRPO_RESUME_FROM
+  GRPO_GRAD_ACCUM, GRPO_MAX_STEPS, SKIP_COMPLETED, GRPO_RESUME_FROM,
+  GRPO_VLLM_ENGINE, GRPO_VLLM_MEMORY_UTILIZATION, GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT
 
 Run on a NEW RUN_ROOT to avoid mixing stale caches or experiments.
 This script DOES NOT generate Environment data or launch a local LLM.
@@ -199,7 +202,6 @@ init_grpo_args() {
     --train_file "$GRPO_DATA/train.jsonl"
     --backend unsloth --load_in_4bit --max_length "$MAX_LENGTH"
     --rollout_attention "$GRPO_ROLLOUT_ATTENTION"
-    --preflight_max_logprob_drift "$GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT"
     --max_new_tokens "$GRPO_MAX_NEW_TOKENS"
     --num_generations "$GRPO_GENERATIONS"
     --gradient_accumulation_steps "$GRPO_GRAD_ACCUM"
@@ -207,6 +209,12 @@ init_grpo_args() {
     --steer_strength "$GRPO_STEER_STRENGTH"
     --steer_threshold "$GRPO_STEER_THRESHOLD" --lr "$GRPO_LR"
   )
+  if [[ "$GRPO_VLLM_ENGINE" == "1" ]]; then
+    common_args+=(--vllm_engine --vllm_memory_utilization "$GRPO_VLLM_MEMORY_UTILIZATION")
+  fi
+  if [[ -n "$GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT" ]]; then
+    common_args+=(--preflight_max_logprob_drift "$GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT")
+  fi
 }
 preflight() {
   need_model; verify_risk; need "$GRPO_DATA/train.jsonl"

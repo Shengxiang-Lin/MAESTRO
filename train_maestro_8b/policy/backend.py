@@ -119,8 +119,8 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
     policy.eval()
     state = engine.prefill(record["prompt"], record["reports"])
     steered_tokens = int((state.risk > engine.threshold).sum().item()) if engine.strength else 0
-    ids, old = engine.sample(
-        state, max_new_tokens=3, temperature=temperature, eos_token_id=-1,
+    [(ids, old)] = engine.sample_group(
+        state, count=1, max_new_tokens=3, temperature=temperature, eos_token_id=-1,
     )
     with torch.no_grad():
         replay = engine.log_probs(state, ids, temperature=temperature)
@@ -157,6 +157,7 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
         "max_abs_no_grad_replay_drift": float((old - replay).abs().max().item()),
         "risk_windows": int(state.window_probs.numel()),
         "steered_tokens": steered_tokens,
+        "vllm_cached_tokens": getattr(engine.rollout_engine, "cached_tokens", None),
         "max_window_risk": float(state.window_probs.max().item())
         if state.window_probs.numel() else None,
     }

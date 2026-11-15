@@ -138,11 +138,11 @@ def make_trainer_class():
             metadata = []
             from environment.untrusted_orchestration.orchestration_reward import score_decision
             with torch.no_grad():
-                for _ in range(self.num_generations):
-                    ids, sampled = self.engine.sample(
-                        prefix, max_new_tokens=self.max_new_tokens,
-                        temperature=self.temperature,
-                    )
+                candidates = self.engine.sample_group(
+                    prefix, count=self.num_generations, max_new_tokens=self.max_new_tokens,
+                    temperature=self.temperature,
+                )
+                for ids, sampled in candidates:
                     candidate = self.engine.decode(ids)
                     if self.reward_fn is None:
                         info = score_decision(candidate, row["decision_state"])

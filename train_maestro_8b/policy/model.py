@@ -23,6 +23,7 @@ class RiskPrefix:
     length: int
     risk: torch.Tensor
     window_probs: torch.Tensor
+    token_ids: list[int] | None = None
     # Keep no completed generation's mutable cache in this shared object.
 
 
@@ -65,6 +66,7 @@ class RiskAwarePolicy:
         self.risk_head = risk_head
         self.config = risk_config
         self.rollout_attention = None
+        self.rollout_engine = None
         self.max_length = max_length
         self.last_n_layers = last_n_layers
         self.strength = strength
@@ -128,7 +130,7 @@ class RiskAwarePolicy:
             strength=self.strength, threshold=self.threshold,
         )
         # No reference to output H is kept in RiskPrefix.
-        return RiskPrefix(steered, len(ids), risk.detach(), probs.detach())
+        return RiskPrefix(steered, len(ids), risk.detach(), probs.detach(), ids)
 
     def _forward_suffix(self, prefix: RiskPrefix, suffix_ids: torch.Tensor):
         if suffix_ids.ndim != 2 or suffix_ids.shape[0] != 1:
@@ -159,6 +161,18 @@ class RiskAwarePolicy:
         return positions.div(temperature).log_softmax(dim=-1).gather(
             2, completion_ids.view(1, -1, 1)
         ).squeeze(0).squeeze(-1)
+
+    def sample_group(self, prefix, *, count, max_new_tokens, temperature, eos_token_id=None):
+        if self.rollout_engine is not None:
+            eos = self.tokenizer.eos_token_id if eos_token_id is None else eos_token_id
+            return self.rollout_engine.sample(
+                self.policy, prefix, self.anchor_ids, count=count,
+                max_new_tokens=max_new_tokens, temperature=temperature, eos_token_id=eos,
+            )
+        kwargs = {"max_new_tokens": max_new_tokens, "temperature": temperature}
+        if eos_token_id is not None:
+            kwargs["eos_token_id"] = eos_token_id
+        return [self.sample(prefix, **kwargs) for _ in range(count)]
 
     @torch.no_grad()
     def sample(self, prefix: RiskPrefix, *, max_new_tokens=256,
