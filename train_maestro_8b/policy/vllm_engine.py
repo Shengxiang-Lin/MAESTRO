@@ -104,7 +104,7 @@ class VLLMRiskRollout:
             policy.save_pretrained(adapter)
             params = SamplingParams(
                 n=count, max_tokens=max_new_tokens, temperature=temperature,
-                top_p=1.0, top_k=0, logprobs=0, detokenize=False, ignore_eos=True,
+                top_p=1.0, top_k=0, logprobs=0, detokenize=False, ignore_eos=False,
                 stop_token_ids=[eos_token_id] if eos_token_id is not None and eos_token_id >= 0 else [],
                 extra_args={"kv_transfer_params": {
                     "risk_id": snapshot_id, "prefix_length": prefix.length,
