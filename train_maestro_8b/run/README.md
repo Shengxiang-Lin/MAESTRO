@@ -1,3 +1,40 @@
+## Stage 2 Reward: MAESTRO Hybrid (default)
+
+`STAGE2_TRAINER=da` continues to use the working Unsloth/TRL/vLLM
+pipeline, while `DA_REWARD_MODE=hybrid` now selects the previously
+defined **0.6 local Environment + 0.4 semantic Judge** reward.
+Invalid Action = -1; legal Action gets the mixed score. Training
+and rollout implementations are untouched.
+
+```bash
+bash train_maestro_8b/run/pipeline.sh prepare-grpo
+bash train_maestro_8b/run/pipeline.sh preflight
+export DASHSCOPE_API_KEY='your-key'
+bash train_maestro_8b/run/pipeline.sh judge
+bash train_maestro_8b/run/pipeline.sh pilot
+GRPO_MAX_STEPS=100 bash train_maestro_8b/run/pipeline.sh grpo
+```
+
+The private reward snapshot file at
+`environment/data/stage4/private/decision_reward_states.jsonl`
+must exist. State rows are joined by the exact Stage4 candidate+round,
+and any unscorable/missing rows are explicitly reported/excluded. For
+legacy Stage4 data that lacks snapshots, regenerate/backfill those
+states before training; there is no implicit teacher imitation
+fallback. The original DA Parquet is reused unchanged.
+
+Check `workspace/maestro_8b/checkpoints/stage2-hybrid-pilot/reward_diagnostics.jsonl`
+for `valid`, `reason`, `env_reward`, `judge_reward`,
+`judge_dimensions` and `reward`; it never stores raw prompt or Action.
+The training source may contain gold/expert metadata for DA compatibility,
+but the hybrid Judge sees **only** the Main-visible Prompt and Action.
+The default paths now keep the old DA-run artifacts separate.
+
+For ablations: `DA_REWARD_MODE=deterministic` or `judge_only`.
+To reproduce the previous four-dimensional DA Judge exactly, use
+`DA_REWARD_MODE=da`. To enable the earlier edited-KV approach, use
+`STAGE2_TRAINER=riskkv` separately.
+
 ## Stage2 DA-first: recommended current training path
 
 ```bash
