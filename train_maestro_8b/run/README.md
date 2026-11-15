@@ -198,6 +198,48 @@ Optional LEGACY strict logprob equality check:
 
 Do not silently raise PPO clipping merely to pass a failing contract.
 
+
+## Optional hybrid LLM Judge reward
+
+The default `GRPO_REWARD_MODE=deterministic` makes **no external API calls**.
+To enable mixed reward (valid Actions only), export an API key and run:
+
+    export DASHSCOPE_API_KEY=your_key_in_shell
+    GRPO_REWARD_MODE=hybrid GRPO_JUDGE_MODEL=qwen3.7-flash \
+      GRPO_JUDGE_WORKERS=4 GRPO_JUDGE_WEIGHT=0.4 \
+      bash train_maestro_8b/run/pipeline.sh pilot
+
+The remote model name and endpoint are resolved through
+`config/model_config.yaml`; the API key itself is **never** committed.
+You can also use `GRPO_REWARD_MODE=judge_only` for ablation. In all modes,
+the local Environment hard-validity check runs first: invalid JSON, illegal
+delegations, broken dependencies, and premature completion always score -1.
+For valid Actions, hybrid reward is 0.6 * Environment reward + 0.4 *
+semantic reward by default. The Judge scores visible evidence grounding
+(30%), recovery strategy (30%), subtask instruction quality (20%) and
+reasoning quality (20%) on a 0..4 integer scale.
+
+The Judge sees **only** the original Main-visible O1 prompt and each valid
+candidate Action. Teacher actions, fault origin, future observations, Gold
+answers and `decision_state` are never sent. **The visible Main prompt
+itself is sent to the external API**: enable only if your report/question
+data are permitted to leave your environment. API failures, invalid judge
+JSON or invalid score ranges stop the training step rather than silently
+creating scores; valid candidates are submitted concurrently with
+`GRPO_JUDGE_WORKERS`. Identical inputs are cached by SHA-256 (not raw
+prompt text) in `GRPO_JUDGE_CACHE_JSONL`, so resumed training can reuse
+scores. The cache schema includes a rubric version: change it when the
+rubric changes.
+
+`GRPO_ZERO_ADV_STRATEGY=skip` remains required for hybrid and judge-only
+experiments. A group of entirely invalid Actions still has zero advantage;
+adding a Judge does not repair JSON-format cold start. Reward diagnostics in
+`reward_grpo.jsonl` include Environment and Judge scores for each candidate,
+while Trainer logs add `risk_grpo/judge_reward`,
+`risk_grpo/judge_scored_fraction` and four normalized rubric scores.
+Unlike the baseline API Judge, this mode does not ask the external LLM to
+override deterministic action validity.
+
 ## Strict reward and zero-gradient handling
 
 The strict deterministic scorer remains unchanged. It parses the
