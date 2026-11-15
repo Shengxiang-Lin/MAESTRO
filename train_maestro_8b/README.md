@@ -54,6 +54,16 @@ View every subcommand and adjustable environment variable in
     bash train_maestro_8b/run/pipeline.sh pilot
     bash train_maestro_8b/run/pipeline.sh grpo
 
+### Optional semantic LLM Judge (hybrid or judge-only)
+
+GRPO now optionally combines the existing deterministic private-state reward
+with a remote LLM Judge. The default remains strict deterministic scoring,
+with **no API calls**. Set `GRPO_REWARD_MODE=hybrid` and export
+`DASHSCOPE_API_KEY` for concurrent scoring of valid generated Actions.
+Illegal Actions remain exactly -1; only Main-visible prompt/Action text goes
+to the API. See [run/README.md](run/README.md#optional-hybrid-llm-judge-reward)
+for the scoring rubric, cache, privacy constraints and pilot command.
+
 ### Strict GRPO reward and optional supervised warmup
 
 The default GRPO reward is the ORIGINAL deterministic
