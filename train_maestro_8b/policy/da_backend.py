@@ -80,16 +80,6 @@ def build_stage2_config(args, baseline):
     return cfg
 
 
-def subset_for_pilot(cfg, max_train_rows: int):
-    """Materialize an isolated sample without mutating source parquet."""
-    if max_train_rows <= 0:
-        return
-    import pandas as pd
-    from tempfile import TemporaryDirectory
-    # This is called within run()'s temporary-directory lifetime instead.
-    raise RuntimeError("subset_for_pilot must be invoked with a destination path")
-
-
 def make_subset(cfg: dict, max_train_rows: int, dest: Path):
     import pandas as pd
     rows = pd.read_parquet(cfg["paths"]["train_parquet"])
