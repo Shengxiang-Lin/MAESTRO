@@ -59,6 +59,57 @@ class TestExportContract(unittest.TestCase):
                 seen=seen,
             )
 
+    @patch("dataset.prepare_da_grpo.o1_prompt_from_turn", return_value="O1 prompt")
+    def test_current_stage4_stable_candidate_identity(self, _):
+        # Recent Stage4 journals use fork-round-XX as stable candidate ID,
+        # which is different from a display sample's branch-round label.
+        a = self.turn("x-branch-02-round-03", 3)
+        b = self.turn("x-branch-02-round-03", 3)
+        a["round_sample_id"] = "x-fork-round-02"
+        b["round_sample_id"] = "x-fork-round-04"
+        seen = set()
+        rows, experts, _ = make_examples(
+            self.scenes, [a, b], source="stage4",
+            settings=self.settings, seen=seen,
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["extra_info"]["sample_id"], "x-fork-round-02-round-03")
+        self.assertEqual(rows[0]["extra_info"]["original_sample_id"], a["sample_id"])
+        self.assertEqual(rows[1]["extra_info"]["sample_id"], "x-fork-round-04-round-03")
+        self.assertIn("x-fork-round-02", experts)
+        self.assertIn("x-fork-round-04", experts)
+        self.assertEqual(len(seen), 2)
+
+    @patch("dataset.prepare_da_grpo.o1_prompt_from_turn", return_value="O1 prompt")
+    @patch("dataset.prepare_da_grpo.settings_for")
+    @patch("dataset.prepare_da_grpo.read_jsonl")
+    def test_stage4_only_export_dry_run(self, loader, settings_for, _):
+        from dataset.prepare_da_grpo import export
+        settings_for.return_value = self.settings
+        def read(path):
+            if str(path) == "/fake/scenes.jsonl":
+                return list(self.scenes.values())
+            if str(path) == "/fake/stage4/main_turns.jsonl":
+                turn = self.turn("x-branch-02-round-03", 3)
+                turn["round_sample_id"] = "x-fork-round-02"
+                return [turn]
+            raise AssertionError("Unexpected Stage3 source: " + str(path))
+        loader.side_effect = read
+        summary = export(
+            Path("/fake/scenes.jsonl"), None, Path("/fake/out"),
+            untrusted_turns=Path("/fake/stage4/main_turns.jsonl"),
+            dry_run=True,
+        )
+        self.assertEqual(summary["rows"], 1)
+        self.assertEqual(summary["by_source"], {"maestro_stage4": 1})
+        self.assertEqual(summary["episodes"], 1)
+        settings_for.assert_called_once()
+
+    def test_stage4_only_requires_source(self):
+        from dataset.prepare_da_grpo import export
+        with self.assertRaisesRegex(ValueError, "At least one"):
+            export(Path("/fake/scenes.jsonl"), None, Path("/fake/out"))
+
     def test_historical_o1_docstring_only_change_is_safe(self):
         current = ('"""The on-disk per-turn reviewed-turn input stores"""\n'
                    'def render():\n'
