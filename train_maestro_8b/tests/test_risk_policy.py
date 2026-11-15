@@ -121,14 +121,24 @@ class TinyModelTests(unittest.TestCase):
         self.assertTrue(torch.allclose(new_logps.detach(), incremental, atol=1e-4),
                         f"incremental/batched replay drift: "
                         f"{incremental} vs {new_logps}")
-        # The first two predictions MUST NOT depend on the second target
-        # token, which is in the future of those causal positions.
-        altered = ids.clone()
-        altered[1] = (altered[1] + 1) % cfg.vocab_size
+        # Change the SECOND suffix input, not the gathered target tokens.
+        # Earlier logits must remain stable under true causal attention.
+        forced = torch.cat([
+            torch.tensor(engine.anchor_ids, dtype=torch.long, device=ids.device),
+            ids[:-1],
+        ])[None]
+        changed_suffix = forced.clone()
+        changed_suffix[0, -1] = (changed_suffix[0, -1] + 1) % cfg.vocab_size
         with torch.no_grad():
-            causal = engine.log_probs(prefix, altered, temperature=0.9)
+            changed_out = engine._forward_suffix(prefix, changed_suffix)
+            changed_logps = changed_out.logits[:, -ids.numel():].float().div(
+                0.9
+            ).log_softmax(dim=-1).gather(
+                2, ids.view(1, -1, 1)
+            ).squeeze(0).squeeze(-1)
         torch.testing.assert_close(
-            new_logps.detach()[:2], causal[:2], atol=1e-4, rtol=1e-4,
+            new_logps.detach()[:2], changed_logps[:2],
+            atol=1e-4, rtol=1e-4,
         )
         # Full preflight exercises autoregressive, SDPA batched and Eager
         # batched evaluation on an identical 3-token sequence.
