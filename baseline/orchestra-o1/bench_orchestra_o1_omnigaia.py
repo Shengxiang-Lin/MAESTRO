@@ -50,6 +50,7 @@ async def main() -> int:
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
     parser.add_argument("--max_concurrency", type=int, default=None)
     parser.add_argument("--tasks", type=str, default=None)
+    parser.add_argument("--task_ids_file", type=str, default=None)
     parser.add_argument("--skip_completed", type=str, default=None)
     args = parser.parse_args()
 
@@ -58,6 +59,9 @@ async def main() -> int:
     logger.info("=" * 60)
 
     cfg = GAIAOrchestraConfig.load(args.config)
+    if args.task_ids_file:
+        override = Path(args.task_ids_file)
+        cfg.task_ids_file = (override if override.is_absolute() else REPO_ROOT / override).resolve()
     search_cfg, browse_cfg = load_web_tool_configs(args.config)
     cfg.prepare_dataset()
     logger.info(f"Dataset: type={cfg.dataset_type}, source={cfg.dataset_source_path}, jsonl={cfg.dataset_path}")
@@ -85,6 +89,7 @@ async def main() -> int:
                 else None
             ),
             max_tasks=cfg.max_tasks,
+            task_ids_file=cfg.task_ids_file,
             result_folder=cfg.result_folder,
             trajectory_folder=cfg.trajectory_folder,
         ),
@@ -128,6 +133,8 @@ async def main() -> int:
         "dataset_type": cfg.dataset_type,
         "dataset_source_path": str(cfg.dataset_source_path),
         "dataset_path": str(cfg.dataset_path),
+        "task_ids_file": str(cfg.task_ids_file) if cfg.task_ids_file else None,
+        "selected_task_ids": [str(level.get("id", level.get("task_id"))) for level in levels],
         "attachments_dir": str(cfg.attachments_dir),
         "main_model": cfg.main_model,
         "sub_models": cfg.sub_models,
