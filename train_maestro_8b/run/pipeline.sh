@@ -34,6 +34,9 @@ GRPO_MAX_PROMPT_TOKENS="${GRPO_MAX_PROMPT_TOKENS:-12288}"
 GRPO_TEMPERATURE="${GRPO_TEMPERATURE:-1.0}"
 PILOT_MAX_NEW_TOKENS="${PILOT_MAX_NEW_TOKENS:-512}"
 GRPO_LR="${GRPO_LR:-1e-5}"
+GRPO_SFT_WARMUP="${GRPO_SFT_WARMUP:-0}"
+GRPO_SFT_WARMUP_SAMPLES="${GRPO_SFT_WARMUP_SAMPLES:-32}"
+PILOT_REQUIRE_GRAD="${PILOT_REQUIRE_GRAD:-1}"
 GRPO_ROLLOUT_ATTENTION="${GRPO_ROLLOUT_ATTENTION:-sdpa}"
 GRPO_VLLM_ENGINE="${GRPO_VLLM_ENGINE:-0}"
 GRPO_VLLM_MEMORY_UTILIZATION="${GRPO_VLLM_MEMORY_UTILIZATION:-0.45}"
@@ -61,7 +64,8 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
   risk          Train Risk Head only, using cached NF4 features
   prepare-grpo  Backfill missing private states, export and audit GRPO rows
   preflight     Check Unsloth KV/logprob/LoRA gradient compatibility
-  pilot         DA-style smoke (1 prompt x 8 candidates, 512 output cap)
+  pilot         DA-style smoke; optional legal-reference SFT cold start
+  audit-pilot   Review recent candidate outputs and invalid reward reasons (CPU)
   grpo          Full Unsloth+TRL GRPO training
   inspect-io    Audit real O1 prompt tokens and reference action lengths
   status        Show generated data and checkpoint files
@@ -72,6 +76,7 @@ Override settings via environment variables or run/config.env:
   RISK_EPOCHS, RISK_BATCH_SIZE, GRPO_EPOCHS, GRPO_GENERATIONS,
   GRPO_GRAD_ACCUM, GRPO_MAX_PROMPT_TOKENS, GRPO_MAX_NEW_TOKENS,
   GRPO_TEMPERATURE, PILOT_MAX_NEW_TOKENS, GRPO_MAX_STEPS,
+  GRPO_SFT_WARMUP, GRPO_SFT_WARMUP_SAMPLES, PILOT_REQUIRE_GRAD,
   SKIP_COMPLETED, GRPO_RESUME_FROM,
   GRPO_VLLM_ENGINE, GRPO_VLLM_MEMORY_UTILIZATION, GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT
 
@@ -250,7 +255,13 @@ pilot() {
   fi
   init_grpo_args
   say "Pilot GRPO"
+  local pilot_extra=(--sft_warmup "$GRPO_SFT_WARMUP" \
+                     --sft_warmup_samples "$GRPO_SFT_WARMUP_SAMPLES")
+  if [[ "$PILOT_REQUIRE_GRAD" == "1" ]]; then
+    pilot_extra+=(--fail_on_zero_adv)
+  fi
   python -m train_maestro_8b.policy.train "${common_args[@]}" \
+    "${pilot_extra[@]}" \
     --max_new_tokens "$PILOT_MAX_NEW_TOKENS" \
     --output_dir "$PILOT_CKPT" \
     --max_prompts "$PILOT_PROMPTS" --max_steps "$PILOT_STEPS" \
@@ -270,9 +281,18 @@ grpo() {
   [[ -n "$GRPO_RESUME_FROM" ]] && resume=(--resume_from_checkpoint "$GRPO_RESUME_FROM")
   say "Full Unsloth + TRL risk-aware GRPO"
   python -m train_maestro_8b.policy.train "${common_args[@]}" \
+    --sft_warmup "$GRPO_SFT_WARMUP" \
+    --sft_warmup_samples "$GRPO_SFT_WARMUP_SAMPLES" \
     --output_dir "$GRPO_CKPT" --epochs "$GRPO_EPOCHS" \
     --max_steps "$GRPO_MAX_STEPS" --logging_steps 5 --save_steps 100 \
     --reward_debug_jsonl "$RUN_ROOT/reward_grpo.jsonl" "${resume[@]}"
+}
+audit_pilot() {
+  need "$RUN_ROOT/reward_pilot.jsonl"
+  say "Inspect recently sampled Actions and deterministic invalid reasons (no GPU)"
+  python -m train_maestro_8b.data.audit_rollouts \
+    --input "$RUN_ROOT/reward_pilot.jsonl" \
+    --tail "$GRPO_GENERATIONS"
 }
 status() {
   say "MODEL=$MODEL | RUN_ROOT=$RUN_ROOT"
@@ -297,6 +317,7 @@ case "${1:-help}" in
   inspect-io) inspect_io ;;
   preflight) preflight ;;
   pilot) pilot ;;
+  audit-pilot) audit_pilot ;;
   grpo) grpo ;;
   status) status ;;
   help|-h|--help) usage ;;
