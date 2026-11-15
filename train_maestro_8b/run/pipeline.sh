@@ -41,7 +41,7 @@ GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT="${GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT:-}"
 GRPO_STEER_LAYERS="${GRPO_STEER_LAYERS:-8}"
 GRPO_STEER_STRENGTH="${GRPO_STEER_STRENGTH:-0.1}"
 GRPO_STEER_THRESHOLD="${GRPO_STEER_THRESHOLD:-0.5}"
-PILOT_PROMPTS="${PILOT_PROMPTS:-4}"
+PILOT_PROMPTS="${PILOT_PROMPTS:-1}"
 PILOT_STEPS="${PILOT_STEPS:-1}"
 SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
 GRPO_RESUME_FROM="${GRPO_RESUME_FROM:-}"
@@ -61,7 +61,7 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
   risk          Train Risk Head only, using cached NF4 features
   prepare-grpo  Backfill missing private states, export and audit GRPO rows
   preflight     Check Unsloth KV/logprob/LoRA gradient compatibility
-  pilot         DA-style short GRPO run (1 prompt x 8 candidates, 512 output cap)
+  pilot         DA-style smoke (1 prompt x 8 candidates, 512 output cap)
   grpo          Full Unsloth+TRL GRPO training
   inspect-io    Audit real O1 prompt tokens and reference action lengths
   status        Show generated data and checkpoint files
