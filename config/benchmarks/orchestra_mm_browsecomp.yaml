@@ -26,8 +26,10 @@ dataset_path: "data/MM-BrowseComp/data/MMBrowseComp_400_decrypted.jsonl"
 dataset_jsonl_path: "data/MM-BrowseComp/data/test_metadata.jsonl"
 attachments_dir: "data/MM-BrowseComp"
 level_filter: null
+# Official 400-task MM-BrowseComp final evaluation subset.
+task_ids_file: "data/MM-BrowseComp/splits/final_100_ids.txt"
 
-max_tasks: 10
+max_tasks: null
 max_attempts: 10
 max_concurrency: 10
 

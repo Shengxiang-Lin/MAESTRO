@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from benchmark.experiment_splits import load_task_ids
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -80,6 +81,7 @@ class OmniGAIAConfig:
     max_steps: int = 30
     max_tasks: Optional[int] = None
     level_filter: Optional[List[str]] = None
+    task_ids_file: Path | None = None
     result_folder: Path = PROJECT_ROOT / "workspace/logs/omnigaia_results"
     trajectory_folder: Path = PROJECT_ROOT / "workspace/logs/omnigaia_trajectories"
     timestamp: Optional[str] = None
@@ -113,6 +115,7 @@ class OmniGAIAConfig:
             attachments_dir=resolve_required("attachments_dir"),
             max_steps=int(raw.get("max_steps", 30)),
             max_tasks=int(raw["max_tasks"]) if raw.get("max_tasks") else None,
+            task_ids_file=(resolve_required("task_ids_file") if raw.get("task_ids_file") else None),
             level_filter=level_filter,
             result_folder=resolve_optional(
                 "result_folder", "workspace/logs/omnigaia_results"
@@ -428,7 +431,12 @@ class OmniGAIAOrchestraBenchmark(Benchmark):
                 f"[OmniGAIA] Dataset not found: {self.config.dataset_path}"
             )
             return
-        self._levels = []
+        selected_ids = (
+            load_task_ids(self.config.task_ids_file)
+            if self.config.task_ids_file is not None else None
+        )
+        levels: List[LevelSpec] = []
+        indexed: Dict[str, LevelSpec] = {}
         with self.config.dataset_path.open("r", encoding="utf-8") as handle:
             for line_num, line in enumerate(handle, 1):
                 line = line.strip()
@@ -445,10 +453,38 @@ class OmniGAIAOrchestraBenchmark(Benchmark):
                     data["task_id"] = str(data["id"])
                 elif "task_id" not in data:
                     data["task_id"] = f"omnigaia_task_{line_num}"
-                if self.config.level_filter is not None:
-                    if data.get("Level", "") not in self.config.level_filter:
-                        continue
-                self._levels.append(data)
+                if selected_ids is None:
+                    levels.append(data)
+                else:
+                    identifier = str(data.get("id", data.get("task_id")))
+                    if identifier in indexed:
+                        raise ValueError(f"Dataset contains repeated task ID {identifier}")
+                    indexed[identifier] = data
+
+        if selected_ids is not None:
+            missing = [task_id for task_id in selected_ids if task_id not in indexed]
+            if missing:
+                raise ValueError(
+                    f"Task IDs in {self.config.task_ids_file} missing from "
+                    f"{self.config.dataset_path}: {missing}"
+                )
+            # Do not rely on the source JSONL line ordering.
+            levels = [indexed[task_id] for task_id in selected_ids]
+            logger.info(
+                f"[OmniGAIA] Using {len(levels)} fixed IDs from {self.config.task_ids_file}"
+            )
+        if self.config.level_filter is not None:
+            levels = [
+                item for item in levels
+                if str(item.get("Level", item.get("level", ""))) in self.config.level_filter
+            ]
+        self._levels = levels
+        if selected_ids is not None and self.config.max_tasks is not None:
+            if self.config.max_tasks < len(self._levels):
+                raise ValueError(
+                    f"max_tasks={self.config.max_tasks} would truncate the selected "
+                    f"{len(self._levels)} tasks; set max_tasks: null"
+                )
 
         level_counts: Dict[str, int] = {}
         type_counts: Dict[str, int] = {}

@@ -4,6 +4,61 @@ Both MAESTRO (`bench_orchestra_omnigaia.py`) and Orchestra-o1
 (`baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py`) use the same preparation
 step before starting model backends. Their existing entrypoint names are retained.
 
+## Frozen pretest / final evaluation splits
+
+Three **fixed one-ID-per-line files** are versioned under the associated
+dataset folders. The original question/answer/attachment files remain ignored.
+
+| Evaluation | ID file | Selection |
+| --- | --- | --- |
+| OmniGAIA pretest (60) | `data/OmniGAIA/splits/pretest_60_ids.txt` | 20 Easy + 20 Medium + 20 Hard; 30 video/audio + 30 image/audio |
+| OmniGAIA final (100) | `data/OmniGAIA/splits/final_100_ids.txt` | 34 Easy + 33 Medium + 33 Hard; 50 video/audio + 50 image/audio |
+| MM-BrowseComp final (100) | `data/MM-BrowseComp/splits/final_100_ids.txt` | Five categories × 20; all 22 subtasks; level 1/2 = 85/15 |
+
+OmniGAIA pretest uses the previously approved 60 question IDs. The final
+OmniGAIA selection excludes those 60 IDs **and all media IDs shared with
+the pretest**. The 100 MM-BrowseComp IDs come from the **official 400-task
+dataset**, not the older 224-task release. MM-BrowseComp IDs are not continuous
+1–400; IDs above 1000 are valid.
+
+`task_ids_file` is an optional YAML field accepted by MAESTRO and Orchestra-o1.
+The default OmniGAIA benchmark configs now point at the **pretest 60**;
+MM-BrowseComp configs point at the **final 100**. To run OmniGAIA final 100
+without duplicating model settings:
+
+```bash
+python bench_orchestra_omnigaia.py \
+  --config config/benchmarks/orchestra_omnigaia.yaml \
+  --task_ids_file data/OmniGAIA/splits/final_100_ids.txt
+
+python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
+  --config baseline/orchestra-o1/config/benchmarks/orchestra_o1_omnigaia.yaml \
+  --task_ids_file data/OmniGAIA/splits/final_100_ids.txt
+```
+
+Both launchers load selected tasks in **manifest order**, irrespective of
+the source JSONL row ordering. Missing, duplicate, or malformed task IDs fail
+before model calls. If a manifest is used with `max_tasks` smaller than its
+selection, the launcher raises an error instead of silently truncating;
+use `max_tasks: null` to run the entire frozen set. The existing `--tasks`
+argument still works to narrow a selected split during debugging.
+Each run's model manifest records the ID-file path and the selected IDs.
+
+Use the stdlib-only script to re-create or verify the same frozen files:
+
+```bash
+python benchmark/experiment_splits.py
+python benchmark/experiment_splits.py --check
+python benchmark/experiment_splits.py --check --verify-data \
+  --omnigaia-meta data/OmniGAIA/test_metadata.json \
+  --mm-meta data/MM-BrowseComp/data/MMBrowseComp_400.jsonl
+```
+
+The `--verify-data` command checks membership, counts, category/level
+balance, and OmniGAIA media overlap against local **official metadata**.
+MM-BrowseComp questions and answers remain encrypted; the verifier
+reads only public metadata fields and never exports plaintext.
+
 ## MM-BrowseComp
 
 Add these fields to your experiment YAML; retain your existing model roles:
