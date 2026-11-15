@@ -32,5 +32,5 @@ max_tasks: null
 max_attempts: 10
 max_concurrency: 10
 
-result_folder: "logs/omnigaia_final/omnigaia_o1_qwen37_plus_qwen38_max_360"
-trajectory_folder: "logs/omnigaia_final/omnigaia_o1_qwen37_plus_qwen38_max_360/trajectories"
+result_folder: "logs/omnigaia_final/orchestra_o1_omnigaia_qwen37_plus_qwen38_max"
+trajectory_folder: "logs/omnigaia_final/orchestra_o1_omnigaia_qwen37_plus_qwen38_max/trajectories"
