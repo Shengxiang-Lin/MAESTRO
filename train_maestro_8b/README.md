@@ -53,13 +53,15 @@ View every subcommand and adjustable environment variable in
     bash train_maestro_8b/run/pipeline.sh grpo
 
 The recommended NF4 feature cache **must** match the default Unsloth NF4
-training backbone. Preflight validates sampling/recomputed logprobs, cache
-continuation, and LoRA-only gradients. If compatibility checks fail, do
-not disable them before training. The preflight checks the maximum absolute
-sampled-versus-differentiable log-probability gap. Use
-`GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT` to set the bound for a numerical smoke test
-and inspect the measured drift before setting a training tolerance. The full
-engine defaults to 0.05 for its distinct inference kernels.
+training backbone. Preflight checks cache continuation, causal isolation,
+local incremental-replay integrity and LoRA-only gradients. Since NF4
+single-token and multi-token kernels differ numerically on the target GPU,
+the default also REQUIRES initial sampled-to-training importance ratios
+to remain inside GRPO's existing [1-clip_epsilon,1+clip_epsilon] interval,
+without changing the loss or weakening structural invariants.
+GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT=0.01 remains an optional strict absolute
+logprob override. See run/README.md for measured mismatch and real Pilot
+importance-ratio metrics.
 
 ## Batch and token budget aligned with DA-GRPO
 
