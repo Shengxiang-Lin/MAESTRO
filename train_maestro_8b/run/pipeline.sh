@@ -220,8 +220,24 @@ prepare_grpo() {
   if [[ "$STAGE2_TRAINER" == "da" ]]; then
     need "$STAGE1_DIR/questions/scenes.jsonl"
     need "$STAGE4_DIR/main_turns.jsonl"
-    if [[ "$SKIP_COMPLETED" == "1" && -s "$DA_DATA/train.parquet" && -f "$DA_DATA/summary.json" ]]; then
-      say "Reusing Stage2 DA Parquet: $DA_DATA/train.parquet"
+    if [[ "$SKIP_COMPLETED" == "1" && -s "$DA_DATA/train.parquet" && -f "$DA_DATA/summary.json" ]] &&
+      python - "$DA_DATA/summary.json" "$STAGE1_DIR/questions/scenes.jsonl" "$STAGE4_DIR/main_turns.jsonl" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+def digest(path):
+    h=hashlib.sha256()
+    with open(path,"rb") as f:
+        for chunk in iter(lambda:f.read(1<<20),b""):
+            h.update(chunk)
+    return h.hexdigest()
+s=json.loads(Path(sys.argv[1]).read_text())
+if (s.get("schema") != "maestro.stage2_da_grpo.v1"
+        or s.get("scenes_sha256") != digest(sys.argv[2])
+        or s.get("turns_sha256") != digest(sys.argv[3])):
+    raise SystemExit(1)
+PY
+    then
+      say "Reusing verified Stage2 DA Parquet: $DA_DATA/train.parquet"
       return
     fi
     say "Stage2 DA export: exact O1 prompts + reward-only expert metadata"
