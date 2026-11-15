@@ -41,6 +41,8 @@ def _source(sid: str, modality: str, title: str, fields: list[str],
     assert all(set(row) == set(fields) for row in records)
     observations = [
         {"observation_id": f"{sid}.OBS{i:03d}", "fact_refs": [f"{sid}:F{i:03d}"],
+         "origin_fact_id": ("yago:" + _digest(values)
+                            if origin == "yago" else f"synthetic:{sid}:{i}"),
          "values": dict(values), "origin": origin}
         for i, values in enumerate(records, 1)
     ]
@@ -196,7 +198,7 @@ def _build_world(graph: KnowledgeGraph, path: list[Edge], tasks: list[dict],
     return world, hints
 
 
-def _run(tasks: list[dict], sources: dict, graph: KnowledgeGraph) -> tuple[list[dict], dict, list[dict]]:
+def _run(tasks: list[dict], sources: dict, graph: KnowledgeGraph) -> tuple[list[dict], dict]:
     products = {}
     feedback = []
     for task in tasks:
@@ -290,12 +292,17 @@ def _run(tasks: list[dict], sources: dict, graph: KnowledgeGraph) -> tuple[list[
             "used_source_ids": list(scoped),
             "used_upstream_handoffs": ["work_" + p for p in task["depends_on"]],
             "output_schema": dict(task["output_schema"]),
-            "result_rows": 1,
+            "result_rows": (len(witness) if strategy == "filter_candidates" else 1),
             "fact_refs": refs,
-            "workproduct": [{"values": deepcopy(value), "source_fact_refs": refs}],
+            "workproduct": (
+                [{"values": {"candidate_id": key}, "source_fact_refs": list(support)}
+                 for key, support in sorted(witness.items())]
+                if strategy == "filter_candidates" else
+                [{"values": deepcopy(value), "source_fact_refs": refs}]
+            ),
             "internal_trace": [{"tool": op} for op in steps],
         })
-    return feedback, products[tasks[-1]["macro_id"]]["values"], feedback
+    return feedback, products[tasks[-1]["macro_id"]]["values"]
 
 
 def validate_scene(scene: dict) -> dict:
@@ -340,11 +347,10 @@ def validate_scene(scene: dict) -> dict:
             raise ValueError("false_real_fact_origin")
         rows = [row["values"] for row in
                 scene["world"]["sources"][f"relation_{i}"]["observations"]]
-        if {k: edge[k] for k in ("subject", "predicate", "object")}:
-            required = {"subject_uri": edge["subject"], "predicate": edge["predicate"],
-                        "object_uri": edge["object"]}
-            if required not in rows:
-                raise ValueError("yago_fact_missing_from_evidence")
+        required = {"subject_uri": edge["subject"], "predicate": edge["predicate"],
+                    "object_uri": edge["object"]}
+        if required not in rows:
+            raise ValueError("yago_fact_missing_from_evidence")
     return {
         "passed": True, "macro_count": len(tasks), "branch_count": len(branches),
         "all_branch_sources_necessary": True,
@@ -376,7 +382,7 @@ def compose_scene(graph: KnowledgeGraph, *, seed: int = 17,
                 + " relation for the upstream entity, using scoped records"
             )
     world, hints = _build_world(graph, path, tasks, rng)
-    feedback, result, _ = _run(tasks, world["sources"], graph)
+    feedback, result = _run(tasks, world["sources"], graph)
     labels = [
         f"{hint['title']} ({hint['attribute']} = {hint['expected_value']})"
         for hint in hints
@@ -453,8 +459,11 @@ def compose_scene(graph: KnowledgeGraph, *, seed: int = 17,
 def replay_scene(scene: dict, graph: KnowledgeGraph) -> dict:
     """Replay frozen scoped evidence; detect tampering or solver drift."""
     audit = validate_scene(scene)
+    for row in scene["world"]["real_fact_path"]:
+        if Edge(row["subject"], row["predicate"], row["object"]) not in graph.edges:
+            raise ValueError("frozen_yago_fact_not_in_source_graph")
     tasks = scene["macro_plan"]["macro_tasks"]
-    feedback, result, _ = _run(tasks, scene["world"]["sources"], graph)
+    feedback, result = _run(tasks, scene["world"]["sources"], graph)
     if [result] != scene["gold_answer"] or feedback != scene["task_feedback"]:
         raise ValueError("macro_v3_replay_mismatch")
     expected_hash = _digest({
