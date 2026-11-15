@@ -83,12 +83,12 @@ def even_quotas(n, populations):
 
 
 def proportional_quotas(n, populations):
-    """Largest-remainder apportionment for MM-BrowseComp's original difficulty."""
+    """Largest-remainder apportionment; ties favor rare difficulty levels."""
     total = sum(populations.values())
     weights = {key: n * count / total for key, count in populations.items()}
     quota = {key: math.floor(weight) for key, weight in weights.items()}
     ranks = sorted(weights, key=lambda k: (
-        -(weights[k] - quota[k]), -populations[k], str(k)
+        -(weights[k] - quota[k]), populations[k], str(k)
     ))
     for key in ranks[:n - sum(quota.values())]:
         quota[key] += 1
