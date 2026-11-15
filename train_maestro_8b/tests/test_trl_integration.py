@@ -97,7 +97,8 @@ class TRLTrainerTinyQwen3Tests(unittest.TestCase):
             args = GRPOConfig(
                 output_dir=tmp, max_steps=1,
                 num_generations=2, per_device_train_batch_size=1,
-                gradient_accumulation_steps=2,
+                gradient_accumulation_steps=1,
+                generation_batch_size=2,
                 max_completion_length=4,
                 learning_rate=1e-3, beta=0.0,
                 loss_type="grpo", use_vllm=False,
@@ -114,7 +115,10 @@ class TRLTrainerTinyQwen3Tests(unittest.TestCase):
             )
             output = trainer.train()
             self.assertEqual(trainer.state.global_step, 1)
-            self.assertGreater(trainer.seen_groups, 0)
+            self.assertEqual(trainer.seen_groups, 1)
+            self.assertEqual(trainer.generated_total, 2)
+            self.assertGreater(trainer.completion_tokens_total, 0)
+            self.assertEqual(trainer.prefill_tokens_total, len(row["prompt"]))
             self.assertTrue(any(
                 not torch.equal(p.detach(), before[n])
                 for n, p in model.named_parameters() if n in before
