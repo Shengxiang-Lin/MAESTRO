@@ -250,6 +250,12 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
         "max_abs_incremental_vs_batched_eval":
             diagnostic["max_abs_incremental_vs_batched_eval"],
         "max_abs_batched_eval_vs_train": diagnostic["max_abs_batched_eval_vs_train"],
+        "max_abs_batched_causal_future_sensitivity":
+            diagnostic["max_abs_batched_causal_future_sensitivity"],
+        "max_abs_batched_eager_vs_incremental":
+            diagnostic["max_abs_batched_eager_vs_incremental"],
+        "max_abs_batched_eager_vs_sdpa":
+            diagnostic["max_abs_batched_eager_vs_sdpa"],
         "risk_windows": int(state.window_probs.numel()),
         "steered_tokens": steered_tokens,
         "vllm_cached_tokens": getattr(engine.rollout_engine, "cached_tokens", None),
