@@ -369,11 +369,26 @@ def validate_scene(scene: dict, kg: KnowledgeGraph | None = None) -> dict:
         )
         if any(fact_source.get(f) not in legal for f in report["fact_refs"]):
             raise ValueError("macro_uses_nonlocal_unreported_evidence")
+        # A Macro may *observe* multiple competing records and only cite the
+        # surviving subset in its final WorkProduct. Observed refs are legal
+        # when and only when they came from its own source scope or a
+        # declared upstream WorkProduct; they need not be answer-supporting.
+        permitted_parent_refs = set().union(*(
+            set(next(row["fact_refs"] for row in reports
+                     if row["macro_id"] == parent))
+            for parent in node["depends_on"]
+        )) if node["depends_on"] else set()
         for step in report["internal_trace"]:
-            if step["source_id"] is not None and step["source_id"] not in node["source_scope"]:
+            sid = step["source_id"]
+            if sid is not None and sid not in node["source_scope"]:
                 raise ValueError("unscoped_trace_source")
-            if not set(step["supporting_fact_refs"]) <= set(report["fact_refs"]):
-                raise ValueError("unreported_trace_fact_ref")
+            observed = set(step["supporting_fact_refs"])
+            if sid is not None:
+                if any(fact_source.get(f) != sid for f in observed):
+                    raise ValueError("trace_fact_ref_does_not_belong_to_source")
+            elif any(fact_source.get(f) not in set(node["source_scope"])
+                     and f not in permitted_parent_refs for f in observed):
+                raise ValueError("trace_uses_unavailable_evidence")
 
     expected_hash = _digest({
         "macro_plan": graph, "world": scene["world"],
