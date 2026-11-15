@@ -233,9 +233,10 @@ max_new_tokens, it fails rather than silently truncating supervision.
 Consider a shorter first diagnostic with G=2 / 256 output tokens
 ONLY to inspect formatting, not to compare the full 8-way objective.
 
-Pilot now defaults to PILOT_REQUIRE_GRAD=1, so an all-identical-reward
-group raises a diagnostic RuntimeError with the failure reason histogram
-and does NOT produce a misleading successfully-trained checkpoint.
+Pilot defaults to PILOT_REQUIRE_GRAD=1. When the default reference_sft
+fallback is enabled, tied rewards trigger a legal supervised update
+with explicit metrics. Only when fallback is disabled does a tied-reward
+group raise a diagnostic RuntimeError instead of silently succeeding.
 For normal GRPO training this strict per-group check is off: some
 individual groups can legitimately have zero advantage.
 When SFT warmup is enabled for full training, the same options apply to
