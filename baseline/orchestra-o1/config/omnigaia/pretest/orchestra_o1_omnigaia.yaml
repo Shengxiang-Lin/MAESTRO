@@ -1,0 +1,38 @@
+# Frozen OmniGAIA pretest / Orchestra-o1.
+# OmniGAIA Benchmark Configuration (Orchestra-o1 baseline)
+main_model: "qwen3.7-plus"
+sub_models:
+  - "qwen3.7-plus"
+
+search:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+browse:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+tool_models:
+  image_analysis: "qwen3.7-flash"
+  audio_analysis: "qwen3.5-omni-flash"
+  video_vision: "qwen3.7-flash"
+  video_audio: "qwen3.5-omni-flash"
+  video_summary: "qwen3.7-flash"
+
+evaluation_model: "qwen3.7-plus"
+trace_summary_model: "qwen3.7-plus"
+
+dataset_type: "OmniGAIA"
+dataset_path: "data/OmniGAIA/test_metadata.jsonl"
+attachments_dir: "data/OmniGAIA"
+level_filter: null
+# Fixed OmniGAIA pre-experiment (60 questions).
+task_ids_file: "data/OmniGAIA/splits/pretest_60_ids.txt"
+# Pretest; for final evaluation use data/OmniGAIA/splits/final_100_ids.txt.
+
+max_tasks: null
+max_attempts: 10
+max_concurrency: 10
+
+result_folder: "logs/omnigaia_pretest/omnigaia_orchestra_o1_qwen3.7_plus"
+trajectory_folder: "logs/omnigaia_pretest/omnigaia_orchestra_o1_qwen3.7_plus/trajectories"
