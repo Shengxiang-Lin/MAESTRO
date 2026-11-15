@@ -125,6 +125,56 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
     with torch.no_grad():
         incremental = engine.log_probs_incremental(state, ids, temperature=temperature)
         replay = engine.log_probs(state, ids, temperature=temperature)
+
+        # To test causal independence, modify the ACTUAL future input
+        # token while keeping the TARGET ids in gather() unchanged. Calling
+        # log_probs(prefix, mutated_targets) would be a false-positive:
+        # it also changes the target token at that position, so its own
+        # log probability naturally differs even with a correct mask.
+        causal_future_sensitivity = None
+        if ids.numel() >= 3:
+            anchor = torch.tensor(
+                engine.anchor_ids, dtype=torch.long, device=engine.device,
+            )
+            suffix = torch.cat((anchor, ids[:-1]), dim=0)[None]
+            changed_suffix = suffix.clone()
+            vocab_size = int(policy.get_input_embeddings().weight.shape[0])
+            changed_suffix[0, -1] = (changed_suffix[0, -1] + 1) % vocab_size
+            changed_logits = engine._forward_suffix(state, changed_suffix).logits
+            changed_logps = changed_logits[:, -ids.numel():].float().div(
+                temperature
+            ).log_softmax(dim=-1).gather(
+                2, ids.view(1, -1, 1)
+            ).squeeze(0).squeeze(-1)
+            # The last suffix input affects the final prediction, not the
+            # first two. Compare probabilities of the SAME target tokens.
+            causal_future_sensitivity = float(
+                (replay[:-1] - changed_logps[:-1]).abs().max().item()
+            )
+
+        # Distinguish the SDPA attention implementation from NF4 GEMV/GEMM
+        # shape-specific numerical effects. A 3-token Eager teacher-forced
+        # replay uses the SAME model, LoRA weights and steered KV, but the
+        # explicit eager attention path. Restore both wrappers' settings
+        # unconditionally, including if this optional diagnostic fails.
+        eager = None
+        eager_probe_error = None
+        configs = []
+        for cfg in (policy.config, policy.get_base_model().config):
+            if not any(cfg is x for x, _ in configs):
+                configs.append((cfg, cfg._attn_implementation))
+        try:
+            for cfg, _ in configs:
+                cfg._attn_implementation = "eager"
+            eager = engine.log_probs(state, ids, temperature=temperature)
+        except Exception as exc:
+            # Optional diagnostic only; the strict consistency gate below
+            # still fails closed regardless of eager backend support.
+            eager_probe_error = f"{type(exc).__name__}: {str(exc)[:240]}"
+        finally:
+            for cfg, original in configs:
+                cfg._attn_implementation = original
+
     if any(
         not torch.isfinite(v).all()
         for v in (old, incremental, replay)
@@ -155,6 +205,14 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
         "max_abs_incremental_vs_batched_eval": max_drift(incremental, replay),
         "max_abs_batched_eval_vs_train": max_drift(replay, grad_values),
         "max_abs_sample_vs_batched_train": drift,
+        "max_abs_batched_causal_future_sensitivity": causal_future_sensitivity,
+        "max_abs_batched_eager_vs_incremental": (
+            max_drift(eager, incremental) if eager is not None else None
+        ),
+        "max_abs_batched_eager_vs_sdpa": (
+            max_drift(eager, replay) if eager is not None else None
+        ),
+        "eager_probe_error": eager_probe_error,
         "per_token_sample_vs_incremental": [
             round(float(v), 7) for v in (old - incremental).abs().tolist()
         ],
@@ -180,6 +238,9 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
             "incremental_vs_batched_eval isolates one-token vs batched "
             "teacher-forcing (attention masks/kernels or NF4 matmul shapes); "
             "batched_eval_vs_train isolates training-mode kernel behavior. "
+            "Causal-future sensitivity checks whether a future token changes "
+            "earlier logits; Eager-vs-SDPA helps isolate attention kernels "
+            "from NF4 GEMV/GEMM shape-specific numerical effects. "
             "Do not increase the tolerance or start GRPO until diagnosed."
         )
     (-replay_with_grad.mean()).backward()
@@ -201,6 +262,12 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
         "max_abs_incremental_vs_batched_eval":
             diagnostic["max_abs_incremental_vs_batched_eval"],
         "max_abs_batched_eval_vs_train": diagnostic["max_abs_batched_eval_vs_train"],
+        "max_abs_batched_causal_future_sensitivity":
+            diagnostic["max_abs_batched_causal_future_sensitivity"],
+        "max_abs_batched_eager_vs_incremental":
+            diagnostic["max_abs_batched_eager_vs_incremental"],
+        "max_abs_batched_eager_vs_sdpa":
+            diagnostic["max_abs_batched_eager_vs_sdpa"],
         "risk_windows": int(state.window_probs.numel()),
         "steered_tokens": steered_tokens,
         "vllm_cached_tokens": getattr(engine.rollout_engine, "cached_tokens", None),
