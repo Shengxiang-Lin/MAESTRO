@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from collections.abc import Mapping
+from numbers import Integral
 import json
 from pathlib import Path
 import statistics
@@ -35,15 +37,41 @@ def _stats(values):
 
 
 def _ids(x):
-    if isinstance(x, dict) and "input_ids" in x:
+    """Normalize one input's token IDs across Transformers versions.
+
+    Depending on Transformers and tokenizer flags, apply_chat_template may
+    return a list, a BatchEncoding/UserDict, or a 1D/2D tensor. Preserve
+    the exact token sequence: never flatten multiple examples or truncate.
+    This audit runs on CPU, so .tolist() is safe and requires no torch import.
+    """
+    if isinstance(x, Mapping):
+        if "input_ids" not in x:
+            raise TypeError(
+                "Tokenizer returned a mapping without input_ids: "
+                f"{type(x).__name__}"
+            )
         return _ids(x["input_ids"])
-    if not isinstance(x, list):
-        raise TypeError("Tokenizer returned unexpected non-list token ids")
-    if x and isinstance(x[0], list):
+    if not isinstance(x, (list, tuple)):
+        tolist = getattr(x, "tolist", None)
+        if not callable(tolist):
+            raise TypeError(
+                "Tokenizer returned unsupported token IDs container "
+                f"{type(x).__name__}; expected list, BatchEncoding or tensor"
+            )
+        x = tolist()
+    if not isinstance(x, (list, tuple)):
+        raise TypeError(
+            "Tokenizer returned scalar IDs; expected one token sequence"
+        )
+    if x and not isinstance(x[0], Integral):
         if len(x) != 1:
-            raise ValueError("Expected one input")
-        return x[0]
-    return x
+            raise ValueError(
+                f"Expected one tokenized input, got a batch of {len(x)}"
+            )
+        return _ids(x[0])
+    if any(isinstance(v, bool) or not isinstance(v, Integral) for v in x):
+        raise TypeError("Tokenizer sequence includes non-integer token IDs")
+    return list(x)
 
 
 def inspect(records, tokenizer, *, max_prompt_tokens=12288,
