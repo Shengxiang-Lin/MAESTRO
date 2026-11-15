@@ -38,17 +38,20 @@ def normalize_action(text: str) -> tuple[str, bool]:
         raise TypeError("Generated Action must be text")
     raw = text.strip()
     candidate = raw
+    wrapper_removed = False
     if candidate.startswith("<think>"):
         match = _THINK.match(candidate)
         if match is None:
             return raw, False   # unfinished reasoning
         candidate = candidate[match.end():].strip()
+        wrapper_removed = True
     fence = chr(96) * 3
     if candidate.startswith(fence):
         lines = candidate.splitlines()
         if len(lines) < 3 or lines[0].strip().lower() not in (fence, fence + "json") or lines[-1].strip() != fence:
             return raw, False
         candidate = "\n".join(lines[1:-1]).strip()
+        wrapper_removed = True
     try:
         obj = json.loads(candidate)
     except (TypeError, ValueError):
@@ -56,7 +59,7 @@ def normalize_action(text: str) -> tuple[str, bool]:
     if not isinstance(obj, dict):
         return raw, False
     # No schema change: original score_decision still makes the final decision.
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":")), candidate != raw
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":")), wrapper_removed
 
 
 def private_sample_id(entry: dict) -> str:
