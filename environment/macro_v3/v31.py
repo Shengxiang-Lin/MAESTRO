@@ -108,7 +108,12 @@ def choose_real_path(graph: KnowledgeGraph, rng: random.Random,
     joinable = [edge for edge in graph.edges
                 if any(n.object != edge.subject and n.object != edge.object
                        for n in adjacency.get(edge.object, ()))]
-    for target in range(max_hops, min_hops - 1, -1):
+    target_lengths = list(range(min_hops, max_hops + 1))
+    rng.shuffle(target_lengths)
+    # Prefer genuine multi-hop paths, but vary 2-hop versus 3-hop tasks
+    # rather than always taking the longest available chain.
+    target_lengths.sort(key=lambda length: length > 1, reverse=True)
+    for target in target_lengths:
         first_pool = joinable if target > 1 else graph.edges
         if not first_pool:
             continue
@@ -256,8 +261,15 @@ def _build_sources(graph: KnowledgeGraph, path: list[Edge], tasks: list[dict],
             }
         }
 
-    others = [e.subject for e in graph.edges if e.subject != path[0].subject]
-    rng.shuffle(others)
+    others = []
+    seen_entities = {path[0].subject}
+    for _ in range(len(cases) * 50):
+        if len(others) >= len(cases) - 1:
+            break
+        candidate = rng.choice(graph.edges).subject
+        if candidate not in seen_entities:
+            seen_entities.add(candidate)
+            others.append(candidate)
     crosswalk = []
     for case in cases:
         entity = path[0].subject if case == target else (
@@ -278,9 +290,17 @@ def _build_sources(graph: KnowledgeGraph, path: list[Edge], tasks: list[dict],
             "object_uri": fact.object,
             "object_label": graph.label(fact.object),
         }]
-        pool = [e for e in graph.edges
-                if e.subject != fact.subject and e.object != fact.object]
-        for other in rng.sample(pool, min(len(pool), rng.randint(2, 5))):
+        decoy_count = rng.randint(2, 5)
+        decoys = set()
+        for _ in range(decoy_count * 30):
+            if len(decoys) >= decoy_count:
+                break
+            other = rng.choice(graph.edges)
+            key = (other.subject, other.predicate, other.object)
+            if (other.subject == fact.subject or other.object == fact.object
+                    or key in decoys):
+                continue
+            decoys.add(key)
             rows.append({"subject_uri": other.subject,
                          "predicate": other.predicate,
                          "object_uri": other.object,
@@ -521,7 +541,7 @@ def _question(rng: random.Random, graph: KnowledgeGraph, path: list[Edge],
     route = " → ".join(graph.label(e.predicate) for e in path)
     request = (
         "Also report the final dossier review status and whether independent assessments agreed."
-        if review else "Give the linked entity as the final answer."
+        if review else "Give the linked entity and its catalog reference URI as the final answer."
     )
     draft = rng.choice(QUESTIONS).format(
         institution=institution, occupation=occupation,
