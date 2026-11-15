@@ -70,11 +70,12 @@ class Stage2DAExport(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(modes["contract_frozen"], 1)
 
+    @patch("train_maestro_8b.data.export_da_grpo.digest", return_value="mock-sha")
     @patch("train_maestro_8b.data.export_da_grpo.validate_prompt_lengths")
     @patch("train_maestro_8b.data.export_da_grpo.settings_for")
     @patch("train_maestro_8b.data.export_da_grpo.read_jsonl")
     @patch("train_maestro_8b.data.export_da_grpo.o1_prompt_from_turn", return_value="prompt")
-    def test_export_dry_run_without_gpu_or_parquet(self, _, read, settings, check_len):
+    def test_export_dry_run_without_gpu_or_parquet(self, _, read, settings, check_len, digest):
         settings.return_value = self.settings
         def loader(path):
             return [scene()] if str(path).endswith("scenes.jsonl") else [turn()]
