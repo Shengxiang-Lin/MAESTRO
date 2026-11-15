@@ -1,0 +1,44 @@
+name: Verify reproducible benchmark splits
+
+on:
+  pull_request:
+    paths:
+      - benchmark/experiment_splits.py
+      - data/OmniGAIA/splits/**
+      - data/MM-BrowseComp/splits/**
+      - .github/workflows/verify-seeded-benchmark-splits.yml
+  push:
+    branches: [main]
+    paths:
+      - benchmark/experiment_splits.py
+      - data/OmniGAIA/splits/**
+      - data/MM-BrowseComp/splits/**
+      - .github/workflows/verify-seeded-benchmark-splits.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download official metadata for independent audit
+        run: |
+          mkdir -p "$RUNNER_TEMP/datasets"
+          curl -fsSL --retry 3 \
+            https://raw.githubusercontent.com/RUC-NLPIR/OmniGAIA/main/data/test_metadata.json \
+            -o "$RUNNER_TEMP/datasets/omnigaia.json"
+          curl -fsSL --retry 3 \
+            https://raw.githubusercontent.com/MMBrowseComp/MM-BrowseComp/main/data/MMBrowseComp_400.jsonl \
+            -o "$RUNNER_TEMP/datasets/mm_browsecomp.jsonl"
+      - name: Check Python syntax and regenerated IDs (no writes)
+        run: |
+          python -m py_compile benchmark/experiment_splits.py
+          python benchmark/experiment_splits.py --seed 20261115 --check \
+            --omnigaia-meta "$RUNNER_TEMP/datasets/omnigaia.json" \
+            --mm-meta "$RUNNER_TEMP/datasets/mm_browsecomp.jsonl"
