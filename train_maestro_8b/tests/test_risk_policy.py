@@ -121,6 +121,26 @@ class TinyModelTests(unittest.TestCase):
         self.assertTrue(torch.allclose(new_logps.detach(), incremental, atol=1e-4),
                         f"incremental/batched replay drift: "
                         f"{incremental} vs {new_logps}")
+        # The first two predictions MUST NOT depend on the second target
+        # token, which is in the future of those causal positions.
+        altered = ids.clone()
+        altered[1] = (altered[1] + 1) % cfg.vocab_size
+        with torch.no_grad():
+            causal = engine.log_probs(prefix, altered, temperature=0.9)
+        torch.testing.assert_close(
+            new_logps.detach()[:2], causal[:2], atol=1e-4, rtol=1e-4,
+        )
+        # Full preflight exercises autoregressive, SDPA batched and Eager
+        # batched evaluation on an identical 3-token sequence.
+        from train_maestro_8b.policy.backend import check_risk_cache_contract
+        metrics = check_risk_cache_contract(
+            engine, {"prompt": prompt, "reports": [
+                {"start": 1, "end": 6}, {"start": 7, "end": 11},
+            ]}, temperature=0.9, max_logprob_drift=1e-3,
+        )
+        self.assertLess(metrics["max_abs_sample_vs_incremental"], 1e-4)
+        self.assertLess(metrics["max_abs_batched_causal_future_sensitivity"], 1e-4)
+        self.assertIsNotNone(metrics["max_abs_batched_eager_vs_sdpa"])
         (-new_logps.mean()).backward()
         self.assertTrue(any(p.grad is not None and p.grad.abs().sum().item() > 0
                             for n, p in lora.named_parameters() if "lora_" in n))
