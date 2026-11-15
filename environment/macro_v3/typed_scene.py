@@ -27,8 +27,14 @@ def _single(source: dict, field: str, value: str) -> dict:
     return matched[0]
 
 
-def execute(scene: dict) -> tuple[list[dict], dict]:
-    """No global World scan inside an individual Macro; all inputs are explicit."""
+def execute(scene: dict, *,
+            input_overrides: dict[tuple[str, str], object] | None = None
+            ) -> tuple[list[dict], dict]:
+    """No global World scan inside an individual Macro; all inputs are explicit.
+
+    Test-only input_overrides enables controlled *port-level* counterfactual
+    execution. Without overrides, all original frozen replay bytes are stable.
+    """
     graph = scene["macro_plan"]
     bank = scene["world"]["sources"]
     binding = scene["oracle_binding"]
@@ -45,6 +51,12 @@ def execute(scene: dict) -> tuple[list[dict], dict]:
             port: set(products[edge["from_macro"]]["refs"])
             for port, edge in node["input_ports"].items()
         }
+        if input_overrides:
+            for (target, port), replacement in input_overrides.items():
+                if target == mid:
+                    if port not in inputs:
+                        raise ValueError("counterfactual_invalid_input_port")
+                    inputs[port] = deepcopy(replacement)
         refs: set[str] = set()
         steps = []
         if role == "discovery":
@@ -399,8 +411,13 @@ def validate_scene(scene: dict, kg: KnowledgeGraph | None = None) -> dict:
     })
     if scene["replay_hash"] != expected_hash:
         raise ValueError("typed_scene_frozen_content_changed")
+    # Import canonical Stage-1 goal/causality gates. Do NOT duplicate their
+    # logic in the experimental Macro composer.
+    from environment.generate_question.typed_macro_quality import audit_typed_scene
+    typed_quality = audit_typed_scene(scene, execute)
     return {
         **audit, "source_necessary": True,
+        "canonical_stage1_quality": typed_quality,
         "yago_facts_used": len(scene["world"]["real_fact_path"]),
         "independent_investigations": len(discovery),
         "question_status": "draft",

@@ -173,3 +173,15 @@ pipeline and exact Stage-2/3/4 schema adapter remain separate work.
 ```bash
 python -m unittest discover -s environment/macro_v3/tests -p 'test_*.py' -v
 ```
+
+
+## Canonical generator migration
+
+The typed Role Grammar, partial-order DAG sampler, graph validator and
+port-level goal/necessity audits are now maintained in
+`environment/generate_question/`. Files of the same name under this
+experimental pilot are compatibility imports, not separate implementations.
+The v3.2 CLI and historical task versions remain usable. Old production
+`generate-questions` still uses the original executable frozen-v2
+compiler and existing strict quality gates, pending a versioned typed
+World/Program compiler adapter.
