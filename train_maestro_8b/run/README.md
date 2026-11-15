@@ -119,3 +119,25 @@ To test the actual FULL vLLM backend rather than only its FlashAttention:
 
 Use a fresh `PILOT_CKPT` for each independent comparison; a completed
 pilot is intentionally reused when `SKIP_COMPLETED=1`.
+
+## NF4 one-token versus three-token numerical parity
+
+If preflight reports negligible `sample_vs_incremental` and
+`batched_eval_vs_train`, but nonzero `incremental_vs_batched_eval`
+that persists under Eager attention, inspect the additional field
+`nf4_projection_shape_probe`.
+
+The probe captures a real activation from Qwen3 layer 0 while evaluating
+the same 3-token RiskKV suffix. It then feeds the identical first
+activation vector through selected **quantized linear base layers** at
+sequence sizes M=1 and M=3. Results include each layer's maximum and
+mean absolute output discrepancy. This isolates 4-bit matrix
+multiplication numerical differences from attention, RoPE, and KV
+caching. An empty array indicates that the loader exposes no matching
+quantized Qwen3 projections; it does *not* certify equality.
+
+No model weights, prompts, rewards, training gradients, or thresholds
+are changed. The preflight continues failing closed when the sampled
+and differentiable log-probabilities disagree. It is important to
+identify the source on the RTX GPU before selecting a fix that may
+otherwise substantially degrade 4096-token rollout throughput.
