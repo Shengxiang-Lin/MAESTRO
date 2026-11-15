@@ -10,6 +10,7 @@ from train_maestro_8b.policy.cache import (
     clone_cache, steer_value_cache, token_risk_from_windows,
 )
 from train_maestro_8b.risk.model import WindowRiskHead
+from train_maestro_8b.policy.backend import _probe_nf4_projection_shape
 
 
 class CacheSteeringTests(unittest.TestCase):
@@ -48,6 +49,49 @@ class CacheSteeringTests(unittest.TestCase):
         self.assertEqual(risk[7].item(), 0)
         with self.assertRaises(TypeError):
             steer_value_cache(SimpleNamespace(layers=[]), risk[None])
+
+
+class NF4ShapeProbeTests(unittest.TestCase):
+    def test_linear_quantization_shape_probe_detects_mocked_gemm_bias(self):
+        from types import SimpleNamespace
+        class Fake4Bit(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.eye(4))
+                self.weight.quant_state = object()
+
+            def forward(self, x):
+                # Simulate an NF4 path returning slightly different numbers
+                # at M=1 versus M=3 without changing the input vector.
+                return torch.nn.functional.linear(x, self.weight) + (
+                    0.125 if x.shape[1] >= 3 else 0.0
+                )
+
+        class FakePolicy(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = torch.nn.ModuleList([torch.nn.Module()])
+                self.layers[0].self_attn = torch.nn.Module()
+                self.layers[0].self_attn.q_proj = torch.nn.Module()
+                self.layers[0].self_attn.q_proj.base_layer = Fake4Bit()
+
+        class FakeEngine:
+            def __init__(self):
+                self.policy = FakePolicy()
+                self.device = torch.device("cpu")
+                self.anchor_ids = [8]
+
+            def _forward_suffix(self, _state, suffix):
+                x = torch.ones(1, suffix.shape[1], 4)
+                return self.policy.layers[0].self_attn.q_proj.base_layer(x)
+
+        results = _probe_nf4_projection_shape(
+            FakeEngine(), None, torch.tensor([11, 12, 13])
+        )
+        self.assertEqual(len(results), 1)
+        self.assertAlmostEqual(results[0]["max_abs"], 0.125)
+        self.assertAlmostEqual(results[0]["mean_abs"], 0.125)
+        self.assertIn("q_proj", results[0]["module"])
 
 
 class DummyTokenizer:
