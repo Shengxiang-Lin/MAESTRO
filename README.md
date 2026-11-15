@@ -81,7 +81,10 @@ MAESTRO/
 │       ├── bench_orchestra_o1_omnigaia.py
 │       ├── bench_qwen/                # local-Qwen O1 evaluation/training helpers
 │       ├── train_qwen3_8b/            # O1 Main-Agent training
-│       └── config/benchmarks/         # O1 experiment configs
+│       └── config/                    # O1 configs by dataset and stage
+│           ├── omnigaia/pretest/      # Frozen 60-task pretest
+│           ├── omnigaia/final/        # Frozen 100-task final evaluation
+│           └── mm_browsecomp/final/   # Frozen 100-task final evaluation
 ├── base/                              # lower-level agent/LLM primitives
 ├── benchmark/                         # shared OmniGAIA environment/tooling
 ├── config/                            # shared model registry + MAESTRO configs
@@ -225,7 +228,7 @@ python bench_orchestra_omnigaia.py \
 
 ```bash
 python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
-  --config baseline/orchestra-o1/config/benchmarks/orchestra_o1_omnigaia.yaml
+  --config baseline/orchestra-o1/config/omnigaia/pretest/orchestra_o1_omnigaia.yaml
 ```
 
 The O1 launcher uses the shared root runner, shared SubAgent, shared model registry, and shared tools, but injects `baseline/orchestra-o1/orchestra_o1/main_agent.py` and the O1 prompt.
@@ -239,7 +242,7 @@ Base model:
 ```bash
 export QWEN3_8B_MODEL_PATH=/data/models/Qwen3-8B
 python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
-  --config baseline/orchestra-o1/config/benchmarks/orchestra_o1_omnigaia_qwen3_8b_base.yaml
+  --config baseline/orchestra-o1/config/omnigaia/pretest/orchestra_o1_omnigaia_qwen3_8b_base.yaml
 ```
 
 GRPO checkpoint:

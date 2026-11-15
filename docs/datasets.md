@@ -32,8 +32,7 @@ python bench_orchestra_omnigaia.py \
   --task_ids_file data/OmniGAIA/splits/final_100_ids.txt
 
 python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
-  --config baseline/orchestra-o1/config/benchmarks/orchestra_o1_omnigaia.yaml \
-  --task_ids_file data/OmniGAIA/splits/final_100_ids.txt
+  --config baseline/orchestra-o1/config/omnigaia/final/orchestra_o1_omnigaia.yaml
 ```
 
 Both launchers load selected tasks in **manifest order**, irrespective of
@@ -59,6 +58,32 @@ balance, and OmniGAIA media overlap against local **official metadata**.
 MM-BrowseComp questions and answers remain encrypted; the verifier
 reads only public metadata fields and never exports plaintext.
 
+## Orchestra-o1 configuration directories
+
+The Orchestra-o1 baseline configs are organized **by dataset and stage**.
+All existing model combinations are preserved:
+
+- `baseline/orchestra-o1/config/omnigaia/pretest/`: 12 model configurations, all using the frozen 60-task pretest.
+- `baseline/orchestra-o1/config/omnigaia/final/`: the same 12 model configurations, using the disjoint frozen 100-task final evaluation.
+- `baseline/orchestra-o1/config/mm_browsecomp/final/`: 7 model configurations, all using the frozen MM-BrowseComp final 100 tasks.
+
+These YAML files keep the model and tool roles, with stage-specific
+`task_ids_file`, `max_tasks: null`, and isolated result/trajectory directories.
+Old baseline paths under `config/benchmarks/` have been removed.
+
+Run the defaults (pretest) or select a specific configuration:
+
+```bash
+python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
+  --config baseline/orchestra-o1/config/omnigaia/pretest/orchestra_o1_omnigaia.yaml
+
+python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
+  --config baseline/orchestra-o1/config/omnigaia/final/orchestra_o1_omnigaia.yaml
+
+python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
+  --config baseline/orchestra-o1/config/mm_browsecomp/final/orchestra_o1_mm_browsecomp.yaml
+```
+
 ## MM-BrowseComp
 
 Add these fields to your experiment YAML; retain your existing model roles:
@@ -69,7 +94,8 @@ dataset_path: data/MM-BrowseComp/data/MMBrowseComp_400_decrypted.jsonl
 dataset_jsonl_path: data/MM-BrowseComp/data/test_metadata.jsonl
 attachments_dir: data/MM-BrowseComp
 level_filter: null
-max_tasks: 10
+task_ids_file: data/MM-BrowseComp/splits/final_100_ids.txt
+max_tasks: null
 ```
 
 `dataset_path` is the original source, and may be a `.json` record list, a JSON
@@ -95,18 +121,19 @@ beside the source. On each startup conversion is validated and the resulting
 content compared: unchanged files are reused, source changes regenerate output
 atomically. The output must differ from the source.
 
-Provided example configs (first 10 tasks, default API model roles):
+Provided example configs (the fixed final 100 tasks):
 
 ```bash
 python baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
-  --config baseline/orchestra-o1/config/benchmarks/orchestra_o1_mm_browsecomp.yaml
+  --config baseline/orchestra-o1/config/mm_browsecomp/final/orchestra_o1_mm_browsecomp.yaml
 
 python bench_orchestra_omnigaia.py \
   --config config/benchmarks/orchestra_mm_browsecomp.yaml
 ```
 
-These examples use qwen3.7-plus Main/Sub-Agents. Copy the model settings from your
-actual experiment before using them for a different model combination.
+The baseline MM-BrowseComp example uses qwen3.7-plus Main-Agent and a local
+qwen3.5-9b Sub-Agent, while the MAESTRO example uses qwen3.7-plus for both.
+Choose the corresponding model configuration for controlled comparisons.
 MM-BrowseComp results use an `mm_browsecomp_` filename prefix, and model-role
 manifests record dataset type, original source, generated JSONL and attachment root.
 
