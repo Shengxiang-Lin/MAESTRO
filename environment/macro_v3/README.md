@@ -117,3 +117,59 @@ The output location is
 `environment/data/stage1_v31_pilot/drafts/scenes.jsonl`. Like v3, it is
 **not** a Stage-2 compatible `questions/scenes.jsonl` bank. No existing
 v2/v3 scenes, tests, or runtime Main-Agent interfaces are changed.
+
+
+## V3.2: Programmatic Typed Macro DAG (opt-in)
+
+This is the next **Macro-first** pilot and deliberately keeps `v3` and
+`v3.1` replay semantics unchanged.
+
+```bash
+python -m environment.macro_v3 \
+  --variant v3.2 \
+  --yago data/world-source/YAGO-4.6 \
+  --output-dir environment/data/stage1_v32_pilot \
+  --target 20 --seed 17 \
+  --max-triples 1000000 --max-edges 250000 \
+  --min-hops 2 --max-hops 3 \
+  --max-macros 12 --max-parallel 3 --max-waves 7
+```
+
+### Implementation
+
+- `role_grammar.py`: six coarse **information-goal** roles:
+  Discovery / Identification / Investigation / Verification /
+  Comparison / Synthesis, with typed input/output ports.
+- `graph_generator.py`: samples role graph, permitted transitions,
+  branch/wave concurrency, progressive discoveries, conditional followups,
+  comparisons, optional verification and *non-fake* long-range evidence edges
+  BEFORE reading any YAGO data or selecting a scene domain.
+- `graph_validator.py`: rejects cycles, forward dependencies,
+  fabricated `depends_on`, invalid input/output types, orphan tasks,
+  over-budget graphs and non-causal edges.
+- `typed_world.py`: maps the frozen abstract graph onto actual YAGO
+  relationship paths and independent **fictional** evidence bundles;
+  each discovery owns two sources. The source-specific original witness
+  is retained in its own port; Identity does not silently carry it.
+- `typed_scene.py`: executes each Macro with **only its declared incoming
+  ports and local sources**, builds exact provenance-bearing Trace,
+  freezes Question draft and Gold Result, and replays from frozen inputs.
+
+The typed skeleton can create direct Wave-1-to-final evidence handoffs
+because `Synthesis.original_evidence` really consumes
+`Discovery.evidence`. A blind extra edge is not allowed.
+
+### What remains experimental
+
+The Question is still a programmatic **draft**, and the multimodal sources
+are *simulated observations* (not decoded actual media). V3.2 scenes are
+**not Stage-2-compatible** and must not be fed to production training. The
+typed sampler uses a bounded, extensible information-goal grammar rather
+than mathematically arbitrary DAGs. The World/Question naturalization
+pipeline and exact Stage-2/3/4 schema adapter remain separate work.
+
+### Tests
+
+```bash
+python -m unittest discover -s environment/macro_v3/tests -p 'test_*.py' -v
+```
