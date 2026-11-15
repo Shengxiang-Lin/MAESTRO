@@ -62,3 +62,58 @@ Question **draft**, a dependency wave schedule and an audit.
 ```bash
 python -m unittest discover -s environment/macro_v3/tests -v
 ```
+
+## V3.1: coarse-grained Macro investigations (opt-in)
+
+The original `--variant v3` behavior is **unchanged**. The new
+`--variant v3.1` implements the next research iteration:
+
+```bash
+python -m environment.macro_v3 \
+  --variant v3.1 \
+  --yago data/world-source/YAGO-4.6 \
+  --output-dir environment/data/stage1_v31_pilot \
+  --target 20 --seed 17 \
+  --max-triples 1000000 --max-edges 250000 \
+  --min-hops 1 --max-hops 3
+```
+
+- **Coarse Macro boundary:** 2–3 investigation Macros each combine TWO
+  evidence sources (image/audio/video annotation + text/table, all simulated).
+  Identification reconciles their candidate WorkProducts. One relation
+  investigation handles an entire sampled YAGO path, rather than one Macro
+  per graph edge. Optional review uses **two independent fictional
+  assessments plus a separate adjudication record**, followed by synthesis.
+- **Typed structural DAG first:** investigation branches may be independent
+  or progress through candidate handoffs. The identity Macro only depends
+  on maximal upstream branches; the review branch genuinely forks from
+  identity while YAGO-relation research proceeds in parallel.
+- **Scenario grounding:** sampled visual/audio metadata describe fictional
+  archive *dossiers*, not impossible colors or shapes attributed to a YAGO
+  person. Fictional case-to-real-entity crosswalks are labeled synthetic.
+  Research notes request exact predicates and the real RDF path is copied
+  unchanged into separately tagged YAGO evidence sources.
+- **Real relationship depth:** uses only connected YAGO edges for 1–3
+  relations; multi-hop walks are preferred when available. Exact
+  `--min-hops 2` will fail rather than invent a YAGO connection if the
+  retained edge sample contains no such path.
+- **Question styles:** eight contract-based drafts across several scenario
+  frames; still **NOT** LLM-reviewed or suitable for production SFT/RL.
+- **Audits:** all individual clue sources are counterfactually necessary;
+  tasks have topological typed handoffs and source-scoped deterministic
+  evidence traces. The replay hash locks Macro, World, Answer and Question.
+
+### YAGO sampling notes
+
+`--max-triples` and `--max-edges` are separate limits: whichever is hit
+first stops the stream. In the earlier 20-task sample, `retained_edges=70000`
+caused parsing to stop after 205,413 triples even with
+`--max-triples 1000000`. Increase `--max-edges` to inspect more facts.
+Do not interpret `real_yago_hops` as number of independent data sources.
+
+### Compatibility boundary
+
+The output location is
+`environment/data/stage1_v31_pilot/drafts/scenes.jsonl`. Like v3, it is
+**not** a Stage-2 compatible `questions/scenes.jsonl` bank. No existing
+v2/v3 scenes, tests, or runtime Main-Agent interfaces are changed.
