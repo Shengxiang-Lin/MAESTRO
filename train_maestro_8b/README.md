@@ -17,10 +17,11 @@ The pipeline defaults to `STAGE2_TRAINER=da`, with Stage2-owned
 `data/export_da_grpo.py`, `policy/da_backend.py` and
 `policy/train.py da ...`. **No Stage1 Risk Head/features/checkpoint is
 required for this run.** The original baseline source remains unchanged.
-The new Stage2 backend uses the baseline implementation as a stable
-library: Qwen3 chat template, BF16 LoRA, colocated Unsloth/vLLM,
-TRL GRPOTrainer DAPO+KL 0.01, and exactly the original DA four-dimension
-LLM Judge prompt/weights (format .1, action .1, tool .2, decision .6).
+The main Stage2 backend **constructs and runs** BF16 LoRA + Unsloth/vLLM
+with TRL GRPOTrainer and DAPO+KL 0.01 inside `train_maestro_8b/policy/da_backend.py`.
+It reuses the unmodified DA baseline configuration/tokenization helpers
+and the exact four-dimension LLM Judge prompt/weights
+(format .1, action .1, tool .2, decision .6).
 It sends public task/history plus the private gold/expert reference to
 the external Judge **for reward only**, never to the Main policy prompt.
 
