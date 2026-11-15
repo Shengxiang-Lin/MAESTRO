@@ -46,8 +46,6 @@ def parser() -> argparse.ArgumentParser:
                           default="llm")
     workflow.add_argument("--max-scenes", type=int)
     workflow.add_argument("--no-progress", action="store_true")
-    sub.add_parser("generate-macro-v3",
-                   help="Stage 1 v3 YAGO-grounded Macro-first pilot (separate contracts)")
     generate = sub.add_parser("generate-questions",
                               help="Run the complete config-driven generation pipeline")
     generate.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -133,12 +131,6 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if argv is None:
-        import sys
-        argv = sys.argv[1:]
-    if argv and argv[0] == "generate-macro-v3":
-        from .macro_v3.__main__ import main as macro_v3_main
-        return macro_v3_main(argv[1:])
     p = parser()
     cli = p.parse_args(argv)
     if cli.command == "run":
