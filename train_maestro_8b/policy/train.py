@@ -47,6 +47,15 @@ def parse_args(argv=None):
     p.add_argument("--steer_strength", type=float, default=0.1)
     p.add_argument("--steer_threshold", type=float, default=0.5)
     p.add_argument("--clip_epsilon", type=float, default=0.2)
+    p.add_argument("--grpo_reward_mode", choices=("strict", "curriculum"),
+                   default="curriculum",
+                   help="Self-learned JSON/Action graded feedback or original strict -1 scorer")
+    p.add_argument("--zero_adv_strategy", choices=("skip", "reference_sft"),
+                   default="reference_sft",
+                   help="When every completion scores equally, use an independently "
+                        "verified reference Action as auxiliary SFT, never fake GRPO advantage")
+    p.add_argument("--zero_adv_sft_weight", type=float, default=0.25,
+                   help="Weight for reference SFT fallback on no-preference groups")
     p.add_argument("--sft_warmup", type=int, default=0,
                    help="Optional reference-Action supervised warmup epochs before GRPO")
     p.add_argument("--sft_warmup_samples", type=int, default=0,
@@ -80,7 +89,8 @@ def validate_args(args):
         raise ValueError("--vllm_memory_utilization must be in (0, 1)")
     if (args.epochs <= 0 or args.num_generations < 2 or args.max_length < 1
             or args.max_new_tokens < 1 or args.lora_rank < 1
-            or args.temperature <= 0 or not 0 < args.clip_epsilon < 1):
+            or args.temperature <= 0 or not 0 < args.clip_epsilon < 1
+            or not 0 < args.zero_adv_sft_weight <= 1):
         raise ValueError("invalid GRPO/LoRA hyperparameters")
     if args.gradient_accumulation_steps < 1:
         raise ValueError("gradient accumulation counts FULL prompt groups and must be >=1")
@@ -159,6 +169,7 @@ def _sft_warmup(engine, full_records, args):
     """
     import torch
     from torch.optim import AdamW
+    from train_maestro_8b.policy.trainer import reference_action_ids
     selected = select_warmup_records(
         full_records, seed=args.seed, limit=args.sft_warmup_samples,
     )
@@ -172,22 +183,10 @@ def _sft_warmup(engine, full_records, args):
         total_loss = 0.0
         for j in indices:
             row = selected[j]
-            text = json.dumps(
-                row["reference_action"], ensure_ascii=False, separators=(",", ":")
+            target = reference_action_ids(
+                engine.tokenizer, row["reference_action"], device=engine.device,
+                max_new_tokens=args.max_new_tokens,
             )
-            if engine.tokenizer.eos_token:
-                text += engine.tokenizer.eos_token
-            target = torch.tensor(
-                engine.tokenizer.encode(text, add_special_tokens=False),
-                device=engine.device, dtype=torch.long,
-            )
-            if len(target) > args.max_new_tokens:
-                raise ValueError(
-                    f"SFT reference Action {row.get('sample_id')} requires "
-                    f"{len(target)} tokens, exceeds --max_new_tokens="
-                    f"{args.max_new_tokens}; increase the cap rather than "
-                    "silently truncating supervised Actions"
-                )
             prefix = engine.prefill(row["prompt"], row["reports"])
             optim.zero_grad(set_to_none=True)
             loss = -engine.log_probs(prefix, target).mean()
@@ -247,6 +246,8 @@ def run(args, stack):
     print("risk_grpo_batch_plan=" + json.dumps({
         "distinct_prompts_per_optimizer_step": args.gradient_accumulation_steps,
         "num_generations_per_prompt": args.num_generations,
+        "reward_mode": args.grpo_reward_mode,
+        "zero_adv_strategy": args.zero_adv_strategy,
         "completions_per_optimizer_step":
             args.gradient_accumulation_steps * args.num_generations,
         "max_prompt_tokens": args.max_length,
@@ -266,6 +267,11 @@ def run(args, stack):
     if args.preflight_only:
         return
 
+    if args.reward_callable and args.zero_adv_strategy == "reference_sft":
+        raise ValueError(
+            "Custom reward plugin requires --zero_adv_strategy=skip; "
+            "otherwise its reward semantics may not match private legal references"
+        )
     if args.sft_warmup:
         if args.resume_from_checkpoint:
             raise ValueError("cannot combine SFT warmup with Trainer checkpoint resume")
@@ -318,6 +324,9 @@ def run(args, stack):
         clip_epsilon=args.clip_epsilon,
         debug_path=args.reward_debug_jsonl,
         fail_on_zero_adv=args.fail_on_zero_adv,
+        reward_mode=args.grpo_reward_mode,
+        zero_adv_strategy=args.zero_adv_strategy,
+        zero_adv_sft_weight=args.zero_adv_sft_weight,
         args=cfg,
         train_dataset=dataset,
     )
@@ -341,6 +350,11 @@ def run(args, stack):
         "reward_type": args.reward_callable or "deterministic_orchestration",
         "grpo_training_steps": trainer.state.global_step,
         "zero_advantage_groups": trainer.zero_adv_groups,
+        "grpo_gradient_groups": trainer.grpo_gradient_groups,
+        "reference_sft_fallback_groups": trainer.reference_sft_fallback_groups,
+        "grpo_reward_mode": args.grpo_reward_mode,
+        "zero_adv_strategy": args.zero_adv_strategy,
+        "zero_adv_sft_weight": args.zero_adv_sft_weight,
         "total_groups": trainer.seen_groups,
         "num_generations": args.num_generations,
         "sft_warmup_epochs": args.sft_warmup,
