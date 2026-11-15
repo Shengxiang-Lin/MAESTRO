@@ -7,6 +7,7 @@ import unittest
 
 from environment.untrusted_orchestration.decision_reward_state import SCHEMA
 from train_maestro_8b.data.audit_rollouts import summarize_rollouts
+from train_maestro_8b.policy.rewards import score_training_candidate
 from train_maestro_8b.policy.train import (
     select_warmup_records, parse_args, validate_args,
 )
@@ -60,9 +61,56 @@ class RiskColdStartTests(unittest.TestCase):
         self.assertEqual(args.sft_warmup, 1)
         self.assertEqual(args.sft_warmup_samples, 32)
         self.assertTrue(args.fail_on_zero_adv)
+        self.assertEqual(args.grpo_reward_mode, "curriculum")
+        self.assertEqual(args.zero_adv_strategy, "reference_sft")
+        self.assertAlmostEqual(args.zero_adv_sft_weight, 0.25)
         args.sft_warmup_samples = -1
         with self.assertRaises(ValueError):
             validate_args(args)
+
+    def test_curriculum_reward_distinguishes_realistic_invalid_json(self):
+        state = row(0, valid=True)["decision_state"]
+        samples = [
+            "Now let's think. We should delegate and then consider what to do.",
+            'Here is my analysis and then {"action":"complete","params":',
+            '{"action":"complete","params":',
+            '{"action":"complete","params":{"answer":"A"}}\nExtra analysis',
+        ]
+        outcomes = [
+            score_training_candidate(text, state, mode="curriculum")
+            for text in samples
+        ]
+        self.assertTrue(all(not x["valid"] for x in outcomes))
+        self.assertTrue(all(x["reason"] == "invalid_json" for x in outcomes))
+        self.assertEqual(outcomes[0]["training_reward"], 0.0)
+        self.assertGreater(
+            outcomes[2]["training_reward"], outcomes[1]["training_reward"]
+        )
+        self.assertGreater(
+            outcomes[3]["training_reward"], outcomes[2]["training_reward"]
+        )
+        self.assertTrue(all(0 <= x["training_reward"] < 0.35 for x in outcomes))
+        self.assertTrue(all(x["strict_reward"] == -1 for x in outcomes))
+        self.assertTrue(all(not x["json_valid"] for x in outcomes))
+
+    def test_strict_evaluator_is_not_changed_by_training_shaping(self):
+        state = row(0, valid=True)["decision_state"]
+        legal = '{"action":"complete","params":{"answer":"verified"}}'
+        result = score_training_candidate(legal, state, mode="curriculum")
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["training_reward"], 1.0)
+        premature = score_training_candidate(
+            legal, row(0, valid=False)["decision_state"], mode="curriculum",
+        )
+        self.assertFalse(premature["valid"])
+        self.assertEqual(premature["reason"], "premature_completion")
+        self.assertEqual(premature["training_reward"], 0.35)
+        baseline = score_training_candidate(
+            "natural language output", state, mode="strict",
+        )
+        self.assertEqual(baseline["training_reward"], -1.0)
+        with self.assertRaises(ValueError):
+            score_training_candidate(legal, state, mode="unknown")
 
     def test_audit_reports_reward_failures_and_completion_cap(self):
         with TemporaryDirectory() as root:
