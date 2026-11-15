@@ -33,5 +33,5 @@ max_tasks: null
 max_attempts: 10
 max_concurrency: 10
 
-result_folder: "logs/mm_browsecomp_final/mm_browsecomp_o1_qwen37_flash_qwen38_max_400"
-trajectory_folder: "logs/mm_browsecomp_final/mm_browsecomp_o1_qwen37_flash_qwen38_max_400/trajectories"
+result_folder: "logs/mm_browsecomp_final/orchestra_o1_mm_qwen37_flash_qwen38_max"
+trajectory_folder: "logs/mm_browsecomp_final/orchestra_o1_mm_qwen37_flash_qwen38_max/trajectories"
