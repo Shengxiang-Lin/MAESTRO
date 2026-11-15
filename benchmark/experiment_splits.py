@@ -346,6 +346,9 @@ def generate_splits(omni, mm, *, seed=DEFAULT_SEED, pretest_size=60,
     """Generate all splits using only the source records, requested sizes and seed."""
     if min(pretest_size, omni_final_size, mm_final_size, trials) <= 0:
         raise ValueError("Sizes and trials must be positive")
+    # Stable output even if the source JSON/JSONL row order changes.
+    omni = sorted(omni, key=id_key)
+    mm = sorted(mm, key=id_key)
     pre, final, omni_stat = select_omni(
         omni, pretest_size, omni_final_size, seed, trials
     )
