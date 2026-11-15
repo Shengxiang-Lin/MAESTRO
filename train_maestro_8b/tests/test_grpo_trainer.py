@@ -68,11 +68,20 @@ class TRLRiskGRPOTests(unittest.TestCase):
         a = arguments()
         self.assertEqual(a.backend, "unsloth")
         self.assertTrue(a.load_in_4bit)
-        self.assertEqual(a.num_generations, 4)
-        self.assertEqual(a.gradient_accumulation_steps, 4)
+        self.assertEqual(a.num_generations, 8)
+        self.assertEqual(a.gradient_accumulation_steps, 1)
+        self.assertEqual(a.max_length, 12288)
+        self.assertEqual(a.max_new_tokens, 4096)
+        self.assertEqual(a.temperature, 1.0)
         validate_args(a)
+        # Our custom Trainer owns an entire G-completion group per prompt.
+        # One gradient accumulation step therefore means ONE prompt x G,
+        # unlike stock DA-GRPO where G completion-microsteps are required.
+        validate_args(arguments("--gradient_accumulation_steps", "2"))
         with self.assertRaises(ValueError):
-            validate_args(arguments("--gradient_accumulation_steps", "2"))
+            validate_args(arguments("--gradient_accumulation_steps", "0"))
+        with self.assertRaisesRegex(ValueError, "16384"):
+            validate_args(arguments("--max_length", "12289"))
         with self.assertRaises(ValueError):
             validate_args(arguments("--num_generations", "1"))
         with self.assertRaises(ValueError):

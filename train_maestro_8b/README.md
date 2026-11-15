@@ -47,6 +47,7 @@ View every subcommand and adjustable environment variable in
     bash train_maestro_8b/run/pipeline.sh features
     bash train_maestro_8b/run/pipeline.sh risk
     bash train_maestro_8b/run/pipeline.sh prepare-grpo
+    bash train_maestro_8b/run/pipeline.sh inspect-io
     bash train_maestro_8b/run/pipeline.sh preflight
     bash train_maestro_8b/run/pipeline.sh pilot
     bash train_maestro_8b/run/pipeline.sh grpo
@@ -59,6 +60,42 @@ sampled-versus-differentiable log-probability gap. Use
 `GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT` to set the bound for a numerical smoke test
 and inspect the measured drift before setting a training tolerance. The full
 engine defaults to 0.05 for its distinct inference kernels.
+
+## Batch and token budget aligned with DA-GRPO
+
+The standard MAESTRO Stage2 settings now match DA-GRPO's **visible**
+rollout budget: one distinct O1 Main prompt per optimizer step, eight
+candidate Actions, 12,288 raw Main-prompt tokens, 4,096 output tokens,
+and temperature 1.0. The one-step pilot uses 512 output tokens, as
+the DA smoke test does. The Risk Head feature cache still uses its
+original 16,384-token maximum, so Stage1 data/weights do not need to
+be regenerated just for this Stage2 cap.
+
+**Important difference in accumulation:** this custom Trainer already
+runs G completions/backwards inside one per-prompt training_step. Set
+`GRPO_GRAD_ACCUM=1` to match DA's one-prompt / eight-candidate update;
+DA's stock GRPOTrainer instead accumulates eight completion microsteps,
+so it uses `gradient_accumulation_steps=8`. Copying the raw number 8
+to MAESTRO would train eight prompts (64 candidates) before one step.
+
+MAESTRO uses the exact original O1 prompt STRING, while DA supplies a
+one-user-message list rendered through Qwen's chat template. To
+measure both lengths and inspect actual prompt tails + reference Action
+examples without loading the 8B model, use:
+
+    bash train_maestro_8b/run/pipeline.sh inspect-io
+
+This command is strict on overlong prompts and writes a token-length
+report to `workspace/maestro_8b/io_inspection.json`.
+
+Matching 12K/4K/G8 does **not** equalize hardware cost or learning
+objective: DA uses BF16 LoRA r32 (QKVO+MLP), native TRL DAPO+KL and
+shared colocated vLLM; MAESTRO uses NF4 LoRA r16 (QKVO), a frozen
+Risk Head, steered Value-KV, custom offline decision reward and
+custom GRPO without reference KL. Its optional full vLLM engine
+requires a separate BF16 inference model and per-group KV/LoRA
+synchronization, unlike Unsloth's shared-weight colocated vLLM.
+See `run/README.md` for profiling and fair comparisons.
 
 ## Code structure
 
