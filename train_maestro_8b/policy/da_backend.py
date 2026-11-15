@@ -45,8 +45,16 @@ def build_stage2_config(args, baseline):
     cfg["training"]["learning_rate"] = args.lr
     cfg["training"]["weight_decay"] = args.weight_decay
     cfg["training"]["max_grad_norm"] = args.max_grad_norm
+    cfg["training"]["optim"] = args.optim
+    cfg["training"]["kl_coef"] = args.kl_coef
+    cfg["training"]["clip_range"] = args.clip_epsilon
+    cfg["training"]["warmup_ratio"] = args.warmup_ratio
+    cfg["training"]["seed"] = args.seed
+    cfg["model"]["lora_rank"] = args.lora_rank
+    cfg["model"]["lora_alpha"] = args.lora_alpha
     cfg["training"]["save_steps"] = args.save_steps
     cfg["training"]["logging_steps"] = args.logging_steps
+    cfg["rollout"]["temperature"] = args.temperature
     cfg["rollout"]["num_generations"] = args.num_generations
     cfg["rollout"]["prompts_per_step"] = args.gradient_accumulation_steps
     cfg["rollout"]["max_prompt_tokens"] = args.max_length
@@ -75,7 +83,12 @@ def build_stage2_config(args, baseline):
         raise ValueError("DA GRPO requires >=2 candidates and >=1 prompt group")
     if (args.epochs <= 0 or args.max_steps == 0 or args.lr <= 0
             or args.max_grad_norm <= 0 or args.weight_decay < 0
-            or args.judge_workers < 1 or not 0 < args.vllm_memory_utilization < 1):
+            or args.judge_workers < 1 or not 0 < args.vllm_memory_utilization < 1
+            or args.lora_rank < 1 or args.lora_alpha < 1
+            or args.optim != "adamw_8bit" or args.temperature != 1.0
+            or not 0 <= args.clip_epsilon < 1 or args.kl_coef < 0
+            or not 0 <= args.warmup_ratio < 1
+            or args.save_steps < 1 or args.logging_steps < 1):
         raise ValueError("Invalid Stage2 DA training settings")
     return cfg
 
@@ -213,6 +226,14 @@ def main(argv=None):
     p.add_argument("--max_new_tokens", type=int, default=4096)
     p.add_argument("--vllm_memory_utilization", type=float, default=0.70)
     p.add_argument("--lr", type=float, default=5e-5)
+    p.add_argument("--temperature", type=float, default=1.0)
+    p.add_argument("--lora_rank", type=int, default=32)
+    p.add_argument("--lora_alpha", type=int, default=64)
+    p.add_argument("--optim", default="adamw_8bit")
+    p.add_argument("--kl_coef", type=float, default=0.01)
+    p.add_argument("--clip_epsilon", type=float, default=0.2)
+    p.add_argument("--warmup_ratio", type=float, default=0.03)
+    p.add_argument("--seed", type=int, default=42)
     p.add_argument("--weight_decay", type=float, default=0.01)
     p.add_argument("--max_grad_norm", type=float, default=1.0)
     p.add_argument("--save_steps", type=int, default=50)
