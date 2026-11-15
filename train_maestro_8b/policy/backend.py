@@ -129,7 +129,7 @@ def _probe_nf4_projection_shape(engine, state, ids):
     )
     modules = [
         (name, module) for name, module in engine.policy.named_modules()
-        if any(name.endswith(suffix) for suffix in targets)
+        if any(name == suffix[1:] or name.endswith(suffix) for suffix in targets)
         and getattr(getattr(module, "weight", None), "quant_state", None) is not None
     ]
     if not modules:
