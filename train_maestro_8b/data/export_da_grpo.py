@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from dataset.prepare_da_grpo import (
-    read_jsonl, settings_for, validate_prompt_lengths,
+    read_jsonl, settings_for, validate_prompt_lengths, digest,
 )
 from environment.base_orchestration.o1_compat import o1_prompt_from_turn
 from environment.base_orchestration.trajectory_builder import _answer_text
@@ -131,6 +131,8 @@ def export(scenes_path: Path, turns_path: Path, output_dir: Path, *,
         "episodes": len(experts), "generation_modes": dict(modes),
         "reviewed_only": reviewed_only, "tokenizer_checked": bool(tokenizer),
         "output_dir": str(output_dir),
+        "scenes_sha256": digest(scenes_path),
+        "turns_sha256": digest(turns_path),
         "trainer": "unsloth_trl_grpo_da",
         "reward": "baseline_da_four_dimension_llm_judge",
     }
