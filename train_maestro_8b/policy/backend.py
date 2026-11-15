@@ -169,7 +169,105 @@ def _probe_nf4_projection_shape(engine, state, ids):
     return differences
 
 
-def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_drift=0.01):
+def assess_probability_contract(
+    sampled, incremental, batched_eval, batched_train,
+    *, rollout_engine, clip_epsilon, strict_max_drift=None,
+    causal_future_sensitivity=None, invariant_tolerance=0.01,
+):
+    """Check *semantic* parity separately from expected kernel numerics.
+
+    GRPO uses sampled logits as the behavior denominator and teacher-forced
+    logits for the differentiable policy numerator. Different 4-bit M=1/M>1
+    kernels are not necessarily bit-exact, even when the same LoRA and cached
+    history are used. Verify exact-model invariants, then require the initial
+    importance ratios to remain INSIDE the configured PPO clip region.
+
+    An explicit strict_max_drift restores the old absolute-logp gate.
+    This does not alter the clipped loss or discard sampled logprobs.
+    """
+    import torch
+    values = (sampled, incremental, batched_eval, batched_train)
+    if (any(v.ndim != 1 or v.shape != sampled.shape for v in values)
+            or not sampled.numel()
+            or any(not torch.isfinite(v).all() for v in values)):
+        raise RuntimeError("RiskKV probability contract received invalid log probabilities")
+    if not 0 < clip_epsilon < 1:
+        raise ValueError("clip_epsilon must be in (0,1)")
+    if strict_max_drift is not None and not 0 < strict_max_drift < 1:
+        raise ValueError("strict_max_drift must be None or in (0,1)")
+    if not 0 < invariant_tolerance < 1:
+        raise ValueError("invariant_tolerance must be in (0,1)")
+
+    def drift(a, b):
+        return float((a.detach() - b.detach()).abs().max().item())
+
+    sampler_incremental_drift = drift(sampled, incremental)
+    eval_train_drift = drift(batched_eval, batched_train)
+    sampler_train_drift = drift(sampled, batched_train)
+    # At the start of each one-step, synchronous GRPO update, the
+    # behavior model and training model weights are identical. This ratio
+    # captures *numerical* (not stale-weight) sampling/replay mismatch.
+    ratios = (batched_train.detach() - sampled.detach()).exp()
+    ratio_min = float(ratios.min().item())
+    ratio_max = float(ratios.max().item())
+    fraction_clipped = float(
+        ((ratios < 1 - clip_epsilon) | (ratios > 1 + clip_epsilon))
+        .float().mean().item()
+    )
+    result = {
+        "max_abs_sample_vs_batched_train": sampler_train_drift,
+        "max_abs_sample_vs_incremental": sampler_incremental_drift,
+        "max_abs_batched_eval_vs_train": eval_train_drift,
+        "initial_importance_ratio_min": ratio_min,
+        "initial_importance_ratio_max": ratio_max,
+        "initial_importance_ratio_clipped_fraction": fraction_clipped,
+        "probability_contract": (
+            "strict_logprob" if strict_max_drift is not None
+            else "bounded_behavior_importance_ratio"
+        ),
+    }
+    if (rollout_engine == "transformers"
+            and sampler_incremental_drift > invariant_tolerance):
+        raise RuntimeError(
+            "RiskKV local sampling and forced single-token replay differ "
+            f"({sampler_incremental_drift:.6g} > {invariant_tolerance}); "
+            "check sampling, tokens, positions and KV cache"
+        )
+    if eval_train_drift > invariant_tolerance:
+        raise RuntimeError(
+            "RiskKV identical batched forwards differ between no-grad and "
+            f"train ({eval_train_drift:.6g} > {invariant_tolerance})"
+        )
+    if (causal_future_sensitivity is not None
+            and causal_future_sensitivity > invariant_tolerance):
+        raise RuntimeError(
+            "RiskKV suffix has future-token influence on earlier predictions "
+            f"({causal_future_sensitivity:.6g} > {invariant_tolerance})"
+        )
+    if strict_max_drift is not None:
+        if sampler_train_drift > strict_max_drift:
+            raise RuntimeError(
+                f"RiskKV strict rollout/replay logprob drift {sampler_train_drift:.6g} "
+                f"exceeds explicitly configured bound {strict_max_drift}. "
+                "Unset GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT to use bounded "
+                "importance-ratio correctness checks instead."
+            )
+    elif fraction_clipped > 0:
+        raise RuntimeError(
+            "RiskKV sampling/training mismatch already exceeds the PPO clip "
+            f"interval [{1-clip_epsilon:.4g}, {1+clip_epsilon:.4g}] "
+            f"before any optimizer step (ratio [{ratio_min:.6g}, {ratio_max:.6g}], "
+            f"{fraction_clipped:.1%} of probe tokens clipped). "
+            "Do not simply expand clip_epsilon: check sampler/weights/KV "
+            "or inspect training-inference mismatch first."
+        )
+    return result
+
+
+def check_risk_cache_contract(
+    engine, record, *, temperature=0.8, max_logprob_drift=None,
+    clip_epsilon=0.2,
+):
     """Fail early if a particular Unsloth version breaks cache continuation.
 
     This is a semantic consistency probe, not a 16K throughput benchmark.
@@ -287,24 +385,30 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
         "vllm_cached_tokens": getattr(engine.rollout_engine, "cached_tokens", None),
         "steered_tokens": steered_tokens,
         "allowed_drift": max_logprob_drift,
+        "clip_epsilon": clip_epsilon,
     }
     import json
     print("risk_steering_preflight_diagnostics=" +
           json.dumps(diagnostic, ensure_ascii=False), flush=True)
-    if drift > max_logprob_drift:
-        raise RuntimeError(
-            f"RiskKV rollout vs differentiable replay drift {drift:.6g} "
-            f"exceeds the configured bound {max_logprob_drift}. "
-            "Inspect risk_steering_preflight_diagnostics: "
-            "sample_vs_incremental isolates inference engine/LoRA/weight drift; "
-            "incremental_vs_batched_eval isolates one-token vs batched "
-            "teacher-forcing (attention masks/kernels or NF4 matmul shapes); "
-            "batched_eval_vs_train isolates training-mode kernel behavior. "
-            "Causal-future sensitivity checks whether a future token changes "
-            "earlier logits; Eager-vs-SDPA helps isolate attention kernels "
-            "from NF4 GEMV/GEMM shape-specific numerical effects. "
-            "Do not increase the tolerance or start GRPO until diagnosed."
+    # Print the measured differences, then enforce both hard causal/
+    # gradient invariants and an interpretable sampler/trainer IS-ratio bound.
+    # In particular, do NOT require BF16/NF4 one-token GEMV and multi-token
+    # GEMM to be bit-exact: these are different numerical executions.
+    try:
+        contract = assess_probability_contract(
+            old, incremental, replay, grad_values,
+            rollout_engine=diagnostic["rollout_engine"],
+            clip_epsilon=clip_epsilon,
+            strict_max_drift=max_logprob_drift,
+            causal_future_sensitivity=causal_future_sensitivity,
         )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"{exc}; inspect risk_steering_preflight_diagnostics above"
+        ) from exc
+    diagnostic.update(contract)
+    print("risk_steering_preflight_contract=" +
+          json.dumps(contract, ensure_ascii=False), flush=True)
     (-replay_with_grad.mean()).backward()
     if not any(p.grad is not None and bool((p.grad != 0).any())
                for name, p in policy.named_parameters() if "lora_" in name):
@@ -319,6 +423,11 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
         "prefix_tokens": state.length,
         "probe_tokens": len(ids),
         "max_abs_logprob_drift": drift,
+        "probability_contract": contract["probability_contract"],
+        "initial_importance_ratio_min": contract["initial_importance_ratio_min"],
+        "initial_importance_ratio_max": contract["initial_importance_ratio_max"],
+        "initial_importance_ratio_clipped_fraction":
+            contract["initial_importance_ratio_clipped_fraction"],
         "max_abs_no_grad_replay_drift": max_drift(old, replay),
         "max_abs_sample_vs_incremental": diagnostic["max_abs_sample_vs_incremental"],
         "max_abs_incremental_vs_batched_eval":

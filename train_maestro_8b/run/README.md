@@ -136,8 +136,51 @@ multiplication numerical differences from attention, RoPE, and KV
 caching. An empty array indicates that the loader exposes no matching
 quantized Qwen3 projections; it does *not* certify equality.
 
-No model weights, prompts, rewards, training gradients, or thresholds
-are changed. The preflight continues failing closed when the sampled
-and differentiable log-probabilities disagree. It is important to
-identify the source on the RTX GPU before selecting a fix that may
-otherwise substantially degrade 4096-token rollout throughput.
+No model weights, prompts, rewards, or trainable gradients are changed.
+The 8B CUDA diagnostics showed NF4 linear projections can differ
+between one-token and three-token shapes (up_proj: max 0.0078125).
+Default preflight therefore separates STRICT model/cache invariants
+from bounded TRAINING-INFERENCE numerical mismatch as described next.
+
+## RiskKV preflight: structural correctness vs numerical mismatch
+
+RTX 6000D BF16/NF4 Qwen3-8B diagnostics found:
+
+- Local sampled logp == forced incremental logp exactly
+- Batch eval logp == batch train logp exactly
+- No future-token influence detected by causal-mask perturbation
+- Single-token vs 3-token batch logp differed by 0.124283 max; Eager attention
+  still differed by 0.124559
+- Quantized layer-0 up_proj differed by 0.0078125 max at M=1 vs M=3
+
+Numerical differences in 4-bit execution do NOT automatically mean a bad
+KV cache. The ACTUAL sampled logprobs remain the behavior denominator in
+the existing clipped_policy_loss; they are not replaced with teacher-forced
+logprobs just to fabricate matching ratios.
+
+The default preflight now strictly checks three numerical invariants:
+(1) local sampling vs forced one-token replay <= 0.01 logp;
+(2) batched eval vs differentiable batched train <= 0.01 logp;
+(3) perturbing a future input does not influence earlier logits <= 0.01.
+It also requires the initial sampled-to-training per-token importance ratios
+to fall within the configured PPO clip interval (default [0.8, 1.2]), and
+requires nonzero LoRA-only gradients without modifying frozen weights.
+
+Outputs now include risk_steering_preflight_contract with
+initial_importance_ratio_min, initial_importance_ratio_max,
+initial_importance_ratio_clipped_fraction and probability_contract.
+The real GRPO Pilot also logs risk_grpo/importance_ratio_min,
+risk_grpo/importance_ratio_max and
+risk_grpo/importance_ratio_clipped_fraction over ALL generated tokens.
+The 3-token preflight cannot guarantee that 512/4096-token completions
+never leave that interval. Review Pilot metrics before full training.
+
+Default bounded-ratio check:
+
+    GRPO_VLLM_ENGINE=0 GRPO_ROLLOUT_ATTENTION=sdpa bash train_maestro_8b/run/pipeline.sh preflight
+
+Optional LEGACY strict logprob equality check:
+
+    GRPO_PREFLIGHT_MAX_LOGPROB_DRIFT=0.01 GRPO_VLLM_ENGINE=0 GRPO_ROLLOUT_ATTENTION=sdpa bash train_maestro_8b/run/pipeline.sh preflight
+
+Do not silently raise PPO clipping merely to pass a failing contract.

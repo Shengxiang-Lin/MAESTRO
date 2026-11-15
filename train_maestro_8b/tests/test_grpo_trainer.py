@@ -11,6 +11,7 @@ from train_maestro_8b.policy.trainer import (
     decision_collator,
 )
 from train_maestro_8b.policy.train import parse_args, validate_args
+from train_maestro_8b.policy.backend import assess_probability_contract
 
 
 def arguments(*extra):
@@ -47,6 +48,64 @@ class TRLRiskGRPOTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             clipped_policy_loss(new, old[:1], torch.tensor(1.), 0.2)
 
+    def test_numerical_mismatch_within_ppo_clip_is_valid(self):
+        sampled = torch.tensor([-4.0, -2.0, -1.5])
+        incremental = sampled.clone()
+        # Single-token NF4 and batched NF4 kernels may give different
+        # likelihoods. The old sampling distribution remains the denominator.
+        batched = sampled + torch.tensor([0.124283, -0.044, 0.03])
+        result = assess_probability_contract(
+            sampled, incremental, batched, batched.clone(),
+            rollout_engine="transformers", clip_epsilon=0.2,
+            causal_future_sensitivity=0.0,
+        )
+        self.assertEqual(
+            result["probability_contract"],
+            "bounded_behavior_importance_ratio",
+        )
+        self.assertEqual(result["initial_importance_ratio_clipped_fraction"], 0.0)
+        self.assertGreater(result["max_abs_sample_vs_batched_train"], 0.12)
+        self.assertLess(result["initial_importance_ratio_max"], 1.2)
+        self.assertGreater(result["initial_importance_ratio_min"], 0.8)
+
+    def test_strict_gate_remains_available(self):
+        sampled = torch.tensor([-4.0, -2.0, -1.5])
+        batched = sampled + 0.124283
+        with self.assertRaisesRegex(RuntimeError, "strict rollout/replay"):
+            assess_probability_contract(
+                sampled, sampled, batched, batched,
+                rollout_engine="transformers", clip_epsilon=0.2,
+                strict_max_drift=0.01,
+            )
+
+    def test_mismatch_exceeding_initial_ppo_clip_still_blocks(self):
+        sampled = torch.tensor([-4.0, -2.0, -1.5])
+        batched = sampled + 0.35
+        with self.assertRaisesRegex(RuntimeError, "already exceeds the PPO clip"):
+            assess_probability_contract(
+                sampled, sampled, batched, batched,
+                rollout_engine="transformers", clip_epsilon=0.2,
+            )
+
+    def test_cache_and_train_invariants_remain_strict(self):
+        sampled = torch.tensor([-4.0, -2.0, -1.5])
+        with self.assertRaisesRegex(RuntimeError, "local sampling"):
+            assess_probability_contract(
+                sampled, sampled + 0.03, sampled, sampled,
+                rollout_engine="transformers", clip_epsilon=0.2,
+            )
+        with self.assertRaisesRegex(RuntimeError, "identical batched forwards"):
+            assess_probability_contract(
+                sampled, sampled, sampled, sampled + 0.03,
+                rollout_engine="transformers", clip_epsilon=0.2,
+            )
+        with self.assertRaisesRegex(RuntimeError, "future-token influence"):
+            assess_probability_contract(
+                sampled, sampled, sampled, sampled,
+                rollout_engine="transformers", clip_epsilon=0.2,
+                causal_future_sensitivity=0.04,
+            )
+
     def test_private_state_only_goes_to_collator_scorer(self):
         row = {
             "prompt": "Main sees Question and report only",
@@ -74,6 +133,10 @@ class TRLRiskGRPOTests(unittest.TestCase):
         self.assertEqual(a.max_new_tokens, 4096)
         self.assertEqual(a.temperature, 1.0)
         validate_args(a)
+        self.assertIsNone(a.preflight_max_logprob_drift)
+        strict = arguments("--preflight_max_logprob_drift", "0.01")
+        validate_args(strict)
+        self.assertAlmostEqual(strict.preflight_max_logprob_drift, 0.01)
         # Our custom Trainer owns an entire G-completion group per prompt.
         # One gradient accumulation step therefore means ONE prompt x G,
         # unlike stock DA-GRPO where G completion-microsteps are required.

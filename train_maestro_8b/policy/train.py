@@ -56,7 +56,10 @@ def parse_args(argv=None):
     p.add_argument("--save_total_limit", type=int, default=2)
     p.add_argument("--warmup_ratio", type=float, default=0.03)
     p.add_argument("--resume_from_checkpoint", default=None)
-    p.add_argument("--preflight_max_logprob_drift", type=float)
+    p.add_argument("--preflight_max_logprob_drift", type=float, default=None,
+                   help="Optional STRICT absolute logprob equality gate. Default: "
+                        "enforce RiskKV causal/gradient invariants plus the existing "
+                        "GRPO clip_epsilon importance-ratio interval.")
     p.add_argument("--skip_preflight", action="store_true",
                    help="disables risk-cache replay sanity check; not recommended")
     p.add_argument("--preflight_only", action="store_true",
@@ -87,10 +90,16 @@ def validate_args(args):
         raise ValueError("initial Unsloth integration is NF4-only; remove --no_4bit")
     if args.sft_warmup < 0 or args.save_steps < 1 or args.logging_steps < 1:
         raise ValueError("invalid warmup/save/logging settings")
-    if args.preflight_max_logprob_drift is None:
-        args.preflight_max_logprob_drift = 0.05 if args.vllm_engine else 0.01
-    if not 0 < args.preflight_max_logprob_drift < 1:
-        raise ValueError("preflight log-probability drift bound must be in (0, 1)")
+    # Legacy strict absolute-logp gate stays available as an explicit
+    # diagnostic override. By default we validate hard RiskKV invariants
+    # AND require the sampler/trainer importance ratio to remain inside
+    # the current GRPO clip_epsilon band. NF4 GEMV and GEMM need not be
+    # numerically identical.
+    if (args.preflight_max_logprob_drift is not None
+            and not 0 < args.preflight_max_logprob_drift < 1):
+        raise ValueError(
+            "explicit strict preflight log-probability drift bound must be in (0,1)"
+        )
     if args.max_steps == 0:
         raise ValueError("--max_steps must be -1 (epoch) or positive")
 
@@ -189,6 +198,7 @@ def run(args, stack):
             engine, next((row for row in records if row["reports"]), records[0]),
             temperature=args.temperature,
             max_logprob_drift=args.preflight_max_logprob_drift,
+            clip_epsilon=args.clip_epsilon,
         )
         print("risk_steering_preflight="+json.dumps(probe), flush=True)
     if args.preflight_only:
