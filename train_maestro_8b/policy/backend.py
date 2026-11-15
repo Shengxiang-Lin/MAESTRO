@@ -108,6 +108,67 @@ def load_risk_engine(args):
     return engine
 
 
+def _probe_nf4_projection_shape(engine, state, ids):
+    """Compare SAME first-token activation through NF4 at M=1 vs M=3.
+
+    Three-token forward captures realistic layer inputs, then computes
+    an identical vector through one-token and three-token 4-bit kernels.
+    This isolates quantized linear matmul from attention and KV caching.
+    """
+    import torch
+    from contextlib import ExitStack
+
+    if ids.ndim != 1 or ids.numel() < 3:
+        return []
+    targets = (
+        ".layers.0.self_attn.q_proj.base_layer",
+        ".layers.0.self_attn.k_proj.base_layer",
+        ".layers.0.self_attn.v_proj.base_layer",
+        ".layers.0.mlp.up_proj",
+        ".layers.0.mlp.down_proj",
+    )
+    modules = [
+        (name, module) for name, module in engine.policy.named_modules()
+        if any(name.endswith(suffix) for suffix in targets)
+        and getattr(getattr(module, "weight", None), "quant_state", None) is not None
+    ]
+    if not modules:
+        return []
+    x = torch.cat(
+        (torch.tensor(engine.anchor_ids, device=engine.device, dtype=torch.long),
+         ids[:-1]),
+    ).unsqueeze(0)
+    captured = {}
+    with torch.no_grad(), ExitStack() as stack:
+        for name, module in modules:
+            def capture(_module, inputs, name=name):
+                if name not in captured:
+                    captured[name] = inputs[0].detach().clone()
+            hook = module.register_forward_pre_hook(capture)
+            stack.callback(hook.remove)
+        engine._forward_suffix(state, x)
+
+    differences = []
+    with torch.no_grad():
+        for name, module in modules:
+            activations = captured.get(name)
+            if activations is None or activations.ndim != 3 or activations.shape[1] < 3:
+                continue
+            single = module(activations[:, :1, :])[:, 0, :].float()
+            multiple = module(activations)[:, 0, :].float()
+            if single.shape != multiple.shape or not torch.isfinite(single).all() or not torch.isfinite(multiple).all():
+                raise RuntimeError("invalid 4-bit shape comparison")
+            delta = (single - multiple).abs()
+            differences.append({
+                "module": name,
+                "max_abs": round(delta.max().item(), 8),
+                "mean_abs": round(delta.mean().item(), 8),
+                "relative_max": round((delta.max() / multiple.abs().max().clamp_min(1e-8)).item(), 8),
+                "output_features": int(single.shape[-1]),
+            })
+    return differences
+
+
 def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_drift=0.01):
     """Fail early if a particular Unsloth version breaks cache continuation.
 
@@ -213,6 +274,7 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
             max_drift(eager, replay) if eager is not None else None
         ),
         "eager_probe_error": eager_probe_error,
+        "nf4_projection_shape_probe": _probe_nf4_projection_shape(engine, state, ids),
         "per_token_sample_vs_incremental": [
             round(float(v), 7) for v in (old - incremental).abs().tolist()
         ],
@@ -268,6 +330,7 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
             diagnostic["max_abs_batched_eager_vs_incremental"],
         "max_abs_batched_eager_vs_sdpa":
             diagnostic["max_abs_batched_eager_vs_sdpa"],
+        "nf4_projection_shape_probe": diagnostic["nf4_projection_shape_probe"],
         "risk_windows": int(state.window_probs.numel()),
         "steered_tokens": steered_tokens,
         "vllm_cached_tokens": getattr(engine.rollout_engine, "cached_tokens", None),
