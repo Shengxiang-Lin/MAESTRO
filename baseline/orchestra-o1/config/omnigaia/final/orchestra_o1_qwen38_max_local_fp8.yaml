@@ -41,5 +41,5 @@ task_ids_file: "data/OmniGAIA/splits/final_100_ids.txt"
 max_tasks: null
 max_attempts: 10
 max_concurrency: 10
-result_folder: "logs/omnigaia_final/omnigaia_o1_qwen38_max_local_fp8"
-trajectory_folder: "logs/omnigaia_final/omnigaia_o1_qwen38_max_local_fp8/trajectories"
+result_folder: "logs/omnigaia_final/orchestra_o1_qwen38_max_local_fp8"
+trajectory_folder: "logs/omnigaia_final/orchestra_o1_qwen38_max_local_fp8/trajectories"
