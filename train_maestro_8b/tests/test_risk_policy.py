@@ -112,10 +112,15 @@ class TinyModelTests(unittest.TestCase):
             prefix, max_new_tokens=3, temperature=0.9,
             eos_token_id=-1,
         )
+        incremental = engine.log_probs_incremental(prefix, ids, temperature=0.9)
         new_logps = engine.log_probs(prefix, ids, temperature=0.9)
         self.assertEqual(new_logps.shape, old_logps.shape)
-        self.assertTrue(torch.allclose(new_logps.detach(), old_logps, atol=1e-4),
-                        f"sampling/logprob drift: {old_logps} vs {new_logps}")
+        self.assertTrue(torch.allclose(incremental, old_logps, atol=1e-5),
+                        f"forced incremental replay differs from sample: "
+                        f"{old_logps} vs {incremental}")
+        self.assertTrue(torch.allclose(new_logps.detach(), incremental, atol=1e-4),
+                        f"incremental/batched replay drift: "
+                        f"{incremental} vs {new_logps}")
         (-new_logps.mean()).backward()
         self.assertTrue(any(p.grad is not None and p.grad.abs().sum().item() > 0
                             for n, p in lora.named_parameters() if "lora_" in n))
