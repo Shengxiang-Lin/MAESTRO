@@ -1,153 +1,451 @@
-"""Rebuild and verify MAESTRO's frozen experiment task-ID selections.
+"""Generate reproducible stratified benchmark subsets from source metadata.
 
-Selected from official OmniGAIA-360 / MM-BrowseComp-400 metadata using
-stratified sampling. The evaluated IDs are immutable; this module deliberately
-does not re-roll a random seed or publish decrypted MM-BrowseComp content.
-
-Run: python benchmark/experiment_splits.py [--check] [--verify-data]
+Nothing is sampled from hard-coded question IDs. Same source records, seed and
+sizes yield the same three TXT manifests. Raw/decrypted benchmark data stays local.
 """
 from __future__ import annotations
 
 import argparse
 from collections import Counter
+import hashlib
 import json
+import math
 from pathlib import Path
+import random
 
 ROOT = Path(__file__).resolve().parents[1]
-OMNI_PRETEST_60 = (5,12,20,28,35,39,45,46,60,61,64,71,72,74,75,77,80,91,95,100,115,117,118,121,127,153,164,165,172,179,181,182,186,194,195,206,208,209,212,224,230,234,243,245,249,265,273,280,283,288,292,312,313,318,328,342,345,347,358,359)
-OMNI_FINAL_100 = (1,2,8,13,16,19,22,26,30,34,36,37,38,49,50,51,53,65,67,69,78,79,82,86,87,97,102,107,108,116,122,125,126,128,133,135,136,137,143,145,149,150,151,155,167,169,171,175,180,183,190,197,201,205,213,215,216,217,226,227,228,244,251,253,254,259,261,269,270,277,278,281,285,287,289,299,301,302,303,305,307,311,314,319,321,323,324,325,326,332,334,335,339,340,348,350,352,353,355,360)
-MM_FINAL_100 = (1,3,5,9,17,19,28,30,33,48,52,54,67,68,71,73,81,87,88,97,104,109,111,118,122,123,125,141,142,144,145,149,156,157,160,161,167,176,180,187,188,207,208,210,211,218,228,232,233,237,308,312,314,315,1001,1004,1009,1015,1018,1022,1024,1031,1036,1048,1049,1050,1054,1060,1062,1070,1071,1073,1077,1081,1086,1088,1090,1096,1099,1100,1106,1109,1117,1119,1120,1121,1126,1127,1130,1131,1133,1135,1147,1153,1157,1159,1163,1166,1175,1301)
-MANIFESTS = {
-    "OmniGAIA/splits/pretest_60_ids.txt": OMNI_PRETEST_60,
-    "OmniGAIA/splits/final_100_ids.txt": OMNI_FINAL_100,
-    "MM-BrowseComp/splits/final_100_ids.txt": MM_FINAL_100,
-}
+DEFAULT_SEED = 20261115
+PRETEST = "OmniGAIA/splits/pretest_60_ids.txt"
+OMNI_FINAL = "OmniGAIA/splits/final_100_ids.txt"
+MM_FINAL = "MM-BrowseComp/splits/final_100_ids.txt"
 
 
-def load_task_ids(path: Path | str) -> list[str]:
-    """Read a one-ID-per-line manifest; fail on duplicate/malformed IDs."""
+def load_task_ids(path):
+    """Read one task ID per line, reject duplicates and malformed lines."""
     path = Path(path)
     if not path.is_file():
-        raise FileNotFoundError(f"Task IDs file not found: {path}")
-    ids: list[str] = []
-    seen: set[str] = set()
-    for line_no, raw in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
-        task_id = raw.split("#", 1)[0].strip()
-        if not task_id:
+        raise FileNotFoundError(path)
+    result, seen = [], set()
+    for number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        value = line.split("#", 1)[0].strip()
+        if not value:
             continue
-        if any(ch.isspace() for ch in task_id) or "," in task_id:
-            raise ValueError(f"{path}:{line_no}: one task ID per line is required")
-        if task_id in seen:
-            raise ValueError(f"{path}:{line_no}: duplicate task ID {task_id}")
-        ids.append(task_id)
-        seen.add(task_id)
-    if not ids:
-        raise ValueError(f"No task IDs in {path}")
-    return ids
+        if "," in value or any(ch.isspace() for ch in value):
+            raise ValueError(f"{path}:{number}: expected one task ID")
+        if value in seen:
+            raise ValueError(f"{path}:{number}: duplicate task ID {value}")
+        result.append(value)
+        seen.add(value)
+    if not result:
+        raise ValueError(f"Empty task ID file: {path}")
+    return result
 
 
-def _read_records(path: Path) -> list[dict]:
-    with path.open(encoding="utf-8-sig") as stream:
-        if path.suffix.lower() == ".json":
-            rows = json.load(stream)
-            if isinstance(rows, dict):
-                rows = rows.get("data", rows.get("tasks"))
-        elif path.suffix.lower() == ".jsonl":
-            rows = [json.loads(line) for line in stream if line.strip()]
+def read_records(path):
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing metadata: {path}")
+    if path.suffix == ".json":
+        rows = json.loads(path.read_text(encoding="utf-8-sig"))
+        if isinstance(rows, dict):
+            rows = rows.get("data", rows.get("tasks"))
+    elif path.suffix == ".jsonl":
+        rows = [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8-sig").splitlines()
+            if line.strip()
+        ]
+    else:
+        raise ValueError("Metadata must be JSON or JSONL")
+    if not isinstance(rows, list) or not rows or not all(isinstance(r, dict) for r in rows):
+        raise ValueError(f"Invalid metadata: {path}")
+    ids = [str(r.get("id", r.get("task_id"))) for r in rows]
+    if "None" in ids or len(set(ids)) != len(ids):
+        raise ValueError(f"Missing or duplicate IDs in {path}")
+    return sorted(rows, key=id_key)
+
+
+def id_key(row):
+    value = str(row.get("id", row.get("task_id")))
+    return (0, int(value)) if value.isdecimal() else (1, value)
+
+
+def even_quotas(n, populations):
+    """Balanced stratum quotas; extra seats go to larger available populations."""
+    labels = sorted(populations, key=lambda k: (-populations[k], str(k)))
+    if not labels:
+        raise ValueError("No valid strata")
+    base, rem = divmod(n, len(labels))
+    result = {key: base + int(i < rem) for i, key in enumerate(labels)}
+    if any(result[k] > populations[k] for k in result):
+        raise ValueError("Balanced quotas exceed available data")
+    return result
+
+
+def proportional_quotas(n, populations):
+    """Largest-remainder apportionment for MM-BrowseComp's original difficulty."""
+    total = sum(populations.values())
+    weights = {key: n * count / total for key, count in populations.items()}
+    quota = {key: math.floor(weight) for key, weight in weights.items()}
+    ranks = sorted(weights, key=lambda k: (
+        -(weights[k] - quota[k]), -populations[k], str(k)
+    ))
+    for key in ranks[:n - sum(quota.values())]:
+        quota[key] += 1
+    return quota
+
+
+def balanced_matrix(row_quota, col_quota, capacities):
+    """Min-cost flow: exact margins, bounded cells, near-even cross strata."""
+    rows, cols = list(row_quota), list(col_quota)
+    total = sum(row_quota.values())
+    if total != sum(col_quota.values()):
+        raise ValueError("Unequal marginal totals")
+    source, sink = len(rows) + len(cols), len(rows) + len(cols) + 1
+    graph = [[] for _ in range(sink + 1)]
+
+    def add(u, v, cap, cost):
+        fwd = [v, cap, cost, len(graph[v])]
+        back = [u, 0, -cost, len(graph[u])]
+        graph[u].append(fwd)
+        graph[v].append(back)
+        return fwd
+
+    for i, key in enumerate(rows):
+        add(source, i, row_quota[key], 0)
+    for j, key in enumerate(cols):
+        add(len(rows) + j, sink, col_quota[key], 0)
+    arcs = {}
+    for i, row in enumerate(rows):
+        for j, col in enumerate(cols):
+            key = (row, col)
+            target = row_quota[row] * col_quota[col] / total
+            arcs[key] = [
+                add(i, len(rows) + j, 1,
+                    round(100 * ((k - target)**2 - (k - 1 - target)**2)))
+                for k in range(1, capacities.get(key, 0) + 1)
+            ]
+    for sent in range(total):
+        dist = [math.inf] * len(graph)
+        pred = [None] * len(graph)
+        dist[source] = 0
+        for _ in range(len(graph) - 1):
+            updated = False
+            for u, edges in enumerate(graph):
+                if math.isinf(dist[u]):
+                    continue
+                for edge in edges:
+                    if edge[1] > 0 and dist[u] + edge[2] < dist[edge[0]]:
+                        dist[edge[0]] = dist[u] + edge[2]
+                        pred[edge[0]] = (u, edge)
+                        updated = True
+            if not updated:
+                break
+        if pred[sink] is None:
+            raise ValueError(f"Infeasible stratified sample after {sent}/{total} units")
+        v = sink
+        while v != source:
+            u, edge = pred[v]
+            edge[1] -= 1
+            graph[v][edge[3]][1] += 1
+            v = u
+    return {
+        key: sum(edge[1] == 0 for edge in unit_edges)
+        for key, unit_edges in arcs.items()
+    }
+
+
+def media_ids(row):
+    return {
+        str(m.get("id") or m.get("path"))
+        for m in row.get("omni_modal_input", [])
+        if isinstance(m, dict) and (m.get("id") or m.get("path"))
+    }
+
+
+def select_omni(records, pre_size, final_size, seed, trials):
+    valid = [
+        r for r in records
+        if r.get("Level", r.get("level")) in ("Easy", "Medium", "Hard")
+        and r.get("category")
+        and r.get("task_type") in ("video w/ audio", "image + audio")
+        and isinstance(r.get("omni_modal_input"), list)
+        and r["omni_modal_input"]
+        and isinstance(r.get("total_steps"), (int, float))
+    ]
+    categories = Counter(r["category"] for r in valid)
+    levels = Counter(r.get("Level", r.get("level")) for r in valid)
+    modalities = Counter(r["task_type"] for r in valid)
+    cat_pre = even_quotas(pre_size, categories)
+    cat_final = even_quotas(final_size, categories)
+    lev_pre = even_quotas(pre_size, levels)
+    lev_final = even_quotas(final_size, levels)
+    by_cell = {
+        (cat, level): [
+            r for r in valid
+            if r["category"] == cat and r.get("Level", r.get("level")) == level
+        ]
+        for cat in categories for level in levels
+    }
+    both_c = {cat: cat_pre[cat] + cat_final[cat] for cat in categories}
+    both_l = {lv: lev_pre[lv] + lev_final[lv] for lv in levels}
+    both = balanced_matrix(
+        both_c, both_l, {k: len(v) for k, v in by_cell.items()}
+    )
+    pre_cells = balanced_matrix(cat_pre, lev_pre, both)
+    groups = sorted(both, key=lambda k: (
+        len(by_cell[k]) / max(both[k], 1), str(k)
+    ))
+    rng = random.Random(seed)
+    tool_rate = sum(
+        "code_executor" in (r.get("required_external_tools") or [])
+        for r in valid
+    ) / len(valid)
+    best, successes = None, 0
+    for _ in range(trials):
+        used, pre, final = set(), [], []
+        for key in groups:
+            if both[key] == 0:
+                continue
+            options = by_cell[key][:]
+            rng.shuffle(options)
+            selected = []
+            for row in options:
+                mid = media_ids(row)
+                if used.isdisjoint(mid):
+                    selected.append(row)
+                    used.update(mid)
+                    if len(selected) == both[key]:
+                        break
+            if len(selected) != both[key]:
+                break
+            rng.shuffle(selected)
+            pre.extend(selected[:pre_cells[key]])
+            final.extend(selected[pre_cells[key]:])
         else:
-            raise ValueError(f"Expected JSON/JSONL metadata: {path}")
-    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
-        raise ValueError(f"Expected a list of records in {path}")
-    return rows
+            successes += 1
+            pv = sum(r["task_type"] == "video w/ audio" for r in pre)
+            fv = sum(r["task_type"] == "video w/ audio" for r in final)
+            pc = sum(
+                "code_executor" in (r.get("required_external_tools") or [])
+                for r in pre
+            )
+            fc = sum(
+                "code_executor" in (r.get("required_external_tools") or [])
+                for r in final
+            )
+            score = (
+                30 * abs(pv - pre_size / 2)
+                + 30 * abs(fv - final_size / 2)
+                + 2 * abs(pc - pre_size * tool_rate)
+                + 2 * abs(fc - final_size * tool_rate)
+            )
+            if best is None or score < best[0]:
+                best = (score, pre[:], final[:])
+    if best is None:
+        raise ValueError("Could not create media-disjoint OmniGAIA splits")
+    return sorted(best[1], key=id_key), sorted(best[2], key=id_key), {
+        "eligible": len(valid),
+        "source_categories": dict(categories),
+        "source_levels": dict(levels),
+        "source_modalities": dict(modalities),
+        "category_pretest_quota": cat_pre,
+        "category_final_quota": cat_final,
+        "level_pretest_quota": lev_pre,
+        "level_final_quota": lev_final,
+        "successful_trials": successes,
+        "best_balance_score": round(best[0], 3),
+    }
 
 
-def _index(rows: list[dict], name: str) -> dict[str, dict]:
-    lookup: dict[str, dict] = {}
-    for row in rows:
-        task_id = row.get("id", row.get("task_id"))
-        if task_id is None or str(task_id) in lookup:
-            raise ValueError(f"{name}: missing/duplicate task id {task_id}")
-        lookup[str(task_id)] = row
-    return lookup
+def select_mm(records, size, seed, trials):
+    valid = [
+        r for r in records
+        if r.get("category") and r.get("subtask")
+        and r.get("level", r.get("Level")) is not None
+        and isinstance(r.get("images", []), list)
+    ]
+    categories = Counter(r["category"] for r in valid)
+    cat_quota = even_quotas(size, categories)
+    sub_quota = {}
+    for cat in cat_quota:
+        sub = Counter(r["subtask"] for r in valid if r["category"] == cat)
+        sub_quota.update({
+            (cat, task): amount
+            for task, amount in even_quotas(cat_quota[cat], sub).items()
+        })
+    levels = Counter(str(r.get("level", r.get("Level"))) for r in valid)
+    level_quota = proportional_quotas(size, levels)
+    by_cell = {
+        (group, lv): [
+            r for r in valid
+            if (r["category"], r["subtask"]) == group
+            and str(r.get("level", r.get("Level"))) == lv
+        ]
+        for group in sub_quota for lv in level_quota
+    }
+    cell_quota = balanced_matrix(
+        sub_quota, level_quota, {k: len(v) for k, v in by_cell.items()}
+    )
+    groups = sorted(cell_quota, key=lambda k: (
+        len(by_cell[k]) / max(1, cell_quota[k]), str(k)
+    ))
+    rng = random.Random(seed + 1)
+    image_target = size * sum(bool(r.get("images")) for r in valid) / len(valid)
+    source_target = size * sum(
+        len(r.get("source") or []) for r in valid
+    ) / len(valid)
+    best, successful = None, 0
+    for _ in range(trials):
+        used, selected = set(), []
+        for cell in groups:
+            if cell_quota[cell] == 0:
+                continue
+            options = by_cell[cell][:]
+            rng.shuffle(options)
+            found = []
+            for row in options:
+                images = {str(v) for v in (row.get("images") or [])}
+                if used.isdisjoint(images):
+                    found.append(row)
+                    used.update(images)
+                    if len(found) == cell_quota[cell]:
+                        break
+            if len(found) < cell_quota[cell]:
+                break
+            selected.extend(found)
+        else:
+            successful += 1
+            score = (
+                3 * abs(
+                    sum(bool(r.get("images")) for r in selected) - image_target
+                )
+                + 0.3 * abs(
+                    sum(len(r.get("source") or []) for r in selected)
+                    - source_target
+                )
+            )
+            if best is None or score < best[0]:
+                best = (score, selected[:])
+    if best is None:
+        raise ValueError("Could not sample MM-BrowseComp with distinct images")
+    return sorted(best[1], key=id_key), {
+        "eligible": len(valid),
+        "source_categories": dict(categories),
+        "source_levels": dict(levels),
+        "category_quota": cat_quota,
+        "level_quota": level_quota,
+        "subtasks_covered": len(sub_quota),
+        "successful_trials": successful,
+        "best_balance_score": round(best[0], 3),
+    }
 
 
-def verify_metadata(omnigaia_meta: Path, mm_meta: Path) -> None:
-    omni = _index(_read_records(omnigaia_meta), "OmniGAIA")
-    mm = _index(_read_records(mm_meta), "MM-BrowseComp")
-    if len(omni) != 360 or len(mm) != 400:
-        raise ValueError("Expected OmniGAIA-360 and MM-BrowseComp-400 official datasets")
-    for label, selected, source in (
-        ("OmniGAIA pretest", OMNI_PRETEST_60, omni),
-        ("OmniGAIA final", OMNI_FINAL_100, omni),
-        ("MM-BrowseComp final", MM_FINAL_100, mm),
-    ):
-        absent = set(map(str, selected)) - set(source)
-        if absent:
-            raise ValueError(f"{label}: missing IDs {sorted(absent)}")
+def generate_splits(omni, mm, *, seed=DEFAULT_SEED, pretest_size=60,
+                    omni_final_size=100, mm_final_size=100, trials=512):
+    """Generate all splits using only the source records, requested sizes and seed."""
+    if min(pretest_size, omni_final_size, mm_final_size, trials) <= 0:
+        raise ValueError("Sizes and trials must be positive")
+    pre, final, omni_stat = select_omni(
+        omni, pretest_size, omni_final_size, seed, trials
+    )
+    mm_final, mm_stat = select_mm(mm, mm_final_size, seed, trials)
+    manifests = {
+        PRETEST: [str(r["id"]) for r in pre],
+        OMNI_FINAL: [str(r["id"]) for r in final],
+        MM_FINAL: [str(r["id"]) for r in mm_final],
+    }
+    sizes = [pretest_size, omni_final_size, mm_final_size]
+    if any(len(set(ids)) != expected
+           for ids, expected in zip(manifests.values(), sizes)):
+        raise ValueError("Duplicate or missing sampled IDs")
+    if set(manifests[PRETEST]) & set(manifests[OMNI_FINAL]):
+        raise ValueError("Overlapping OmniGAIA task IDs")
+    pre_media = set().union(*(media_ids(r) for r in pre))
+    final_media = set().union(*(media_ids(r) for r in final))
+    if pre_media & final_media:
+        raise ValueError("Overlapping OmniGAIA media IDs")
+    return manifests, {
+        "algorithm": "seeded-balanced-strata-v1",
+        "seed": seed,
+        "trials": trials,
+        "sizes": dict(zip(
+            ("omni_pretest", "omni_final", "mm_final"), sizes
+        )),
+        "omnigaia": omni_stat,
+        "mm_browsecomp": mm_stat,
+        "selected": {
+            "omni_pretest": {
+                "levels": dict(Counter(r.get("Level", r.get("level")) for r in pre)),
+                "categories": dict(Counter(r["category"] for r in pre)),
+                "modalities": dict(Counter(r["task_type"] for r in pre)),
+            },
+            "omni_final": {
+                "levels": dict(Counter(r.get("Level", r.get("level")) for r in final)),
+                "categories": dict(Counter(r["category"] for r in final)),
+                "modalities": dict(Counter(r["task_type"] for r in final)),
+            },
+            "mm_final": {
+                "levels": dict(Counter(
+                    str(r.get("level", r.get("Level"))) for r in mm_final
+                )),
+                "categories": dict(Counter(r["category"] for r in mm_final)),
+                "subtask_coverage": len({r["subtask"] for r in mm_final}),
+            },
+        },
+    }
 
-    media_used: set[str] = set()
-    for label, selected, desired_levels, desired_types in (
-        ("pretest", OMNI_PRETEST_60, {"Easy": 20, "Medium": 20, "Hard": 20},
-         {"video w/ audio": 30, "image + audio": 30}),
-        ("final", OMNI_FINAL_100, {"Easy": 34, "Medium": 33, "Hard": 33},
-         {"video w/ audio": 50, "image + audio": 50}),
-    ):
-        rows = [omni[str(i)] for i in selected]
-        levels = Counter(row.get("Level", row.get("level")) for row in rows)
-        task_types = Counter(row.get("task_type") for row in rows)
-        categories = Counter(row.get("category") for row in rows)
-        if levels != desired_levels or task_types != desired_types:
-            raise ValueError(f"OmniGAIA {label}: wrong level/task-type distribution")
-        if len(categories) != 9 or max(categories.values()) - min(categories.values()) > 1:
-            raise ValueError(f"OmniGAIA {label}: expected 9 balanced categories")
-        for row in rows:
-            for media in row.get("omni_modal_input") or []:
-                media_id = media.get("id") or media.get("path")
-                if media_id:
-                    if media_id in media_used:
-                        raise ValueError(f"OmniGAIA pretest/final shared media: {media_id}")
-                    media_used.add(media_id)
 
-    mm_rows = [mm[str(i)] for i in MM_FINAL_100]
-    mm_categories = Counter(row["category"] for row in mm_rows)
-    mm_levels = Counter(str(row["level"]) for row in mm_rows)
-    if len(mm_categories) != 5 or set(mm_categories.values()) != {20}:
-        raise ValueError("MM-BrowseComp: expected 20 questions per category")
-    if mm_levels != {"1": 85, "2": 15}:
-        raise ValueError("MM-BrowseComp: expected 85/15 levels")
-    if len({row["subtask"] for row in mm_rows}) != 22:
-        raise ValueError("MM-BrowseComp: expected coverage of all 22 subtasks")
-    print("Verified against 360 OmniGAIA and 400 MM-BrowseComp source records")
-
-
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--pretest-size", type=int, default=60)
+    parser.add_argument("--omni-final-size", type=int, default=100)
+    parser.add_argument("--mm-final-size", type=int, default=100)
+    parser.add_argument("--trials", type=int, default=512)
+    parser.add_argument(
+        "--omnigaia-meta", type=Path,
+        default=ROOT / "data/OmniGAIA/test_metadata.jsonl",
+    )
+    parser.add_argument(
+        "--mm-meta", type=Path,
+        default=ROOT / "data/MM-BrowseComp/data/MMBrowseComp_400_decrypted.jsonl",
+    )
     parser.add_argument("--output-root", type=Path, default=ROOT / "data")
-    parser.add_argument("--check", action="store_true", help="Verify committed manifests, do not change them")
-    parser.add_argument("--verify-data", action="store_true", help="Audit IDs against both metadata files")
-    parser.add_argument("--omnigaia-meta", type=Path, default=ROOT / "data/OmniGAIA/test_metadata.json")
-    parser.add_argument("--mm-meta", type=Path, default=ROOT / "data/MM-BrowseComp/data/MMBrowseComp_400.jsonl")
+    parser.add_argument(
+        "--check", action="store_true",
+        help="Compare regenerated IDs with saved files",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Report only; do not change saved IDs",
+    )
     args = parser.parse_args()
-
-    if len(OMNI_PRETEST_60) != 60 or len(OMNI_FINAL_100) != 100 or len(MM_FINAL_100) != 100:
-        raise ValueError("Wrong frozen manifest size")
-    if len(set(OMNI_PRETEST_60)) != 60 or len(set(OMNI_FINAL_100)) != 100 or len(set(MM_FINAL_100)) != 100:
-        raise ValueError("Duplicated frozen task IDs")
-    if set(OMNI_PRETEST_60) & set(OMNI_FINAL_100):
-        raise ValueError("OmniGAIA splits overlap")
-
-    for relative_path, selected in MANIFESTS.items():
-        path = args.output_root / relative_path
-        expected = "".join(f"{i}\n" for i in selected)
+    omni, mm = read_records(args.omnigaia_meta), read_records(args.mm_meta)
+    manifests, report = generate_splits(
+        omni, mm, seed=args.seed,
+        pretest_size=args.pretest_size,
+        omni_final_size=args.omni_final_size,
+        mm_final_size=args.mm_final_size, trials=args.trials,
+    )
+    report["source_sha256"] = {
+        "omnigaia": hashlib.sha256(args.omnigaia_meta.read_bytes()).hexdigest(),
+        "mm_browsecomp": hashlib.sha256(args.mm_meta.read_bytes()).hexdigest(),
+    }
+    for name, ids in manifests.items():
+        path = args.output_root / name
+        expected = "".join(f"{task_id}\n" for task_id in ids)
         if args.check:
-            if path.read_text(encoding="utf-8") != expected:
-                raise ValueError(f"Manifest differs from frozen IDs: {path}")
-        else:
+            if not path.is_file() or path.read_text(encoding="utf-8") != expected:
+                raise ValueError(f"Out-of-date manifest: {path}")
+        elif not args.dry_run:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(expected, encoding="utf-8")
-        print(f"{'Checked' if args.check else 'Wrote'} {path} ({len(selected)} IDs)")
-    if args.verify_data:
-        verify_metadata(args.omnigaia_meta, args.mm_meta)
+        print(
+            f'{"Checked" if args.check else "Planned" if args.dry_run else "Wrote"}'
+            f" {path} ({len(ids)} IDs)"
+        )
+    print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
