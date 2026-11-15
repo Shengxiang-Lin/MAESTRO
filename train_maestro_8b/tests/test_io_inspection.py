@@ -1,7 +1,8 @@
 """Inspect that DA-aligned prompt/output audits are exact and privacy-safe."""
 import unittest
+from collections import UserDict
 
-from train_maestro_8b.data.inspect_io import inspect
+from train_maestro_8b.data.inspect_io import inspect, _ids
 
 
 class TinyTokenizer:
@@ -14,7 +15,62 @@ class TinyTokenizer:
         return list(range(len(messages[0]["content"]) + 3))
 
 
+
+class TensorLike:
+    """Torch/NumPy-like token container without a CUDA dependency."""
+    def __init__(self, value):
+        self.value = value
+
+    def tolist(self):
+        return self.value
+
+
+class BatchEncodingTokenizer(TinyTokenizer):
+    def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+        ids = super().apply_chat_template(
+            messages, tokenize=tokenize,
+            add_generation_prompt=add_generation_prompt,
+        )
+        return UserDict({
+            "input_ids": TensorLike([ids]),
+            "attention_mask": TensorLike([[1] * len(ids)]),
+        })
+
+
 class IOAuditTests(unittest.TestCase):
+    def test_chat_template_batchencoding_and_tensor_like_are_supported(self):
+        row = {
+            "sample_id": "batchencoding",
+            "prompt": "Main question with Sub-Agent reports",
+            "reports": [{"start": 5, "end": 22}],
+            "reference_action": {"action": "complete", "params": {"answer": "ok"}},
+            "decision_state": {"scorable": True},
+        }
+        result = inspect([row], BatchEncodingTokenizer())
+        self.assertEqual(
+            result["prompt_da_chat_template_tokens"]["max"],
+            len(row["prompt"]) + 3,
+        )
+        self.assertEqual(result["prompt_raw_tokens"]["max"], len(row["prompt"]))
+
+    def test_token_ids_normalizer_accepts_multiple_single_example_shapes(self):
+        ids = [2, 3, 5, 7]
+        self.assertEqual(_ids(ids), ids)
+        self.assertEqual(_ids(tuple(ids)), ids)
+        self.assertEqual(_ids(TensorLike(ids)), ids)
+        self.assertEqual(_ids(TensorLike([ids])), ids)
+        self.assertEqual(_ids(UserDict({"input_ids": TensorLike([ids])})), ids)
+
+    def test_token_ids_normalizer_rejects_accidental_multirow_batches(self):
+        with self.assertRaisesRegex(ValueError, "batch of 2"):
+            _ids(TensorLike([[1, 2], [3, 4]]))
+        with self.assertRaisesRegex(TypeError, "without input_ids"):
+            _ids(UserDict({"attention_mask": [1, 1]}))
+        with self.assertRaisesRegex(TypeError, "unsupported"):
+            _ids("not token IDs")
+        with self.assertRaisesRegex(TypeError, "non-integer"):
+            _ids([1, True, 3])
+
     def test_raw_input_reference_and_private_reward_separation(self):
         row = {
             "sample_id": "demo-01",
