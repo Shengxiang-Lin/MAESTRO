@@ -55,3 +55,37 @@ themselves Sub-Agent faults.
 Previous V1.3 data are retained in distinct directories. Strict Replay
 must continue to work on old frozen scenes; use a fresh output directory
 for any new generation run.
+
+
+## Typed Macro upgrade (incremental, versioned)
+
+New work on the typed Macro DAG now lives **in this canonical Stage-1 package**
+rather than in an independent generator tree:
+
+- `typed_role_grammar.py`: Discovery, Identification, Investigation,
+  Verification, Comparison and Synthesis port contracts.
+- `typed_graph_generator.py`: deterministic typed partial-order graph
+  sampling with concurrency and wave budgets.
+- `typed_graph_validator.py`: check edge types, no invented dependencies,
+  reachability, topological order, and legitimate cross-wave source evidence.
+- `typed_macro_quality.py`: enforce requested final WorkProduct coverage
+  and audit every port with controlled answer-sensitivity / execution-blocking
+  counterfactuals. Operational blocking is explicitly **not** mislabeled a
+  proof of semantic necessity.
+
+The standalone `environment.macro_v3 --variant v3.2` pilot now imports these
+modules using backward-compatible shims. Its final Synthesis retains each
+requested Investigation, Verification and Comparison work product, even
+when those products are also inputs to other Macros. This prevents a
+VerifiedClaim from disappearing merely because another investigation
+consumed it.
+
+**Migration boundary:** The canonical production `generate-questions`
+command, frozen V1.3/V1.4 ProblemSpecs, `quality.audit_scene()`, the
+legacy deterministic macro executor, and Stage 2–4 interfaces are
+intentionally unchanged in this first migration. The experimental typed
+World/solver is **not** yet compiled into the original
+`problem_spec → gold_program → macro_graph` contract. It is incorrect
+to claim full old Stage-1 quality/Replays or Stage-2 compatibility for
+typed v3.2 outputs. This work consolidates the shared generator and
+quality foundations for the next adapter, without weakening old audits.
