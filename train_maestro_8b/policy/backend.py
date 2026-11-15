@@ -123,8 +123,12 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
         state, count=1, max_new_tokens=3, temperature=temperature, eos_token_id=-1,
     )
     with torch.no_grad():
+        incremental = engine.log_probs_incremental(state, ids, temperature=temperature)
         replay = engine.log_probs(state, ids, temperature=temperature)
-    if not torch.isfinite(replay).all() or not torch.isfinite(old).all():
+    if any(
+        not torch.isfinite(v).all()
+        for v in (old, incremental, replay)
+    ):
         raise RuntimeError("RiskKV probe returned nonfinite log probabilities")
     if not state.window_probs.numel() and record["reports"]:
         raise RuntimeError("reported feedback was not assigned any risk windows")
@@ -134,11 +138,49 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
     for param in policy.parameters():
         param.grad = None
     replay_with_grad = engine.log_probs(state, ids, temperature=temperature)
-    drift = float((old - replay_with_grad.detach()).abs().max().item())
-    if not torch.isfinite(replay_with_grad).all() or drift > max_logprob_drift:
+    if not torch.isfinite(replay_with_grad).all():
+        raise RuntimeError("RiskKV differentiable replay has nonfinite log probabilities")
+    grad_values = replay_with_grad.detach()
+    drift = float((old - grad_values).abs().max().item())
+    def max_drift(a, b):
+        return float((a - b).abs().max().item())
+    diagnostic = {
+        "prefix_tokens": state.length,
+        "probe_tokens": len(ids),
+        "rollout_engine": (
+            "vllm" if engine.rollout_engine is not None
+            else "transformers"
+        ),
+        "max_abs_sample_vs_incremental": max_drift(old, incremental),
+        "max_abs_incremental_vs_batched_eval": max_drift(incremental, replay),
+        "max_abs_batched_eval_vs_train": max_drift(replay, grad_values),
+        "max_abs_sample_vs_batched_train": drift,
+        "per_token_sample_vs_incremental": [
+            round(float(v), 7) for v in (old - incremental).abs().tolist()
+        ],
+        "per_token_incremental_vs_batched_eval": [
+            round(float(v), 7) for v in (incremental - replay).abs().tolist()
+        ],
+        "per_token_batched_eval_vs_train": [
+            round(float(v), 7) for v in (replay - grad_values).abs().tolist()
+        ],
+        "vllm_cached_tokens": getattr(engine.rollout_engine, "cached_tokens", None),
+        "steered_tokens": steered_tokens,
+        "allowed_drift": max_logprob_drift,
+    }
+    import json
+    print("risk_steering_preflight_diagnostics=" +
+          json.dumps(diagnostic, ensure_ascii=False), flush=True)
+    if drift > max_logprob_drift:
         raise RuntimeError(
             f"RiskKV rollout vs differentiable replay drift {drift:.6g} "
-            f"exceeds the configured log-probability bound {max_logprob_drift}"
+            f"exceeds the configured bound {max_logprob_drift}. "
+            "Inspect risk_steering_preflight_diagnostics: "
+            "sample_vs_incremental isolates inference engine/LoRA/weight drift; "
+            "incremental_vs_batched_eval isolates one-token vs batched "
+            "teacher-forcing (attention masks/kernels or NF4 matmul shapes); "
+            "batched_eval_vs_train isolates training-mode kernel behavior. "
+            "Do not increase the tolerance or start GRPO until diagnosed."
         )
     (-replay_with_grad.mean()).backward()
     if not any(p.grad is not None and bool((p.grad != 0).any())
@@ -154,7 +196,11 @@ def check_risk_cache_contract(engine, record, *, temperature=0.8, max_logprob_dr
         "prefix_tokens": state.length,
         "probe_tokens": len(ids),
         "max_abs_logprob_drift": drift,
-        "max_abs_no_grad_replay_drift": float((old - replay).abs().max().item()),
+        "max_abs_no_grad_replay_drift": max_drift(old, replay),
+        "max_abs_sample_vs_incremental": diagnostic["max_abs_sample_vs_incremental"],
+        "max_abs_incremental_vs_batched_eval":
+            diagnostic["max_abs_incremental_vs_batched_eval"],
+        "max_abs_batched_eval_vs_train": diagnostic["max_abs_batched_eval_vs_train"],
         "risk_windows": int(state.window_probs.numel()),
         "steered_tokens": steered_tokens,
         "vllm_cached_tokens": getattr(engine.rollout_engine, "cached_tokens", None),

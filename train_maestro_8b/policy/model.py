@@ -188,6 +188,52 @@ class RiskAwarePolicy:
             if self.rollout_attention:
                 config._attn_implementation = original
 
+    def _next_step_logits(self, prefix: RiskPrefix, cache, input_ids, generated: int):
+        """One exact autoregressive decoding step for sampling and preflight.
+
+        `generated` counts completed tokens. Keeping this one shared path
+        isolates token-by-token decoding from batched teacher-forced replay.
+        """
+        if input_ids.ndim != 2 or input_ids.shape[0] != 1 or generated < 0:
+            raise ValueError("expected one token sequence and valid generated count")
+        consumed = 0 if generated == 0 else len(self.anchor_ids) + generated - 1
+        n = input_ids.shape[1]
+        mask = torch.ones((1, prefix.length + consumed + n),
+                          dtype=torch.long, device=self.device)
+        end = prefix.length + len(self.anchor_ids) + generated
+        if end - n != prefix.length + consumed:
+            raise ValueError("autoregressive RiskKV position mismatch")
+        out = self.policy(
+            input_ids=input_ids, attention_mask=mask,
+            past_key_values=cache, use_cache=True, return_dict=True,
+            cache_position=torch.arange(end - n, end, device=self.device),
+        )
+        return out.logits[:, -1, :].float()
+
+    @torch.no_grad()
+    def log_probs_incremental(self, prefix: RiskPrefix,
+                              completion_ids: torch.Tensor,
+                              temperature: float = 1.0):
+        """Diagnostic replay: force the same tokens through the sample path.
+
+        Never used for optimizer backward. This tells whether a discrepancy
+        originates in the autoregressive/model engine or the different-shape
+        teacher-forced forward used by GRPO.
+        """
+        if (temperature <= 0 or completion_ids.ndim != 1
+                or not completion_ids.numel()):
+            raise ValueError("invalid diagnostic tokens or temperature")
+        cache = clone_cache(prefix.cache)
+        inputs = torch.tensor([self.anchor_ids], device=self.device, dtype=torch.long)
+        values = []
+        for i, target in enumerate(completion_ids):
+            logits = self._next_step_logits(prefix, cache, inputs, generated=i)
+            distribution = logits.div(temperature).log_softmax(dim=-1)
+            token_id = int(target.item())
+            values.append(distribution[0, token_id])
+            inputs = target.view(1, 1).to(device=self.device, dtype=torch.long)
+        return torch.stack(values)
+
     def _sample(self, prefix, max_new_tokens, temperature, eos_token_id):
         if max_new_tokens < 1 or temperature <= 0:
             raise ValueError("invalid generation settings")
@@ -197,21 +243,8 @@ class RiskAwarePolicy:
         seq = []
         old_logps = []
         for _ in range(max_new_tokens):
-            n = ids.shape[1]
-            consumed = 0 if not seq else len(self.anchor_ids) + len(seq) - 1
-            mask = torch.ones((1, prefix.length + consumed + n),
-                              dtype=torch.long, device=self.device)
-            # First call consumes all anchor tokens. Later calls consume the
-            # previously generated token only; do not replay the prefix.
-            pos_end = prefix.length + (len(self.anchor_ids) if not seq else
-                                       len(self.anchor_ids) + len(seq))
-            pos_start = pos_end - n
-            out = self.policy(
-                input_ids=ids, attention_mask=mask,
-                past_key_values=cache, use_cache=True, return_dict=True,
-                cache_position=torch.arange(pos_start, pos_end, device=self.device),
-            )
-            distribution = out.logits[:, -1, :].float().div(temperature).log_softmax(-1)
+            logits = self._next_step_logits(prefix, cache, ids, generated=len(seq))
+            distribution = logits.div(temperature).log_softmax(dim=-1)
             next_id = torch.multinomial(distribution.exp(), 1)
             seq.append(next_id.item())
             old_logps.append(distribution.gather(-1, next_id).squeeze().detach())
