@@ -20,8 +20,8 @@ python -m environment.macro_v3 \
   --target 100 --seed 17 --max-triples 1000000
 ```
 
-Use `python -m environment generate-macro-v3 --yago ...` as an equivalent
-command after integrating the optional entrypoint.
+The v3 command is intentionally a separate Python module so the
+existing `python -m environment` command surface and all v2 users stay unchanged.
 
 If YAGO is very sparse in the first N parsed statements, increase
 `--max-triples` or pass a curated Turtle facts file to `--yago`.
