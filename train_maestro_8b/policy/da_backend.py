@@ -95,10 +95,10 @@ def build_stage2_config(args, baseline):
 
 
 def train_stage2(cfg: dict, baseline, *, resume: str | None, args):
-    """Native Stage2 training loop using DA's stable helpers/reward contract.
+    """Native Stage2 GRPO. Keep DA's trainer mechanics; replace only reward.
 
-    Unlike the previous attempt this actually constructs and trains the
-    GRPO model in train_maestro_8b. No baseline trainer entrypoint runs.
+    Constructs and trains the policy here. The original DA reward is an
+    explicit ablation; hybrid uses private Environment + semantic Judge.
     """
     baseline.configure_runtime(cfg)
     print("[MAESTRO/Stage2] native DA GRPO; no Stage1 Risk Head/KV steering", flush=True)
