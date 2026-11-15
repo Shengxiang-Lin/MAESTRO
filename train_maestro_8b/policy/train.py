@@ -28,6 +28,16 @@ def parse_args(argv=None):
     p.add_argument("--vllm_memory_utilization", type=float, default=0.70)
     p.add_argument("--reward_callable", help="optional module.path:function(candidate, record)")
     p.add_argument("--reward_debug_jsonl", default=None)
+    p.add_argument("--reward_mode", choices=("deterministic", "hybrid", "judge_only"),
+                   default="deterministic", help="Hard legality gate in every mode")
+    p.add_argument("--judge_registry", default="config/model_config.yaml")
+    p.add_argument("--judge_model", default="qwen3.7-flash")
+    p.add_argument("--judge_api_key_env", default="DASHSCOPE_API_KEY")
+    p.add_argument("--judge_workers", type=int, default=4)
+    p.add_argument("--judge_timeout", type=float, default=90.0)
+    p.add_argument("--judge_retries", type=int, default=2)
+    p.add_argument("--judge_weight", type=float, default=0.4)
+    p.add_argument("--judge_cache_jsonl", default=None)
     p.add_argument("--epochs", type=float, default=3.0)
     p.add_argument("--max_steps", type=int, default=-1)
     p.add_argument("--num_generations", type=int, default=8,
@@ -121,6 +131,12 @@ def validate_args(args):
         )
     if args.max_steps == 0:
         raise ValueError("--max_steps must be -1 (epoch) or positive")
+    if args.reward_mode != "deterministic" and args.reward_callable:
+        raise ValueError("hybrid/judge_only cannot be combined with --reward_callable")
+    if args.reward_mode != "deterministic" and args.zero_adv_strategy != "skip":
+        raise ValueError("hybrid/judge_only requires --zero_adv_strategy=skip")
+    if not 0 <= args.judge_weight <= 1 or args.judge_workers < 1 or args.judge_timeout <= 0 or args.judge_retries < 0:
+        raise ValueError("invalid semantic judge settings")
 
 
 def select_warmup_records(records, *, seed, limit):
@@ -214,6 +230,21 @@ def main(argv=None):
 
 
 def run(args, stack):
+    # Validate API credentials before allocating GPU memory. The judge
+    # receives only Main-visible prompt and Action.
+    hybrid_reward = None
+    if args.reward_mode != "deterministic":
+        from train_maestro_8b.policy.semantic_judge import SemanticJudge
+        from train_maestro_8b.policy.hybrid_reward import HybridReward
+        judge = SemanticJudge.from_registry(
+            registry_path=args.judge_registry, model=args.judge_model,
+            api_key_env=args.judge_api_key_env, workers=args.judge_workers,
+            timeout=args.judge_timeout, retries=args.judge_retries,
+            cache_path=args.judge_cache_jsonl, enable_thinking=False,
+        )
+        hybrid_reward = HybridReward(
+            judge, mode=args.reward_mode, judge_weight=args.judge_weight,
+        )
     # Import Unsloth FIRST, before importing transformers/trl/peft.
     # For the HF reference backend the module is never imported.
     if args.backend == "unsloth":
@@ -319,7 +350,9 @@ def run(args, stack):
     )
     # The current environment reward is scored by the private evaluator
     # within trainer.training_step; no private state is appended to the prompt.
-    reward = resolve_reward(args.reward_callable) if args.reward_callable else None
+    reward = hybrid_reward or (
+        resolve_reward(args.reward_callable) if args.reward_callable else None
+    )
     trainer = make_trainer_class()(
         engine=engine,
         reward_fn=reward,
@@ -351,7 +384,11 @@ def run(args, stack):
         "steer_strength": args.steer_strength,
         "steer_threshold": args.steer_threshold,
         "anchor_ids": engine.anchor_ids,
-        "reward_type": args.reward_callable or "deterministic_orchestration",
+        "reward_type": args.reward_callable or args.reward_mode,
+        "judge_model": args.judge_model if hybrid_reward else None,
+        "judge_weight": args.judge_weight if hybrid_reward else None,
+        "judge_workers": args.judge_workers if hybrid_reward else None,
+        "judge_cache_jsonl": args.judge_cache_jsonl if hybrid_reward else None,
         "grpo_training_steps": trainer.state.global_step,
         "zero_advantage_groups": trainer.zero_adv_groups,
         "grpo_gradient_groups": trainer.grpo_gradient_groups,

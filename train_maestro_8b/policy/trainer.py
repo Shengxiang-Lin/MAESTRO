@@ -188,9 +188,20 @@ def make_trainer_class():
                     prefix, count=self.num_generations, max_new_tokens=self.max_new_tokens,
                     temperature=self.temperature,
                 )
-                for ids, sampled in candidates:
-                    candidate = self.engine.decode(ids)
-                    if self.reward_fn is None:
+                texts = [self.engine.decode(ids) for ids, _ in candidates]
+                group_scores = (
+                    self.reward_fn.score_group(texts, row)
+                    if self.reward_fn is not None and hasattr(self.reward_fn, "score_group")
+                    else None
+                )
+                if group_scores is not None and len(group_scores) != len(candidates):
+                    raise RuntimeError("Reward group/candidate count mismatch")
+                for index, (ids, sampled) in enumerate(candidates):
+                    candidate = texts[index]
+                    if group_scores is not None:
+                        info = group_scores[index]
+                        reward = float(info["reward"])
+                    elif self.reward_fn is None:
                         info = score_decision(candidate, row["decision_state"])
                         reward = info["reward"]
                     else:
@@ -210,7 +221,10 @@ def make_trainer_class():
                                 "prompt_tokens": prefix.length,
                                 "completion_tokens": int(ids.numel()),
                                 "reward": reward,
-                                "strict_reward": info["reward"] if info else None,
+                                "strict_reward": (
+                                    info.get("env_reward", info["reward"])
+                                    if info else None
+                                ),
                                 "components": info,
                             }, ensure_ascii=False) + "\n")
             if gpu:
@@ -222,6 +236,29 @@ def make_trainer_class():
             self.generated_total += len(actions)
             self.invalid_total += sum(info is not None and not info["valid"]
                                       for _, info in metadata)
+            judged = [
+                info for _, info in metadata
+                if info is not None and info.get("judge_reward") is not None
+            ]
+            judge_metrics = {
+                "judge_scored_fraction": len(judged) / len(actions),
+                "judge_reward": (
+                    sum(info["judge_reward"] for info in judged) / len(judged)
+                    if judged else None
+                ),
+                "judge_cached_fraction": (
+                    sum(bool(info["judge_cached"]) for info in judged) / len(judged)
+                    if judged else None
+                ),
+            }
+            for dimension in (
+                "evidence_grounding", "recovery_strategy",
+                "subtask_quality", "reasoning_quality",
+            ):
+                judge_metrics["judge_" + dimension] = (
+                    sum(info["judge_dimensions"][dimension] for info in judged)
+                    / (4 * len(judged)) if judged else None
+                )
             advantages = group_advantages(rewards).to(self.engine.device)
             model.train()
             if float(advantages.abs().max()) < 1e-6:
@@ -265,10 +302,12 @@ def make_trainer_class():
 
                 self.last_components = {
                     "reward": sum(rewards) / len(rewards),
-                    "strict_reward": sum(
-                        info["reward"] for _, info in metadata
-                        if info is not None
-                    ) / len(actions) if self.reward_fn is None else None,
+                    "strict_reward": (
+                        sum(info.get("env_reward", info["reward"])
+                            for _, info in metadata if info is not None)
+                        / len(actions)
+                        if any(info is not None for _, info in metadata) else None
+                    ),
                     "reward_unique": len(set(rewards)),
                     "reward_std": float(torch.as_tensor(rewards).std(unbiased=False)),
                     "strict_valid_fraction": sum(
@@ -294,6 +333,7 @@ def make_trainer_class():
                         round(float(fallback_loss.detach()), 6)
                         if fallback_loss is not None else None
                     ),
+                    **judge_metrics,
                 }
                 if gpu:
                     self.last_components["cuda_peak_allocated_gib"] = round(
@@ -366,10 +406,12 @@ def make_trainer_class():
             t3 = time.perf_counter()
             self.last_components = {
                 "reward": sum(rewards) / len(rewards),
-                "strict_reward": sum(
-                    info["strict_reward"] for _, info in metadata
-                    if info is not None
-                ) / len(actions) if self.reward_fn is None else None,
+                "strict_reward": (
+                    sum(info.get("env_reward", info["reward"])
+                        for _, info in metadata if info is not None)
+                    / len(actions)
+                    if any(info is not None for _, info in metadata) else None
+                ),
                 "reward_unique": len(set(rewards)),
                 "reward_std": float(torch.as_tensor(rewards).std(unbiased=False)),
                 "prompt_tokens": prefix.length,
@@ -392,6 +434,7 @@ def make_trainer_class():
                     info is not None and info.get("reason") != "invalid_json"
                     for _, info in metadata
                 ) / len(actions),
+                **judge_metrics,
                 "importance_ratio_min": round(importance_ratio_min, 6),
                 "importance_ratio_max": round(importance_ratio_max, 6),
                 "importance_ratio_clipped_fraction": round(
