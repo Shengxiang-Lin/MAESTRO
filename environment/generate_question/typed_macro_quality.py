@@ -45,11 +45,6 @@ def audit_terminal_goal_coverage(scene: dict) -> dict:
         node for node in nodes if node["role"] in RESULT_ROLES
     ]
     coverage = []
-    delivered = {
-        (entry.get("type"), str(entry.get("port")), entry.get("result") and
-         repr(entry["result"]))
-        for entry in final["findings"]
-    }
     # All investigation, verification, and comparison outputs explicitly
     # requested by the Question must survive as typed FinalResult fields.
     for node in required:
@@ -151,6 +146,21 @@ def audit_typed_handoffs(scene: dict, executor) -> dict:
             src = link["from_macro"]
             old = reports[src]["workproduct"][link["from_port"]]
             mutated = _counterfactual_value(link["type"], old)
+            # Comparison must be tested against the sibling relation rather
+            # than an arbitrary unrelated URI. Otherwise a false != false
+            # outcome masks a real dependency despite changing its argument.
+            if child["role"] == "comparison" and link["type"] == "FactBundle":
+                sibling_port = "right" if port == "left" else "left"
+                sibling = child["input_ports"][sibling_port]
+                other = reports[sibling["from_macro"]]["workproduct"][
+                    sibling["from_port"]
+                ]
+                other_uri = other["linked_entity_uri"]
+                mutated["linked_entity_uri"] = (
+                    other_uri if old["linked_entity_uri"] != other_uri
+                    else "urn:maestro:counterfactual:comparison"
+                )
+                mutated["linked_entity"] = "controlled-comparison-case"
             if mutated == old:
                 raise ValueError("counterfactual_mutation_was_no_op")
             try:
