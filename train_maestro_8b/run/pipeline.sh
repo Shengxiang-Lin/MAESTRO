@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MAESTRO Stage4 -> NF4 Risk Head -> private-reward Unsloth GRPO.
+# MAESTRO Stage2: default DA/TRL GRPO; optional legacy Stage1 RiskKV route.
 set -Eeuo pipefail
 
 RUN_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -11,6 +11,14 @@ MODEL="${MODEL:-$ROOT/base_models/Qwen3-8B}"
 STAGE1_DIR="${STAGE1_DIR:-$ROOT/environment/data/stage1}"
 STAGE4_DIR="${STAGE4_DIR:-$ROOT/environment/data/stage4}"
 RUN_ROOT="${RUN_ROOT:-$ROOT/workspace/maestro_8b}"
+STAGE2_TRAINER="${STAGE2_TRAINER:-da}"     # da (default) or riskkv
+DA_DATA="${DA_DATA:-$RUN_ROOT/stage2_da}"
+DA_GRPO_CKPT="${DA_GRPO_CKPT:-$RUN_ROOT/checkpoints/stage2-da-grpo}"
+DA_PILOT_CKPT="${DA_PILOT_CKPT:-$RUN_ROOT/checkpoints/stage2-da-pilot}"
+DA_PILOT_STEPS="${DA_PILOT_STEPS:-3}"
+DA_PILOT_ROWS="${DA_PILOT_ROWS:-16}"
+DA_PILOT_NEW_TOKENS="${DA_PILOT_NEW_TOKENS:-1536}"
+DA_REVIEWED_ONLY="${DA_REVIEWED_ONLY:-0}"
 RISK_DATA="${RISK_DATA:-$STAGE4_DIR/private/window_risk}"
 REWARD_STATES="${REWARD_STATES:-$STAGE4_DIR/private/decision_reward_states.jsonl}"
 GRPO_DATA="${GRPO_DATA:-$STAGE4_DIR/private/risk_grpo}"
@@ -76,20 +84,25 @@ usage() {
   cat <<'EOF'
 Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
 
-  all           export -> features -> risk -> prepare-grpo -> preflight -> pilot -> grpo
+  all           Default DA: prepare-grpo -> preflight -> pilot -> grpo
+                With STAGE2_TRAINER=riskkv: old Stage1 Risk Head -> RiskKV
   export        Stage4 episodes/claim states -> train/val risk rows
   features      Frozen Qwen3-8B NF4 train/val window-feature cache
   risk          Train Risk Head only, using cached NF4 features
-  prepare-grpo  Backfill missing private states, export and audit GRPO rows
-  preflight     Check Unsloth KV/logprob/LoRA gradient compatibility
-  pilot         Strict Action-reward smoke; 1 prompt x G candidates, full token cap
-  audit-pilot   Review recent candidate outputs and invalid reward reasons (CPU)
-  grpo          Full Unsloth+TRL GRPO training
-  inspect-io    Audit real O1 prompt tokens and reference action lengths
+  prepare-grpo  DA: export Stage4 -> Parquet; RiskKV: private-state reward rows
+  preflight     DA: baseline package/input checks; RiskKV: cache/logprob
+  pilot         DA: 3-step 16-row 1536-token smoke + reward variance gate
+                RiskKV: previous strict Action-reward pilot
+  audit-pilot   DA: review Judge reward diagnostics; RiskKV: invalid reasons
+  grpo          Main Stage2 GRPO, defaults to native DA/TRL training
+  inspect-io    DA: export preflight; RiskKV: native prompt/reference audit
+  judge         DA: check remote LLM Judge endpoint without loading GPU
   status        Show generated data and checkpoint files
   help          This help
 
 Override settings via environment variables or run/config.env:
+  STAGE2_TRAINER (da|riskkv), DA_DATA, DA_GRPO_CKPT, DA_PILOT_CKPT,
+  DA_PILOT_STEPS, DA_PILOT_ROWS, DA_PILOT_NEW_TOKENS, DA_REVIEWED_ONLY,
   MODEL, STAGE1_DIR, STAGE4_DIR, RUN_ROOT, MAX_LENGTH,
   RISK_EPOCHS, RISK_BATCH_SIZE, GRPO_EPOCHS, GRPO_GENERATIONS,
   GRPO_GRAD_ACCUM, GRPO_MAX_PROMPT_TOKENS, GRPO_MAX_NEW_TOKENS,
@@ -204,6 +217,25 @@ train_risk() {
   verify_risk
 }
 prepare_grpo() {
+  if [[ "$STAGE2_TRAINER" == "da" ]]; then
+    need "$STAGE1_DIR/questions/scenes.jsonl"
+    need "$STAGE4_DIR/main_turns.jsonl"
+    if [[ "$SKIP_COMPLETED" == "1" && -s "$DA_DATA/train.parquet" && -f "$DA_DATA/summary.json" ]]; then
+      say "Reusing Stage2 DA Parquet: $DA_DATA/train.parquet"
+      return
+    fi
+    say "Stage2 DA export: exact O1 prompts + reward-only expert metadata"
+    local extra=()
+    [[ "$DA_REVIEWED_ONLY" == "1" ]] && extra+=(--reviewed_only)
+    python -m train_maestro_8b.data.export_da_grpo \
+      --scenes "$STAGE1_DIR/questions/scenes.jsonl" \
+      --turns "$STAGE4_DIR/main_turns.jsonl" \
+      --output_dir "$DA_DATA" --tokenizer "$MODEL" \
+      --max_prompt_tokens "$GRPO_MAX_PROMPT_TOKENS" "${extra[@]}"
+    need "$DA_DATA/train.parquet"
+    return
+  fi
+  [[ "$STAGE2_TRAINER" == "riskkv" ]] || die "STAGE2_TRAINER must be da or riskkv"
   need "$RISK_DATA/train.jsonl"
   need "$STAGE4_DIR/main_turns.jsonl"
   if [[ ! -s "$REWARD_STATES" ]]; then
@@ -229,6 +261,80 @@ prepare_grpo() {
   python -m train_maestro_8b.data.audit_rewards \
     --train_file "$GRPO_DATA/train.jsonl" \
     --output_jsonl "$RUN_ROOT/reward_reference_audit.jsonl"
+}
+stage2_da_args=()
+init_stage2_da_args() {
+  stage2_da_args=(
+    --model "$MODEL" --train_file "$DA_DATA/train.parquet"
+    --max_length "$GRPO_MAX_PROMPT_TOKENS"
+    --max_new_tokens "$GRPO_MAX_NEW_TOKENS"
+    --num_generations "$GRPO_GENERATIONS"
+    --gradient_accumulation_steps "$GRPO_GRAD_ACCUM"
+    --vllm_memory_utilization "$GRPO_VLLM_MEMORY_UTILIZATION"
+    --lr "$GRPO_LR" --weight_decay "$GRPO_WEIGHT_DECAY"
+    --max_grad_norm "$GRPO_MAX_GRAD_NORM"
+    --judge_registry "$GRPO_JUDGE_REGISTRY"
+    --judge_model "$GRPO_JUDGE_MODEL"
+    --judge_api_key_env "$GRPO_JUDGE_API_KEY_ENV"
+    --judge_workers "$GRPO_JUDGE_WORKERS"
+    --logging_steps "$GRPO_LOGGING_STEPS"
+    --save_steps "$GRPO_SAVE_STEPS"
+  )
+}
+stage2_da_check() {
+  need_model; need "$DA_DATA/train.parquet"
+  init_stage2_da_args
+  python -m train_maestro_8b.policy.train da "${stage2_da_args[@]}" \
+    --output_dir "$DA_GRPO_CKPT" --check
+}
+stage2_da_judge() {
+  need "$DA_DATA/train.parquet"
+  init_stage2_da_args
+  python -m train_maestro_8b.policy.train da "${stage2_da_args[@]}" \
+    --output_dir "$DA_GRPO_CKPT" --test_judge
+}
+stage2_da_pilot() {
+  need_model; need "$DA_DATA/train.parquet"
+  if [[ "$SKIP_COMPLETED" == "1" && -f "$DA_PILOT_CKPT/stage2_da_training.json" ]]; then
+    say "Reusing completed Stage2 DA Pilot"; return
+  fi
+  if [[ -d "$DA_PILOT_CKPT" && -n "$(ls -A "$DA_PILOT_CKPT")" ]]; then
+    die "Stage2 DA pilot output exists: $DA_PILOT_CKPT; choose fresh DA_PILOT_CKPT"
+  fi
+  init_stage2_da_args
+  say "Stage2 DA/TRL Pilot: 8 candidates per prompt, original four-dimensional Judge"
+  python -m train_maestro_8b.policy.train da "${stage2_da_args[@]}" \
+    --output_dir "$DA_PILOT_CKPT" --max_steps "$DA_PILOT_STEPS" \
+    --max_train_rows "$DA_PILOT_ROWS" --max_new_tokens "$DA_PILOT_NEW_TOKENS"
+  need "$DA_PILOT_CKPT/reward_diagnostics.jsonl"
+  python - "$DA_PILOT_CKPT/reward_diagnostics.jsonl" <<'PY'
+import json,sys
+from collections import defaultdict
+groups=defaultdict(list)
+for line in open(sys.argv[1], encoding="utf-8"):
+    x=json.loads(line)
+    groups[(x["batch_id"],x["group_index"])].append(float(x["reward"]))
+nonzero=sum(max(vals)-min(vals)>1e-7 for vals in groups.values())
+print(f"Stage2 DA Pilot: {len(groups)} GRPO groups; {nonzero} with nonzero reward variance",flush=True)
+if not groups or not nonzero:
+    raise SystemExit("No preference signal in Stage2 DA pilot; inspect Judge diagnostic scores before full training")
+PY
+}
+stage2_da_grpo() {
+  need_model; need "$DA_DATA/train.parquet"
+  if [[ "$SKIP_COMPLETED" == "1" && -f "$DA_GRPO_CKPT/stage2_da_training.json" ]]; then
+    say "Reusing completed Stage2 DA GRPO"; return
+  fi
+  if [[ -d "$DA_GRPO_CKPT" && -n "$(ls -A "$DA_GRPO_CKPT")" && -z "$GRPO_RESUME_FROM" ]]; then
+    die "Stage2 DA output exists: $DA_GRPO_CKPT; use a fresh DA_GRPO_CKPT or GRPO_RESUME_FROM"
+  fi
+  init_stage2_da_args
+  local resume=()
+  [[ -n "$GRPO_RESUME_FROM" ]] && resume=(--resume_from_checkpoint "$GRPO_RESUME_FROM")
+  say "Main Stage2 training: DA Unsloth + TRL GRPOTrainer, Risk Head disabled"
+  python -m train_maestro_8b.policy.train da "${stage2_da_args[@]}" \
+    --output_dir "$DA_GRPO_CKPT" --epochs "$GRPO_EPOCHS" \
+    --max_steps "$GRPO_MAX_STEPS" "${resume[@]}"
 }
 common_args=()
 init_grpo_args() {
@@ -266,6 +372,14 @@ init_grpo_args() {
   fi
 }
 inspect_io() {
+  if [[ "$STAGE2_TRAINER" == "da" ]]; then
+    need_model
+    python -m train_maestro_8b.data.export_da_grpo \
+      --scenes "$STAGE1_DIR/questions/scenes.jsonl" \
+      --turns "$STAGE4_DIR/main_turns.jsonl" --output_dir "$DA_DATA" \
+      --tokenizer "$MODEL" --max_prompt_tokens "$GRPO_MAX_PROMPT_TOKENS" --dry_run
+    return
+  fi
   need_model
   need "$GRPO_DATA/train.jsonl"
   say "Inspect actual Main prompts and reference Action budgets (no GPU)"
@@ -277,6 +391,7 @@ inspect_io() {
     --out "$RUN_ROOT/io_inspection.json"
 }
 preflight() {
+  if [[ "$STAGE2_TRAINER" == "da" ]]; then stage2_da_check; return; fi
   need_model; verify_risk; need "$GRPO_DATA/train.jsonl"
   say "Unsloth RiskKV preflight: sampling/logprob/LoRA gradients"
   init_grpo_args
@@ -284,6 +399,7 @@ preflight() {
     --output_dir "$GRPO_CKPT" --preflight_only
 }
 pilot() {
+  if [[ "$STAGE2_TRAINER" == "da" ]]; then stage2_da_pilot; return; fi
   need_model; verify_risk; need "$GRPO_DATA/train.jsonl"
   if [[ "$SKIP_COMPLETED" == "1" && -f "$PILOT_CKPT/risk_policy_config.json" ]]; then
     say "Reusing completed GRPO pilot"; return
@@ -307,6 +423,7 @@ pilot() {
     --reward_debug_jsonl "$RUN_ROOT/reward_pilot.jsonl"
 }
 grpo() {
+  if [[ "$STAGE2_TRAINER" == "da" ]]; then stage2_da_grpo; return; fi
   need_model; verify_risk; need "$GRPO_DATA/train.jsonl"
   if [[ "$SKIP_COMPLETED" == "1" && -f "$GRPO_CKPT/risk_policy_config.json" ]]; then
     say "Reusing completed GRPO checkpoint"; return
@@ -327,6 +444,11 @@ grpo() {
     --reward_debug_jsonl "$RUN_ROOT/reward_grpo.jsonl" "${resume[@]}"
 }
 audit_pilot() {
+  if [[ "$STAGE2_TRAINER" == "da" ]]; then
+    need "$DA_PILOT_CKPT/reward_diagnostics.jsonl"
+    tail -n "$GRPO_GENERATIONS" "$DA_PILOT_CKPT/reward_diagnostics.jsonl"
+    return
+  fi
   need "$RUN_ROOT/reward_pilot.jsonl"
   say "Inspect recently sampled Actions and deterministic invalid reasons (no GPU)"
   python -m train_maestro_8b.data.audit_rollouts \
@@ -334,7 +456,10 @@ audit_pilot() {
     --tail "$GRPO_GENERATIONS"
 }
 status() {
-  say "MODEL=$MODEL | RUN_ROOT=$RUN_ROOT"
+  say "MODEL=$MODEL | RUN_ROOT=$RUN_ROOT | STAGE2_TRAINER=$STAGE2_TRAINER"
+  [[ -f "$DA_DATA/summary.json" ]] && cat "$DA_DATA/summary.json" || true
+  [[ -f "$DA_PILOT_CKPT/stage2_da_training.json" ]] && echo "OK Stage2 DA Pilot" || true
+  [[ -f "$DA_GRPO_CKPT/stage2_da_training.json" ]] && echo "OK Stage2 DA GRPO" || true
   for file in "$STAGE4_DIR/main_turns.jsonl" "$RISK_DATA/train.jsonl" \
               "$RISK_DATA/val.jsonl" "$GRPO_DATA/train.jsonl"; do
     [[ -f "$file" ]] && printf '%7s rows %s\n' "$(wc -l < "$file")" "$file" ||
@@ -348,7 +473,13 @@ status() {
   done
 }
 case "${1:-help}" in
-  all) export_data; extract_features; train_risk; prepare_grpo; inspect_io; preflight; pilot; grpo; status ;;
+  all)
+    if [[ "$STAGE2_TRAINER" == "da" ]]; then
+      prepare_grpo; preflight; pilot; grpo; status
+    else
+      export_data; extract_features; train_risk; prepare_grpo; inspect_io; preflight; pilot; grpo; status
+    fi
+    ;;
   export) export_data ;;
   features) extract_features ;;
   risk) train_risk ;;
@@ -357,6 +488,7 @@ case "${1:-help}" in
   preflight) preflight ;;
   pilot) pilot ;;
   audit-pilot) audit_pilot ;;
+  judge) [[ "$STAGE2_TRAINER" == "da" ]] || die "judge is only a DA Stage2 command"; stage2_da_judge ;;
   grpo) grpo ;;
   status) status ;;
   help|-h|--help) usage ;;
