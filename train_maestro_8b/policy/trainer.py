@@ -217,6 +217,10 @@ def make_trainer_class():
                               for k, v in self.last_components.items()})
                 return torch.tensor(0.0, device=self.engine.device)
             group_losses = []
+            importance_ratio_min = float("inf")
+            importance_ratio_max = 0.0
+            importance_ratio_clipped_tokens = 0
+            importance_ratio_total_tokens = 0
             for i, (ids, old_logps) in enumerate(actions):
                 # The Accelerate .backward() method automatically accounts
                 # for Trainer's gradient_accumulation_steps. Divide here
@@ -225,6 +229,26 @@ def make_trainer_class():
                     new_logps = self.engine.log_probs(
                         prefix, ids, temperature=self.temperature
                     )
+                    # Same weights but different NF4 GEMV-vs-GEMM numeric
+                    # paths can yield non-unit initial sampler/train ratios.
+                    # Preserve the sampler's TRUE log-probability as the
+                    # behavior denominator; report which tokens clip even
+                    # before any optimizer step. No extra forward is needed.
+                    with torch.no_grad():
+                        ratios = (
+                            new_logps.detach() - old_logps.detach()
+                        ).exp()
+                        importance_ratio_min = min(
+                            importance_ratio_min, float(ratios.min().item())
+                        )
+                        importance_ratio_max = max(
+                            importance_ratio_max, float(ratios.max().item())
+                        )
+                        importance_ratio_clipped_tokens += int(
+                            ((ratios < 1 - self.clip_epsilon)
+                             | (ratios > 1 + self.clip_epsilon)).sum().item()
+                        )
+                        importance_ratio_total_tokens += ratios.numel()
                     loss = clipped_policy_loss(
                         new_logps, old_logps, advantages[i], self.clip_epsilon
                     ) / self.num_generations
@@ -248,6 +272,12 @@ def make_trainer_class():
                     info is not None and not info["valid"] for _, info in metadata
                 ) / len(actions),
                 "zero_adv_groups": self.zero_adv_groups,
+                "importance_ratio_min": round(importance_ratio_min, 6),
+                "importance_ratio_max": round(importance_ratio_max, 6),
+                "importance_ratio_clipped_fraction": round(
+                    importance_ratio_clipped_tokens /
+                    max(1, importance_ratio_total_tokens), 6
+                ),
             }
             if gpu:
                 self.last_components["cuda_peak_allocated_gib"] = round(
