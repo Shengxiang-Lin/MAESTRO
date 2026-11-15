@@ -32,7 +32,7 @@ jobs:
           bash train_maestro_8b/run/pipeline.sh help
           bash train_maestro_8b/run/pipeline.sh status
       - name: Test risk schema, history alignment and masks
-        run: python -m unittest train_maestro_8b.tests.test_reliability train_maestro_8b.tests.test_candidate_alignment -v
+        run: python -m unittest train_maestro_8b.tests.test_reliability train_maestro_8b.tests.test_candidate_alignment train_maestro_8b.tests.test_io_inspection -v
 
   risk-head-gradient:
     runs-on: ubuntu-latest
