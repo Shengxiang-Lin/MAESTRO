@@ -32,7 +32,6 @@ saves/
 logs/
 orchestra/
 output/
-data/
 cache/
 *.log
 *.json
@@ -66,3 +65,4 @@ unsloth_compiled_cache/
 !/train_maestro_8b/tests/*.py
 # Machine-local training overrides
 /train_maestro_8b/run/config.env
+data/
