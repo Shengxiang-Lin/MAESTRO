@@ -80,16 +80,78 @@ def build_stage2_config(args, baseline):
     return cfg
 
 
-def make_subset(cfg: dict, max_train_rows: int, dest: Path):
-    import pandas as pd
-    rows = pd.read_parquet(cfg["paths"]["train_parquet"])
-    if rows.empty:
-        raise ValueError("Empty Stage2 training Parquet")
-    if max_train_rows < 1 or max_train_rows > len(rows):
-        raise ValueError(f"Requested {max_train_rows} rows, available {len(rows)}")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    rows.head(max_train_rows).to_parquet(dest, engine="pyarrow", index=False)
-    cfg["paths"]["train_parquet"] = dest
+def train_stage2(cfg: dict, baseline, *, resume: str | None,
+                 max_train_rows: int = 0):
+    """Native Stage2 training loop using DA's stable helpers/reward contract.
+
+    Unlike the previous attempt this actually constructs and trains the
+    GRPO model in train_maestro_8b. No baseline trainer entrypoint runs.
+    """
+    baseline.configure_runtime(cfg)
+    print("[MAESTRO/Stage2] native DA GRPO; no Stage1 Risk Head/KV steering", flush=True)
+    import torch
+    if torch.cuda.device_count() != 1 or not torch.cuda.is_bf16_supported():
+        raise RuntimeError("Stage2 DA requires one BF16-capable CUDA GPU")
+
+    # Unsloth MUST patch before importing TRL GRPOTrainer.
+    from unsloth import FastLanguageModel
+    baseline.disable_vllm_flashinfer_autotune()
+    from trl import GRPOConfig, GRPOTrainer
+    from datasets import Dataset
+    # Reuse the original four-dimensional LLM Judge and its exact prompt.
+    from reward_adapter import make_reward_function
+
+    rows = baseline.load_dataset_rows(cfg["paths"]["train_parquet"])
+    if max_train_rows:
+        if max_train_rows > len(rows):
+            raise ValueError(f"pilot asks for {max_train_rows} rows, only {len(rows)} available")
+        rows = rows[:max_train_rows]
+    if not rows:
+        raise ValueError("Empty Stage2 DA training set")
+    print(f"[MAESTRO/Stage2] {len(rows)} Stage4 Main decisions; "
+          f"batch_plan={baseline.batch_plan(cfg)}", flush=True)
+    model_cfg, rollout = cfg["model"], cfg["rollout"]
+    policy, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=str(cfg["paths"]["model"]),
+        max_seq_length=model_cfg["max_seq_length"],
+        dtype=torch.bfloat16,
+        load_in_4bit=model_cfg["load_in_4bit"],
+        fast_inference=True,
+        max_lora_rank=model_cfg["lora_rank"],
+        gpu_memory_utilization=rollout["gpu_memory_utilization"],
+        max_num_seqs=rollout["max_num_seqs"],
+        float8_kv_cache=False,
+        enforce_eager=rollout["enforce_eager"],
+    )
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    # DA uses Qwen3 role/chat templates, not raw continuation+newline.
+    baseline.check_prompt_lengths(rows, tokenizer, rollout["max_prompt_tokens"])
+    policy = FastLanguageModel.get_peft_model(
+        policy, r=model_cfg["lora_rank"], lora_alpha=model_cfg["lora_alpha"],
+        lora_dropout=model_cfg["lora_dropout"],
+        target_modules=model_cfg["lora_target_modules"],
+        bias="none", use_gradient_checkpointing="unsloth",
+        random_state=cfg["training"]["seed"],
+    )
+    training_config = GRPOConfig(**baseline.build_grpo_kwargs(cfg))
+    trainer = GRPOTrainer(
+        model=policy,
+        processing_class=tokenizer,
+        train_dataset=Dataset.from_list(rows),
+        reward_funcs=[make_reward_function(
+            cfg["judge"]["workers"],
+            diagnostics_path=cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl",
+            num_generations=rollout["num_generations"],
+        )],
+        args=training_config,
+    )
+    if not getattr(trainer, "use_vllm", False):
+        raise RuntimeError("Stage2 DA vLLM rollout is not enabled")
+    trainer.train(resume_from_checkpoint=resume)
+    dest = cfg["paths"]["output_dir"] / "final_adapter"
+    trainer.save_model(str(dest))
+    tokenizer.save_pretrained(str(dest))
 
 
 def run(args):
@@ -100,11 +162,6 @@ def run(args):
     if args.dry_run:
         baseline.show_config(cfg)
         return
-    if args.max_train_rows:
-        make_subset(
-            cfg, args.max_train_rows,
-            cfg["paths"]["output_dir"] / "stage2_pilot_dataset.parquet",
-        )
     checks = baseline.environment_checks(cfg)
     if args.check:
         baseline.show_config(cfg)
@@ -120,7 +177,10 @@ def run(args):
         return
     print("[MAESTRO/Stage2] backend=DA/Unsloth+TRL/vLLM; risk_head=off; "
           "reward=original_DA_4D_Judge; formatter=Qwen3_chat_template", flush=True)
-    baseline.train(cfg, resume=args.resume_from_checkpoint)
+    train_stage2(
+        cfg, baseline, resume=args.resume_from_checkpoint,
+        max_train_rows=args.max_train_rows,
+    )
     destination = cfg["paths"]["output_dir"] / "stage2_da_training.json"
     destination.write_text(json.dumps({
         "schema": "maestro.stage2_da_training.v1",
