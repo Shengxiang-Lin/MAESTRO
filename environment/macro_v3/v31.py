@@ -123,8 +123,7 @@ def choose_real_path(graph: KnowledgeGraph, rng: random.Random,
             seen = {chosen.subject, chosen.object}
             while len(path) < target:
                 next_edges = [e for e in adjacency.get(path[-1].object, [])
-                              if e.object not in seen and e.subject != e.object
-                              and e.predicate != path[-1].predicate]
+                              if e.object not in seen and e.subject != e.object]
                 if not next_edges:
                     break
                 edge = rng.choice(next_edges)
