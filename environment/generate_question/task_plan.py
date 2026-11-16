@@ -53,6 +53,9 @@ _SEMANTIC_RECIPES = (
     (("spouse","birthplace","containedinplace"), "biographical", "person", "administrative area", "Which administrative area contains the birthplace of the referenced person's spouse?"),
     (("deathplace","location","containedinplace"), "biographical", "person", "administrative area", "Which administrative area contains the location recorded for the referenced person's place of death?"),
     (("nationality","capital","location"), "biographical", "person", "location", "Where is the capital of the referenced person's recorded nationality located?"),
+    (("location","neighbor","location"), "geographical", "entity", "location", "Which location is recorded for the place neighboring the referenced entity's location?"),
+    (("deathplace","location","neighbor"), "biographical", "person", "neighboring area", "Which area neighbors the location recorded for the referenced person's place of death?"),
+    (("location","capital","twinnedwith"), "geographical", "entity", "twin municipality", "Which municipality is twinned with the capital of the area containing the referenced entity?"),
 )
 
 
@@ -298,6 +301,7 @@ def _semantic_ground(kg, index, plan, *, seed: int, ordinal: int):
             continue
         alternatives = _alternatives(
             kg, index, path, count=n_cases-1, rng=rng,
+            candidate_filter=lambda row: _loaded_yago_unique(index, row),
         )
         if not alternatives:
             rejects["incomplete_shadows"] += 1
