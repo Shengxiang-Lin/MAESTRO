@@ -609,11 +609,15 @@ def _unlicensed_task_plan_condition(question: str, plan: dict) -> list[str]:
     )
     year_terms = re.search(r"\b(?:19|20)\d{2}\b", q)
     if condition is None:
-        if re.search(
+        if (re.search(
             r"\b(?:event|session|review)s?\b.{0,65}\b"
             r"(?:completed|scheduled|cancelled|canceled|(?:19|20)\d{2})\b",
             q,
-        ):
+        ) or re.search(
+            r"\b(?:completed|scheduled|cancelled|canceled|(?:19|20)\d{2})\b"
+            r".{0,40}\b(?:event|session|review)s?\b",
+            q,
+        )):
             return ["task_plan_unlicensed_event_condition"]
         return []
     if condition["field"] == "event_status":
