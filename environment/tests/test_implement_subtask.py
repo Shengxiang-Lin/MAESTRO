@@ -221,6 +221,35 @@ class Stage2OutputTests(unittest.TestCase):
                 for row in failures
             ))
 
+    def test_empty_oracle_writes_real_summary_with_failure_causes(self):
+        from environment.implement_subtask.combined import (
+            generate_subagent_reports,
+        )
+
+        rejected = _scene(54, "medium")
+        rejected["question_authoring"]["status"] = "failed"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scenes = root / "scenes.jsonl"
+            _write(scenes, [rejected])
+            output = root / "stage2"
+            result = generate_subagent_reports(
+                scenes_path=scenes,
+                output_dir=output,
+                reporting_options={"overwrite": False},
+                no_progress=True,
+            )
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["oracle_accepted_scenes"], 0)
+            self.assertEqual(result["oracle_failed_scenes"], 1)
+            self.assertEqual(result["oracle_failure_reasons"], {
+                "ValueError:stage1_question_not_accepted": 1
+            })
+            self.assertEqual(
+                json.loads((output / "summary.json").read_text()),
+                result,
+            )
+
     def test_all_valid_scenes_publish_all_macro_answers(self):
         rows = [_scene(40, "hard"), _scene(41, "medium")]
         with tempfile.TemporaryDirectory() as td:
