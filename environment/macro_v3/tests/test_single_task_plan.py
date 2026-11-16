@@ -947,8 +947,15 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
             result = generate_questions(args)
             self.assertEqual(result["status"], "done", result)
             self.assertEqual(result["generated"], 20)
-            self.assertEqual(result["rejected"].get("duplicate_question", 0), 0)
-            self.assertEqual(result["rejected"].get("duplicate_user_task", 0), 0)
+            construction = json.loads(
+                (args.output_dir / "constructed" / "summary.json").read_text()
+            )
+            self.assertEqual(
+                construction["rejected"].get("duplicate_question", 0), 0,
+            )
+            self.assertEqual(
+                construction["rejected"].get("duplicate_user_task", 0), 0,
+            )
             from environment.generate_question.stages import _user_task_identity
             scenes = [
                 json.loads(line)
