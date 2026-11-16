@@ -63,7 +63,8 @@ _SEMANTIC_RECIPES = (
 
 
 def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
-                      hops: int, sampling_policy: str | None = None) -> dict:
+                      hops: int, sampling_policy: str | None = None,
+                      world_mode: str = "witnessed") -> dict:
     """Choose typed information work before consulting World facts.
 
     Legacy samples retain their exact old deterministic choices. The new
@@ -192,6 +193,14 @@ def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
 
     if len(tasks) > 9:
         raise ValueError("task_plan_macro_budget_exceeded")
+    if world_mode == "compose":
+        for task in tasks:
+            task["relation_need"] = task["relation_need"].replace(
+                "real YAGO", "recorded").replace(
+                "genuine YAGO", "documented")
+            task["evidence_plan"]["description"] = task["relation_need"]
+    elif world_mode != "witnessed":
+        raise ValueError("unknown_task_plan_world_mode")
     return {
         "version": VERSION,
         "mode": mode, "condition": condition,
@@ -515,8 +524,73 @@ def _fictional_ground(plan, *, seed: int, ordinal: int,
     }
 
 
-def _ground(kg, index, plan, *, seed: int, ordinal: int):
-    """Prefer witnessed YAGO; fall back to a clearly fictional relation world."""
+
+def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
+    """Compose a task-driven fictional world from *observed YAGO motifs*.
+
+    YAGO supplies relation vocabulary, observed predicate prevalence and
+    generic field words; no original entity-to-entity assertion is reassigned
+    to any factual person. The new canonical World owns all target/shadow
+    paths, and the same original Macro executor consumes its evidence views.
+    """
+    from .world_motifs import (
+        motif_features, compose_relation_goal, compose_typed_world,
+    )
+    rng = random.Random(int(digest(
+        seed, ordinal, "task-plan-world-composition"
+    )[:15], 16))
+    features = motif_features(kg, index)
+    recipes = tuple(r for r in _SEMANTIC_RECIPES
+                    if len(r[0]) == plan["hops"])
+    recipe = compose_relation_goal(features, recipes, rng=rng)
+    n_clues = 2 * sum(
+        t["operation"] == "match_clues" for t in plan["macro_tasks"]
+    )
+    n_cases = n_clues + 4
+    target = "Dossier-" + digest(seed, ordinal, "target")[:10]
+    cases = [target] + [
+        "Dossier-" + digest(seed, ordinal, i, "case")[:10]
+        for i in range(n_cases-1)
+    ]
+    rng.shuffle(cases)
+    paths, world_model = compose_typed_world(
+        kg, index, recipe=recipe, cases=cases, seed=seed, ordinal=ordinal,
+    )
+    fork = _fictional_fork(paths) if plan["mode"] == "verify" else None
+    world_model["verification_facts"] = (
+        {case: copy.deepcopy(row) for case, row
+         in fork["candidate_forks"].items()} if fork else {}
+    )
+    return {
+        "target_case": target, "all_cases": cases,
+        "candidate_paths": paths, "real_fork": fork,
+        "world_model": world_model,
+        "case_shadow_slots": {
+            case: i if i < n_clues else None
+            for i, case in enumerate(c for c in cases if c != target)
+        },
+        "origin_file": SYNTHETIC_WORLD, "sample_triples_scanned": 0,
+        "semantic_audit": {
+            "policy": SEMANTIC_GOALS, "attempts": 1, "rejections": {},
+            "grounding_origin": "synthetic",
+            "fallback_from_yago": False, "composed_from_yago_motifs": True,
+            "synthetic_consistency_checked": True,
+            "loaded_yago_singleton_witness": False,
+            "complete_candidate_count": n_cases,
+            "rdf_type_verification": False,
+        },
+    }
+
+
+def _ground(kg, index, plan, *, seed: int, ordinal: int,
+            world_mode: str = "witnessed"):
+    """Compose new Worlds or preserve historical real-YAGO-first semantics."""
+    if world_mode == "compose":
+        return _compose_ground(
+            kg, index, plan, seed=seed, ordinal=ordinal,
+        )
+    if world_mode != "witnessed":
+        raise ValueError("unknown_task_plan_world_mode")
     if plan.get("semantic_grounding_policy") == SEMANTIC_GOALS:
         try:
             return _semantic_ground(kg, index, plan, seed=seed, ordinal=ordinal)
@@ -685,7 +759,8 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
 
 def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
               min_hops: int = 2, max_hops: int = 3,
-              index: YagoKnowledgeIndex | None = None) -> dict:
+              index: YagoKnowledgeIndex | None = None,
+              world_mode: str = "witnessed") -> dict:
     """One contract, one direct World grounding, no nested frozen Specs."""
     if difficulty not in ("medium", "hard"):
         raise ValueError("task_plan_requires_medium_or_hard")
@@ -697,12 +772,14 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     hops = min_hops if difficulty == "medium" else max_hops
     plan = _sample_task_plan(
         seed=seed, ordinal=ordinal, difficulty=difficulty, hops=hops,
-        sampling_policy=CALIBRATED,
+        sampling_policy=CALIBRATED, world_mode=world_mode,
     )
     plan["semantic_grounding_policy"] = SEMANTIC_GOALS
+    if world_mode == "compose":
+        plan["knowledge_world_mode"] = "compose"
     grounding = _ground(
         kg, index or YagoKnowledgeIndex(kg),
-        plan, seed=seed, ordinal=ordinal,
+        plan, seed=seed, ordinal=ordinal, world_mode=world_mode,
     )
     fictional = grounding["candidate_paths"][grounding["target_case"]][0][
         "origin"] == "synthetic"
@@ -870,6 +947,22 @@ def validate_spec(spec: dict) -> list[str]:
                                     for t in plan["macro_tasks"])+4):
             return ["task_plan_invalid_competing_paths"]
         fictional = paths[target][0]["origin"] == "synthetic"
+        world_mode = plan.get("knowledge_world_mode", "witnessed")
+        if world_mode not in {"witnessed", "compose"}:
+            return ["task_plan_unknown_world_mode"]
+        if world_mode == "compose":
+            from .world_motifs import validate_composed_world
+            issues = validate_composed_world(binding)
+            if issues:
+                return issues
+            expected_fork = (
+                binding["real_fork"]["candidate_forks"]
+                if binding["real_fork"] else {}
+            )
+            if binding["world_model"]["verification_facts"] != expected_fork:
+                return ["composed_world_verification_not_authoritative"]
+        elif "world_model" in binding:
+            return ["task_plan_unexpected_composed_world"]
         if ((fictional and (
                     witness["version"] != SYNTHETIC_WITNESS
                     or witness.get("origin") != "synthetic"
@@ -938,7 +1031,10 @@ def validate_spec(spec: dict) -> list[str]:
                     or (fictional and (
                         audit.get("grounding_origin") != "synthetic"
                         or audit.get("synthetic_consistency_checked") is not True
-                        or audit.get("fallback_from_yago") is not True
+                        or audit.get("fallback_from_yago") is not
+                            (world_mode != "compose")
+                        or (world_mode == "compose" and
+                            audit.get("composed_from_yago_motifs") is not True)
                     ))
                     or audit.get("complete_candidate_count") != len(cases)
                     or audit.get("attempts", 0) < 1
@@ -974,7 +1070,7 @@ def validate_spec(spec: dict) -> list[str]:
         if plan["macro_tasks"] != _sample_task_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
             difficulty=spec["difficulty_target"], hops=plan["hops"],
-            sampling_policy=sampling,
+            sampling_policy=sampling, world_mode=world_mode,
         )["macro_tasks"]:
             return ["task_plan_graph_not_from_information_needs"]
         by_id, scopes = {}, []
