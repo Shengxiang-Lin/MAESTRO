@@ -408,6 +408,13 @@ class DirectTaskPlanTests(unittest.TestCase):
             self.assertEqual(
                 scene["world"]["typed_knowledge_world"], world_model,
             )
+            self.assertTrue(all(
+                "urn:maestro:fictional:" not in value
+                for source in scene["world"]["sources"].values()
+                for obs in source["observations"]
+                for value in obs["values"].values()
+                if isinstance(value, str)
+            ))
             self.assertEqual(scene["public"]["status"],
                              "ready_for_investigation")
             self.assertTrue(all(
