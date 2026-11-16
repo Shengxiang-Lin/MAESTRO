@@ -209,7 +209,7 @@ class GlobalJudgeTests(unittest.TestCase):
         self.assertIn("evaluator_only_global_context", judge.calls[0][0])
         self.assertNotIn("PRIVATE GOLD", str(judge.calls))
         self.assertNotIn("PRIVATE_ORACLE_NEVER_SEND", str(judge.calls))
-        self.assertEqual(judge.calls[0][1], [candidate])
+        self.assertEqual([json.loads(x) for x in judge.calls[0][1]], [json.loads(candidate)])
 
     def test_api_request_contains_reference_not_teacher_or_hidden_fault_label(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(
