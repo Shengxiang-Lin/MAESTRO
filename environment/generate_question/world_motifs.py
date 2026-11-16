@@ -164,7 +164,7 @@ _ROLE_OUTPUT = {
 }
 _ROLE_INPUT = {
     "birthplace": "person", "deathplace": "person",
-    "containedinplace": "place", "location": "place",
+    "containedinplace": "place", "location": "any_locatable",
     "doctoraladvisor": "person", "fieldofwork": "person",
     "spouse": "person", "memberof": "person",
     "neighbor": "place", "nationality": "person",
@@ -237,7 +237,9 @@ def _typed_roles(keys: tuple, domain: str) -> list[str]:
         output = _ROLE_OUTPUT[key]
         if i+1 < len(keys):
             following = _ROLE_INPUT[keys[i+1]]
-            if following == "country" and output in {"place", "region"}:
+            if following == "any_locatable":
+                pass
+            elif following == "country" and output in {"place", "region"}:
                 output = "country"
             elif following == "city" and output == "place":
                 output = "city"
