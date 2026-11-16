@@ -32,7 +32,7 @@ class TrajectoryConfigurationTests(TestCase):
         self.assertTrue(cfg["reports_path"].is_absolute())
         self.assertTrue(cfg["output_dir"].is_absolute())
         self.assertTrue(str(cfg["scenes_path"]).endswith(
-            "/constructed/scenes.jsonl"
+            "/questions/scenes.jsonl"
         ))
         self.assertTrue(str(cfg["reports_path"]).endswith(
             "/subtasks.jsonl"
