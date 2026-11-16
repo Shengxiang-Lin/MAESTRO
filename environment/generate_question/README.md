@@ -215,3 +215,84 @@ or external knowledge strategy is impossible. V2 remains the
 Discovery/Identification/Investigation family, not a full six-role typed
 DAG compiler. The Question is a deterministic draft until naturalized
 and independently reviewed.
+
+## Hybrid World v3 — real YAGO motifs + fictional entities (opt-in)
+
+This is an incremental extension of the **canonical**
+`environment generate-questions` workflow, not an independent scene
+writer. It freezes `typed_knowledge_v3` ProblemSpecs and reuses the old
+Program IR, Macro Compiler, WorkProducts, Gold/Trace, source and handoff
+counterfactuals, exact replay, and Stage 2 compatibility.
+
+```bash
+python -m environment generate-questions \
+  --config environment/configs/questions_hybrid_world_v3.yaml
+
+python -m environment quality \
+  --config environment/configs/questions_hybrid_world_v3.yaml \
+  --scenes environment/data/hybrid_world_v3_pilot/constructed/scenes.jsonl
+```
+
+Versioned `v1`/`v2` task banks and their replay semantics are unmodified.
+Use a **new output directory** for v3, never overwrite frozen older banks.
+
+### Real + fictional layers
+
+- **`world_motifs.py`** mines only actual YAGO RDF triples as
+  connected chains, forks or (when available) diamonds. The target
+  multi-hop route remains a frozen, truly witnessed YAGO relationship
+  chain with real competing candidates. Additional mined motif edges
+  are explicitly **context only** in this first pilot: they do not earn
+  a claimed causal dependency or second-publisher credit.
+- **`hybrid_world.py`** expands every YAGO-grounded case into a
+  **fictional** research project / exhibition / field survey / heritage
+  project, with a synthetic project→real-reference ground-truth link.
+  The private ledger separates these synthetic truths from YAGO facts.
+- Two separately *simulated* project-reference source directories
+  each list two real-entity candidates per fictional project: one
+  correct, one different, unverified alternative. Their intersection
+  uniquely determines the project's reference. Claims in synthetic
+  source rows are not automatically true synthetic facts and are
+  **not real historical documents**.
+- Real candidate YAGO paths are complete. A missing/discarded Discovery
+  still leaves multiple *different valid YAGO answers*, instead of
+  filtering away broken decoys.
+
+### Executable Macro patterns
+
+The same types of local information goals can be composed into either:
+
+```text
+parallel_fork_join:
+  Discovery x 2–3 ─→ Identification ─┬→ Project Reference A ─┐
+                                    └→ Project Reference B ─┤
+                                             Verification JOIN
+                                                      ↓
+                                           YAGO Investigation x 1–2
+
+serial_refinement:
+  Discovery x 2–3 → Identification → Reference A
+    → Evidence-dependent Verification B → YAGO Investigation x 1–2
+```
+
+Each step compiles to the ORIGINAL relational Gold Program, with actual
+source scopes and fact references; no separate typed v3 scene executor.
+A total of up to 9 Macro tasks retains the original Stage-1 budget.
+
+The old `information_necessity.py` additionally runs the new
+`hybrid_world_replanning_v3` controlled executable tests: unique
+Identification, omit each clue, omit each Discovery, omit all Discovery
+filters, and make each synthetic mapping directory uninformative in
+turn. Each bypass must leave multiple feasible answers, never merely
+an empty or blocked execution. See the `hybrid_world_v3` section of
+`knowledge_world_grounding` in `quality_report.json`.
+
+### Current research boundary
+
+The mixed World and two Macro compositions are validated as an executable
+hybrid **subgrammar**; arbitrary six-role DAGs and systematic use of the
+extra real fork/diamond edges as independent verification subgoals are
+future expansions. These synthetic media records are programmatically
+realized annotations, **not actual decoded images/audio/video**.
+Deterministic Question drafts should still be naturalized and reviewed
+before training distribution-scale models.

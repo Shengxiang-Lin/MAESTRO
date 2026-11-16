@@ -102,7 +102,46 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
-    if spec.get("reasoning_pattern") in {"typed_knowledge_v1", "typed_knowledge_v2"}:
+    if spec.get("reasoning_pattern") == "typed_knowledge_v3":
+        from environment.schema import digest
+        from .knowledge_macro import predicate_label
+        plan = spec["macro_plan"]
+        clues = [
+            f"{item['attribute']} '{item['value']}' in the {item['title']}"
+            for _, item in sorted(plan["clues"].items())
+        ]
+        route = ", then ".join(
+            predicate_label(item["predicate"]) for item in plan["real_facts"]
+        )
+        topic = spec["scenario"]["topic"]
+        choices = [
+            (
+                f"For {topic}, simulated records identify an unresolved "
+                f"project using these observations: {'; '.join(clues)}. "
+                f"Two separate simulated project reference directories "
+                f"list possible real entity links. Reconcile both directories "
+                f"and then follow documented YAGO relationships {route}. "
+                f"What is the name of the related entity?"
+            ),
+            (
+                f"A researcher working with {topic} has these records: "
+                f"{'; '.join(clues)}. Identify the fictional project, compare "
+                f"two separate simulated reference directories to establish "
+                f"the actual entity it documents, and then follow the YAGO "
+                f"relation sequence {route}. Which related entity is reached?"
+            ),
+            (
+                f"Within {topic}, simulated media and catalog observations "
+                f"give the following identifying evidence: {'; '.join(clues)}. "
+                f"Match the project, cross-check candidate entity references "
+                f"in two simulated source directories, and investigate the "
+                f"documented YAGO trail {route}. What is the related entity name?"
+            ),
+        ]
+        slot = int(digest(spec["seed"], spec["ordinal"],
+                          "hybrid-question-style-v3")[:8], 16) % len(choices)
+        return choices[slot]
+    if spec.get("reasoning_pattern") in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}:
         plan = spec["macro_plan"]
         clues = plan["clues"]
         source_phrases = [
@@ -335,7 +374,13 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
-    if pattern in {"typed_knowledge_v1", "typed_knowledge_v2"}:
+    if pattern == "typed_knowledge_v3":
+        if not (re.search(r"\b(?:two|both|separate|independent)\b",
+                          q, flags=re.I)
+                and re.search(r"\b(?:reference|directory|directories)\b",
+                              q, flags=re.I)):
+            errors.append("hybrid_missing_two_source_reference_goal")
+    if pattern in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}:
         plan = spec["macro_plan"]
         for info in plan["clues"].values():
             if info["value"].casefold() not in q.casefold():

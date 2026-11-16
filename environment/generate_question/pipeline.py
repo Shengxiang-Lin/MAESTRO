@@ -733,7 +733,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     knowledge_scenes = [
         scene for scene in scenes
         if scene.get("problem_spec", {}).get("reasoning_pattern")
-        in {"typed_knowledge_v1", "typed_knowledge_v2"}
+        in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}
     ]
     if knowledge_scenes:
         role_counts = Counter(
@@ -765,7 +765,67 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             )
             for scene in v2_scenes
         ]
+        v3_scenes = [
+            scene for scene in knowledge_scenes
+            if scene["problem_spec"]["reasoning_pattern"] == "typed_knowledge_v3"
+        ]
+        v3_audits = [
+            scene.get("difficulty_audit", {}).get("macro_first_audit", {}).get(
+                "candidate_information_necessity", {}
+            ) for scene in v3_scenes
+        ]
         data["knowledge_world_grounding"] = {
+            "hybrid_world_v3": {
+                "scenes_checked": len(v3_scenes),
+                "necessity_passed": sum(
+                    a.get("passed", False) for a in v3_audits
+                ),
+                "identification_unique": sum(
+                    a.get("identification_unique", False) for a in v3_audits
+                ),
+                "all_clue_relaxations_ambiguous": sum(
+                    bool(a.get("clue_relaxation_necessary"))
+                    and all(a["clue_relaxation_necessary"].values())
+                    for a in v3_audits
+                ),
+                "all_discovery_relaxations_ambiguous": sum(
+                    bool(a.get("discovery_relaxation_necessary"))
+                    and all(a["discovery_relaxation_necessary"].values())
+                    for a in v3_audits
+                ),
+                "both_synthetic_branches_necessary": sum(
+                    bool(a.get("synthetic_branch_necessity"))
+                    and all(a["synthetic_branch_necessity"].values())
+                    for a in v3_audits
+                ),
+                "all_discovery_bypass_ambiguous": sum(
+                    a.get("all_discovery_filters_removed", {}).get(
+                        "ambiguous", False
+                    ) for a in v3_audits
+                ),
+                "real_yago_motif_distribution": dict(Counter(
+                    s["problem_spec"]["macro_plan"]["real_motif"]["kind"]
+                    for s in v3_scenes
+                )),
+                "macro_shape_distribution": dict(Counter(
+                    s["problem_spec"]["macro_plan"]["hybrid_shape"]
+                    for s in v3_scenes
+                )),
+                "synthetic_entity_count": sum(
+                    len(s["problem_spec"]["macro_plan"]["synthetic_entities"])
+                    for s in v3_scenes
+                ),
+                "synthetic_true_relation_count": sum(
+                    len(s["problem_spec"]["macro_plan"]["synthetic_truth"])
+                    for s in v3_scenes
+                ),
+                "source_lineage_note": (
+                    "YAGO facts are real. Fictional projects and their "
+                    "associations are not YAGO facts. Extra mined YAGO motif "
+                    "edges are context and not yet consumed as a required "
+                    "Macro source. Simulated candidate claims may be false."
+                ),
+            },
             "necessity_v2": {
                 "scenes_checked": len(v2_scenes),
                 "passed": sum(a.get("passed", False) for a in necessity),
@@ -797,7 +857,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     "optimal agent information acquisition."
                 ),
             },
-            "version": "typed_knowledge_v1_and_v2",
+            "version": "typed_knowledge_v1_v2_v3",
             "pattern_distribution": dict(Counter(
                 scene["problem_spec"]["reasoning_pattern"]
                 for scene in knowledge_scenes
@@ -821,9 +881,9 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "Replay is self-contained, not independent online YAGO verification."
             ),
             "scope": (
-                "The first canonical typed family; variable Discovery/Macro "
-                "coarsening and 2-3 hop relationships, not the entire "
-                "six-role typed Macro grammar."
+                "Canonical, versioned knowledge and hybrid-world subgrammars; "
+                "not arbitrary six-role Macro DAGs or externally verified "
+                "fictional media."
             ),
         }
     return data

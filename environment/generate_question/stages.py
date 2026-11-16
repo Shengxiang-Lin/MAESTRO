@@ -75,7 +75,8 @@ def _construction_identity(args) -> str:
             name: file_digest(Path(__file__).with_name(name))
             for name in (
                 "spec.py", "macro_planning.py",
-                "knowledge_macro.py", "typed_role_grammar.py",
+                "knowledge_macro.py", "knowledge_macro_v2.py",
+                "hybrid_world.py", "world_motifs.py", "typed_role_grammar.py",
                 "typed_graph_generator.py", "typed_graph_validator.py",
                 "operator_grammar.py", "numeric_goal_world.py",
                 "evidence_operators.py", "evidence_relations.py",
@@ -260,7 +261,9 @@ def construct_scenes(args) -> dict:
         try:
             ordinal = len(chosen)
             if knowledge_mode:
-                if getattr(args, "knowledge_variant", "v1") == "v2":
+                if getattr(args, "knowledge_variant", "v1") == "v3":
+                    from .hybrid_world import make_spec as make_knowledge_spec
+                elif getattr(args, "knowledge_variant", "v1") == "v2":
                     from .knowledge_macro_v2 import make_spec as make_knowledge_spec
                 else:
                     from .knowledge_macro import make_spec as make_knowledge_spec

@@ -119,7 +119,7 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         if share and not macro_first_v2_share:
             raise ValueError(name + "_requires_macro_planning")
     if knowledge:
-        if generation.get("knowledge_variant", "v1") not in {"v1", "v2"}:
+        if generation.get("knowledge_variant", "v1") not in {"v1", "v2", "v3"}:
             raise ValueError("unsupported_knowledge_variant")
         if (type(generation.get("knowledge_max_triples", 1000000)) is not int
             or generation.get("knowledge_max_triples", 1000000) < 1
