@@ -20,35 +20,48 @@ def source_catalog(scene: dict) -> dict[str, dict]:
 
 
 def o1_initial_instruction(scene: dict) -> str:
-    """Keep the user question short; show supplied materials separately.
+    """Render user question, already-observed inputs and unqueried sources.
 
-    The O1 baseline renderer accepts one instruction string. For new
-    reference-card scenes, include their target-only observed features in
-    a separate labeled section instead of silently dropping the only
-    public target anchor. Older scenes preserve their exact instruction.
+    The current Task Plan uses textual simulations of media observations.
+    Simulated source handles are NOT attached image/audio files.
     """
     question = scene["question"]
     card = scene["public"].get("task_input")
     if card is None:
         return question
-    version = card.get("version")
-    if version not in {
-        "macro_goal_reference_card_v1",
-        "macro_goal_reference_card_v2",
-    }:
+    if card.get("version") != "macro_goal_reference_card_v2":
         raise ValueError("stage3_unknown_task_reference_card")
+    observations = card["observations"]
+    if not observations:
+        raise ValueError("stage3_empty_initial_task_input")
+    counts = {}
     lines = [
-        "Provided reference materials (initial task input, not source results):"
+        "==== INITIAL TASK INPUTS (PROVIDED SIMULATED OBSERVATIONS) ====",
+        "These observations were already provided by the user. They are "
+        "text descriptions, not attached media or Sub-Agent findings.",
     ]
-    for obs in card["observations"]:
-        if version == "macro_goal_reference_card_v2":
-            lines.append("- " + obs["modality"] + ": " + obs["content"])
-        else:
-            # Preserve the exact O1 rendering of already-frozen v1 cards.
-            lines.append(
-                "- " + obs["modality"] + ": " + obs["feature"] + ": "
-                + str(obs["observed_value"])
-            )
+    for obs in observations:
+        modality = obs["modality"]
+        counts[modality] = counts.get(modality, 0) + 1
+        marker = modality + "_" + str(counts[modality])
+        lines.append(
+            "[" + marker + " / observed " + modality + "] " + obs["content"]
+        )
+    lines.extend([
+        "",
+        "==== AVAILABLE EVIDENCE SOURCES (NOT INITIAL ATTACHMENTS) ====",
+        "The following sources have not been queried. Their identifiers "
+        "denote simulated investigation workspaces, not physical media.",
+    ])
+    for entry in scene["public"]["available_source_descriptions"]:
+        lines.append(
+            "- " + entry["source_id"] + " [" + entry["modality_hint"] + ", " +
+            entry.get("access_mode", "browse") + "]: " + entry["title"]
+        )
+    lines.append(
+        "Investigate candidate records and verify as needed. Do not "
+        "re-extract reference observations already provided above."
+    )
     return question + "\n\n" + "\n".join(lines)
 
 
@@ -75,12 +88,13 @@ def o1_prompt_from_history(
     if not isinstance(subtask_history, str):
         raise TypeError("stage3_subtask_history_must_be_string")
     sources = source_catalog(scene)
+    has_reference_inputs = "task_input" in scene["public"]
     meta = {
         "task_type": "Multi-source investigation",
         "category": scene.get("problem_spec", {}).get("macro_plan", {}).get(
             "domain", "general",
         ),
-        "modal_inputs": [
+        "modal_inputs": [] if has_reference_inputs else [
             {
                 "type": source["modality_hint"],
                 "id": sid,

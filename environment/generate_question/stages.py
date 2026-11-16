@@ -51,19 +51,54 @@ def _user_task_identity(spec: dict, question: str) -> tuple:
     card = spec.get("task_input")
     if card is None:
         return (title,)
+    if card.get("version") != "macro_goal_reference_card_v2":
+        raise ValueError("unsupported_task_input_version")
     observations = tuple(sorted(
         (
             normalize_label(str(item["modality"])),
-            normalize_label(str(item.get("content", "")))
-            if "content" in item else
-            normalize_label(str(item["feature"])) + "=" +
-            normalize_label(str(item["observed_value"])),
+            normalize_label(str(item["content"])),
         ) for item in card["observations"]
     ))
     return (title, observations)
 
 
 def _construction_identity(args) -> str:
+    # Only the current Task Plan + compose signature is independent of old
+    # generators. Changing a retired experiment must NOT invalidate a current
+    # production scene journal or trigger an expensive fresh generation.
+    if (
+        getattr(args, "knowledge_variant", None) == "task_plan"
+        and getattr(args, "knowledge_world_mode", None) == "compose"
+    ):
+        return stable_signature({
+            "stage": "task_plan_compose_v2",
+            "target": args.target,
+            "max_records": args.max_records,
+            "seed": args.seed,
+            "difficulty_mix": args.difficulty_mix,
+            "knowledge_source_identity": _knowledge_input_identity(args),
+            "knowledge_limits": [
+                getattr(args, field, None) for field in (
+                    "knowledge_max_triples", "knowledge_max_edges",
+                    "knowledge_min_hops", "knowledge_max_hops",
+                )
+            ],
+            "generation_code": {
+                filename: file_digest(Path(__file__).with_name(filename))
+                for filename in (
+                    "spec.py", "knowledge_macro.py", "knowledge_macro_v2.py",
+                    "real_motif_grounding.py", "world_motifs.py",
+                    "task_plan.py", "task_plan_runtime.py", "question.py",
+                    "intent.py", "world.py", "program_ir.py", "compiler.py",
+                    "quality.py", "evidence_tools.py", "stages.py",
+                )
+            },
+            "scenario_model": args.scenario_model,
+            "scenario_api_base": args.scenario_api_base,
+            "scenario_critic_model": args.scenario_critic_model,
+            "scenario_critic_api_base": args.scenario_critic_api_base,
+            "scenario_max_revisions": args.scenario_max_revisions,
+        })
     return stable_signature({
         "target": args.target,
         "max_records": args.max_records,

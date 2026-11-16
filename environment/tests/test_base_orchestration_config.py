@@ -46,7 +46,7 @@ class TrajectoryConfigurationTests(TestCase):
 
         from environment.config import DEFAULT_CONFIG as QUESTIONS
         from environment.implement_subtask.config import DEFAULT_CONFIG as SUBAGENTS
-        self.assertEqual(QUESTIONS.name, "questions.yaml")
+        self.assertEqual(QUESTIONS.name, "questions_task_plan.yaml")
         self.assertEqual(SUBAGENTS.name, "subagent_reports.yaml")
         self.assertEqual({QUESTIONS.parent, SUBAGENTS.parent,
                           DEFAULT_CONFIG.parent}, {DEFAULT_CONFIG.parent})

@@ -28,12 +28,12 @@ class CanonicalStagePathsTests(TestCase):
         main = load_main(MAIN)
         stage4 = load_untrusted(UNTRUSTED)
         root = Path(__file__).resolve().parents[1] / "data"
-        self.assertEqual(QUESTIONS.name, "questions.yaml")
+        self.assertEqual(QUESTIONS.name, "questions_task_plan.yaml")
         self.assertEqual(REPORTS.name, "subagent_reports.yaml")
         self.assertEqual(MAIN.name, "main_orchestration.yaml")
         self.assertEqual(UNTRUSTED.name, "untrusted_orchestration.yaml")
-        self.assertEqual(stage1["generation"]["target"], 1000)
-        self.assertGreaterEqual(stage1["input"]["max_records"], 1000)
+        self.assertEqual(stage1["generation"]["target"], 20)
+        self.assertGreaterEqual(stage1["input"]["max_records"], 20)
         self.assertEqual(
             stage1["generation"]["output_dir"],
             "environment/data/stage1",

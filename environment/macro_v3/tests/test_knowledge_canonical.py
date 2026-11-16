@@ -154,7 +154,7 @@ class KnowledgeCanonicalCliTests(unittest.TestCase):
             # model-free deterministic question drafts.
             from environment.config import load_config, args_from_config
             from environment.generate_question.pipeline import generate_questions
-            cfg = load_config("environment/configs/questions_knowledge.yaml")
+            cfg = load_config("environment/macro_v3/tests/fixtures/questions_knowledge.yaml")
             cfg["generation"]["knowledge_yago"] = str(rdf)
             cfg["generation"]["output_dir"] = str(root / "unified")
             cfg["generation"]["target"] = 3

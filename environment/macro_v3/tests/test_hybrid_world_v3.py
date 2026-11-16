@@ -181,7 +181,7 @@ class HybridFullPipelineTests(unittest.TestCase):
                 ])
             rdf.write_text("\n".join(lines), encoding="utf-8")
             config = load_config(
-                "environment/configs/questions_hybrid_world_v3.yaml"
+                "environment/macro_v3/tests/fixtures/questions_hybrid_world_v3.yaml"
             )
             config["generation"]["knowledge_yago"] = str(rdf)
             config["generation"]["output_dir"] = str(home / "new")

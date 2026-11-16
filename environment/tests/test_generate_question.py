@@ -23,6 +23,9 @@ from environment.generate_question.stages import (
 )
 from environment.generate_question.pipeline import quality_report, generate_questions
 
+# Retained regression fixtures for the old Macro-v2 branch, not the CLI default.
+LEGACY_TEST_CONFIG = Path(__file__).with_name("fixtures") / "questions_legacy.yaml"
+
 
 def spec(ordinal=0, difficulty="medium", family=None):
     data = make_spec(
@@ -60,14 +63,16 @@ class ConfigAndCliTests(unittest.TestCase):
     def test_yaml_is_canonical_and_fully_resolved(self):
         values = load_config(DEFAULT_CONFIG)
         args = args_from_config(values)
-        self.assertEqual(args.target, 1000)
-        self.assertEqual(args.difficulty_mix, "17,33,50")
+        self.assertEqual(args.target, 20)
+        self.assertEqual(args.difficulty_mix, "0,50,50")
         self.assertFalse(hasattr(args, "quota_refill"))
         self.assertFalse(hasattr(args, "max_candidate_multiplier"))
-        self.assertTrue(args.mmqa.is_absolute())
-        self.assertEqual(args.scenario_workers, 8)
-        self.assertEqual(args.question_workers, 8)
+        self.assertIsNone(args.mmqa)
+        self.assertEqual(args.scenario_workers, 4)
+        self.assertEqual(args.question_workers, 4)
         self.assertIsNone(args.question_api_key_env)
+        self.assertEqual(args.knowledge_variant, "task_plan")
+        self.assertEqual(args.knowledge_world_mode, "compose")
 
     def test_cli_exposes_one_generation_command(self):
         sub = parser()._subparsers._group_actions[0].choices
@@ -215,7 +220,7 @@ class StageAndQualityTests(unittest.TestCase):
             root = Path(td)
             src = root / "constructed.jsonl"
             _jsonl(src, original)
-            args = args_from_config(load_config(DEFAULT_CONFIG))
+            args = args_from_config(load_config(LEGACY_TEST_CONFIG))
             args.scenes = src
             args.output_dir = root / "questions"
             args.max_records = None
@@ -250,7 +255,7 @@ class StageAndQualityTests(unittest.TestCase):
             root = Path(td)
             source = root / "constructed.jsonl"
             _jsonl(source, original)
-            args = args_from_config(load_config(DEFAULT_CONFIG))
+            args = args_from_config(load_config(LEGACY_TEST_CONFIG))
             args.scenes = source
             args.output_dir = root / "questions"
             args.max_records = None
@@ -324,7 +329,7 @@ class StageAndQualityTests(unittest.TestCase):
         from environment.generate_question.stages import (
             run_ordered as real_run_ordered,
         )
-        args = args_from_config(load_config(DEFAULT_CONFIG))
+        args = args_from_config(load_config(LEGACY_TEST_CONFIG))
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             args.output_dir = root / "constructed"
@@ -395,7 +400,7 @@ class StageAndQualityTests(unittest.TestCase):
         self.assertEqual(report["question_publishable"], 0)
 
     def test_generate_questions_reuses_completed_stages_after_interruption(self):
-        args = args_from_config(load_config(DEFAULT_CONFIG))
+        args = args_from_config(load_config(LEGACY_TEST_CONFIG))
         with tempfile.TemporaryDirectory() as td:
             args.output_dir = Path(td) / "pipeline"
             args.target = 4
@@ -470,7 +475,7 @@ class StageAndQualityTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             calls = []
-            args = args_from_config(load_config(DEFAULT_CONFIG))
+            args = args_from_config(load_config(LEGACY_TEST_CONFIG))
             args.target = 2
             args.no_progress = False
 
@@ -530,7 +535,7 @@ class StageAndQualityTests(unittest.TestCase):
                     ])
 
     def test_single_candidate_batch_keeps_all_valid_without_refill(self):
-        args = args_from_config(load_config(DEFAULT_CONFIG))
+        args = args_from_config(load_config(LEGACY_TEST_CONFIG))
         with tempfile.TemporaryDirectory() as td:
             args.output_dir = Path(td) / "fixed_candidates"
             args.target = 6
@@ -615,7 +620,7 @@ class StageAndQualityTests(unittest.TestCase):
             )
 
     def test_scenario_fallback_not_a_success(self):
-        args = args_from_config(load_config(DEFAULT_CONFIG))
+        args = args_from_config(load_config(LEGACY_TEST_CONFIG))
         with tempfile.TemporaryDirectory() as td:
             args.output_dir = Path(td) / "constructed"
             args.target = 4

@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = Path(__file__).with_name("configs") / "questions.yaml"
+DEFAULT_CONFIG = Path(__file__).with_name("configs") / "questions_task_plan.yaml"
 
 SECTIONS = {
     "input": {"mmqa", "max_records"},
@@ -63,9 +63,9 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     generation = config["generation"]
     scenario = config["scenario"]
     question = config["question"]
-    if not data.get("mmqa"):
-        raise ValueError("input.mmqa is required")
     knowledge = generation.get("knowledge_yago")
+    if not knowledge and not data.get("mmqa"):
+        raise ValueError("input.mmqa is required without knowledge_yago")
     for section, value in (("scenario", scenario), ("question", question)):
         # Knowledge-mode dry runs can disable LLM naturalization, while
         # existing production configurations retain their strict settings.
@@ -144,7 +144,7 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     if not directory:
         raise ValueError("generation.output_dir is required")
     return argparse.Namespace(
-        mmqa=_path(data["mmqa"]), scenes=None,
+        mmqa=_path(data["mmqa"]) if data.get("mmqa") else None, scenes=None,
         output_dir=_path(directory), target=chosen_target,
         max_records=max_records, seed=seed,
         difficulty_mix=",".join(map(str, mix)),

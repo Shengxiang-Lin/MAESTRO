@@ -1,4 +1,5 @@
-# Experimental opt-in: canonical Stage 1 with real YAGO-grounded Macro tasks.
+# Historical generator regression fixture; not a production Stage-1 profile.
+# Experimental opt-in: Macro DAG -> relation sketch -> YAGO/fictional World -> evidence.
 # Uses the SAME World/Program/Quality/Replay pipeline as the v2 scenes.
 # Source media and dossier cards remain explicitly simulated. YAGO RDF facts
 # are real and frozen as witnesses in each private ProblemSpec.
@@ -9,7 +10,7 @@ input:
   max_records: 1000
 
 generation:
-  output_dir: environment/data/stage1_hybrid_motif_v4_pilot
+  output_dir: environment/data/stage1_task_graph_first_pilot
   target: 20
   seed: 17
   difficulty_mix: [0, 50, 50]
@@ -17,7 +18,7 @@ generation:
   flush_every: 1
   no_progress: false
   macro_planning_share: 100
-  knowledge_variant: v4
+  knowledge_variant: graph_first
   knowledge_yago: data/world-source/YAGO-4.6
   knowledge_max_triples: 1000000
   knowledge_max_edges: 250000

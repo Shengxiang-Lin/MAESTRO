@@ -9,7 +9,7 @@ multi-agent orchestration. Configuration and data directories are organized
 ```bash
 # Stage 1: questions, synthetic sources, typed Macro dependency graphs
 python -m environment generate-questions \
-  --config environment/configs/questions.yaml
+  --config environment/configs/questions_task_plan.yaml
 
 # Stage 2: execute the Macro Oracle, then review Sub-Agent feedback
 python -m environment naturalize-subtasks \

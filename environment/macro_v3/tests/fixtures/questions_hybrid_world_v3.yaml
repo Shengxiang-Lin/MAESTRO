@@ -1,3 +1,4 @@
+# Historical generator regression fixture; not a production Stage-1 profile.
 # Experimental opt-in: canonical Stage 1 with real YAGO-grounded Macro tasks.
 # Uses the SAME World/Program/Quality/Replay pipeline as the v2 scenes.
 # Source media and dossier cards remain explicitly simulated. YAGO RDF facts
@@ -9,7 +10,7 @@ input:
   max_records: 1000
 
 generation:
-  output_dir: environment/data/stage1_knowledge_pilot
+  output_dir: environment/data/stage1_hybrid_world_v3_pilot
   target: 20
   seed: 17
   difficulty_mix: [0, 50, 50]
@@ -17,6 +18,7 @@ generation:
   flush_every: 1
   no_progress: false
   macro_planning_share: 100
+  knowledge_variant: v3
   knowledge_yago: data/world-source/YAGO-4.6
   knowledge_max_triples: 1000000
   knowledge_max_edges: 250000

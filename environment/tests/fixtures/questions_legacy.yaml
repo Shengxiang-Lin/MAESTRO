@@ -1,3 +1,4 @@
+# Legacy Stage-1 generator regression fixture only. Not a CLI default.
 # Stage 1: typed Macro planning, diverse numeric witnesses and semantic constraints.
 # Paths are relative to the repository root; secrets must be environment vars.
 version: 1

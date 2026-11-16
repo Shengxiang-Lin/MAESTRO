@@ -112,18 +112,15 @@ def _intent_reference_question(spec: dict) -> str:
         plan = spec["macro_plan"]
         goal = plan["goal"]["semantic"]
         topic = spec["scenario"]["topic"]
-        if plan.get("question_surface_policy") in {
-            "macro_goal_reference_card_v1",
-            "macro_goal_reference_card_v2",
-        }:
+        if plan.get("question_surface_policy") == "macro_goal_reference_card_v2":
             # User intent comes from the Task Plan's semantic Goal and
             # eligibility rule. Target-specific features belong to the
             # provided reference material, NOT the user question.
             lead = (
-                f"The supplied reference materials concern an entry in the {topic}.",
-                f"An entry in the {topic} is described by the provided reference materials.",
-                f"The attached reference materials point to a record in the {topic}.",
-                f"One record in the {topic} is associated with the supplied reference materials.",
+                f"The supplied photograph and recording descriptions concern a record in the {topic}.",
+                f"A record in the {topic} is described by supplied image and audio observations.",
+                f"The provided archive-photo and spoken-catalog observations concern a record in the {topic}.",
+                f"The supplied image description and audio observation refer to a record in the {topic}.",
             )[spec["ordinal"] % 4]
             condition = plan["condition"]
             if condition is None:
@@ -748,10 +745,7 @@ def guard_question(question: str, spec: dict,
             q, flags=re.I,
         ):
             errors.append("task_plan_meta_fiction_framing")
-        compact = plan.get("question_surface_policy") in {
-            "macro_goal_reference_card_v1",
-            "macro_goal_reference_card_v2",
-        }
+        compact = plan.get("question_surface_policy") == "macro_goal_reference_card_v2"
         if compact:
             if not re.search(
                 r"\b(?:supplied|provided|attached)\b", q, re.I
@@ -1009,10 +1003,8 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                     ),
                 }] if (
                     spec.get("reasoning_pattern") == "task_plan" and
-                    spec["macro_plan"].get("question_surface_policy") in {
-                        "macro_goal_reference_card_v1",
-                        "macro_goal_reference_card_v2",
-                    }
+                    spec["macro_plan"].get("question_surface_policy") ==
+                        "macro_goal_reference_card_v2"
                 ) else [
                     {"title": source["title"],
                      "modality": source["modality"],

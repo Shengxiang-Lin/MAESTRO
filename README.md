@@ -23,7 +23,7 @@ All paths, model endpoints, worker counts and output directories live in
 [environment/configs](environment/configs/README.md).
 
 ```bash
-python -m environment generate-questions --config environment/configs/questions.yaml
+python -m environment generate-questions --config environment/configs/questions_task_plan.yaml
 python -m environment naturalize-subtasks --config environment/configs/subagent_reports.yaml
 python -m environment generate-main-turns --config environment/configs/base_orchestration.yaml
 python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml
