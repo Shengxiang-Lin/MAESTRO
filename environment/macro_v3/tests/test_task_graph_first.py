@@ -191,7 +191,7 @@ class TaskGraphFirstCanonicalCliTests(unittest.TestCase):
                 ])
             ttl.write_text("\n".join(records), encoding="utf-8")
             conf = load_config(
-                "environment/configs/questions_task_graph_first.yaml"
+                "environment/macro_v3/tests/fixtures/questions_task_graph_first.yaml"
             )
             conf["generation"]["knowledge_yago"] = str(ttl)
             conf["generation"]["output_dir"] = str(root/"output")
