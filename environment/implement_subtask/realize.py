@@ -27,6 +27,11 @@ def _fact_index(world: dict) -> dict[str, dict]:
                     "source_id": source_id,
                     "observation_id": observation["observation_id"],
                     "values": dict(observation["values"]),
+                    **({"document_context": dict(
+                        observation["document_context"]
+                    )} if "document_context" in observation else {}),
+                    **({"record_excerpt": observation["record_excerpt"]}
+                       if "record_excerpt" in observation else {}),
                 }
     return index
 
