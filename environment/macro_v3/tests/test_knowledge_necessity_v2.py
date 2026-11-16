@@ -151,7 +151,7 @@ class KnowledgeV2CliTests(unittest.TestCase):
                     f"x:Subject{i} s:memberOf x:Institute{i} .",
                 ])
             rdf.write_text("\n".join(entries), encoding="utf-8")
-            config = load_config("environment/configs/questions_knowledge_v2.yaml")
+            config = load_config("environment/macro_v3/tests/fixtures/questions_knowledge_v2.yaml")
             config["generation"]["knowledge_yago"] = str(rdf)
             config["generation"]["output_dir"] = str(home / "generated")
             config["generation"]["target"] = 3
