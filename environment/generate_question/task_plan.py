@@ -34,6 +34,7 @@ SYNTHETIC_WORLD = "maestro.fictional_semantic_world.v1"
 SYNTHETIC_WITNESS = "maestro.task_plan.fictional_witness.v1"
 SYNTHETIC_FORK = "maestro.fictional_fork_grounding.v1"
 GOAL_COMPOSER = "goal_conditioned_typed_v2"
+NEEDS_COMPOSER = "goal_conditioned_evidence_needs_v3"
 # Local predicate combinations with interpretable user goals. These are
 # *predicate-signature hypotheses*, NOT RDF-type attestations. The bounded
 # YAGO loader intentionally excludes rdf:type triples.
@@ -942,7 +943,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     # YAGO chain, Hard the longer; modes/independent clues are also
     # conditional on difficulty. This is NOT a learned-agent difficulty score.
     hops = min_hops if difficulty == "medium" else max_hops
-    if composer == GOAL_COMPOSER:
+    if composer in (GOAL_COMPOSER, NEEDS_COMPOSER):
         if world_mode != "compose":
             raise ValueError("goal_composer_requires_composed_world")
         from .goal_composer import compose_plan
@@ -957,7 +958,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         goal_recipe = compose_relation_goal(features, choices, rng=goal_rng)
         plan = compose_plan(
             seed=seed, ordinal=ordinal, difficulty=difficulty,
-            hops=hops, goal_keys=goal_recipe[0],
+            hops=hops, goal_keys=goal_recipe[0], policy=composer,
         )
     elif composer == "legacy":
         plan = _sample_task_plan(
@@ -1292,12 +1293,12 @@ def validate_spec(spec: dict) -> list[str]:
         ):
             return ["task_plan_unpaired_sampling_policy"]
         composer = plan.get("composer_policy")
-        if composer == GOAL_COMPOSER:
+        if composer in (GOAL_COMPOSER, NEEDS_COMPOSER):
             from .goal_composer import compose_plan
             expected = compose_plan(
                 seed=spec["seed"], ordinal=spec["ordinal"],
                 difficulty=spec["difficulty_target"], hops=plan["hops"],
-                goal_keys=plan["goal_recipe_keys"],
+                goal_keys=plan["goal_recipe_keys"], policy=composer,
             )
             if (plan["goal_recipe_keys"] != [
                     _predicate_key(fact["predicate"])
@@ -1307,6 +1308,20 @@ def validate_spec(spec: dict) -> list[str]:
                         "terminal_macro_id", "goal_recipe_keys"
                     ))):
                 return ["task_plan_goal_composer_mismatch"]
+            if composer == NEEDS_COMPOSER:
+                if plan.get("information_requirements") != expected[
+                        "information_requirements"]:
+                    return ["task_plan_information_need_mismatch"]
+                discovery = [
+                    task for task in plan["macro_tasks"]
+                    if task["operation"] == "match_clues"
+                ]
+                access = plan["information_requirements"]["source_access"]
+                if (len(discovery) != len(access)
+                        or any(bool(task["depends_on"]) !=
+                               (mode == "keyed_lookup")
+                               for task, mode in zip(discovery, access))):
+                    return ["task_plan_source_affordance_mismatch"]
         elif composer is not None:
             return ["task_plan_unknown_composer"]
         elif plan["macro_tasks"] != _sample_task_plan(
