@@ -621,8 +621,12 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
            {"case_id": "str", "project_id": "str", "project_name": "str"},
            key="case_id")
     mode = plan["mode"]
+    fictional = grounding["candidate_paths"][grounding["target_case"]][0][
+        "origin"] == "synthetic"
     if mode == "trace":
-        source("project_ref", "text", "Project YAGO reference register",
+        source("project_ref", "text",
+               "Fictional subject reference register" if fictional
+               else "Project YAGO reference register",
                "Resolve the project's documented real entity",
                {"project_id": "str", "entity_0": "str"}, key="project_id")
     if mode in {"event", "verify"}:
@@ -635,7 +639,9 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
                "Inspect events subject to an explicit eligibility rule",
                schema)
     if mode == "event":
-        source("event_ref", "text", "Event-specific YAGO reference",
+        source("event_ref", "text",
+               "Event-specific fictional subject reference" if fictional
+               else "Event-specific YAGO reference",
                "Follow the selected event's independently indexed entity",
                {"event_id": "str", "entity_0": "str"}, key="event_id")
     if mode == "verify":
@@ -643,7 +649,11 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
             source(sid, "text", f"Simulated project reference hypotheses {sid[-1].upper()}",
                    "Investigate competing fictional source claims",
                    {"project_id": "str", "route_key": "str", "entity_0": "str"})
-        source("real_fork", "text", "Actual YAGO secondary relation",
+        source("real_fork", "text",
+               "Independent simulated registry relationship" if fictional
+               else "Actual YAGO secondary relation",
+               "Verify a separately recorded fictional registry link"
+               if fictional else
                "Verify the candidate entity's genuine secondary YAGO fact",
                {"entity_0": "str", "motif_object": "str"}, key="entity_0")
     facts = grounding["candidate_paths"][grounding["target_case"]]
@@ -651,8 +661,12 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
         input_key = f"entity_{i-1}"
         output_key = "answer" if i == plan["hops"] else f"entity_{i}"
         source(f"relation_{i}", "text",
-               f"YAGO {predicate_label(fact['predicate'])} relation",
-               "Look up the real YAGO relation required by the goal",
+               (f"Simulated {predicate_label(fact['predicate'])} relation"
+                if fictional else
+                f"YAGO {predicate_label(fact['predicate'])} relation"),
+               ("Look up the fictional relation within the scenario"
+                if fictional else
+                "Look up the real YAGO relation required by the goal"),
                {input_key: "str", output_key: "str"}, key=input_key)
     expected = Counter(
         sid for t in plan["macro_tasks"] for sid in t["source_scope"]
@@ -683,6 +697,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         kg, index or YagoKnowledgeIndex(kg),
         plan, seed=seed, ordinal=ordinal,
     )
+    fictional = grounding["candidate_paths"][grounding["target_case"]][0][
+        "origin"] == "synthetic"
     clues, sources, schemas = _bind_sources(
         plan, grounding, seed=seed, ordinal=ordinal,
     )
@@ -694,6 +710,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         grounding["candidate_paths"][grounding["target_case"]],
         len(grounding["all_cases"]),
     )
+    if fictional:
+        plan["knowledge_origin"] = "synthetic"
     condition = plan["condition"]
     clause = (
         "the completed event" if condition and
@@ -711,14 +729,22 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         semantic = plan["goal"]["semantic"]
         scenario = {
             "topic": topics[semantic["domain"]],
-            "setting": ("a fictional archive cross-referenced with "
-                        "genuinely witnessed YAGO relationships"),
+            "setting": (
+                "an entirely fictional archive with internally consistent "
+                "recorded entity relationships" if fictional else
+                "a fictional archive cross-referenced with "
+                "genuinely witnessed YAGO relationships"
+            ),
             "user_role": "archive investigator",
             "purpose": ("identify " + clause + " and determine the "
                         + semantic["answer_type_hint"]
                         + " specified by the recorded relationships"),
-            "motivation": ("reconcile simulated dossier evidence before "
-                           "answering one interpretable real-world relation goal"),
+            "motivation": (
+                "reconcile independent simulated records within a "
+                "fictional knowledge world" if fictional else
+                "reconcile simulated dossier evidence before "
+                "answering one interpretable real-world relation goal"
+            ),
             "entity_kind": "fictional archive dossier",
         }
     else:
@@ -755,8 +781,10 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
             "entity_kind": "fictional project",
         }
     witness = {
-        "version": "maestro.task_plan.yago_witness.v1",
+        "version": (SYNTHETIC_WITNESS if fictional else
+                    "maestro.task_plan.yago_witness.v1"),
         "origin_file": grounding["origin_file"],
+        **({"origin": "synthetic", "fictional": True} if fictional else {}),
         "candidate_facts": {
             case: [
                 {k: fact[k] for k in ("subject", "predicate", "object")}
@@ -772,7 +800,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         )[:8],
         "scene_id": f"task-plan-{ordinal:06d}",
         "source_anchor": {
-            "dataset": "YAGO-4.6-plus-fictional-project",
+            "dataset": ("MAESTRO-fictional-semantic-world" if fictional
+                        else "YAGO-4.6-plus-fictional-project"),
             "source_record_id": str(ordinal),
             "original_question_reused": False,
             "original_answer_reused": False,
@@ -814,7 +843,8 @@ def validate_spec(spec: dict) -> list[str]:
         if (spec["family"] != PATTERN or spec["reasoning_pattern"] != PATTERN
                 or plan["version"] != VERSION
                 or plan["mode"] not in MODES
-                or witness["version"] != "maestro.task_plan.yago_witness.v1"
+                or witness["version"] not in (
+                    "maestro.task_plan.yago_witness.v1", SYNTHETIC_WITNESS)
                 or plan["information_necessity_policy"] != POLICY):
             return ["task_plan_wrong_version"]
         if spec["knowledge_contract_hash"] != digest(
@@ -832,6 +862,18 @@ def validate_spec(spec: dict) -> list[str]:
                 or len(cases) != 2*sum(t["operation"] == "match_clues"
                                     for t in plan["macro_tasks"])+4):
             return ["task_plan_invalid_competing_paths"]
+        fictional = paths[target][0]["origin"] == "synthetic"
+        if ((fictional and (
+                    witness["version"] != SYNTHETIC_WITNESS
+                    or witness.get("origin") != "synthetic"
+                    or witness.get("fictional") is not True
+                    or plan.get("knowledge_origin") != "synthetic"
+                    or binding["origin_file"] != SYNTHETIC_WORLD
+                    or spec["source_anchor"]["dataset"] !=
+                        "MAESTRO-fictional-semantic-world"
+                )) or (not fictional and witness["version"] !=
+                        "maestro.task_plan.yago_witness.v1")):
+            return ["task_plan_knowledge_provenance_mismatch"]
         predicates = [f["predicate"] for f in paths[target]]
         if len(predicates) != plan["hops"]:
             return ["task_plan_wrong_real_hops"]
@@ -841,8 +883,15 @@ def validate_spec(spec: dict) -> list[str]:
             if len(facts) != len(predicates):
                 return ["task_plan_incomplete_real_path"]
             for i, fact in enumerate(facts):
-                if fact["origin"] != "yago" or fact["predicate"] != predicates[i]:
-                    return ["task_plan_mixed_real_predicate"]
+                if (fact["origin"] != ("synthetic" if fictional else "yago")
+                        or fact["predicate"] != predicates[i]):
+                    return ["task_plan_mixed_knowledge_predicate"]
+                if fictional and (
+                    not fact["subject"].startswith("urn:maestro:fictional:entity:")
+                    or not fact["object"].startswith("urn:maestro:fictional:entity:")
+                    or _semantic_recipe(facts) is None
+                ):
+                    return ["task_plan_invalid_fictional_relation"]
                 if fact["subject"] in each_hop_subjects[i]:
                     return ["task_plan_non_unique_real_lookup_keys"]
                 each_hop_subjects[i].add(fact["subject"])
@@ -855,8 +904,12 @@ def validate_spec(spec: dict) -> list[str]:
                 return ["task_plan_duplicate_real_answer"]
             labels.add(facts[-1]["object_label"])
         if plan["mode"] == "verify":
-            from .real_motif_grounding import validate_frozen_required_fork
-            problems = validate_frozen_required_fork(binding["real_fork"], paths)
+            if fictional:
+                problems = _validate_fictional_fork(binding["real_fork"], paths)
+            else:
+                from .real_motif_grounding import validate_frozen_required_fork
+                problems = validate_frozen_required_fork(
+                    binding["real_fork"], paths)
             if problems:
                 return problems
         elif binding["real_fork"] is not None:
@@ -873,7 +926,13 @@ def validate_spec(spec: dict) -> list[str]:
                 return ["task_plan_semantic_goal_mismatched"]
             audit = binding.get("semantic_audit", {})
             if (audit.get("policy") != SEMANTIC_GOALS
-                    or not audit.get("loaded_yago_singleton_witness")
+                    or audit.get("loaded_yago_singleton_witness") is not
+                    (not fictional)
+                    or (fictional and (
+                        audit.get("grounding_origin") != "synthetic"
+                        or audit.get("synthetic_consistency_checked") is not True
+                        or audit.get("fallback_from_yago") is not True
+                    ))
                     or audit.get("complete_candidate_count") != len(cases)
                     or audit.get("attempts", 0) < 1
                     or audit.get("rdf_type_verification") is not False):
