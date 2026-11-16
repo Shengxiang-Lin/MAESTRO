@@ -742,7 +742,9 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             for task in scene["problem_spec"]["macro_plan"]["macro_tasks"]
         )
         hop_counts = Counter(
-            len(scene["problem_spec"]["macro_plan"]["real_facts"])
+            scene["problem_spec"]["macro_plan"].get(
+                "hops", len(scene["problem_spec"]["macro_plan"].get("real_facts", []))
+            )
             for scene in knowledge_scenes
         )
         macro_counts = Counter(
@@ -802,7 +804,52 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "candidate_information_necessity", {}
             ) for scene in graph_v2_scenes
         ]
+        current_scenes = [
+            scene for scene in knowledge_scenes
+            if scene["problem_spec"]["reasoning_pattern"] == "task_plan"
+        ]
+        current_audits = [
+            scene.get("difficulty_audit", {}).get("macro_first_audit", {}).get(
+                "candidate_information_necessity", {}
+            ) for scene in current_scenes
+        ]
+        sizes = [
+            len(scene["problem_spec"]["macro_plan"]["macro_tasks"])
+            for scene in current_scenes
+        ]
         data["knowledge_world_grounding"] = {
+            "single_task_plan": {
+                "scenes": len(current_scenes),
+                "necessity_passed": sum(
+                    row.get("passed", False) for row in current_audits
+                ),
+                "mode_distribution": dict(Counter(
+                    s["problem_spec"]["macro_plan"]["mode"]
+                    for s in current_scenes
+                )),
+                "macro_task_count_range": [
+                    min(sizes, default=0), max(sizes, default=0)
+                ],
+                "mean_macro_tasks": (
+                    round(sum(sizes)/len(sizes), 3) if sizes else 0
+                ),
+                "event_fields_causal": sum(
+                    row.get("event_field_necessary") is True
+                    for row in current_audits
+                ),
+                "real_fork_causal": sum(
+                    row.get("real_fork_necessary") is True
+                    for row in current_audits
+                ),
+                "nested_legacy_specs": sum(
+                    any("backbone" in k for k in s["problem_spec"])
+                    for s in current_scenes
+                ),
+                "note": (
+                    "One Task Plan directly grounded in witnessed YAGO paths "
+                    "and fictional evidence. Historic generator Specs are not nested."
+                ),
+            },
             "task_graph_first_v2": {
                 "scenes_checked": len(graph_v2_scenes),
                 "information_necessity_passed": sum(
@@ -1041,7 +1088,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     "optimal agent information acquisition."
                 ),
             },
-            "version": "typed_knowledge_v1_v2_v3_v4_and_task_graph_first_v1_v2",
+            "version": "typed_knowledge_v1_v2_v3_v4_and_task_graph_first_v1_v2_and_task_plan",
             "pattern_distribution": dict(Counter(
                 scene["problem_spec"]["reasoning_pattern"]
                 for scene in knowledge_scenes
