@@ -191,6 +191,9 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 
 def compile_program(spec: dict) -> dict:
     """Compile only supported Easy or Macro-first V2 task programs."""
+    if spec.get("reasoning_pattern") == "typed_knowledge_v4":
+        from .hybrid_world_v4 import compile_macro_solvers
+        return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "typed_knowledge_v3":
         from .hybrid_world import compile_macro_solvers
         return compile_macro_solvers(spec)
@@ -211,6 +214,9 @@ def compile_program(spec: dict) -> dict:
 
 def generate_world(spec: dict) -> dict:
     """Versioned synthetic sources; never rewrite old private World facts."""
+    if spec.get("reasoning_pattern") == "typed_knowledge_v4":
+        from .hybrid_world_v4 import generate_world as generate_hybrid_world
+        return generate_hybrid_world(spec)
     if spec.get("reasoning_pattern") == "typed_knowledge_v3":
         from .hybrid_world import generate_world as generate_hybrid_world
         return generate_hybrid_world(spec)
