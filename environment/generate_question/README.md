@@ -874,3 +874,32 @@ are not migrated. No new Macro type, planner, external media decoder,
 or Stage-2/3/4 action is added. This is a targeted improvement to
 the *information acquisition dependency*, not a claim of more graph
 templates or verified recovery behavior.
+
+
+### User-facing Question from Macro goals (compose mode)
+
+Newly generated \`knowledge_world_mode: compose\` Task Plan scenes separate
+**what the user asks** from **the reference observations the user supplied**.
+
+- \`scene.question\` is a compact natural-language task grounded in the
+  frozen Macro Goal, event eligibility condition and (for \`verify\`) the
+  need for a corroborated result. It never enumerates all clue values,
+  table fields, source titles, internal Macro IDs, or lookup order.
+- \`scene.public.task_input\` is the *provided reference card*: only the
+  target-specific image/audio/video/text/table observations already encoded
+  in the frozen discovery clues, with no case ID, project key, event key,
+  Gold answer or private source rows. This is a **textual simulated media
+  description**, not an actual image/audio/video file.
+- The source catalog remains separate, and the Agent must still match the
+  reference card against the retrieved multi-candidate source observations.
+  Existing candidate/condition/Gold/counterfactual necessity tests remain.
+- The Stage-3 Orchestra-o1 renderer uses the same original prompt builder
+  but includes the card in a distinct **Provided reference materials**
+  section. Its \`question\` field stays concise. Historical scenes without
+  \`task_input\` render exactly as before.
+
+Old frozen composed and witnessed scenes without this surface policy retain
+their original reference question and replay semantics. This changes the
+*public task presentation*, not World, Macro DAG, Gold program or answer.
+The quality report tracks \`macro_goal_questions\`,
+\`reference_cards_in_public_view\`, and \`mean_question_characters\`.
