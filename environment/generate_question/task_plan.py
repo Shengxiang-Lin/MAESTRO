@@ -125,7 +125,7 @@ def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
         ds.append(add(
             "discovery", "match_clues", [],
             {"case_id": "str"}, [f"M{j}_a", f"M{j}_b"],
-            "Find candidate dossiers through two independent simulated clues",
+            "Find dossier candidates using two complementary source clues",
         ))
     identified = add(
         "identification", "identify_project", ds,
@@ -196,11 +196,17 @@ def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
     if world_mode == "compose":
         for task in tasks:
             task["relation_need"] = task["relation_need"].replace(
-                "real YAGO", "documented").replace(
-                "genuine YAGO", "documented").replace(
-                "fictional", "recorded").replace(
-                "simulated", "independent")
+                "genuine YAGO", "recorded").replace(
+                "real YAGO", "recorded").replace(
+                "fictional", "documented").replace(
+                "simulated", "observed")
             task["evidence_plan"]["description"] = task["relation_need"]
+        discovery = next(t for t in tasks if t["operation"] == "match_clues")
+        discovery["relation_need"] = (
+            "Combine a visible dossier clue with its recorded affiliation "
+            "or shared survey-volume association"
+        )
+        discovery["evidence_plan"]["description"] = discovery["relation_need"]
     elif world_mode != "witnessed":
         raise ValueError("unknown_task_plan_world_mode")
     return {
@@ -560,9 +566,42 @@ def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
         for i in range(n_cases-1)
     ]
     rng.shuffle(cases)
+    shadow_slots = {
+        case: i if i < n_clues else None
+        for i, case in enumerate(c for c in cases if c != target)
+    }
+    # Reuse an EXISTING discovery source, not a new Macro or evidence bank.
+    # Its associated shadow is the only case without the required relation.
+    discovery = next(t for t in plan["macro_tasks"]
+                     if t["operation"] == "match_clues")
+    source_id = discovery["source_scope"][1]
+    source_slot = 1
+    excluded = next(case for case, slot in shadow_slots.items()
+                    if slot == source_slot)
     paths, world_model = compose_typed_world(
         kg, index, recipe=recipe, cases=cases, seed=seed, ordinal=ordinal,
+        required_excluded_cases=[
+            case for case, slot in shadow_slots.items()
+            if slot is None or slot == source_slot
+        ],
     )
+    subject_role = world_model["entities"][paths[target][0]["subject"]]["type"]
+    world_model["required_context_relation"] = {
+        "source_id": source_id, "source_slot": source_slot,
+        "excluded_case": excluded,
+        "excluded_cases": [
+            case for case, slot in shadow_slots.items()
+            if slot is None or slot == source_slot
+        ],
+        "field": "cue",
+        "predicate": ("http://schema.org/affiliation"
+                      if subject_role == "person" else
+                      "http://schema.org/subjectOf"),
+        "target_anchor_id": world_model["context_by_case"][target]["anchor_id"],
+        "target_anchor_label": world_model["context_by_case"][target]["anchor_label"],
+        "excluded_anchor_id": world_model["context_by_case"][excluded]["anchor_id"],
+        "excluded_anchor_label": world_model["context_by_case"][excluded]["anchor_label"],
+    }
     fork = (_fictional_fork(paths, source_style="archive")
             if plan["mode"] == "verify" else None)
     world_model["verification_facts"] = (
@@ -573,10 +612,7 @@ def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
         "target_case": target, "all_cases": cases,
         "candidate_paths": paths, "real_fork": fork,
         "world_model": world_model,
-        "case_shadow_slots": {
-            case: i if i < n_clues else None
-            for i, case in enumerate(c for c in cases if c != target)
-        },
+        "case_shadow_slots": shadow_slots,
         "origin_file": SYNTHETIC_WORLD, "sample_triples_scanned": 0,
         "semantic_audit": {
             "policy": SEMANTIC_GOALS, "attempts": 1, "rejections": {},
@@ -696,6 +732,21 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
             sid = task["source_scope"][j]
             chosen = rng.choice(choices)
             alt = rng.choice([x for x in choices if x != chosen])
+            required = grounding.get("world_model", {}).get(
+                "required_context_relation"
+            )
+            if required and sid == required["source_id"]:
+                chosen = required["target_anchor_label"]
+                alt = required["excluded_anchor_label"]
+                is_affiliation = required["predicate"].endswith("affiliation")
+                attr = (
+                    "institutional affiliation" if is_affiliation
+                    else "survey-volume association"
+                )
+                title = (
+                    "Research affiliation register" if is_affiliation
+                    else "Regional survey-volume register"
+                )
             clues[sid] = {
                 "value": chosen, "alternative": alt,
                 "attribute": attr, "source_slot": 2*i+j,
@@ -955,6 +1006,19 @@ def validate_spec(spec: dict) -> list[str]:
             issues = validate_composed_world(binding)
             if issues:
                 return issues
+            required = binding["world_model"].get("required_context_relation")
+            if required:
+                if (required["source_id"] not in plan["clues"]
+                        or plan["clues"][required["source_id"]][
+                            "source_slot"] != required["source_slot"]
+                        or plan["clues"][required["source_id"]]["value"] !=
+                            required["target_anchor_label"]
+                        or plan["clues"][required["source_id"]][
+                            "alternative"] != required["excluded_anchor_label"]
+                        or binding["case_shadow_slots"].get(
+                            required["excluded_case"]
+                        ) != required["source_slot"]):
+                    return ["task_plan_required_shared_clue_mismatch"]
             expected_fork = (
                 binding["real_fork"]["candidate_forks"]
                 if binding["real_fork"] else {}

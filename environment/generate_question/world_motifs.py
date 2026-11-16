@@ -374,7 +374,8 @@ def _entity_name(role: str, case_index: int, node_index: int,
 
 
 def compose_typed_world(graph, index, *, recipe: tuple,
-                        cases: list[str], seed: int, ordinal: int) -> tuple:
+                        cases: list[str], seed: int, ordinal: int,
+                        required_excluded_cases: list[str] | None = None) -> tuple:
     """Rewire real relation *types* into a new, coherent fictional KG.
 
     All source entities and assertions in the new graph are distinct from
@@ -454,12 +455,20 @@ def compose_typed_world(graph, index, *, recipe: tuple,
                 "subject_type": roles[i], "object_type": roles[i+1],
             })
         paths[case] = path
-    # Shared context is deliberately separate from mandatory answer paths.
-    # Distinct dossiers can be affiliated with the same institution, or
-    # indexed in the same survey volume; institutions may share a city.
-    # These are first-class World facts and make different sources reference
-    # the same entities without altering the proven unique-answer program.
-    group_count = max(2, (len(cases) + 2) // 3)
+    # One existing discovery clue can be the *actual association* in this
+    # World, rather than a free-standing string. Exactly one shadow dossier
+    # belongs to another institution/archive volume; other candidates share
+    # the same entity. This preserves counterfactual necessity for ALL other
+    # clue sources without inventing a new Macro or a new executor.
+    exclusions = set(required_excluded_cases or ())
+    if (required_excluded_cases is not None
+            and (not exclusions or exclusions == set(cases)
+                 or not exclusions <= set(cases))):
+        raise ValueError("invalid_required_relation_exclusion_set")
+    group_count = (
+        2 if required_excluded_cases is not None
+        else max(2, (len(cases) + 2) // 3)
+    )
     groups = {}
     context_by_case = {}
     context_relations = []
@@ -502,7 +511,11 @@ def compose_typed_world(graph, index, *, recipe: tuple,
             "origin": "synthetic", "scope": "context_only",
         })
     for case_index, case in enumerate(cases):
-        group = case_index % group_count
+        group = (
+            (1 if case in exclusions else 0)
+            if required_excluded_cases is not None
+            else case_index % group_count
+        )
         anchor_id, site_id = groups[group]
         subject = paths[case][0]["subject"]
         context_relations.append({
@@ -515,7 +528,10 @@ def compose_typed_world(graph, index, *, recipe: tuple,
             "object": anchor_id,
             "subject_type": roles[0],
             "object_type": entity_rows[anchor_id]["type"],
-            "origin": "synthetic", "scope": "context_only",
+            "origin": "synthetic",
+            "scope": ("required_clue"
+                      if required_excluded_cases is not None
+                      else "context_only"),
         })
         context_by_case[case] = {
             "anchor_id": anchor_id,
@@ -541,6 +557,7 @@ def compose_typed_world(graph, index, *, recipe: tuple,
         ],
         "shared_context_group_count": group_count,
         "shared_context_case_count": len(context_by_case),
+        "required_shared_association": required_excluded_cases is not None,
         "composition": "typed_semantic_motifs_rewired_to_new_entities",
         "actual_yago_assertions_reused": False,
     }
@@ -620,7 +637,44 @@ def validate_composed_world(binding: dict) -> list[str]:
                     "http://schema.org/location" if src_role == "person"
                     else "http://schema.org/spatialCoverage",
                 ))
-            if len(group_uses) < 2 or min(group_uses.values()) < 2:
+            required = world.get("required_context_relation")
+            if required:
+                target, excluded = (
+                    binding["target_case"], required["excluded_case"]
+                )
+                excluded_set = set(required.get("excluded_cases", ()))
+                expected_exclusions = {
+                    case for case, slot in binding["case_shadow_slots"].items()
+                    if slot is None or slot == required["source_slot"]
+                }
+                if (excluded not in excluded_set
+                        or target in excluded_set
+                        or excluded_set != expected_exclusions
+                        or required["field"] != "cue"
+                        or required["target_anchor_id"] !=
+                            mapping[target]["anchor_id"]
+                        or required["target_anchor_label"] !=
+                            mapping[target]["anchor_label"]
+                        or required["excluded_anchor_id"] !=
+                            mapping[excluded]["anchor_id"]
+                        or required["excluded_anchor_label"] !=
+                            mapping[excluded]["anchor_label"]
+                        or mapping[excluded]["anchor_id"] ==
+                            mapping[target]["anchor_id"]
+                        or any(
+                            item["anchor_id"] != (
+                                mapping[excluded]["anchor_id"]
+                                if case in excluded_set
+                                else mapping[target]["anchor_id"]
+                            )
+                            for case, item in mapping.items()
+                        )):
+                    return ["composed_world_required_relation_not_unique_shadow"]
+                if (len(group_uses) != 2 or
+                        group_uses[mapping[target]["anchor_id"]] !=
+                        len(paths)-len(excluded_set)):
+                    return ["composed_world_required_relation_bad_sharing"]
+            elif len(group_uses) < 2 or min(group_uses.values()) < 2:
                 return ["composed_world_context_not_shared"]
             actual_links = {
                 (r["subject"], r["object"], r["predicate"])
@@ -631,7 +685,15 @@ def validate_composed_world(binding: dict) -> list[str]:
             if len(actual_links) != len(context):
                 return ["composed_world_duplicate_context_link"]
             for r in context:
-                if (r["scope"] != "context_only"
+                is_required = bool(required) and (
+                    r["predicate"] in {
+                        "http://schema.org/affiliation",
+                        "http://schema.org/subjectOf",
+                    }
+                )
+                if (r["scope"] != (
+                        "required_clue" if is_required else "context_only"
+                    )
                         or r["origin"] != "synthetic"
                         or r["subject"] not in entities
                         or r["object"] not in entities
@@ -644,6 +706,16 @@ def validate_composed_world(binding: dict) -> list[str]:
                 group_uses
             ):
                 return ["composed_world_context_stats_mismatch"]
+            if required:
+                source_id = required.get("source_id", "")
+                if (not source_id or
+                        required.get("predicate") != (
+                            "http://schema.org/affiliation"
+                            if entities[paths[binding["target_case"]][0][
+                                "subject"]]["type"] == "person"
+                            else "http://schema.org/subjectOf"
+                        )):
+                    return ["composed_world_invalid_required_relation"]
             for row in entities.values():
                 if row["type"] == "field" and not _academic_field_label(
                     row["label"]
