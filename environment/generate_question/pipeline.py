@@ -917,6 +917,19 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                         ].get("world_model", {})
                         for s in current_scenes
                     ),
+                    "required_shared_relation_worlds": sum(
+                        bool(s["problem_spec"]["macro_plan"][
+                            "world_binding"
+                        ].get("world_model", {}).get(
+                            "required_context_relation"
+                        )) for s in current_scenes
+                    ),
+                    "required_shared_relation_necessity_passed": sum(
+                        s["difficulty_audit"]["macro_first_audit"][
+                            "candidate_information_necessity"
+                        ].get("required_shared_relation_necessary") is True
+                        for s in current_scenes
+                    ),
                     "shared_context_entity_groups": sum(
                         s["problem_spec"]["macro_plan"]["world_binding"].get(
                             "world_model", {}
@@ -969,9 +982,10 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     "scope": (
                         "In compose mode, observed YAGO relation types and "
                         "type-filtered vocabulary are recombined into novel "
-                        "Worlds, with shared context entities and cross-source "
-                        "record references. Context edges are not yet required "
-                        "by the executable Gold task. "
+                        "Worlds. New scenes use one existing discovery source "
+                        "to expose a genuinely required shared relation; "
+                        "other sources do not copy it into per-record context. "
+                        "Other context edges remain non-required. "
                         "In witnessed mode, YAGO uniqueness is checked only "
                         "against the bounded loaded fact sample."
                     ),
