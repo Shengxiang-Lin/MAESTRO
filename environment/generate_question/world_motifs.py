@@ -154,6 +154,47 @@ _FIELDS = (
     "landscape modeling", "cultural astronomy", "heritage informatics",
     "comparative philology",
 )
+
+
+# Conservative lexical type check for generic fields inherited from YAGO.
+# A 'fieldOfWork' object in RDF is not necessarily an academic discipline.
+# Do not treat arbitrary entity labels (e.g. "Aerospace manufacturer") as
+# valid research-field values in a newly composed university world.
+_ACADEMIC_TERMS = frozenset((
+    "science", "studies", "history", "physics", "chemistry", "biology",
+    "geography", "ecology", "geology", "philosophy", "literature",
+    "linguistics", "mathematics", "engineering", "astronomy",
+    "archaeology", "anthropology", "cartography", "hydrology",
+    "paleography", "philology", "informatics", "crystallography",
+    "conservation", "modeling", "economics", "medicine", "music",
+    "psychology", "sociology", "architecture", "education",
+    "environmental", "statistics", "computer", "computational",
+))
+_NON_FIELD_TERMS = frozenset((
+    "manufacturer", "corporation", "company", "business", "association",
+    "foundation", "school", "university", "institute", "college",
+    "person", "politician", "musician", "athlete", "artist", "city",
+    "county", "town", "village", "country", "organisation", "organization",
+    "football", "airline", "band", "museum", "newspaper",
+))
+
+
+def _academic_field_label(label: str) -> bool:
+    """Conservative type gate for vocabulary borrowed from YAGO labels."""
+    words = label.casefold().replace("-", " ").split()
+    if not 1 <= len(words) <= 5 or any(
+        not word.isalpha() for word in words
+    ):
+        return False
+    if any(word in _NON_FIELD_TERMS for word in words):
+        return False
+    return any(
+        word in _ACADEMIC_TERMS
+        or word.endswith(("ology", "ography", "istics", "onomy"))
+        for word in words
+    )
+
+
 _ROLE_OUTPUT = {
     "birthplace": "place", "deathplace": "place",
     "containedinplace": "region", "location": "place",
@@ -189,6 +230,7 @@ def motif_features(graph, index, recipes=None) -> dict:
     counts = defaultdict(int)
     predicates = {}
     observed_fields = []
+    field_labels_rejected = 0
     by_name = defaultdict(list)
     for edge in graph.edges:
         name = "".join(c for c in edge.predicate.rsplit("/", 1)[-1]
@@ -200,14 +242,16 @@ def motif_features(graph, index, recipes=None) -> dict:
         if name == "fieldofwork" and len(observed_fields) < 96:
             label = graph.label(edge.object)
             if (4 <= len(label) <= 48 and
-                    all(c.isalpha() or c in " -'" for c in label)
-                    and not label.startswith("http")):
+                    _academic_field_label(label)):
                 observed_fields.append(label)
+            else:
+                field_labels_rejected += 1
     fanouts = [len(x) for x in index.outgoing.values()]
     cache = {
         "edge_counts": dict(counts),
         "predicate_uris": predicates,
         "observed_field_labels": list(dict.fromkeys(observed_fields)),
+        "rejected_nonacademic_field_labels": field_labels_rejected,
         "samples_by_predicate": dict(by_name),
         "total_scanned_edges": len(graph.edges),
         "observed_fork_fraction": (
@@ -394,6 +438,75 @@ def compose_typed_world(graph, index, *, recipe: tuple,
                 "subject_type": roles[i], "object_type": roles[i+1],
             })
         paths[case] = path
+    # Shared context is deliberately separate from mandatory answer paths.
+    # Distinct dossiers can be affiliated with the same institution, or
+    # indexed in the same survey volume; institutions may share a city.
+    # These are first-class World facts and make different sources reference
+    # the same entities without altering the proven unique-answer program.
+    group_count = max(2, (len(cases) + 2) // 3)
+    groups = {}
+    context_by_case = {}
+    context_relations = []
+    for group in range(group_count):
+        place = _PLACES[(ordinal * 3 + group * 5) % len(_PLACES)]
+        anchor_id = "ENT-" + digest(
+            seed, ordinal, "shared-anchor", group,
+        )[:12].upper()
+        site_id = "ENT-" + digest(
+            seed, ordinal, "shared-site", group // 2,
+        )[:12].upper()
+        anchor_type = "organization" if roles[0] == "person" else "archive_record"
+        anchor_label = (
+            place + " Research Institute" if roles[0] == "person"
+            else place + " Regional Survey Gazetteer"
+        )
+        site_label = (
+            "City of " + _PLACES[
+                (ordinal * 3 + (group // 2) * 7 + 4) % len(_PLACES)
+            ]
+        )
+        entity_rows[anchor_id] = {
+            "entity_id": anchor_id, "type": anchor_type,
+            "label": anchor_label,
+        }
+        if site_id not in entity_rows:
+            entity_rows[site_id] = {
+                "entity_id": site_id, "type": "city", "label": site_label,
+            }
+        groups[group] = (anchor_id, site_id)
+        context_relations.append({
+            "subject": anchor_id,
+            "predicate": (
+                "http://schema.org/location"
+                if roles[0] == "person" else
+                "http://schema.org/spatialCoverage"
+            ),
+            "object": site_id,
+            "subject_type": anchor_type, "object_type": "city",
+            "origin": "synthetic", "scope": "context_only",
+        })
+    for case_index, case in enumerate(cases):
+        group = case_index % group_count
+        anchor_id, site_id = groups[group]
+        subject = paths[case][0]["subject"]
+        context_relations.append({
+            "subject": subject,
+            "predicate": (
+                "http://schema.org/affiliation"
+                if roles[0] == "person" else
+                "http://schema.org/subjectOf"
+            ),
+            "object": anchor_id,
+            "subject_type": roles[0],
+            "object_type": entity_rows[anchor_id]["type"],
+            "origin": "synthetic", "scope": "context_only",
+        })
+        context_by_case[case] = {
+            "anchor_id": anchor_id,
+            "anchor_label": entity_rows[anchor_id]["label"],
+            "site_id": site_id,
+            "site_label": entity_rows[site_id]["label"],
+        }
     profile = {
         "policy": COMPOSE_VERSION,
         "goal_signature": list(keys),
@@ -407,6 +520,11 @@ def compose_typed_world(graph, index, *, recipe: tuple,
         "reused_public_field_vocabulary": bool(
             "fieldofwork" in keys and features["observed_field_labels"]
         ),
+        "rejected_nonacademic_field_labels": features[
+            "rejected_nonacademic_field_labels"
+        ],
+        "shared_context_group_count": group_count,
+        "shared_context_case_count": len(context_by_case),
         "composition": "typed_semantic_motifs_rewired_to_new_entities",
         "actual_yago_assertions_reused": False,
     }
@@ -414,6 +532,9 @@ def compose_typed_world(graph, index, *, recipe: tuple,
         "version": COMPOSE_VERSION,
         "entities": entity_rows,
         "relations": relation_rows,
+        "context_relations": context_relations,
+        "context_by_case": context_by_case,
+        "context_version": "maestro.shared_context.v1",
         "profile": profile,
     }
 
@@ -452,6 +573,61 @@ def validate_composed_world(binding: dict) -> list[str]:
                     or role_by_id[fact["object"]] != fact["object_type"]
                     or entities[fact["object"]]["label"] != fact["object_label"]):
                 return ["composed_world_type_or_identity_mismatch"]
+        # Historical composed scenes without the shared-context extension
+        # retain their exact frozen World/Replay semantics.
+        if "context_version" in world:
+            if world["context_version"] != "maestro.shared_context.v1":
+                return ["composed_world_wrong_context_version"]
+            mapping = world["context_by_case"]
+            context = world["context_relations"]
+            if set(mapping) != set(paths):
+                return ["composed_world_context_cases_mismatch"]
+            group_uses = defaultdict(int)
+            expected_links = set()
+            for case, item in mapping.items():
+                if (item["anchor_id"] not in entities
+                        or item["site_id"] not in entities
+                        or entities[item["anchor_id"]]["label"] !=
+                            item["anchor_label"]
+                        or entities[item["site_id"]]["label"] !=
+                            item["site_label"]):
+                    return ["composed_world_bad_context_reference"]
+                group_uses[item["anchor_id"]] += 1
+                src_role = entities[paths[case][0]["subject"]]["type"]
+                expected_links.add((
+                    paths[case][0]["subject"], item["anchor_id"],
+                    "http://schema.org/affiliation" if src_role == "person"
+                    else "http://schema.org/subjectOf",
+                ))
+            if len(group_uses) < 2 or min(group_uses.values()) < 2:
+                return ["composed_world_context_not_shared"]
+            actual_links = {
+                (r["subject"], r["object"], r["predicate"])
+                for r in context
+            }
+            if not expected_links <= actual_links:
+                return ["composed_world_missing_shared_links"]
+            if len(actual_links) != len(context):
+                return ["composed_world_duplicate_context_link"]
+            for r in context:
+                if (r["scope"] != "context_only"
+                        or r["origin"] != "synthetic"
+                        or r["subject"] not in entities
+                        or r["object"] not in entities
+                        or r["subject_type"] !=
+                            entities[r["subject"]]["type"]
+                        or r["object_type"] !=
+                            entities[r["object"]]["type"]):
+                    return ["composed_world_invalid_context_relation"]
+            if world["profile"]["shared_context_group_count"] != len(
+                group_uses
+            ):
+                return ["composed_world_context_stats_mismatch"]
+        for row in entities.values():
+            if row["type"] == "field" and not _academic_field_label(
+                row["label"]
+            ):
+                return ["composed_world_invalid_research_field"]
         profile = world["profile"]
         if (profile["policy"] != COMPOSE_VERSION
                 or profile["actual_yago_assertions_reused"] is not False):
