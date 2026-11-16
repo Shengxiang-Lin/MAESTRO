@@ -522,7 +522,13 @@ class DirectTaskPlanTests(unittest.TestCase):
             seen_leads.add(question.split(":", 1)[0].split(
                 " with the following", 1
             )[0][:72])
-            self.assertIn(plan["clues"][sid]["value"], question)
+            self.assertNotIn(
+                plan["clues"][sid]["value"], question,
+            )
+            self.assertIn(
+                plan["clues"][sid]["value"],
+                [row["observed_value"] for row in spec["task_input"]["observations"]],
+            )
             scene = compile_and_validate(spec, question)
             self.assertEqual(validate_replay(scene)["status"], "valid")
             audit = scene["difficulty_audit"]["macro_first_audit"][
@@ -627,10 +633,15 @@ class DirectTaskPlanTests(unittest.TestCase):
             self.assertIn(spec["scenario"]["topic"], question)
             self.assertIn(plan["goal"]["semantic"]["question"][
                 0:15].lower(), question.lower())
-            for cue in plan["clues"].values():
-                self.assertNotIn(
-                    cue["value"].casefold(), question.casefold(),
-                )
+            self.assertNotIn(
+                "seal motif", question.casefold(),
+            )
+            self.assertNotIn(
+                "shelf code", question.casefold(),
+            )
+            self.assertNotIn(
+                "drawer code", question.casefold(),
+            )
             scene = compile_and_validate(spec, question)
             self.assertEqual(validate_replay(scene)["status"], "valid")
             self.assertEqual(scene["public"]["task_input"], card)
