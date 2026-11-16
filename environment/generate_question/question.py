@@ -132,7 +132,7 @@ def _intent_reference_question(spec: dict) -> str:
                 f"For the matching fictional project, use {eligibility} "
                 f"to establish the relevant evidence, reconcile competing "
                 f"reference records with genuine YAGO secondary relation "
-                f"evidence, and report the final linked real-world entity."
+                f"evidence. Which final linked real-world entity is identified?"
             ),
         ]
         choice = int(digest(
