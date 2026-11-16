@@ -85,7 +85,10 @@ class SemanticJudge:
 
     def __init__(self, *, model: str, base_url: str, api_key_env: str,
                  workers: int = 4, timeout: float = 90.0, retries: int = 2,
-                 cache_path: str | None = None, enable_thinking: bool = False):
+                 cache_path: str | None = None, enable_thinking: bool = False,
+                 rubric_version: str = RUBRIC_VERSION,
+                 system_rubric: str = SYSTEM_RUBRIC,
+                 response_parser=None, user_payload=None):
         if not model or not base_url.startswith(("https://", "http://")):
             raise ValueError("Judge model and HTTP(S) endpoint are required")
         if type(workers) is not int or workers < 1 or timeout <= 0 or retries < 0:
@@ -96,6 +99,12 @@ class SemanticJudge:
         self.timeout = timeout
         self.retries = retries
         self.enable_thinking = bool(enable_thinking)
+        self.rubric_version = rubric_version
+        self.system_rubric = system_rubric
+        self.response_parser = response_parser or parse_semantic_response
+        self.user_payload = user_payload or (lambda prompt, candidate: {
+            "main_visible_prompt": prompt, "candidate_action": candidate,
+        })
         self.api_key = os.environ.get(api_key_env)
         if not self.api_key:
             raise ValueError(f"Judge requires API key environment variable: {api_key_env}")
@@ -110,7 +119,7 @@ class SemanticJudge:
                         if not line.strip():
                             continue
                         entry = json.loads(line)
-                        if entry.get("schema") != RUBRIC_VERSION:
+                        if entry.get("schema") != self.rubric_version:
                             raise ValueError("Incompatible judge cache schema")
                         self._cache[entry["key"]] = entry["result"]
 
@@ -128,7 +137,7 @@ class SemanticJudge:
 
     def _key(self, prompt: str, candidate: str) -> str:
         payload = json.dumps(
-            [RUBRIC_VERSION, self.model, self.base_url, prompt, candidate],
+            [self.rubric_version, self.model, self.base_url, prompt, candidate],
             ensure_ascii=False, separators=(",", ":"),
         )
         return sha256(payload.encode("utf-8")).hexdigest()
@@ -138,10 +147,10 @@ class SemanticJudge:
         body = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_RUBRIC},
-                {"role": "user", "content": json.dumps({
-                    "main_visible_prompt": prompt, "candidate_action": candidate,
-                }, ensure_ascii=False)},
+                {"role": "system", "content": self.system_rubric},
+                {"role": "user", "content": json.dumps(
+                    self.user_payload(prompt, candidate), ensure_ascii=False,
+                )},
             ],
             "temperature": 0.0,
             "max_tokens": 512,
@@ -160,7 +169,7 @@ class SemanticJudge:
                 )
                 response.raise_for_status()
                 content = response.json()["choices"][0]["message"]["content"]
-                return parse_semantic_response(content)
+                return self.response_parser(content)
             except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
                 last_error = exc
                 if attempt < self.retries:
@@ -194,7 +203,7 @@ class SemanticJudge:
                     with self.cache_path.open("a", encoding="utf-8") as out:
                         for key, result in completed:
                             out.write(json.dumps({
-                                "schema": RUBRIC_VERSION, "key": key, "result": result,
+                                "schema": self.rubric_version, "key": key, "result": result,
                             }, ensure_ascii=False) + "\n")
                 self._cache.update(completed)
         return [{**self._cache[key], "cached": key not in unique} for key in keys]
