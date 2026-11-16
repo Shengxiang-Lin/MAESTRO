@@ -224,9 +224,14 @@ def construct_scenes(args) -> dict:
         )
         from .knowledge_macro import YagoKnowledgeIndex
         knowledge_index = YagoKnowledgeIndex(knowledge_graph)
+        # Task Plan accepts replacement candidates after a rejected World.
+        # The target difficulty mix is still indexed by accepted Scenes.
+        candidate_budget = max(
+            args.target, min(args.max_records, args.target * 4)
+        ) if getattr(args, "knowledge_variant", "v1") == "task_plan" else args.target
         seeds = [
             {"topic": "archival reference collection",
-             "record_id": f"knowledge-{i:06d}"} for i in range(args.target)
+             "record_id": f"knowledge-{i:06d}"} for i in range(candidate_budget)
         ]
         seed_source = knowledge_graph.input_file
     else:
@@ -254,7 +259,7 @@ def construct_scenes(args) -> dict:
     chosen, rejected, seen_questions = [], Counter(), set()
     # Freeze Goal, structure, source permissions and all substantive
     # constraints before calling any optional LLM or sampling World values.
-    for seed_record in order:
+    for candidate_ordinal, seed_record in enumerate(order):
         if len(chosen) >= args.target:
             break
         if not knowledge_mode and getattr(args, "macro_first_v2_share", 0):
@@ -264,7 +269,11 @@ def construct_scenes(args) -> dict:
                 rejected.update(problems)
                 continue
         try:
-            ordinal = len(chosen)
+            ordinal = (
+                candidate_ordinal if knowledge_mode and
+                getattr(args, "knowledge_variant", "v1") == "task_plan"
+                else len(chosen)
+            )
             if knowledge_mode:
                 if getattr(args, "knowledge_variant", "v1") == "task_plan":
                     from .task_plan import make_spec as make_knowledge_spec
@@ -282,7 +291,7 @@ def construct_scenes(args) -> dict:
                     from .knowledge_macro import make_spec as make_knowledge_spec
                 spec = make_knowledge_spec(
                     knowledge_graph, seed=args.seed, ordinal=ordinal,
-                    difficulty=sequence[ordinal],
+                    difficulty=sequence[len(chosen)],
                     min_hops=args.knowledge_min_hops,
                     max_hops=args.knowledge_max_hops,
                     index=knowledge_index,
