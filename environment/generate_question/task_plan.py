@@ -28,7 +28,6 @@ MODES = ("trace", "event", "verify")
 CALIBRATED = "calibrated_structural_difficulty_v1"
 BLIND_EVENTS = "eligibility_blind_event_names_v1"
 GOAL_QUESTIONS = "grounded_relation_goal_question_v1"
-MACRO_GOAL_QUESTION_V1 = "macro_goal_reference_card_v1"
 MACRO_GOAL_QUESTION = "macro_goal_reference_card_v2"
 SEMANTIC_GOALS = "goal_constrained_yago_grounding_v1"
 SYNTHETIC_WORLD = "maestro.fictional_semantic_world.v1"
@@ -899,25 +898,19 @@ def _reference_card(plan: dict, sources: list[dict], *,
     """
     modality = {source["source_id"]: source["modality"]
                 for source in sources}
-    version = plan.get("question_surface_policy")
-    if version not in {MACRO_GOAL_QUESTION_V1, MACRO_GOAL_QUESTION}:
+    if plan.get("question_surface_policy") != MACRO_GOAL_QUESTION:
         raise ValueError("reference_card_unknown_surface_version")
     observations = [
         {
             "modality": modality[sid],
-            **({
-                "feature": info["attribute"],
-                "observed_value": info["value"],
-            } if version == MACRO_GOAL_QUESTION_V1 else {
-                "content": _reference_observation_text(
-                    modality[sid], info["attribute"], info["value"]
-                ),
-            }),
+            "content": _reference_observation_text(
+                modality[sid], info["attribute"], info["value"]
+            ),
         }
         for sid, info in sorted(plan["clues"].items())
     ]
     return {
-        "version": version,
+        "version": MACRO_GOAL_QUESTION,
         "reference_id": "REF-" + digest(
             seed, ordinal, "task-plan-provided-reference"
         )[:12].upper(),
@@ -1077,9 +1070,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         "macro_plan": plan,
         **({"task_input": _reference_card(
             plan, sources, seed=seed, ordinal=ordinal
-        )} if plan.get("question_surface_policy") in {
-            MACRO_GOAL_QUESTION_V1, MACRO_GOAL_QUESTION
-        } else {}),
+        )} if plan.get("question_surface_policy") ==
+            MACRO_GOAL_QUESTION else {}),
         "knowledge_witness": witness,
         "macro_information_necessity_version": POLICY,
     }
@@ -1111,9 +1103,7 @@ def validate_spec(spec: dict) -> list[str]:
         ):
             return ["task_plan_frozen_hash_mismatch"]
         question_policy = plan.get("question_surface_policy")
-        if question_policy in {
-            MACRO_GOAL_QUESTION_V1, MACRO_GOAL_QUESTION
-        }:
+        if question_policy == MACRO_GOAL_QUESTION:
             if (plan.get("knowledge_world_mode") != "compose"
                     or spec.get("task_input") != _reference_card(
                         plan, spec["sources"], seed=spec["seed"],
