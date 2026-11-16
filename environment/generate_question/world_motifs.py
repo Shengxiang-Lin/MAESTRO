@@ -615,14 +615,19 @@ def validate_composed_world(binding: dict) -> list[str]:
                     "http://schema.org/affiliation" if src_role == "person"
                     else "http://schema.org/subjectOf",
                 ))
+                expected_links.add((
+                    item["anchor_id"], item["site_id"],
+                    "http://schema.org/location" if src_role == "person"
+                    else "http://schema.org/spatialCoverage",
+                ))
             if len(group_uses) < 2 or min(group_uses.values()) < 2:
                 return ["composed_world_context_not_shared"]
             actual_links = {
                 (r["subject"], r["object"], r["predicate"])
                 for r in context
             }
-            if not expected_links <= actual_links:
-                return ["composed_world_missing_shared_links"]
+            if expected_links != actual_links:
+                return ["composed_world_missing_or_extra_shared_links"]
             if len(actual_links) != len(context):
                 return ["composed_world_duplicate_context_link"]
             for r in context:
