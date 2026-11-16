@@ -664,18 +664,18 @@ def guard_question(question: str, spec: dict,
         from .task_plan import _predicate_key
         goal = spec["macro_plan"]["goal"]["semantic"]
         patterns = {
-            "birthplace": r"\\b(?:birth\\s?place|born)\\b",
-            "deathplace": r"\\b(?:death|died|place of death)\\b",
-            "doctoraladvisor": r"\\b(?:advisor|adviser|supervisor)\\b",
-            "fieldofwork": r"\\b(?:research field|field of (?:work|study)|research area|discipline)\\b",
-            "spouse": r"\\b(?:spouse|husband|wife|partner)\\b",
-            "memberof": r"\\b(?:member|affiliat\\w*|organization)\\b",
-            "location": r"\\b(?:locat(?:ion|ed)|where|area)\\b",
-            "containedinplace": r"\\b(?:contain\\w*|region|area|district|within)\\b",
-            "neighbor": r"\\b(?:neighbor\\w*|border\\w*|adjacent)\\b",
-            "twinnedwith": r"\\b(?:twin\\w*|sister.city)\\b",
-            "nationality": r"\\b(?:nationality|citizenship)\\b",
-            "capital": r"\\bcapital\\b",
+            "birthplace": r"\b(?:birth\s?place|born)\b",
+            "deathplace": r"\b(?:death|died|place of death)\b",
+            "doctoraladvisor": r"\b(?:advisor|adviser|supervisor)\b",
+            "fieldofwork": r"\b(?:research field|field of (?:work|study)|research area|discipline)\b",
+            "spouse": r"\b(?:spouse|husband|wife|partner)\b",
+            "memberof": r"\b(?:member|affiliat\w*|organization)\b",
+            "location": r"\b(?:locat(?:ion|ed)|where|area)\b",
+            "containedinplace": r"\b(?:contain\w*|region|area|district|within)\b",
+            "neighbor": r"\b(?:neighbor\w*|border\w*|adjacent)\b",
+            "twinnedwith": r"\b(?:twin\w*|sister.city)\b",
+            "nationality": r"\b(?:nationality|citizenship)\b",
+            "capital": r"\bcapital\b",
         }
         keys = [_predicate_key(iri) for iri in
                 goal["relation_sequence"]]
@@ -685,7 +685,7 @@ def guard_question(question: str, spec: dict,
             for key in keys
         ) or (
             keys.count("containedinplace") >= 2 and
-            not re.search(r"\\b(?:larger|broader|higher.level|second.level)\\b",
+            not re.search(r"\b(?:larger|broader|higher.level|second.level)\b",
                           q, flags=re.I)
         ):
             errors.append("task_plan_semantic_goal_question_missing")
