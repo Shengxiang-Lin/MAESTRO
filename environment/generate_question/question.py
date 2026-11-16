@@ -102,6 +102,49 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if spec.get("reasoning_pattern") == "task_graph_first_v1":
+        from environment.schema import digest
+        plan = spec["macro_plan"]
+        clues = [
+            f"{item['attribute']} '{item['value']}' in the {item['title']}"
+            for _, item in sorted(plan["clues"].items())
+        ]
+        # A user asks an information question, NOT an internal DAG
+        # execution recipe. The World sources supply the actual relations.
+        topic = spec["scenario"]["topic"]
+        options = [
+            (
+                f"In {topic}, several simulated records identify an "
+                f"unresolved project: {'; '.join(clues)}. "
+                f"The project's completed event and two independent "
+                f"candidate directories describe competing possible "
+                f"connections to real entities. Using the event records "
+                f"and genuine YAGO relationship evidence, which entity "
+                f"lies at the end of the documented relation trail?"
+            ),
+            (
+                f"Please determine the final linked real-world entity for "
+                f"a project in {topic}. Its identifying observations are "
+                f"{'; '.join(clues)}. Select the completed event rather "
+                f"than a scheduled follow-up, reconcile the candidate "
+                f"reference records with the actual YAGO secondary "
+                f"relationship, and report the entity reached by the "
+                f"documented knowledge-graph trail. Which entity is it?"
+            ),
+            (
+                f"The {topic} contains these identifying hints: "
+                f"{'; '.join(clues)}. An unidentified project's event "
+                f"records include both completed and scheduled sessions, "
+                f"and its reference documents admit more than one candidate. "
+                f"After establishing which real link is supported by the "
+                f"completed session and YAGO evidence, what is the "
+                f"final related entity's name?"
+            ),
+        ]
+        slot = int(digest(
+            spec["seed"], spec["ordinal"], "graph-first-question-v1"
+        )[:8], 16) % len(options)
+        return options[slot]
     if spec.get("reasoning_pattern") == "typed_knowledge_v4":
         from environment.schema import digest
         from .knowledge_macro import predicate_label
@@ -421,6 +464,15 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
+    if pattern == "task_graph_first_v1":
+        if not re.search(r"\bcompleted\b", q, flags=re.I):
+            errors.append("graph_first_required_event_status_missing")
+        if not re.search(r"\b(?:YAGO|knowledge.graph|real.world)\b",
+                         q, flags=re.I):
+            errors.append("graph_first_real_knowledge_source_missing")
+        if not re.search(r"\b(?:reference|candidate|directory)\b",
+                         q, flags=re.I):
+            errors.append("graph_first_competing_sources_missing")
     if pattern == "typed_knowledge_v4":
         if not re.search(r"\b(?:event|organizer|venue)\b", q, flags=re.I):
             errors.append("causal_hybrid_event_relation_missing")
