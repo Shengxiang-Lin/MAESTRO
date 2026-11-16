@@ -68,7 +68,7 @@ def sample_graph(*, seed: int, ordinal: int,
 
     def node(kind: str, parents=(), *, role=None, description=None):
         mid = "M" + str(len(result)+1)
-        definition = ROLE_OUTPUT[kind]
+        definition = ROLE_OUTPUT["discover" if kind.startswith("discover") else kind]
         incoming = {}
         for parent in parents:
             parent_mid = names[parent]
