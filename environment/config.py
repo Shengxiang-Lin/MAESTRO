@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = Path(__file__).with_name("configs") / "questions.yaml"
+DEFAULT_CONFIG = Path(__file__).with_name("configs") / "questions_task_plan.yaml"
 
 SECTIONS = {
     "input": {"mmqa", "max_records"},
