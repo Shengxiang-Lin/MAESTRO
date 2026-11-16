@@ -39,6 +39,7 @@ FAMILY_OUTPUTS = {
     "typed_knowledge_v1": "Name the entity reached by the documented YAGO relation path.",
     "typed_knowledge_v2": "Name the entity reached by the documented YAGO relation path.",
     "typed_knowledge_v3": "Identify the fictional project, reconcile its candidate real references, then name the related YAGO entity.",
+    "typed_knowledge_v4": "Resolve the fictional event and its genuine secondary YAGO relation before tracing the related entity.",
 }
 STYLES = (
     ("direct_lookup", "Start with a concise direct question, not a job title."),
@@ -129,7 +130,7 @@ def intent_contract(spec: dict) -> dict:
     return {
         "visual_clue": (
             applied_clues if applied_clues is not None else
-            spec["macro_plan"]["clues"] if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"} else None
+            spec["macro_plan"]["clues"] if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4"} else None
         ),
         "acquisition_chain": None,
         "topic": spec["scenario"]["topic"],
