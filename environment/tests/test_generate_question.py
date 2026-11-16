@@ -67,7 +67,7 @@ class ConfigAndCliTests(unittest.TestCase):
         self.assertEqual(args.difficulty_mix, "0,50,50")
         self.assertFalse(hasattr(args, "quota_refill"))
         self.assertFalse(hasattr(args, "max_candidate_multiplier"))
-        self.assertTrue(args.mmqa.is_absolute())
+        self.assertIsNone(args.mmqa)
         self.assertEqual(args.scenario_workers, 4)
         self.assertEqual(args.question_workers, 4)
         self.assertIsNone(args.question_api_key_env)
