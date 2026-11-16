@@ -872,7 +872,7 @@ def _reference_observation_text(modality: str, attribute: str,
             "A cross-reference note identifies the document series as {value}."
         ),
         "reel motif": (
-            "The supplied reel observation describes a {value} sequence."
+            "The supplied reel observation describes a sequence marked {value}."
         ),
         "record class": (
             "A separate register note classifies the item as {value}."
