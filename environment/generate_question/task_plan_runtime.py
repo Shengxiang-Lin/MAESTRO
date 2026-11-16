@@ -72,16 +72,26 @@ def generate_world(spec: dict) -> dict:
         spec["seed"], spec["ordinal"], "task-plan-rows"
     )[:15], 16))
     tables = {}
+    required = (
+        model.get("required_context_relation") if composed else None
+    )
     for sid, cue in plan["clues"].items():
         rows = []
         for case in cases:
             shadow = b["case_shadow_slots"].get(case)
             ok = case == target or (shadow is not None
                                     and shadow != cue["source_slot"])
-            rows.append({
-                "case_id": case,
-                "cue": cue["value"] if ok else cue["alternative"],
-            })
+            value = (
+                model["context_by_case"][case]["anchor_label"]
+                if required and sid == required["source_id"]
+                else cue["value"] if ok else cue["alternative"]
+            )
+            if required and sid == required["source_id"]:
+                # Validate the evidence projection against the actual World
+                # relation, not the chosen target answer or a copied value.
+                if (value == cue["value"]) != ok:
+                    raise ValueError("required_shared_world_evidence_not_necessary")
+            rows.append({"case_id": case, "cue": value})
         rng.shuffle(rows)
         tables[sid] = rows
     projects = {
@@ -282,10 +292,11 @@ def generate_world(spec: dict) -> dict:
                     "fictional_observation"
                 )
         bank[sid] = src
-    if composed and "context_version" in model:
-        # Every visible record is a partial projection of a shared canonical
-        # entity world. Same archive/institution and site can be referenced
-        # across multiple dossiers and different evidence sources.
+    if composed and "context_version" in model and not required:
+        # Old frozen composed Worlds retain their original source metadata.
+        # New Worlds put the *required* affiliation only in its authorized
+        # source. Repeating it as document_context in every observation
+        # would leak the answer and invalidate the evidence-dependency task.
         case_by_project = {pid: case for case, pid in projects.items()}
         case_by_event = {
             event_key(pid, which): case
@@ -596,6 +607,25 @@ def audit_information(scene: dict) -> dict:
     clue = {
         sid: ambiguous(_run(drop=[sid])) for sid in plan["clues"]
     }
+    required = plan["world_binding"].get("world_model", {}).get(
+        "required_context_relation"
+    )
+    required_necessary = None
+    if required:
+        sid = required["source_id"]
+        mapping = plan["world_binding"]["world_model"]["context_by_case"]
+        observed = {
+            obs["values"]["case_id"]: obs["values"]["cue"]
+            for obs in sources[sid]["observations"]
+        }
+        required_necessary = (
+            clue.get(sid) is True
+            and set(observed) == set(mapping)
+            and all(observed[case] == item["anchor_label"]
+                    for case, item in mapping.items())
+            and sum(v == required["target_anchor_label"]
+                    for v in observed.values()) == len(observed)-1
+        )
     discoveries = {
         t["macro_id"]: ambiguous(
             _run(drop=t["source_scope"])
@@ -712,6 +742,7 @@ def audit_information(scene: dict) -> dict:
             and all_discovery and (condition is None or condition)
             and all(branches.values())
             and (fork_necessary is None or fork_necessary)
+            and (required_necessary is None or required_necessary)
             and (substitution is None or substitution["passed"])
         ),
         "clue_necessary": clue,
@@ -720,6 +751,9 @@ def audit_information(scene: dict) -> dict:
         "event_field_necessary": condition,
         "simulated_sources_necessary": branches,
         "real_fork_necessary": fork_necessary,
+        **({"required_shared_relation_necessary": required_necessary,
+            "required_shared_relation_source": required["source_id"]}
+           if required else {}),
         "mode": plan["mode"],
         "limitations": (
             "Bounded executable filter relaxation and source interventions, "
