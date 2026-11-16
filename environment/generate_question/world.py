@@ -131,6 +131,8 @@ def initial_public_view(spec: dict, world: dict, question: str) -> dict:
     return {
         "task_id": spec["task_id"],
         "question": question,
+        **({"task_input": spec["task_input"]}
+           if "task_input" in spec else {}),
         "available_source_descriptions": [{
             "source_id": sid,
             "title": item["title"],
