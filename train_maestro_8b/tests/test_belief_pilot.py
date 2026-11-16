@@ -186,6 +186,44 @@ class TinyLoRABeliefTests(unittest.TestCase):
         self.assertTrue(all(p.grad is None for name, p in policy.named_parameters()
                             if "lora_" not in name))
 
+    def test_peft_adapter_can_initialize_identical_stage2_lora(self):
+        import torch
+        from transformers import Qwen3Config, Qwen3ForCausalLM
+        from peft import LoraConfig, TaskType, get_peft_model
+        from train_maestro_8b.policy.belief_init import load_stage1_belief_adapter
+        config = Qwen3Config(
+            vocab_size=128, hidden_size=32, intermediate_size=64,
+            num_hidden_layers=1, num_attention_heads=4,
+            num_key_value_heads=2, head_dim=8, max_position_embeddings=128,
+        )
+        adapter_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM, r=4, lora_alpha=8,
+            target_modules=["q_proj", "v_proj"],
+        )
+        source = get_peft_model(Qwen3ForCausalLM(config), adapter_config)
+        target = get_peft_model(Qwen3ForCausalLM(config), adapter_config)
+        for name, p in source.named_parameters():
+            if "lora_" in name:
+                torch.nn.init.constant_(p, 0.037)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            adapter = root / "adapter"
+            source.save_pretrained(adapter)
+            (root / "manifest.json").write_text(json.dumps({
+                "schema": "maestro.stage1_belief_checkpoint.v1",
+                "base_model": "test-tiny", "lora_rank": 4, "lora_alpha": 8,
+                "steps": 2, "validation": [],
+            }))
+            result = load_stage1_belief_adapter(
+                target, adapter, stage2_model="test-tiny", rank=4, alpha=8,
+            )
+            self.assertGreater(result["loaded_tensors"], 0)
+            tvalues = [p.detach().float() for n, p in target.named_parameters()
+                       if "lora_" in n]
+            self.assertTrue(tvalues)
+            self.assertTrue(all(torch.allclose(p, torch.full_like(p, 0.037))
+                                for p in tvalues))
+
 
 if __name__ == "__main__":
     unittest.main()
