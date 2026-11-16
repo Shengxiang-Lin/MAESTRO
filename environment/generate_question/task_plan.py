@@ -541,9 +541,9 @@ def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
     rng = random.Random(int(digest(
         seed, ordinal, "task-plan-world-composition"
     )[:15], 16))
-    features = motif_features(kg, index)
     recipes = tuple(r for r in _SEMANTIC_RECIPES
                     if len(r[0]) == plan["hops"])
+    features = motif_features(kg, index, recipes)
     recipe = compose_relation_goal(features, recipes, rng=rng)
     n_clues = 2 * sum(
         t["operation"] == "match_clues" for t in plan["macro_tasks"]
