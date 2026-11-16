@@ -75,6 +75,13 @@ def generate_world(spec: dict) -> dict:
     required = (
         model.get("required_context_relation") if composed else None
     )
+    from .world_motifs import (
+        composed_project_id, composed_event_id, KEYED_EVENT_VERSION,
+    )
+    keyed_events = (
+        composed and model.get("keyed_event_relation_version")
+        == KEYED_EVENT_VERSION
+    )
     for sid, cue in plan["clues"].items():
         rows = []
         for case in cases:
@@ -96,16 +103,16 @@ def generate_world(spec: dict) -> dict:
         tables[sid] = rows
     projects = {
         case: (
-            "PRJ-" + digest(
-                spec["seed"], spec["ordinal"], case, "project"
-            )[:12].upper()
+            composed_project_id(
+                spec["seed"], spec["ordinal"], case
+            )
             if composed else _project(
                 spec["seed"], spec["ordinal"], case
             )
         ) for case in cases
     }
     def event_key(pid, which):
-        return ("EVT-" + digest(pid, which)[:12].upper()
+        return (composed_event_id(pid, which)
                 if composed else _event(pid, which))
     tables["entity_index"] = [{
         "case_id": case, "project_id": pid,
@@ -145,26 +152,51 @@ def generate_world(spec: dict) -> dict:
         event_rows = []
         if mode == "event":
             event_refs = []
+            indexed_links = {
+                (link["case_id"], link["event_role"]): link
+                for link in model["event_links"]
+            } if keyed_events else {}
         for i, case in enumerate(cases):
             pid = projects[case]
             good_event = event_key(pid, "qualified")
             other_event = event_key(pid, "other")
             if mode == "event":
+                qualified_link = indexed_links.get((case, "qualified"))
+                other_link = indexed_links.get((case, "other"))
+                if keyed_events:
+                    if (not qualified_link or not other_link
+                            or qualified_link["project_id"] != pid
+                            or other_link["project_id"] != pid
+                            or qualified_link["event_id"] != good_event
+                            or other_link["event_id"] != other_event):
+                        raise ValueError("event_relation_world_projection_mismatch")
+                    good_details = {
+                        field: qualified_link[field]
+                        for field in ("event_status", "event_year")
+                    }
+                    other_details = {
+                        field: other_link[field]
+                        for field in ("event_status", "event_year")
+                    }
+                    qualified_entity = qualified_link["entity_0"]
+                    other_entity = other_link["entity_0"]
+                else:
+                    good_details, other_details = eligible, ineligible
+                    qualified_entity = paths[case][0]["subject"]
+                    other_entity = paths[cases[(i+1) % len(cases)]][0]["subject"]
                 event_rows.extend([
                     {"project_id": pid, "event_id": good_event,
                      "event_name": ((neutral_label + " " + case[-5:]) if blind else
                                     ("Qualified project review " + case[-5:])),
-                     **eligible},
+                     **good_details},
                     {"project_id": pid, "event_id": other_event,
                      "event_name": ((neutral_label + " " + case[-5:]) if blind else
                                     ("Other project review " + case[-5:])),
-                     **ineligible},
+                     **other_details},
                 ])
                 event_refs.extend([
-                    {"event_id": good_event,
-                     "entity_0": paths[case][0]["subject"]},
-                    {"event_id": other_event,
-                     "entity_0": paths[cases[(i+1) % len(cases)]][0]["subject"]},
+                    {"event_id": good_event, "entity_0": qualified_entity},
+                    {"event_id": other_event, "entity_0": other_entity},
                 ])
             else:
                 fork = (model["verification_facts"] if composed else
@@ -239,6 +271,8 @@ def generate_world(spec: dict) -> dict:
             "mode": role["access_mode"],
             **({"key_field": role["key_field"]}
                if role["access_mode"] == "keyed_lookup" else {}),
+            **({"key_cardinality": "many"}
+               if sid == "event_ledger" and keyed_events else {}),
         }
         if sid.startswith("relation_") or sid == "real_fork":
             fictional = paths[target][0]["origin"] == "synthetic"
@@ -418,16 +452,34 @@ def compile_macro_solvers(spec: dict) -> dict:
             )
             terminal = add("project", lookup, fields=["entity_0"])
         elif op in {"qualifying_event", "event_eligibility"}:
-            scanned = add("scan", source_id="event_ledger")
+            # New composed event Worlds use a true dependent retrieval:
+            # the project_id must arrive with provenance from the previous
+            # identification Macro. Historical scenes still scan+join.
+            keyed = (
+                plan.get("knowledge_world_mode") == "compose"
+                and plan["world_binding"]["world_model"].get(
+                    "keyed_event_relation_version"
+                ) is not None
+            )
+            if keyed:
+                observed = add(
+                    "lookup_by_key", parents[0], source_id="event_ledger",
+                    input_key_field="project_id", source_key_field="project_id",
+                )
+            else:
+                observed = add("scan", source_id="event_ledger")
             condition = plan["condition"]
             filtered = add(
-                condition["op"], scanned, field=condition["field"],
+                condition["op"], observed, field=condition["field"],
                 value=condition["value"],
             )
-            linked = add(
-                "join", parents[0], filtered,
-                left_on="project_id", right_on="project_id",
-            )
+            if keyed:
+                linked = filtered
+            else:
+                linked = add(
+                    "join", parents[0], filtered,
+                    left_on="project_id", right_on="project_id",
+                )
             fields = ["event_id"] if op == "qualifying_event" else [
                 "motif_object"
             ]
@@ -737,6 +789,84 @@ def audit_information(scene: dict) -> dict:
             substitution = {
                 "applicable": False, "tested_fields": {}, "passed": True,
             }
+    # Unlike source blocking, this checks a *valid but wrong* upstream
+    # project key and confirms that the downstream event lookup follows it
+    # to a different, nonempty answer. The event subject is frozen in World.
+    event_dependency = None
+    event_model = plan["world_binding"].get("world_model", {})
+    if event_model.get("keyed_event_relation_version"):
+        ledger = sources["event_ledger"]
+        records = {
+            (obs["values"]["project_id"], obs["values"]["event_id"]):
+                obs["values"] for obs in ledger["observations"]
+        }
+        world_links = event_model["event_links"]
+        links_match = (
+            len(records) == len(world_links)
+            and all(
+                (link["project_id"], link["event_id"]) in records
+                and all(
+                    records[(link["project_id"], link["event_id"])][field]
+                    == link[field]
+                    for field in ("event_status", "event_year")
+                )
+                for link in world_links
+            )
+        )
+        keyed_nodes = [
+            node for node in program["nodes"]
+            if node["op"] == "lookup_by_key"
+            and node["source_id"] == "event_ledger"
+            and node["input_key_field"] == "project_id"
+            and node["source_key_field"] == "project_id"
+        ]
+        source_scans = [
+            node for node in program["nodes"]
+            if node["op"] == "scan" and
+            node["source_id"] == "event_ledger"
+        ]
+        policy_ok = (
+            ledger["access_policy"] == {
+                "mode": "keyed_lookup", "key_field": "project_id",
+                "key_cardinality": "many",
+            }
+            and len(keyed_nodes) == 1 and not source_scans
+        )
+        target = plan["world_binding"]["target_case"]
+        alternative_case = next(
+            case for case in plan["world_binding"]["all_cases"]
+            if case != target
+        )
+        alternative_project = project_for_case(alternative_case)
+        altered = copy.deepcopy(sources)
+        target_record = next(
+            obs for obs in altered["entity_index"]["observations"]
+            if obs["values"]["case_id"] == target
+        )
+        target_record["values"]["project_id"] = alternative_project
+        wrong_key_answers = answer_values(
+            evaluate_program(program, sources=altered)
+        )
+        wrong_key_changes_answer = bool(
+            wrong_key_answers
+            and wrong_key_answers != scene["gold_answer"]
+        )
+        event_dependency = {
+            "source": "event_ledger",
+            "key": "project_id",
+            "world_links_match": links_match,
+            "keyed_access_enforced": policy_ok,
+            "wrong_upstream_key_changes_answer": wrong_key_changes_answer,
+            "wrong_upstream_key_result": wrong_key_answers,
+            "passed": (
+                links_match and policy_ok
+                and wrong_key_changes_answer and condition is True
+            ),
+            "scope": (
+                "Valid wrong-project counterfactual plus conditional "
+                "event selection; not an independent recovery test."
+            ),
+        }
     result = {
         "policy": "single_task_plan_counterfactual_v1",
         "passed": (
@@ -745,6 +875,7 @@ def audit_information(scene: dict) -> dict:
             and all(branches.values())
             and (fork_necessary is None or fork_necessary)
             and (required_necessary is None or required_necessary)
+            and (event_dependency is None or event_dependency["passed"])
             and (substitution is None or substitution["passed"])
         ),
         "clue_necessary": clue,
@@ -753,6 +884,8 @@ def audit_information(scene: dict) -> dict:
         "event_field_necessary": condition,
         "simulated_sources_necessary": branches,
         "real_fork_necessary": fork_necessary,
+        **({"keyed_event_dependency": event_dependency}
+           if event_dependency else {}),
         **({"required_shared_relation_necessary": required_necessary,
             "required_shared_relation_source": required["source_id"]}
            if required else {}),

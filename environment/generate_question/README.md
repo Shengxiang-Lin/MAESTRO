@@ -838,3 +838,39 @@ The quality report includes \`required_shared_relation_worlds\`,
 counterfactual necessity is checked separately from merely blocking source
 access. The current design still does not claim new Macro Graph skeletons,
 true image/audio perception, or measured live-Agent difficulty.
+
+
+### Key-dependent Project → Event → Entity retrieval (incremental)
+
+New \`compose\` + \`event\` scenes now freeze the **Project → Event →
+Referenced Entity** facts in \`world_model.event_links\` before creating
+any source rows. The current event's status/year and the independent
+event-subject register are projections of those same private facts.
+The \`qualifying_event\` Macro is unchanged as a Task Plan node, but
+its **existing** Gold subprogram now uses
+
+\`\`\`
+Identification(project_id)
+  -> lookup_by_key(event_ledger, project_id)  # only events of this project
+  -> filter_event_status_or_year
+  -> qualifying_event(event_id)
+  -> lookup_by_key(event_ref, event_id)
+  -> subject entity
+\`\`\`
+
+The event ledger has two records for each project. Accordingly, the
+existing \`lookup_by_key\` primitive recognizes an **explicitly opt-in**
+\`access_policy.key_cardinality: many\` for this indexed table only;
+other indexed sources retain the strict one-record-per-key default.
+Full-table reads of \`event_ledger\` are forbidden for newly generated
+event scenes. A wrong but valid project key must lead to a **nonempty,
+incorrect** downstream answer, rather than merely causing a blocked
+program. The old eligibility-removal ambiguity audit still applies.
+
+Historical composed Worlds without
+\`keyed_event_relation_version\` retain their original \`scan + join\`
+event semantics and Replay output. The \`trace\` and \`verify\` modes
+are not migrated. No new Macro type, planner, external media decoder,
+or Stage-2/3/4 action is added. This is a targeted improvement to
+the *information acquisition dependency*, not a claim of more graph
+templates or verified recovery behavior.

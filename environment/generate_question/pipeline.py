@@ -930,6 +930,20 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                         ].get("required_shared_relation_necessary") is True
                         for s in current_scenes
                     ),
+                    "keyed_event_worlds": sum(
+                        bool(s["problem_spec"]["macro_plan"][
+                            "world_binding"
+                        ].get("world_model", {}).get(
+                            "keyed_event_relation_version"
+                        )) for s in current_scenes
+                    ),
+                    "keyed_event_wrong_key_audit_passed": sum(
+                        s["difficulty_audit"]["macro_first_audit"][
+                            "candidate_information_necessity"
+                        ].get("keyed_event_dependency", {}).get(
+                            "passed", False
+                        ) for s in current_scenes
+                    ),
                     "shared_context_entity_groups": sum(
                         s["problem_spec"]["macro_plan"]["world_binding"].get(
                             "world_model", {}
@@ -983,8 +997,9 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                         "In compose mode, observed YAGO relation types and "
                         "type-filtered vocabulary are recombined into novel "
                         "Worlds. New scenes use one existing discovery source "
-                        "to expose a genuinely required shared relation; "
-                        "other sources do not copy it into per-record context. "
+                        "to expose a required shared relation; event-mode scenes "
+                        "add a canonical project-event-subject relation and "
+                        "upstream-keyed event lookup, without full-ledger scans. "
                         "Other context edges remain non-required. "
                         "In witnessed mode, YAGO uniqueness is checked only "
                         "against the bounded loaded fact sample."

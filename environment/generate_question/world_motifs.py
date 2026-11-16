@@ -130,6 +130,18 @@ def validate_frozen_motif(motif: dict, anchored_path: list[dict]) -> list[str]:
 # This module does not alter the historical witnessed YAGO motif contracts.
 
 COMPOSE_VERSION = "maestro.composed_typed_world.v1"
+KEYED_EVENT_VERSION = "maestro.keyed_event_relation.v1"
+
+
+def composed_project_id(seed: int, ordinal: int, case: str) -> str:
+    from environment.schema import digest
+    return "PRJ-" + digest(seed, ordinal, case, "project")[:12].upper()
+
+
+def composed_event_id(project_id: str, role: str) -> str:
+    from environment.schema import digest
+    return "EVT-" + digest(project_id, role)[:12].upper()
+
 
 _GIVEN = (
     "Mara", "Evelyn", "Talia", "Jonas", "Soren", "Lina",
@@ -721,6 +733,64 @@ def validate_composed_world(binding: dict) -> list[str]:
                     row["label"]
                 ):
                     return ["composed_world_invalid_research_field"]
+        # Optional one-to-many project/event relation is versioned to keep
+        # older composed Worlds and their exact Replay representations valid.
+        if "keyed_event_relation_version" in world:
+            if world["keyed_event_relation_version"] != KEYED_EVENT_VERSION:
+                return ["composed_world_bad_event_link_version"]
+            links = world.get("event_links")
+            if not isinstance(links, list):
+                return ["composed_world_missing_event_links"]
+            if len(links) != 2 * len(paths):
+                return ["composed_world_wrong_event_link_count"]
+            per_case, event_ids, project_ids = defaultdict(set), set(), {}
+            for link in links:
+                case = link["case_id"]
+                role = link["event_role"]
+                pid, eid = link["project_id"], link["event_id"]
+                if (case not in paths or role not in {"qualified", "other"}
+                        or role in per_case[case]
+                        or pid != project_ids.setdefault(case, pid)
+                        or eid != composed_event_id(pid, role)
+                        or eid in event_ids
+                        or pid not in entities or eid not in entities
+                        or entities[pid]["type"] != "project"
+                        or entities[eid]["type"] != "event"
+                        or link["project_event_predicate"] !=
+                            "http://schema.org/hasPart"
+                        or link["event_subject_predicate"] !=
+                            "http://schema.org/about"
+                        or link["origin"] != "synthetic"
+                        or type(link["event_year"]) is not int
+                        or not isinstance(link["event_status"], str)):
+                    return ["composed_world_invalid_event_link"]
+                if link["entity_0"] not in {
+                    path[0]["subject"] for path in paths.values()
+                }:
+                    return ["composed_world_event_subject_missing"]
+                per_case[case].add(role)
+                event_ids.add(eid)
+            if set(per_case) != set(paths) or any(
+                roles != {"qualified", "other"}
+                for roles in per_case.values()
+            ) or len(set(project_ids.values())) != len(paths):
+                return ["composed_world_event_cardinality_invalid"]
+            for i, case in enumerate(binding["all_cases"]):
+                qualified = next(
+                    link for link in links if link["case_id"] == case
+                    and link["event_role"] == "qualified"
+                )
+                other = next(
+                    link for link in links if link["case_id"] == case
+                    and link["event_role"] == "other"
+                )
+                if (qualified["entity_0"] != paths[case][0]["subject"]
+                        or other["entity_0"] != paths[
+                            binding["all_cases"][(i+1) % len(paths)]
+                        ][0]["subject"]):
+                    return ["composed_world_event_reference_not_grounded"]
+        elif "event_links" in world:
+            return ["composed_world_unversioned_event_links"]
         profile = world["profile"]
         if (profile["policy"] != COMPOSE_VERSION
                 or profile["actual_yago_assertions_reused"] is not False):

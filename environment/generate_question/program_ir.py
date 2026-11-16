@@ -186,7 +186,14 @@ def _lookup_by_key(node: dict, key_product: Relation,
     rows = []
     observed = source["observations"]
     source_keys = [item.get("values", {}).get(key_field) for item in observed]
-    if len(source_keys) != len(set(map(str, source_keys))):
+    cardinality = policy.get("key_cardinality", "one")
+    if cardinality not in {"one", "many"}:
+        raise ProgramError("invalid_lookup_cardinality:" + sid)
+    if any(key is None or isinstance(key, (dict, list))
+           for key in source_keys):
+        raise ProgramError("invalid_lookup_source_key:" + sid)
+    if (cardinality == "one"
+            and len(source_keys) != len(set(map(str, source_keys)))):
         raise ProgramError("ambiguous_lookup_source_key:" + sid)
     for upstream in key_product.rows:
         if not upstream.get("support"):
