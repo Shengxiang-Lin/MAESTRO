@@ -1160,8 +1160,11 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
                 _user_task_identity(scene["problem_spec"], scene["question"])
                 for scene in scenes
             }), 20)
-            self.assertLess(
-                len({scene["question"] for scene in scenes}), 20,
+            # Goal-conditioned composition may produce a distinct natural
+            # semantic question for every candidate. The old assertion
+            # requiring duplicate questions was a template-era artifact.
+            self.assertGreaterEqual(
+                len({scene["question"] for scene in scenes}), 10,
             )
             report = json.loads(
                 (args.output_dir / "quality_report.json").read_text()
