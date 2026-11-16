@@ -117,10 +117,10 @@ def _intent_reference_question(spec: dict) -> str:
             # eligibility rule. Target-specific features belong to the
             # provided reference material, NOT the user question.
             lead = (
-                f"The supplied reference materials concern an entry in the {topic}.",
-                f"An entry in the {topic} is described by the provided reference materials.",
-                f"The attached reference materials point to a record in the {topic}.",
-                f"One record in the {topic} is associated with the supplied reference materials.",
+                f"The supplied photograph and recording descriptions concern a record in the {topic}.",
+                f"A record in the {topic} is described by supplied image and audio observations.",
+                f"The provided archive-photo and spoken-catalog observations concern a record in the {topic}.",
+                f"The supplied image description and audio observation refer to a record in the {topic}.",
             )[spec["ordinal"] % 4]
             condition = plan["condition"]
             if condition is None:
