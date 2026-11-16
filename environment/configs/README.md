@@ -8,7 +8,7 @@ canonical CLI default. Acceptance is verified by Replay and necessity tests.
 
 | Stage | Config | Output | Main input |
 |---|---|---|---|
-| 1 — questions and executable Macro DAG | `questions_task_plan.yaml` (default) | `environment/data/stage1_single_task_plan_pilot/` | YAGO-seeded synthetic Task Plan + composed World |
+| 1 — questions and executable Macro DAG | `questions_task_plan.yaml` (default) | `environment/data/stage1/` | YAGO-seeded synthetic Task Plan + composed World |
 | 2 — Oracle and reviewed Sub-Agent reports | `subagent_reports.yaml` | `environment/data/stage2/` | Stage-1 `questions/scenes.jsonl` |
 | 3 — trusted Main decisions | `main_orchestration.yaml` | `environment/data/stage3/` | Stage-1 scenes + Stage-2 `subtasks.jsonl` |
 | 4 — untrusted recovery decisions | `untrusted_orchestration.yaml` | `environment/data/stage4/` | Stage-1 scenes + Stage-2 `subtasks.jsonl` |
