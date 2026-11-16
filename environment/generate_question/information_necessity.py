@@ -8,6 +8,144 @@ from __future__ import annotations
 
 
 POLICY = "two_nonunique_candidate_sets_with_single_intersection_v1"
+
+KNOWLEDGE_REPLANNING_POLICY = "knowledge_candidate_replanning_v2"
+
+
+def _audit_knowledge_replanning(scene: dict) -> dict:
+    """Test actual candidate-set uniqueness and executable bypass attempts.
+
+    Unlike v1's 'mutate a cited correct row' check, these interventions
+    *relax filters* while leaving all valid competing YAGO paths in place.
+    A complete competing answer must remain feasible if any source or
+    Discovery Macro is skipped. A blocked/empty execution does not count
+    as evidence of information necessity.
+    """
+    import copy
+    from .program_ir import evaluate_program, answer_values
+
+    spec = scene["problem_spec"]
+    plan, world = spec["macro_plan"], scene["world"]["sources"]
+    target = plan["target_case"]
+    clue_sets = {}
+    for sid, cue in plan["clues"].items():
+        clue_sets[sid] = {
+            record["values"]["case_id"]
+            for record in world[sid]["observations"]
+            if record["values"]["cue"] == cue["value"]
+        }
+    if len(clue_sets) < 4:
+        raise ValueError("knowledge_audit_too_few_independent_clues")
+    full = set.intersection(*clue_sets.values())
+    feedback = {row["macro_id"]: row for row in scene["task_feedback"]
+                if "macro_id" in row}
+    identity = next(t for t in plan["macro_tasks"]
+                    if t["role"] == "identification")
+    identity_feedback = next(row for row in scene["task_feedback"]
+                             if row["task_id"] == "work_" + identity["macro_id"])
+    mid_count = identity_feedback["result_rows"]
+    # Need both a true candidate intersection and the actual intermediate
+    # WorkProduct to agree; later relation filters cannot hide ambiguity.
+    jointly_unique = (
+        full == {target} and mid_count == 1
+        and identity_feedback["workproduct"][0]["values"]["entity_0"]
+        == plan["entity_anchor"]
+    )
+
+    program = scene["gold_program"]
+    by_id = {node["id"]: node for node in program["nodes"]}
+    clue_filters = {}
+    for node in program["nodes"]:
+        if node["op"] != "filter_eq" or node.get("field") != "cue":
+            continue
+        source = by_id[node["inputs"][0]]
+        if source["op"] != "scan":
+            raise ValueError("knowledge_filter_not_source_scoped")
+        sid = source["source_id"]
+        if sid in clue_filters:
+            raise ValueError("knowledge_duplicate_clue_filter")
+        clue_filters[sid] = node["id"]
+    if set(clue_filters) != set(clue_sets):
+        raise ValueError("knowledge_missing_compiled_clue_filters")
+
+    expected = scene["gold_answer"]
+    def _run_relaxed(sids: set[str]) -> list[dict]:
+        altered = copy.deepcopy(program)
+        filters = {clue_filters[sid] for sid in sids}
+        for node in altered["nodes"]:
+            if node["id"] in filters:
+                nid, parents = node["id"], list(node["inputs"])
+                node.clear()
+                node.update({
+                    "id": nid, "op": "project", "inputs": parents,
+                    "fields": ["case_id", "cue"],
+                })
+        return answer_values(evaluate_program(altered, sources=world))
+
+    def _ambiguous(results: list[dict]) -> bool:
+        outputs = {entry["answer"] for entry in results}
+        return (len(outputs) > 1
+                and expected[0]["answer"] in outputs
+                and len(outputs) == len(results))
+
+    source_checks = {}
+    for sid, candidates in clue_sets.items():
+        without = set.intersection(*[
+            values for other, values in clue_sets.items()
+            if other != sid
+        ])
+        results = _run_relaxed({sid})
+        source_checks[sid] = {
+            "remaining_candidate_count": len(without),
+            "remaining_answer_count": len(results),
+            "has_real_competing_answer": _ambiguous(results),
+            "expected_shadow_case": target in without and len(without) > 1,
+        }
+    discovery_checks = {}
+    for task in plan["macro_tasks"]:
+        if task["role"] != "discovery":
+            continue
+        sids = set(task["source_scope"])
+        other = [values for sid, values in clue_sets.items() if sid not in sids]
+        remaining = set.intersection(*other)
+        results = _run_relaxed(sids)
+        discovery_checks[task["macro_id"]] = {
+            "remaining_candidate_count": len(remaining),
+            "remaining_answer_count": len(results),
+            "has_real_competing_answer": _ambiguous(results),
+            "candidate_ambiguity": target in remaining and len(remaining) > 1,
+        }
+    all_relaxed = _run_relaxed(set(clue_sets))
+    all_bypass_blocked = _ambiguous(all_relaxed)
+    passed = (
+        jointly_unique
+        and all(r["has_real_competing_answer"]
+                and r["expected_shadow_case"]
+                for r in source_checks.values())
+        and all(r["has_real_competing_answer"]
+                and r["candidate_ambiguity"]
+                for r in discovery_checks.values())
+        and all_bypass_blocked
+    )
+    return {
+        "policy": KNOWLEDGE_REPLANNING_POLICY,
+        "passed": passed,
+        "identification_unique": jointly_unique,
+        "identified_candidate_count": len(full),
+        "identity_macro_workproduct_count": mid_count,
+        "source_counterfactuals": source_checks,
+        "discovery_counterfactuals": discovery_checks,
+        "all_discovery_filters_removed": {
+            "possible_answers": len(all_relaxed),
+            "ambiguous": all_bypass_blocked,
+        },
+        "limitation": (
+            "Bounded executable filter-relaxation and candidate-replanning "
+            "checks, not a proof of globally shortest agent search."
+        ),
+    }
+
+
 VARIABLE_POLICY = "variable_nonunique_candidate_sets_single_intersection_v2"
 CORROBORATED_DISPUTE_POLICY = "reported_year_disagreement_plus_context_v1"
 
@@ -99,6 +237,8 @@ def audit_candidate_information(scene: dict) -> dict:
     spec = scene["problem_spec"]
     plan = spec["macro_plan"]
     policy = plan.get("information_necessity_policy")
+    if policy == KNOWLEDGE_REPLANNING_POLICY:
+        return _audit_knowledge_replanning(scene)
     if policy == CORROBORATED_DISPUTE_POLICY:
         return _audit_corroborated_dispute(scene)
     if policy not in {POLICY, VARIABLE_POLICY}:

@@ -64,6 +64,7 @@ def _construction_identity(args) -> str:
             else None
         ),
         "knowledge_source_identity": _knowledge_input_identity(args),
+        "knowledge_variant": getattr(args, "knowledge_variant", "v1"),
         "knowledge_limits": [
             getattr(args, key, None) for key in (
                 "knowledge_max_triples", "knowledge_max_edges",
@@ -259,7 +260,10 @@ def construct_scenes(args) -> dict:
         try:
             ordinal = len(chosen)
             if knowledge_mode:
-                from .knowledge_macro import make_spec as make_knowledge_spec
+                if getattr(args, "knowledge_variant", "v1") == "v2":
+                    from .knowledge_macro_v2 import make_spec as make_knowledge_spec
+                else:
+                    from .knowledge_macro import make_spec as make_knowledge_spec
                 spec = make_knowledge_spec(
                     knowledge_graph, seed=args.seed, ordinal=ordinal,
                     difficulty=sequence[ordinal],
