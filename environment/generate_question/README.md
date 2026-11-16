@@ -374,3 +374,94 @@ Each Scene has the full per-source audit under
 - The controllable candidate design proves the stated bounded
   counterfactual properties, not global minimality of every possible
   strategy. Questions are deterministic drafts without LLM review.
+
+## True Macro task-first generation (opt-in `graph_first`)
+
+The experimental `graph_first` knowledge variant is the first integrated
+four-stage **task-led** implementation built on the ORIGINAL canonical
+`generate-questions` / Gold Program / Macro Compiler / Quality / Stage-2
+pipeline. It is intentionally **not** another monolithic
+`hybrid_world_v5.py`.
+
+```bash
+python -m environment generate-questions \
+  --config environment/configs/questions_task_graph_first.yaml
+
+python -m environment quality \
+  --config environment/configs/questions_task_graph_first.yaml \
+  --scenes environment/data/stage1_task_graph_first_pilot/constructed/scenes.jsonl
+```
+
+### Generation sequence and frozen contracts
+
+1. **`macro_graph_sampler.py`** samples an abstract source-free,
+   relation-free Macro DAG, with typed output/input information ports.
+   Three currently compilable topologies are balanced in small batches:
+   `parallel_association`, `serial_refinement`,
+   `event_gated_association`. Each graph includes real information
+   operations spanning Discovery, Identification, Investigation,
+   Association, Comparison, and Synthesis. Synthesis performs actual
+   source-scoped YAGO queries, not an answer-only paraphrase.
+2. **`relational_task_planner.py`** converts that graph into a typed
+   **Relational Task Sketch**. It specifies what relationships, ports,
+   real RDF motifs, synthetic event constraints and competing evidence
+   are needed without selecting any entity, predicate or answer.
+3. **`world_grounder.py`** searches actual YAGO data for a valid
+   multi-hop path and a genuine secondary relation per competing
+   candidate. It reuses the proven v4 RDF/World sampler strictly as a
+   **knowledge witness generator**; its original task graph is NOT
+   adopted. It rejects motifs without complete real alternatives
+   rather than fabricating real RDF.
+4. **`evidence_planner.py`** instantiates synthetic projects and events,
+   with a `completed` event and a competing `scheduled` event for
+   each project. The fictional records and genuine YAGO evidence jointly
+   determine the answer. For the event-gated topology, downstream
+   directory rows carry `event_id` and require that typed upstream
+   handoff. Facts, source candidate claims and context fields carry
+   distinct provenance and necessity annotations.
+5. **`task_graph_first.py`** freezes the above four contracts in a
+   versioned `task_graph_first_v1` ProblemSpec, converts the chosen
+   DAG into original source-scoped primitive Program IR, and lets the
+   unchanged core execute it and create old-format WorkProducts.
+   Existing Handoff/Source audits, FactRefs, strict Replay and Stage-2
+   realization all apply.
+
+### Causal and fidelity gates
+
+The existing `information_necessity.py` now dispatches a
+`task_graph_first_replanning_v1` test: each simulated identifying
+clue, each whole Discovery Macro, both competing source directories,
+the **actual** YAGO fork assertion and the **specific completed-event
+status field** are subjected to executable re-planning interventions.
+Removing any required information must leave multiple distinct
+*feasible real YAGO answers*, not merely an empty result or a failed
+lookup. Results and topology frequencies are summarized in
+`quality_report.json -> knowledge_world_grounding.task_graph_first_v1`.
+
+Fields such as organizer names, venue descriptions, event name and year
+are kept as **context**, not falsely counted as causally necessary
+information. The completed-versus-scheduled event status and genuine
+YAGO fork are specifically audited at field level. The generated
+Question is a deterministic, contract-checked draft unless you enable
+the existing optional LLM Author/Critic.
+
+### Compatibility and current scope
+
+- Historical `macro_first_v2`, `typed_knowledge_v1` through
+  `typed_knowledge_v4` scenes remain byte-for-byte replayable.
+  `graph_first` is opt-in, with a new output directory; the default
+  generation profile is not changed.
+- This is an **executable constrained Macro grammar with three distinct
+  DAG topologies**, not yet arbitrary task combinations or all possible
+  real Diamond/Compare/Summary workflows.
+- Genuine YAGO triples are frozen and labeled as RDF witnesses.
+  Fictional people, venues, projects, event records and source claims
+  are explicitly simulated; an image/audio/video observation is
+  a programmatically generated evidence annotation, not decoded
+  external media.
+- The bounded counterfactual gates establish the stated in-World
+  necessity constraints, not a formal proof that no shorter global
+  strategy can ever recover the answer.
+- The grounding layer currently leverages v4's established real
+  candidate-path sampler, so its *fact-family diversity* is still
+  narrower than the full macro/relationship grammar roadmap.
