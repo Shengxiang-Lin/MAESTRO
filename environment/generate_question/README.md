@@ -1,159 +1,124 @@
-# Stage 1 — Current Macro Task Plan
+# Stage 1 — Task Plan + Question Author/Critic
 
-**Current supported production route:** a single Macro Task Plan is sampled, a
-canonical synthetic World is composed, scoped evidence source views are generated,
-and the existing Compiler executes Gold/Replay and necessity audits.
+The maintained data-generation route creates one executable Macro Task Plan,
+composes a canonical synthetic World with source-scoped evidence, compiles
+Gold/Replay and information-necessity audits, then **by default** uses a
+local Question LLM Author and Critic to publish user-facing questions.
 
-Run:
+## Default 100-candidate pilot
+
+From the repository root with the OpenAI-compatible Qwen service listening at
+`http://127.0.0.1:8807/v1`:
 
 ```bash
 python -m environment generate-questions \
   --config environment/configs/questions_task_plan.yaml \
-  --output-dir environment/data/stage1_current_20
+  --output-dir environment/data/stage1_question_llm_100
 ```
 
-The currently maintained Stage-1 data generation profile is
-`knowledge_variant: task_plan` and `knowledge_world_mode: compose`.
-The default pilot contains 20 tasks; set `--target` explicitly for larger runs.
-YAGO is used as a vocabulary/structural seed, not as an assertion that
-synthetic entities or media were real.
+The YAML defaults to 100 fixed candidates, difficulty mix 0/50/50
+(Easy/Medium/Hard), `task_plan + compose`, Qwen3.5-9B Question Author
+and a **separate Critic invocation using the same configured model**.
+Scenario creation remains deterministic. For an offline test without a
+model endpoint, explicitly set `question.model` and
+`question.api_base` (and Critic) to null in a copied YAML.
 
-## What is generated?
-
-| Artifact | Contents | Initial Main visibility |
-|---|---|---|
-| Macro Task Plan | roles, dependency edges, source scope, terminal goal | **No** (private teacher plan) |
-| Canonical World | entities, required contextual association, project-event links | **No** |
-| Evidence Views | candidate observations, keyed/browse access modes, FactRefs | Only the **source catalog**; contents acquired later |
-| User Question | concise final goal and essential event/verification constraints | **Yes** |
-| Initial Task Inputs | target-specific simulated observations (image/audio/video/text/table) | **Yes**, as text descriptions |
-| Gold Program / Trace | executable source-scoped operators and provenance | **No** |
-| Gold Answer | final teacher answer | **No** |
-
-**Question** describes the user's goal, not the internal subtask sequence.
-**Initial Task Inputs** describe observations *already provided* with the
-request. They are not images/audio files and do not imply successful live
-perception. **Available Evidence Sources** are still-unqueried synthetic
-archives/indices. Each can be browsed or retrieved with an upstream key
-as declared in the source catalog.
-
-In the Orchestra-o1 Main prompt, these are two separate blocks:
+### Output layout
 
 ```text
-==== QUESTION ====
-[user-facing question]
-
-==== INITIAL TASK INPUTS (PROVIDED SIMULATED OBSERVATIONS) ====
-[image_1 / observed image] The photographed folio ...
-[audio_1 / observed audio] The recording includes ...
-
-==== AVAILABLE EVIDENCE SOURCES (NOT INITIAL ATTACHMENTS) ====
-- M1_a [image, browse]: ...
-- M1_b [table, browse]: ...
-...
+stage1_question_llm_100/
+  constructed/
+    scenes.jsonl      # frozen, deterministic task baseline
+    questions.jsonl
+    summary.json
+  questions/
+    scenes.jsonl      # ONLY Author+Critic accepted scenes; use downstream
+    questions.jsonl
+    failed.jsonl      # rejected/fallback cases with review diagnostics
+    summary.json
+    question_authoring_progress.json
+  quality_report.json
+  summary.json        # authoritative final_scenes and acceptance counts
 ```
 
-The renderer does **not** expose evidence source handles as attached physical
-media. No source rows, hidden entity IDs, or Gold outputs enter the initial
-Main prompt. A Sub-Agent may investigate the source catalog, but should not
-re-extract observations already supplied by the user.
+`constructed/scenes.jsonl` represents the original fixed tasks.
+`questions/scenes.jsonl` is the accepted, reviewed subset; it is the
+**default Stage-2/3/4 input**. Do not use `constructed/scenes.jsonl`
+for a production reviewed-Question experiment or assume the original
+100 candidates must all pass. A candidate failing its Critic/Guard after
+the configured retries is logged in `questions/failed.jsonl`, not
+silently published as reviewed. The journal can resume an interrupted
+Question phase with the same model/contract/code signature; use a new
+output directory for changed settings.
 
-## Core implementation
+## Frozen components versus editable surfaces
 
-| File | Responsibility |
-|---|---|
-| `task_plan.py` | sample one Macro graph, freeze semantic goal/World binding and initial reference observations |
-| `world_motifs.py` | canonical entity, contextual and event relationships |
-| `task_plan_runtime.py` | derive scoped evidence views, Gold operator chains and counterfactual checks |
-| `question.py` | render one concise task-level Question; ensure required constraints |
-| `stages.py` | deterministic construction, user-task dedup and optional author/reviewer |
-| `compiler.py` / `program_ir.py` | scoped execution and provenance |
-| `quality.py` / `pipeline.py` | strict replay and quality report |
-| `../base_orchestration/o1_compat.py` | reconstruct actual Main prompt and visibility for Stage 3/4 |
+| Artifact | Frozen? | Initial Main visibility |
+|---|---|---|
+| Macro DAG, goal and dependencies | Yes | No |
+| Canonical World and evidence facts | Yes | Only available **source descriptions**, not contents |
+| Gold Program, Trace and Answer | Yes | No |
+| Provided Reference Card v2 | Yes | Yes, as already supplied *textual simulated observations* |
+| User Question | **LLM rewriting only** | Yes, after review |
 
-No second Planner, per-stage Shadow World or extra runtime retrieval graph is
-introduced. The existing Task Plan and World remain the only truth sources.
+The Author receives a compact semantic Goal, required event condition,
+topic, reference-card modality summary and style request. It must express
+the Goal as an ordinary user question without copying underlying evidence
+values, traversals, private IDs, source titles or internal DAG steps. Its
+output cannot modify World, Gold or evidence. The Critic receives the
+frozen Goal, ordered relationship semantics, answer type, event condition,
+frozen reference question and candidate rewrite. Deterministic guards
+reject unsupported semantics or missing requirements; strict Replay
+validates the final Scene again.
 
-## Important quality checks
+The **Initial Task Inputs** are descriptions of image/audio/video/table/text
+observations already supplied by the user, not actual media files.
+The **Available Evidence Sources** are still-unqueried simulated archives,
+including browse and keyed-lookup contracts. Stage 3 renders these as
+separate sections rather than advertising all sources as attached media.
 
-- **Gold Replay** reproduces World, Program, Trace, answer and Macro graph.
-- **Necessary discovery clues**: a full set singles out one dossier; removing
-  a clue leaves ambiguity rather than simply making an API call fail.
-- **World relation necessity**: the required shared association affects the
-  choice of target rather than being decorative context.
-- **Keyed Event dependency**: the prior Identification macro supplies
-  `project_id` to the Event Ledger. Wrong but valid keys
-  produce nonempty incorrect downstream answers.
-- **Public surface**: identifying observations stay in the separate
-  `task_input`, with no answer/project/case keys.
-- **Deduplication** uses normalized (Question, initial observation content);
-  random IDs and observation ordering do not create new tasks.
-- **Prompt separation**: first Main turn knows which observations were already
-  supplied, which sources have not been queried, and has no fictitious
-  physical file attachment.
+## Important invariants
 
-For a small offline verification:
+- The candidate count is fixed; rejected Question rewrites do not trigger
+  additional Task Plan generation to hit an acceptance quota.
+- Gold Replay validates the original and reviewed Scene; each accepted
+  Question must preserve the original World, Macro Graph, Program and Answer.
+- Information necessity includes full-vs-ablated target disambiguation,
+  event-key propagation and source-scoped relation checks.
+- Deduplication uses **(Question, supplied reference observation content)**,
+  not Question alone or an arbitrary reference ID.
+- `question_authoring.status=accepted` is required for the reviewed output.
+  Deterministic offline Scene banks without Question LLM remain valid for
+  their explicit, separate testing workflow.
+- All user-visible Question acceptance claims reflect Critic judgments
+  and program checks; they are not formal natural-language equivalence proofs.
+
+## Inspect the 100-task pilot
 
 ```bash
-python -m unittest environment.macro_v3.tests.test_single_task_plan -v
-python -m environment generate-questions \
-  --config environment/configs/questions_task_plan.yaml \
-  --output-dir environment/data/stage1_audit_current
+python - <<'PY'
+import json
+from pathlib import Path
+
+root = Path("environment/data/stage1_question_llm_100")
+summary = json.loads((root / "summary.json").read_text())
+review = json.loads((root / "questions/summary.json").read_text())
+print("Candidate count:", summary["candidate_count"])
+print("Accepted questions:", summary["accepted"])
+print("Rejected questions:", summary["rejected"])
+print("Review statuses:", review["question_results"])
+print("Final Scene bank:", summary["final_scenes"])
+
+for line in (root / "questions/scenes.jsonl").open():
+    scene = json.loads(line)
+    print(scene["task_id"], scene["question"])
+PY
 ```
 
-Check `constructed/scenes.jsonl`, `constructed/summary.json`
-and `quality_report.json`. The 20-case seed should yield all
-ordinals 0–19, 20/20 replay, 20/20 information necessity and 20 public
-reference cards. These are **synthetic task feasibility checks**, not a proof
-of Main-Agent independent solving or recovery.
+Once the reviewed 100-task output has been inspected, test Stage 2 using
+`--scenes environment/data/stage1_question_llm_100/questions/scenes.jsonl`
+and a **new** Stage-2 output directory, then Stage 3 on those same scenes.
+Stage 4 independently builds its trusted history from Stages 1 and 2.
 
-## Stage 2–4
-
-Stage 2 generates and reviews source-scoped Sub-Agent reports from the
-frozen Macro graph. Stage 3 reconstructs the real O1-style Main prompt using
-the public question, already-supplied observations and available-source
-descriptions. Stage 4 branches histories under controlled untrusted
-feedback; it must use only reports delivered by that round, not hidden
-World state.
-
-Older experimental generator modules and tests should not be used as the
-**current Stage-1 entrypoint**. Their retained shared compiler and regression
-interfaces are maintained separately until their downstream dependencies are
-migrated; they are not needed to author current `task_plan + compose`
-scenes.
-
-
-## Current-only cleanup and downstream pilot
-
-The default generator remains \`task_plan + compose\`. Obsolete question
-renderers shadowed by the frozen semantic goal and the old scenario-domain
-fallback have been removed from the production Task Plan authoring path.
-Historical **other** generator families keep their exact Replay/compiler
-implementations for regression tests; they are not the current default.
-
-For newly generated homogeneous Task Plan compose scene banks,
-\`quality_report.json\` keeps general replay, graph, acquisition and
-reasoning diagnostics plus \`knowledge_world_grounding.single_task_plan\`.
-It omits empty, retired sub-generator report sections. Quality reports for
-old scene banks retain their historical schema to avoid reinterpreting
-old results as current experiments.
-
-To inspect orchestration with the same frozen 5 scenes after Stage 1:
-
-\`\`\`bash
-python -m environment naturalize-subtasks \
-  --config environment/configs/subagent_reports.yaml \
-  --scenes environment/data/stage1_current_20/questions/scenes.jsonl \
-  --output-dir environment/data/stage2_pilot_5 \
-  --max-scenes 5
-
-python -m environment generate-main-turns \
-  --config environment/configs/main_orchestration.yaml \
-  --scenes environment/data/stage1_current_20/questions/scenes.jsonl \
-  --reports environment/data/stage2_pilot_5/subtasks.jsonl \
-  --output-dir environment/data/stage3_llm_5 \
-  --max-scenes 5 --mode llm --workers 4
-\`\`\`
-
-Stage 3 authors prose for **frozen** legally dispatchable task batches; it
-does not independently discover new orchestration choices.
+Historical generator families remain test fixtures; this is the sole
+maintained production Stage-1 configuration profile.
