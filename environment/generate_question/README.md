@@ -158,3 +158,60 @@ Use a fresh output directory when changing configuration or models.
 Do not change the existing `questions.yaml` or frozen V1.3/V1.4 data to
 enable this pilot. Production Stage 2–4 uses accepted old-format scene
 banks as before.
+
+## Knowledge V2: candidate necessity and shortcut resistance
+
+The first canonical YAGO pilot (`typed_knowledge_v1`) passed existing frozen
+handoff/source audits, but its Identification workproducts could contain
+multiple candidates. Later YAGO lookups accidentally removed unrealistically
+unlinked decoys. **V1 remains byte-for-byte replayable**; it is not silently
+re-labeled as validated for stronger information necessity.
+
+Use the stricter **opt-in** V2 mode, with a new output directory:
+
+```bash
+python -m environment generate-questions \
+  --config environment/configs/questions_knowledge_v2.yaml
+
+python -m environment quality \
+  --config environment/configs/questions_knowledge_v2.yaml \
+  --scenes environment/data/stage1_knowledge_v2_pilot/constructed/scenes.jsonl
+```
+
+V2 constructs a real, *complete* YAGO relation trail for **every** candidate
+dossier (not only the answer), using exactly the same predicate sequence.
+All candidate starts, intermediate keys and terminal answer labels must be
+distinct. Motifs with too few actual alternative paths are rejected;
+no synthetic fake RDF links or absent records count as valid distractors.
+YAGO is still a single underlying factual provenance, even when exposed
+as multiple synthetic evidence excerpts.
+
+For each independent simulated clue, exactly one competing dossier matches
+all the *other* clues but fails that clue. Other background distractors
+fail all clues. Consequently every Discovery clue is necessary for a
+unique Identification *before* following the YAGO path.
+
+The original `information_necessity.py` now contains an extended
+`knowledge_candidate_replanning_v2` audit:
+
+1. Verify the Identification Macro's actual WorkProduct contains **one**
+   target entity, independently of any downstream YAGO lookup.
+2. Execute the frozen Gold Program with **one clue filter relaxed**;
+   multiple distinct valid final answers (not an empty or blocked program)
+   must remain.
+3. Repeat with both filters belonging to **each Discovery Macro** relaxed.
+4. Relax **all** Discovery filters; the program must still return
+   multiple real alternatives. Thus a short-circuit that simply uses the
+   known YAGO relation table no longer yields a unique answer.
+
+The results appear at
+`quality_report.json → knowledge_world_grounding.necessity_v2` with
+counts for each gate; detailed per-scene records live at
+`difficulty_audit.macro_first_audit.candidate_information_necessity`.
+
+These are **bounded re-planning counterfactuals** within the frozen
+materialized World, not a proof that every possible adversarial shortcut
+or external knowledge strategy is impossible. V2 remains the
+Discovery/Identification/Investigation family, not a full six-role typed
+DAG compiler. The Question is a deterministic draft until naturalized
+and independently reviewed.
