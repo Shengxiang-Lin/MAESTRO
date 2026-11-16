@@ -903,3 +903,29 @@ their original reference question and replay semantics. This changes the
 *public task presentation*, not World, Macro DAG, Gold program or answer.
 The quality report tracks \`macro_goal_questions\`,
 \`reference_cards_in_public_view\`, and \`mean_question_characters\`.
+
+
+### Reference-card v2: content-level dedup and readable simulated inputs
+
+For **new** \`compose\` scenes, the public reference card uses
+\`macro_goal_reference_card_v2\`. Each initial observation contains only a
+modality hint and an \`content\` description: e.g. an archive photograph
+bearing a named seal, a spoken shelf marker, or a register associating a
+record with a named institution. Every description is a deterministic
+rendering of an existing, frozen clue value; it introduces no new fact.
+These are **simulated observations**, not actual decoded media.
+
+The O1 Main prompt displays the descriptive text rather than a
+\`feature = observed_value\` dump. Internal source rows, keyed lookups,
+Gold and answer remain unchanged. Old \`macro_goal_reference_card_v1\`
+scenes retain their old observation structure, reference question,
+prompt rendering and strict Replay.
+
+The scene selector now deduplicates the *visible user task* as
+\`(normalized Question, normalized reference observation content)\`,
+rather than by Question alone. Reference IDs, task IDs, ordinals and
+observation order do not make duplicate material distinct. This allows
+multiple genuinely distinct supplied inputs to share the same natural
+question while preserving source-scoped necessity. With the canonical
+20-case seed, sample IDs should again cover ordinals 0 through 19
+without resampling from later candidates.
