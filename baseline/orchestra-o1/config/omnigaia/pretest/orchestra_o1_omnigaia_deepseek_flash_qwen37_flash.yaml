@@ -2,7 +2,7 @@
 # Orchestra-o1: OmniGAIA; Main-Agent qwen3.8-max; Sub-Agent qwen3.7-plus.
 main_model: "deepseek-v4.1-flash-1017"
 sub_models:
-  - "qwen3.7-plus"
+  - "qwen3.7-flash"
 
 search:
   provider: "dashscope"
