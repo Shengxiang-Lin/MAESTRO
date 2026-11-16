@@ -9,12 +9,12 @@ import random
 from environment.schema import digest
 
 VERSION = "maestro.problem_spec.v4"
-RELATION_PATTERNS = ("approval", "macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3")
+RELATION_PATTERNS = ("approval", "macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4")
 
 FAMILIES = (
     "reconcile", "coverage_count", "eligibility", "priority",
     "chronology", "evidence_reconcile", "category_distribution",
-    "macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3",
+    "macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4",
 )
 DIFFICULTIES = ("easy", "medium", "hard")
 
@@ -168,7 +168,7 @@ def spec_issues(spec: dict) -> list[str]:
         difficulty not in {"medium", "hard"} or family != "macro_first_v2"
     ):
         errors.append("macro_first_v2_requires_medium_or_hard")
-    if pattern in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"} and (
+    if pattern in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4"} and (
         difficulty not in {"medium", "hard"} or family != pattern
     ):
         errors.append("typed_knowledge_requires_medium_or_hard")
@@ -189,7 +189,7 @@ def spec_issues(spec: dict) -> list[str]:
         errors.append("wrong_source_count")
     needs = spec.get("requirements", {})
     expected_answer = (
-        "macro_value" if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"} else
+        "macro_value" if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4"} else
         "count" if family == "coverage_count" else
         "category_counts" if family == "category_distribution" else
         "single_entry" if family in {"priority", "chronology"} else
@@ -211,6 +211,9 @@ def spec_issues(spec: dict) -> list[str]:
                 errors.append("source_missing_" + key)
     if pattern == "macro_first_v2":
         from .macro_planning import validate_spec
+        errors.extend(validate_spec(spec))
+    if pattern == "typed_knowledge_v4":
+        from .hybrid_world_v4 import validate_spec
         errors.extend(validate_spec(spec))
     if pattern == "typed_knowledge_v3":
         from .hybrid_world import validate_spec

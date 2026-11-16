@@ -733,7 +733,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     knowledge_scenes = [
         scene for scene in scenes
         if scene.get("problem_spec", {}).get("reasoning_pattern")
-        in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}
+        in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4"}
     ]
     if knowledge_scenes:
         role_counts = Counter(
@@ -774,7 +774,76 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "candidate_information_necessity", {}
             ) for scene in v3_scenes
         ]
+        v4_scenes = [
+            scene for scene in knowledge_scenes
+            if scene["problem_spec"]["reasoning_pattern"] == "typed_knowledge_v4"
+        ]
+        v4_audits = [
+            scene.get("difficulty_audit", {}).get(
+                "macro_first_audit", {}).get(
+                "candidate_information_necessity", {}
+            ) for scene in v4_scenes
+        ]
         data["knowledge_world_grounding"] = {
+            "causal_hybrid_v4": {
+                "scenes_checked": len(v4_scenes),
+                "necessity_passed": sum(
+                    a.get("passed", False) for a in v4_audits
+                ),
+                "identification_unique": sum(
+                    a.get("identification_unique", False) for a in v4_audits
+                ),
+                "all_single_clues_necessary": sum(
+                    bool(a.get("single_clue_necessary"))
+                    and all(a["single_clue_necessary"].values())
+                    for a in v4_audits
+                ),
+                "all_discovery_macros_necessary": sum(
+                    bool(a.get("discovery_macro_necessary"))
+                    and all(a["discovery_macro_necessary"].values())
+                    for a in v4_audits
+                ),
+                "both_simulated_directories_necessary": sum(
+                    bool(a.get("link_branch_necessary"))
+                    and all(a["link_branch_necessary"].values())
+                    for a in v4_audits
+                ),
+                "synthetic_event_necessary": sum(
+                    a.get("synthetic_event_necessary", False)
+                    for a in v4_audits
+                ),
+                "genuine_yago_fork_necessary": sum(
+                    a.get("grounded_real_fork_necessary", False)
+                    for a in v4_audits
+                ),
+                "macro_shape_distribution": dict(Counter(
+                    s["problem_spec"]["macro_plan"]["hybrid_shape"]
+                    for s in v4_scenes
+                )),
+                "required_real_motif_distribution": dict(Counter(
+                    s["problem_spec"]["macro_plan"]["real_fork"]["motif_kind"]
+                    for s in v4_scenes
+                )),
+                "fictional_project_count": sum(
+                    len(s["problem_spec"]["macro_plan"]["synthetic_graph"]["projects"])
+                    for s in v4_scenes
+                ),
+                "fictional_event_count": sum(
+                    len(s["problem_spec"]["macro_plan"]["synthetic_graph"]["events"])
+                    for s in v4_scenes
+                ),
+                "fictional_relation_count": sum(
+                    len(s["problem_spec"]["macro_plan"]["synthetic_truth"])
+                    for s in v4_scenes
+                ),
+                "source_lineage_note": (
+                    "Real YAGO Fork assertions are actually queried and "
+                    "joined with synthetic event constraints. All fictional "
+                    "projects/events/organizers/venues and their relations "
+                    "remain simulated, not historical RDF facts. Fork "
+                    "necessity is measured with controlled interventions."
+                ),
+            },
             "hybrid_world_v3": {
                 "scenes_checked": len(v3_scenes),
                 "necessity_passed": sum(
@@ -857,7 +926,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     "optimal agent information acquisition."
                 ),
             },
-            "version": "typed_knowledge_v1_v2_v3",
+            "version": "typed_knowledge_v1_v2_v3_v4",
             "pattern_distribution": dict(Counter(
                 scene["problem_spec"]["reasoning_pattern"]
                 for scene in knowledge_scenes
