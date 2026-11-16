@@ -670,3 +670,71 @@ The quality report's
 `knowledge_world_grounding.single_task_plan` section now adds
 `non_target_field_substitution_passed`, `eligibility_cases`,
 `calibrated_difficulty_profiles` and `question_topic_distribution`.
+
+### Current Single Task Plan: Goal-constrained semantic YAGO grounding
+
+Newly generated scenes use the **existing** `task_plan` family and
+`macro_plan.macro_tasks`, rather than adding a new full generator or
+building further legacy Specs. A narrow frozen policy inside the current
+Task Plan, `semantic_grounding_policy: goal_constrained_yago_grounding_v1`,
+switches on *interpretable relation-goal sampling*:
+
+- The same typed Macro work is selected first. Before selecting any actual
+  YAGO subject or object, the Grounder chooses a candidate **local relation
+  composition with an intelligible user information goal** (e.g. someone's
+  doctoral advisor's research field, or the administrative region
+  containing a recorded birthplace). `location -> follows`,
+  `location -> namedAfter -> location` and unsupported compositions are
+  rejected rather than made plausible through invented prose.
+- The existing pure YAGO sampler produces **complete, distinct real paths
+  for ALL Shadow Cases**, with a new opt-in candidate filter. Old
+  `typed_knowledge_v1/v2` callers do not pass that filter; their
+  frozen generation and Replay behavior are unchanged.
+- For the target **and every competing candidate**, each subject/predicate
+  pair must have **exactly one object in the loaded bounded YAGO graph**.
+  This prevents an artificial singleton created only by truncating the
+  source rows. The check does NOT establish uniqueness in the complete
+  global YAGO corpus, which may contain facts beyond the configured
+  `knowledge_max_triples` /`knowledge_max_edges` limits.
+- The selected goal is stored **only once** under the existing
+  `macro_plan.goal.semantic`. It includes the witnessed predicate
+  sequence, interpretable question, source domain and declared answer
+  scope. No new standalone Relation Sketch/World/Spec is introduced.
+  Type hints are inferred from conventional predicate semantics, not
+  proven by `rdf:type`: the current streaming fact loader excludes
+  RDF type assertions. Do not present inferred person/place type as
+  externally verified ontology evidence.
+- The deterministic reference Question presents that whole goal in
+  context rather than incrementally printing raw RDF predicates. The
+  existing Author/Critic can optionally rewrite it; source clues and
+  eligible-event conditions must be preserved and the goal's relation
+  concepts must remain expressed.
+- Fictional source titles and neutral meeting names are chosen from
+  academic/biographical/institutional/geographical archive vocabularies.
+  They do not add historical facts or reveal which event qualifies.
+
+**No new pipeline:** generation, primitive Gold IR, Macro WorkProducts,
+FactRefs, original source/field/Shadow-Case counterfactuals and strict
+Replay are still the same as in the original Single Task Plan.
+
+The quality report now records
+`knowledge_world_grounding.single_task_plan.semantic_grounding` with
+goal-profile/domain distributions, count of loaded-graph singleton witnesses
+and the number of attempted semantic paths in *successful* scenes. These
+are conditional sampling attempts, not a global semantic validity rate for
+every edge in the YAGO corpus.
+
+```bash
+python -m environment generate-questions \
+  --config environment/configs/questions_task_plan.yaml \
+  --output-dir environment/data/stage1_semantic_goal_pilot
+```
+
+The new policy is used **only for new scenes**: prior frozen
+`task_plan` scenes without `semantic_grounding_policy` still replay with
+the old path choice, source labels, question text and audit structure.
+The current semantic grammar covers a deliberate subset of 2/3-hop
+relation combinations; a sparse source sample may yield no accepted
+combination and should be reported as such rather than filled with
+fabricated RDF witnesses. Real image/audio/video processing remains
+out of scope; the corresponding observations are explicitly simulated.
