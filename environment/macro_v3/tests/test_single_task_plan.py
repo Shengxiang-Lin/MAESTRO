@@ -345,6 +345,94 @@ class DirectTaskPlanTests(unittest.TestCase):
             self.assertTrue(validate_spec(altered))
         self.assertEqual(seen_modes, {"trace", "event", "verify"})
 
+
+    def test_composed_yago_motifs_form_a_canonical_typed_world(self):
+        from environment.generate_question.world_motifs import (
+            motif_features, validate_composed_world, COMPOSE_VERSION,
+        )
+        from environment.generate_question.compiler import QuestionSession
+        graph = graph_fixture()
+        index = YagoKnowledgeIndex(graph)
+        features = motif_features(graph, index)
+        self.assertEqual(features["edge_counts"]["birthplace"], 54)
+        self.assertEqual(features["edge_counts"]["containedinplace"], 108)
+        originals = {
+            (f.subject, f.predicate, f.object) for f in graph.edges
+        }
+        profiles, modes = set(), set()
+        for ordinal in range(18):
+            difficulty = "medium" if ordinal % 2 == 0 else "hard"
+            spec = make_spec(
+                graph, seed=17, ordinal=ordinal, difficulty=difficulty,
+                world_mode="compose", index=index,
+            )
+            plan = spec["macro_plan"]
+            self.assertEqual(plan["knowledge_world_mode"], "compose")
+            self.assertEqual(plan["knowledge_origin"], "synthetic")
+            self.assertFalse(validate_spec(spec))
+            binding = plan["world_binding"]
+            world_model = binding["world_model"]
+            self.assertEqual(world_model["version"], COMPOSE_VERSION)
+            self.assertEqual(validate_composed_world(binding), [])
+            self.assertGreater(world_model["profile"]["source_yago_edges"], 0)
+            self.assertFalse(
+                world_model["profile"]["actual_yago_assertions_reused"]
+            )
+            self.assertEqual(
+                world_model["profile"]["goal_signature"],
+                plan["goal"]["semantic"]["profile"].split("_"),
+            )
+            self.assertEqual(
+                len(world_model["relations"]),
+                len(binding["all_cases"]) * plan["hops"],
+            )
+            profiles.add(plan["goal"]["semantic"]["profile"])
+            modes.add(plan["mode"])
+            for row in world_model["relations"]:
+                self.assertNotIn(
+                    (row["subject"], row["predicate"], row["object"]),
+                    originals,
+                )
+                self.assertEqual(
+                    world_model["entities"][row["object"]]["label"],
+                    row["object_label"],
+                )
+            question = reference_question(spec)
+            self.assertFalse(guard_question(question, spec))
+            for word in ("fictional", "simulated", "synthetic", "YAGO"):
+                self.assertNotIn(word, question)
+            scene = compile_and_validate(spec, question)
+            self.assertEqual(validate_replay(scene)["status"], "valid")
+            self.assertTrue(scene["difficulty_audit"]["macro_first_audit"][
+                "candidate_information_necessity"]["passed"])
+            self.assertEqual(
+                scene["world"]["typed_knowledge_world"], world_model,
+            )
+            self.assertEqual(scene["public"]["status"],
+                             "ready_for_investigation")
+            self.assertTrue(all(
+                "representation" not in row
+                for row in scene["public"]["available_source_descriptions"]
+            ))
+            session = QuestionSession(scene)
+            sid = next(
+                t["source_id"] for t in spec["sources"]
+                if t["access_mode"] == "browse"
+            )
+            material = session.read_source(sid)
+            self.assertNotIn("representation", material)
+            self.assertNotIn("evidence_kind", material)
+            self.assertNotIn(
+                "evidence_origin_id", material["observations"][0],
+            )
+            altered = deepcopy(spec)
+            first = next(iter(altered["macro_plan"]["world_binding"][
+                "world_model"]["entities"].values()))
+            first["type"] = "unsupported_role"
+            self.assertTrue(validate_spec(altered))
+        self.assertEqual(modes, {"trace", "event", "verify"})
+        self.assertGreaterEqual(len(profiles), 5)
+
     def test_spec_tamper_and_replay_fail_closed(self):
         kg = graph_fixture()
         spec = make_spec(kg, seed=17, ordinal=1, difficulty="medium")
@@ -394,6 +482,7 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
             self.assertEqual(stats["scenes"], 20)
             self.assertEqual(stats["necessity_passed"], 20)
             self.assertEqual(stats["semantic_grounding"]["fictional_worlds"], 20)
+            self.assertEqual(stats["semantic_grounding"]["composed_motif_worlds"], 20)
             self.assertEqual(report["replay_pass"], 20)
 
     def test_full_canonical_cli_and_quality_report(self):
@@ -431,7 +520,13 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
             self.assertEqual(stats["scenes"], 6)
             self.assertEqual(stats["semantic_grounding"]["scenes"], 6)
             self.assertEqual(
-                stats["semantic_grounding"]["loaded_graph_uniqueness_verified"], 6
+                stats["semantic_grounding"]["loaded_graph_uniqueness_verified"], 0
+            )
+            self.assertEqual(
+                stats["semantic_grounding"]["fictional_worlds"], 6
+            )
+            self.assertEqual(
+                stats["semantic_grounding"]["composed_motif_worlds"], 6
             )
             self.assertGreaterEqual(
                 stats["semantic_grounding"]["sampling_attempts"], 6
