@@ -748,8 +748,7 @@ def guard_question(question: str, spec: dict,
             q, flags=re.I,
         ):
             errors.append("task_plan_meta_fiction_framing")
-        compact = (
-            plan.get("question_surface_policy") ==
+        compact = plan.get("question_surface_policy") in {
             "macro_goal_reference_card_v1",
             "macro_goal_reference_card_v2",
         }
@@ -1010,10 +1009,11 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                     ),
                 }] if (
                     spec.get("reasoning_pattern") == "task_plan" and
-                    spec["macro_plan"].get("question_surface_policy") ==
-                    "macro_goal_reference_card_v1",
-                    "macro_goal_reference_card_v2",
-                } else [
+                    spec["macro_plan"].get("question_surface_policy") in {
+                        "macro_goal_reference_card_v1",
+                        "macro_goal_reference_card_v2",
+                    }
+                ) else [
                     {"title": source["title"],
                      "modality": source["modality"],
                      "purpose": source["purpose"]}
