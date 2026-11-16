@@ -70,8 +70,17 @@ def materialize_subtasks(*, scenes_path: Path, output_dir: Path,
                 completed_items += 1
                 scene_id = scene.get("task_id")
                 try:
-                    status = scene.get("question_authoring", {}).get("status")
-                    if status != "accepted":
+                    # Stage 1 publishes deterministic (no LLM Author)
+                    # questions with no question_authoring record. The
+                    # accepted statuses match quality_report's publishable
+                    # policy, while strict Replay still validates the entire
+                    # frozen Question/World/Program/Graph.
+                    review = scene.get("question_authoring") or {}
+                    status = review.get("status", "off")
+                    if status not in {"off", "accepted"} or (
+                        status == "off" and scene.get("question_origin") !=
+                        "deterministic_frozen_problem_spec"
+                    ):
                         raise ValueError("stage1_question_not_accepted")
                     result = realize_scene(
                         scene, evidence_limit=evidence_limit,
