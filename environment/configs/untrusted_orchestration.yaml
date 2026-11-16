@@ -4,7 +4,7 @@
 version: 1
 
 input:
-  scenes: environment/data/stage1/constructed/scenes.jsonl
+  scenes: environment/data/stage1/questions/scenes.jsonl
   reports: environment/data/stage2/subtasks.jsonl
 
 generation:
