@@ -37,12 +37,26 @@ def _construction_identity(args) -> str:
         ),
         "mmqa": str(args.mmqa),
         "mmqa_sha256": (
-            file_digest(args.mmqa) if Path(args.mmqa).is_file() else None
+            file_digest(args.mmqa) if (
+                not getattr(args, "knowledge_yago", None)
+                and Path(args.mmqa).is_file()) else None
         ),
+        "knowledge_yago": (
+            str(args.knowledge_yago) if getattr(args, "knowledge_yago", None)
+            else None
+        ),
+        "knowledge_limits": [
+            getattr(args, key, None) for key in (
+                "knowledge_max_triples", "knowledge_max_edges",
+                "knowledge_min_hops", "knowledge_max_hops",
+            )
+        ],
         "generation_code": {
             name: file_digest(Path(__file__).with_name(name))
             for name in (
                 "spec.py", "macro_planning.py",
+                "knowledge_macro.py", "typed_role_grammar.py",
+                "typed_graph_generator.py", "typed_graph_validator.py",
                 "operator_grammar.py", "numeric_goal_world.py",
                 "evidence_operators.py", "evidence_relations.py",
                 "question_semantic_lock.py", "macro_evidence_world.py", "information_necessity.py",
@@ -174,9 +188,23 @@ def _out_files(output_dir: Path) -> dict:
 def construct_scenes(args) -> dict:
     if args.target < 1 or args.max_records < 1:
         raise ValueError("target and max-records must be positive")
-    from .sources import load_scenario_seeds
-    seeds, _ = load_scenario_seeds(args.mmqa, limit=args.max_records)
-    seed_source = str(args.mmqa)
+    knowledge_mode = bool(getattr(args, "knowledge_yago", None))
+    if knowledge_mode:
+        from environment.macro_v3.yago import load_yago
+        knowledge_graph = load_yago(
+            args.knowledge_yago,
+            max_triples=args.knowledge_max_triples,
+            max_edges=args.knowledge_max_edges,
+        )
+        seeds = [
+            {"topic": "archival reference collection",
+             "record_id": f"knowledge-{i:06d}"} for i in range(args.target)
+        ]
+        seed_source = knowledge_graph.input_file
+    else:
+        from .sources import load_scenario_seeds
+        seeds, _ = load_scenario_seeds(args.mmqa, limit=args.max_records)
+        seed_source = str(args.mmqa)
     if len(seeds) < args.target:
         raise ValueError(
             f"not enough scene/topic seeds: {len(seeds)} for target {args.target}"
@@ -201,7 +229,7 @@ def construct_scenes(args) -> dict:
     for seed_record in order:
         if len(chosen) >= args.target:
             break
-        if getattr(args, "macro_first_v2_share", 0):
+        if not knowledge_mode and getattr(args, "macro_first_v2_share", 0):
             from .topic_quality import topic_seed_issues
             problems = topic_seed_issues(seed_record)
             if problems:
@@ -209,18 +237,27 @@ def construct_scenes(args) -> dict:
                 continue
         try:
             ordinal = len(chosen)
-            spec = make_spec(
-                seed_record=seed_record, ordinal=ordinal,
-                run_seed=args.seed, difficulty=sequence[ordinal],
-                macro_first_v2_share=getattr(args, "macro_first_v2_share", 100),
-                operator_grammar_share=getattr(args, "operator_grammar_share", 0),
-                numeric_goal_diversity_share=getattr(
-                    args, "numeric_goal_diversity_share", 0
-                ),
-                question_semantic_lock_share=getattr(
-                    args, "question_semantic_lock_share", 0
-                ),
-            )
+            if knowledge_mode:
+                from .knowledge_macro import make_spec as make_knowledge_spec
+                spec = make_knowledge_spec(
+                    knowledge_graph, seed=args.seed, ordinal=ordinal,
+                    difficulty=sequence[ordinal],
+                    min_hops=args.knowledge_min_hops,
+                    max_hops=args.knowledge_max_hops,
+                )
+            else:
+                spec = make_spec(
+                    seed_record=seed_record, ordinal=ordinal,
+                    run_seed=args.seed, difficulty=sequence[ordinal],
+                    macro_first_v2_share=getattr(args, "macro_first_v2_share", 100),
+                    operator_grammar_share=getattr(args, "operator_grammar_share", 0),
+                    numeric_goal_diversity_share=getattr(
+                        args, "numeric_goal_diversity_share", 0
+                    ),
+                    question_semantic_lock_share=getattr(
+                        args, "question_semantic_lock_share", 0
+                    ),
+                )
             q = reference_question(spec)
             normalized = normalize_label(q)
             if normalized in seen_questions:
