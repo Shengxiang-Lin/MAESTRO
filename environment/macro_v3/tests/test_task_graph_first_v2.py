@@ -81,8 +81,16 @@ def project_only_bypass(scene: dict) -> list[dict]:
             changed += 1
     if changed != 2:
         raise ValueError("test_can_only_bypass_event_keyed_DAG")
+    by_project = deepcopy(scene["world"]["sources"])
+    for sid in ("link_a", "link_b"):
+        by_project[sid]["schema"] = [
+            col for col in by_project[sid]["schema"]
+            if col != "event_id"
+        ]
+        for observation in by_project[sid]["observations"]:
+            observation["values"].pop("event_id")
     return answer_values(evaluate_program(
-        program, sources=scene["world"]["sources"],
+        program, sources=by_project,
     ))
 
 
