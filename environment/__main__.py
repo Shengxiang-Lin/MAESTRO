@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from .config import DEFAULT_CONFIG, args_from_config, load_config
@@ -253,7 +254,23 @@ def main(argv: list[str] | None = None) -> int:
     else:
         config_args = args_from_config(config)
         directory = config_args.output_dir
-        scenes = cli.scenes or directory / "questions" / "scenes.jsonl"
+        # A deterministic Stage-1 run publishes constructed/scenes.jsonl.
+        # Optional LLM Question authoring publishes questions/scenes.jsonl.
+        # Prefer the frozen Stage-1 summary over either guessed path.
+        if cli.scenes is not None:
+            scenes = cli.scenes
+        elif (directory / "summary.json").is_file():
+            manifest = json.loads(
+                (directory / "summary.json").read_text(encoding="utf-8")
+            )
+            final_scenes = manifest.get("final_scenes")
+            if not final_scenes:
+                raise ValueError("stage1_summary_missing_final_scenes")
+            scenes = Path(final_scenes)
+        else:
+            scenes = directory / (
+                "questions" if config_args.question_model else "constructed"
+            ) / "scenes.jsonl"
         output = cli.output or directory / "quality_recheck.json"
         result = audit_questions(argparse.Namespace(
             scenes=scenes, max_records=None, output=output,
