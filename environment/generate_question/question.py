@@ -102,6 +102,48 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if (spec.get("reasoning_pattern") == "task_plan"
+            and spec["macro_plan"].get("semantic_grounding_policy") ==
+            "goal_constrained_yago_grounding_v1"):
+        # The Goal is already selected and frozen by the witnessed relation
+        # grammar. Do not turn individual RDF predicates into a chain of
+        # awkward nested noun phrases, and do not let the Question invent
+        # new constraints or historical claims.
+        plan = spec["macro_plan"]
+        goal = plan["goal"]["semantic"]
+        topic = spec["scenario"]["topic"]
+        clues = "; ".join(
+            f"{info['attribute']} '{info['value']}' in {info['title']}"
+            for _, info in sorted(plan["clues"].items())
+        )
+        condition = plan["condition"]
+        if condition:
+            qualifying = (
+                "the completed archive session" if condition["field"] ==
+                "event_status" else "the archive session recorded in or after 2025"
+            )
+            if plan["mode"] == "verify":
+                instruction = (
+                    f"Using {qualifying}, reconcile the two independent "
+                    "candidate-reference reports with the documented genuine "
+                    "YAGO secondary relationship to identify the real-world "
+                    "entity referenced by the dossier."
+                )
+            else:
+                instruction = (
+                    f"Use {qualifying} to locate the dossier's documented "
+                    "real-world entity reference."
+                )
+        else:
+            instruction = (
+                "Use the matching dossier's documented real-world entity "
+                "reference."
+            )
+        return (
+            f"The fictional {topic} has an unresolved dossier identified by "
+            f"these simulated source clues: {clues}. {instruction} "
+            f"{goal['question']}"
+        )
     if spec.get("reasoning_pattern") == "task_plan" and (
         spec["macro_plan"].get("question_sampling_policy") ==
         "grounded_relation_goal_question_v1"
@@ -610,6 +652,43 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
+    if pattern == "task_plan" and (
+        spec["macro_plan"].get("semantic_grounding_policy") ==
+        "goal_constrained_yago_grounding_v1"
+    ):
+        # A deterministic draft includes the exact frozen Goal Question,
+        # but a connected LLM Author is allowed to paraphrase it. Validate
+        # every underlying relation concept, not exact surface wording.
+        # This is a conservative semantic *surface* check in addition to
+        # the existing Question Critic, never a proof of equivalence.
+        from .task_plan import _predicate_key
+        goal = spec["macro_plan"]["goal"]["semantic"]
+        patterns = {
+            "birthplace": r"\b(?:birth\s?place|born)\b",
+            "deathplace": r"\b(?:death|died|place of death)\b",
+            "doctoraladvisor": r"\b(?:advisor|adviser|supervisor)\b",
+            "fieldofwork": r"\b(?:research field|field of (?:work|study)|research area|discipline)\b",
+            "spouse": r"\b(?:spouse|husband|wife|partner)\b",
+            "memberof": r"\b(?:member|affiliat\w*|organization)\b",
+            "location": r"\b(?:locat(?:ion|ed)|where|area)\b",
+            "containedinplace": r"\b(?:contain\w*|region|area|district|within)\b",
+            "neighbor": r"\b(?:neighbor\w*|border\w*|adjacent)\b",
+            "twinnedwith": r"\b(?:twin\w*|sister.city)\b",
+            "nationality": r"\b(?:nationality|citizenship)\b",
+            "capital": r"\bcapital\b",
+        }
+        keys = [_predicate_key(iri) for iri in
+                goal["relation_sequence"]]
+        if any(
+            (key not in patterns or
+             not re.search(patterns[key], q, flags=re.I))
+            for key in keys
+        ) or (
+            keys.count("containedinplace") >= 2 and
+            not re.search(r"\b(?:larger|broader|higher.level|second.level)\b",
+                          q, flags=re.I)
+        ):
+            errors.append("task_plan_semantic_goal_question_missing")
     if pattern == "task_plan":
         plan = spec["macro_plan"]
         for info in plan["clues"].values():

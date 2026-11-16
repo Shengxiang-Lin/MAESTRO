@@ -11,6 +11,11 @@ from environment.generate_question.task_plan import (
     make_spec, validate_spec, CALIBRATED, BLIND_EVENTS, GOAL_QUESTIONS,
 )
 from environment.generate_question.task_plan_runtime import audit_information
+from environment.generate_question.task_plan import (
+    SEMANTIC_GOALS, _loaded_yago_unique, _semantic_recipe,
+)
+from environment.generate_question.question import guard_question
+from environment.generate_question.knowledge_macro import YagoKnowledgeIndex
 from environment.generate_question.world import compile_program, generate_world
 from environment.generate_question.question import reference_question
 from environment.generate_question.quality import compile_and_validate, validate_replay
@@ -199,6 +204,81 @@ class DirectTaskPlanTests(unittest.TestCase):
         self.assertEqual(modes["medium"], {"trace", "event"})
         self.assertEqual(modes["hard"], {"event", "verify"})
 
+    def test_semantic_goal_questions_are_witnessed_and_scoped(self):
+        kg = graph_fixture()
+        index = YagoKnowledgeIndex(kg)
+        goals = set()
+        for ordinal in range(8):
+            level = "medium" if ordinal % 2 == 0 else "hard"
+            spec = make_spec(
+                kg, seed=17, ordinal=ordinal,
+                difficulty=level, index=index,
+            )
+            plan = spec["macro_plan"]
+            self.assertEqual(plan["semantic_grounding_policy"], SEMANTIC_GOALS)
+            sem = plan["goal"]["semantic"]
+            paths = plan["world_binding"]["candidate_paths"]
+            target_path = paths[plan["world_binding"]["target_case"]]
+            self.assertIsNotNone(_semantic_recipe(target_path))
+            self.assertEqual(sem["relation_sequence"], [
+                edge["predicate"] for edge in target_path
+            ])
+            self.assertEqual(sem["type_evidence"],
+                             "predicate_signature_heuristic_not_rdf_type")
+            self.assertTrue(plan["world_binding"]["semantic_audit"][
+                "loaded_yago_singleton_witness"])
+            self.assertFalse(plan["world_binding"]["semantic_audit"][
+                "rdf_type_verification"])
+            for candidate in paths.values():
+                self.assertTrue(_loaded_yago_unique(
+                    index, [Edge(
+                        e["subject"], e["predicate"], e["object"]
+                    ) for e in candidate]
+                ))
+            question = reference_question(spec)
+            self.assertIn(sem["question"], question)
+            self.assertNotIn("relation target", question)
+            self.assertNotIn("followed by", question)
+            self.assertFalse(guard_question(question, spec))
+            changed = question.replace(
+                sem["question"],
+                "Which unrelated location is mentioned in these records?"
+            )
+            self.assertIn(
+                "task_plan_semantic_goal_question_missing",
+                guard_question(changed, spec),
+            )
+            self.assertFalse(validate_spec(spec))
+            goals.add(sem["profile"])
+        self.assertTrue(goals)
+
+    def test_reject_uninterpretable_and_multivalued_yago(self):
+        p = "http://schema.org/"
+        graph = KnowledgeGraph(
+            edges=[
+                Edge("https://test.org/a", p+"location", "https://test.org/b"),
+                Edge("https://test.org/b", p+"follows", "https://test.org/c"),
+            ],
+            input_file="bad-meaningful-route.ttl",
+            scanned=2,
+        )
+        with self.assertRaisesRegex(
+            ValueError, "no_goal_expressible_singleton_yago"
+        ):
+            make_spec(graph, seed=17, ordinal=0, difficulty="medium")
+        kg = graph_fixture()
+        extra = Edge(
+            "https://example.org/Person0",
+            p+"birthPlace", "https://example.org/AlternativeTown",
+        )
+        kg.edges.append(extra)
+        index = YagoKnowledgeIndex(kg)
+        original = next(x for x in kg.edges
+                        if x.subject == "https://example.org/Person0"
+                        and x.predicate == p+"birthPlace"
+                        and x.object != extra.object)
+        self.assertFalse(_loaded_yago_unique(index, [original]))
+
     def test_spec_tamper_and_replay_fail_closed(self):
         kg = graph_fixture()
         spec = make_spec(kg, seed=17, ordinal=1, difficulty="medium")
@@ -253,6 +333,16 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
             self.assertEqual(report["replay_pass"], 6)
             stats = report["knowledge_world_grounding"]["single_task_plan"]
             self.assertEqual(stats["scenes"], 6)
+            self.assertEqual(stats["semantic_grounding"]["scenes"], 6)
+            self.assertEqual(
+                stats["semantic_grounding"]["loaded_graph_uniqueness_verified"], 6
+            )
+            self.assertGreaterEqual(
+                stats["semantic_grounding"]["sampling_attempts"], 6
+            )
+            self.assertTrue(
+                stats["semantic_grounding"]["goal_profile_distribution"]
+            )
             self.assertEqual(stats["necessity_passed"], 6)
             self.assertEqual(len(stats["mode_distribution"]), 3)
             self.assertGreaterEqual(stats["macro_task_count_range"][1],

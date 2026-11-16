@@ -28,6 +28,35 @@ MODES = ("trace", "event", "verify")
 CALIBRATED = "calibrated_structural_difficulty_v1"
 BLIND_EVENTS = "eligibility_blind_event_names_v1"
 GOAL_QUESTIONS = "grounded_relation_goal_question_v1"
+SEMANTIC_GOALS = "goal_constrained_yago_grounding_v1"
+# Local predicate combinations with interpretable user goals. These are
+# *predicate-signature hypotheses*, NOT RDF-type attestations. The bounded
+# YAGO loader intentionally excludes rdf:type triples.
+_SEMANTIC_RECIPES = (
+    (("birthplace","containedinplace"), "biographical", "person", "administrative area", "Which administrative area contains the referenced person's birthplace?"),
+    (("birthplace","location"), "biographical", "person", "location", "Where is the referenced person's birthplace located?"),
+    (("deathplace","location"), "biographical", "person", "location", "What location is recorded for the referenced person's place of death?"),
+    (("doctoraladvisor","fieldofwork"), "academic", "scholar", "research field", "What research field is recorded for the referenced scholar's doctoral advisor?"),
+    (("doctoraladvisor","birthplace"), "academic", "scholar", "birthplace", "Where was the referenced scholar's doctoral advisor born?"),
+    (("spouse","birthplace"), "biographical", "person", "birthplace", "Where was the referenced person's spouse born?"),
+    (("memberof","location"), "institutional", "entity", "location", "Where is the organization affiliated with the referenced entity located?"),
+    (("location","containedinplace"), "geographical", "entity", "administrative area", "Which administrative area contains the referenced entity's recorded location?"),
+    (("containedinplace","containedinplace"), "geographical", "place", "larger area", "Which larger area contains the administrative area of the referenced place?"),
+    (("neighbor","location"), "geographical", "place", "location", "Where is the neighboring place of the referenced place located?"),
+    (("location","neighbor"), "geographical", "entity", "neighboring place", "Which place borders the referenced entity's recorded location?"),
+    (("birthplace","containedinplace","containedinplace"), "biographical", "person", "larger administrative area", "Which larger administrative area contains the region of the referenced person's birthplace?"),
+    (("birthplace","location","containedinplace"), "biographical", "person", "administrative area", "Which administrative area contains the location recorded for the referenced person's birthplace?"),
+    (("doctoraladvisor","birthplace","location"), "academic", "scholar", "location", "Where is the birthplace of the referenced scholar's doctoral advisor located?"),
+    (("doctoraladvisor","birthplace","containedinplace"), "academic", "scholar", "administrative area", "Which administrative area contains the birthplace of the referenced scholar's doctoral advisor?"),
+    (("memberof","location","containedinplace"), "institutional", "entity", "administrative area", "Which administrative area contains the location of the referenced entity's affiliated organization?"),
+    (("location","containedinplace","containedinplace"), "geographical", "entity", "larger administrative area", "Which larger administrative area contains the region of the referenced entity's recorded location?"),
+    (("spouse","birthplace","containedinplace"), "biographical", "person", "administrative area", "Which administrative area contains the birthplace of the referenced person's spouse?"),
+    (("deathplace","location","containedinplace"), "biographical", "person", "administrative area", "Which administrative area contains the location recorded for the referenced person's place of death?"),
+    (("nationality","capital","location"), "biographical", "person", "location", "Where is the capital of the referenced person's recorded nationality located?"),
+    (("location","neighbor","location"), "geographical", "entity", "location", "Which location is recorded for the place neighboring the referenced entity's location?"),
+    (("deathplace","location","neighbor"), "biographical", "person", "neighboring area", "Which area neighbors the location recorded for the referenced person's place of death?"),
+    (("location","capital","twinnedwith"), "geographical", "entity", "twin municipality", "Which municipality is twinned with the capital of the area containing the referenced entity?"),
+)
 
 
 def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
@@ -178,8 +207,158 @@ def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
     }
 
 
+def _predicate_key(iri: str) -> str:
+    return "".join(ch for ch in predicate_label(iri).casefold()
+                   if ch.isalnum())
+
+
+def _semantic_recipe(path: list) -> tuple | None:
+    keys = tuple(_predicate_key(
+        item["predicate"] if isinstance(item, dict) else item.predicate
+    ) for item in path)
+    return next((entry for entry in _SEMANTIC_RECIPES
+                 if entry[0] == keys), None)
+
+
+def _semantic_goal(path: list, count: int) -> dict:
+    recipe = _semantic_recipe(path)
+    if recipe is None:
+        raise ValueError("uninterpretable_yago_relation_composition")
+    keys, domain, subject_hint, answer_hint, question = recipe
+    return {
+        "profile": "_".join(keys),
+        "relation_sequence": [
+            item["predicate"] if isinstance(item, dict) else item.predicate
+            for item in path
+        ],
+        "domain": domain, "subject_type_hint": subject_hint,
+        "answer_type_hint": answer_hint, "question": question,
+        "type_evidence": "predicate_signature_heuristic_not_rdf_type",
+        "answer_scope": "one_result_per_candidate_in_loaded_yago_graph",
+        "candidate_count": count,
+    }
+
+
+def _loaded_yago_unique(index: YagoKnowledgeIndex, path: list) -> bool:
+    """A single selected RDF edge must not hide other same-key outputs."""
+    return all(
+        {edge.object for edge in index.outgoing.get(fact.subject, ())
+         if edge.predicate == fact.predicate} == {fact.object}
+        for fact in path
+    )
+
+
+def _semantic_ground(kg, index, plan, *, seed: int, ordinal: int):
+    """Choose a human-interpretable relation goal before YAGO facts.
+
+    Both the target and all COMPLETE shadow paths must have exactly one
+    output for each required predicate within the LOADED YAGO sample.
+    This does not claim global uniqueness in the entire public YAGO.
+    """
+    rng = random.Random(int(digest(
+        seed, ordinal, "task-plan-semantic-ground"
+    )[:15], 16))
+    n_clues = 2 * sum(
+        t["operation"] == "match_clues" for t in plan["macro_tasks"]
+    )
+    n_cases = n_clues + 4
+    # Shared index cache: do not rescan the RDF for every Scene.
+    by_name = getattr(index, "_task_plan_semantic_index", None)
+    if by_name is None:
+        by_name = {}
+        for predicate, edges in index.by_predicate.items():
+            by_name.setdefault(_predicate_key(predicate), []).extend(edges)
+        index._task_plan_semantic_index = by_name
+    profiles = [
+        recipe for recipe in _SEMANTIC_RECIPES
+        if len(recipe[0]) == plan["hops"] and by_name.get(recipe[0][0])
+    ]
+    if not profiles:
+        raise ValueError("no_interpretable_yago_goal_in_loaded_sample")
+    rng.shuffle(profiles)
+    rejects = {"missing_join": 0, "multivalued": 0,
+               "incomplete_shadows": 0, "missing_fork": 0}
+    for attempt in range(720):
+        keys = profiles[attempt % len(profiles)][0]
+        start = rng.choice(by_name[keys[0]])
+        path, seen = [start], {start.subject, start.object}
+        for key in keys[1:]:
+            options = [
+                e for e in index.outgoing.get(path[-1].object, ())
+                if _predicate_key(e.predicate) == key
+                and e.object not in seen and e.subject != e.object
+            ]
+            if not options:
+                break
+            step = rng.choice(options)
+            path.append(step)
+            seen.add(step.object)
+        if len(path) != len(keys):
+            rejects["missing_join"] += 1
+            continue
+        if not _loaded_yago_unique(index, path):
+            rejects["multivalued"] += 1
+            continue
+        alternatives = _alternatives(
+            kg, index, path, count=n_cases-1, rng=rng,
+            candidate_filter=lambda row: _loaded_yago_unique(index, row),
+        )
+        if not alternatives:
+            rejects["incomplete_shadows"] += 1
+            continue
+        if not all(_loaded_yago_unique(index, row)
+                   for row in alternatives):
+            rejects["multivalued"] += 1
+            continue
+        target = "Dossier-" + digest(seed, ordinal, "target")[:10]
+        cases = [target] + [
+            "Dossier-" + digest(seed, ordinal, i, "case")[:10]
+            for i in range(n_cases-1)
+        ]
+        rng.shuffle(cases)
+        paths = {
+            target: _serialized_path(kg, path),
+            **{case: _serialized_path(kg, row)
+               for case, row in zip(
+                   [c for c in cases if c != target], alternatives)},
+        }
+        fork = None
+        if plan["mode"] == "verify":
+            try:
+                fork = mine_required_fork(
+                    kg, index, paths, seed=seed, ordinal=ordinal,
+                )
+            except ValueError:
+                rejects["missing_fork"] += 1
+                continue
+        return {
+            "target_case": target, "all_cases": cases,
+            "candidate_paths": paths, "real_fork": fork,
+            "case_shadow_slots": {
+                case: i if i < n_clues else None
+                for i, case in enumerate(c for c in cases if c != target)
+            },
+            "origin_file": str(kg.input_file),
+            "sample_triples_scanned": kg.scanned,
+            "semantic_audit": {
+                "policy": SEMANTIC_GOALS,
+                "attempts": attempt + 1,
+                "rejections": rejects,
+                "loaded_yago_singleton_witness": True,
+                "complete_candidate_count": n_cases,
+                "rdf_type_verification": False,
+            },
+        }
+    raise ValueError(
+        "no_goal_expressible_singleton_yago_with_complete_shadows:"
+        + str(rejects)
+    )
+
+
 def _ground(kg, index, plan, *, seed: int, ordinal: int):
     """Use ONLY pure, validated YAGO samplers, never historical Spec writers."""
+    if plan.get("semantic_grounding_policy") == SEMANTIC_GOALS:
+        return _semantic_ground(kg, index, plan, seed=seed, ordinal=ordinal)
     rng = random.Random(int(digest(seed, ordinal, "task-plan-ground")[:15], 16))
     n_clues = 2 * sum(
         t["operation"] == "match_clues" for t in plan["macro_tasks"]
@@ -242,8 +421,24 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
         schemas[sid] = dict(schema)
     disc = [t for t in plan["macro_tasks"]
             if t["operation"] == "match_clues"]
+    contextual_titles = {
+        "academic": "research correspondence",
+        "biographical": "biographical records",
+        "institutional": "institutional registry",
+        "geographical": "regional fieldwork",
+    }
+    context = (
+        contextual_titles[_semantic_goal(
+            grounding["candidate_paths"][grounding["target_case"]],
+            len(grounding["all_cases"]),
+        )["domain"]]
+        if plan.get("semantic_grounding_policy") == SEMANTIC_GOALS
+        else None
+    )
     for i, task in enumerate(disc):
         for j, (modality, title, attr, choices) in enumerate(CUES[i]):
+            if context is not None:
+                title = f"{context} — {title}"
             sid = task["source_scope"][j]
             chosen = rng.choice(choices)
             alt = rng.choice([x for x in choices if x != chosen])
@@ -255,7 +450,8 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
             source(sid, modality, title+" (simulated)",
                    "Find fictional dossier candidates by an observed clue",
                    {"case_id": "str", "cue": "str"})
-    source("entity_index", "table", "Project identity crosswalk",
+    source("entity_index", "table",
+           "Dossier identity crosswalk" if context else "Project identity crosswalk",
            "Map the identified fictional dossier to one named project",
            {"case_id": "str", "project_id": "str", "project_name": "str"},
            key="case_id")
@@ -317,6 +513,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         seed=seed, ordinal=ordinal, difficulty=difficulty, hops=hops,
         sampling_policy=CALIBRATED,
     )
+    plan["semantic_grounding_policy"] = SEMANTIC_GOALS
     grounding = _ground(
         kg, index or YagoKnowledgeIndex(kg),
         plan, seed=seed, ordinal=ordinal,
@@ -328,6 +525,10 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         "clues": clues, "source_schemas": schemas,
         "world_binding": grounding,
     })
+    plan["goal"]["semantic"] = _semantic_goal(
+        grounding["candidate_paths"][grounding["target_case"]],
+        len(grounding["all_cases"]),
+    )
     condition = plan["condition"]
     clause = (
         "the completed event" if condition and
@@ -335,38 +536,59 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         "the event held in or after 2025" if condition else
         "the documented project reference"
     )
-    # Select a grounded *archive domain*, not a fixed template topic.
-    # These are fictional collections; the only real historical claims
-    # remain the witnessed YAGO relation edges. Do not infer entity type.
-    route = [
-        predicate_label(fact["predicate"]).lower()
-        for fact in grounding["candidate_paths"][grounding["target_case"]]
-    ]
-    if any(
-        key in name for name in route
-        for key in ("neighbor", "location", "capital", "contained in", "twinned")
-    ):
-        topic = "regional research archive"
-    elif any(
-        key in name for name in route
-        for key in ("birth", "student", "spouse", "influenced")
-    ):
-        topic = "biographical research archive"
-    elif any(
-        key in name for name in route
-        for key in ("member", "institution", "works at", "organization")
-    ):
-        topic = "institutional research archive"
+    if plan.get("semantic_grounding_policy") == SEMANTIC_GOALS:
+        topics = {
+            "biographical": "biographical collection",
+            "academic": "academic correspondence archive",
+            "institutional": "institutional records collection",
+            "geographical": "regional survey collection",
+        }
+        semantic = plan["goal"]["semantic"]
+        scenario = {
+            "topic": topics[semantic["domain"]],
+            "setting": ("a fictional archive cross-referenced with "
+                        "genuinely witnessed YAGO relationships"),
+            "user_role": "archive investigator",
+            "purpose": ("identify " + clause + " and determine the "
+                        + semantic["answer_type_hint"]
+                        + " specified by the recorded relationships"),
+            "motivation": ("reconcile simulated dossier evidence before "
+                           "answering one interpretable real-world relation goal"),
+            "entity_kind": "fictional archive dossier",
+        }
     else:
-        topic = "cross-reference project archive"
-    scenario = {
-        "topic": topic,
-        "setting": "a fictional project archive cross-referenced with real YAGO facts",
-        "user_role": "records researcher",
-        "purpose": "identify " + clause + " and trace its real-world relationship",
-        "motivation": "resolve independently located observations before reporting a verified related entity",
-        "entity_kind": "fictional project",
-    }
+        # Select a grounded *archive domain*, not a fixed template topic.
+        # These are fictional collections; the only real historical claims
+        # remain the witnessed YAGO relation edges. Do not infer entity type.
+        route = [
+            predicate_label(fact["predicate"]).lower()
+            for fact in grounding["candidate_paths"][grounding["target_case"]]
+        ]
+        if any(
+            key in name for name in route
+            for key in ("neighbor", "location", "capital", "contained in", "twinned")
+        ):
+            topic = "regional research archive"
+        elif any(
+            key in name for name in route
+            for key in ("birth", "student", "spouse", "influenced")
+        ):
+            topic = "biographical research archive"
+        elif any(
+            key in name for name in route
+            for key in ("member", "institution", "works at", "organization")
+        ):
+            topic = "institutional research archive"
+        else:
+            topic = "cross-reference project archive"
+        scenario = {
+            "topic": topic,
+            "setting": "a fictional project archive cross-referenced with real YAGO facts",
+            "user_role": "records researcher",
+            "purpose": "identify " + clause + " and trace its real-world relationship",
+            "motivation": "resolve independently located observations before reporting a verified related entity",
+            "entity_kind": "fictional project",
+        }
     witness = {
         "version": "maestro.task_plan.yago_witness.v1",
         "origin_file": grounding["origin_file"],
@@ -476,6 +698,23 @@ def validate_spec(spec: dict) -> list[str]:
             return ["task_plan_unneeded_fork"]
         if witness["real_fork"] != binding["real_fork"]:
             return ["task_plan_fork_witness_mismatch"]
+        semantic_policy = plan.get("semantic_grounding_policy")
+        if semantic_policy not in (None, SEMANTIC_GOALS):
+            return ["task_plan_unknown_semantic_policy"]
+        if semantic_policy == SEMANTIC_GOALS:
+            if plan["goal"].get("semantic") != _semantic_goal(
+                paths[target], len(cases)
+            ):
+                return ["task_plan_semantic_goal_mismatched"]
+            audit = binding.get("semantic_audit", {})
+            if (audit.get("policy") != SEMANTIC_GOALS
+                    or not audit.get("loaded_yago_singleton_witness")
+                    or audit.get("complete_candidate_count") != len(cases)
+                    or audit.get("attempts", 0) < 1
+                    or audit.get("rdf_type_verification") is not False):
+                return ["task_plan_semantic_scope_not_verified"]
+        elif "semantic" in plan["goal"] or "semantic_audit" in binding:
+            return ["task_plan_unversioned_semantic_goal"]
         ndisc = sum(t["operation"] == "match_clues" for t in plan["macro_tasks"])
         if (set(plan["clues"]) != {
                 sid for t in plan["macro_tasks"]

@@ -116,6 +116,22 @@ def intent_contract(spec: dict) -> dict:
             f"Identifying observation: {item['attribute']} {item['value']}."
             for item in plan["clues"].values()
         )
+        if plan.get("semantic_grounding_policy") == (
+            "goal_constrained_yago_grounding_v1"
+        ):
+            goal = plan["goal"]["semantic"]
+            constraints.extend([
+                "The precise final user goal must be semantically equivalent "
+                "to: " + goal["question"],
+                "The goal follows the exact witnessed YAGO predicate "
+                "sequence; no extra relation, threshold, comparison, "
+                "uniqueness claim outside the loaded YAGO sample, or "
+                "historical event may be invented.",
+                "The subject and answer type names are predicate-derived "
+                "hints only; the bounded facts dump lacks RDF type proof.",
+                "Keep all synthetic dossier cues and the exact conditional "
+                "event eligibility requirement when applicable.",
+            ])
     elif pattern == "task_graph_first_v2":
         plan = spec["macro_plan"]
         relation = spec["task_first_v2_relation_sketch"]["event_relation"]

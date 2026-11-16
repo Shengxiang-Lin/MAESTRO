@@ -34,7 +34,7 @@ def _as_v1(spec: dict) -> dict:
 
 
 def _alternatives(graph, index, anchor: list, *, count: int,
-                  rng: random.Random) -> list[list]:
+                  rng: random.Random, candidate_filter=None) -> list[list]:
     """Find *real* disjoint trajectories with the same relation sequence.
 
     The complete chain survives later keyed lookups, and every candidate
@@ -76,6 +76,10 @@ def _alternatives(graph, index, anchor: list, *, count: int,
             chosen.append(nxt)
             seen.add(nxt.object)
         if len(chosen) != len(anchor):
+            continue
+        # Optional current-generation constraint. Historical callers pass
+        # None and retain byte-for-byte deterministic shadow sampling.
+        if candidate_filter is not None and not candidate_filter(chosen):
             continue
         label = graph.label(chosen[-1].object)
         if label in terminal_labels:
