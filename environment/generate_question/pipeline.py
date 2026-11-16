@@ -906,6 +906,20 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                             "target_case"]][0]["origin"] == "synthetic"
                         for s in current_scenes
                     ),
+                    "composed_motif_worlds": sum(
+                        s["problem_spec"]["macro_plan"].get(
+                            "knowledge_world_mode"
+                        ) == "compose" for s in current_scenes
+                    ),
+                    "observed_motif_predicate_coverage": dict(Counter(
+                        key for scene in current_scenes
+                        for key, count in scene["problem_spec"]["macro_plan"][
+                            "world_binding"].get("world_model", {}).get(
+                                "profile", {}).get(
+                                    "observed_predicate_counts", {}
+                                ).items()
+                        if count
+                    )),
                     "loaded_graph_uniqueness_verified": sum(
                         s["problem_spec"]["macro_plan"][
                             "world_binding"].get(
@@ -921,10 +935,11 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                         for s in current_scenes
                     ),
                     "scope": (
-                        "Genuine-YAGO uniqueness is checked only against the "
-                        "loaded bounded fact sample. Fictional relation worlds "
-                        "are synthetic, not external RDF evidence. Counts only "
-                        "include successfully generated Scenes."
+                        "In compose mode, observed YAGO relation types and "
+                        "generic vocabulary are recombined into novel typed "
+                        "Worlds; there are no claimed real YAGO assertions. "
+                        "In witnessed mode, YAGO uniqueness is checked only "
+                        "against the bounded loaded fact sample."
                     ),
                 },
                 "nested_legacy_specs": sum(
@@ -932,8 +947,9 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     for s in current_scenes
                 ),
                 "note": (
-                    "One Task Plan directly grounded in witnessed YAGO paths "
-                    "and fictional evidence. Historic generator Specs are not nested."
+                    "One Task Plan grounds either a witnessed YAGO path or a "
+                    "new typed World composed from YAGO relation motifs. "
+                    "No historical generator Specs are nested."
                 ),
             },
             "task_graph_first_v2": {
