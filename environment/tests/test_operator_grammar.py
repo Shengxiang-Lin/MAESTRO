@@ -191,16 +191,15 @@ class TypedOperatorGrammarTests(unittest.TestCase):
         import yaml
 
         cfg = Path(__file__).resolve().parents[1] / "configs"
-        questions = load_questions_config(cfg / "questions.yaml")
+        questions = load_questions_config(cfg / "questions_task_plan.yaml")
         reports = yaml.safe_load((cfg / "subagent_reports.yaml").read_text())
         untrusted = yaml.safe_load(
             (cfg / "untrusted_orchestration.yaml").read_text()
         )
         generation = questions["generation"]
-        self.assertEqual(generation["macro_planning_share"], 100)
-        self.assertEqual(generation["operator_grammar_share"], 100)
-        self.assertEqual(generation["numeric_goal_diversity_share"], 100)
-        self.assertEqual(generation["question_semantic_lock_share"], 100)
+        self.assertEqual(generation["knowledge_variant"], "task_plan")
+        self.assertEqual(generation["knowledge_world_mode"], "compose")
+        self.assertTrue(generation["knowledge_yago"])
         scene_path = generation["output_dir"] + "/questions/scenes.jsonl"
         self.assertEqual(reports["implementation"]["scenes"], scene_path)
         self.assertEqual(untrusted["input"]["scenes"], scene_path)
