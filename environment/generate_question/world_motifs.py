@@ -402,8 +402,24 @@ def compose_typed_world(graph, index, *, recipe: tuple,
         for j, (nid, role) in enumerate(zip(nodes, roles)):
             label = _entity_name(role, case_index, j, rng, features)
             if j == len(keys):
-                while label.casefold() in used_final:
-                    label = label + " " + str(case_index+1)
+                if role == "field":
+                    # Differentiating two legitimate research disciplines
+                    # must not create non-discipline labels such as Physics 3.
+                    original = label
+                    for prefix in (
+                        "", "applied ", "comparative ", "experimental ",
+                        "computational ", "historical ", "theoretical ",
+                        "interdisciplinary ", "regional ", "advanced ",
+                        "environmental ", "digital ",
+                    ):
+                        label = prefix + original
+                        if label.casefold() not in used_final:
+                            break
+                else:
+                    while label.casefold() in used_final:
+                        label = label + " " + str(case_index+1)
+                if label.casefold() in used_final:
+                    raise ValueError("composed_world_non_unique_answer_label")
                 used_final.add(label.casefold())
             entity_rows[nid] = {
                 "entity_id": nid, "type": role, "label": label,
