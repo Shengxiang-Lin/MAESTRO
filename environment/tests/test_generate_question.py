@@ -24,7 +24,7 @@ from environment.generate_question.stages import (
 from environment.generate_question.pipeline import quality_report, generate_questions
 
 # Retained regression fixtures for the old Macro-v2 branch, not the CLI default.
-LEGACY_TEST_CONFIG = DEFAULT_CONFIG.with_name("questions.yaml")
+LEGACY_TEST_CONFIG = Path(__file__).with_name("fixtures") / "questions_legacy.yaml"
 
 
 def spec(ordinal=0, difficulty="medium", family=None):
