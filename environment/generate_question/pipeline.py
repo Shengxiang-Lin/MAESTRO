@@ -733,7 +733,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     knowledge_scenes = [
         scene for scene in scenes
         if scene.get("problem_spec", {}).get("reasoning_pattern")
-        == "typed_knowledge_v1"
+        in {"typed_knowledge_v1", "typed_knowledge_v2"}
     ]
     if knowledge_scenes:
         role_counts = Counter(
@@ -756,7 +756,11 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             for scene in knowledge_scenes
         )
         data["knowledge_world_grounding"] = {
-            "version": "typed_knowledge_v1",
+            "version": "typed_knowledge_v1_and_v2",
+            "pattern_distribution": dict(Counter(
+                scene["problem_spec"]["reasoning_pattern"]
+                for scene in knowledge_scenes
+            )),
             "scenes": len(knowledge_scenes),
             "yago_relation_hops_histogram": dict(sorted(hop_counts.items())),
             "macro_count_histogram": dict(sorted(macro_counts.items())),
