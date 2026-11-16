@@ -1057,6 +1057,14 @@ def validate_spec(spec: dict) -> list[str]:
                 if (plan["mode"] != "event"
                         or event_policy != KEYED_EVENT_VERSION):
                     return ["task_plan_invalid_keyed_event_policy"]
+                event_source = next(
+                    (row for row in spec["sources"]
+                     if row["source_id"] == "event_ledger"), None
+                )
+                if (event_source is None
+                        or event_source["access_mode"] != "keyed_lookup"
+                        or event_source["key_field"] != "project_id"):
+                    return ["task_plan_event_source_not_keyed"]
                 from .task_plan_runtime import _condition_rows
                 qualified, other = _condition_rows(plan)
                 if any(
