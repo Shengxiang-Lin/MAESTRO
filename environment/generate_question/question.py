@@ -340,7 +340,7 @@ def guard_question(question: str, spec: dict,
         for info in plan["clues"].values():
             if info["value"].casefold() not in q.casefold():
                 errors.append("knowledge_required_clue_missing")
-        if not re.search(r"\\b(?:entity|related|relation|name)\\b", q, re.I):
+        if not re.search(r"\b(?:entity|related|relation|name)\b", q, re.I):
             errors.append("knowledge_goal_not_expressed")
     if pattern == "macro_first_v2":
         plan = spec["macro_plan"]
@@ -418,7 +418,7 @@ def guard_question(question: str, spec: dict,
                 question_semantic_lock_issues,
             )
             errors.extend(question_semantic_lock_issues(q, spec))
-    else:
+    elif pattern == "approval":
         if not re.search(r"\bactive\b", q, flags=re.I):
             errors.append("active_condition_missing")
     family = spec["family"]
