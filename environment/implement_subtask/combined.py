@@ -146,7 +146,10 @@ def generate_subagent_reports(
             raise StreamingError("oracle_cache_summary_mismatch")
 
     if result["accepted_scenes"] < 1:
-        return {
+        # Even an early Oracle failure must publish the promised Stage-2
+        # summary. The CLI should point to an existing explanation, not to a
+        # non-existent summary.json after rejecting every Scene.
+        failure = {
             "status": "failed",
             "pipeline": "maestro_stage2_oracle_and_subagent_reports_v1",
             "oracle_status": result["status"],
@@ -154,7 +157,10 @@ def generate_subagent_reports(
             "oracle_failed_scenes": result["failed_scenes"],
             "oracle_dir": str(oracle_dir),
             "failure_reason": "no_accepted_oracle_scenes",
+            "oracle_failure_reasons": result.get("failure_reasons", {}),
         }
+        _atomic_json(output_dir / "summary.json", failure)
+        return failure
 
     naturalize_options = dict(reporting_options)
     naturalize_options.update({
