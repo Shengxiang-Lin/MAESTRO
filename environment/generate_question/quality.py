@@ -427,7 +427,7 @@ def compile_and_validate(spec: dict, question: str) -> dict:
     program = scene["gold_program"]
     graph = (
         compile_frozen_macro_plan(spec, program, scene["gold_trace"])
-        if spec.get("reasoning_pattern") == "macro_first_v2"
+        if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1"}
         else compile_macro_tasks(program, scene["gold_trace"])
     )
     scene["macro_graph"] = graph
