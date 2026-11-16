@@ -65,6 +65,9 @@ def _construction_identity(args) -> str:
         ),
         "knowledge_source_identity": _knowledge_input_identity(args),
         "knowledge_variant": getattr(args, "knowledge_variant", "v1"),
+        "knowledge_world_mode": getattr(
+            args, "knowledge_world_mode", "witnessed"
+        ),
         "knowledge_limits": [
             getattr(args, key, None) for key in (
                 "knowledge_max_triples", "knowledge_max_edges",
@@ -295,6 +298,11 @@ def construct_scenes(args) -> dict:
                     min_hops=args.knowledge_min_hops,
                     max_hops=args.knowledge_max_hops,
                     index=knowledge_index,
+                    **({"world_mode": getattr(
+                        args, "knowledge_world_mode", "witnessed"
+                    )} if getattr(
+                        args, "knowledge_variant", "v1"
+                    ) == "task_plan" else {}),
                 )
             else:
                 spec = make_spec(
