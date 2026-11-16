@@ -804,37 +804,37 @@ videos), and the current Task Plan still uses three bounded Macro patterns;
 these are future realism/diversity targets, not completed features.
 
 
-### Shared-world evidence and stricter semantic labels (compose mode)
+### Shared-world evidence and required semantic clues (compose mode)
 
-Newly constructed Task Plan worlds now contain a **shared context subgraph**,
-separate from the unique-answer path: multiple dossiers can affiliate with
-the same institution or appear in the same regional survey archive, while
-some groups share a site/city. The canonical
-\`world_model.context_relations\` and \`context_by_case\` are the authority for
-these facts. No context relation is credited as required Gold evidence
-unless an explicit Macro consumes it; current shared-context links add
-referential realism and source continuity, **not a claim of new necessary
-Macro dependency depth**. Historical composed scenes without
-\`context_version\` replay unchanged.
+Composed Worlds keep the canonical \`world_model.context_relations\` and
+\`context_by_case\`, with institution/volume and site entities shared between
+dossiers. The second source of the **first existing discovery Macro** is
+now a *required* association: \`affiliation\` for a person's record, or
+\`subjectOf\` for a regional survey entry. The target and other candidate
+shadows share an institution/volume, while one designated shadow and
+background decoys belong to another.
 
-Each new source observation includes a reader-facing \`document_context\`
-(shared archive/site identity and a document reference) and a redundant
-\`record_excerpt\`. Both are derived from the same frozen World and original
-executable row fields, never an alternative eligibility shortcut. Stage 2
-carries these fields into the corresponding evidence atoms. Agent-facing
-content uses ordinary archive terminology; synthetic provenance remains in
-the private teacher material.
+The existing scan → filter → join Macro reads this relation from the
+**authorized register**; removing its filter must introduce competing final
+answers. It does not require a new planner, Macro type, Gold operator or
+Stage-2/3/4 interface. Other contextual edges remain non-required background.
 
-Borrowed YAGO \`fieldOfWork\` labels pass a conservative academic-field
-type gate before sampling. For example, academic disciplines are allowed
-but entity-category values such as "Aerospace manufacturer" are excluded.
-A fixed set of sensible research-field labels supplies coverage if the
-bounded YAGO sample has no suitable terms. This is a lexical safety gate,
-not external RDF-type verification. Newly composed questions also vary
-their opening text while preserving the frozen clues and requested result.
+Earlier composed scenes emitted \`document_context\` and \`record_excerpt\`
+on *every* observation. Repeating per-dossier affiliation across unrelated
+sources both bloated the records and gave the agent a shortcut around the
+required relation source. New scenes omit these redundant fields: each
+fact appears in its authorized source only. Older frozen World specs without
+\`required_context_relation\` retain their original Replay behavior.
 
-Quality reports for Task Plan include
-\`shared_context_worlds\`, \`shared_context_entity_groups\`,
-\`context_relations\`, \`source_records_with_context\`, and
-\`excluded_yago_nonacademic_field_labels\` alongside the original Replay,
-source-necessity and knowledge-motif metrics.
+Borrowed YAGO \`fieldOfWork\` labels are still gated as academic-field
+vocabulary, with a safe fallback when the bounded sample lacks appropriate
+examples. Semantic validation is lexical and typed, not an RDF type-proof.
+Question openings vary while retaining the exact frozen clue and goal.
+
+The quality report includes \`required_shared_relation_worlds\`,
+\`required_shared_relation_necessity_passed\`,
+\`source_records_with_context\`, \`shared_context_entity_groups\`, and
+\`excluded_yago_nonacademic_field_labels\`. The new source filter's
+counterfactual necessity is checked separately from merely blocking source
+access. The current design still does not claim new Macro Graph skeletons,
+true image/audio perception, or measured live-Agent difficulty.
