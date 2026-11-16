@@ -760,3 +760,45 @@ The candidate loop now uses distinct Task Plan ordinals for rejected attempts
 and permits bounded replacements while keeping the accepted difficulty mix.
 Older frozen scenes retain their original replay semantics; this is a
 simulation-first orchestration benchmark, not historical or real multimodal QA.
+
+
+### Task Plan: YAGO motif composition (recommended pilot)
+
+\`environment/configs/questions_task_plan.yaml\` selects
+\`generation.knowledge_world_mode: compose\`. The default Python
+\`task_plan.make_spec(...)\` behavior remains \`witnessed\` to preserve older
+YAGO-grounded scenes and Replay. The original Gold Executor, Macro tasks,
+Stage-2 evidence realization, and Stage-3/4 interfaces are unchanged.
+
+In \`compose\` mode, Stage 1:
+
+1. Samples the frozen **Macro Task Plan**, including discovery, eligibility,
+   association, verification and the typed handoff contracts.
+2. Extracts cached **YAGO relation motifs** from the bounded graph:
+   observed predicate frequencies, short joined-relation signatures,
+   outgoing-fork prevalence and safe generic research-field vocabulary.
+   Schema-typed predicate roles are heuristics, not claimed RDF type proofs.
+3. Chooses an interpretable 2- or 3-hop goal and composes entirely **new
+   fictional entities and typed relations**. No original YAGO entity
+   relationship is reassigned or asserted as a real RDF fact. The private
+   canonical \`world_binding.world_model\` owns entity identities and relation
+   assertions; \`candidate_paths\` is a compatibility projection, not a second
+   source of truth.
+4. Materializes the required evidence sources and optional secondary registry
+   fork **from the same canonical World**. The original Gold Program,
+   counterfactual necessity audits, and Replay must all pass.
+5. Presents an **ordinary archival investigation** to the Main/Sub-Agent:
+   the generated question, source titles, initial public view and readable
+   source observations do not expose the generator's \`synthetic\` provenance
+   markers. Those markers remain in teacher/private witness, World metadata
+   and audit reports; the dataset itself must be documented as synthetic.
+
+To use the original strict YAGO-path scheme, set
+\`knowledge_world_mode: witnessed\`. Composed-world quality is not measured by
+the number of original YAGO fact paths; audit
+\`knowledge_world_grounding.single_task_plan.semantic_grounding\` for
+\`composed_motif_worlds\`, real motif support and Replay / necessity passes.
+
+Note: media remain generated structured observations (not decoded images or
+videos), and the current Task Plan still uses three bounded Macro patterns;
+these are future realism/diversity targets, not completed features.
