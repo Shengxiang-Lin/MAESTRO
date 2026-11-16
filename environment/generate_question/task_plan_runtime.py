@@ -167,15 +167,19 @@ def generate_world(spec: dict) -> dict:
                if role["access_mode"] == "keyed_lookup" else {}),
         }
         if sid.startswith("relation_") or sid == "real_fork":
-            source_facts = (
-                {path[hop]["subject"]: path[hop]
-                 for path in paths.values()}
-                if sid.startswith("relation_")
-                for hop in [int(sid.rsplit("_", 1)[-1]) - 1] else
-                {fact["subject"]: fact
-                 for fact in b["real_fork"]["candidate_forks"].values()}
-            )
-            key = f"entity_{hop}" if sid.startswith("relation_") else "entity_0"
+            if sid.startswith("relation_"):
+                hop = int(sid.rsplit("_", 1)[-1]) - 1
+                source_facts = {
+                    path[hop]["subject"]: path[hop]
+                    for path in paths.values()
+                }
+                key = f"entity_{hop}"
+            else:
+                source_facts = {
+                    fact["subject"]: fact
+                    for fact in b["real_fork"]["candidate_forks"].values()
+                }
+                key = "entity_0"
             src["evidence_kind"] = "real_yago_facts"
             src["independence_note"] = (
                 "Each true RDF fact originates in YAGO, not a second "
