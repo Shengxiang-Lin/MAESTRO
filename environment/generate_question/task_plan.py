@@ -29,6 +29,9 @@ CALIBRATED = "calibrated_structural_difficulty_v1"
 BLIND_EVENTS = "eligibility_blind_event_names_v1"
 GOAL_QUESTIONS = "grounded_relation_goal_question_v1"
 SEMANTIC_GOALS = "goal_constrained_yago_grounding_v1"
+SYNTHETIC_WORLD = "maestro.fictional_semantic_world.v1"
+SYNTHETIC_WITNESS = "maestro.task_plan.fictional_witness.v1"
+SYNTHETIC_FORK = "maestro.fictional_fork_grounding.v1"
 # Local predicate combinations with interpretable user goals. These are
 # *predicate-signature hypotheses*, NOT RDF-type attestations. The bounded
 # YAGO loader intentionally excludes rdf:type triples.
@@ -225,6 +228,7 @@ def _semantic_goal(path: list, count: int) -> dict:
     if recipe is None:
         raise ValueError("uninterpretable_yago_relation_composition")
     keys, domain, subject_hint, answer_hint, question = recipe
+    fictional = path[0].get("origin") == "synthetic"
     return {
         "profile": "_".join(keys),
         "relation_sequence": [
@@ -233,8 +237,14 @@ def _semantic_goal(path: list, count: int) -> dict:
         ],
         "domain": domain, "subject_type_hint": subject_hint,
         "answer_type_hint": answer_hint, "question": question,
-        "type_evidence": "predicate_signature_heuristic_not_rdf_type",
-        "answer_scope": "one_result_per_candidate_in_loaded_yago_graph",
+        "type_evidence": (
+            "fictional_relation_type_contract" if fictional
+            else "predicate_signature_heuristic_not_rdf_type"
+        ),
+        "answer_scope": (
+            "one_result_per_candidate_in_simulated_world" if fictional
+            else "one_result_per_candidate_in_loaded_yago_graph"
+        ),
         "candidate_count": count,
     }
 
@@ -278,7 +288,7 @@ def _semantic_ground(kg, index, plan, *, seed: int, ordinal: int):
     rng.shuffle(profiles)
     rejects = {"missing_join": 0, "multivalued": 0,
                "incomplete_shadows": 0, "missing_fork": 0}
-    for attempt in range(720):
+    for attempt in range(128):
         keys = profiles[attempt % len(profiles)][0]
         start = rng.choice(by_name[keys[0]])
         path, seen = [start], {start.subject, start.object}
@@ -355,10 +365,165 @@ def _semantic_ground(kg, index, plan, *, seed: int, ordinal: int):
     )
 
 
+
+# Fictional relation worlds reuse approved interpretable relation signatures,
+# but no simulated edge is ever represented as a witnessed YAGO fact.
+_FICTIONAL_NAMES = (
+    "Alder", "Briar", "Cedar", "Dunmere", "Elden", "Farrow",
+    "Glenwick", "Hawthorn", "Iver", "Juniper", "Kestrel", "Linden",
+)
+_FICTIONAL_FIELDS = (
+    "river ecology", "historical cartography", "computational linguistics",
+    "maritime archaeology", "urban hydrology", "cultural astronomy",
+    "digital paleography", "environmental history", "heritage informatics",
+    "landscape modeling", "comparative philology", "materials conservation",
+)
+_PREDICATE_NAMES = {
+    "birthplace": "birthPlace", "deathplace": "deathPlace",
+    "containedinplace": "containedInPlace", "location": "location",
+    "doctoraladvisor": "doctoralAdvisor", "fieldofwork": "fieldOfWork",
+    "spouse": "spouse", "memberof": "memberOf",
+    "neighbor": "neighbor", "nationality": "nationality",
+    "capital": "capital", "twinnedwith": "twinnedWith",
+}
+
+
+def _fictional_label(predicate: str, name: str, case_index: int,
+                     hop: int) -> str:
+    if predicate in {"doctoraladvisor", "spouse"}:
+        return "Dr. " + name + " Merrow"
+    if predicate == "fieldofwork":
+        return _FICTIONAL_FIELDS[case_index % len(_FICTIONAL_FIELDS)]
+    if predicate == "memberof":
+        return name + " Research Institute"
+    if predicate == "nationality":
+        return "Republic of " + name
+    if predicate == "capital":
+        return name + " City"
+    if predicate == "twinnedwith":
+        return "City of " + name + "haven"
+    if predicate == "containedinplace":
+        return ("Province of " if hop > 1 else "County of ") + name
+    if predicate in {"birthplace", "deathplace", "location", "neighbor"}:
+        return name + (" District" if hop > 1 else " Township")
+    return name + " Region"
+
+
+def _fictional_fork(paths: dict) -> dict:
+    # A distinct simulated registry is an independent *world source*, not
+    # independent historical corroboration.
+    predicate = "urn:maestro:fictional:predicate:cataloguedIn"
+    forks = {}
+    for case, path in paths.items():
+        subject = path[0]["subject"]
+        object_id = "urn:maestro:fictional:register:" + digest(case, subject)[:20]
+        forks[case] = {
+            "subject": subject, "predicate": predicate, "object": object_id,
+            "subject_label": subject.rsplit(":", 1)[-1],
+            "object_label": "Registry card " + digest(case)[:8].upper(),
+            "origin": "synthetic",
+            "fact_id": "synthetic:" + digest(subject, predicate, object_id)[:20],
+        }
+    return {
+        "version": SYNTHETIC_FORK, "motif_kind": "fictional_fork",
+        "predicate": predicate, "candidate_forks": forks,
+        "source_lineage": SYNTHETIC_WORLD,
+        "causal_use": "required_fictional_fork_macro_evidence",
+    }
+
+
+def _validate_fictional_fork(fork: dict, paths: dict) -> list[str]:
+    try:
+        if (fork["version"] != SYNTHETIC_FORK
+                or fork["motif_kind"] != "fictional_fork"
+                or fork["source_lineage"] != SYNTHETIC_WORLD
+                or fork["causal_use"] != "required_fictional_fork_macro_evidence"
+                or fork["predicate"] != "urn:maestro:fictional:predicate:cataloguedIn"
+                or set(fork["candidate_forks"]) != set(paths)):
+            return ["task_plan_fictional_fork_wrong_contract"]
+        seen = set()
+        for case, path in paths.items():
+            fact = fork["candidate_forks"][case]
+            if (fact["subject"] != path[0]["subject"]
+                    or fact["predicate"] != fork["predicate"]
+                    or fact["origin"] != "synthetic"
+                    or not fact["object"].startswith(
+                        "urn:maestro:fictional:register:")
+                    or fact["fact_id"] != "synthetic:" + digest(
+                        fact["subject"], fact["predicate"], fact["object"]
+                    )[:20] or fact["object"] in seen):
+                return ["task_plan_fictional_fork_bad_witness"]
+            seen.add(fact["object"])
+        return []
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        return ["task_plan_fictional_fork_invalid:" + str(exc)[:140]]
+
+
+def _fictional_ground(plan, *, seed: int, ordinal: int,
+                      real_failure: str) -> dict:
+    """Make a coherent synthetic world with complete alternative paths."""
+    rng = random.Random(int(digest(
+        seed, ordinal, "task-plan-fictional-semantic-world"
+    )[:15], 16))
+    recipes = [r for r in _SEMANTIC_RECIPES if len(r[0]) == plan["hops"]]
+    if not recipes:
+        raise ValueError("no_interpretable_fictional_relation_goal")
+    keys = rng.choice(recipes)[0]
+    n_clues = 2 * sum(
+        t["operation"] == "match_clues" for t in plan["macro_tasks"]
+    )
+    n_cases = n_clues + 4
+    target = "Dossier-" + digest(seed, ordinal, "target")[:10]
+    cases = [target] + [
+        "Dossier-" + digest(seed, ordinal, i, "case")[:10]
+        for i in range(n_cases-1)
+    ]
+    rng.shuffle(cases)
+    paths = {}
+    for i, case in enumerate(cases):
+        name = _FICTIONAL_NAMES[i % len(_FICTIONAL_NAMES)]
+        nodes = [
+            "urn:maestro:fictional:entity:" + digest(
+                seed, ordinal, case, j, "semantic-entity"
+            )[:24] for j in range(len(keys)+1)
+        ]
+        paths[case] = [{
+            "subject": nodes[j],
+            "predicate": "http://schema.org/" + _PREDICATE_NAMES[predicate],
+            "object": nodes[j+1],
+            "object_label": _fictional_label(predicate, name, i, j),
+            "origin": "synthetic",
+        } for j, predicate in enumerate(keys)]
+    fork = _fictional_fork(paths) if plan["mode"] == "verify" else None
+    return {
+        "target_case": target, "all_cases": cases,
+        "candidate_paths": paths, "real_fork": fork,
+        "case_shadow_slots": {
+            case: i if i < n_clues else None
+            for i, case in enumerate(c for c in cases if c != target)
+        },
+        "origin_file": SYNTHETIC_WORLD, "sample_triples_scanned": 0,
+        "semantic_audit": {
+            "policy": SEMANTIC_GOALS, "attempts": 1, "rejections": {},
+            "grounding_origin": "synthetic", "fallback_from_yago": True,
+            "fallback_reason": real_failure[:240],
+            "loaded_yago_singleton_witness": False,
+            "synthetic_consistency_checked": True,
+            "complete_candidate_count": n_cases,
+            "rdf_type_verification": False,
+        },
+    }
+
+
 def _ground(kg, index, plan, *, seed: int, ordinal: int):
-    """Use ONLY pure, validated YAGO samplers, never historical Spec writers."""
+    """Prefer witnessed YAGO; fall back to a clearly fictional relation world."""
     if plan.get("semantic_grounding_policy") == SEMANTIC_GOALS:
-        return _semantic_ground(kg, index, plan, seed=seed, ordinal=ordinal)
+        try:
+            return _semantic_ground(kg, index, plan, seed=seed, ordinal=ordinal)
+        except ValueError as exc:
+            return _fictional_ground(
+                plan, seed=seed, ordinal=ordinal, real_failure=str(exc),
+            )
     rng = random.Random(int(digest(seed, ordinal, "task-plan-ground")[:15], 16))
     n_clues = 2 * sum(
         t["operation"] == "match_clues" for t in plan["macro_tasks"]
