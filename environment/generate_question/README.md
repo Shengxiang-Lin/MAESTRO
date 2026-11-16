@@ -296,3 +296,81 @@ future expansions. These synthetic media records are programmatically
 realized annotations, **not actual decoded images/audio/video**.
 Deterministic Question drafts should still be naturalized and reviewed
 before training distribution-scale models.
+
+## Hybrid Motif v4 — causally required YAGO forks + fictional event networks
+
+This version specifically addresses the observed v3 pilot gap: genuine YAGO
+forks/diamonds were previously stored in World metadata, while fictional
+projects had few visible attributes. v4 still uses the **original**
+`generate-questions`, canonical World, primitive Program IR, frozen Macro
+compiler, evidence and source permissions, information necessity, strict
+Replay and Stage-2 task-feedback interface.
+
+```bash
+git pull origin main
+python -m environment generate-questions \
+  --config environment/configs/questions_hybrid_motif_v4.yaml
+
+python -m environment quality \
+  --config environment/configs/questions_hybrid_motif_v4.yaml \
+  --scenes environment/data/stage1_hybrid_motif_v4_pilot/constructed/scenes.jsonl
+```
+
+Existing v1/v2/v3 frozen data and configuration semantics are unchanged.
+The new variant is `typed_knowledge_v4` and writes to a **new output
+directory**, rather than silently replacing previous scenes.
+
+### Two mutually necessary knowledge layers
+
+- `real_motif_grounding.py` mines a *genuine secondary RDF fork*
+  from each competing YAGO anchor, using a common predicate and
+  distinct real RDF objects. If the input YAGO sample does not have
+  enough matched secondary facts, the candidate World is **rejected**;
+  no fictional edge is labeled real. The complete YAGO answer routes
+  are still drawn from genuine connected facts as in knowledge v2.
+- `hybrid_world_v4.py` creates fully fictional projects **and** typed
+  fictional events, organizers and venues. It freezes the synthetic
+  ground-truth links, event eligibility relationships and source claims,
+  with entity names visible in `entity_index` and `event_ledger`.
+  These names and relations are fictional; they must not be
+  misrepresented as YAGO or historical facts.
+- Two simulated project-reference directories, the fictional event's
+  permitted real-fork objects and the actual YAGO fork lookup are
+  all required by the final solver. For each candidate project, let
+  `T` be the true YAGO anchor and `U,V,W` other genuinely queryable
+  anchors: A provides `{T,U,V}`, B provides `{T,U,W}`, the event
+  permits `{fork(T),fork(V),fork(W)}`. The actual RDF fork lookup
+  disambiguates the intersection to `T`. Unlike v3, the second
+  genuine YAGO relation is part of the **Gold Program and FactRefs**.
+- The Macro graph dynamically uses either parallel reference investigations
+  or serial refinement, an independent event Investigation, a required
+  real-motif Verification (joining the two information layers) and the
+  main witnessed YAGO multi-hop Investigation. The original nine-Macro
+  budget is enforced. Other role combinations are not implied.
+
+### Quality and limits
+
+The canonical `information_necessity.py` adds the
+`hybrid_world_causal_motif_v4` audit: exact Identification, single clue
+relaxation, whole-Discovery omission, all-Discovery bypass, each
+simulated directory becoming nondiscriminating, event eligibility
+becoming nondiscriminating, and the real-fork observation being
+counterfactually unreliable. Every probe must reopen **multiple
+executable distinct** YAGO answers. Empty results do not count.
+
+Summaries are in
+`quality_report.json → knowledge_world_grounding.causal_hybrid_v4`.
+Each Scene has the full per-source audit under
+`difficulty_audit.macro_first_audit.candidate_information_necessity`.
+
+- Both event records and existing image/audio/video observations are
+  simulated media annotations, **not decoded real images/audio/video**.
+- Real fork facts are independently present in the input RDF, but
+  simulated source assertions are not independent historical publishers.
+- The current **required real motif is a Fork**. Genuine YAGO
+  Diamonds can still be mined in the v3 context layer but an entire
+  independent two-hop diamond path is **not yet** an obligatory
+  Verification subgraph.
+- The controllable candidate design proves the stated bounded
+  counterfactual properties, not global minimality of every possible
+  strategy. Questions are deterministic drafts without LLM review.
