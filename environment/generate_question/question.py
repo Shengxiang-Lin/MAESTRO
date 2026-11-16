@@ -102,6 +102,53 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if spec.get("reasoning_pattern") == "typed_knowledge_v4":
+        from environment.schema import digest
+        from .knowledge_macro import predicate_label
+        plan = spec["macro_plan"]
+        clue_phrases = [
+            f"{info['attribute']} '{info['value']}' in the {info['title']}"
+            for _, info in sorted(plan["clues"].items())
+        ]
+        steps = [
+            predicate_label(f["predicate"]) for f in plan["real_facts"]
+        ]
+        path_phrase = " and then ".join(steps)
+        context = spec["scenario"]["topic"]
+        variants = [
+            (
+                f"Among {context}, identify the fictional project described "
+                f"by the following simulated observations: "
+                f"{'; '.join(clue_phrases)}. Its two reference directories "
+                f"disagree on candidate linked real entities. Inspect the "
+                f"project's fictional event, organizer and venue record, "
+                f"cross-check the relevant secondary relation in YAGO, "
+                f"and trace the confirmed entity via {path_phrase}. "
+                f"What is the final related entity's name?"
+            ),
+            (
+                f"A project within {context} is described in simulated "
+                f"materials by {'; '.join(clue_phrases)}. "
+                f"Which related real-world entity is reached after matching "
+                f"the project, reconciling the two project reference "
+                f"directories, checking its fictional event's eligible "
+                f"relationships against a real YAGO fork, and following "
+                f"the documented {path_phrase} relationship trail?"
+            ),
+            (
+                f"Find the real linked entity for an unidentified project "
+                f"in {context}. The simulated image, audio, video and "
+                f"catalog evidence includes {'; '.join(clue_phrases)}. "
+                f"The project's event records provide only a partial "
+                f"constraint on the two reference directories. Verify "
+                f"the corresponding secondary real-world relationship "
+                f"in YAGO before investigating {path_phrase}. "
+                f"What name do you obtain?"
+            ),
+        ]
+        slot = int(digest(spec["seed"], spec["ordinal"],
+                          "causal-hybrid-question-v4")[:8], 16) % len(variants)
+        return variants[slot]
     if spec.get("reasoning_pattern") == "typed_knowledge_v3":
         from environment.schema import digest
         from .knowledge_macro import predicate_label
@@ -141,7 +188,7 @@ def _intent_reference_question(spec: dict) -> str:
         slot = int(digest(spec["seed"], spec["ordinal"],
                           "hybrid-question-style-v3")[:8], 16) % len(choices)
         return choices[slot]
-    if spec.get("reasoning_pattern") in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}:
+    if spec.get("reasoning_pattern") in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4"}:
         plan = spec["macro_plan"]
         clues = plan["clues"]
         source_phrases = [
@@ -374,13 +421,18 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
+    if pattern == "typed_knowledge_v4":
+        if not re.search(r"\b(?:event|organizer|venue)\b", q, flags=re.I):
+            errors.append("causal_hybrid_event_relation_missing")
+        if not re.search(r"\b(?:YAGO|secondary|real-world)\b", q, flags=re.I):
+            errors.append("causal_hybrid_real_fork_missing")
     if pattern == "typed_knowledge_v3":
         if not (re.search(r"\b(?:two|both|separate|independent)\b",
                           q, flags=re.I)
                 and re.search(r"\b(?:reference|directory|directories)\b",
                               q, flags=re.I)):
             errors.append("hybrid_missing_two_source_reference_goal")
-    if pattern in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}:
+    if pattern in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4"}:
         plan = spec["macro_plan"]
         for info in plan["clues"].values():
             if info["value"].casefold() not in q.casefold():
