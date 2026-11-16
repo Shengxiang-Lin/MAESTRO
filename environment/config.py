@@ -130,7 +130,8 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
                 and generation.get("knowledge_variant") != "task_plan"):
             raise ValueError("knowledge_world_mode_compose_requires_task_plan")
         if generation.get("task_plan_composer", "legacy") not in {
-            "legacy", "goal_conditioned_typed_v2"
+            "legacy", "goal_conditioned_typed_v2",
+            "goal_conditioned_evidence_needs_v3"
         }:
             raise ValueError("unsupported_task_plan_composer")
         if (generation.get("task_plan_composer", "legacy") != "legacy"
