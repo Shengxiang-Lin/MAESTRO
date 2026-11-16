@@ -3,22 +3,20 @@
 # YAGO supplies observed relation vocabulary and world-structure statistics,
 # NOT mandatory factual paths. Recombined entities/relations are new facts
 # within the generated scenario; their synthetic origin remains private.
-# For historical YAGO-first behavior set knowledge_world_mode: witnessed.
 version: 1
 
 input:
-  mmqa: data/world-source/MultiModalQA/MMQA_train.jsonl.gz  # unused in this mode
+  mmqa: null  # current Task Plan does not consume MMQA
   max_records: 1000
 
 generation:
-  output_dir: environment/data/stage1_single_task_plan_pilot
+  output_dir: environment/data/stage1
   target: 20
   seed: 17
   difficulty_mix: [0, 50, 50]
   overwrite: false
   flush_every: 1
   no_progress: false
-  macro_planning_share: 100
   knowledge_variant: task_plan
   knowledge_world_mode: compose
   knowledge_yago: data/world-source/YAGO-4.6
