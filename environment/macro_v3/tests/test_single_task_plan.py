@@ -992,6 +992,12 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
                 "x:B s:follows x:C .\n", encoding="utf-8",
             )
             cfg = load_config("environment/configs/questions_task_plan.yaml")
+            # This is an offline deterministic fixture. Production now
+            # enables Question Author/Critic; never call a local LLM in CI.
+            cfg["question"]["api_base"] = None
+            cfg["question"]["model"] = None
+            cfg["question"]["critic_api_base"] = None
+            cfg["question"]["critic_model"] = None
             cfg["generation"]["knowledge_yago"] = str(ttl)
             cfg["generation"]["output_dir"] = str(root / "output")
             cfg["generation"]["target"] = 20
@@ -1098,6 +1104,10 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
                 ])
             ttl.write_text("\n".join(lines), encoding="utf-8")
             conf = load_config("environment/configs/questions_task_plan.yaml")
+            conf["question"]["api_base"] = None
+            conf["question"]["model"] = None
+            conf["question"]["critic_api_base"] = None
+            conf["question"]["critic_model"] = None
             conf["generation"]["knowledge_yago"] = str(ttl)
             conf["generation"]["output_dir"] = str(root/"output")
             conf["generation"]["target"] = 6
