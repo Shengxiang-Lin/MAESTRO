@@ -263,7 +263,7 @@ class DirectTaskPlanTests(unittest.TestCase):
             scanned=2,
         )
         with self.assertRaisesRegex(
-            ValueError, "no_interpretable_yago_goal"
+            ValueError, "no_goal_expressible_singleton_yago"
         ):
             make_spec(graph, seed=17, ordinal=0, difficulty="medium")
         kg = graph_fixture()
