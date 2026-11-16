@@ -31,16 +31,24 @@ def o1_initial_instruction(scene: dict) -> str:
     card = scene["public"].get("task_input")
     if card is None:
         return question
-    if card.get("version") != "macro_goal_reference_card_v1":
+    version = card.get("version")
+    if version not in {
+        "macro_goal_reference_card_v1",
+        "macro_goal_reference_card_v2",
+    }:
         raise ValueError("stage3_unknown_task_reference_card")
     lines = [
         "Provided reference materials (initial task input, not source results):"
     ]
     for obs in card["observations"]:
-        lines.append(
-            "- " + obs["modality"] + ": " + obs["feature"] + ": "
-            + str(obs["observed_value"])
-        )
+        if version == "macro_goal_reference_card_v2":
+            lines.append("- " + obs["modality"] + ": " + obs["content"])
+        else:
+            # Preserve the exact O1 rendering of already-frozen v1 cards.
+            lines.append(
+                "- " + obs["modality"] + ": " + obs["feature"] + ": "
+                + str(obs["observed_value"])
+            )
     return question + "\n\n" + "\n".join(lines)
 
 
