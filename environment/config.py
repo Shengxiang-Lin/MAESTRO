@@ -16,7 +16,10 @@ SECTIONS = {
                    "macro_planning_share",
                    "operator_grammar_share",
                    "numeric_goal_diversity_share",
-                   "question_semantic_lock_share"},
+                   "question_semantic_lock_share",
+                   "knowledge_yago", "knowledge_max_triples",
+                   "knowledge_max_edges", "knowledge_min_hops",
+                   "knowledge_max_hops"},
     "scenario": {"api_base", "model", "critic_api_base", "critic_model",
                  "api_key_env", "critic_api_key_env", "workers",
                  "max_revisions", "timeout"},
@@ -61,9 +64,14 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
     question = config["question"]
     if not data.get("mmqa"):
         raise ValueError("input.mmqa is required")
+    knowledge = generation.get("knowledge_yago")
     for section, value in (("scenario", scenario), ("question", question)):
-        if not value.get("api_base") or not value.get("model"):
+        # Knowledge-mode dry runs can disable LLM naturalization, while
+        # existing production configurations retain their strict settings.
+        if not knowledge and (not value.get("api_base") or not value.get("model")):
             raise ValueError(f"{section}.api_base and {section}.model are required")
+        if knowledge and bool(value.get("api_base")) != bool(value.get("model")):
+            raise ValueError(f"{section}.api_base_and_model_must_be_paired")
         for field in ("workers", "timeout"):
             if not isinstance(value.get(field), int) or value[field] < 1:
                 raise ValueError(f"{section}.{field} must be a positive integer")
@@ -110,6 +118,18 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
             raise ValueError("generation." + name + " must be 0..100")
         if share and not macro_first_v2_share:
             raise ValueError(name + "_requires_macro_planning")
+    if knowledge:
+        if (type(generation.get("knowledge_max_triples", 1000000)) is not int
+            or generation.get("knowledge_max_triples", 1000000) < 1
+            or type(generation.get("knowledge_max_edges", 250000)) is not int
+            or generation.get("knowledge_max_edges", 250000) < 1):
+            raise ValueError("invalid_knowledge_yago_resource_limits")
+        lo = generation.get("knowledge_min_hops", 2)
+        hi = generation.get("knowledge_max_hops", 3)
+        if not (type(lo) is int and type(hi) is int and 1 <= lo <= hi <= 5):
+            raise ValueError("invalid_knowledge_relation_hops")
+        if mix[0] != 0:
+            raise ValueError("knowledge_v1_currently_requires_no_easy_tasks")
     directory = output_dir or generation.get("output_dir")
     if not directory:
         raise ValueError("generation.output_dir is required")
@@ -124,6 +144,11 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         operator_grammar_share=operator_grammar_share,
         numeric_goal_diversity_share=numeric_goal_diversity_share,
         question_semantic_lock_share=question_semantic_lock_share,
+        knowledge_yago=_path(knowledge) if knowledge else None,
+        knowledge_max_triples=generation.get("knowledge_max_triples", 1000000),
+        knowledge_max_edges=generation.get("knowledge_max_edges", 250000),
+        knowledge_min_hops=generation.get("knowledge_min_hops", 2),
+        knowledge_max_hops=generation.get("knowledge_max_hops", 3),
         no_progress=no_progress or bool(generation.get("no_progress", False)),
         scenario_api_base=scenario["api_base"],
         scenario_model=scenario["model"],
