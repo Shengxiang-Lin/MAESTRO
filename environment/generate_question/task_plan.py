@@ -41,10 +41,13 @@ def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
     if sampling_policy == CALIBRATED:
         if difficulty not in {"medium", "hard"}:
             raise ValueError("unsupported_task_plan_difficulty")
+        # Block-wise balancing avoids accidental coupling to the
+        # parity of the Medium/Hard schedule (the old pilot inverted it).
+        selector = (seed + ordinal // 2) % 2
         mode = (
             ("trace", "event") if difficulty == "medium"
             else ("event", "verify")
-        )[(seed + ordinal) % 2]
+        )[selector]
         discoveries = 2 if difficulty == "medium" or mode == "verify" else 3
     elif sampling_policy is None:
         mode = MODES[(seed + ordinal) % len(MODES)]
@@ -332,8 +335,32 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         "the event held in or after 2025" if condition else
         "the documented project reference"
     )
+    # Select a grounded *archive domain*, not a fixed template topic.
+    # These are fictional collections; the only real historical claims
+    # remain the witnessed YAGO relation edges. Do not infer entity type.
+    route = [
+        predicate_label(fact["predicate"]).lower()
+        for fact in grounding["candidate_paths"][grounding["target_case"]]
+    ]
+    if any(
+        key in name for name in route
+        for key in ("neighbor", "location", "capital", "contained in", "twinned")
+    ):
+        topic = "regional research archive"
+    elif any(
+        key in name for name in route
+        for key in ("birth", "student", "spouse", "influenced")
+    ):
+        topic = "biographical research archive"
+    elif any(
+        key in name for name in route
+        for key in ("member", "institution", "works at", "organization")
+    ):
+        topic = "institutional research archive"
+    else:
+        topic = "cross-reference project archive"
     scenario = {
-        "topic": "project reference investigation",
+        "topic": topic,
         "setting": "a fictional project archive cross-referenced with real YAGO facts",
         "user_role": "records researcher",
         "purpose": "identify " + clause + " and trace its real-world relationship",
