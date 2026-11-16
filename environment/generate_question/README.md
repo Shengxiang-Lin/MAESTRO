@@ -89,3 +89,72 @@ World/solver is **not** yet compiled into the original
 to claim full old Stage-1 quality/Replays or Stage-2 compatibility for
 typed v3.2 outputs. This work consolidates the shared generator and
 quality foundations for the next adapter, without weakening old audits.
+
+## Canonical YAGO-backed Macro-first pilot (typed_knowledge_v1)
+
+The previous v3.x independent scene format is **not** the production entrypoint.
+This opt-in family uses the ORIGINAL `generate-questions` pipeline and its
+existing relational Gold Program, frozen Macro Compiler, FactRefs, strict
+Replay, source/edge counterfactual audits, and Stage-2 materializer.
+
+```bash
+pip install "pyoxigraph>=0.5,<0.6"
+
+python -m environment generate-questions \
+  --config environment/configs/questions_knowledge.yaml
+
+python -m environment quality \
+  --config environment/configs/questions_knowledge.yaml \
+  --scenes environment/data/stage1_knowledge_pilot/constructed/scenes.jsonl
+```
+
+For a dry run without LLM Author/Critic, the supplied YAML has null
+`scenario.model/api_base` and `question.model/api_base`. Add both
+endpoints when ready to run naturalization; a model-free question is still
+a deterministic **draft**, even if its executable quality and Replay pass.
+Use a fresh output directory when changing configuration or models.
+
+### What is implemented
+
+- YAGO 4.6 entity-to-entity relations are sampled from the supplied local
+  `data/world-source/YAGO-4.6` facts archive; no fabricated RDF assertion is
+  labeled as YAGO. A per-run adjacency and predicate index is built once.
+- A new versioned, frozen `typed_knowledge_v1` ProblemSpec records the actual
+  RDF subject/predicate/object witnesses and origin file. Historical
+  Replay is self-contained: it rederives the same World/Program from the
+  frozen spec, not from a potentially changed multi-GB dump.
+- Each task has 2–3 independent coarse Discovery Macros, each investigating
+  two separately scoped simulated source records. Identification reconciles
+  the candidates and obtains the YAGO-entity reference using a keyed index.
+- A 2–3-hop genuinely connected YAGO relationship path is investigated
+  within one or two coarse Investigation Macros (rather than always making
+  a single relation lookup into a Macro). Relation evidence uses keyed
+  access, not unrestricted full-source scans.
+- The original `program_ir` operators are unchanged:
+  `scan/filter_eq/join/unique/lookup_by_key/project`. The original
+  `compile_frozen_macro_plan`, `run_macro_tasks`, `macro_contract`,
+  `audit_scene`, `validate_replay` and Stage-2 `realize_scene` execute
+  the new family with the same interface as old Stage-1 records.
+- Deterministic question contracts require every necessary clue and the
+  single terminal linked-entity answer field. The Question Author/Critic
+  path can be enabled through the same configuration.
+
+### What is NOT implemented yet
+
+- This is **one reliably compilable, variable-sized subgrammar**, not
+  arbitrary six-role typed graphs. Verification, Comparison and more
+  sophisticated cross-wave dependencies still need typed IR/World compiler
+  support before switching the production mix.
+- The facts are real YAGO RDF, but multimodal archive cues and case
+  crosswalks are explicitly **fictional simulated evidence**; two simulated
+  cards representing one RDF assertion do not imply independent historical
+  sources. YAGO provenance is checked during sampling, whereas offline
+  replay checks the frozen witness and its checksums.
+- Current KnowledgeGraph parsing focuses on entity-to-entity facts;
+  entity types and multi-language label indexes are future work.
+- The currently supported family is graph-grounded entity retrieval,
+  not general OmniGAIA/MM-BrowseComp-style open-web multimodal reasoning.
+
+Do not change the existing `questions.yaml` or frozen V1.3/V1.4 data to
+enable this pilot. Production Stage 2–4 uses accepted old-format scene
+banks as before.

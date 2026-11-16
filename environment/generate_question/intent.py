@@ -36,6 +36,7 @@ FAMILY_OUTPUTS = {
     "evidence_answer": "Report the accession year justified by discovered evidence.",
     "macro_first": "Return the authoritative year for the uniquely resolved case.",
     "macro_first_v2": "Return the confirmed domain-specific fact for the identified case.",
+    "typed_knowledge_v1": "Name the entity reached by the documented YAGO relation path.",
 }
 STYLES = (
     ("direct_lookup", "Start with a concise direct question, not a job title."),
@@ -85,6 +86,18 @@ def intent_contract(spec: dict) -> dict:
             spec["macro_plan"]["goal"]["public_label"] +
             " for exactly the identified case."
         )
+    elif pattern == "typed_knowledge_v1":
+        plan = spec["macro_plan"]
+        constraints = [
+            "Reconcile all independent fictional dossier observations to identify one case.",
+            "Follow the documented YAGO relations from the cross-referenced entity.",
+            "Do not treat simulated dossier observations as historical YAGO facts.",
+            "Return only the final linked entity name, not intermediate identifiers.",
+        ]
+        constraints.extend(
+            f"Evidence cue: {clue['attribute']} {clue['value']}."
+            for clue in plan["clues"].values()
+        )
     else:
         constraints = list(PATTERN_CONSTRAINTS["approval"])
     if pattern == "approval":
@@ -98,7 +111,7 @@ def intent_contract(spec: dict) -> dict:
     return {
         "visual_clue": (
             applied_clues if applied_clues is not None else
-            spec["macro_plan"]["clues"] if pattern == "macro_first_v2" else None
+            spec["macro_plan"]["clues"] if pattern in {"macro_first_v2", "typed_knowledge_v1"} else None
         ),
         "acquisition_chain": None,
         "topic": spec["scenario"]["topic"],

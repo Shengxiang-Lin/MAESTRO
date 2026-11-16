@@ -9,12 +9,12 @@ import random
 from environment.schema import digest
 
 VERSION = "maestro.problem_spec.v4"
-RELATION_PATTERNS = ("approval", "macro_first_v2")
+RELATION_PATTERNS = ("approval", "macro_first_v2", "typed_knowledge_v1")
 
 FAMILIES = (
     "reconcile", "coverage_count", "eligibility", "priority",
     "chronology", "evidence_reconcile", "category_distribution",
-    "macro_first_v2",
+    "macro_first_v2", "typed_knowledge_v1",
 )
 DIFFICULTIES = ("easy", "medium", "hard")
 
@@ -168,6 +168,10 @@ def spec_issues(spec: dict) -> list[str]:
         difficulty not in {"medium", "hard"} or family != "macro_first_v2"
     ):
         errors.append("macro_first_v2_requires_medium_or_hard")
+    if pattern == "typed_knowledge_v1" and (
+        difficulty not in {"medium", "hard"} or family != "typed_knowledge_v1"
+    ):
+        errors.append("typed_knowledge_requires_medium_or_hard")
     variant = spec.get("macro_plan_variant")
     if variant is not None and (type(variant) is not int or variant not in range(4)):
         errors.append("invalid_macro_plan_variant")
@@ -185,7 +189,7 @@ def spec_issues(spec: dict) -> list[str]:
         errors.append("wrong_source_count")
     needs = spec.get("requirements", {})
     expected_answer = (
-        "macro_value" if pattern == "macro_first_v2" else
+        "macro_value" if pattern in {"macro_first_v2", "typed_knowledge_v1"} else
         "count" if family == "coverage_count" else
         "category_counts" if family == "category_distribution" else
         "single_entry" if family in {"priority", "chronology"} else
@@ -207,6 +211,9 @@ def spec_issues(spec: dict) -> list[str]:
                 errors.append("source_missing_" + key)
     if pattern == "macro_first_v2":
         from .macro_planning import validate_spec
+        errors.extend(validate_spec(spec))
+    if pattern == "typed_knowledge_v1":
+        from .knowledge_macro import validate_spec
         errors.extend(validate_spec(spec))
     if needs.get("simulation_only") is not True:
         errors.append("non_simulated_spec")

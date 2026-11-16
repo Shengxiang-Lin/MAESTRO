@@ -102,6 +102,26 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if spec.get("reasoning_pattern") == "typed_knowledge_v1":
+        plan = spec["macro_plan"]
+        clues = plan["clues"]
+        source_phrases = [
+            f"the {info['title']} shows {info['attribute']} {info['value']}"
+            for _, info in sorted(clues.items())
+        ]
+        route = " followed by ".join(
+            __import__("re").sub(r"(?<=[a-z])(?=[A-Z])", " ",
+                               item["predicate"].rsplit("/", 1)[-1])
+            for item in plan["real_facts"]
+        )
+        return (
+            "In an archival reference collection, several independent "
+            "catalog materials describe an unidentified dossier: "
+            + "; ".join(source_phrases) + ". "
+            + "Identify the dossier matching all these evidence clues "
+            + "and determine the related entity reached by following "
+            + route + ". What is the name of that related entity?"
+        )
     if (spec.get("reasoning_pattern") == "macro_first_v2"
             and spec.get("scene_realism_version")):
         return _one_output_v2_question(spec)
@@ -315,6 +335,13 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
+    if pattern == "typed_knowledge_v1":
+        plan = spec["macro_plan"]
+        for info in plan["clues"].values():
+            if info["value"].casefold() not in q.casefold():
+                errors.append("knowledge_required_clue_missing")
+        if not re.search(r"\b(?:entity|related|relation|name)\b", q, re.I):
+            errors.append("knowledge_goal_not_expressed")
     if pattern == "macro_first_v2":
         plan = spec["macro_plan"]
         mode, clues = plan["pattern"], plan["clues"]
@@ -391,7 +418,7 @@ def guard_question(question: str, spec: dict,
                 question_semantic_lock_issues,
             )
             errors.extend(question_semantic_lock_issues(q, spec))
-    else:
+    elif pattern == "approval":
         if not re.search(r"\bactive\b", q, flags=re.I):
             errors.append("active_condition_missing")
     family = spec["family"]
