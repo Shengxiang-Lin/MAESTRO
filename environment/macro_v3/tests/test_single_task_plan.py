@@ -724,65 +724,66 @@ class DirectTaskPlanTests(unittest.TestCase):
             _user_task_identity(legacy, "  " + question + "  "),
         )
 
-    def test_reference_card_v1_replay_preserves_original_world_and_o1_prompt(self):
-        from environment.generate_question.task_plan import (
-            MACRO_GOAL_QUESTION_V1, _reference_card, SALT,
-        )
+    def test_first_main_round_distinguishes_given_inputs_from_sources(self):
+        """First-round prompt must not label unqueried archives as media.
+
+        No actual media decoding occurs in this synthetic simulation. The
+        Main can see the provided observations, but not private source rows.
+        """
         from environment.base_orchestration.o1_compat import (
-            o1_initial_instruction,
+            o1_initial_instruction, o1_prompt_from_history,
         )
         from environment.schema import digest
+        from environment.generate_question.task_plan import SALT
 
         kg = graph_fixture()
         index = YagoKnowledgeIndex(kg)
-        for ordinal in (0, 1, 2, 3, 4, 5):
-            difficulty = "medium" if ordinal % 2 == 0 else "hard"
-            new_spec = make_spec(
-                kg, seed=17, ordinal=ordinal, difficulty=difficulty,
+        for ordinal in range(12):
+            spec = make_spec(
+                kg, seed=17, ordinal=ordinal,
+                difficulty="medium" if ordinal % 2 == 0 else "hard",
                 index=index, world_mode="compose",
             )
-            old_spec = deepcopy(new_spec)
-            old_spec["macro_plan"]["question_surface_policy"] = (
-                MACRO_GOAL_QUESTION_V1
+            scene = compile_and_validate(spec, reference_question(spec))
+            public = scene["public"]
+            initial = o1_initial_instruction(scene)
+            self.assertIn("INITIAL TASK INPUTS", initial)
+            self.assertIn("AVAILABLE EVIDENCE SOURCES", initial)
+            self.assertIn("not attached media", initial.lower())
+            self.assertEqual(validate_replay(scene)["status"], "valid")
+            for obs in public["task_input"]["observations"]:
+                self.assertIn(obs["content"], initial)
+                self.assertIn("[", initial)
+            for source in public["available_source_descriptions"]:
+                self.assertIn(source["source_id"], initial)
+            prompt = o1_prompt_from_history(
+                scene, "", attempt=1, max_attempts=16,
+                sub_model="qwen3-8b",
             )
-            old_spec["task_input"] = _reference_card(
-                old_spec["macro_plan"], old_spec["sources"],
-                seed=old_spec["seed"], ordinal=old_spec["ordinal"],
+            self.assertIn("No subtasks completed yet.", prompt)
+            self.assertNotIn("Multimodal Inputs:\n", prompt)
+            self.assertNotIn("Path: workspace://", prompt)
+            self.assertIn("AVAILABLE EVIDENCE SOURCES", prompt)
+            self.assertIn("INITIAL TASK INPUTS", prompt)
+            self.assertNotIn(scene["gold_answer"][0][
+                spec["macro_plan"]["goal"]["answer_field"]
+            ], prompt)
+            self.assertNotIn(
+                spec["macro_plan"]["world_binding"]["target_case"],
+                prompt,
             )
-            old_spec["knowledge_contract_hash"] = digest(
-                old_spec["macro_plan"], old_spec["knowledge_witness"],
-                old_spec["seed"], old_spec["ordinal"], SALT,
+            invalid = deepcopy(spec)
+            invalid["macro_plan"]["question_surface_policy"] = (
+                "macro_goal_reference_card_v1"
             )
-            self.assertEqual(old_spec["task_input"]["version"],
-                             MACRO_GOAL_QUESTION_V1)
-            self.assertFalse(validate_spec(old_spec))
-            old_scene = compile_and_validate(
-                old_spec, reference_question(old_spec)
+            invalid["knowledge_contract_hash"] = digest(
+                invalid["macro_plan"], invalid["knowledge_witness"],
+                invalid["seed"], invalid["ordinal"], SALT,
             )
-            new_scene = compile_and_validate(
-                new_spec, reference_question(new_spec)
-            )
-            self.assertEqual(validate_replay(old_scene)["status"], "valid")
-            for field in (
-                "world", "gold_program", "gold_trace", "gold_answer",
-                "macro_graph", "task_feedback",
-            ):
-                self.assertEqual(old_scene[field], new_scene[field], field)
-            old_obs = old_spec["task_input"]["observations"]
-            self.assertTrue(all(
-                set(item) == {"modality", "feature", "observed_value"}
-                for item in old_obs
-            ))
-            old_prompt = o1_initial_instruction(old_scene)
             self.assertIn(
-                "- " + old_obs[0]["modality"] + ": " +
-                old_obs[0]["feature"] + ": " +
-                old_obs[0]["observed_value"], old_prompt,
+                "task_plan_unversioned_reference_card",
+                validate_spec(invalid),
             )
-            new_prompt = o1_initial_instruction(new_scene)
-            self.assertIn(new_spec["task_input"]["observations"][0]["content"],
-                          new_prompt)
-            self.assertNotIn("observed_value", new_prompt)
 
     def test_world_event_links_require_a_real_upstream_key(self):
         """A wrong but valid project key must retrieve another event chain.
