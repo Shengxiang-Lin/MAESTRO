@@ -789,6 +789,84 @@ def audit_information(scene: dict) -> dict:
             substitution = {
                 "applicable": False, "tested_fields": {}, "passed": True,
             }
+    # Unlike source blocking, this checks a *valid but wrong* upstream
+    # project key and confirms that the downstream event lookup follows it
+    # to a different, nonempty answer. The event subject is frozen in World.
+    event_dependency = None
+    event_model = plan["world_binding"].get("world_model", {})
+    if event_model.get("keyed_event_relation_version"):
+        ledger = sources["event_ledger"]
+        records = {
+            (obs["values"]["project_id"], obs["values"]["event_id"]):
+                obs["values"] for obs in ledger["observations"]
+        }
+        world_links = event_model["event_links"]
+        links_match = (
+            len(records) == len(world_links)
+            and all(
+                (link["project_id"], link["event_id"]) in records
+                and all(
+                    records[(link["project_id"], link["event_id"])][field]
+                    == link[field]
+                    for field in ("event_status", "event_year")
+                )
+                for link in world_links
+            )
+        )
+        keyed_nodes = [
+            node for node in program["nodes"]
+            if node["op"] == "lookup_by_key"
+            and node["source_id"] == "event_ledger"
+            and node["input_key_field"] == "project_id"
+            and node["source_key_field"] == "project_id"
+        ]
+        source_scans = [
+            node for node in program["nodes"]
+            if node["op"] == "scan" and
+            node["source_id"] == "event_ledger"
+        ]
+        policy_ok = (
+            ledger["access_policy"] == {
+                "mode": "keyed_lookup", "key_field": "project_id",
+                "key_cardinality": "many",
+            }
+            and len(keyed_nodes) == 1 and not source_scans
+        )
+        target = plan["world_binding"]["target_case"]
+        alternative_case = next(
+            case for case in plan["world_binding"]["all_cases"]
+            if case != target
+        )
+        alternative_project = project_for_case(alternative_case)
+        altered = copy.deepcopy(sources)
+        target_record = next(
+            obs for obs in altered["entity_index"]["observations"]
+            if obs["values"]["case_id"] == target
+        )
+        target_record["values"]["project_id"] = alternative_project
+        wrong_key_answers = answer_values(
+            evaluate_program(program, sources=altered)
+        )
+        wrong_key_changes_answer = bool(
+            wrong_key_answers
+            and wrong_key_answers != scene["gold_answer"]
+        )
+        event_dependency = {
+            "source": "event_ledger",
+            "key": "project_id",
+            "world_links_match": links_match,
+            "keyed_access_enforced": policy_ok,
+            "wrong_upstream_key_changes_answer": wrong_key_changes_answer,
+            "wrong_upstream_key_result": wrong_key_answers,
+            "passed": (
+                links_match and policy_ok
+                and wrong_key_changes_answer and condition is True
+            ),
+            "scope": (
+                "Valid wrong-project counterfactual plus conditional "
+                "event selection; not an independent recovery test."
+            ),
+        }
     result = {
         "policy": "single_task_plan_counterfactual_v1",
         "passed": (
@@ -797,6 +875,7 @@ def audit_information(scene: dict) -> dict:
             and all(branches.values())
             and (fork_necessary is None or fork_necessary)
             and (required_necessary is None or required_necessary)
+            and (event_dependency is None or event_dependency["passed"])
             and (substitution is None or substitution["passed"])
         ),
         "clue_necessary": clue,
@@ -805,6 +884,8 @@ def audit_information(scene: dict) -> dict:
         "event_field_necessary": condition,
         "simulated_sources_necessary": branches,
         "real_fork_necessary": fork_necessary,
+        **({"keyed_event_dependency": event_dependency}
+           if event_dependency else {}),
         **({"required_shared_relation_necessary": required_necessary,
             "required_shared_relation_source": required["source_id"]}
            if required else {}),
