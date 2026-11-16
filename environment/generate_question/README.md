@@ -121,3 +121,39 @@ Older experimental generator modules and tests should not be used as the
 interfaces are maintained separately until their downstream dependencies are
 migrated; they are not needed to author current `task_plan + compose`
 scenes.
+
+
+## Current-only cleanup and downstream pilot
+
+The default generator remains \`task_plan + compose\`. Obsolete question
+renderers shadowed by the frozen semantic goal and the old scenario-domain
+fallback have been removed from the production Task Plan authoring path.
+Historical **other** generator families keep their exact Replay/compiler
+implementations for regression tests; they are not the current default.
+
+For newly generated homogeneous Task Plan compose scene banks,
+\`quality_report.json\` keeps general replay, graph, acquisition and
+reasoning diagnostics plus \`knowledge_world_grounding.single_task_plan\`.
+It omits empty, retired sub-generator report sections. Quality reports for
+old scene banks retain their historical schema to avoid reinterpreting
+old results as current experiments.
+
+To inspect orchestration with the same frozen 5 scenes after Stage 1:
+
+\`\`\`bash
+python -m environment naturalize-subtasks \
+  --config environment/configs/subagent_reports.yaml \
+  --scenes environment/data/stage1_current_20/questions/scenes.jsonl \
+  --output-dir environment/data/stage2_pilot_5 \
+  --max-scenes 5
+
+python -m environment generate-main-turns \
+  --config environment/configs/main_orchestration.yaml \
+  --scenes environment/data/stage1_current_20/questions/scenes.jsonl \
+  --reports environment/data/stage2_pilot_5/subtasks.jsonl \
+  --output-dir environment/data/stage3_llm_5 \
+  --max-scenes 5 --mode llm --workers 4
+\`\`\`
+
+Stage 3 authors prose for **frozen** legally dispatchable task batches; it
+does not independently discover new orchestration choices.
