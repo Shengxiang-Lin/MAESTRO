@@ -149,6 +149,26 @@ class KnowledgeCanonicalCliTests(unittest.TestCase):
             self.assertTrue(all(validate_replay(row)["status"] == "valid"
                                 for row in rows))
 
+            # Exercise the ORIGINAL user-facing generate-questions pipeline,
+            # including final quality_report and checkpoint identity, with
+            # model-free deterministic question drafts.
+            from environment.config import load_config, args_from_config
+            from environment.generate_question.pipeline import generate_questions
+            cfg = load_config("environment/configs/questions_knowledge.yaml")
+            cfg["generation"]["knowledge_yago"] = str(rdf)
+            cfg["generation"]["output_dir"] = str(root / "unified")
+            cfg["generation"]["target"] = 3
+            cfg["input"]["mmqa"] = str(root / "not-required.gz")
+            args2 = args_from_config(cfg)
+            args2.no_progress = True
+            result = generate_questions(args2)
+            self.assertEqual(result["status"], "done", result)
+            self.assertEqual(result["generated"], 3)
+            self.assertEqual(
+                json.loads((args2.output_dir / "quality_report.json").read_text())[
+                    "question_publishable"], 3,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
