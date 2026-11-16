@@ -982,11 +982,29 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 key: value for key, value in instruction["intent"].items()
                 if key not in {"sources", "difficulty", "reasoning_pattern"}
             },
-            "materials": [
-                {"title": source["title"], "modality": source["modality"],
-                 "purpose": source["purpose"]}
-                for source in spec["sources"]
-            ],
+            "materials": (
+                [{
+                    "kind": "provided_reference_materials",
+                    "modalities": sorted({
+                        item["modality"] for item in spec["task_input"][
+                            "observations"]
+                    }),
+                    "description": (
+                        "The user has supplied a separate target reference "
+                        "card; do not enumerate its observation values in "
+                        "the question or expose internal source lookups."
+                    ),
+                }] if (
+                    spec.get("reasoning_pattern") == "task_plan" and
+                    spec["macro_plan"].get("question_surface_policy") ==
+                    "macro_goal_reference_card_v1"
+                ) else [
+                    {"title": source["title"],
+                     "modality": source["modality"],
+                     "purpose": source["purpose"]}
+                    for source in spec["sources"]
+                ]
+            ),
             "style": instruction["style"],
             **({
                 "semantic_evidence_contract":
