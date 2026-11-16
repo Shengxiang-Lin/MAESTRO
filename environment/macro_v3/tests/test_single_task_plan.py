@@ -668,7 +668,8 @@ class DirectTaskPlanTests(unittest.TestCase):
             self.assertEqual(set.intersection(*candidate_sets), {target})
             rendered = o1_initial_instruction(scene)
             self.assertTrue(rendered.startswith(question + "\n\n"))
-            self.assertIn("Provided reference materials", rendered)
+            self.assertIn("INITIAL TASK INPUTS", rendered)
+            self.assertIn("AVAILABLE EVIDENCE SOURCES", rendered)
             for cue in plan["clues"].values():
                 self.assertIn(cue["value"], rendered)
             tampered = deepcopy(spec)
