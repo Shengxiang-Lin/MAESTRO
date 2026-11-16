@@ -50,6 +50,24 @@ def generate_world(spec: dict) -> dict:
     b = plan["world_binding"]
     target, cases = b["target_case"], b["all_cases"]
     paths = b["candidate_paths"]
+    composed = plan.get("knowledge_world_mode") == "compose"
+    if composed:
+        # Source views are materialized from the canonical typed World,
+        # not separate ad-hoc path/fork tables. The private projection is
+        # checked against the World by validate_spec above.
+        model = b["world_model"]
+        relation_by_case = {case: [] for case in cases}
+        for edge in model["relations"]:
+            relation_by_case[edge["case_id"]].append(edge)
+        paths = {
+            case: [{
+                key: edge[key] for key in (
+                    "subject", "predicate", "object", "object_label", "origin"
+                )
+            } for edge in sorted(relation_by_case[case],
+                                  key=lambda row: row["hop"])]
+            for case in cases
+        }
     rng = random.Random(int(digest(
         spec["seed"], spec["ordinal"], "task-plan-rows"
     )[:15], 16))
@@ -130,7 +148,8 @@ def generate_world(spec: dict) -> dict:
                      "entity_0": paths[cases[(i+1) % len(cases)]][0]["subject"]},
                 ])
             else:
-                fork = b["real_fork"]["candidate_forks"]
+                fork = (model["verification_facts"] if composed else
+                        b["real_fork"]["candidate_forks"])
                 for shift in (0, 2, 3):
                     related = cases[(i+shift) % len(cases)]
                     event_rows.append({
@@ -177,7 +196,10 @@ def generate_world(spec: dict) -> dict:
         tables["real_fork"] = [{
             "entity_0": paths[case][0]["subject"],
             "motif_object": fact["object"],
-        } for case, fact in b["real_fork"]["candidate_forks"].items()]
+        } for case, fact in (
+            model["verification_facts"] if composed else
+            b["real_fork"]["candidate_forks"]
+        ).items()]
     for hop in range(plan["hops"]):
         left = f"entity_{hop}"
         right = "answer" if hop == plan["hops"]-1 else f"entity_{hop+1}"
@@ -211,7 +233,10 @@ def generate_world(spec: dict) -> dict:
             else:
                 source_facts = {
                     fact["subject"]: fact
-                    for fact in b["real_fork"]["candidate_forks"].values()
+                    for fact in (
+                        model["verification_facts"].values() if composed else
+                        b["real_fork"]["candidate_forks"].values()
+                    )
                 }
                 key = "entity_0"
             src["evidence_kind"] = (
@@ -259,6 +284,8 @@ def generate_world(spec: dict) -> dict:
         "generation_seed": spec["seed"],
         "knowledge_witness": copy.deepcopy(spec["knowledge_witness"]),
         "value_sampling_contract": "direct_task_plan_grounding_v1",
+        **({"typed_knowledge_world": copy.deepcopy(b["world_model"])}
+           if composed else {}),
         **({"knowledge_origin": "synthetic"}
            if paths[target][0]["origin"] == "synthetic" else {}),
     }
