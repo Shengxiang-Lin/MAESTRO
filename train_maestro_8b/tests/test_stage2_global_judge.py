@@ -241,7 +241,7 @@ class GlobalJudgeTests(unittest.TestCase):
             with patch("train_maestro_8b.policy.semantic_judge.requests.post", side_effect=fake_post):
                 scores = judge.score_many(prompt, ['{"action":"complete","params":{"answer":"X"}}'])
             self.assertEqual(len(sent), 1)
-            self.assertEqual(sent[0]["messages"][0]["content"].find("GLOBAL"), -1)
+            self.assertIn("GLOBAL", sent[0]["messages"][0]["content"])
             self.assertIn("global_orchestration_quality", sent[0]["messages"][0]["content"])
             self.assertEqual(scores[0]["reward"], parse_global_judge_response(response())["reward"])
             self.assertIn(RUBRIC_VERSION, (Path(temp) / "global.jsonl").read_text())
