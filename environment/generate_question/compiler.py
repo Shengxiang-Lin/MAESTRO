@@ -390,7 +390,12 @@ def compile_frozen_macro_plan(spec: dict, program: dict,
     a declared parent Macro's terminal WorkProduct. Any hidden cross-Macro
     primitive dependency fails closed.
     """
-    if spec.get("reasoning_pattern") == "typed_knowledge_v1":
+    if spec.get("reasoning_pattern") == "typed_knowledge_v2":
+        from .knowledge_macro_v2 import (
+            validate_spec as validate_macro_first_spec,
+            compile_macro_solvers,
+        )
+    elif spec.get("reasoning_pattern") == "typed_knowledge_v1":
         from .knowledge_macro import (
             validate_spec as validate_macro_first_spec,
             compile_macro_solvers,
