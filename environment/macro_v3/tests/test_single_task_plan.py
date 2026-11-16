@@ -1,0 +1,180 @@
+"""Single Task Plan: direct witnessed YAGO grounding, no old-spec nesting."""
+from __future__ import annotations
+
+from copy import deepcopy
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from environment.generate_question.task_plan import make_spec, validate_spec
+from environment.generate_question.world import compile_program, generate_world
+from environment.generate_question.question import reference_question
+from environment.generate_question.quality import compile_and_validate, validate_replay
+from environment.implement_subtask.realize import realize_scene
+from environment.macro_v3.yago import Edge, KnowledgeGraph
+
+try:
+    import pyoxigraph  # noqa: F401
+    RDF_READY = True
+except ImportError:
+    RDF_READY = False
+
+
+def graph_fixture(n=54):
+    d, p = "https://example.org/", "http://schema.org/"
+    edges = []
+    for i in range(n):
+        person, town, region, country, institute = (
+            d+f"Person{i}", d+f"Town{i}", d+f"Region{i}",
+            d+f"Country{i}", d+f"Institution{i}",
+        )
+        edges += [
+            Edge(person, p+"birthPlace", town),
+            Edge(town, p+"containedInPlace", region),
+            Edge(region, p+"containedInPlace", country),
+            Edge(person, p+"memberOf", institute),
+        ]
+    return KnowledgeGraph(
+        edges=edges, input_file="fixture-yago-facts.ttl",
+        scanned=len(edges),
+    )
+
+
+class DirectTaskPlanTests(unittest.TestCase):
+    def test_one_plan_without_any_legacy_backbone(self):
+        graph = graph_fixture()
+        indexed = set(graph.edges)
+        seen_modes, sizes = set(), set()
+        from environment.generate_question.knowledge_macro import YagoKnowledgeIndex
+        index = YagoKnowledgeIndex(graph)
+        for ordinal in range(9):
+            spec = make_spec(graph, seed=17, ordinal=ordinal,
+                             difficulty="hard", index=index)
+            self.assertFalse(validate_spec(spec))
+            self.assertEqual(spec["reasoning_pattern"], "task_plan")
+            self.assertEqual(spec["family"], "task_plan")
+            self.assertTrue(not any(
+                "backbone" in field for field in spec
+            ))
+            self.assertFalse(any(k in spec for k in (
+                "task_first_v1_backbone", "hybrid_backbone_v3",
+                "task_first_relation_sketch", "task_first_grounding",
+            )))
+            plan = spec["macro_plan"]
+            seen_modes.add(plan["mode"])
+            sizes.add(len(plan["macro_tasks"]))
+            self.assertLessEqual(len(plan["macro_tasks"]), 9)
+            self.assertGreaterEqual(len(plan["macro_tasks"]), 4)
+            for facts in plan["world_binding"]["candidate_paths"].values():
+                for fact in facts:
+                    self.assertIn(Edge(
+                        fact["subject"], fact["predicate"], fact["object"]
+                    ), indexed)
+            if plan["mode"] == "verify":
+                fork = plan["world_binding"]["real_fork"]
+                for fact in fork["candidate_forks"].values():
+                    self.assertIn(Edge(
+                        fact["subject"], fact["predicate"], fact["object"]
+                    ), indexed)
+            question = reference_question(spec)
+            scene = compile_and_validate(spec, question)
+            self.assertEqual(validate_replay(scene)["status"], "valid")
+            self.assertEqual(compile_program(spec), scene["gold_program"])
+            self.assertEqual(generate_world(spec), scene["world"])
+            realized = realize_scene(scene, strict=True)
+            self.assertEqual(len(realized["macro_tasks"]),
+                             scene["macro_graph"]["macro_task_count"])
+            self.assertEqual(
+                scene["gold_answer"], [{
+                    "answer": plan["world_binding"]["candidate_paths"][
+                        plan["world_binding"]["target_case"]][-1][
+                            "object_label"]
+                }]
+            )
+            info = scene["difficulty_audit"]["macro_first_audit"][
+                "candidate_information_necessity"
+            ]
+            self.assertTrue(info["passed"], info)
+            self.assertTrue(all(info["clue_necessary"].values()))
+            self.assertTrue(all(info["discovery_necessary"].values()))
+            if plan["condition"]:
+                self.assertTrue(info["event_field_necessary"])
+            if plan["mode"] == "verify":
+                self.assertTrue(info["real_fork_necessary"])
+                self.assertTrue(all(info["simulated_sources_necessary"].values()))
+            else:
+                self.assertIsNone(info["real_fork_necessary"])
+        self.assertEqual(seen_modes, {"trace", "event", "verify"})
+        self.assertGreaterEqual(len(sizes), 3)
+
+    def test_spec_tamper_and_replay_fail_closed(self):
+        kg = graph_fixture()
+        spec = make_spec(kg, seed=17, ordinal=1, difficulty="medium")
+        broken = deepcopy(spec)
+        broken["macro_plan"]["macro_tasks"][-1]["depends_on"] = []
+        self.assertTrue(validate_spec(broken))
+        broken = deepcopy(spec)
+        case = broken["macro_plan"]["world_binding"]["target_case"]
+        broken["macro_plan"]["world_binding"]["candidate_paths"][case][0][
+            "object"] = "urn:fake"
+        self.assertTrue(validate_spec(broken))
+        scene = compile_and_validate(spec, reference_question(spec))
+        altered = deepcopy(scene)
+        one = next(iter(altered["world"]["sources"]))
+        altered["world"]["sources"][one]["observations"][0][
+            "values"]["cue"] = "unmatched"
+        self.assertEqual(validate_replay(altered)["status"], "invalid")
+
+
+@unittest.skipUnless(RDF_READY, "requires pyoxigraph")
+class TaskPlanCanonicalCliTests(unittest.TestCase):
+    def test_full_canonical_cli_and_quality_report(self):
+        from environment.config import load_config, args_from_config
+        from environment.generate_question.pipeline import generate_questions
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ttl = root/"yago-fixture.ttl"
+            lines = [
+                "@prefix x: <https://example.org/> .",
+                "@prefix s: <http://schema.org/> .",
+            ]
+            for i in range(54):
+                lines.extend([
+                    f"x:Person{i} s:birthPlace x:Town{i} .",
+                    f"x:Town{i} s:containedInPlace x:Region{i} .",
+                    f"x:Region{i} s:containedInPlace x:Country{i} .",
+                    f"x:Person{i} s:memberOf x:Institution{i} .",
+                ])
+            ttl.write_text("\n".join(lines), encoding="utf-8")
+            conf = load_config("environment/configs/questions_task_plan.yaml")
+            conf["generation"]["knowledge_yago"] = str(ttl)
+            conf["generation"]["output_dir"] = str(root/"output")
+            conf["generation"]["target"] = 6
+            args = args_from_config(conf)
+            args.no_progress = True
+            result = generate_questions(args)
+            self.assertEqual(result["status"], "done", result)
+            self.assertEqual(result["generated"], 6)
+            report = json.loads(
+                (args.output_dir/"quality_report.json").read_text()
+            )
+            self.assertEqual(report["replay_pass"], 6)
+            stats = report["knowledge_world_grounding"]["single_task_plan"]
+            self.assertEqual(stats["scenes"], 6)
+            self.assertEqual(stats["necessity_passed"], 6)
+            self.assertEqual(len(stats["mode_distribution"]), 3)
+            self.assertGreaterEqual(stats["macro_task_count_range"][1],
+                                    stats["macro_task_count_range"][0])
+            scenes = [
+                json.loads(x) for x in (
+                    args.output_dir/"constructed"/"scenes.jsonl"
+                ).read_text().splitlines()
+            ]
+            self.assertEqual(len(scenes), 6)
+            for scene in scenes:
+                self.assertEqual(validate_replay(scene)["status"], "valid")
+
+
+if __name__ == "__main__":
+    unittest.main()

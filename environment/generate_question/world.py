@@ -191,6 +191,9 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 
 def compile_program(spec: dict) -> dict:
     """Compile only supported Easy or Macro-first V2 task programs."""
+    if spec.get("reasoning_pattern") == "task_plan":
+        from .task_plan_runtime import compile_macro_solvers
+        return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "task_graph_first_v2":
         from .task_graph_first_v2 import compile_macro_solvers
         return compile_macro_solvers(spec)
@@ -220,6 +223,9 @@ def compile_program(spec: dict) -> dict:
 
 def generate_world(spec: dict) -> dict:
     """Versioned synthetic sources; never rewrite old private World facts."""
+    if spec.get("reasoning_pattern") == "task_plan":
+        from .task_plan_runtime import generate_world as materialize_plan
+        return materialize_plan(spec)
     if spec.get("reasoning_pattern") == "task_graph_first_v2":
         from .task_graph_first_v2 import generate_world as generate_task_first
         return generate_task_first(spec)
