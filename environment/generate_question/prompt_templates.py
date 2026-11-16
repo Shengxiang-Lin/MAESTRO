@@ -239,7 +239,10 @@ reference pointer naturally ("supplied ... descriptions" or "provided ...
 record") so the solver knows which initial materials identify the record.
 If the frozen event condition is completed, explicitly say "completed";
 if a year condition is 2025 onward, include 2025 and preserve the inclusive
-direction. For verification mode, preserve the requirement for a corroborated
+direction. Status and year are independent fields: do NOT add 'completed'
+to a year-only condition, do NOT add a year to a completed-only condition,
+and do NOT invent an event condition if none is requested.
+For verification mode, preserve the requirement for a corroborated
 reference without listing sources or checking steps.
 
 Avoid vague 'related entity' boilerplate, invented dates, external historical
