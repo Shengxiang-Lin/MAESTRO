@@ -102,6 +102,48 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if spec.get("reasoning_pattern") == "task_plan":
+        from .knowledge_macro import predicate_label
+        plan = spec["macro_plan"]
+        binding = plan["world_binding"]
+        route = [
+            predicate_label(item["predicate"])
+            for item in binding["candidate_paths"][binding["target_case"]]
+        ]
+        clues = "; ".join(
+            f"{row['attribute']} '{row['value']}' from {row['title']}"
+            for _, row in sorted(plan["clues"].items())
+        )
+        criterion = plan["condition"]
+        rule = (
+            "the project's completed event" if criterion and
+            criterion["field"] == "event_status" else
+            "the project's event recorded in or after 2025"
+            if criterion else None
+        )
+        sequence = ", followed by ".join(route)
+        title = spec["scenario"]["topic"]
+        if plan["mode"] == "trace":
+            return (
+                f"In the {title}, simulated catalog records describe an "
+                f"unidentified project using these clues: {clues}. "
+                f"For that project's real-world reference, what entity "
+                f"is reached by the documented {sequence} relationship trail?"
+            )
+        if plan["mode"] == "event":
+            return (
+                f"In the {title}, identify the fictional project described "
+                f"by {clues}. Using {rule}, what real-world entity is "
+                f"reached by following its reference through {sequence} "
+                f"in the documented YAGO relationships?"
+            )
+        return (
+            f"For the {title}, simulated records provide these clues: "
+            f"{clues}. Identify the project, reconcile its two candidate "
+            f"reference records with {rule} and the documented YAGO "
+            f"secondary relation, and follow {sequence}. "
+            f"Which related real-world entity is confirmed?"
+        )
     if spec.get("reasoning_pattern") == "task_graph_first_v2":
         from environment.schema import digest
         plan = spec["macro_plan"]
@@ -501,6 +543,19 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
+    if pattern == "task_plan":
+        plan = spec["macro_plan"]
+        for info in plan["clues"].values():
+            if info["value"].casefold() not in q.casefold():
+                errors.append("task_plan_required_clue_missing")
+        if plan["condition"]:
+            if plan["condition"]["field"] == "event_status":
+                if not re.search(r"\bcompleted\b", q, re.I):
+                    errors.append("task_plan_required_status_missing")
+            elif not re.search(r"\b2025\b", q):
+                errors.append("task_plan_required_year_missing")
+        if not re.search(r"\b(?:related|relation|entity)\b", q, re.I):
+            errors.append("task_plan_final_goal_missing")
     if pattern == "task_graph_first_v2":
         relation = spec["task_first_v2_relation_sketch"]["event_relation"]
         if relation["field"] == "event_status":
