@@ -582,14 +582,14 @@ def _supplied_reference_pointer(question: str) -> bool:
     words such as 'supplied' or unrelated mentions of a record.
     """
     object_pattern = (
-        r"(?:reference\\s+(?:cards?|materials?|records?|descriptions?|"
+        r"(?:reference\s+(?:cards?|materials?|records?|descriptions?|"
         r"notes?|sheets?|documents?)|materials?|records?|observations?|"
         r"descriptions?|notes?|documents?|cards?|photos?|photographs?|"
         r"images?|audio|recordings?|videos?|evidence)"
     )
     return bool(re.search(
-        r"\\b(?:supplied|provided|attached|enclosed|given)\\b"
-        r"(?:\\s+[\\w-]+){0,8}\\s+" + object_pattern + r"\\b",
+        r"\b(?:supplied|provided|attached|enclosed|given)\b"
+        r"(?:\s+[\w-]+){0,8}\s+" + object_pattern + r"\b",
         question, flags=re.I,
     ))
 
@@ -605,13 +605,13 @@ def _unlicensed_task_plan_condition(question: str, plan: dict) -> list[str]:
     q = question.casefold()
     condition = plan["condition"]
     status_terms = re.search(
-        r"\\b(?:completed|scheduled|cancelled|canceled)\\b", q
+        r"\b(?:completed|scheduled|cancelled|canceled)\b", q
     )
-    year_terms = re.search(r"\\b(?:19|20)\\d{2}\\b", q)
+    year_terms = re.search(r"\b(?:19|20)\d{2}\b", q)
     if condition is None:
         if re.search(
-            r"\\b(?:event|session|review)s?\\b.{0,65}\\b"
-            r"(?:completed|scheduled|cancelled|canceled|(?:19|20)\\d{2})\\b",
+            r"\b(?:event|session|review)s?\b.{0,65}\b"
+            r"(?:completed|scheduled|cancelled|canceled|(?:19|20)\d{2})\b",
             q,
         ):
             return ["task_plan_unlicensed_event_condition"]
@@ -620,17 +620,17 @@ def _unlicensed_task_plan_condition(question: str, plan: dict) -> list[str]:
         errors = []
         if year_terms:
             errors.append("task_plan_unlicensed_year_condition")
-        if re.search(r"\\b(?:not|never)\\s+completed\\b", q):
+        if re.search(r"\b(?:not|never)\s+completed\b", q):
             errors.append("task_plan_reversed_completed_status")
-        if re.search(r"\\b(?:scheduled|cancelled|canceled)\\b", q):
+        if re.search(r"\b(?:scheduled|cancelled|canceled)\b", q):
             errors.append("task_plan_conflicting_event_status")
         return errors
     errors = []
     if status_terms:
         errors.append("task_plan_unlicensed_status_condition")
-    if re.search(r"\\b(?:after|later than)\\s+2025\\b", q):
+    if re.search(r"\b(?:after|later than)\s+2025\b", q):
         errors.append("task_plan_exclusive_year_threshold")
-    if re.search(r"\\b(?:before|prior to|earlier than)\\s+2025\\b", q):
+    if re.search(r"\b(?:before|prior to|earlier than)\s+2025\b", q):
         errors.append("task_plan_reversed_year_threshold")
     return errors
 
