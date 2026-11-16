@@ -7,7 +7,13 @@ local Question LLM Author and Critic to publish user-facing questions.
 
 ## Goal-conditioned composition (v2)
 
-The default configuration selects `task_plan_composer: goal_conditioned_typed_v2`.
+The default configuration selects `task_plan_composer: goal_conditioned_evidence_needs_v3`.
+V3 samples information obligations (optional event eligibility and independent
+corroboration), checks an independently sampled source inventory, and selects
+only typed source producers satisfying the exact need. Each clue source's
+browse/keyed access is decided before building its Macro dependency.
+Existing `goal_conditioned_typed_v2` frozen Scenes replay unchanged.
+
 The semantic relationship Goal is chosen before the information acquisition
 plan. Supported source-scoped producers then form a bounded typed Macro DAG:
 clue investigations may be independent or may require upstream `case_id`

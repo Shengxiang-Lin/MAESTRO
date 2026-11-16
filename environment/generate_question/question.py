@@ -577,6 +577,68 @@ Do NOT require a user question to name every index or archive lookup.
 Only pass if all four booleans are true."""
 
 
+def _supplied_reference_pointer(question: str) -> bool:
+    """Recognize real pointers to initially supplied materials, not bare
+    words such as 'supplied' or unrelated mentions of a record.
+    """
+    object_pattern = (
+        r"(?:reference\s+(?:cards?|materials?|records?|descriptions?|"
+        r"notes?|sheets?|documents?)|materials?|records?|observations?|"
+        r"descriptions?|notes?|documents?|cards?|photos?|photographs?|"
+        r"images?|audio|recordings?|videos?|evidence)"
+    )
+    return bool(re.search(
+        r"\b(?:supplied|provided|attached|enclosed|given)\b"
+        r"(?:\s+[\w-]+){0,8}\s+" + object_pattern + r"\b",
+        question, flags=re.I,
+    ))
+
+
+def _unlicensed_task_plan_condition(question: str, plan: dict) -> list[str]:
+    """Reject explicit extra filters, preserving frozen v2 Replay behavior.
+
+    This high-precision guard checks only new v3 tasks; the independent
+    LLM Critic remains responsible for subtler semantic entailment errors.
+    """
+    if plan.get("composer_policy") != "goal_conditioned_evidence_needs_v3":
+        return []
+    q = question.casefold()
+    condition = plan["condition"]
+    status_terms = re.search(
+        r"\b(?:completed|scheduled|cancelled|canceled)\b", q
+    )
+    year_terms = re.search(r"\b(?:19|20)\d{2}\b", q)
+    if condition is None:
+        if (re.search(
+            r"\b(?:event|session|review)s?\b.{0,65}\b"
+            r"(?:completed|scheduled|cancelled|canceled|(?:19|20)\d{2})\b",
+            q,
+        ) or re.search(
+            r"\b(?:completed|scheduled|cancelled|canceled|(?:19|20)\d{2})\b"
+            r".{0,40}\b(?:event|session|review)s?\b",
+            q,
+        )):
+            return ["task_plan_unlicensed_event_condition"]
+        return []
+    if condition["field"] == "event_status":
+        errors = []
+        if year_terms:
+            errors.append("task_plan_unlicensed_year_condition")
+        if re.search(r"\b(?:not|never)\s+completed\b", q):
+            errors.append("task_plan_reversed_completed_status")
+        if re.search(r"\b(?:scheduled|cancelled|canceled)\b", q):
+            errors.append("task_plan_conflicting_event_status")
+        return errors
+    errors = []
+    if status_terms:
+        errors.append("task_plan_unlicensed_status_condition")
+    if re.search(r"\b(?:after|later than)\s+2025\b", q):
+        errors.append("task_plan_exclusive_year_threshold")
+    if re.search(r"\b(?:before|prior to|earlier than)\s+2025\b", q):
+        errors.append("task_plan_reversed_year_threshold")
+    return errors
+
+
 def guard_question(question: str, spec: dict,
                    macro_graph: dict | None = None) -> list[str]:
     """Conservative high-precision textual checks before/after the LLM Critic."""
@@ -638,11 +700,7 @@ def guard_question(question: str, spec: dict,
             errors.append("task_plan_meta_fiction_framing")
         compact = plan.get("question_surface_policy") == "macro_goal_reference_card_v2"
         if compact:
-            if not re.search(
-                r"\b(?:supplied|provided|attached)\b", q, re.I
-            ) or not re.search(
-                r"\b(?:reference materials|materials|record)\b", q, re.I
-            ):
+            if not _supplied_reference_pointer(q):
                 errors.append("task_plan_reference_material_not_identified")
             # Guard against *specific* evidence values being copied into
             # the question, not ordinary vocabulary shared by a semantic
@@ -669,6 +727,7 @@ def guard_question(question: str, spec: dict,
                     errors.append("task_plan_required_status_missing")
             elif not re.search(r"\b2025\b", q):
                 errors.append("task_plan_required_year_missing")
+        errors.extend(_unlicensed_task_plan_condition(q, plan))
         if not compact and not re.search(
             r"\b(?:related|relation|entity)\b", q, re.I
         ):

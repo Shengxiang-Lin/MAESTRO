@@ -271,6 +271,14 @@ def is_explicit_user_request(text: str) -> bool:
         normalized, re.I,
     ):
         return True
+    # A chained imperative can place its request after 'then' instead of
+    # punctuation. Keep fragments and descriptions invalid.
+    if re.search(
+        rf"\b(?:then|finally|subsequently)\s+"
+        rf"(?:please\s+)?{REQUEST_VERB}\b",
+        normalized, re.I,
+    ):
+        return True
     if re.search(
         rf"\b(?:I need to|I want to|I would like to|we need to)"
         rf"\s+(?:please\s+)?{REQUEST_VERB}\b",
