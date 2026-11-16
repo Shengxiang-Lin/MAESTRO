@@ -42,6 +42,7 @@ FAMILY_OUTPUTS = {
     "typed_knowledge_v4": "Resolve the fictional event and its genuine secondary YAGO relation before tracing the related entity.",
     "task_graph_first_v1": "Identify the project and its completed event, reconcile competing reference records and use genuine YAGO evidence to answer.",
     "task_graph_first_v2": "Select a status- or year-qualified fictional event, reconcile event-specific references and verify genuine YAGO evidence.",
+    "task_plan": "Resolve a project from simulated clues and name the entity reached by genuinely witnessed YAGO relations.",
 }
 STYLES = (
     ("direct_lookup", "Start with a concise direct question, not a job title."),
@@ -90,6 +91,30 @@ def intent_contract(spec: dict) -> dict:
             "Return the confirmed " +
             spec["macro_plan"]["goal"]["public_label"] +
             " for exactly the identified case."
+        )
+    elif pattern == "task_plan":
+        plan = spec["macro_plan"]
+        constraints = [
+            "Combine the independently simulated identifying clues.",
+            "Identify the single fictional project before following real YAGO links.",
+            "Report the related entity reached by the documented real YAGO predicates.",
+            "Fictional project and event information is not historical YAGO evidence.",
+        ]
+        condition = plan["condition"]
+        if condition:
+            constraints.append(
+                "Only completed events qualify."
+                if condition["field"] == "event_status"
+                else "Only events in or after 2025 qualify."
+            )
+        if plan["mode"] == "verify":
+            constraints.append(
+                "Combine two candidate directories, fictional event eligibility "
+                "and genuine secondary YAGO evidence."
+            )
+        constraints.extend(
+            f"Identifying observation: {item['attribute']} {item['value']}."
+            for item in plan["clues"].values()
         )
     elif pattern == "task_graph_first_v2":
         plan = spec["macro_plan"]
@@ -205,7 +230,7 @@ def intent_contract(spec: dict) -> dict:
     return {
         "visual_clue": (
             applied_clues if applied_clues is not None else
-            spec["macro_plan"]["clues"] if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2"} else None
+            spec["macro_plan"]["clues"] if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"} else None
         ),
         "acquisition_chain": None,
         "topic": spec["scenario"]["topic"],
@@ -220,7 +245,7 @@ def intent_contract(spec: dict) -> dict:
         "nonnegotiable_conditions": constraints,
         "output_contract": (
             "Return one final linked real-world entity name."
-            if pattern in {"task_graph_first_v1", "task_graph_first_v2"} else
+            if pattern in {"task_graph_first_v1", "task_graph_first_v2", "task_plan"} else
             "Return the single final real YAGO-related entity name."
             if pattern == "typed_knowledge_v4" else
             "Return the confirmed " + spec["macro_plan"]["goal"]["public_label"] +
