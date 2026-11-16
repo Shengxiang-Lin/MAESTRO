@@ -766,6 +766,14 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
             self.assertEqual(
                 stats["semantic_grounding"]["source_records_with_context"], 0,
             )
+            self.assertGreater(
+                stats["semantic_grounding"]["keyed_event_worlds"], 0
+            )
+            self.assertEqual(
+                stats["semantic_grounding"]["keyed_event_worlds"],
+                stats["semantic_grounding"][
+                    "keyed_event_wrong_key_audit_passed"],
+            )
             self.assertEqual(report["replay_pass"], 20)
 
     def test_full_canonical_cli_and_quality_report(self):
