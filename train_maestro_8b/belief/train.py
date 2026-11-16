@@ -195,7 +195,9 @@ def belief_forward(backbone, head, batch, *, device,
 
 
 def inverse_sqrt_class_weights(counts: Counter, device):
-    raw = [1.0 / math.sqrt(counts[i]) if counts[i] else 0.0
+    # Unseen classes get neutral weight for validation, not zero: otherwise
+    # validation batches containing a class absent from train can yield NaN.
+    raw = [1.0 / math.sqrt(counts[i]) if counts[i] else 1.0
            for i in range(len(CLASSES))]
     active = [v for v in raw if v > 0]
     if not active:
