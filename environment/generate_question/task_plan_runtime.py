@@ -452,16 +452,34 @@ def compile_macro_solvers(spec: dict) -> dict:
             )
             terminal = add("project", lookup, fields=["entity_0"])
         elif op in {"qualifying_event", "event_eligibility"}:
-            scanned = add("scan", source_id="event_ledger")
+            # New composed event Worlds use a true dependent retrieval:
+            # the project_id must arrive with provenance from the previous
+            # identification Macro. Historical scenes still scan+join.
+            keyed = (
+                plan.get("knowledge_world_mode") == "compose"
+                and plan["world_binding"]["world_model"].get(
+                    "keyed_event_relation_version"
+                ) is not None
+            )
+            if keyed:
+                observed = add(
+                    "lookup_by_key", parents[0], source_id="event_ledger",
+                    input_key_field="project_id", source_key_field="project_id",
+                )
+            else:
+                observed = add("scan", source_id="event_ledger")
             condition = plan["condition"]
             filtered = add(
-                condition["op"], scanned, field=condition["field"],
+                condition["op"], observed, field=condition["field"],
                 value=condition["value"],
             )
-            linked = add(
-                "join", parents[0], filtered,
-                left_on="project_id", right_on="project_id",
-            )
+            if keyed:
+                linked = filtered
+            else:
+                linked = add(
+                    "join", parents[0], filtered,
+                    left_on="project_id", right_on="project_id",
+                )
             fields = ["event_id"] if op == "qualifying_event" else [
                 "motif_object"
             ]
