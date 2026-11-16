@@ -196,6 +196,8 @@ def construct_scenes(args) -> dict:
             max_triples=args.knowledge_max_triples,
             max_edges=args.knowledge_max_edges,
         )
+        from .knowledge_macro import YagoKnowledgeIndex
+        knowledge_index = YagoKnowledgeIndex(knowledge_graph)
         seeds = [
             {"topic": "archival reference collection",
              "record_id": f"knowledge-{i:06d}"} for i in range(args.target)
@@ -244,6 +246,7 @@ def construct_scenes(args) -> dict:
                     difficulty=sequence[ordinal],
                     min_hops=args.knowledge_min_hops,
                     max_hops=args.knowledge_max_hops,
+                    index=knowledge_index,
                 )
             else:
                 spec = make_spec(
