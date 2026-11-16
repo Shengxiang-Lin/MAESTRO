@@ -48,7 +48,13 @@ def run_pipeline(
     questions = generate_questions(questions_args)
     if questions.get("status") not in {"done", "partial"}:
         raise RuntimeError("stage1_not_accepted:" + str(questions.get("status")))
-    scenes_path = questions_args.output_dir / "questions" / "scenes.jsonl"
+    # Stage 1 publishes constructed/ when Question LLM authoring is off,
+    # and questions/ when it is enabled. Use the authoritative manifest
+    # field rather than guessing an obsolete fixed subdirectory.
+    final_scenes = questions.get("final_scenes")
+    if not isinstance(final_scenes, str) or not final_scenes:
+        raise RuntimeError("stage1_summary_missing_final_scenes")
+    scenes_path = Path(final_scenes)
     if not scenes_path.is_file():
         raise FileNotFoundError("stage1_did_not_publish_scenes")
 
