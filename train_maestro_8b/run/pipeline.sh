@@ -12,7 +12,7 @@ STAGE1_DIR="${STAGE1_DIR:-$ROOT/environment/data/stage1}"
 STAGE4_DIR="${STAGE4_DIR:-$ROOT/environment/data/stage4}"
 RUN_ROOT="${RUN_ROOT:-$ROOT/workspace/maestro_8b}"
 STAGE2_TRAINER="${STAGE2_TRAINER:-da}"     # da (default) or riskkv
-DA_REWARD_MODE="${DA_REWARD_MODE:-hybrid}"  # hybrid | deterministic | judge_only | da
+DA_REWARD_MODE="${DA_REWARD_MODE:-global}"  # global | hybrid | deterministic | judge_only | da
 DA_DATA="${DA_DATA:-$RUN_ROOT/stage2_da}"
 DA_GRPO_CKPT="${DA_GRPO_CKPT:-$RUN_ROOT/checkpoints/stage2-${DA_REWARD_MODE}-grpo}"
 DA_PILOT_CKPT="${DA_PILOT_CKPT:-$RUN_ROOT/checkpoints/stage2-${DA_REWARD_MODE}-pilot}"
@@ -59,7 +59,7 @@ GRPO_JUDGE_WORKERS="${GRPO_JUDGE_WORKERS:-4}"
 GRPO_JUDGE_TIMEOUT="${GRPO_JUDGE_TIMEOUT:-90}"
 GRPO_JUDGE_RETRIES="${GRPO_JUDGE_RETRIES:-2}"
 GRPO_JUDGE_WEIGHT="${GRPO_JUDGE_WEIGHT:-0.4}"
-GRPO_JUDGE_CACHE_JSONL="${GRPO_JUDGE_CACHE_JSONL:-$RUN_ROOT/semantic_judge_cache.jsonl}"
+GRPO_JUDGE_CACHE_JSONL="${GRPO_JUDGE_CACHE_JSONL:-$RUN_ROOT/judge_cache_${STAGE2_TRAINER}_${DA_REWARD_MODE}.jsonl}"
 GRPO_ZERO_ADV_SFT_WEIGHT="${GRPO_ZERO_ADV_SFT_WEIGHT:-0.25}"
 GRPO_SFT_WARMUP="${GRPO_SFT_WARMUP:-0}"
 GRPO_SFT_WARMUP_SAMPLES="${GRPO_SFT_WARMUP_SAMPLES:-0}"
@@ -102,7 +102,7 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
   help          This help
 
 Override settings via environment variables or run/config.env:
-  STAGE2_TRAINER (da|riskkv), DA_REWARD_MODE (hybrid|deterministic|judge_only|da),
+  STAGE2_TRAINER (da|riskkv), DA_REWARD_MODE (global|hybrid|deterministic|judge_only|da),
   DA_DATA, DA_GRPO_CKPT, DA_PILOT_CKPT,
   DA_PILOT_STEPS, DA_PILOT_ROWS, DA_PILOT_NEW_TOKENS, DA_REVIEWED_ONLY,
   MODEL, STAGE1_DIR, STAGE4_DIR, RUN_ROOT, MAX_LENGTH,
@@ -225,6 +225,9 @@ prepare_grpo() {
     if [[ "$DA_REWARD_MODE" != "da" ]]; then
       need "$REWARD_STATES"
     fi
+    if [[ "$DA_REWARD_MODE" == "global" ]]; then
+      need "$STAGE4_DIR/private/claim_state_supervision.jsonl"
+    fi
     if [[ "$SKIP_COMPLETED" == "1" && -s "$DA_DATA/train.parquet" && -f "$DA_DATA/summary.json" ]] &&
       python - "$DA_DATA/summary.json" "$STAGE1_DIR/questions/scenes.jsonl" "$STAGE4_DIR/main_turns.jsonl" <<'PY'
 import hashlib,json,sys
@@ -303,6 +306,8 @@ init_stage2_da_args() {
     --judge_workers "$GRPO_JUDGE_WORKERS"
     --reward_mode "$DA_REWARD_MODE"
     --decision_states "$REWARD_STATES"
+    --scenes_file "$STAGE1_DIR/questions/scenes.jsonl"
+    --claim_states "$STAGE4_DIR/private/claim_state_supervision.jsonl"
     --judge_weight "$GRPO_JUDGE_WEIGHT"
     --judge_timeout "$GRPO_JUDGE_TIMEOUT"
     --judge_retries "$GRPO_JUDGE_RETRIES"

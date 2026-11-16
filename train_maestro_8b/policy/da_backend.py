@@ -4,8 +4,8 @@ This is a Stage-2-owned entrypoint. For the first stable GRPO baseline, use
 the already tested DA implementation as a library without modifying it:
 - Unsloth FastLanguageModel BF16 LoRA + colocated vLLM
 - Qwen3 Chat Template and TRL GRPOTrainer, DAPO + 0.01 KL
-- Native MAESTRO environment reward + semantic Judge (default 0.6/0.4)
-- Original DA 4D Judge remains an explicit comparison-only reward mode.
+- Global Evidence & Recovery LLM Judge (default): graph+visible facts+recovery
+- Legacy MAESTRO hybrid 0.6/0.4 and DA 4D Judge kept as explicit ablations.
 Private decision states are loaded by the reward only, never by the policy.
 """
 from __future__ import annotations
@@ -140,12 +140,28 @@ def train_stage2(cfg: dict, baseline, *, resume: str | None, args):
             num_generations=cfg["rollout"]["num_generations"],
         )
     else:
-        judge = make_semantic_judge(args, cfg) if args.reward_mode != "deterministic" else None
+        global_contexts = None
+        if args.reward_mode == "global":
+            from train_maestro_8b.policy.global_judge_context import load_global_contexts
+            global_contexts, audit = load_global_contexts(
+                scenes_path=args.scenes_file,
+                claim_states_path=args.claim_states,
+                private_states=private_states, rows=rows,
+            )
+            print("[MAESTRO/Stage2] global evidence context: " +
+                  json.dumps(audit, ensure_ascii=False), flush=True)
+        judge = (
+            make_global_judge_instance(args, cfg)
+            if args.reward_mode == "global" else
+            make_semantic_judge(args, cfg)
+            if args.reward_mode != "deterministic" else None
+        )
         reward_function = make_stage2_reward_function(
             private_states=private_states, prompts=prompt_lookup(rows),
             mode=args.reward_mode, judge=judge, judge_weight=args.judge_weight,
             num_generations=cfg["rollout"]["num_generations"],
             diagnostics_path=cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl",
+            global_contexts=global_contexts,
         )
     print(f"[MAESTRO/Stage2] {len(rows)} Stage4 Main decisions; "
           f"batch_plan={baseline.batch_plan(cfg)}", flush=True)
@@ -205,15 +221,39 @@ def make_semantic_judge(args, cfg):
     )
 
 
+def make_global_judge_instance(args, cfg):
+    """Version-separated reward-only full graph / factual evidence Judge."""
+    from train_maestro_8b.policy.global_judge import make_global_judge
+    cache = args.judge_cache_jsonl or str(
+        cfg["paths"]["output_dir"] / "global_judge_cache.jsonl"
+    )
+    return make_global_judge(
+        registry_path=cfg["judge"]["registry"],
+        model=cfg["judge"]["model"],
+        api_key_env=cfg["judge"]["api_key_env"],
+        workers=cfg["judge"]["workers"],
+        timeout=args.judge_timeout, retries=args.judge_retries,
+        cache_path=cache,
+    )
+
+
 def verify_private_reward_data(args, cfg, baseline):
     from train_maestro_8b.policy.trl_reward_adapter import (
         load_private_states, select_scorable_rows,
     )
     states = load_private_states(args.decision_states)
     rows = baseline.load_dataset_rows(cfg["paths"]["train_parquet"])
-    _, summary = select_scorable_rows(rows, states)
+    rows, summary = select_scorable_rows(rows, states)
     print("[MAESTRO/Stage2] private reward alignment: " +
           json.dumps(summary, ensure_ascii=False), flush=True)
+    if args.reward_mode == "global":
+        from train_maestro_8b.policy.global_judge_context import load_global_contexts
+        _, audit = load_global_contexts(
+            scenes_path=args.scenes_file, claim_states_path=args.claim_states,
+            private_states=states, rows=rows,
+        )
+        print("[MAESTRO/Stage2] global preflight: " +
+              json.dumps(audit, ensure_ascii=False), flush=True)
 
 
 def run(args):
@@ -242,17 +282,31 @@ def run(args):
         key = baseline.judge_key(cfg["judge"]["api_key_env"])
         baseline.setup_judge(cfg, key)
         baseline.probe_judge(cfg, key)
-    elif args.reward_mode in ("hybrid", "judge_only"):
-        judge = make_semantic_judge(args, cfg)
+    elif args.reward_mode in ("global", "hybrid", "judge_only"):
+        judge = (make_global_judge_instance(args, cfg)
+                 if args.reward_mode == "global" else make_semantic_judge(args, cfg))
         if args.test_judge:
-            # Make a fresh, uncached live request to verify the rubric output.
+            # Probe exact rubric and schema without GPU, not a training rollout.
+            visible_prompt = "User asks for project status. No reports have returned yet."
+            if args.reward_mode == "global":
+                from train_maestro_8b.policy.global_judge import build_global_judge_prompt
+                from train_maestro_8b.policy.global_judge_context import SCHEMA
+                visible_prompt = build_global_judge_prompt(visible_prompt, {
+                    "schema": SCHEMA, "decision_round": 1,
+                    "task_graph": {"tasks": [{"task_id": "A", "depends_on": []}]},
+                    "scheduling_reference": {"max_parallel_tasks": 2,
+                                             "currently_feasible_goals": [{"task_id": "A"}]},
+                    "observed_evidence": {"claim_nodes": [], "claim_states": []},
+                    "recovery_reference": {"observable_issues": []},
+                    "evaluator_only_reference": {},
+                })
             result = judge._request(
-                "A Main-Agent has not yet received enough evidence to answer.",
+                visible_prompt,
                 '{"action":"delegate_task","reasoning":"Find missing evidence",'
-                '"params":{"tasks":[{"task_instruction":"Verify the missing'
-                ' evidence.","model":"model_1","tools":["GoogleSearchAction"]}]}}',
+                '"params":{"tasks":[{"task_instruction":"Verify missing'
+                ' evidence","model":"model_1","tools":["GoogleSearchAction"]}]}}',
             )
-            print("[MAESTRO/Stage2] semantic Judge HTTP OK: " +
+            print("[MAESTRO/Stage2] " + args.reward_mode + " Judge HTTP OK: " +
                   json.dumps(result, ensure_ascii=False), flush=True)
     elif args.test_judge:
         print("[MAESTRO/Stage2] deterministic reward requires no LLM Judge")
@@ -276,6 +330,8 @@ def run(args):
                            else f"environment_weight={1-args.judge_weight};semantic_weight={args.judge_weight}" if args.reward_mode == "hybrid"
                            else args.reward_mode),
         "decision_states": str(args.decision_states) if args.reward_mode != "da" else None,
+        "global_scene_file": str(args.scenes_file) if args.reward_mode == "global" else None,
+        "global_claim_states": str(args.claim_states) if args.reward_mode == "global" else None,
         "data_source": str(cfg["paths"]["train_parquet"]),
         "num_generations": cfg["rollout"]["num_generations"],
         "max_prompt_tokens": cfg["rollout"]["max_prompt_tokens"],
@@ -317,9 +373,13 @@ def main(argv=None):
     p.add_argument("--judge_api_key_env", default="DASHSCOPE_API_KEY")
     p.add_argument("--judge_workers", type=int, default=4)
     p.add_argument("--reward_mode",
-                   choices=("hybrid", "deterministic", "judge_only", "da"),
-                   default="hybrid",
-                   help="Stage2 native hybrid is the default; da=old 4D baseline ablation")
+                   choices=("global", "hybrid", "deterministic", "judge_only", "da"),
+                   default="global",
+                   help="global=full evidence+recovery LLM Judge; hybrid=old strict local gate")
+    p.add_argument("--scenes_file",
+                   default="environment/data/stage1/questions/scenes.jsonl")
+    p.add_argument("--claim_states",
+                   default="environment/data/stage4/private/claim_state_supervision.jsonl")
     p.add_argument("--decision_states",
                    default="environment/data/stage4/private/decision_reward_states.jsonl",
                    help="Local private pre-action state sidecar, never sent to policy/Judge")

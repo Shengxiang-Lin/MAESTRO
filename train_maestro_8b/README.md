@@ -1,4 +1,43 @@
-## Main Stage 2 training: native Environment + Semantic Judge reward
+## Current default Stage2 reward: Global Evidence & Recovery LLM Judge
+
+Set `DA_REWARD_MODE=global` (the default). The student generates the
+**same Orchestra-o1 one-round `delegate_task` or `complete` JSON** using
+the existing Unsloth/TRL/vLLM training backend. Its policy prompt does
+**not** contain private task graphs, ground-truth facts or future results.
+
+The new judge has evaluator-only reference information:
+1. Full Stage1 Macro Graph, sources, dependencies and current feasible
+   evidence goals from Stage4 pre-action snapshots;
+2. Actual returned Stage4 claim values, provenance, conflicts, missing
+   evidence and version/dependency edges from
+   `private/claim_state_supervision.jsonl`;
+3. Source World reference facts **only for previously reported sources**
+   and the synthetic reference answer. The rubric requires visible
+   evidence to justify a Main decision: future or hidden source values
+   cannot be counted as Main observations.
+
+Each structurally valid Action is **scored independently**, with no
+groupwise ranking and no exact-field-string binding gate:
+`0.10(format) + 0.15(task/tool) + 0.15(evidence) + 0.25(recovery) +
+0.35(global scheduling)`.
+The four semantic dimensions are scored 0..10 by the LLM Judge.
+Malformed JSON, invalid O1 structural fields or empty completion answers
+remain -1. Tools and context are optional per the O1 contract. The old
+deterministic `score_decision()` is retained only as a nonbinding
+`legacy_env_reason` diagnostic in global mode.
+
+Use `bash train_maestro_8b/run/pipeline.sh preflight` before GPU
+training to verify the exact Scene / Stage4 claim snapshot alignment.
+Old `DA_REWARD_MODE=hybrid`, `deterministic`, `judge_only` and `da`
+remain available for controlled ablations. Reward-specific checkpoint
+and cache paths are isolated by mode.
+
+See `train_maestro_8b/run/README.md` for exact commands, safety and
+failure checks.
+
+---
+
+## Legacy Hybrid Stage2 reward (DA_REWARD_MODE=hybrid)
 
 The main Stage2 **generation/training framework stays exactly the working
 DA-style Unsloth + TRL GRPOTrainer + Qwen3 Chat Template + colocated vLLM**.
