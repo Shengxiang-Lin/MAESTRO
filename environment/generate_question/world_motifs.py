@@ -375,7 +375,7 @@ def _entity_name(role: str, case_index: int, node_index: int,
 
 def compose_typed_world(graph, index, *, recipe: tuple,
                         cases: list[str], seed: int, ordinal: int,
-                        required_excluded_case: str | None = None) -> tuple:
+                        required_excluded_cases: list[str] | None = None) -> tuple:
     """Rewire real relation *types* into a new, coherent fictional KG.
 
     All source entities and assertions in the new graph are distinct from
@@ -460,10 +460,13 @@ def compose_typed_world(graph, index, *, recipe: tuple,
     # belongs to another institution/archive volume; other candidates share
     # the same entity. This preserves counterfactual necessity for ALL other
     # clue sources without inventing a new Macro or a new executor.
-    if required_excluded_case is not None and required_excluded_case not in cases:
-        raise ValueError("required_relation_shadow_missing_from_world")
+    exclusions = set(required_excluded_cases or ())
+    if (required_excluded_cases is not None
+            and (not exclusions or exclusions == set(cases)
+                 or not exclusions <= set(cases))):
+        raise ValueError("invalid_required_relation_exclusion_set")
     group_count = (
-        2 if required_excluded_case is not None
+        2 if required_excluded_cases is not None
         else max(2, (len(cases) + 2) // 3)
     )
     groups = {}
@@ -509,8 +512,8 @@ def compose_typed_world(graph, index, *, recipe: tuple,
         })
     for case_index, case in enumerate(cases):
         group = (
-            (1 if case == required_excluded_case else 0)
-            if required_excluded_case is not None
+            (1 if case in exclusions else 0)
+            if required_excluded_cases is not None
             else case_index % group_count
         )
         anchor_id, site_id = groups[group]
@@ -527,7 +530,7 @@ def compose_typed_world(graph, index, *, recipe: tuple,
             "object_type": entity_rows[anchor_id]["type"],
             "origin": "synthetic",
             "scope": ("required_clue"
-                      if required_excluded_case is not None
+                      if required_excluded_cases is not None
                       else "context_only"),
         })
         context_by_case[case] = {
@@ -554,7 +557,7 @@ def compose_typed_world(graph, index, *, recipe: tuple,
         ],
         "shared_context_group_count": group_count,
         "shared_context_case_count": len(context_by_case),
-        "required_shared_association": required_excluded_case is not None,
+        "required_shared_association": required_excluded_cases is not None,
         "composition": "typed_semantic_motifs_rewired_to_new_entities",
         "actual_yago_assertions_reused": False,
     }
@@ -639,7 +642,14 @@ def validate_composed_world(binding: dict) -> list[str]:
                 target, excluded = (
                     binding["target_case"], required["excluded_case"]
                 )
-                if (excluded not in mapping or excluded == target
+                excluded_set = set(required.get("excluded_cases", ()))
+                expected_exclusions = {
+                    case for case, slot in binding["case_shadow_slots"].items()
+                    if slot is None or slot == required["source_slot"]
+                }
+                if (excluded not in excluded_set
+                        or target in excluded_set
+                        or excluded_set != expected_exclusions
                         or required["field"] != "cue"
                         or required["target_anchor_id"] !=
                             mapping[target]["anchor_id"]
@@ -652,14 +662,17 @@ def validate_composed_world(binding: dict) -> list[str]:
                         or mapping[excluded]["anchor_id"] ==
                             mapping[target]["anchor_id"]
                         or any(
-                            item["anchor_id"] != mapping[target]["anchor_id"]
+                            item["anchor_id"] != (
+                                mapping[excluded]["anchor_id"]
+                                if case in excluded_set
+                                else mapping[target]["anchor_id"]
+                            )
                             for case, item in mapping.items()
-                            if case != excluded
                         )):
                     return ["composed_world_required_relation_not_unique_shadow"]
                 if (len(group_uses) != 2 or
                         group_uses[mapping[target]["anchor_id"]] !=
-                        len(paths)-1):
+                        len(paths)-len(excluded_set)):
                     return ["composed_world_required_relation_bad_sharing"]
             elif len(group_uses) < 2 or min(group_uses.values()) < 2:
                 return ["composed_world_context_not_shared"]
