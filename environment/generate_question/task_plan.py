@@ -196,8 +196,10 @@ def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
     if world_mode == "compose":
         for task in tasks:
             task["relation_need"] = task["relation_need"].replace(
-                "real YAGO", "recorded").replace(
-                "genuine YAGO", "documented")
+                "real YAGO", "documented").replace(
+                "genuine YAGO", "documented").replace(
+                "fictional", "recorded").replace(
+                "simulated", "independent")
             task["evidence_plan"]["description"] = task["relation_need"]
     elif world_mode != "witnessed":
         raise ValueError("unknown_task_plan_world_mode")
@@ -693,12 +695,12 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
                 "attribute": attr, "source_slot": 2*i+j,
                 "title": title,
             }
-            source(sid, modality, title+" (simulated)",
-                   "Find fictional dossier candidates by an observed clue",
+            source(sid, modality, title,
+                   "Find dossier candidates by an observed clue",
                    {"case_id": "str", "cue": "str"})
     source("entity_index", "table",
            "Dossier identity crosswalk" if context else "Project identity crosswalk",
-           "Map the identified fictional dossier to one named project",
+           "Map the identified dossier to one named project",
            {"case_id": "str", "project_id": "str", "project_name": "str"},
            key="case_id")
     mode = plan["mode"]
@@ -706,9 +708,8 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
         "origin"] == "synthetic"
     if mode == "trace":
         source("project_ref", "text",
-               "Fictional subject reference register" if fictional
-               else "Project YAGO reference register",
-               "Resolve the project's documented real entity",
+               "Project subject reference register",
+               "Resolve the project's documented entity",
                {"project_id": "str", "entity_0": "str"}, key="project_id")
     if mode in {"event", "verify"}:
         schema = {"project_id": "str", "event_id": "str",
@@ -721,33 +722,25 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
                schema)
     if mode == "event":
         source("event_ref", "text",
-               "Event-specific fictional subject reference" if fictional
-               else "Event-specific YAGO reference",
+               "Event-specific subject reference",
                "Follow the selected event's independently indexed entity",
                {"event_id": "str", "entity_0": "str"}, key="event_id")
     if mode == "verify":
         for sid in ("link_a", "link_b"):
-            source(sid, "text", f"Simulated project reference hypotheses {sid[-1].upper()}",
-                   "Investigate competing fictional source claims",
+            source(sid, "text", f"Project reference report {sid[-1].upper()}",
+                   "Investigate competing source claims",
                    {"project_id": "str", "route_key": "str", "entity_0": "str"})
         source("real_fork", "text",
-               "Independent simulated registry relationship" if fictional
-               else "Actual YAGO secondary relation",
-               "Verify a separately recorded fictional registry link"
-               if fictional else
-               "Verify the candidate entity's genuine secondary YAGO fact",
+               "Secondary registry relationship",
+               "Check the candidate against the independent registry record",
                {"entity_0": "str", "motif_object": "str"}, key="entity_0")
     facts = grounding["candidate_paths"][grounding["target_case"]]
     for i, fact in enumerate(facts, 1):
         input_key = f"entity_{i-1}"
         output_key = "answer" if i == plan["hops"] else f"entity_{i}"
         source(f"relation_{i}", "text",
-               (f"Simulated {predicate_label(fact['predicate'])} relation"
-                if fictional else
-                f"YAGO {predicate_label(fact['predicate'])} relation"),
-               ("Look up the fictional relation within the scenario"
-                if fictional else
-                "Look up the real YAGO relation required by the goal"),
+               f"{predicate_label(fact['predicate'])} relationship index",
+               "Look up the documented relationship required by the goal",
                {input_key: "str", output_key: "str"}, key=input_key)
     expected = Counter(
         sid for t in plan["macro_tasks"] for sid in t["source_scope"]
@@ -796,6 +789,10 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     )
     if fictional:
         plan["knowledge_origin"] = "synthetic"
+    if world_mode == "compose":
+        plan["goal"]["meaning"] = (
+            "Determine the entity at the end of the documented relation chain"
+        )
     condition = plan["condition"]
     clause = (
         "the completed event" if condition and
@@ -814,22 +811,18 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         scenario = {
             "topic": topics[semantic["domain"]],
             "setting": (
-                "an entirely fictional archive with internally consistent "
-                "recorded entity relationships" if fictional else
-                "a fictional archive cross-referenced with "
-                "genuinely witnessed YAGO relationships"
+                "a research archive with personnel files, field records "
+                "and independently maintained reference registers"
             ),
-            "user_role": "archive investigator",
+            "user_role": "archive researcher",
             "purpose": ("identify " + clause + " and determine the "
                         + semantic["answer_type_hint"]
                         + " specified by the recorded relationships"),
             "motivation": (
-                "reconcile independent simulated records within a "
-                "fictional knowledge world" if fictional else
-                "reconcile simulated dossier evidence before "
-                "answering one interpretable real-world relation goal"
+                "resolve inconsistent or incomplete references across "
+                "separate archival records"
             ),
-            "entity_kind": "fictional archive dossier",
+            "entity_kind": "archive dossier",
         }
     else:
         # Select a grounded *archive domain*, not a fixed template topic.
