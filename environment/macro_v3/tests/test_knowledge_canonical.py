@@ -164,9 +164,16 @@ class KnowledgeCanonicalCliTests(unittest.TestCase):
             result = generate_questions(args2)
             self.assertEqual(result["status"], "done", result)
             self.assertEqual(result["generated"], 3)
+            final_quality = json.loads(
+                (args2.output_dir / "quality_report.json").read_text()
+            )
+            self.assertEqual(final_quality["question_publishable"], 3)
             self.assertEqual(
-                json.loads((args2.output_dir / "quality_report.json").read_text())[
-                    "question_publishable"], 3,
+                final_quality["knowledge_world_grounding"]["scenes"], 3
+            )
+            self.assertEqual(
+                final_quality["knowledge_world_grounding"][
+                    "all_handoffs_necessary"], 3
             )
 
 
