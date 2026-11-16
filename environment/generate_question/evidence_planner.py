@@ -265,3 +265,164 @@ def materialize_world(spec: dict) -> dict:
         spec["knowledge_witness"]
     )
     return original
+
+
+def audit_information_necessity(scene: dict) -> dict:
+    """Bounded executable necessity audit over a task-FIRST evidence graph.
+
+    Test removal of any clue, whole Discovery, either directory constraint,
+    real RDF fork sensitivity, and the REQUIRED completed-event status
+    field. Counterfactuals must yield >1 distinct *executable* real
+    answers, never merely a blocked/empty program.
+    """
+    from .program_ir import evaluate_program, answer_values
+
+    spec, program, sources = (
+        scene["problem_spec"], scene["gold_program"],
+        scene["world"]["sources"],
+    )
+    plan = spec["macro_plan"]
+    evidence = spec["task_first_evidence"]
+    target = plan["target_case"]
+    answer = scene["gold_answer"][0]["answer"]
+    parent = next(row for row in plan["macro_tasks"]
+                  if row["information_operation"] == "identify")
+    actual = next(row for row in scene["task_feedback"]
+                  if row["task_id"] == "work_" + parent["macro_id"])
+    unique_identity = (
+        actual["result_rows"] == 1
+        and actual["workproduct"][0]["values"]["project_id"] ==
+        plan["synthetic_entities"][target]["entity_id"]
+    )
+    by_id = {node["id"]: node for node in program["nodes"]}
+    cue_ids, status_id = {}, None
+    for node in program["nodes"]:
+        if node["op"] != "filter_eq":
+            continue
+        if node.get("field") == "cue":
+            upstream = by_id[node["inputs"][0]]
+            cue_ids[upstream["source_id"]] = node["id"]
+        elif node.get("field") == "event_status":
+            if status_id is not None:
+                raise ValueError("multiple_event_status_filters")
+            status_id = node["id"]
+    if set(cue_ids) != set(plan["clues"]) or status_id is None:
+        raise ValueError("task_graph_first_missing_required_primitive_filters")
+    def alternative(rows):
+        distinct = {record["answer"] for record in rows}
+        return len(distinct) >= 2 and answer in distinct
+
+    def execute(*, changed_sources=None, loosen_cues=(), drop_status=False):
+        derived = copy.deepcopy(program)
+        loose = {cue_ids[sid] for sid in loosen_cues}
+        for node in derived["nodes"]:
+            if node["id"] in loose:
+                oid, parents = node["id"], list(node["inputs"])
+                node.clear()
+                node.update({
+                    "id": oid, "op": "project",
+                    "inputs": parents, "fields": ["case_id", "cue"],
+                })
+            elif drop_status and node["id"] == status_id:
+                oid, parents = node["id"], list(node["inputs"])
+                node.clear()
+                node.update({
+                    "id": oid, "op": "project",
+                    "inputs": parents,
+                    "fields": list(sources["event_ledger"]["schema"]),
+                })
+        return answer_values(evaluate_program(
+            derived, sources=changed_sources
+                if changed_sources is not None else sources,
+        ))
+
+    clue_results = {
+        sid: alternative(execute(loosen_cues=(sid,)))
+        for sid in cue_ids
+    }
+    discovery_results = {
+        node["macro_id"]: alternative(execute(
+            loosen_cues=node["source_scope"]
+        ))
+        for node in plan["macro_tasks"]
+        if node["role"] == "discovery"
+    }
+    fully_relaxed = execute(loosen_cues=cue_ids)
+    status_without_filter = execute(drop_status=True)
+
+    cases = plan["all_cases"]
+    target_index = cases.index(target)
+    project = plan["synthetic_entities"][target]["entity_id"]
+    anchors = {
+        case: plan["candidate_paths"][case][0]["subject"]
+        for case in cases
+    }
+    main_event = evidence["main_event_records"][target][0]["event_id"]
+    broken_directory_checks = {}
+    for sid, shift in (("link_a", 3), ("link_b", 2)):
+        changed = copy.deepcopy(sources)
+        real_uri = anchors[cases[(target_index+shift) % len(cases)]]
+        from .hybrid_world import _route_key
+        new_candidate = {
+            "project_id": project, "entity_0": real_uri,
+            "route_key": _route_key(project, real_uri),
+        }
+        if evidence["source_evidence_policy"]["event_id_gates_directory"]:
+            new_candidate["event_id"] = main_event
+        changed[sid]["observations"].append({
+            "observation_id": sid + ".RELAXED",
+            "fact_refs": [sid + ":F-RELAXED"],
+            "values": new_candidate,
+            "claim_status": "hypothetical_extra_candidate",
+        })
+        broken_directory_checks[sid] = alternative(
+            execute(changed_sources=changed)
+        )
+
+    u = cases[(target_index+1) % len(cases)]
+    u_uri = anchors[u]
+    fork = plan["real_fork"]["candidate_forks"]
+    changed_fork = copy.deepcopy(sources)
+    entry = next(
+        row for row in changed_fork["real_fork"]["observations"]
+        if row["values"]["entity_0"] == u_uri
+    )
+    # Hypothetical falsification of a source observation; NOT real RDF.
+    entry["values"]["motif_object"] = fork[target]["object"]
+    fork_result = alternative(execute(changed_sources=changed_fork))
+    # The field, not just its containing source, must be necessary:
+    # relaxing "completed" now admits an entirely different scheduled
+    # event and its genuine complete downstream YAGO answer path.
+    field_causality = {
+        "event_status": alternative(status_without_filter),
+        "real_fork_motif_object": fork_result,
+    }
+    # Context fields are NOT credited as additional required complexity.
+    context_fields = evidence["context_fields"]
+    gates = [
+        unique_identity, all(clue_results.values()),
+        all(discovery_results.values()), alternative(fully_relaxed),
+        all(broken_directory_checks.values()),
+        all(field_causality.values()),
+    ]
+    return {
+        "policy": "task_graph_first_replanning_v1",
+        "passed": all(gates),
+        "identification_unique": unique_identity,
+        "each_clue_necessary": clue_results,
+        "each_discovery_necessary": discovery_results,
+        "all_discovery_bypass_ambiguous": alternative(fully_relaxed),
+        "simulated_directory_necessity": broken_directory_checks,
+        "required_field_necessity": field_causality,
+        "event_id_gates_source_access": (
+            evidence["source_evidence_policy"]["event_id_gates_directory"]
+        ),
+        "context_fields_not_credited": context_fields,
+        "macro_shape": spec["task_first_macro_graph"]["shape"],
+        "required_real_fork": True,
+        "limitation": (
+            "Bounded counterfactual re-planning within the frozen World; "
+            "not proof of global solution minimality or factual claims "
+            "about simulated historical media."
+        ),
+    }
