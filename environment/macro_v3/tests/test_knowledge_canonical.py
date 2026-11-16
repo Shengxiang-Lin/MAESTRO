@@ -134,6 +134,8 @@ class KnowledgeCanonicalCliTests(unittest.TestCase):
                 knowledge_max_edges=300, knowledge_min_hops=2,
                 knowledge_max_hops=3,
                 scenario_model=None, scenario_api_base=None,
+                scenario_critic_model=None, scenario_critic_api_base=None,
+                scenario_max_revisions=2,
                 scenario_workers=1, no_progress=True, flush_every=1,
             )
             summary = construct_scenes(args)
