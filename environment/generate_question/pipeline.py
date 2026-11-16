@@ -899,6 +899,13 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                             "semantic_grounding_policy"
                         ) == "goal_constrained_yago_grounding_v1"
                     )),
+                    "fictional_worlds": sum(
+                        s["problem_spec"]["macro_plan"]["world_binding"][
+                            "candidate_paths"
+                        ][s["problem_spec"]["macro_plan"]["world_binding"][
+                            "target_case"]][0]["origin"] == "synthetic"
+                        for s in current_scenes
+                    ),
                     "loaded_graph_uniqueness_verified": sum(
                         s["problem_spec"]["macro_plan"][
                             "world_binding"].get(
@@ -914,10 +921,10 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                         for s in current_scenes
                     ),
                     "scope": (
-                        "Uniqueness is checked only against the loaded bounded "
-                        "YAGO fact sample; predicate types are heuristic, not "
-                        "externally RDF-type-verified. Acceptance counts only "
-                        "successful generated Scenes, not failed task requests."
+                        "Genuine-YAGO uniqueness is checked only against the "
+                        "loaded bounded fact sample. Fictional relation worlds "
+                        "are synthetic, not external RDF evidence. Counts only "
+                        "include successfully generated Scenes."
                     ),
                 },
                 "nested_legacy_specs": sum(
