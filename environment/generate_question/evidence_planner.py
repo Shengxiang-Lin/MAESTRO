@@ -754,8 +754,24 @@ def audit_information_v2(scene: dict) -> dict:
             elif project_key_bypass and node["id"] in port_node_ids:
                 node["left_on"] = "project_id"
                 node["right_on"] = "project_id"
+        active_sources = sources if src is None else src
+        if project_key_bypass:
+            # A genuine alternate plan obtains a PROJECT-scoped view
+            # of each directory. Merely changing the join key is NOT
+            # enough: the original IR also implicitly enforces equality
+            # on every shared field, including event_id. Remove that
+            # field from the *alternate view*, not from the original
+            # World, while preserving every candidate and its FactRefs.
+            active_sources = copy.deepcopy(active_sources)
+            for sid in ("link_a", "link_b"):
+                view = active_sources[sid]
+                view["schema"] = [
+                    name for name in view["schema"] if name != "event_id"
+                ]
+                for observation in view["observations"]:
+                    observation["values"].pop("event_id")
         return answer_values(evaluate_program(
-            altered, sources=sources if src is None else src,
+            altered, sources=active_sources,
         ))
 
     canonical = _exec()
