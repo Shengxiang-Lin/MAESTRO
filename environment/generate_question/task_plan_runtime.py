@@ -50,6 +50,24 @@ def generate_world(spec: dict) -> dict:
     b = plan["world_binding"]
     target, cases = b["target_case"], b["all_cases"]
     paths = b["candidate_paths"]
+    composed = plan.get("knowledge_world_mode") == "compose"
+    if composed:
+        # Source views are materialized from the canonical typed World,
+        # not separate ad-hoc path/fork tables. The private projection is
+        # checked against the World by validate_spec above.
+        model = b["world_model"]
+        relation_by_case = {case: [] for case in cases}
+        for edge in model["relations"]:
+            relation_by_case[edge["case_id"]].append(edge)
+        paths = {
+            case: [{
+                key: edge[key] for key in (
+                    "subject", "predicate", "object", "object_label", "origin"
+                )
+            } for edge in sorted(relation_by_case[case],
+                                  key=lambda row: row["hop"])]
+            for case in cases
+        }
     rng = random.Random(int(digest(
         spec["seed"], spec["ordinal"], "task-plan-rows"
     )[:15], 16))
@@ -67,9 +85,18 @@ def generate_world(spec: dict) -> dict:
         rng.shuffle(rows)
         tables[sid] = rows
     projects = {
-        case: _project(spec["seed"], spec["ordinal"], case)
-        for case in cases
+        case: (
+            "PRJ-" + digest(
+                spec["seed"], spec["ordinal"], case, "project"
+            )[:12].upper()
+            if composed else _project(
+                spec["seed"], spec["ordinal"], case
+            )
+        ) for case in cases
     }
+    def event_key(pid, which):
+        return ("EVT-" + digest(pid, which)[:12].upper()
+                if composed else _event(pid, which))
     tables["entity_index"] = [{
         "case_id": case, "project_id": pid,
         "project_name": "Project " + case.split("-")[-1].upper(),
@@ -110,8 +137,8 @@ def generate_world(spec: dict) -> dict:
             event_refs = []
         for i, case in enumerate(cases):
             pid = projects[case]
-            good_event = _event(pid, "qualified")
-            other_event = _event(pid, "other")
+            good_event = event_key(pid, "qualified")
+            other_event = event_key(pid, "other")
             if mode == "event":
                 event_rows.extend([
                     {"project_id": pid, "event_id": good_event,
@@ -130,7 +157,8 @@ def generate_world(spec: dict) -> dict:
                      "entity_0": paths[cases[(i+1) % len(cases)]][0]["subject"]},
                 ])
             else:
-                fork = b["real_fork"]["candidate_forks"]
+                fork = (model["verification_facts"] if composed else
+                        b["real_fork"]["candidate_forks"])
                 for shift in (0, 2, 3):
                     related = cases[(i+shift) % len(cases)]
                     event_rows.append({
@@ -177,7 +205,10 @@ def generate_world(spec: dict) -> dict:
         tables["real_fork"] = [{
             "entity_0": paths[case][0]["subject"],
             "motif_object": fact["object"],
-        } for case, fact in b["real_fork"]["candidate_forks"].items()]
+        } for case, fact in (
+            model["verification_facts"] if composed else
+            b["real_fork"]["candidate_forks"]
+        ).items()]
     for hop in range(plan["hops"]):
         left = f"entity_{hop}"
         right = "answer" if hop == plan["hops"]-1 else f"entity_{hop+1}"
@@ -211,7 +242,10 @@ def generate_world(spec: dict) -> dict:
             else:
                 source_facts = {
                     fact["subject"]: fact
-                    for fact in b["real_fork"]["candidate_forks"].values()
+                    for fact in (
+                        model["verification_facts"].values() if composed else
+                        b["real_fork"]["candidate_forks"].values()
+                    )
                 }
                 key = "entity_0"
             src["evidence_kind"] = (
@@ -259,6 +293,8 @@ def generate_world(spec: dict) -> dict:
         "generation_seed": spec["seed"],
         "knowledge_witness": copy.deepcopy(spec["knowledge_witness"]),
         "value_sampling_contract": "direct_task_plan_grounding_v1",
+        **({"typed_knowledge_world": copy.deepcopy(b["world_model"])}
+           if composed else {}),
         **({"knowledge_origin": "synthetic"}
            if paths[target][0]["origin"] == "synthetic" else {}),
     }
@@ -454,6 +490,17 @@ def audit_information(scene: dict) -> dict:
     program = scene["gold_program"]
     sources = scene["world"]["sources"]
     expected = scene["gold_answer"][0]["answer"]
+    def project_for_case(case):
+        # Resolve the frozen source-level identifier instead of guessing
+        # it from a particular URI or archive-key presentation scheme.
+        records = [
+            obs["values"]["project_id"] for obs in
+            sources["entity_index"]["observations"]
+            if obs["values"]["case_id"] == case
+        ]
+        if len(records) != 1:
+            raise ValueError("missing_or_duplicate_target_project")
+        return records[0]
     nodes = {n["id"]: n for n in program["nodes"]}
     cue_filters, condition_filter = {}, None
     for node in program["nodes"]:
@@ -516,10 +563,7 @@ def audit_information(scene: dict) -> dict:
         cases = b["all_cases"]
         target = b["target_case"]
         i = cases.index(target)
-        project = _project(
-            scene["problem_spec"]["seed"],
-            scene["problem_spec"]["ordinal"], target,
-        )
+        project = project_for_case(target)
         for sid, shift in (("link_a", 3), ("link_b", 2)):
             changed = copy.deepcopy(sources)
             uri = b["candidate_paths"][cases[(i+shift)%len(cases)]][0]["subject"]
@@ -561,10 +605,7 @@ def audit_information(scene: dict) -> dict:
             )]
             by_field = {}
             target_case = plan["world_binding"]["target_case"]
-            project = _project(
-                scene["problem_spec"]["seed"],
-                scene["problem_spec"]["ordinal"], target_case,
-            )
+            project = project_for_case(target_case)
             records = [
                 row["values"] for row in sources["event_ledger"]["observations"]
                 if row["values"]["project_id"] == project

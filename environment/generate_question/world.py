@@ -137,15 +137,17 @@ def initial_public_view(spec: dict, world: dict, question: str) -> dict:
             "modality_hint": item["modality"],
             **({"resource_url": item["resource_url"]}
                if "resource_url" in item else {}),
-            **({} if spec.get("reasoning_pattern") == "macro_first_v2"
-               else {"representation": item["representation"]}),
+            **({} if spec.get("reasoning_pattern") in {
+                "macro_first_v2", "task_plan"
+            } else {"representation": item["representation"]}),
             **({"access_mode": item["access_policy"]["mode"]}
                if "access_policy" in item else {}),
         } for sid, item in sorted(world["sources"].items())],
         "max_concurrent_subagents": 10,
         "status": ("ready_for_investigation"
-                   if spec.get("reasoning_pattern") == "macro_first_v2"
-                   else "fictional_structured_multisource_world"),
+                   if spec.get("reasoning_pattern") in {
+                       "macro_first_v2", "task_plan"
+                   } else "fictional_structured_multisource_world"),
     }
 
 
