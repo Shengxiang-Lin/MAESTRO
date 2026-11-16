@@ -272,7 +272,19 @@ class QuestionSession:
         self._acquired.add(source_id)
         self.total_cost += self.COSTS["read_source"]
         self.action_log.append({"action": "read_source", "source_id": source_id})
-        return deepcopy(self._sources[source_id])
+        view = deepcopy(self._sources[source_id])
+        if self._scene["problem_spec"].get("reasoning_pattern") == "task_plan":
+            # Private provenance/replay flags are teacher metadata. An Agent
+            # should see an ordinary source with scoped observations, not
+            # the benchmark generator's internal construction annotations.
+            for key in ("representation", "evidence_kind",
+                        "independence_note", "original_mmqa_handle_used"):
+                view.pop(key, None)
+            for item in view["observations"]:
+                for key in ("knowledge_fact", "evidence_origin_id",
+                            "claim_status"):
+                    item.pop(key, None)
+        return view
 
     def run_task(self, task_id: str) -> dict:
         if task_id not in self._tasks:
