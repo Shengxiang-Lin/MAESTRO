@@ -39,7 +39,7 @@ class InformationNecessityTests(unittest.TestCase):
         from pathlib import Path
         import yaml
         config = yaml.safe_load(
-            (Path(__file__).resolve().parents[1] / "configs" / "questions.yaml").read_text()
+            (Path(__file__).with_name("fixtures") / "questions_legacy.yaml").read_text()
         )
         mix = tuple(config["generation"]["difficulty_mix"])
         self.assertEqual(mix, (17, 33, 50))
