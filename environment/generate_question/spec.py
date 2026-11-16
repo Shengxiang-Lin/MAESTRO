@@ -9,12 +9,12 @@ import random
 from environment.schema import digest
 
 VERSION = "maestro.problem_spec.v4"
-RELATION_PATTERNS = ("approval", "macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2")
+RELATION_PATTERNS = ("approval", "macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan")
 
 FAMILIES = (
     "reconcile", "coverage_count", "eligibility", "priority",
     "chronology", "evidence_reconcile", "category_distribution",
-    "macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2",
+    "macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan",
 )
 DIFFICULTIES = ("easy", "medium", "hard")
 
