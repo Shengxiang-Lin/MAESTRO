@@ -692,6 +692,133 @@ class DirectTaskPlanTests(unittest.TestCase):
             old_question = question
         self.assertIsNotNone(old_question)
 
+    def test_reviewed_question_bank_flows_into_stage2_without_live_model(self):
+        """Exercise the default two-call Author/Critic path on frozen Tasks.
+
+        The stubs verify prompt contracts but never contact the Qwen service.
+        This is deliberately separate from the deterministic offline tests.
+        """
+        from unittest.mock import patch
+        from environment.config import args_from_config, load_config
+        from environment.generate_question.stages import review_questions
+        from environment.implement_subtask.pipeline import materialize_subtasks
+
+        kg = graph_fixture()
+        index = YagoKnowledgeIndex(kg)
+        scenes = [
+            compile_and_validate(
+                spec, reference_question(spec)
+            )
+            for spec in (
+                make_spec(
+                    kg, seed=17, ordinal=ordinal,
+                    difficulty="medium" if ordinal % 2 == 0 else "hard",
+                    index=index, world_mode="compose",
+                )
+                for ordinal in range(4)
+            )
+        ]
+
+        class Author:
+            def complete_json(self, system, user):
+                self.assertIn("semantic goal", system.lower())
+                fields = json.loads(user)["contract"]
+                self.assertIn("semantic_goal_question", fields)
+                self.assertIn("modalities", fields["materials"][0])
+                topic = fields["user_intent"]["topic"]
+                goal = fields["semantic_goal_question"]
+                condition = fields["required_event_condition"]
+                if condition is None:
+                    qualifier = ""
+                elif condition["field"] == "event_status":
+                    qualifier = "for its completed review session, "
+                else:
+                    qualifier = "for its review sessions from 2025 onward, "
+                if fields["verification_mode"]:
+                    qualifier += "using the corroborated reference, "
+                return {"question": (
+                    "For the " + topic + " record identified by the "
+                    "supplied image and audio descriptions, " +
+                    qualifier + goal[0].lower() + goal[1:]
+                )}
+
+        class Critic:
+            def complete_json(self, system, user):
+                self.assertIn("frozen semantic goal", system.lower())
+                contract = json.loads(user)["frozen_contract"]
+                self.assertIn("semantic_goal_question", contract)
+                self.assertNotIn("macro_dependency_plan", contract)
+                self.assertIn("reference_materials", contract)
+                return {
+                    "verdict": "pass",
+                    "all_constraints_preserved": True,
+                    "no_unlicensed_facts": True,
+                    "same_answer_scope": True,
+                    "natural": True,
+                    "reason": "Semantics and public reference scope preserved.",
+                }
+
+        # Bind unittest assertions to both fake clients.
+        author, critic = Author(), Critic()
+        author.assertIn = self.assertIn
+        critic.assertIn = self.assertIn
+        critic.assertNotIn = self.assertNotIn
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "constructed" / "scenes.jsonl"
+            source.parent.mkdir()
+            source.write_text(
+                "".join(json.dumps(scene, ensure_ascii=False) + "\n"
+                        for scene in scenes), encoding="utf-8",
+            )
+            args = args_from_config(
+                load_config("environment/configs/questions_task_plan.yaml")
+            )
+            self.assertEqual(args.target, 100)
+            self.assertEqual(args.question_model, "local-qwen3.5-9b")
+            args.scenes = source
+            args.output_dir = root / "questions"
+            args.max_records = None
+            args.question_workers = 2
+            args.no_progress = True
+            with patch(
+                "environment.generate_question.stages._llm_clients",
+                return_value=(author, critic),
+            ):
+                result = review_questions(args)
+            self.assertEqual(result["status"], "done", result)
+            self.assertEqual(result["generated"], 4)
+            self.assertEqual(result["question_results"], {"accepted": 4})
+            accepted = [
+                json.loads(line) for line in (
+                    args.output_dir / "scenes.jsonl"
+                ).read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(len(accepted), 4)
+            for original, updated in zip(scenes, accepted):
+                self.assertEqual(
+                    updated["question_origin"], "llm_accepted_frozen_spec"
+                )
+                self.assertEqual(
+                    updated["question_authoring"]["status"], "accepted"
+                )
+                for field in (
+                    "world", "gold_program", "gold_answer", "gold_trace",
+                    "macro_graph", "task_feedback", "problem_spec",
+                ):
+                    self.assertEqual(
+                        original[field], updated[field], field
+                    )
+                self.assertEqual(
+                    validate_replay(updated)["status"], "valid"
+                )
+            oracle = materialize_subtasks(
+                scenes_path=args.output_dir / "scenes.jsonl",
+                output_dir=root / "oracle", no_progress=True,
+            )
+            self.assertEqual(oracle["status"], "done", oracle)
+            self.assertEqual(oracle["accepted_scenes"], 4)
+
     def test_stage2_accepts_default_unreviewed_composed_scenes(self):
         """End-to-end Stage1 -> Stage2 Oracle without a Question LLM.
 
