@@ -89,6 +89,26 @@ def intent_contract(spec: dict) -> dict:
             spec["macro_plan"]["goal"]["public_label"] +
             " for exactly the identified case."
         )
+    elif pattern == "typed_knowledge_v4":
+        plan = spec["macro_plan"]
+        constraints = [
+            "Identify exactly one fictional project from ALL simulated media clues.",
+            "Investigate both simulated reference directories. Their overlap "
+            "still contains TWO possible YAGO entities; neither the two "
+            "directories alone nor the event record alone gives the answer.",
+            "Inspect the fictional project's actual event, organizer and "
+            "venue records to obtain permitted secondary real-world links.",
+            "Use genuine YAGO secondary fork evidence as a required "
+            "verification input before following the final real YAGO path.",
+            "Do not treat synthetic projects, events, organizers, venues, "
+            "or their associations as genuine YAGO historical facts.",
+            "Return only the final real-world entity name; internal "
+            "project IDs and candidate keys are not user-visible goals.",
+        ]
+        constraints.extend(
+            f"Identifying clue: {item['attribute']} {item['value']}."
+            for item in plan["clues"].values()
+        )
     elif pattern == "typed_knowledge_v3":
         plan = spec["macro_plan"]
         constraints = [
@@ -144,6 +164,8 @@ def intent_contract(spec: dict) -> dict:
         "difficulty": spec["difficulty_target"],
         "nonnegotiable_conditions": constraints,
         "output_contract": (
+            "Return the single final real YAGO-related entity name."
+            if pattern == "typed_knowledge_v4" else
             "Return the confirmed " + spec["macro_plan"]["goal"]["public_label"] +
             " for the identified case."
             if pattern == "macro_first_v2" else FAMILY_OUTPUTS[spec["family"]]
