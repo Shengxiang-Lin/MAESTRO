@@ -187,6 +187,14 @@ def prompt_lookup(rows: list[dict]) -> dict[str, str]:
     return prompts
 
 
+def diagnostic_legacy_reason(text: str, state: dict) -> str | None:
+    """Old binding can fail even for valid O1 actions; do not gate new Judge."""
+    try:
+        return score_decision(text, state)["reason"]
+    except (ValueError, KeyError, TypeError):
+        return "legacy_scorer_unsupported"
+
+
 def make_stage2_reward_function(*, private_states: dict[str, dict],
                                 prompts: dict[str, str],
                                 mode: str = "global",
@@ -263,7 +271,7 @@ def make_stage2_reward_function(*, private_states: dict[str, dict],
                     "valid": reason is None, "reason": reason,
                     "env_reward": None, "judge_reward": None,
                     "judge_dimensions": None, "judge_cached": None,
-                    "legacy_env_reason": None,
+                    "judge_reason": None, "legacy_env_reason": None,
                 } for reason in structural_reasons]
                 for i, result in zip(eligible, semantic):
                     value = float(result["reward"])
@@ -273,9 +281,11 @@ def make_stage2_reward_function(*, private_states: dict[str, dict],
                         "reward": value, "judge_reward": value,
                         "judge_dimensions": result["dimensions"],
                         "judge_cached": bool(result.get("cached", False)),
-                        # The old deterministic scorer is diagnostics ONLY.
-                        # Its exact-string binder cannot veto LLM judgement.
-                        "legacy_env_reason": score_decision(texts[i], state)["reason"],
+                        "judge_reason": result.get("reason", ""),
+                        # Legacy exact-string binding is DIAGNOSTIC ONLY.
+                        # Never let its unsupported heuristic reject or stop
+                        # a structurally legal globally judged candidate.
+                        "legacy_env_reason": diagnostic_legacy_reason(texts[i], state),
                     })
             elif mode == "deterministic":
                 scored = [score_decision(text, state) for text in texts]
@@ -298,6 +308,7 @@ def make_stage2_reward_function(*, private_states: dict[str, dict],
                     "env_reward": result["env_reward"], "judge_reward": result["judge_reward"],
                     "reward": result["reward"], "judge_dimensions": result["judge_dimensions"],
                     "judge_cached": result["judge_cached"],
+                    "judge_reason": result.get("judge_reason"),
                     "legacy_env_reason": result.get("legacy_env_reason"),
                     "action_type": (
                         json.loads(normalized_result[0]).get("action")
