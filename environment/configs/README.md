@@ -2,9 +2,10 @@
 
 Use one maintained YAML per stage. Stage 1 defaults to the current
 `task_plan + compose` profile with a 20-scene validation target; increase
-`--target` and select a new `--output-dir` for production. Retired generation variants remain isolated as research fixtures; the
-old default YAML is now located under `environment/tests/fixtures/` for
-regression tests rather than the production config directory. Acceptance is verified by Replay and necessity tests.
+`--target` and select a new `--output-dir` for production. Retired generator YAML profiles are regression fixtures under
+`environment/tests/fixtures/` and `environment/macro_v3/tests/fixtures/`,
+not supported production configurations. Only the current Task Plan profile
+is kept in the production Stage-1 config directory. Acceptance is verified by Replay and necessity tests.
 
 | Stage | Config | Output | Main input |
 |---|---|---|---|
