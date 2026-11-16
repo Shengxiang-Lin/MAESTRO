@@ -1,8 +1,9 @@
-# Current opt-in: one Task Plan -> direct real/synthetic World -> old Compiler/Replay.
-# Uses the SAME World/Program/Quality/Replay pipeline as the v2 scenes.
-# Source media and dossier cards remain explicitly simulated. Real YAGO
-# witnesses are preferred, but when a complete causal relation cannot be
-# grounded, the generator builds an explicitly fictional semantic world.
+# Current opt-in: Task Plan -> typed motif composition -> one coherent World
+# -> scoped evidence views -> original Compiler/Replay and Stage 2–4 contracts.
+# YAGO supplies observed relation vocabulary and world-structure statistics,
+# NOT mandatory factual paths. Recombined entities/relations are new facts
+# within the generated scenario; their synthetic origin remains private.
+# For historical YAGO-first behavior set knowledge_world_mode: witnessed.
 version: 1
 
 input:
@@ -19,6 +20,7 @@ generation:
   no_progress: false
   macro_planning_share: 100
   knowledge_variant: task_plan
+  knowledge_world_mode: compose
   knowledge_yago: data/world-source/YAGO-4.6
   knowledge_max_triples: 1000000
   knowledge_max_edges: 250000
