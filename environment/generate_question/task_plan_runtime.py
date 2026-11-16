@@ -1,0 +1,520 @@
+"""Interpret the SINGLE frozen Task Plan using the original Stage-1 IR.
+
+No historical make_spec(), no duplicate DAG/Sketch/World Spec, and no
+independent executor. The same IR is consumed by old Compiler, Quality,
+Replay and Stage-2 Sub-Agent WorkProduct.
+"""
+from __future__ import annotations
+
+import copy
+import random
+
+from environment.schema import digest
+from .task_plan import PATTERN, VERSION, validate_spec
+
+
+def _route_key(pid, entity):
+    return "route:" + digest(pid, entity, "task-plan-source-link")[:20]
+
+
+def _project(seed, ordinal, case):
+    return "urn:maestro:fictional:project:" + digest(
+        seed, ordinal, case, "project"
+    )[:20]
+
+
+def _event(pid, which):
+    return "urn:maestro:fictional:event:" + digest(pid, which)[:20]
+
+
+def _condition_rows(plan):
+    """Only the chosen status OR year differentiates eligible events."""
+    condition = plan["condition"]
+    if condition["field"] == "event_status":
+        return (
+            {"event_status": "completed", "event_year": 2025},
+            {"event_status": "scheduled", "event_year": 2025},
+        )
+    return (
+        {"event_status": "recorded", "event_year": 2025},
+        {"event_status": "recorded", "event_year": 2024},
+    )
+
+
+def generate_world(spec: dict) -> dict:
+    from .world import _rows, WORLD_VERSION
+    problems = validate_spec(spec)
+    if problems:
+        raise ValueError("invalid_task_plan_world:" + ",".join(problems))
+    plan = spec["macro_plan"]
+    b = plan["world_binding"]
+    target, cases = b["target_case"], b["all_cases"]
+    paths = b["candidate_paths"]
+    rng = random.Random(int(digest(
+        spec["seed"], spec["ordinal"], "task-plan-rows"
+    )[:15], 16))
+    tables = {}
+    for sid, cue in plan["clues"].items():
+        rows = []
+        for case in cases:
+            shadow = b["case_shadow_slots"].get(case)
+            ok = case == target or (shadow is not None
+                                    and shadow != cue["source_slot"])
+            rows.append({
+                "case_id": case,
+                "cue": cue["value"] if ok else cue["alternative"],
+            })
+        rng.shuffle(rows)
+        tables[sid] = rows
+    projects = {
+        case: _project(spec["seed"], spec["ordinal"], case)
+        for case in cases
+    }
+    tables["entity_index"] = [{
+        "case_id": case, "project_id": pid,
+        "project_name": "Project " + case.split("-")[-1].upper(),
+    } for case, pid in projects.items()]
+    mode = plan["mode"]
+    if mode == "trace":
+        tables["project_ref"] = [{
+            "project_id": projects[case],
+            "entity_0": paths[case][0]["subject"],
+        } for case in cases]
+    if mode in {"event", "verify"}:
+        eligible, ineligible = _condition_rows(plan)
+        event_rows = []
+        if mode == "event":
+            event_refs = []
+        for i, case in enumerate(cases):
+            pid = projects[case]
+            good_event = _event(pid, "qualified")
+            other_event = _event(pid, "other")
+            if mode == "event":
+                event_rows.extend([
+                    {"project_id": pid, "event_id": good_event,
+                     "event_name": "Completed project review " + case[-5:],
+                     **eligible},
+                    {"project_id": pid, "event_id": other_event,
+                     "event_name": "Other project review " + case[-5:],
+                     **ineligible},
+                ])
+                event_refs.extend([
+                    {"event_id": good_event,
+                     "entity_0": paths[case][0]["subject"]},
+                    {"event_id": other_event,
+                     "entity_0": paths[cases[(i+1) % len(cases)]][0]["subject"]},
+                ])
+            else:
+                fork = b["real_fork"]["candidate_forks"]
+                for shift in (0, 2, 3):
+                    related = cases[(i+shift) % len(cases)]
+                    event_rows.append({
+                        "project_id": pid, "event_id": good_event,
+                        "event_name": "Qualified project session " + case[-5:],
+                        **eligible,
+                        "motif_object": fork[related]["object"],
+                    })
+                other = cases[(i+1) % len(cases)]
+                event_rows.append({
+                    "project_id": pid, "event_id": other_event,
+                    "event_name": "Unqualified project session " + case[-5:],
+                    **ineligible, "motif_object": fork[other]["object"],
+                })
+        rng.shuffle(event_rows)
+        tables["event_ledger"] = event_rows
+        if mode == "event":
+            tables["event_ref"] = event_refs
+    if mode == "verify":
+        from .real_motif_grounding import validate_frozen_required_fork
+        if validate_frozen_required_fork(b["real_fork"], paths):
+            raise ValueError("missing_required_yago_fork")
+        for sid, shifts in (
+            ("link_a", (0, 1, 2)), ("link_b", (0, 1, 3)),
+        ):
+            tables[sid] = [
+                {"project_id": projects[case],
+                 "route_key": _route_key(
+                     projects[case],
+                     paths[cases[(i+shift)%len(cases)]][0]["subject"],
+                 ),
+                 "entity_0": paths[cases[(i+shift)%len(cases)]][0]["subject"]}
+                for i, case in enumerate(cases)
+                for shift in shifts
+            ]
+        tables["real_fork"] = [{
+            "entity_0": paths[case][0]["subject"],
+            "motif_object": fact["object"],
+        } for case, fact in b["real_fork"]["candidate_forks"].items()]
+    for hop in range(plan["hops"]):
+        left = f"entity_{hop}"
+        right = "answer" if hop == plan["hops"]-1 else f"entity_{hop+1}"
+        tables[f"relation_{hop+1}"] = [{
+            left: path[hop]["subject"],
+            right: path[hop]["object_label"] if right == "answer"
+                   else path[hop]["object"],
+        } for path in paths.values()]
+    bank = {}
+    for role in spec["sources"]:
+        sid = role["source_id"]
+        rows = tables[sid]
+        rng.shuffle(rows)
+        src = _rows(
+            sid, role["modality"], role["title"], role["purpose"], rows,
+        )
+        src["access_policy"] = {
+            "mode": role["access_mode"],
+            **({"key_field": role["key_field"]}
+               if role["access_mode"] == "keyed_lookup" else {}),
+        }
+        if sid.startswith("relation_") or sid == "real_fork":
+            source_facts = (
+                {path[hop]["subject"]: path[hop]
+                 for path in paths.values()}
+                if sid.startswith("relation_")
+                for hop in [int(sid.rsplit("_", 1)[-1]) - 1] else
+                {fact["subject"]: fact
+                 for fact in b["real_fork"]["candidate_forks"].values()}
+            )
+            key = f"entity_{hop}" if sid.startswith("relation_") else "entity_0"
+            src["evidence_kind"] = "real_yago_facts"
+            src["independence_note"] = (
+                "Each true RDF fact originates in YAGO, not a second "
+                "independent historical publisher."
+            )
+            for obs in src["observations"]:
+                row = source_facts[obs["values"][key]]
+                fact = {field: row[field]
+                        for field in ("subject", "predicate", "object")}
+                obs["knowledge_fact"] = fact
+                obs["evidence_origin_id"] = "YAGO-4.6:" + digest(
+                    *fact.values()
+                )[:20]
+        else:
+            src["evidence_kind"] = (
+                "unverified_fictional_candidate_claims"
+                if sid in {"link_a", "link_b"} else
+                "fictional_project_and_event_facts"
+            )
+            for obs in src["observations"]:
+                obs["evidence_origin_id"] = "synthetic:" + digest(
+                    sid, obs["values"]
+                )[:20]
+                obs["claim_status"] = (
+                    "unverified_candidate"
+                    if sid in {"link_a", "link_b"} else
+                    "fictional_observation"
+                )
+        bank[sid] = src
+    return {
+        "version": WORLD_VERSION, "simulated_only": True,
+        "sources": bank,
+        "entities": [{
+            "entity_id": pid, "entity_type": "fictional_project",
+            "display_name": "Project " + case.split("-")[-1].upper(),
+            "origin": "synthetic", "fictional": True,
+        } for case, pid in projects.items()],
+        "generation_seed": spec["seed"],
+        "knowledge_witness": copy.deepcopy(spec["knowledge_witness"]),
+        "value_sampling_contract": "direct_task_plan_grounding_v1",
+    }
+
+
+def compile_macro_solvers(spec: dict) -> dict:
+    issues = validate_spec(spec)
+    if issues:
+        raise ValueError("invalid_task_plan_program:" + ",".join(issues))
+    plan = spec["macro_plan"]
+    nodes, groups, outputs = [], [], {}
+    for task in plan["macro_tasks"]:
+        mid, op = task["macro_id"], task["operation"]
+        parents = [outputs[p] for p in task["depends_on"]]
+        local = []
+
+        def add(name, *inputs, **kw):
+            nid = f"{mid.lower()}_op{len(local)+1:02d}"
+            local.append({
+                "id": nid, "op": name, "inputs": list(inputs), **kw
+            })
+            return nid
+
+        if op == "match_clues":
+            matches = []
+            for sid in task["source_scope"]:
+                scanned = add("scan", source_id=sid)
+                filtered = add(
+                    "filter_eq", scanned, field="cue",
+                    value=plan["clues"][sid]["value"],
+                )
+                matches.append(add(
+                    "project", filtered, fields=["case_id"]
+                ))
+            joined = add(
+                "join", matches[0], matches[1],
+                left_on="case_id", right_on="case_id",
+            )
+            terminal = add("unique", joined)
+        elif op == "identify_project":
+            joined = parents[0]
+            for parent in parents[1:]:
+                joined = add(
+                    "join", joined, parent,
+                    left_on="case_id", right_on="case_id",
+                )
+            unique = add("unique", joined)
+            indexed = add(
+                "lookup_by_key", unique, source_id="entity_index",
+                input_key_field="case_id", source_key_field="case_id",
+            )
+            terminal = add("project", indexed, fields=["project_id"])
+        elif op == "reference":
+            lookup = add(
+                "lookup_by_key", parents[0], source_id="project_ref",
+                input_key_field="project_id", source_key_field="project_id",
+            )
+            terminal = add("project", lookup, fields=["entity_0"])
+        elif op in {"qualifying_event", "event_eligibility"}:
+            scanned = add("scan", source_id="event_ledger")
+            condition = plan["condition"]
+            filtered = add(
+                condition["op"], scanned, field=condition["field"],
+                value=condition["value"],
+            )
+            linked = add(
+                "join", parents[0], filtered,
+                left_on="project_id", right_on="project_id",
+            )
+            fields = ["event_id"] if op == "qualifying_event" else [
+                "motif_object"
+            ]
+            terminal = add("project", linked, fields=fields)
+        elif op == "event_reference":
+            lookup = add(
+                "lookup_by_key", parents[0], source_id="event_ref",
+                input_key_field="event_id", source_key_field="event_id",
+            )
+            terminal = add("project", lookup, fields=["entity_0"])
+        elif op in {"directory_a", "directory_b"}:
+            sid = task["source_scope"][0]
+            scanned = add("scan", source_id=sid)
+            joined = add(
+                "join", parents[0], scanned,
+                left_on="project_id", right_on="project_id",
+            )
+            terminal = add(
+                "project", joined, fields=["route_key", "entity_0"]
+            )
+        elif op == "intersect_references":
+            joined = add(
+                "join", parents[0], parents[1],
+                left_on="route_key", right_on="route_key",
+            )
+            projected = add(
+                "project", joined, fields=["entity_0"]
+            )
+            terminal = add("unique", projected)
+        elif op == "verify_real_fork":
+            real = add(
+                "lookup_by_key", parents[0], source_id="real_fork",
+                input_key_field="entity_0", source_key_field="entity_0",
+            )
+            joined = add(
+                "join", real, parents[1],
+                left_on="motif_object", right_on="motif_object",
+            )
+            projected = add(
+                "project", joined, fields=["entity_0"]
+            )
+            terminal = add("unique", projected)
+        elif op == "follow_yago":
+            last = parents[0]
+            for sid in task["source_scope"]:
+                hop = int(sid.rsplit("_", 1)[-1]) - 1
+                key = f"entity_{hop}"
+                last = add(
+                    "lookup_by_key", last, source_id=sid,
+                    input_key_field=key, source_key_field=key,
+                )
+            terminal = add(
+                "project", last, fields=list(task["output_schema"])
+            )
+        else:
+            raise ValueError("unsupported_task_plan_operation:" + op)
+        nodes.extend(local)
+        groups.append({
+            "macro_id": mid,
+            "node_ids": [n["id"] for n in local],
+            "output_node_id": terminal,
+            "external_input_nodes": parents,
+        })
+        outputs[mid] = terminal
+    return {
+        "version": "maestro.reasoning_program.v4",
+        "semantic_operator_pattern": PATTERN,
+        "nodes": nodes, "output": outputs[plan["terminal_macro_id"]],
+        "authorized_source_ids": [
+            r["source_id"] for r in spec["sources"]
+        ],
+        "frozen_problem_spec_id": spec["task_id"],
+        "macro_solver_groups": groups, "macro_plan_version": VERSION,
+    }
+
+
+def mutate_witness(sources: dict, sid: str,
+                   answer_rows: list[dict], spec: dict) -> dict:
+    """Make ONE cited source observation unusable, retaining old audit."""
+    updated = copy.deepcopy(sources)
+    refs = {ref for row in answer_rows
+            for ref in row["source_fact_refs"] if ref.startswith(sid+":")}
+    selected = next(
+        (row for row in updated[sid]["observations"]
+         if refs.intersection(row["fact_refs"])), None
+    )
+    if selected is None:
+        raise ValueError("missing_cited_task_plan_source:" + sid)
+    data = selected["values"]
+    if sid in spec["macro_plan"]["clues"]:
+        data["cue"] = "__counterfactual_clue__"
+    elif sid == "entity_index":
+        data["project_id"] = "urn:maestro:fictional:missing-project"
+    elif sid in ("project_ref", "event_ref"):
+        data["entity_0"] = "urn:maestro:counterfactual:missing-entity"
+    elif sid in ("link_a", "link_b"):
+        data["route_key"] = "urn:maestro:counterfactual:wrong-route"
+    elif sid == "event_ledger":
+        condition = spec["macro_plan"]["condition"]
+        data[condition["field"]] = (
+            "__other_event_status__" if condition["field"] ==
+            "event_status" else -1
+        )
+    elif sid == "real_fork":
+        data["motif_object"] = "urn:maestro:counterfactual:fork"
+    elif sid.startswith("relation_"):
+        key = [f for f in data if f !=
+               f"entity_{int(sid.rsplit('_',1)[-1])-1}"][0]
+        data[key] = "urn:maestro:counterfactual:broken-relation"
+    else:
+        raise ValueError("unexpected_task_plan_mutation_source:" + sid)
+    return updated
+
+
+def audit_information(scene: dict) -> dict:
+    """One generic, bounded counterfactual audit over the executable plan.
+
+    Never treat an empty or blocked execution as evidence of necessity.
+    Only fields declared as answer-defining are counted; background names
+    and descriptive context are not credited.
+    """
+    from .program_ir import evaluate_program, answer_values
+    plan = scene["problem_spec"]["macro_plan"]
+    program = scene["gold_program"]
+    sources = scene["world"]["sources"]
+    expected = scene["gold_answer"][0]["answer"]
+    nodes = {n["id"]: n for n in program["nodes"]}
+    cue_filters, condition_filter = {}, None
+    for node in program["nodes"]:
+        if node["op"] == "filter_eq" and node.get("field") == "cue":
+            source = nodes[node["inputs"][0]]
+            cue_filters[source["source_id"]] = node["id"]
+        if (plan["condition"] and node.get("field") ==
+                plan["condition"]["field"] and
+                node.get("op") == plan["condition"]["op"]):
+            condition_filter = node["id"]
+
+    if set(cue_filters) != set(plan["clues"]):
+        raise ValueError("task_plan_clue_filter_mismatch")
+    if bool(plan["condition"]) != bool(condition_filter):
+        raise ValueError("task_plan_condition_filter_mismatch")
+
+    def _run(*, drop=(), drop_condition=False, changed=None):
+        p = copy.deepcopy(program)
+        targets = {cue_filters[sid] for sid in drop}
+        for node in p["nodes"]:
+            if node["id"] in targets or (
+                drop_condition and node["id"] == condition_filter
+            ):
+                ident, parents = node["id"], list(node["inputs"])
+                field_names = ["case_id", "cue"] if node["id"] in targets \
+                    else list(sources["event_ledger"]["schema"])
+                node.clear()
+                node.update({
+                    "id": ident, "op": "project", "inputs": parents,
+                    "fields": field_names,
+                })
+        return answer_values(evaluate_program(
+            p, sources=sources if changed is None else changed,
+        ))
+
+    def ambiguous(rows):
+        labels = {row["answer"] for row in rows}
+        return len(labels) > 1 and expected in labels
+
+    clue = {
+        sid: ambiguous(_run(drop=[sid])) for sid in plan["clues"]
+    }
+    discoveries = {
+        t["macro_id"]: ambiguous(
+            _run(drop=t["source_scope"])
+        )
+        for t in plan["macro_tasks"] if t["operation"] == "match_clues"
+    }
+    all_discovery = ambiguous(_run(drop=plan["clues"]))
+    condition = ambiguous(
+        _run(drop_condition=True)
+    ) if plan["condition"] else None
+    branches = {}
+    fork_necessary = None
+    if plan["mode"] == "verify":
+        from .task_plan import validate_spec
+        if validate_spec(scene["problem_spec"]):
+            raise ValueError("bad_frozen_plan_at_audit")
+        b = plan["world_binding"]
+        cases = b["all_cases"]
+        target = b["target_case"]
+        i = cases.index(target)
+        project = _project(
+            scene["problem_spec"]["seed"],
+            scene["problem_spec"]["ordinal"], target,
+        )
+        for sid, shift in (("link_a", 3), ("link_b", 2)):
+            changed = copy.deepcopy(sources)
+            uri = b["candidate_paths"][cases[(i+shift)%len(cases)]][0]["subject"]
+            row = {
+                "project_id": project, "entity_0": uri,
+                "route_key": _route_key(project, uri),
+            }
+            changed[sid]["observations"].append({
+                "observation_id": sid+".COUNTERFACTUAL",
+                "fact_refs": [sid+":F-COUNTERFACTUAL"],
+                "values": row, "claim_status": "hypothetical_candidate",
+            })
+            branches[sid] = ambiguous(_run(changed=changed))
+        # A hypothetical corrupted real-source observation for U, NEVER
+        # added as a true RDF witness.
+        u = cases[(i+1)%len(cases)]
+        u_uri = b["candidate_paths"][u][0]["subject"]
+        changed = copy.deepcopy(sources)
+        hit = next(r for r in changed["real_fork"]["observations"]
+                   if r["values"]["entity_0"] == u_uri)
+        hit["values"]["motif_object"] = b["real_fork"][
+            "candidate_forks"][target]["object"]
+        fork_necessary = ambiguous(_run(changed=changed))
+    return {
+        "policy": "single_task_plan_counterfactual_v1",
+        "passed": (
+            all(clue.values()) and all(discoveries.values())
+            and all_discovery and (condition is None or condition)
+            and all(branches.values())
+            and (fork_necessary is None or fork_necessary)
+        ),
+        "clue_necessary": clue,
+        "discovery_necessary": discoveries,
+        "all_discovery_ambiguous": all_discovery,
+        "event_field_necessary": condition,
+        "simulated_sources_necessary": branches,
+        "real_fork_necessary": fork_necessary,
+        "mode": plan["mode"],
+        "limitations": (
+            "Bounded executable filter relaxation and source interventions, "
+            "not proof of globally optimal or unique possible plans."
+        ),
+    }
