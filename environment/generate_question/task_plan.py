@@ -266,7 +266,7 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
     expected = Counter(
         sid for t in plan["macro_tasks"] for sid in t["source_scope"]
     )
-    if expected != Counter(schemas):
+    if expected != Counter(schemas.keys()):
         raise ValueError("task_plan_source_not_bound_exactly_once")
     return clues, catalog, schemas
 
