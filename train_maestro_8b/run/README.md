@@ -1,7 +1,80 @@
-## Stage 2 Reward: MAESTRO Hybrid (default)
+## Stage 2 Default: Global Evidence & Recovery LLM Judge
+
+The native Unsloth + colocated vLLM + TRL GRPOTrainer / Qwen3
+chat-template pipeline remains unchanged. The **new default** is
+`DA_REWARD_MODE=global` (independent per-completion reward, not groupwise).
+
+Unlike DA's teacher-action comparison or the old local hard-binding hybrid,
+the LLM Judge sees a reward-only context built from THREE views:
+
+- **Global DAG:** every Macro task, its source/field goals, dependencies,
+  and current admissible work/parallel limit.
+- **Actually returned factual evidence:** Stage4 claim nodes with concrete
+  subject/attribute/value, source/provenance, revision, claim relations,
+  conflicts, missing fields and affected dependencies. Exact branch and
+  pre-action round are enforced.
+- **Evaluator-only reference:** simulated source observations for sources
+  already reported, plus the final reference answer. These may contain
+  facts not actually observed by Main. The rubric explicitly FORBIDS
+  penalizing Main for failing to divine hidden corruption or future facts.
+
+Only the unchanged O1 prompt reaches the 8B student. The reference context
+goes to the external **reward Judge only**; it must not appear in the policy
+prompt. The Judge individually grades every structurally valid Action on
+0..10 task-tool alignment, evidence grounding, recovery quality and global
+orchestration quality. Current scoring weights are:
+
+```text
+Invalid O1 JSON or required structural fields  => -1
+Valid O1 Action => 0.10 format credit
+                 + 0.15 task/tool alignment
+                 + 0.15 evidence grounding
+                 + 0.25 recovery quality
+                 + 0.35 global orchestration quality
+```
+
+All dimension ratings are LLM judged and normalized to [0,1].
+`context` and `tools` remain OPTIONAL as defined by Orchestra-o1.
+Wrong tool/field/parallel strategy is not automatically -1 from an
+exact-string matcher; the earlier deterministic scorer's error is logged
+as `legacy_env_reason` **for diagnosis only**.
+
+Required Stage4 files:
+`private/decision_reward_states.jsonl` and
+`private/claim_state_supervision.jsonl`.
+The new context builder also reads the exact Stage1 `questions/scenes.jsonl`.
+Preflight rejects missing or future-timestamped claim states. If legacy
+journals lack pre-action claim audits, regenerate the Stage4 sidecar; do not
+fill it with inferred future observations.
+
+```bash
+git pull origin main
+bash train_maestro_8b/run/pipeline.sh prepare-grpo
+bash train_maestro_8b/run/pipeline.sh preflight
+export DASHSCOPE_API_KEY='YOUR_KEY'
+bash train_maestro_8b/run/pipeline.sh judge
+bash train_maestro_8b/run/pipeline.sh pilot
+GRPO_MAX_STEPS=100 bash train_maestro_8b/run/pipeline.sh grpo
+```
+
+Outputs are isolated in `stage2-global-pilot` and
+`stage2-global-grpo` directories. The global Judge uses its own
+versioned cache; it must not reuse the old Semantic Judge's v1 cache.
+Monitor `reward_diagnostics.jsonl`: per Action type, Judge dimension
+scores, reward, and `legacy_env_reason`. No raw candidate text or global
+reference records are written into diagnostics. Judge API failures abort
+rather than fabricating rewards.
+
+Ablations: `DA_REWARD_MODE=hybrid` (legacy exact-binding Environment +
+Semantic Judge), `deterministic` (local only), `judge_only` (old
+semantic model behind the local gate), `da` (DA four-dimension expert/gold
+Judge). Do not resume an optimizer checkpoint from a different reward mode.
+For the experimental Stage1 RiskKV path, use `STAGE2_TRAINER=riskkv`.
+
+## Legacy ablation: MAESTRO Hybrid (DA_REWARD_MODE=hybrid)
 
 `STAGE2_TRAINER=da` continues to use the working Unsloth/TRL/vLLM
-pipeline, while `DA_REWARD_MODE=hybrid` now selects the previously
+pipeline, while `DA_REWARD_MODE=hybrid` selects the previously
 defined **0.6 local Environment + 0.4 semantic Judge** reward.
 Invalid Action = -1; legal Action gets the mixed score. Training
 and rollout implementations are untouched.
@@ -28,7 +101,7 @@ for `valid`, `reason`, `env_reward`, `judge_reward`,
 `judge_dimensions` and `reward`; it never stores raw prompt or Action.
 The training source may contain gold/expert metadata for DA compatibility,
 but the hybrid Judge sees **only** the Main-visible Prompt and Action.
-The default paths now keep the old DA-run artifacts separate.
+The hybrid-mode paths are separate from the global and DA runs.
 
 For ablations: `DA_REWARD_MODE=deterministic` or `judge_only`.
 To reproduce the previous four-dimensional DA Judge exactly, use
