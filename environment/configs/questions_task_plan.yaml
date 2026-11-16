@@ -19,6 +19,7 @@ generation:
   no_progress: false
   knowledge_variant: task_plan
   knowledge_world_mode: compose
+  task_plan_composer: goal_conditioned_typed_v2
   knowledge_yago: data/world-source/YAGO-4.6
   knowledge_max_triples: 1000000
   knowledge_max_edges: 250000

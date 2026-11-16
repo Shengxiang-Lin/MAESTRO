@@ -20,7 +20,7 @@ SECTIONS = {
                    "knowledge_yago", "knowledge_max_triples",
                    "knowledge_max_edges", "knowledge_min_hops",
                    "knowledge_max_hops", "knowledge_variant",
-                   "knowledge_world_mode"},
+                   "knowledge_world_mode", "task_plan_composer"},
     "scenario": {"api_base", "model", "critic_api_base", "critic_model",
                  "api_key_env", "critic_api_key_env", "workers",
                  "max_revisions", "timeout"},
@@ -129,6 +129,14 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         if (generation.get("knowledge_world_mode", "witnessed") == "compose"
                 and generation.get("knowledge_variant") != "task_plan"):
             raise ValueError("knowledge_world_mode_compose_requires_task_plan")
+        if generation.get("task_plan_composer", "legacy") not in {
+            "legacy", "goal_conditioned_typed_v2"
+        }:
+            raise ValueError("unsupported_task_plan_composer")
+        if (generation.get("task_plan_composer", "legacy") != "legacy"
+                and (generation.get("knowledge_variant") != "task_plan"
+                     or generation.get("knowledge_world_mode") != "compose")):
+            raise ValueError("goal_composer_requires_task_plan_compose")
         if (type(generation.get("knowledge_max_triples", 1000000)) is not int
             or generation.get("knowledge_max_triples", 1000000) < 1
             or type(generation.get("knowledge_max_edges", 250000)) is not int
@@ -157,6 +165,7 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         knowledge_yago=_path(knowledge) if knowledge else None,
         knowledge_variant=generation.get("knowledge_variant", "v1"),
         knowledge_world_mode=generation.get("knowledge_world_mode", "witnessed"),
+        task_plan_composer=generation.get("task_plan_composer", "legacy"),
         knowledge_max_triples=generation.get("knowledge_max_triples", 1000000),
         knowledge_max_edges=generation.get("knowledge_max_edges", 250000),
         knowledge_min_hops=generation.get("knowledge_min_hops", 2),

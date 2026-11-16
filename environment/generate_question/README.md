@@ -5,6 +5,21 @@ composes a canonical synthetic World with source-scoped evidence, compiles
 Gold/Replay and information-necessity audits, then **by default** uses a
 local Question LLM Author and Critic to publish user-facing questions.
 
+## Goal-conditioned composition (v2)
+
+The default configuration selects `task_plan_composer: goal_conditioned_typed_v2`.
+The semantic relationship Goal is chosen before the information acquisition
+plan. Supported source-scoped producers then form a bounded typed Macro DAG:
+clue investigations may be independent or may require upstream `case_id`
+keys; relationship hops may be grouped into one or several Macro WorkProducts.
+Only downstream source views with a genuine upstream key become
+`keyed_lookup` sources. The legacy composer remains available by setting
+`task_plan_composer: legacy`, and earlier frozen Scene banks replay unchanged.
+
+V2 intentionally retains the existing one-string, exactly-one answer contract,
+three tested entity-acquisition producers, World/Gold IR and Stage 2–4
+interfaces. It does **not** claim arbitrary DAG planning or new answer types.
+
 ## Default 100-candidate pilot
 
 From the repository root with the OpenAI-compatible Qwen service listening at
