@@ -608,6 +608,44 @@ def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
         {case: copy.deepcopy(row) for case, row
          in fork["candidate_forks"].items()} if fork else {}
     )
+    if plan["mode"] == "event":
+        # Freeze project -> event -> subject links BEFORE source records.
+        # Two events per project force an actual keyed one-to-many lookup
+        # followed by the existing eligibility condition. Neither source
+        # invents a separate copy of the relationship.
+        from .world_motifs import (
+            composed_project_id, composed_event_id, KEYED_EVENT_VERSION,
+        )
+        from .task_plan_runtime import _condition_rows
+        qualified, other = _condition_rows(plan)
+        links = []
+        for i, case in enumerate(cases):
+            pid = composed_project_id(seed, ordinal, case)
+            world_model["entities"][pid] = {
+                "entity_id": pid, "type": "project",
+                "label": "Project " + case.split("-")[-1].upper(),
+            }
+            for role, details, subject_case in (
+                ("qualified", qualified, case),
+                ("other", other, cases[(i+1) % len(cases)]),
+            ):
+                eid = composed_event_id(pid, role)
+                world_model["entities"][eid] = {
+                    "entity_id": eid, "type": "event",
+                    "label": "Archive session " + eid[-6:],
+                }
+                links.append({
+                    "case_id": case, "project_id": pid,
+                    "event_id": eid, "event_role": role,
+                    "entity_0": paths[subject_case][0]["subject"],
+                    "event_status": details["event_status"],
+                    "event_year": details["event_year"],
+                    "project_event_predicate": "http://schema.org/hasPart",
+                    "event_subject_predicate": "http://schema.org/about",
+                    "origin": "synthetic",
+                })
+        world_model["event_links"] = links
+        world_model["keyed_event_relation_version"] = KEYED_EVENT_VERSION
     return {
         "target_case": target, "all_cases": cases,
         "candidate_paths": paths, "real_fork": fork,
@@ -774,9 +812,12 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
                   "event_name": "str"}
         if mode == "verify":
             schema["motif_object"] = "str"
+        keyed_event = grounding.get("world_model", {}).get(
+            "keyed_event_relation_version"
+        )
         source("event_ledger", "table", "Project event ledger",
                "Inspect events subject to an explicit eligibility rule",
-               schema)
+               schema, key="project_id" if keyed_event else None)
     if mode == "event":
         source("event_ref", "text",
                "Event-specific subject reference",
@@ -1002,10 +1043,34 @@ def validate_spec(spec: dict) -> list[str]:
         if world_mode not in {"witnessed", "compose"}:
             return ["task_plan_unknown_world_mode"]
         if world_mode == "compose":
-            from .world_motifs import validate_composed_world
+            from .world_motifs import (
+                validate_composed_world, KEYED_EVENT_VERSION,
+            )
             issues = validate_composed_world(binding)
             if issues:
                 return issues
+            event_links = binding["world_model"].get("event_links")
+            event_policy = binding["world_model"].get(
+                "keyed_event_relation_version"
+            )
+            if event_policy:
+                if (plan["mode"] != "event"
+                        or event_policy != KEYED_EVENT_VERSION):
+                    return ["task_plan_invalid_keyed_event_policy"]
+                from .task_plan_runtime import _condition_rows
+                qualified, other = _condition_rows(plan)
+                if any(
+                    link["event_status"] !=
+                        (qualified if link["event_role"] == "qualified"
+                         else other)["event_status"]
+                    or link["event_year"] !=
+                        (qualified if link["event_role"] == "qualified"
+                         else other)["event_year"]
+                    for link in event_links
+                ):
+                    return ["task_plan_event_eligibility_not_from_world"]
+            elif event_links is not None:
+                return ["task_plan_unversioned_event_links"]
             required = binding["world_model"].get("required_context_relation")
             if required:
                 if (required["source_id"] not in plan["clues"]
