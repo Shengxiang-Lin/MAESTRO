@@ -16,9 +16,60 @@ from __future__ import annotations
 import copy
 import random
 import re
+from collections import defaultdict
 
 from environment.schema import digest
 from .typed_role_grammar import OUTPUTS
+
+class YagoKnowledgeIndex:
+    """Build once for a large YAGO dump; share indexes across all scenes.
+
+    Neither the index nor the full YAGO corpus enters a frozen ProblemSpec.
+    Each scene records only its actual entity-to-entity factual witnesses.
+    """
+
+    def __init__(self, graph):
+        self.graph = graph
+        self.outgoing = graph.outgoing()
+        self.by_predicate = defaultdict(list)
+        for fact in graph.edges:
+            self.by_predicate[fact.predicate].append(fact)
+        self.joinable = [
+            fact for fact in graph.edges
+            if any(
+                next_fact.object != fact.subject
+                and next_fact.object != fact.object
+                for next_fact in self.outgoing.get(fact.object, ())
+            )
+        ]
+
+    def connected_path(self, rng, *, min_hops: int, max_hops: int):
+        if not 1 <= min_hops <= max_hops <= 5:
+            raise ValueError("invalid_knowledge_hop_limits")
+        lengths = list(range(min_hops, max_hops + 1))
+        rng.shuffle(lengths)
+        lengths.sort(key=lambda n: n > 1, reverse=True)
+        for target in lengths:
+            choices = self.joinable if target > 1 else self.graph.edges
+            if not choices:
+                continue
+            for _ in range(120):
+                start = rng.choice(choices)
+                path, visited = [start], {start.subject, start.object}
+                while len(path) < target:
+                    following = [
+                        e for e in self.outgoing.get(path[-1].object, ())
+                        if e.object not in visited and e.subject != e.object
+                    ]
+                    if not following:
+                        break
+                    fact = rng.choice(following)
+                    path.append(fact)
+                    visited.add(fact.object)
+                if len(path) == target:
+                    return path
+        raise ValueError("no_witnessed_yago_path_for_requested_depth")
+
 
 VERSION = "maestro.macro_plan.typed_knowledge.v1"
 KNOWLEDGE_VERSION = "maestro.yago_witness.v1"
@@ -51,13 +102,14 @@ def predicate_label(iri: str) -> str:
 
 
 def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
-              min_hops: int = 2, max_hops: int = 3) -> dict:
+              min_hops: int = 2, max_hops: int = 3,
+              index: YagoKnowledgeIndex | None = None) -> dict:
     """Ground a versioned Macro graph on witnessed, connected YAGO facts."""
-    from environment.macro_v3.v31 import choose_real_path
     if difficulty not in {"medium", "hard"}:
         raise ValueError("knowledge_v1_supports_medium_or_hard")
     rng = random.Random(int(digest(seed, ordinal, "knowledge-canonical-v1")[:15], 16))
-    path = choose_real_path(kg, rng, min_hops=min_hops, max_hops=max_hops)
+    index = index or YagoKnowledgeIndex(kg)
+    path = index.connected_path(rng, min_hops=min_hops, max_hops=max_hops)
     n_discovery = rng.randint(2, 3)
     total_clues = 2 * n_discovery
     target = "Ref-" + str(rng.randrange(100000, 999999))
@@ -161,9 +213,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
             "origin": "yago",
         })
         # Every decoy row also originates from an existing YAGO triple.
-        alternatives = [e for e in kg.edges
-                        if e.predicate == edge.predicate
-                        and e.subject != edge.subject
+        alternatives = [e for e in index.by_predicate[edge.predicate]
+                        if e.subject != edge.subject
                         and e.object != edge.object]
         rng.shuffle(alternatives) if len(alternatives) < 150 else None
         picked = set()
