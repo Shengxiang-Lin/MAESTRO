@@ -426,3 +426,234 @@ def audit_information_necessity(scene: dict) -> dict:
             "about simulated historical media."
         ),
     }
+
+
+# --- Graph-first v2: field-selective evidence and causal event-key handoffs ---
+EVIDENCE_V2_VERSION = "maestro.task_first_evidence_plan.v2"
+
+
+def design_evidence_v2(graph: dict, relation_v2: dict, base: dict) -> dict:
+    """Freeze event-specific source claims after graph and sketch selection.
+
+    For an event-gated Macro, completed-event directories have the
+    original sets A={T,U,V}, B={T,U,W}; the scheduled event adds W only
+    to directory A and V only to directory B. Collapsing the event_id
+    handoff to project_id therefore reopens *real* alternative YAGO
+    answers. The original v1 source rows were identical by event_id.
+    """
+    from .relational_task_planner import validate_relations_v2
+    from .hybrid_world import _route_key
+    problems = validate_relations_v2(relation_v2, graph)
+    if problems:
+        raise ValueError("invalid_event_relation_for_evidence:" +
+                         ",".join(problems))
+    cases = base["macro_plan"]["all_cases"]
+    paths = base["macro_plan"]["candidate_paths"]
+    projects = base["macro_plan"]["synthetic_entities"]
+    extras = {"link_a": {}, "link_b": {}}
+    event_records = base["task_first_evidence"]["scheduled_event_records"]
+    for i, case in enumerate(cases):
+        pid = projects[case]["entity_id"]
+        eid = event_records[case]["event_id"]
+        for sid, shift in (("link_a", 3), ("link_b", 2)):
+            uri = paths[cases[(i+shift) % len(cases)]][0]["subject"]
+            extras[sid][case] = {
+                "project_id": pid, "event_id": eid, "entity_0": uri,
+                "route_key": _route_key(pid, uri),
+            }
+    evidence = {
+        "version": EVIDENCE_V2_VERSION,
+        "graph_hash": graph["graph_hash"],
+        "relation_sketch_hash": relation_v2["sketch_hash"],
+        "frozen_v1_evidence_hash": base["task_first_evidence"][
+            "evidence_hash"],
+        "event_selection": relation_v2["event_relation"],
+        "event_facts_policy": {
+            "status_completed": {
+                "selected": {"event_status": "completed", "event_year": 2025},
+                "other": {"event_status": "scheduled", "event_year": 2025},
+            },
+            "year_at_least_2025": {
+                "selected": {"event_status": "recorded", "event_year": 2025},
+                "other": {"event_status": "recorded", "event_year": 2024},
+            },
+        }[relation_v2["event_goal"]],
+        "scheduled_only_source_claims": extras,
+        "causal_port": {
+            "node_key": "event", "field": "event_id",
+            "downstream": ["directory_a", "directory_b"],
+            "required": graph["shape"] == "event_gated_association",
+            "bypass_plan": "relink_both_directory_inputs_by_project_id",
+        },
+        "context_not_credited": [
+            "event_name", "project_name", "organizer_name",
+            "venue_name", "organizer_id", "venue_id",
+        ],
+        "minimum_alternative_answers": 2,
+    }
+    evidence["evidence_hash"] = digest(
+        evidence, "task-first-evidence-v2"
+    )
+    return evidence
+
+
+def validate_evidence_v2(evidence: dict, relation_v2: dict,
+                         base: dict) -> list[str]:
+    try:
+        from .relational_task_planner import validate_relations_v2
+        graph = base["task_first_macro_graph"]
+        issues = validate_relations_v2(relation_v2, graph)
+        if issues:
+            return issues
+        data = {k: v for k, v in evidence.items()
+                if k != "evidence_hash"}
+        if (evidence["version"] != EVIDENCE_V2_VERSION
+                or evidence["evidence_hash"] != digest(
+                    data, "task-first-evidence-v2"
+                ) or evidence["graph_hash"] != graph["graph_hash"]
+                or evidence["relation_sketch_hash"] !=
+                relation_v2["sketch_hash"]
+                or evidence["frozen_v1_evidence_hash"] !=
+                base["task_first_evidence"]["evidence_hash"]):
+            return ["task_first_v2_evidence_hash_mismatch"]
+        if evidence["event_selection"] != relation_v2["event_relation"]:
+            return ["task_first_v2_event_selection_not_from_sketch"]
+        goal = relation_v2["event_goal"]
+        policy = evidence["event_facts_policy"]
+        if goal == "status_completed":
+            if (policy["selected"] != {
+                    "event_status": "completed", "event_year": 2025
+            } or policy["other"] != {
+                    "event_status": "scheduled", "event_year": 2025
+            }):
+                return ["task_first_v2_bad_status_evidence"]
+        elif goal == "year_at_least_2025":
+            if (policy["selected"] != {
+                    "event_status": "recorded", "event_year": 2025
+            } or policy["other"] != {
+                    "event_status": "recorded", "event_year": 2024
+            }):
+                return ["task_first_v2_bad_temporal_evidence"]
+        else:
+            return ["task_first_v2_unsupported_event_relation"]
+        cases = base["macro_plan"]["all_cases"]
+        plans = base["macro_plan"]
+        from .hybrid_world import _route_key
+        extra = evidence["scheduled_only_source_claims"]
+        if set(extra) != {"link_a", "link_b"}:
+            return ["task_first_v2_missing_scheduled_competitors"]
+        for sid, shift in (("link_a", 3), ("link_b", 2)):
+            if set(extra[sid]) != set(cases):
+                return ["task_first_v2_missing_per_case_claim"]
+            for i, case in enumerate(cases):
+                record = extra[sid][case]
+                pid = plans["synthetic_entities"][case]["entity_id"]
+                expected_uri = plans["candidate_paths"][
+                    cases[(i+shift) % len(cases)]
+                ][0]["subject"]
+                expected_eid = base["task_first_evidence"][
+                    "scheduled_event_records"][case]["event_id"]
+                if record != {
+                    "project_id": pid, "event_id": expected_eid,
+                    "entity_0": expected_uri,
+                    "route_key": _route_key(pid, expected_uri),
+                }:
+                    return ["task_first_v2_noncausal_scheduled_candidate"]
+        if (evidence["causal_port"]["required"] != (
+                graph["shape"] == "event_gated_association")
+                or evidence["causal_port"]["field"] != "event_id"):
+            return ["task_first_v2_wrong_port_contract"]
+        return []
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        return ["task_first_v2_evidence_invalid:" + str(exc)[:150]]
+
+
+def materialize_world_v2(spec: dict) -> dict:
+    """Keep frozen v1 replay untouched; overlay v2 evidence deterministically."""
+    from .world import _rows
+    import copy as _copy
+
+    base = spec["task_first_v1_backbone"]
+    relation = spec["task_first_v2_relation_sketch"]
+    evidence = spec["task_first_v2_evidence"]
+    issues = validate_evidence_v2(evidence, relation, base)
+    if issues:
+        raise ValueError("task_first_v2_world_contract:" + ",".join(issues))
+    world = materialize_world(base)
+    bank = world["sources"]
+    cases = base["macro_plan"]["all_cases"]
+    selected = base["task_first_evidence"]["main_event_records"]
+    other = base["task_first_evidence"]["scheduled_event_records"]
+    policy = evidence["event_facts_policy"]
+    by_eid = {}
+    for case in cases:
+        by_eid[selected[case][0]["event_id"]] = policy["selected"]
+        by_eid[other[case]["event_id"]] = policy["other"]
+    for row in bank["event_ledger"]["observations"]:
+        data = row["values"]
+        label = by_eid[data["event_id"]]
+        data.update(label)
+        if "(scheduled follow-up)" in data["event_name"]:
+            data["event_name"] = data["event_name"].replace(
+                "(scheduled follow-up)", "(supplementary session)"
+            )
+    # Make event records correspond to their materialized synthetic
+    # entities; do not leave a stale status/year in the truth ledger.
+    entities = world["synthetic_world"]["entities"]
+    for case in cases:
+        entities["events"][case]["status"] = policy["selected"]["event_status"]
+        entities["events"][case]["year"] = policy["selected"]["event_year"]
+        entities["scheduled_events"][case]["status"] = policy["other"][
+            "event_status"]
+        entities["scheduled_events"][case]["display_name"] = other[case][
+            "event_name"].replace(
+                "(scheduled follow-up)", "(supplementary session)"
+            )
+        entities["scheduled_events"][case]["year"] = policy["other"][
+            "event_year"]
+
+    if evidence["causal_port"]["required"]:
+        for sid in ("link_a", "link_b"):
+            values = [dict(row["values"])
+                      for row in bank[sid]["observations"]]
+            values += [
+                dict(evidence["scheduled_only_source_claims"][sid][case])
+                for case in cases
+            ]
+            # Deterministic ordering, no source row loses provenance.
+            values.sort(key=lambda r: (
+                r["project_id"], r["event_id"], r["entity_0"]
+            ))
+            entry = next(s for s in spec["sources"]
+                         if s["source_id"] == sid)
+            source = _rows(sid, entry["modality"], entry["title"],
+                           entry["purpose"], values)
+            source["access_policy"] = {"mode": "browse"}
+            source["evidence_kind"] = (
+                "event_specific_unverified_reference_hypotheses"
+            )
+            for record in source["observations"]:
+                record["claim_status"] = "unverified_candidate"
+                record["evidence_origin_id"] = "simulated:" + digest(
+                    sid, record["values"]["event_id"],
+                    record["values"]["route_key"],
+                )[:20]
+            bank[sid] = source
+
+    world["task_first_evidence_contract"] = {
+        "version": EVIDENCE_V2_VERSION,
+        "task_local_relation": _copy.deepcopy(
+            relation["event_relation"]
+        ),
+        "required_port": _copy.deepcopy(evidence["causal_port"]),
+        "context_fields": _copy.deepcopy(
+            evidence["context_not_credited"]
+        ),
+    }
+    world["value_sampling_contract"] = (
+        "graph_first_local_relation_and_causal_event_port_v2"
+    )
+    world["knowledge_witness"] = _copy.deepcopy(
+        spec["knowledge_witness"]
+    )
+    return world
