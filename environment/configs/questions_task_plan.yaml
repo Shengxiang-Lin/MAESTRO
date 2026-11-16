@@ -11,7 +11,7 @@ input:
 
 generation:
   output_dir: environment/data/stage1
-  target: 20
+  target: 100
   seed: 17
   difficulty_mix: [0, 50, 50]
   overwrite: false
@@ -37,10 +37,12 @@ scenario:
   timeout: 180
 
 question:
-  api_base: null
-  model: null
-  critic_api_base: null
-  critic_model: null
+  # Default Question Author and Critic: separate calls to the local Qwen endpoint.
+  # Frozen Task Plan, World, Evidence and Gold are never edited by the LLM.
+  api_base: http://127.0.0.1:8807/v1
+  model: local-qwen3.5-9b
+  critic_api_base: http://127.0.0.1:8807/v1
+  critic_model: local-qwen3.5-9b
   api_key_env: null
   workers: 4
   max_revisions: 2
