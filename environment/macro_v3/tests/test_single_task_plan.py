@@ -7,7 +7,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from environment.generate_question.task_plan import make_spec, validate_spec
+from environment.generate_question.task_plan import (
+    make_spec, validate_spec, CALIBRATED, BLIND_EVENTS, GOAL_QUESTIONS,
+)
+from environment.generate_question.task_plan_runtime import audit_information
 from environment.generate_question.world import compile_program, generate_world
 from environment.generate_question.question import reference_question
 from environment.generate_question.quality import compile_and_validate, validate_replay
@@ -50,10 +53,17 @@ class DirectTaskPlanTests(unittest.TestCase):
         index = YagoKnowledgeIndex(graph)
         for ordinal in range(9):
             spec = make_spec(graph, seed=17, ordinal=ordinal,
-                             difficulty="hard", index=index)
+                             difficulty="medium" if ordinal % 2 == 0 else "hard",
+                             index=index)
             self.assertFalse(validate_spec(spec))
             self.assertEqual(spec["reasoning_pattern"], "task_plan")
             self.assertEqual(spec["family"], "task_plan")
+            self.assertEqual(spec["macro_plan"]["difficulty_sampling_policy"],
+                             CALIBRATED)
+            self.assertEqual(spec["macro_plan"]["evidence_sampling_policy"],
+                             BLIND_EVENTS)
+            self.assertEqual(spec["macro_plan"]["question_sampling_policy"],
+                             GOAL_QUESTIONS)
             self.assertTrue(not any(
                 "backbone" in field for field in spec
             ))
@@ -96,6 +106,8 @@ class DirectTaskPlanTests(unittest.TestCase):
                 "candidate_information_necessity"
             ]
             self.assertTrue(info["passed"], info)
+            self.assertTrue(info["non_target_field_substitution"]["passed"])
+            self.assertNotIn("followed by", question.casefold())
             self.assertTrue(all(info["clue_necessary"].values()))
             self.assertTrue(all(info["discovery_necessary"].values()))
             if plan["condition"]:
@@ -107,6 +119,85 @@ class DirectTaskPlanTests(unittest.TestCase):
                 self.assertIsNone(info["real_fork_necessary"])
         self.assertEqual(seen_modes, {"trace", "event", "verify"})
         self.assertGreaterEqual(len(sizes), 3)
+
+    def test_cross_field_leakage_negative_control(self):
+        # Replay the old naming shortcut in the NEW materialized World.
+        # The original condition-removal test would still pass, but
+        # replacing the condition with event_name must now catch it.
+        kg = graph_fixture()
+        for ordinal, difficulty in (
+            (0, "medium"), (0, "hard"),
+            (1, "hard"), (3, "hard"),
+        ):
+            spec = make_spec(
+                kg, seed=17, ordinal=ordinal, difficulty=difficulty,
+            )
+            self.assertIsNotNone(spec["macro_plan"]["condition"])
+            scene = compile_and_validate(
+                spec, reference_question(spec)
+            )
+            audit = scene["difficulty_audit"]["macro_first_audit"][
+                "candidate_information_necessity"
+            ]
+            self.assertTrue(audit["non_target_field_substitution"]["passed"])
+            self.assertTrue(audit["event_field_necessary"])
+            case = spec["macro_plan"]["world_binding"]["target_case"]
+            from environment.generate_question.task_plan_runtime import _project
+            pid = _project(spec["seed"], spec["ordinal"], case)
+            target_records = [
+                r["values"] for r in scene["world"]["sources"][
+                    "event_ledger"]["observations"]
+                if r["values"]["project_id"] == pid
+            ]
+            self.assertEqual(
+                len({r["event_name"] for r in target_records}), 1
+            )
+            # No alternative descriptive field can replace the selected
+            # event_status or event_year predicate for this project.
+            attacked = deepcopy(scene)
+            condition = spec["macro_plan"]["condition"]
+            for obs in attacked["world"]["sources"][
+                "event_ledger"]["observations"
+            ]:
+                r = obs["values"]
+                eligible = (r["event_status"] == "completed"
+                            if condition["field"] == "event_status"
+                            else r["event_year"] >= 2025)
+                r["event_name"] = (
+                    "Qualified project session" if eligible
+                    else "Unqualified project session"
+                )
+            bypass = audit_information(attacked)
+            self.assertFalse(bypass["passed"])
+            self.assertTrue(bypass["event_field_necessary"])
+            self.assertFalse(bypass[
+                "non_target_field_substitution"]["tested_fields"][
+                    "event_name"]["passed"]
+            )
+            self.assertTrue(any(
+                row["unique_shortcut"]
+                for row in bypass["non_target_field_substitution"][
+                    "tested_fields"]["event_name"]["attempts"].values()
+            ))
+
+    def test_structural_difficulty_stratification(self):
+        kg = graph_fixture()
+        plans = {"medium": [], "hard": []}
+        modes = {"medium": set(), "hard": set()}
+        for ordinal in range(12):
+            for level in ("medium", "hard"):
+                spec = make_spec(
+                    kg, seed=17, ordinal=ordinal,
+                    difficulty=level,
+                )
+                plan = spec["macro_plan"]
+                plans[level].append(len(plan["macro_tasks"]))
+                modes[level].add(plan["mode"])
+        self.assertGreater(
+            min(plans["hard"]), max(plans["medium"])
+        )
+        self.assertEqual(modes["medium"], {"trace", "event"})
+        self.assertEqual(modes["hard"], {"event", "verify"})
 
     def test_spec_tamper_and_replay_fail_closed(self):
         kg = graph_fixture()
