@@ -44,7 +44,7 @@ class CanonicalStagePathsTests(TestCase):
             reports["source_subtasks"],
             subtask["output_dir"] / "subtasks.jsonl",
         )
-        scenes = root / "stage1" / "questions" / "scenes.jsonl"
+        scenes = root / "stage1" / "constructed" / "scenes.jsonl"
         self.assertEqual(subtask["scenes_path"], scenes)
         self.assertEqual(main["scenes_path"], scenes)
         self.assertEqual(stage4["scenes_path"], scenes)
