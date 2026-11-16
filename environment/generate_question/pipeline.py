@@ -755,7 +755,48 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     "counterfactual_source_tests", {}).values())
             for scene in knowledge_scenes
         )
+        v2_scenes = [
+            scene for scene in knowledge_scenes
+            if scene["problem_spec"]["reasoning_pattern"] == "typed_knowledge_v2"
+        ]
+        necessity = [
+            scene.get("difficulty_audit", {}).get("macro_first_audit", {}).get(
+                "candidate_information_necessity", {}
+            )
+            for scene in v2_scenes
+        ]
         data["knowledge_world_grounding"] = {
+            "necessity_v2": {
+                "scenes_checked": len(v2_scenes),
+                "passed": sum(a.get("passed", False) for a in necessity),
+                "identification_unique": sum(
+                    a.get("identification_unique", False) for a in necessity
+                ),
+                "all_clue_relaxations_ambiguous": sum(
+                    bool(a.get("source_counterfactuals"))
+                    and all(
+                        row.get("has_real_competing_answer", False)
+                        for row in a["source_counterfactuals"].values()
+                    ) for a in necessity
+                ),
+                "all_discovery_relaxations_ambiguous": sum(
+                    bool(a.get("discovery_counterfactuals"))
+                    and all(
+                        row.get("has_real_competing_answer", False)
+                        for row in a["discovery_counterfactuals"].values()
+                    ) for a in necessity
+                ),
+                "no_discovery_bypass_blocked": sum(
+                    a.get("all_discovery_filters_removed", {}).get(
+                        "ambiguous", False
+                    ) for a in necessity
+                ),
+                "scope": (
+                    "Executable filter-relaxation checks with complete "
+                    "real-YAGO alternative paths, not a proof of globally "
+                    "optimal agent information acquisition."
+                ),
+            },
             "version": "typed_knowledge_v1_and_v2",
             "pattern_distribution": dict(Counter(
                 scene["problem_spec"]["reasoning_pattern"]
