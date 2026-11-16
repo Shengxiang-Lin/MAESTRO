@@ -25,12 +25,12 @@ All paths, model endpoints, worker counts and output directories live in
 ```bash
 python -m environment generate-questions --config environment/configs/questions_task_plan.yaml
 python -m environment naturalize-subtasks --config environment/configs/subagent_reports.yaml
-python -m environment generate-main-turns --config environment/configs/base_orchestration.yaml
+python -m environment generate-main-turns --config environment/configs/main_orchestration.yaml
 python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml
 ```
 
-The first workflow constructs validated Questions and Macro DAGs from a fixed
-candidate pool; the second materializes exact evidence traces and reviewed
+The first workflow constructs frozen Macro DAGs and publishes Question
+Author/Critic-reviewed questions from a fixed 100-candidate pool; the second materializes exact evidence traces and reviewed
 Sub-Agent responses; the third generates trusted, cumulative-history
 Main-Agent decision trajectories. The fourth workflow branches from an accepted
 Main decision round, injects a last-batch primitive evidence fault, and
