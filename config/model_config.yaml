@@ -40,7 +40,7 @@ models:
     temperature: 0.1
     top_p: 0.9
 
-  deepseek-v4-flash-0731:
+  deepseek-v4.1-flash-1017:
     backend: api
     api_type: openai
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
