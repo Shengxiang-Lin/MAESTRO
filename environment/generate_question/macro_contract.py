@@ -120,7 +120,7 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         for step in steps
         if step["op"] in {"compare_fields", "claim_relation_filter"}
     ]
-    if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2"}:
+    if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}:
         plan = spec["macro_plan"]
         if (len(graph["tasks"]) != len(plan["macro_tasks"])
                 or graph.get("plan_origin") != "macro_first"):
@@ -134,6 +134,10 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         if (graph["terminal_task_id"] != "work_" + plan["terminal_macro_id"]
                 or not ops["lookup_by_key"]):
             raise ValueError("macro_first_terminal_or_lookup_missing")
+    if pattern == "typed_knowledge_v3":
+        from .hybrid_world import VERSION as K_VERSION
+        if plan.get("version") != K_VERSION:
+            raise ValueError("incorrect_hybrid_macro_version")
     if pattern == "typed_knowledge_v2":
         from .knowledge_macro_v2 import VERSION as K_VERSION
         if plan.get("version") != K_VERSION:
