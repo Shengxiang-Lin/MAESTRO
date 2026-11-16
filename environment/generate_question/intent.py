@@ -94,19 +94,13 @@ def intent_contract(spec: dict) -> dict:
         )
     elif pattern == "task_plan":
         plan = spec["macro_plan"]
-        fictional = (plan["world_binding"]["candidate_paths"][
-            plan["world_binding"]["target_case"]][0]["origin"] == "synthetic")
         constraints = [
-            "Combine the independently simulated identifying clues.",
-            ("Identify the single fictional project before following "
-             + ("its fictional relation records." if fictional else
-                "real YAGO links.")),
-            ("Report the related entity reached by the documented "
-             + ("fictional relations." if fictional else "real YAGO predicates.")),
-            ("All knowledge and evidence relationships are simulated; do not "
-             "describe them as actual YAGO or historical facts." if fictional
-             else "Fictional project and event information is not historical "
-                  "YAGO evidence."),
+            "Combine the independently recorded identifying clues.",
+            "Identify the matching dossier before following its relationship records.",
+            "Report the entity reached by the documented relation sequence.",
+            "Write the user request as an ordinary archival investigation; "
+            "do not mention generators, simulated worlds, YAGO or provenance.",
+            "Do not assert unsupported external historical facts.",
         ]
         condition = plan["condition"]
         if condition:
@@ -117,9 +111,8 @@ def intent_contract(spec: dict) -> dict:
             )
         if plan["mode"] == "verify":
             constraints.append(
-                "Combine two candidate directories, fictional event eligibility "
-                + ("and a distinct simulated registry relation." if fictional
-                   else "and genuine secondary YAGO evidence.")
+                "Combine two candidate directories, the event eligibility "
+                "criterion and a separately maintained registry relation."
             )
         constraints.extend(
             f"Identifying observation: {item['attribute']} {item['value']}."
@@ -132,18 +125,11 @@ def intent_contract(spec: dict) -> dict:
             constraints.extend([
                 "The precise final user goal must be semantically equivalent "
                 "to: " + goal["question"],
-                ("The goal follows the exact frozen simulated relations; "
-                 "do not claim external historical/YAGO grounding or invent "
-                 "extra comparisons, conditions or predicates." if fictional
-                 else "The goal follows the exact witnessed YAGO predicate "
-                      "sequence; no extra relation, threshold, comparison, "
-                      "uniqueness claim outside the loaded YAGO sample, or "
-                      "historical event may be invented."),
-                ("All entities, relation objects and source reports belong "
-                 "to this fictional world." if fictional
-                 else "The subject and answer type names are predicate-derived "
-                      "hints only; the bounded facts dump lacks RDF type proof."),
-                "Keep all synthetic dossier cues and the exact conditional "
+                "The goal follows the exact recorded relationship sequence. "
+                "Do not invent additional comparisons, eligibility conditions "
+                "or relationships.",
+                "Use only the dossier records and relationship sources provided.",
+                "Keep all dossier identifying cues and the exact conditional "
                 "event eligibility requirement when applicable.",
             ])
     elif pattern == "task_graph_first_v2":
@@ -264,7 +250,7 @@ def intent_contract(spec: dict) -> dict:
         ),
         "acquisition_chain": None,
         "topic": spec["scenario"]["topic"],
-        "hypothetical": pattern != "macro_first_v2",
+        "hypothetical": pattern not in {"macro_first_v2", "task_plan"},
         "setting": spec["scenario"]["setting"],
         "entity_kind": " ".join(
             spec["scenario"]["entity_kind"].replace("_", " ").split()
@@ -274,12 +260,9 @@ def intent_contract(spec: dict) -> dict:
         "difficulty": spec["difficulty_target"],
         "nonnegotiable_conditions": constraints,
         "output_contract": (
-            ("Return one final related fictional entity name."
-             if pattern == "task_plan" and
-             spec["macro_plan"]["world_binding"]["candidate_paths"][
-                 spec["macro_plan"]["world_binding"]["target_case"]
-             ][0]["origin"] == "synthetic"
-             else "Return one final linked real-world entity name.")
+            ("Return one final related entity name."
+             if pattern == "task_plan" else
+             "Return one final linked real-world entity name.")
             if pattern in {"task_graph_first_v1", "task_graph_first_v2", "task_plan"} else
             "Return the single final real YAGO-related entity name."
             if pattern == "typed_knowledge_v4" else
