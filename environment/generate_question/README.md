@@ -552,3 +552,66 @@ Detailed per-scene counterfactuals are available under
 - The alternative-plan test is a bounded, executable counterfactual in
   the frozen World. It does not prove global optimality or exclude
   shortcuts using knowledge not in the simulated corpus.
+
+## Current experimental generator: one Task Plan (not stacked legacy Specs)
+
+Use the opt-in configuration `environment/configs/questions_task_plan.yaml`:
+
+```bash
+python -m environment generate-questions \
+  --config environment/configs/questions_task_plan.yaml
+
+python -m environment quality \
+  --config environment/configs/questions_task_plan.yaml \
+  --scenes environment/data/stage1_single_task_plan_pilot/constructed/scenes.jsonl
+```
+
+The generator consists of **two current files** rather than a new stack
+of complete versioned World Generators:
+
+- `task_plan.py` first freezes the source-free typed Macro information
+  tasks. It chooses the number of Discovery Macros, optional eligibility
+  and cross-source verification requirements, and how a real YAGO trail
+  is grouped into 1–2 Macros. **Only then** does it match complete,
+  distinct real candidate paths directly from the YAGO index, and
+  optional actual secondary YAGO fork facts. The two reused legacy
+  functions are pure fact samplers; no earlier `make_spec()` is called.
+  The authoritative DAG and relation requirements live together in
+  **one** `macro_plan.macro_tasks` array.
+- `task_plan_runtime.py` materializes real witnessed RDF excerpts and
+  explicitly fictional project/event/source evidence, compiles those
+  tasks into the **original** source-scoped Program IR, and performs
+  bounded executable information-necessity interventions. It does not
+  add a second execution engine; the old Compiler, Macro WorkProducts,
+  FactRefs, Question Author/Critic, strict Replay and Stage-2 output
+  contracts are retained.
+
+Supported *first vertical slice*: direct project reference tracing,
+a genuinely conditional event→entity lookup, and a two-claim-source
+association followed by genuine YAGO fork verification. The resulting
+Macro DAGs have **variable sizes, with a hard cap of nine**, rather than
+enforcing nine for all tasks. These are still constrained task families,
+not arbitrary compositions or all possible human research goals.
+
+New specs do **not** contain `task_first_v1_backbone`,
+`hybrid_backbone_v3` or any other embedded historical ProblemSpec.
+The output path and serialized version are distinct to keep earlier
+v1–v4 and Graph-first v1/v2 Replay reproducible; frozen historical
+code paths are retained as compatibility handlers, not used to
+generate new task banks.
+
+Source-level and information-level audit checks remain separate:
+the new `single_task_plan_counterfactual_v1` policy tests each
+identifying clue, Discovery removal, event-status/year eligibility,
+and (when present) the independent candidate directories and real YAGO
+fork under controlled re-planning. An empty or blocked path is **not**
+counted as proof of necessity; these are bounded World interventions,
+not proof of globally shortest agent plans. All fictional evidence
+remains simulated, while every stated genuine RDF edge is drawn from
+the supplied YAGO corpus.
+
+The quality report includes
+`knowledge_world_grounding.single_task_plan` with graph mode,
+number of Macro tasks, replay/necessity pass counts and a check that
+the new Spec embeds no legacy backbones.
+
