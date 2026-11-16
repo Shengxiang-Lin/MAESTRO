@@ -36,6 +36,9 @@ def _mutate_answer_witness(sources: dict, source_id: str,
             if ref.startswith(source_id + ":")}
     if not refs:
         raise ValueError("missing_gold_source_witness:" + source_id)
+    if (spec or {}).get("reasoning_pattern") == "task_plan":
+        from .task_plan_runtime import mutate_witness
+        return mutate_witness(sources, source_id, gold_workproducts, spec)
     if (spec or {}).get("reasoning_pattern") == "task_graph_first_v2":
         from .task_graph_first_v2 import mutate_witness
         return mutate_witness(sources, source_id, gold_workproducts, spec)
@@ -87,7 +90,7 @@ def _mutate_answer_witness(sources: dict, source_id: str,
 
 def weak_single_source_baseline(scene: dict) -> list[dict]:
     """A measured shortcut attempt, NOT exhaustive program minimization."""
-    if scene["problem_spec"].get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2"}:
+    if scene["problem_spec"].get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"}:
         # A visual clue is mandatory, neither keyed store is browsable.
         return []
     rows = [
@@ -254,7 +257,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             issues.append("gold_execution_trace_mismatch")
         graph = (
             compile_frozen_macro_plan(spec, program, execution["trace"])
-            if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2"}
+            if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"}
             else compile_macro_tasks(program, execution["trace"])
         )
         if graph != scene["macro_graph"]:
@@ -286,7 +289,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         "medium": (3, 2, 3),
         "hard": (4, 3, 4),
     }
-    if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2"}:
+    if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"}:
         source_count, joins, depth = 2, 0, 2
     else:
         source_count, joins, depth = levels[difficulty]
@@ -298,7 +301,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         issues.append("insufficient_join_count")
     if profile["necessary_structural_operator_depth"] < depth:
         issues.append("insufficient_operator_depth")
-    if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2"}:
+    if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"}:
         if (len(answer) != 1 or set(answer[0]) != {
             spec["macro_plan"]["goal"]["answer_field"]
         }):
@@ -407,7 +410,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             "Image, video and audio are simulated annotations, not real perception.",
         ],
     }
-    if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2"}:
+    if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"}:
         result["macro_first_audit"] = {
             "pattern": spec["macro_plan"].get("pattern", spec["reasoning_pattern"]),
             "frozen_macro_count": len(spec["macro_plan"]["macro_tasks"]),
@@ -442,7 +445,7 @@ def compile_and_validate(spec: dict, question: str) -> dict:
     program = scene["gold_program"]
     graph = (
         compile_frozen_macro_plan(spec, program, scene["gold_trace"])
-        if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2"}
+        if spec.get("reasoning_pattern") in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"}
         else compile_macro_tasks(program, scene["gold_trace"])
     )
     scene["macro_graph"] = graph
