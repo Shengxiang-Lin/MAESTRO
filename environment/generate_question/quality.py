@@ -199,6 +199,12 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         issues.append("privileged_world_leaked_to_public")
     if scene["public"].get("question") != scene["question"]:
         issues.append("public_question_mismatch")
+    if "task_input" in spec and (
+        scene["public"].get("task_input") != spec["task_input"]
+    ):
+        issues.append("public_task_input_not_from_frozen_spec")
+    elif "task_input" not in spec and "task_input" in scene["public"]:
+        issues.append("unexpected_public_task_input")
     if not scene["question_origin"].startswith(("deterministic_", "llm_")):
         issues.append("unknown_question_origin")
     if scene["question_origin"] == "deterministic_frozen_problem_spec":

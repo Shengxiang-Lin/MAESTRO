@@ -522,7 +522,13 @@ class DirectTaskPlanTests(unittest.TestCase):
             seen_leads.add(question.split(":", 1)[0].split(
                 " with the following", 1
             )[0][:72])
-            self.assertIn(plan["clues"][sid]["value"], question)
+            self.assertNotIn(
+                plan["clues"][sid]["value"], question,
+            )
+            self.assertIn(
+                plan["clues"][sid]["value"],
+                [row["observed_value"] for row in spec["task_input"]["observations"]],
+            )
             scene = compile_and_validate(spec, question)
             self.assertEqual(validate_replay(scene)["status"], "valid")
             audit = scene["difficulty_audit"]["macro_first_audit"][
@@ -582,6 +588,99 @@ class DirectTaskPlanTests(unittest.TestCase):
                 validate_spec(tampered),
             )
         self.assertGreaterEqual(len(seen_leads), 4)
+
+    def test_compact_macro_goal_question_preserves_public_target_anchor(self):
+        """Question is user-level intent; separate reference card is input.
+
+        The card identifies exactly one dossier by intersecting the already
+        necessary discovery observations; it is not a shortcut to Gold.
+        """
+        from environment.generate_question.question import guard_question
+        from environment.generate_question.compiler import QuestionSession
+        from environment.generate_question.task_plan import (
+            MACRO_GOAL_QUESTION,
+        )
+        from environment.base_orchestration.o1_compat import (
+            o1_initial_instruction,
+        )
+
+        kg = graph_fixture()
+        index = YagoKnowledgeIndex(kg)
+        old_question = None
+        for ordinal in range(20):
+            difficulty = "medium" if ordinal % 2 == 0 else "hard"
+            spec = make_spec(
+                kg, seed=17, ordinal=ordinal, difficulty=difficulty,
+                index=index, world_mode="compose",
+            )
+            plan = spec["macro_plan"]
+            binding = plan["world_binding"]
+            self.assertEqual(
+                plan["question_surface_policy"], MACRO_GOAL_QUESTION,
+            )
+            card = spec["task_input"]
+            self.assertEqual(card["version"], MACRO_GOAL_QUESTION)
+            self.assertEqual(
+                len(card["observations"]), len(plan["clues"]),
+            )
+            self.assertNotIn("case_id", json.dumps(card))
+            self.assertNotIn("project_id", json.dumps(card))
+            self.assertNotIn("event_id", json.dumps(card))
+            self.assertNotIn("answer", json.dumps(card))
+            question = reference_question(spec)
+            self.assertLess(len(question), 355, question)
+            self.assertFalse(guard_question(question, spec), question)
+            self.assertIn(spec["scenario"]["topic"], question)
+            self.assertIn(plan["goal"]["semantic"]["question"][
+                0:15].lower(), question.lower())
+            self.assertNotIn(
+                "seal motif", question.casefold(),
+            )
+            self.assertNotIn(
+                "shelf code", question.casefold(),
+            )
+            self.assertNotIn(
+                "drawer code", question.casefold(),
+            )
+            scene = compile_and_validate(spec, question)
+            self.assertEqual(validate_replay(scene)["status"], "valid")
+            self.assertEqual(scene["public"]["task_input"], card)
+            self.assertEqual(
+                QuestionSession(scene).public_view["task_input"], card,
+            )
+            target = binding["target_case"]
+            candidate_sets = []
+            for sid, cue in sorted(plan["clues"].items()):
+                candidate_sets.append({
+                    obs["values"]["case_id"]
+                    for obs in scene["world"]["sources"][sid]["observations"]
+                    if obs["values"]["cue"] == cue["value"]
+                })
+            self.assertEqual(set.intersection(*candidate_sets), {target})
+            rendered = o1_initial_instruction(scene)
+            self.assertTrue(rendered.startswith(question + "\n\n"))
+            self.assertIn("Provided reference materials", rendered)
+            for cue in plan["clues"].values():
+                self.assertIn(cue["value"], rendered)
+            tampered = deepcopy(spec)
+            tampered["task_input"]["observations"][0][
+                "observed_value"] = "UNLICENSED-OBSERVATION"
+            self.assertIn(
+                "task_plan_reference_card_not_frozen",
+                validate_spec(tampered),
+            )
+            missing_pointer = question.replace(
+                "supplied reference materials", "records"
+            ).replace("provided reference materials", "records").replace(
+                "attached reference materials", "records"
+            )
+            if missing_pointer != question:
+                self.assertIn(
+                    "task_plan_reference_material_not_identified",
+                    guard_question(missing_pointer, spec),
+                )
+            old_question = question
+        self.assertIsNotNone(old_question)
 
     def test_world_event_links_require_a_real_upstream_key(self):
         """A wrong but valid project key must retrieve another event chain.

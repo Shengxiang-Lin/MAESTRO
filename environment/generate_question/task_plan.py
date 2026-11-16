@@ -28,6 +28,7 @@ MODES = ("trace", "event", "verify")
 CALIBRATED = "calibrated_structural_difficulty_v1"
 BLIND_EVENTS = "eligibility_blind_event_names_v1"
 GOAL_QUESTIONS = "grounded_relation_goal_question_v1"
+MACRO_GOAL_QUESTION = "macro_goal_reference_card_v1"
 SEMANTIC_GOALS = "goal_constrained_yago_grounding_v1"
 SYNTHETIC_WORLD = "maestro.fictional_semantic_world.v1"
 SYNTHETIC_WITNESS = "maestro.task_plan.fictional_witness.v1"
@@ -848,6 +849,32 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
     return clues, catalog, schemas
 
 
+def _reference_card(plan: dict, sources: list[dict], *,
+                    seed: int, ordinal: int) -> dict:
+    """Public *starting material*, not a second evidence or World planner.
+
+    It names the observations on the provided target reference without
+    disclosing the matching case_id, project_id, event key or downstream
+    answer. The Agent still has to acquire the candidate source records.
+    Existing clue values already identify the target in the old question;
+    moving them into a separate task input changes presentation only.
+    """
+    modality = {source["source_id"]: source["modality"]
+                for source in sources}
+    return {
+        "version": MACRO_GOAL_QUESTION,
+        "reference_id": "REF-" + digest(
+            seed, ordinal, "task-plan-provided-reference"
+        )[:12].upper(),
+        "kind": "provided_reference_materials",
+        "observations": [{
+            "modality": modality[sid],
+            "feature": info["attribute"],
+            "observed_value": info["value"],
+        } for sid, info in sorted(plan["clues"].items())],
+    }
+
+
 def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
               min_hops: int = 2, max_hops: int = 3,
               index: YagoKnowledgeIndex | None = None,
@@ -868,7 +895,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     plan["semantic_grounding_policy"] = SEMANTIC_GOALS
     if world_mode == "compose":
         plan["knowledge_world_mode"] = "compose"
-        plan["question_surface_policy"] = "varied_archive_reference_v1"
+        plan["question_surface_policy"] = MACRO_GOAL_QUESTION
     grounding = _ground(
         kg, index or YagoKnowledgeIndex(kg),
         plan, seed=seed, ordinal=ordinal, world_mode=world_mode,
@@ -997,6 +1024,10 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
             "simulation_only": True,
         },
         "macro_plan": plan,
+        **({"task_input": _reference_card(
+            plan, sources, seed=seed, ordinal=ordinal
+        )} if plan.get("question_surface_policy") ==
+            MACRO_GOAL_QUESTION else {}),
         "knowledge_witness": witness,
         "macro_information_necessity_version": POLICY,
     }
@@ -1027,6 +1058,16 @@ def validate_spec(spec: dict) -> list[str]:
             plan, witness, spec["seed"], spec["ordinal"], SALT,
         ):
             return ["task_plan_frozen_hash_mismatch"]
+        question_policy = plan.get("question_surface_policy")
+        if question_policy == MACRO_GOAL_QUESTION:
+            if (plan.get("knowledge_world_mode") != "compose"
+                    or spec.get("task_input") != _reference_card(
+                        plan, spec["sources"], seed=spec["seed"],
+                        ordinal=spec["ordinal"],
+                    )):
+                return ["task_plan_reference_card_not_frozen"]
+        elif "task_input" in spec:
+            return ["task_plan_unversioned_reference_card"]
         if any(k in spec for k in ("task_first_v1_backbone",
                                    "hybrid_backbone_v3",
                                    "task_first_v2_relation_sketch",

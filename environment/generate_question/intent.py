@@ -109,15 +109,35 @@ def intent_contract(spec: dict) -> dict:
                 if condition["field"] == "event_status"
                 else "Only events in or after 2025 qualify."
             )
-        if plan["mode"] == "verify":
-            constraints.append(
-                "Combine two candidate directories, the event eligibility "
-                "criterion and a separately maintained registry relation."
-            )
-        constraints.extend(
-            f"Identifying observation: {item['attribute']} {item['value']}."
-            for item in plan["clues"].values()
+        compact = (
+            plan.get("question_surface_policy") ==
+            "macro_goal_reference_card_v1"
         )
+        if compact:
+            constraints.extend([
+                "The initial public view provides a separate reference card "
+                "identifying the target record; refer to those materials, "
+                "not to individual feature values or source titles.",
+                "Do not list source observations, retrieval steps or "
+                "intermediate keys in the Question.",
+                "The final question must be answerable using the supplied "
+                "reference card plus discoverable source records.",
+            ])
+            if plan["mode"] == "verify":
+                constraints.append(
+                    "The result must rely on a corroborated reference; do "
+                    "not enumerate the directories or verification operations."
+                )
+        else:
+            if plan["mode"] == "verify":
+                constraints.append(
+                    "Combine two candidate directories, the event eligibility "
+                    "criterion and a separately maintained registry relation."
+                )
+            constraints.extend(
+                f"Identifying observation: {item['attribute']} {item['value']}."
+                for item in plan["clues"].values()
+            )
         if plan.get("semantic_grounding_policy") == (
             "goal_constrained_yago_grounding_v1"
         ):
@@ -129,8 +149,12 @@ def intent_contract(spec: dict) -> dict:
                 "Do not invent additional comparisons, eligibility conditions "
                 "or relationships.",
                 "Use only the dossier records and relationship sources provided.",
-                "Keep all dossier identifying cues and the exact conditional "
-                "event eligibility requirement when applicable.",
+                ("Keep the reference-material pointer and the exact "
+                 "conditional event eligibility requirement; individual "
+                 "feature values live in the separate public task input."
+                 if compact else
+                 "Keep all dossier identifying cues and the exact conditional "
+                 "event eligibility requirement when applicable."),
             ])
     elif pattern == "task_graph_first_v2":
         plan = spec["macro_plan"]
@@ -246,7 +270,11 @@ def intent_contract(spec: dict) -> dict:
     return {
         "visual_clue": (
             applied_clues if applied_clues is not None else
-            spec["macro_plan"]["clues"] if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"} else None
+            (None if pattern == "task_plan" and
+             spec["macro_plan"].get("question_surface_policy") ==
+             "macro_goal_reference_card_v1" else
+             spec["macro_plan"]["clues"])
+            if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"} else None
         ),
         "acquisition_chain": None,
         "topic": spec["scenario"]["topic"],

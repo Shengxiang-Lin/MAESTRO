@@ -19,6 +19,31 @@ def source_catalog(scene: dict) -> dict[str, dict]:
     return sources
 
 
+def o1_initial_instruction(scene: dict) -> str:
+    """Keep the user question short; show supplied materials separately.
+
+    The O1 baseline renderer accepts one instruction string. For new
+    reference-card scenes, include their target-only observed features in
+    a separate labeled section instead of silently dropping the only
+    public target anchor. Older scenes preserve their exact instruction.
+    """
+    question = scene["question"]
+    card = scene["public"].get("task_input")
+    if card is None:
+        return question
+    if card.get("version") != "macro_goal_reference_card_v1":
+        raise ValueError("stage3_unknown_task_reference_card")
+    lines = [
+        "Provided reference materials (initial task input, not source results):"
+    ]
+    for obs in card["observations"]:
+        lines.append(
+            "- " + obs["modality"] + ": " + obs["feature"] + ": "
+            + str(obs["observed_value"])
+        )
+    return question + "\n\n" + "\n".join(lines)
+
+
 def o1_history(task_entries: list[dict]) -> str:
     """Call the baseline's real formatter on a minimal history-only view."""
     state = SimpleNamespace(
@@ -69,7 +94,7 @@ def o1_prompt_from_history(
     tool_objects = [SimpleNamespace(**definition)
                     for definition in o1_tool_definitions()]
     return OmniGAIAMainAgentPrompt.build_prompt(
-        instruction=scene["question"],
+        instruction=o1_initial_instruction(scene),
         meta=meta,
         prior_context="",  # The O1 builder currently does not render it.
         attempt_index=attempt,

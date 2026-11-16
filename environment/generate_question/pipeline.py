@@ -924,6 +924,23 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                             "required_context_relation"
                         )) for s in current_scenes
                     ),
+                    "macro_goal_questions": sum(
+                        s["problem_spec"]["macro_plan"].get(
+                            "question_surface_policy"
+                        ) == "macro_goal_reference_card_v1"
+                        for s in current_scenes
+                    ),
+                    "reference_cards_in_public_view": sum(
+                        s["public"].get("task_input") ==
+                        s["problem_spec"].get("task_input") and
+                        "task_input" in s["public"]
+                        for s in current_scenes
+                    ),
+                    "mean_question_characters": (
+                        round(sum(len(s["question"]) for s in current_scenes)
+                              / len(current_scenes), 1)
+                        if current_scenes else None
+                    ),
                     "required_shared_relation_necessity_passed": sum(
                         s["difficulty_audit"]["macro_first_audit"][
                             "candidate_information_necessity"

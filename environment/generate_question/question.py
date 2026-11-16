@@ -112,6 +112,32 @@ def _intent_reference_question(spec: dict) -> str:
         plan = spec["macro_plan"]
         goal = plan["goal"]["semantic"]
         topic = spec["scenario"]["topic"]
+        if plan.get("question_surface_policy") == "macro_goal_reference_card_v1":
+            # User intent comes from the Task Plan's semantic Goal and
+            # eligibility rule. Target-specific features belong to the
+            # provided reference material, NOT the user question.
+            lead = (
+                f"The supplied reference materials concern an entry in the {topic}.",
+                f"An entry in the {topic} is described by the provided reference materials.",
+                f"The attached reference materials point to a record in the {topic}.",
+                f"One record in the {topic} is associated with the supplied reference materials.",
+            )[spec["ordinal"] % 4]
+            condition = plan["condition"]
+            if condition is None:
+                qualifier = ""
+            elif condition["field"] == "event_status":
+                qualifier = "Considering only its completed review session, "
+            else:
+                qualifier = "Considering only its review sessions from 2025 onward, "
+            if plan["mode"] == "verify":
+                qualifier += "using the corroborated reference, "
+            target_question = goal["question"]
+            if qualifier:
+                target_question = (
+                    qualifier + target_question[0].lower()
+                    + target_question[1:]
+                )
+            return f"{lead} {target_question}"
         clues = "; ".join(
             f"{info['attribute']} '{info['value']}' in {info['title']}"
             for _, info in sorted(plan["clues"].items())
@@ -719,16 +745,45 @@ def guard_question(question: str, spec: dict,
             q, flags=re.I,
         ):
             errors.append("task_plan_meta_fiction_framing")
-        for info in plan["clues"].values():
-            if info["value"].casefold() not in q.casefold():
-                errors.append("task_plan_required_clue_missing")
+        compact = (
+            plan.get("question_surface_policy") ==
+            "macro_goal_reference_card_v1"
+        )
+        if compact:
+            if not re.search(
+                r"\b(?:supplied|provided|attached)\b", q, re.I
+            ) or not re.search(
+                r"\b(?:reference materials|materials|record)\b", q, re.I
+            ):
+                errors.append("task_plan_reference_material_not_identified")
+            # Guard against *specific* evidence values being copied into
+            # the question, not ordinary vocabulary shared by a semantic
+            # goal or topic (e.g., the word "survey" in a regional survey).
+            # Exact word/phrase boundaries also avoid "ridge" in "bridge".
+            allowed = (
+                spec["scenario"]["topic"] + " " +
+                plan["goal"]["semantic"]["question"]
+            )
+            for info in plan["clues"].values():
+                value = str(info["value"])
+                phrase = r"\b" + re.escape(value) + r"\b"
+                if (not re.search(phrase, allowed, flags=re.I)
+                        and re.search(phrase, q, flags=re.I)):
+                    errors.append("task_plan_answer_clues_leaked_into_question")
+                    break
+        else:
+            for info in plan["clues"].values():
+                if info["value"].casefold() not in q.casefold():
+                    errors.append("task_plan_required_clue_missing")
         if plan["condition"]:
             if plan["condition"]["field"] == "event_status":
                 if not re.search(r"\bcompleted\b", q, re.I):
                     errors.append("task_plan_required_status_missing")
             elif not re.search(r"\b2025\b", q):
                 errors.append("task_plan_required_year_missing")
-        if not re.search(r"\b(?:related|relation|entity)\b", q, re.I):
+        if not compact and not re.search(
+            r"\b(?:related|relation|entity)\b", q, re.I
+        ):
             errors.append("task_plan_final_goal_missing")
     if pattern == "task_graph_first_v2":
         relation = spec["task_first_v2_relation_sketch"]["event_relation"]
@@ -937,11 +992,29 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 key: value for key, value in instruction["intent"].items()
                 if key not in {"sources", "difficulty", "reasoning_pattern"}
             },
-            "materials": [
-                {"title": source["title"], "modality": source["modality"],
-                 "purpose": source["purpose"]}
-                for source in spec["sources"]
-            ],
+            "materials": (
+                [{
+                    "kind": "provided_reference_materials",
+                    "modalities": sorted({
+                        item["modality"] for item in spec["task_input"][
+                            "observations"]
+                    }),
+                    "description": (
+                        "The user has supplied a separate target reference "
+                        "card; do not enumerate its observation values in "
+                        "the question or expose internal source lookups."
+                    ),
+                }] if (
+                    spec.get("reasoning_pattern") == "task_plan" and
+                    spec["macro_plan"].get("question_surface_policy") ==
+                    "macro_goal_reference_card_v1"
+                ) else [
+                    {"title": source["title"],
+                     "modality": source["modality"],
+                     "purpose": source["purpose"]}
+                    for source in spec["sources"]
+                ]
+            ),
             "style": instruction["style"],
             **({
                 "semantic_evidence_contract":
