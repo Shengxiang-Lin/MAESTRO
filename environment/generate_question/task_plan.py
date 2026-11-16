@@ -580,12 +580,20 @@ def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
                     if slot == source_slot)
     paths, world_model = compose_typed_world(
         kg, index, recipe=recipe, cases=cases, seed=seed, ordinal=ordinal,
-        required_excluded_case=excluded,
+        required_excluded_cases=[
+            case for case, slot in shadow_slots.items()
+            if slot is None or slot == source_slot
+        ],
     )
     subject_role = world_model["entities"][paths[target][0]["subject"]]["type"]
     world_model["required_context_relation"] = {
         "source_id": source_id, "source_slot": source_slot,
-        "excluded_case": excluded, "field": "cue",
+        "excluded_case": excluded,
+        "excluded_cases": [
+            case for case, slot in shadow_slots.items()
+            if slot is None or slot == source_slot
+        ],
+        "field": "cue",
         "predicate": ("http://schema.org/affiliation"
                       if subject_role == "person" else
                       "http://schema.org/subjectOf"),
