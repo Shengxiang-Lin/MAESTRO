@@ -62,6 +62,43 @@ def normalize_action(text: str) -> tuple[str, bool]:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":")), wrapper_removed
 
 
+def o1_contract_reason(text: str) -> str | None:
+    """Check original Orchestra-o1 *structural* contract, not semantic binding.
+
+    In O1 context and tools are optional. Wrong model/tool/capability and
+    nonoptimal scheduling are for the global LLM Judge, not a JSON parser.
+    """
+    try:
+        action = json.loads(text)
+    except (ValueError, TypeError):
+        return "invalid_json"
+    if not isinstance(action, dict):
+        return "invalid_json"
+    kind, params = action.get("action"), action.get("params")
+    if kind not in ("complete", "delegate_task") or not isinstance(params, dict):
+        return "invalid_action_contract"
+    if kind == "complete":
+        answer = params.get("answer")
+        return None if isinstance(answer, str) and answer.strip() else "missing_completion_answer"
+    tasks = params.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return "invalid_delegate_params"
+    for i, task in enumerate(tasks):
+        if not isinstance(task, dict):
+            return f"slot_{i}_invalid_subtask"
+        if (not isinstance(task.get("task_instruction"), str)
+                or not task["task_instruction"].strip()
+                or not isinstance(task.get("model"), str)
+                or not task["model"].strip()):
+            return f"slot_{i}_invalid_subtask"
+        if "context" in task and not isinstance(task["context"], str):
+            return f"slot_{i}_invalid_context"
+        if "tools" in task and (not isinstance(task["tools"], list)
+                or any(not isinstance(tool, str) for tool in task["tools"])):
+            return f"slot_{i}_invalid_tools"
+    return None
+
+
 def private_sample_id(entry: dict) -> str:
     task = entry.get("task_id")
     candidate = entry.get("round_sample_id")
@@ -152,23 +189,27 @@ def prompt_lookup(rows: list[dict]) -> dict[str, str]:
 
 def make_stage2_reward_function(*, private_states: dict[str, dict],
                                 prompts: dict[str, str],
-                                mode: str = "hybrid",
+                                mode: str = "global",
                                 judge=None, judge_weight: float = 0.4,
                                 num_generations: int = 8,
-                                diagnostics_path: str | Path | None = None):
+                                diagnostics_path: str | Path | None = None,
+                                global_contexts: dict[str, dict] | None = None):
     """Return one scalar for each TRL completion without changing trainer math.
 
     Hard illegal Action: -1. For valid hybrid Action: (1-w)*R_env+w*R_llm.
     In judge_only mode the Environment legality gate is still mandatory.
     """
-    if mode not in ("hybrid", "deterministic", "judge_only"):
-        raise ValueError("Expected hybrid/deterministic/judge_only Stage2 reward")
+    if mode not in ("global", "hybrid", "deterministic", "judge_only"):
+        raise ValueError("Expected global/hybrid/deterministic/judge_only Stage2 reward")
     if (type(num_generations) is not int or num_generations < 2
             or not 0 <= judge_weight <= 1):
         raise ValueError("Invalid Stage2 GRPO group size / semantic weight")
     if mode != "deterministic" and judge is None:
-        raise ValueError("Hybrid/judge_only Stage2 reward requires semantic Judge")
-    hybrid = HybridReward(judge, mode=mode, judge_weight=judge_weight) if judge is not None and mode != "deterministic" else None
+        raise ValueError("Stage2 LLM reward requires a configured Judge")
+    if mode == "global" and not global_contexts:
+        raise ValueError("Global Judge requires decision-aligned evidence contexts")
+    hybrid = (HybridReward(judge, mode=mode, judge_weight=judge_weight)
+              if mode in ("hybrid", "judge_only") else None)
     path = Path(diagnostics_path) if diagnostics_path else None
     if path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +244,40 @@ def make_stage2_reward_function(*, private_states: dict[str, dict],
             raw_texts = [completion_text(item) for item in completions[lo:lo + num_generations]]
             normalized = [normalize_action(text) for text in raw_texts]
             texts = [item[0] for item in normalized]
-            if hybrid is None:
+            if mode == "global":
+                from train_maestro_8b.policy.global_judge import build_global_judge_prompt
+                if sample_id not in global_contexts:
+                    raise ValueError("Missing exact global Judge context: " + sample_id)
+                reference_prompt = build_global_judge_prompt(
+                    prompts[sample_id], global_contexts[sample_id],
+                )
+                structural_reasons = [o1_contract_reason(text) for text in texts]
+                eligible = [i for i, reason in enumerate(structural_reasons) if reason is None]
+                semantic = judge.score_many(
+                    reference_prompt, [texts[i] for i in eligible],
+                ) if eligible else []
+                if len(semantic) != len(eligible):
+                    raise RuntimeError("Global Judge returned misaligned rewards")
+                scored = [{
+                    "reward": -1.0 if reason else None,
+                    "valid": reason is None, "reason": reason,
+                    "env_reward": None, "judge_reward": None,
+                    "judge_dimensions": None, "judge_cached": None,
+                    "legacy_env_reason": None,
+                } for reason in structural_reasons]
+                for i, result in zip(eligible, semantic):
+                    value = float(result["reward"])
+                    if not 0 <= value <= 1:
+                        raise ValueError("Global Judge reward outside [0,1]")
+                    scored[i].update({
+                        "reward": value, "judge_reward": value,
+                        "judge_dimensions": result["dimensions"],
+                        "judge_cached": bool(result.get("cached", False)),
+                        # The old deterministic scorer is diagnostics ONLY.
+                        # Its exact-string binder cannot veto LLM judgement.
+                        "legacy_env_reason": score_decision(texts[i], state)["reason"],
+                    })
+            elif mode == "deterministic":
                 scored = [score_decision(text, state) for text in texts]
                 for value in scored:
                     value.update({
@@ -224,6 +298,12 @@ def make_stage2_reward_function(*, private_states: dict[str, dict],
                     "env_reward": result["env_reward"], "judge_reward": result["judge_reward"],
                     "reward": result["reward"], "judge_dimensions": result["judge_dimensions"],
                     "judge_cached": result["judge_cached"],
+                    "legacy_env_reason": result.get("legacy_env_reason"),
+                    "action_type": (
+                        json.loads(normalized_result[0]).get("action")
+                        if o1_contract_reason(normalized_result[0]) is None
+                        else None
+                    ),
                     "think_wrapper_normalized": normalized_result[1],
                     "raw_sha256": sha256(raw.encode("utf-8")).hexdigest(),
                 })
@@ -233,6 +313,10 @@ def make_stage2_reward_function(*, private_states: dict[str, dict],
                 "step": step, "sample_id": sample_id, "mode": mode,
                 "valid": sum(x["valid"] for x in scored),
                 "judged": sum(x["judge_reward"] is not None for x in scored),
+                "legacy_rejections_after_global_judge": (
+                    sum(x.get("legacy_env_reason") is not None for x in scored if x["valid"])
+                    if mode == "global" else None
+                ),
                 "reward_mean": round(sum(values) / len(values), 6),
                 "reward_std": round(pstdev(values), 6),
                 "invalid_reasons": dict(reasons),
