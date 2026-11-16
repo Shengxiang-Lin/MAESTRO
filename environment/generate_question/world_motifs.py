@@ -623,11 +623,11 @@ def validate_composed_world(binding: dict) -> list[str]:
                 group_uses
             ):
                 return ["composed_world_context_stats_mismatch"]
-        for row in entities.values():
-            if row["type"] == "field" and not _academic_field_label(
-                row["label"]
-            ):
-                return ["composed_world_invalid_research_field"]
+            for row in entities.values():
+                if row["type"] == "field" and not _academic_field_label(
+                    row["label"]
+                ):
+                    return ["composed_world_invalid_research_field"]
         profile = world["profile"]
         if (profile["policy"] != COMPOSE_VERSION
                 or profile["actual_yago_assertions_reused"] is not False):
