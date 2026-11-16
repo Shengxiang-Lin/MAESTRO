@@ -195,6 +195,15 @@ class HybridFullPipelineTests(unittest.TestCase):
                 (args.output_dir / "quality_report.json").read_text()
             )
             self.assertEqual(audit["replay_pass"], 4)
+            hybrid_stats = audit["knowledge_world_grounding"]["hybrid_world_v3"]
+            self.assertEqual(hybrid_stats["scenes_checked"], 4)
+            self.assertEqual(hybrid_stats["necessity_passed"], 4)
+            self.assertEqual(hybrid_stats["identification_unique"], 4)
+            self.assertEqual(hybrid_stats["all_clue_relaxations_ambiguous"], 4)
+            self.assertEqual(hybrid_stats["all_discovery_relaxations_ambiguous"], 4)
+            self.assertEqual(hybrid_stats["both_synthetic_branches_necessary"], 4)
+            self.assertEqual(hybrid_stats["all_discovery_bypass_ambiguous"], 4)
+            self.assertGreater(hybrid_stats["synthetic_entity_count"], 4)
             scenes = [
                 json.loads(row) for row in (
                     args.output_dir / "constructed" / "scenes.jsonl"
