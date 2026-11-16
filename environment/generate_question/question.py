@@ -116,8 +116,6 @@ def _intent_reference_question(spec: dict) -> str:
             f"{info['attribute']} '{info['value']}' in {info['title']}"
             for _, info in sorted(plan["clues"].items())
         )
-        fictional = (plan["world_binding"]["candidate_paths"][
-            plan["world_binding"]["target_case"]][0]["origin"] == "synthetic")
         condition = plan["condition"]
         if condition:
             qualifying = (
@@ -126,28 +124,21 @@ def _intent_reference_question(spec: dict) -> str:
             )
             if plan["mode"] == "verify":
                 instruction = (
-                    f"Using {qualifying}, reconcile the two independent "
-                    "candidate-reference reports with the separately recorded "
-                    + ("fictional registry relationship to identify the entity "
-                       "referenced by the dossier." if fictional else
-                       "genuine YAGO secondary relationship to identify the "
-                       "real-world entity referenced by the dossier.")
+                    f"Using {qualifying}, reconcile the two candidate-reference "
+                    "reports with the separate registry relationship to identify "
+                    "the entity documented by the dossier."
                 )
             else:
                 instruction = (
-                    f"Use {qualifying} to locate the dossier's documented "
-                    + ("fictional entity reference." if fictional
-                       else "real-world entity reference.")
+                    f"Use {qualifying} to locate the dossier's entity reference."
                 )
         else:
             instruction = (
-                "Use the matching dossier's documented "
-                + ("fictional entity reference." if fictional
-                   else "real-world entity reference.")
+                "Use the matching dossier's documented entity reference."
             )
         return (
-            f"The fictional {topic} has an unresolved dossier identified by "
-            f"these simulated source clues: {clues}. {instruction} "
+            f"The {topic} contains an unresolved dossier with the "
+            f"following identifying clues: {clues}. {instruction} "
             f"{goal['question']}"
         )
     if spec.get("reasoning_pattern") == "task_plan" and (
@@ -562,6 +553,12 @@ identify the discrepancy but never invent factual years. For visual clues,
 retain BOTH stated features. The typed source graph is an internal contract,
 not a list of step-by-step instructions that must appear in the Question.
 
+For Task Plan problems, the archive and its records are treated as
+ordinary facts *inside the scenario*. Never label the archive, its entities,
+observations or source titles fictional, simulated, hypothetical or synthetic
+in the public question. Provenance and generator policy remain private; do
+not imply any fictional assertion is a verified real-world historical fact.
+
 For latest-version requests, you receive a STRUCTURED FROZEN USER INTENT:
 constraints, typed output, source roles and a style preference. Write an
 original user question from that contract. You may vary clause order,
@@ -632,6 +629,10 @@ MacroGraph projects entry_label. A well-formed imperative user request (e.g.
 For chronology, the compiled sort uses ascending relative_step: "earliest"
 or "first" is correct; "latest" or "most recent" is WRONG. Never hallucinate
 a reversed direction. Surface fluency alone is insufficient.
+For Task Plan problems, reject public questions that expose the synthetic
+construction process or use words like fictional/simulated/hypothetical to
+qualify the source records. Treat the archive as an ordinary scenario, but
+reject claims of external historical verification that were not authorized.
 For macro_first tasks, the frozen Macro DAG is an internal reference;
 check the initial distinguishing clues, the exact authoritative year
 deliverable and, for conflict tasks, the dispute condition. Do not
@@ -697,6 +698,11 @@ def guard_question(question: str, spec: dict,
             errors.append("task_plan_semantic_goal_question_missing")
     if pattern == "task_plan":
         plan = spec["macro_plan"]
+        if re.search(
+            r"\b(?:fictional|simulated|synthetic|hypothetical|imaginary)\b",
+            q, flags=re.I,
+        ):
+            errors.append("task_plan_meta_fiction_framing")
         for info in plan["clues"].values():
             if info["value"].casefold() not in q.casefold():
                 errors.append("task_plan_required_clue_missing")
