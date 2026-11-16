@@ -2,9 +2,9 @@
 
 Use one maintained YAML per stage. Stage 1 defaults to the current
 `task_plan + compose` profile with a 20-scene validation target; increase
-`--target` and select a new `--output-dir` for production. The prior
-`questions.yaml` and variant YAMLs are legacy research fixtures, not the
-canonical CLI default. Acceptance is verified by Replay and necessity tests.
+`--target` and select a new `--output-dir` for production. Retired generation variants remain isolated as research fixtures; the
+old default YAML is now located under `environment/tests/fixtures/` for
+regression tests rather than the production config directory. Acceptance is verified by Replay and necessity tests.
 
 | Stage | Config | Output | Main input |
 |---|---|---|---|
