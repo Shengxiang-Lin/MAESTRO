@@ -417,8 +417,24 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
         schemas[sid] = dict(schema)
     disc = [t for t in plan["macro_tasks"]
             if t["operation"] == "match_clues"]
+    contextual_titles = {
+        "academic": "research correspondence",
+        "biographical": "biographical records",
+        "institutional": "institutional registry",
+        "geographical": "regional fieldwork",
+    }
+    context = (
+        contextual_titles[_semantic_goal(
+            grounding["candidate_paths"][grounding["target_case"]],
+            len(grounding["all_cases"]),
+        )["domain"]]
+        if plan.get("semantic_grounding_policy") == SEMANTIC_GOALS
+        else None
+    )
     for i, task in enumerate(disc):
         for j, (modality, title, attr, choices) in enumerate(CUES[i]):
+            if context is not None:
+                title = f"{context} — {title}"
             sid = task["source_scope"][j]
             chosen = rng.choice(choices)
             alt = rng.choice([x for x in choices if x != chosen])
@@ -430,7 +446,8 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
             source(sid, modality, title+" (simulated)",
                    "Find fictional dossier candidates by an observed clue",
                    {"case_id": "str", "cue": "str"})
-    source("entity_index", "table", "Project identity crosswalk",
+    source("entity_index", "table",
+           "Dossier identity crosswalk" if context else "Project identity crosswalk",
            "Map the identified fictional dossier to one named project",
            {"case_id": "str", "project_id": "str", "project_name": "str"},
            key="case_id")
