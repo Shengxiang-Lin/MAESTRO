@@ -927,10 +927,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     "macro_goal_questions": sum(
                         s["problem_spec"]["macro_plan"].get(
                             "question_surface_policy"
-                        ) in {
-                            "macro_goal_reference_card_v1",
-                            "macro_goal_reference_card_v2",
-                        }
+                        ) == "macro_goal_reference_card_v2"
                         for s in current_scenes
                     ),
                     "reference_cards_in_public_view": sum(
