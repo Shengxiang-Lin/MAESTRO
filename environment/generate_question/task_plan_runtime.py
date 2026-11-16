@@ -624,7 +624,9 @@ def audit_information(scene: dict) -> dict:
             and all(observed[case] == item["anchor_label"]
                     for case, item in mapping.items())
             and sum(v == required["target_anchor_label"]
-                    for v in observed.values()) == len(observed)-1
+                    for v in observed.values()) == (
+                        len(observed) - len(required["excluded_cases"])
+                    )
         )
     discoveries = {
         t["macro_id"]: ambiguous(
