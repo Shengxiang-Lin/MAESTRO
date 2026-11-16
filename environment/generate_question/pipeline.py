@@ -876,6 +876,50 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     s["problem_spec"]["scenario"]["topic"]
                     for s in current_scenes
                 )),
+                "semantic_grounding": {
+                    "scenes": sum(
+                        s["problem_spec"]["macro_plan"].get(
+                            "semantic_grounding_policy"
+                        ) == "goal_constrained_yago_grounding_v1"
+                        for s in current_scenes
+                    ),
+                    "goal_profile_distribution": dict(Counter(
+                        s["problem_spec"]["macro_plan"]["goal"][
+                            "semantic"]["profile"]
+                        for s in current_scenes
+                        if s["problem_spec"]["macro_plan"].get(
+                            "semantic_grounding_policy"
+                        ) == "goal_constrained_yago_grounding_v1"
+                    )),
+                    "domain_distribution": dict(Counter(
+                        s["problem_spec"]["macro_plan"]["goal"][
+                            "semantic"]["domain"]
+                        for s in current_scenes
+                        if s["problem_spec"]["macro_plan"].get(
+                            "semantic_grounding_policy"
+                        ) == "goal_constrained_yago_grounding_v1"
+                    )),
+                    "loaded_graph_uniqueness_verified": sum(
+                        s["problem_spec"]["macro_plan"][
+                            "world_binding"].get(
+                                "semantic_audit", {}
+                            ).get("loaded_yago_singleton_witness", False)
+                        for s in current_scenes
+                    ),
+                    "sampling_attempts": sum(
+                        s["problem_spec"]["macro_plan"][
+                            "world_binding"].get(
+                                "semantic_audit", {}
+                            ).get("attempts", 0)
+                        for s in current_scenes
+                    ),
+                    "scope": (
+                        "Uniqueness is checked only against the loaded bounded "
+                        "YAGO fact sample; predicate types are heuristic, not "
+                        "externally RDF-type-verified. Acceptance counts only "
+                        "successful generated Scenes, not failed task requests."
+                    ),
+                },
                 "nested_legacy_specs": sum(
                     any("backbone" in k for k in s["problem_spec"])
                     for s in current_scenes
