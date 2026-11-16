@@ -872,7 +872,7 @@ def _reference_observation_text(modality: str, attribute: str,
             "A cross-reference note identifies the document series as {value}."
         ),
         "reel motif": (
-            "The supplied reel observation describes a {value} sequence."
+            "The supplied reel observation describes a sequence marked {value}."
         ),
         "record class": (
             "A separate register note classifies the item as {value}."
@@ -970,63 +970,29 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         "the event held in or after 2025" if condition else
         "the documented project reference"
     )
-    if plan.get("semantic_grounding_policy") == SEMANTIC_GOALS:
-        topics = {
-            "biographical": "biographical collection",
-            "academic": "academic correspondence archive",
-            "institutional": "institutional records collection",
-            "geographical": "regional survey collection",
-        }
-        semantic = plan["goal"]["semantic"]
-        scenario = {
-            "topic": topics[semantic["domain"]],
-            "setting": (
-                "a research archive with personnel files, field records "
-                "and independently maintained reference registers"
-            ),
-            "user_role": "archive researcher",
-            "purpose": ("identify " + clause + " and determine the "
-                        + semantic["answer_type_hint"]
-                        + " specified by the recorded relationships"),
-            "motivation": (
-                "resolve inconsistent or incomplete references across "
-                "separate archival records"
-            ),
-            "entity_kind": "archive dossier",
-        }
-    else:
-        # Select a grounded *archive domain*, not a fixed template topic.
-        # These are fictional collections; the only real historical claims
-        # remain the witnessed YAGO relation edges. Do not infer entity type.
-        route = [
-            predicate_label(fact["predicate"]).lower()
-            for fact in grounding["candidate_paths"][grounding["target_case"]]
-        ]
-        if any(
-            key in name for name in route
-            for key in ("neighbor", "location", "capital", "contained in", "twinned")
-        ):
-            topic = "regional research archive"
-        elif any(
-            key in name for name in route
-            for key in ("birth", "student", "spouse", "influenced")
-        ):
-            topic = "biographical research archive"
-        elif any(
-            key in name for name in route
-            for key in ("member", "institution", "works at", "organization")
-        ):
-            topic = "institutional research archive"
-        else:
-            topic = "cross-reference project archive"
-        scenario = {
-            "topic": topic,
-            "setting": "a fictional project archive cross-referenced with real YAGO facts",
-            "user_role": "records researcher",
-            "purpose": "identify " + clause + " and trace its real-world relationship",
-            "motivation": "resolve independently located observations before reporting a verified related entity",
-            "entity_kind": "fictional project",
-        }
+    topics = {
+        "biographical": "biographical collection",
+        "academic": "academic correspondence archive",
+        "institutional": "institutional records collection",
+        "geographical": "regional survey collection",
+    }
+    semantic = plan["goal"]["semantic"]
+    scenario = {
+        "topic": topics[semantic["domain"]],
+        "setting": (
+            "a research archive with personnel files, field records "
+            "and independently maintained reference registers"
+        ),
+        "user_role": "archive researcher",
+        "purpose": ("identify " + clause + " and determine the "
+                    + semantic["answer_type_hint"]
+                    + " specified by the recorded relationships"),
+        "motivation": (
+            "resolve inconsistent or incomplete references across "
+            "separate archival records"
+        ),
+        "entity_kind": "archive dossier",
+    }
     witness = {
         "version": (SYNTHETIC_WITNESS if fictional else
                     "maestro.task_plan.yago_witness.v1"),

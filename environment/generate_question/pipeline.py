@@ -1304,6 +1304,33 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "fictional media."
             ),
         }
+    # Current Task Plan scene banks should not publish walls of zero-valued
+    # statistics for retired generation experiments. Keep the general
+    # Replay/graph/reasoning metrics and exact Task Plan necessity audit.
+    # Older scene banks retain their original report shape for reproducible
+    # historical tests and existing consumers.
+    if scenes and all(
+        scene.get("problem_spec", {}).get("reasoning_pattern") == "task_plan"
+        and scene["problem_spec"]["macro_plan"].get("knowledge_world_mode")
+        == "compose"
+        for scene in scenes
+    ):
+        data.pop("macro_first_v2", None)
+        data.pop("semantic_evidence_diagnostics", None)
+        data.pop("evidence_graph", None)
+        data.pop("evidence_relations", None)
+        knowledge = data.get("knowledge_world_grounding")
+        if knowledge is not None:
+            keep = (
+                "single_task_plan", "scenes", "pattern_distribution",
+                "yago_relation_hops_histogram", "macro_count_histogram",
+                "macro_roles", "all_source_counterfactuals_passed",
+                "all_handoffs_necessary", "provenance_note", "scope",
+            )
+            data["knowledge_world_grounding"] = {
+                "version": "task_plan_compose_v2",
+                **{key: knowledge[key] for key in keep if key in knowledge},
+            }
     return data
 
 
