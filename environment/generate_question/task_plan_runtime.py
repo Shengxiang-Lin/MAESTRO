@@ -81,6 +81,13 @@ def generate_world(spec: dict) -> dict:
             "entity_0": paths[case][0]["subject"],
         } for case in cases]
     if mode in {"event", "verify"}:
+        # Task Plan's new evidence policy forbids expressing the answer
+        # criterion twice. Recurring events deliberately share the SAME
+        # neutral title inside each project; only the required status/year
+        # field distinguishes eligibility. Historical frozen task_plan
+        # scenes (without this policy) replay their original row names.
+        from .task_plan import BLIND_EVENTS
+        blind = plan.get("evidence_sampling_policy") == BLIND_EVENTS
         eligible, ineligible = _condition_rows(plan)
         event_rows = []
         if mode == "event":
@@ -92,10 +99,12 @@ def generate_world(spec: dict) -> dict:
             if mode == "event":
                 event_rows.extend([
                     {"project_id": pid, "event_id": good_event,
-                     "event_name": "Qualified project review " + case[-5:],
+                     "event_name": (("Project review meeting " + case[-5:]) if blind else
+                                    ("Qualified project review " + case[-5:])),
                      **eligible},
                     {"project_id": pid, "event_id": other_event,
-                     "event_name": "Other project review " + case[-5:],
+                     "event_name": (("Project review meeting " + case[-5:]) if blind else
+                                    ("Other project review " + case[-5:])),
                      **ineligible},
                 ])
                 event_refs.extend([
@@ -110,14 +119,16 @@ def generate_world(spec: dict) -> dict:
                     related = cases[(i+shift) % len(cases)]
                     event_rows.append({
                         "project_id": pid, "event_id": good_event,
-                        "event_name": "Qualified project session " + case[-5:],
+                        "event_name": (("Project review session " + case[-5:]) if blind else
+                                        ("Qualified project session " + case[-5:])),
                         **eligible,
                         "motif_object": fork[related]["object"],
                     })
                 other = cases[(i+1) % len(cases)]
                 event_rows.append({
                     "project_id": pid, "event_id": other_event,
-                    "event_name": "Unqualified project session " + case[-5:],
+                    "event_name": (("Project review session " + case[-5:]) if blind else
+                                    ("Unqualified project session " + case[-5:])),
                     **ineligible, "motif_object": fork[other]["object"],
                 })
         rng.shuffle(event_rows)
@@ -502,13 +513,82 @@ def audit_information(scene: dict) -> dict:
         hit["values"]["motif_object"] = b["real_fork"][
             "candidate_forks"][target]["object"]
         fork_necessary = ambiguous(_run(changed=changed))
-    return {
+    # Extend the OLD shadow-case / executable re-planning audit with
+    # a direct cross-field SUBSTITUTION probe. Removing a condition alone
+    # does not catch an alternate visible label like "Qualified review".
+    # Attempt to execute each descriptive or inactive-criterion value
+    # INSTEAD of the required filter; no alternative may recover the
+    # canonical unique answer. Avoid treating entity IDs / foreign keys
+    # as semantic eligibility labels: they are legitimate join ports.
+    substitution = None
+    if plan.get("evidence_sampling_policy") == "eligibility_blind_event_names_v1":
+        substitution = {}
+        if plan["condition"]:
+            selected_field = plan["condition"]["field"]
+            alternatives = ["event_name", (
+                "event_year" if selected_field == "event_status"
+                else "event_status"
+            )]
+            by_field = {}
+            target_case = plan["world_binding"]["target_case"]
+            project = _project(
+                scene["problem_spec"]["seed"],
+                scene["problem_spec"]["ordinal"], target_case,
+            )
+            records = [
+                row["values"] for row in sources["event_ledger"]["observations"]
+                if row["values"]["project_id"] == project
+            ]
+            for field in alternatives:
+                vals = sorted({row[field] for row in records})
+                attempts = {}
+                for value in vals:
+                    alternate = copy.deepcopy(program)
+                    for node in alternate["nodes"]:
+                        if node["id"] == condition_filter:
+                            node.update({
+                                "op": "filter_eq", "field": field,
+                                "value": value,
+                            })
+                    answers = answer_values(evaluate_program(
+                        alternate, sources=sources,
+                    ))
+                    attempts[str(value)] = {
+                        "answer_count": len(answers),
+                        "ambiguous_with_original": ambiguous(answers),
+                        "unique_shortcut": answers == scene["gold_answer"],
+                    }
+                by_field[field] = {
+                    "candidate_values": [str(v) for v in vals],
+                    "attempts": attempts,
+                    "passed": bool(attempts) and all(
+                        row["ambiguous_with_original"]
+                        and not row["unique_shortcut"]
+                        for row in attempts.values()
+                    ),
+                }
+            substitution = {
+                "applicable": True, "tested_fields": by_field,
+                "passed": all(row["passed"] for row in by_field.values()),
+                "scope": (
+                    "Executable replacement of eligibility predicate by "
+                    "all values of non-target descriptive/other-condition "
+                    "fields for the identified project; opaque ID and "
+                    "relation-object keys are excluded."
+                ),
+            }
+        else:
+            substitution = {
+                "applicable": False, "tested_fields": {}, "passed": True,
+            }
+    result = {
         "policy": "single_task_plan_counterfactual_v1",
         "passed": (
             all(clue.values()) and all(discoveries.values())
             and all_discovery and (condition is None or condition)
             and all(branches.values())
             and (fork_necessary is None or fork_necessary)
+            and (substitution is None or substitution["passed"])
         ),
         "clue_necessary": clue,
         "discovery_necessary": discoveries,
@@ -522,3 +602,6 @@ def audit_information(scene: dict) -> dict:
             "not proof of globally optimal or unique possible plans."
         ),
     }
+    if substitution is not None:
+        result["non_target_field_substitution"] = substitution
+    return result

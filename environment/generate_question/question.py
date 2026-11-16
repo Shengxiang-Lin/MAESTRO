@@ -102,6 +102,73 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if spec.get("reasoning_pattern") == "task_plan" and (
+        spec["macro_plan"].get("question_sampling_policy") ==
+        "grounded_relation_goal_question_v1"
+    ):
+        # Express the *actual RDF relation chain* as a user-level goal
+        # instead of printing an internal predicate sequence or Macro IDs.
+        # This is an optional current generation policy; historical frozen
+        # task_plan reference questions remain unchanged for strict Replay.
+        from .knowledge_macro import predicate_label
+        plan = spec["macro_plan"]
+        target = plan["world_binding"]["target_case"]
+        path = plan["world_binding"]["candidate_paths"][target]
+        nouns = {
+            "neighbor": "neighboring place",
+            "location": "location",
+            "birth place": "birthplace",
+            "contained in place": "containing region",
+            "capital": "capital",
+            "twinned with": "twin municipality",
+            "member of": "member organization",
+            "influenced by": "influencing entity",
+            "student of": "teacher",
+            "spouse": "spouse",
+            "performer": "performer",
+            "nationality": "nationality",
+            "works at": "workplace",
+            "founder": "founder",
+        }
+        current = "the project's referenced real-world entity"
+        for item in path:
+            relation_name = predicate_label(item["predicate"]).lower()
+            noun = nouns.get(
+                relation_name, relation_name + " relation target"
+            )
+            current = "the " + noun + " of " + current
+        clues = [
+            f"{info['attribute']} '{info['value']}' in the "
+            f"{info['title']}"
+            for _, info in sorted(plan["clues"].items())
+        ]
+        clue_text = "; ".join(clues)
+        topic = spec["scenario"]["topic"]
+        condition = plan["condition"]
+        selector = (
+            "the completed project meeting" if condition and
+            condition["field"] == "event_status"
+            else "the project meeting recorded in or after 2025"
+            if condition else None
+        )
+        if plan["mode"] == "trace":
+            return (
+                f"The {topic} includes several clues for one project: "
+                f"{clue_text}. Once the project is identified, "
+                f"what is {current}?"
+            )
+        if plan["mode"] == "event":
+            return (
+                f"An unidentified project in the {topic} is described "
+                f"by {clue_text}. For {selector}, "
+                f"what is {current}?"
+            )
+        return (
+            f"In the {topic}, the project is identified by {clue_text}. "
+            f"After checking its two independent reference reports "
+            f"against the information from {selector} and a genuine "
+            f"YAGO relationship, what is {current}?"
+        )
     if spec.get("reasoning_pattern") == "task_plan":
         from .knowledge_macro import predicate_label
         plan = spec["macro_plan"]

@@ -841,6 +841,41 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     row.get("real_fork_necessary") is True
                     for row in current_audits
                 ),
+                "non_target_field_substitution_passed": sum(
+                    row.get("non_target_field_substitution", {}).get(
+                        "passed", False
+                    ) for row in current_audits
+                ),
+                "eligibility_cases": sum(
+                    s["problem_spec"]["macro_plan"].get("condition")
+                    is not None for s in current_scenes
+                ),
+                "calibrated_difficulty_profiles": {
+                    level: {
+                        "scenes": len(items),
+                        "mean_macro_tasks": round(sum(
+                            i["macro_graph"]["macro_task_count"]
+                            for i in items
+                        ) / len(items), 3) if items else 0,
+                        "mean_dependency_depth": round(sum(
+                            i["macro_graph"]["critical_path_depth"]
+                            for i in items
+                        ) / len(items), 3) if items else 0,
+                        "mean_real_yago_hops": round(sum(
+                            i["problem_spec"]["macro_plan"]["hops"]
+                            for i in items
+                        ) / len(items), 3) if items else 0,
+                    }
+                    for level in ("medium", "hard")
+                    for items in [[
+                        s for s in current_scenes
+                        if s["problem_spec"]["difficulty_target"] == level
+                    ]]
+                },
+                "question_topic_distribution": dict(Counter(
+                    s["problem_spec"]["scenario"]["topic"]
+                    for s in current_scenes
+                )),
                 "nested_legacy_specs": sum(
                     any("backbone" in k for k in s["problem_spec"])
                     for s in current_scenes

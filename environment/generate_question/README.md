@@ -615,3 +615,58 @@ The quality report includes
 number of Macro tasks, replay/necessity pass counts and a check that
 the new Spec embeds no legacy backbones.
 
+
+### Single Task Plan — information-substitution audit and structural calibration
+
+The current `task_plan` generator now reuses the **Knowledge v2 shadow-case
+principle** (every required identifying cue has a distractor with a COMPLETE
+real YAGO answer path), plus executable filter/source counterfactual
+replanning. However, those older checks alone did NOT catch a visible
+`event_name = "Qualified..."` shortcut, which could replace the intended
+`event_status` or `event_year` predicate.
+
+Newly generated plans therefore freeze three narrow policy fields
+**inside the existing single `macro_plan`**; there is no new generator,
+backbone, Spec version, or secondary evidence framework:
+
+- `evidence_sampling_policy=eligibility_blind_event_names_v1`: qualifying
+  and nonqualifying events have the SAME neutral title within their
+  fictional project. A separate `event_id` still identifies each row
+  for evidence lookup, and the task's specified status/year is the only
+  eligibility discriminator (the inactive field is constant).
+- `difficulty_sampling_policy=calibrated_structural_difficulty_v1`:
+  Medium samples shorter and simpler reference/event investigations;
+  Hard samples deeper event/real-fork verification work. Selection uses
+  blockwise deterministic balancing rather than correlating a mode with
+  the alternating difficulty schedule. Reports explicitly describe
+  **structural proxies**, not empirically measured agent hardness.
+- `question_sampling_policy=grounded_relation_goal_question_v1`:
+  the Question describes a human-readable relationship goal derived
+  from genuine YAGO predicate witnesses rather than printing a raw
+  predicate sequence or exposing Macro IDs.
+
+`task_plan_runtime.audit_information()` additionally tries to
+SUBSTITUTE the necessary event eligibility filter with `event_name` or
+the *inactive* event condition field, testing every possible value for
+the correctly identified fictional project. The original Gold Program
+is re-executed. **Every** such alternative must leave multiple
+full, executable real YAGO answers; a single-answer shortcut rejects
+the scene. Deliberately injecting `Qualified`/`Unqualified` titles
+back into a scene is a regression negative control and must fail.
+
+Opaque IDs and genuine motif objects are not counted as semantic
+eligibility descriptors. This is a bounded same-World substitution
+audit, not a proof that arbitrary external information cannot imply
+eligibility.
+
+Important replay compatibility: **older** `task_plan` Scene Specs
+without these three policy fields retain their original deterministic
+sampler, event titles, Question rendering and Quality Audit report
+shape. Existing complete Scene banks are intentionally protected by
+the default `overwrite: false` setting. For a fresh production pilot
+choose a new output directory (or explicitly opt into overwrite).
+
+The quality report's
+`knowledge_world_grounding.single_task_plan` section now adds
+`non_target_field_substitution_passed`, `eligibility_cases`,
+`calibrated_difficulty_profiles` and `question_topic_distribution`.

@@ -23,13 +23,37 @@ VERSION = "maestro.task_plan.v1"
 POLICY = "single_task_plan_counterfactual_v1"
 SALT = "maestro-single-task-plan-frozen"
 MODES = ("trace", "event", "verify")
+# Sampling policy flags only: do not create another complete generator or
+# invalidate frozen task_plan scenes that omitted these fields.
+CALIBRATED = "calibrated_structural_difficulty_v1"
+BLIND_EVENTS = "eligibility_blind_event_names_v1"
+GOAL_QUESTIONS = "grounded_relation_goal_question_v1"
 
 
 def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
-                      hops: int) -> dict:
-    """No concrete entity, RDF predicate, or evidence is selected here."""
-    mode = MODES[(seed + ordinal) % len(MODES)]
-    discoveries = 2 if mode == "verify" else 2 + (ordinal % 2)
+                      hops: int, sampling_policy: str | None = None) -> dict:
+    """Choose typed information work before consulting World facts.
+
+    Legacy samples retain their exact old deterministic choices. The new
+    sampling policy gives Hard samples more independent information work,
+    without treating this proxy as measured live-Agent hardness.
+    """
+    if sampling_policy == CALIBRATED:
+        if difficulty not in {"medium", "hard"}:
+            raise ValueError("unsupported_task_plan_difficulty")
+        # Block-wise balancing avoids accidental coupling to the
+        # parity of the Medium/Hard schedule (the old pilot inverted it).
+        selector = (seed + ordinal // 2) % 2
+        mode = (
+            ("trace", "event") if difficulty == "medium"
+            else ("event", "verify")
+        )[selector]
+        discoveries = 2 if difficulty == "medium" or mode == "verify" else 3
+    elif sampling_policy is None:
+        mode = MODES[(seed + ordinal) % len(MODES)]
+        discoveries = 2 if mode == "verify" else 2 + (ordinal % 2)
+    else:
+        raise ValueError("unsupported_task_plan_sampling_policy")
     condition = (
         {"field": "event_status", "op": "filter_eq", "value": "completed"}
         if ordinal % 2 == 0 else
@@ -120,7 +144,9 @@ def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
         )
 
     groups = [[i for i in range(1, hops + 1)]]
-    if mode != "verify" and hops > 2 and ordinal % 2:
+    if mode != "verify" and hops > 2 and (
+        sampling_policy == CALIBRATED or ordinal % 2
+    ):
         groups = [[1], list(range(2, hops+1))]
     for group in groups:
         tail = group[-1]
@@ -137,6 +163,10 @@ def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
     return {
         "version": VERSION,
         "mode": mode, "condition": condition,
+        **({"difficulty_sampling_policy": CALIBRATED,
+            "evidence_sampling_policy": BLIND_EVENTS,
+            "question_sampling_policy": GOAL_QUESTIONS}
+           if sampling_policy == CALIBRATED else {}),
         "hops": hops, "macro_tasks": tasks,
         "terminal_macro_id": last,
         "goal": {
@@ -279,9 +309,13 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         raise ValueError("task_plan_requires_medium_or_hard")
     if not 2 <= min_hops <= max_hops <= 4:
         raise ValueError("task_plan_invalid_hops")
-    hops = min_hops + (ordinal % (max_hops-min_hops+1))
+    # Structural proxy calibration: Medium samples the shorter admissible
+    # YAGO chain, Hard the longer; modes/independent clues are also
+    # conditional on difficulty. This is NOT a learned-agent difficulty score.
+    hops = min_hops if difficulty == "medium" else max_hops
     plan = _sample_task_plan(
         seed=seed, ordinal=ordinal, difficulty=difficulty, hops=hops,
+        sampling_policy=CALIBRATED,
     )
     grounding = _ground(
         kg, index or YagoKnowledgeIndex(kg),
@@ -301,8 +335,32 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         "the event held in or after 2025" if condition else
         "the documented project reference"
     )
+    # Select a grounded *archive domain*, not a fixed template topic.
+    # These are fictional collections; the only real historical claims
+    # remain the witnessed YAGO relation edges. Do not infer entity type.
+    route = [
+        predicate_label(fact["predicate"]).lower()
+        for fact in grounding["candidate_paths"][grounding["target_case"]]
+    ]
+    if any(
+        key in name for name in route
+        for key in ("neighbor", "location", "capital", "contained in", "twinned")
+    ):
+        topic = "regional research archive"
+    elif any(
+        key in name for name in route
+        for key in ("birth", "student", "spouse", "influenced")
+    ):
+        topic = "biographical research archive"
+    elif any(
+        key in name for name in route
+        for key in ("member", "institution", "works at", "organization")
+    ):
+        topic = "institutional research archive"
+    else:
+        topic = "cross-reference project archive"
     scenario = {
-        "topic": "project reference investigation",
+        "topic": topic,
         "setting": "a fictional project archive cross-referenced with real YAGO facts",
         "user_role": "records researcher",
         "purpose": "identify " + clause + " and trace its real-world relationship",
@@ -430,9 +488,23 @@ def validate_spec(spec: dict) -> list[str]:
         if sorted(x for x in binding["case_shadow_slots"].values()
                   if x is not None) != list(range(2*ndisc)):
             return ["task_plan_bad_shadow_mapping"]
+        sampling = plan.get("difficulty_sampling_policy")
+        if sampling not in (None, CALIBRATED):
+            return ["task_plan_unknown_sampling_policy"]
+        if sampling == CALIBRATED and (
+            plan.get("evidence_sampling_policy") != BLIND_EVENTS
+            or plan.get("question_sampling_policy") != GOAL_QUESTIONS
+        ):
+            return ["task_plan_missing_blind_evidence_contract"]
+        if sampling is None and any(
+            key in plan for key in ("evidence_sampling_policy",
+                                   "question_sampling_policy")
+        ):
+            return ["task_plan_unpaired_sampling_policy"]
         if plan["macro_tasks"] != _sample_task_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
-            difficulty=spec["difficulty_target"], hops=plan["hops"]
+            difficulty=spec["difficulty_target"], hops=plan["hops"],
+            sampling_policy=sampling,
         )["macro_tasks"]:
             return ["task_plan_graph_not_from_information_needs"]
         by_id, scopes = {}, []
