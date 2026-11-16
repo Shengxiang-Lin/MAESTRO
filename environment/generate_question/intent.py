@@ -109,8 +109,7 @@ def intent_contract(spec: dict) -> dict:
                 if condition["field"] == "event_status"
                 else "Only events in or after 2025 qualify."
             )
-        compact = (
-            plan.get("question_surface_policy") ==
+        compact = plan.get("question_surface_policy") in {
             "macro_goal_reference_card_v1",
             "macro_goal_reference_card_v2",
         }
@@ -272,8 +271,10 @@ def intent_contract(spec: dict) -> dict:
         "visual_clue": (
             applied_clues if applied_clues is not None else
             (None if pattern == "task_plan" and
-             spec["macro_plan"].get("question_surface_policy") ==
-             "macro_goal_reference_card_v1" else
+             spec["macro_plan"].get("question_surface_policy") in {
+                 "macro_goal_reference_card_v1",
+                 "macro_goal_reference_card_v2",
+             } else
              spec["macro_plan"]["clues"])
             if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"} else None
         ),
