@@ -237,6 +237,9 @@ def audit_candidate_information(scene: dict) -> dict:
     spec = scene["problem_spec"]
     plan = spec["macro_plan"]
     policy = plan.get("information_necessity_policy")
+    if policy == "hybrid_world_replanning_v3":
+        from .hybrid_world import audit_hybrid_information
+        return audit_hybrid_information(scene)
     if policy == KNOWLEDGE_REPLANNING_POLICY:
         return _audit_knowledge_replanning(scene)
     if policy == CORROBORATED_DISPUTE_POLICY:
