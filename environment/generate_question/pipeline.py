@@ -927,13 +927,21 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     "macro_goal_questions": sum(
                         s["problem_spec"]["macro_plan"].get(
                             "question_surface_policy"
-                        ) == "macro_goal_reference_card_v1"
+                        ) in {
+                            "macro_goal_reference_card_v1",
+                            "macro_goal_reference_card_v2",
+                        }
                         for s in current_scenes
                     ),
                     "reference_cards_in_public_view": sum(
                         s["public"].get("task_input") ==
                         s["problem_spec"].get("task_input") and
                         "task_input" in s["public"]
+                        for s in current_scenes
+                    ),
+                    "natural_reference_cards": sum(
+                        s["public"].get("task_input", {}).get("version")
+                        == "macro_goal_reference_card_v2"
                         for s in current_scenes
                     ),
                     "mean_question_characters": (

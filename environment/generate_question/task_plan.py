@@ -28,7 +28,8 @@ MODES = ("trace", "event", "verify")
 CALIBRATED = "calibrated_structural_difficulty_v1"
 BLIND_EVENTS = "eligibility_blind_event_names_v1"
 GOAL_QUESTIONS = "grounded_relation_goal_question_v1"
-MACRO_GOAL_QUESTION = "macro_goal_reference_card_v1"
+MACRO_GOAL_QUESTION_V1 = "macro_goal_reference_card_v1"
+MACRO_GOAL_QUESTION = "macro_goal_reference_card_v2"
 SEMANTIC_GOALS = "goal_constrained_yago_grounding_v1"
 SYNTHETIC_WORLD = "maestro.fictional_semantic_world.v1"
 SYNTHETIC_WITNESS = "maestro.task_plan.fictional_witness.v1"
@@ -849,6 +850,43 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
     return clues, catalog, schemas
 
 
+def _reference_observation_text(modality: str, attribute: str,
+                                value: str) -> str:
+    """Render ONLY an already frozen target observation as a media note.
+
+    No extra entity, date, provenance or inferred fact is introduced.
+    Unlike a raw table dump, these are user-provided *description* snippets;
+    media decoding is not claimed.
+    """
+    quoted = "'" + str(value) + "'"
+    templates = {
+        "seal motif": "The photographed folio carries a seal with a {value} motif.",
+        "drawer code": "The attached catalog slip gives the drawer marker as {value}.",
+        "institutional affiliation": (
+            "The accompanying register associates the record with {value}."
+        ),
+        "survey-volume association": (
+            "An attached catalog note places the record in {value}."
+        ),
+        "shelf code": "The recording includes the spoken shelf marker {value}.",
+        "document series": (
+            "A cross-reference note identifies the document series as {value}."
+        ),
+        "reel motif": (
+            "The supplied reel observation describes a {value} sequence."
+        ),
+        "record class": (
+            "A separate register note classifies the item as {value}."
+        ),
+    }
+    if attribute in templates:
+        return templates[attribute].format(value=quoted)
+    return (
+        "The supplied " + modality + " observation records " +
+        attribute + " as " + quoted + "."
+    )
+
+
 def _reference_card(plan: dict, sources: list[dict], *,
                     seed: int, ordinal: int) -> dict:
     """Public *starting material*, not a second evidence or World planner.
@@ -861,17 +899,30 @@ def _reference_card(plan: dict, sources: list[dict], *,
     """
     modality = {source["source_id"]: source["modality"]
                 for source in sources}
+    version = plan.get("question_surface_policy")
+    if version not in {MACRO_GOAL_QUESTION_V1, MACRO_GOAL_QUESTION}:
+        raise ValueError("reference_card_unknown_surface_version")
+    observations = [
+        {
+            "modality": modality[sid],
+            **({
+                "feature": info["attribute"],
+                "observed_value": info["value"],
+            } if version == MACRO_GOAL_QUESTION_V1 else {
+                "content": _reference_observation_text(
+                    modality[sid], info["attribute"], info["value"]
+                ),
+            }),
+        }
+        for sid, info in sorted(plan["clues"].items())
+    ]
     return {
-        "version": MACRO_GOAL_QUESTION,
+        "version": version,
         "reference_id": "REF-" + digest(
             seed, ordinal, "task-plan-provided-reference"
         )[:12].upper(),
         "kind": "provided_reference_materials",
-        "observations": [{
-            "modality": modality[sid],
-            "feature": info["attribute"],
-            "observed_value": info["value"],
-        } for sid, info in sorted(plan["clues"].items())],
+        "observations": observations,
     }
 
 
@@ -1026,8 +1077,9 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         "macro_plan": plan,
         **({"task_input": _reference_card(
             plan, sources, seed=seed, ordinal=ordinal
-        )} if plan.get("question_surface_policy") ==
-            MACRO_GOAL_QUESTION else {}),
+        )} if plan.get("question_surface_policy") in {
+            MACRO_GOAL_QUESTION_V1, MACRO_GOAL_QUESTION
+        } else {}),
         "knowledge_witness": witness,
         "macro_information_necessity_version": POLICY,
     }
@@ -1059,7 +1111,9 @@ def validate_spec(spec: dict) -> list[str]:
         ):
             return ["task_plan_frozen_hash_mismatch"]
         question_policy = plan.get("question_surface_policy")
-        if question_policy == MACRO_GOAL_QUESTION:
+        if question_policy in {
+            MACRO_GOAL_QUESTION_V1, MACRO_GOAL_QUESTION
+        }:
             if (plan.get("knowledge_world_mode") != "compose"
                     or spec.get("task_input") != _reference_card(
                         plan, spec["sources"], seed=spec["seed"],

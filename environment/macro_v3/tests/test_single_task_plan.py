@@ -527,7 +527,7 @@ class DirectTaskPlanTests(unittest.TestCase):
             )
             self.assertIn(
                 plan["clues"][sid]["value"],
-                [row["observed_value"] for row in spec["task_input"]["observations"]],
+                " ".join(row["content"] for row in spec["task_input"]["observations"]),
             )
             scene = compile_and_validate(spec, question)
             self.assertEqual(validate_replay(scene)["status"], "valid")
@@ -627,6 +627,15 @@ class DirectTaskPlanTests(unittest.TestCase):
             self.assertNotIn("project_id", json.dumps(card))
             self.assertNotIn("event_id", json.dumps(card))
             self.assertNotIn("answer", json.dumps(card))
+            self.assertTrue(all(
+                set(item) == {"modality", "content"}
+                for item in card["observations"]
+            ))
+            for sid, clue in sorted(plan["clues"].items()):
+                self.assertIn(
+                    str(clue["value"]),
+                    " ".join(row["content"] for row in card["observations"]),
+                )
             question = reference_question(spec)
             self.assertLess(len(question), 355, question)
             self.assertFalse(guard_question(question, spec), question)
@@ -664,7 +673,7 @@ class DirectTaskPlanTests(unittest.TestCase):
                 self.assertIn(cue["value"], rendered)
             tampered = deepcopy(spec)
             tampered["task_input"]["observations"][0][
-                "observed_value"] = "UNLICENSED-OBSERVATION"
+                "content"] = "UNLICENSED-OBSERVATION"
             self.assertIn(
                 "task_plan_reference_card_not_frozen",
                 validate_spec(tampered),
@@ -681,6 +690,99 @@ class DirectTaskPlanTests(unittest.TestCase):
                 )
             old_question = question
         self.assertIsNotNone(old_question)
+
+    def test_question_identity_uses_visible_material_not_random_ids(self):
+        from environment.generate_question.stages import _user_task_identity
+
+        kg = graph_fixture()
+        spec = make_spec(
+            kg, seed=17, ordinal=0, difficulty="medium",
+            index=YagoKnowledgeIndex(kg), world_mode="compose",
+        )
+        question = reference_question(spec)
+        original = _user_task_identity(spec, question)
+
+        same = deepcopy(spec)
+        same["task_input"]["reference_id"] = "REF-DIFFERENT"
+        same["ordinal"] = 999
+        same["task_id"] = "different-task-id"
+        self.assertEqual(_user_task_identity(same, question), original)
+
+        same["task_input"]["observations"].reverse()
+        self.assertEqual(_user_task_identity(same, question), original)
+
+        different = deepcopy(spec)
+        different["task_input"]["observations"][0]["content"] += (
+            " A different observed marker appears."
+        )
+        self.assertNotEqual(_user_task_identity(different, question), original)
+
+        legacy = deepcopy(spec)
+        legacy.pop("task_input")
+        self.assertEqual(
+            _user_task_identity(legacy, question),
+            _user_task_identity(legacy, "  " + question + "  "),
+        )
+
+    def test_reference_card_v1_replay_preserves_original_world_and_o1_prompt(self):
+        from environment.generate_question.task_plan import (
+            MACRO_GOAL_QUESTION_V1, _reference_card, SALT,
+        )
+        from environment.base_orchestration.o1_compat import (
+            o1_initial_instruction,
+        )
+        from environment.schema import digest
+
+        kg = graph_fixture()
+        index = YagoKnowledgeIndex(kg)
+        for ordinal in (0, 1, 2, 3, 4, 5):
+            difficulty = "medium" if ordinal % 2 == 0 else "hard"
+            new_spec = make_spec(
+                kg, seed=17, ordinal=ordinal, difficulty=difficulty,
+                index=index, world_mode="compose",
+            )
+            old_spec = deepcopy(new_spec)
+            old_spec["macro_plan"]["question_surface_policy"] = (
+                MACRO_GOAL_QUESTION_V1
+            )
+            old_spec["task_input"] = _reference_card(
+                old_spec["macro_plan"], old_spec["sources"],
+                seed=old_spec["seed"], ordinal=old_spec["ordinal"],
+            )
+            old_spec["knowledge_contract_hash"] = digest(
+                old_spec["macro_plan"], old_spec["knowledge_witness"],
+                old_spec["seed"], old_spec["ordinal"], SALT,
+            )
+            self.assertEqual(old_spec["task_input"]["version"],
+                             MACRO_GOAL_QUESTION_V1)
+            self.assertFalse(validate_spec(old_spec))
+            old_scene = compile_and_validate(
+                old_spec, reference_question(old_spec)
+            )
+            new_scene = compile_and_validate(
+                new_spec, reference_question(new_spec)
+            )
+            self.assertEqual(validate_replay(old_scene)["status"], "valid")
+            for field in (
+                "world", "gold_program", "gold_trace", "gold_answer",
+                "macro_graph", "task_feedback",
+            ):
+                self.assertEqual(old_scene[field], new_scene[field], field)
+            old_obs = old_spec["task_input"]["observations"]
+            self.assertTrue(all(
+                set(item) == {"modality", "feature", "observed_value"}
+                for item in old_obs
+            ))
+            old_prompt = o1_initial_instruction(old_scene)
+            self.assertIn(
+                "- " + old_obs[0]["modality"] + ": " +
+                old_obs[0]["feature"] + ": " +
+                old_obs[0]["observed_value"], old_prompt,
+            )
+            new_prompt = o1_initial_instruction(new_scene)
+            self.assertIn(new_spec["task_input"]["observations"][0]["content"],
+                          new_prompt)
+            self.assertNotIn("observed_value", new_prompt)
 
     def test_world_event_links_require_a_real_upstream_key(self):
         """A wrong but valid project key must retrieve another event chain.
@@ -845,6 +947,32 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
             result = generate_questions(args)
             self.assertEqual(result["status"], "done", result)
             self.assertEqual(result["generated"], 20)
+            construction = json.loads(
+                (args.output_dir / "constructed" / "summary.json").read_text()
+            )
+            self.assertEqual(
+                construction["rejected"].get("duplicate_question", 0), 0,
+            )
+            self.assertEqual(
+                construction["rejected"].get("duplicate_user_task", 0), 0,
+            )
+            from environment.generate_question.stages import _user_task_identity
+            scenes = [
+                json.loads(line)
+                for line in (args.output_dir / "constructed" /
+                             "scenes.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(
+                [scene["problem_spec"]["ordinal"] for scene in scenes],
+                list(range(20)),
+            )
+            self.assertEqual(len({
+                _user_task_identity(scene["problem_spec"], scene["question"])
+                for scene in scenes
+            }), 20)
+            self.assertLess(
+                len({scene["question"] for scene in scenes}), 20,
+            )
             report = json.loads(
                 (args.output_dir / "quality_report.json").read_text()
             )
@@ -856,6 +984,13 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
             self.assertEqual(stats["semantic_grounding"]["shared_context_worlds"], 20)
             self.assertEqual(
                 stats["semantic_grounding"]["required_shared_relation_worlds"],
+                20,
+            )
+            self.assertEqual(
+                stats["semantic_grounding"]["natural_reference_cards"], 20,
+            )
+            self.assertEqual(
+                stats["semantic_grounding"]["reference_cards_in_public_view"],
                 20,
             )
             self.assertEqual(
