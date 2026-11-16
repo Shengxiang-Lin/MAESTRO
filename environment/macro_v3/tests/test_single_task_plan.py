@@ -583,6 +583,127 @@ class DirectTaskPlanTests(unittest.TestCase):
             )
         self.assertGreaterEqual(len(seen_leads), 4)
 
+    def test_world_event_links_require_a_real_upstream_key(self):
+        """A wrong but valid project key must retrieve another event chain.
+
+        This is not a missing-source/blocked-program necessity proxy:
+        the counterfactual returns a nonempty *wrong* answer with provenance.
+        """
+        from environment.generate_question.world_motifs import (
+            KEYED_EVENT_VERSION,
+        )
+        from environment.generate_question.program_ir import (
+            ProgramError, MissingSourceError, evaluate_program,
+        )
+        from environment.generate_question.compiler import QuestionSession
+        from environment.generate_question.task_plan import SALT
+        from environment.schema import digest
+
+        kg = graph_fixture()
+        index = YagoKnowledgeIndex(kg)
+        seen = 0
+        for ordinal in range(24):
+            difficulty = "medium" if ordinal % 2 == 0 else "hard"
+            spec = make_spec(
+                kg, seed=17, ordinal=ordinal, difficulty=difficulty,
+                index=index, world_mode="compose",
+            )
+            if spec["macro_plan"]["mode"] != "event":
+                continue
+            seen += 1
+            world_model = spec["macro_plan"]["world_binding"]["world_model"]
+            self.assertEqual(
+                world_model["keyed_event_relation_version"],
+                KEYED_EVENT_VERSION,
+            )
+            links = world_model["event_links"]
+            self.assertEqual(
+                len(links),
+                2*len(spec["macro_plan"]["world_binding"]["all_cases"]),
+            )
+            self.assertFalse(validate_spec(spec))
+            scene = compile_and_validate(spec, reference_question(spec))
+            self.assertEqual(validate_replay(scene)["status"], "valid")
+            audit = scene["difficulty_audit"]["macro_first_audit"][
+                "candidate_information_necessity"
+            ]
+            self.assertTrue(audit["passed"], audit)
+            key_audit = audit["keyed_event_dependency"]
+            self.assertTrue(key_audit["passed"], key_audit)
+            self.assertTrue(key_audit["world_links_match"])
+            self.assertTrue(key_audit["wrong_upstream_key_changes_answer"])
+            self.assertTrue(key_audit["wrong_upstream_key_result"])
+            self.assertNotEqual(
+                key_audit["wrong_upstream_key_result"], scene["gold_answer"]
+            )
+            ledger = scene["world"]["sources"]["event_ledger"]
+            self.assertEqual(ledger["access_policy"], {
+                "mode": "keyed_lookup",
+                "key_field": "project_id",
+                "key_cardinality": "many",
+            })
+            with self.assertRaises(MissingSourceError):
+                QuestionSession(scene).read_source("event_ledger")
+            node_ops = [
+                node for node in scene["gold_program"]["nodes"]
+                if node.get("source_id") == "event_ledger"
+            ]
+            self.assertEqual(len(node_ops), 1)
+            self.assertEqual(node_ops[0]["op"], "lookup_by_key")
+            self.assertEqual(node_ops[0]["input_key_field"], "project_id")
+            source_keys = [
+                x["values"]["project_id"] for x in ledger["observations"]
+            ]
+            self.assertTrue(all(source_keys.count(pid) == 2
+                                for pid in set(source_keys)))
+            event_values = {
+                (r["values"]["project_id"], r["values"]["event_id"]):
+                    r["values"] for r in ledger["observations"]
+            }
+            references = {
+                r["values"]["event_id"]: r["values"]["entity_0"]
+                for r in scene["world"]["sources"]["event_ref"]["observations"]
+            }
+            for link in links:
+                row = event_values[link["project_id"], link["event_id"]]
+                self.assertEqual(row["event_status"], link["event_status"])
+                self.assertEqual(row["event_year"], link["event_year"])
+                self.assertEqual(
+                    references[link["event_id"]], link["entity_0"],
+                )
+            # The old strict singleton policy must not be weakened for
+            # other keyed registers or when the explicit flag is removed.
+            blocked = deepcopy(scene["world"]["sources"])
+            del blocked["event_ledger"]["access_policy"]["key_cardinality"]
+            with self.assertRaisesRegex(
+                ProgramError, "ambiguous_lookup_source_key"
+            ):
+                evaluate_program(scene["gold_program"], sources=blocked)
+            realized = realize_scene(scene, strict=True)
+            self.assertEqual(
+                len(realized["macro_tasks"]),
+                scene["macro_graph"]["macro_task_count"],
+            )
+            self.assertTrue(any(
+                step["operation"] == "lookup_by_key" and
+                step.get("lookup_keys", {}).get("source_id") == "event_ledger"
+                for item in realized["macro_tasks"]
+                for step in item["trace_summary"]["steps"]
+                if step["lookup_keys"] is not None
+            ))
+            tampered = deepcopy(spec)
+            tampered["macro_plan"]["world_binding"]["world_model"][
+                "event_links"][0]["entity_0"] = "ENT-NONEXISTENT"
+            tampered["knowledge_contract_hash"] = digest(
+                tampered["macro_plan"], tampered["knowledge_witness"],
+                tampered["seed"], tampered["ordinal"], SALT,
+            )
+            self.assertIn(
+                "composed_world_event_subject_missing",
+                validate_spec(tampered),
+            )
+        self.assertGreaterEqual(seen, 6)
+
     def test_spec_tamper_and_replay_fail_closed(self):
         kg = graph_fixture()
         spec = make_spec(kg, seed=17, ordinal=1, difficulty="medium")
