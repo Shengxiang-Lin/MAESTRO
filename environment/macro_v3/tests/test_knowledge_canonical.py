@@ -72,7 +72,7 @@ class KnowledgeBridgeTests(unittest.TestCase):
             oracle = run_macro_tasks(
                 scene["macro_graph"], sources=scene["world"]["sources"])
             self.assertEqual(oracle["answer"], scene["gold_answer"])
-            self.assertEqual(len(realize_scene(scene, strict=True)["subtasks"]),
+            self.assertEqual(len(realize_scene(scene, strict=True)["macro_tasks"]),
                              scene["macro_graph"]["macro_task_count"])
 
     def test_freeze_and_tamper_detection(self):
