@@ -1,13 +1,14 @@
 # MAESTRO data generation configuration
 
-There is **one YAML per functional stage**, using stable paths rather than
-experiment/version suffixes. The default target is **1,000 Stage-1 Scenes**.
-Rejections are valid: this is not a guarantee that exactly 1,000 accepted
-Scenes or 1,000 Stage-4 recovered branches will be published.
+Use one maintained YAML per stage. Stage 1 defaults to the current
+`task_plan + compose` profile with a 20-scene validation target; increase
+`--target` and select a new `--output-dir` for production. The prior
+`questions.yaml` and variant YAMLs are legacy research fixtures, not the
+canonical CLI default. Acceptance is verified by Replay and necessity tests.
 
 | Stage | Config | Output | Main input |
 |---|---|---|---|
-| 1 — questions and executable Macro DAG | `questions.yaml` | `environment/data/stage1/` | MMQA scenarios (context only) |
+| 1 — questions and executable Macro DAG | `questions_task_plan.yaml` (default) | `environment/data/stage1_single_task_plan_pilot/` | YAGO-seeded synthetic Task Plan + composed World |
 | 2 — Oracle and reviewed Sub-Agent reports | `subagent_reports.yaml` | `environment/data/stage2/` | Stage-1 `questions/scenes.jsonl` |
 | 3 — trusted Main decisions | `main_orchestration.yaml` | `environment/data/stage3/` | Stage-1 scenes + Stage-2 `subtasks.jsonl` |
 | 4 — untrusted recovery decisions | `untrusted_orchestration.yaml` | `environment/data/stage4/` | Stage-1 scenes + Stage-2 `subtasks.jsonl` |
@@ -23,7 +24,7 @@ Run each stage explicitly:
 
 ```bash
 python -m environment generate-questions \
-  --config environment/configs/questions.yaml
+  --config environment/configs/questions_task_plan.yaml
 
 python -m environment naturalize-subtasks \
   --config environment/configs/subagent_reports.yaml
