@@ -21,6 +21,24 @@ from environment.streaming import (
 )
 
 
+def _knowledge_input_identity(args) -> dict | None:
+    """Cheap corpus identity for resumability; avoids hashing multi-GB ZIPs."""
+    location = getattr(args, "knowledge_yago", None)
+    if not location:
+        return None
+    from environment.macro_v3.yago import _files
+    candidates = _files(Path(location))
+    if not candidates:
+        raise FileNotFoundError("knowledge_yago_has_no_supported_facts_file")
+    source = candidates[0]
+    meta = source.stat()
+    return {
+        "file": str(source.resolve()),
+        "size_bytes": meta.st_size,
+        "mtime_ns": meta.st_mtime_ns,
+    }
+
+
 def _construction_identity(args) -> str:
     return stable_signature({
         "target": args.target,
@@ -45,6 +63,7 @@ def _construction_identity(args) -> str:
             str(args.knowledge_yago) if getattr(args, "knowledge_yago", None)
             else None
         ),
+        "knowledge_source_identity": _knowledge_input_identity(args),
         "knowledge_limits": [
             getattr(args, key, None) for key in (
                 "knowledge_max_triples", "knowledge_max_edges",
