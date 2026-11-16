@@ -102,7 +102,7 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
-    if spec.get("reasoning_pattern") in {"typed_knowledge_v1", "typed_knowledge_v2"}:
+    if spec.get("reasoning_pattern") in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}:
         plan = spec["macro_plan"]
         clues = plan["clues"]
         source_phrases = [
@@ -335,7 +335,7 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
-    if pattern in {"typed_knowledge_v1", "typed_knowledge_v2"}:
+    if pattern in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}:
         plan = spec["macro_plan"]
         for info in plan["clues"].values():
             if info["value"].casefold() not in q.casefold():
