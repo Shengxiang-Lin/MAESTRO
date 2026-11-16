@@ -259,7 +259,8 @@ def generate_world(spec: dict) -> dict:
         "generation_seed": spec["seed"],
         "knowledge_witness": copy.deepcopy(spec["knowledge_witness"]),
         "value_sampling_contract": "direct_task_plan_grounding_v1",
-        "knowledge_origin": paths[target][0]["origin"],
+        **({"knowledge_origin": "synthetic"}
+           if paths[target][0]["origin"] == "synthetic" else {}),
     }
 
 
