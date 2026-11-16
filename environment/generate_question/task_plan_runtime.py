@@ -88,6 +88,22 @@ def generate_world(spec: dict) -> dict:
         # scenes (without this policy) replay their original row names.
         from .task_plan import BLIND_EVENTS
         blind = plan.get("evidence_sampling_policy") == BLIND_EVENTS
+        semantic = plan["goal"].get("semantic") if (
+            plan.get("semantic_grounding_policy") ==
+            "goal_constrained_yago_grounding_v1"
+        ) else None
+        neutral_names = {
+            "academic": "Correspondence review session",
+            "biographical": "Biography file review",
+            "institutional": "Registry file review",
+            "geographical": "Regional record review",
+        }
+        # This descriptor is shared by all events of the same dossier;
+        # it cannot act as a shortcut for status/year eligibility.
+        neutral_label = (
+            neutral_names[semantic["domain"]] if semantic
+            else "Project review meeting"
+        )
         eligible, ineligible = _condition_rows(plan)
         event_rows = []
         if mode == "event":
@@ -99,11 +115,11 @@ def generate_world(spec: dict) -> dict:
             if mode == "event":
                 event_rows.extend([
                     {"project_id": pid, "event_id": good_event,
-                     "event_name": (("Project review meeting " + case[-5:]) if blind else
+                     "event_name": ((neutral_label + " " + case[-5:]) if blind else
                                     ("Qualified project review " + case[-5:])),
                      **eligible},
                     {"project_id": pid, "event_id": other_event,
-                     "event_name": (("Project review meeting " + case[-5:]) if blind else
+                     "event_name": ((neutral_label + " " + case[-5:]) if blind else
                                     ("Other project review " + case[-5:])),
                      **ineligible},
                 ])
@@ -119,7 +135,7 @@ def generate_world(spec: dict) -> dict:
                     related = cases[(i+shift) % len(cases)]
                     event_rows.append({
                         "project_id": pid, "event_id": good_event,
-                        "event_name": (("Project review session " + case[-5:]) if blind else
+                        "event_name": ((neutral_label + " " + case[-5:]) if blind else
                                         ("Qualified project session " + case[-5:])),
                         **eligible,
                         "motif_object": fork[related]["object"],
@@ -127,7 +143,7 @@ def generate_world(spec: dict) -> dict:
                 other = cases[(i+1) % len(cases)]
                 event_rows.append({
                     "project_id": pid, "event_id": other_event,
-                    "event_name": (("Project review session " + case[-5:]) if blind else
+                    "event_name": ((neutral_label + " " + case[-5:]) if blind else
                                     ("Unqualified project session " + case[-5:])),
                     **ineligible, "motif_object": fork[other]["object"],
                 })
