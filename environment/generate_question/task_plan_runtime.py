@@ -85,9 +85,18 @@ def generate_world(spec: dict) -> dict:
         rng.shuffle(rows)
         tables[sid] = rows
     projects = {
-        case: _project(spec["seed"], spec["ordinal"], case)
-        for case in cases
+        case: (
+            "PRJ-" + digest(
+                spec["seed"], spec["ordinal"], case, "project"
+            )[:12].upper()
+            if composed else _project(
+                spec["seed"], spec["ordinal"], case
+            )
+        ) for case in cases
     }
+    def event_key(pid, which):
+        return ("EVT-" + digest(pid, which)[:12].upper()
+                if composed else _event(pid, which))
     tables["entity_index"] = [{
         "case_id": case, "project_id": pid,
         "project_name": "Project " + case.split("-")[-1].upper(),
@@ -128,8 +137,8 @@ def generate_world(spec: dict) -> dict:
             event_refs = []
         for i, case in enumerate(cases):
             pid = projects[case]
-            good_event = _event(pid, "qualified")
-            other_event = _event(pid, "other")
+            good_event = event_key(pid, "qualified")
+            other_event = event_key(pid, "other")
             if mode == "event":
                 event_rows.extend([
                     {"project_id": pid, "event_id": good_event,
