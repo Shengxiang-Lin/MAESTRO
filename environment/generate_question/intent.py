@@ -88,7 +88,23 @@ def intent_contract(spec: dict) -> dict:
             spec["macro_plan"]["goal"]["public_label"] +
             " for exactly the identified case."
         )
-    elif pattern in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}:
+    elif pattern == "typed_knowledge_v3":
+        plan = spec["macro_plan"]
+        constraints = [
+            "Identify exactly one fictional project using all simulated clues.",
+            "Use BOTH simulated candidate reference directories: neither "
+            "alone establishes a unique real-world entity.",
+            "Follow the real YAGO chain only after the fictional "
+            "project-to-entity reference has been reconciled.",
+            "Do not describe fictional project entities or their synthetic "
+            "associations as historically verified facts.",
+            "Return one final linked YAGO entity name.",
+        ]
+        constraints.extend(
+            f"Identifying clue: {info['attribute']} {info['value']}."
+            for info in plan["clues"].values()
+        )
+    elif pattern in {"typed_knowledge_v1", "typed_knowledge_v2"}:
         plan = spec["macro_plan"]
         constraints = [
             "Reconcile all independent fictional dossier observations to identify one case.",
