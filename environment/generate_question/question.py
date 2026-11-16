@@ -756,11 +756,21 @@ def guard_question(question: str, spec: dict,
                 r"\b(?:reference materials|materials|record)\b", q, re.I
             ):
                 errors.append("task_plan_reference_material_not_identified")
-            if any(
-                info["value"].casefold() in q.casefold()
-                for info in plan["clues"].values()
-            ):
-                errors.append("task_plan_answer_clues_leaked_into_question")
+            # Guard against *specific* evidence values being copied into
+            # the question, not ordinary vocabulary shared by a semantic
+            # goal or topic (e.g., the word "survey" in a regional survey).
+            # Exact word/phrase boundaries also avoid "ridge" in "bridge".
+            allowed = (
+                spec["scenario"]["topic"] + " " +
+                plan["goal"]["semantic"]["question"]
+            )
+            for info in plan["clues"].values():
+                value = str(info["value"])
+                phrase = r"\b" + re.escape(value) + r"\b"
+                if (not re.search(phrase, allowed, flags=re.I)
+                        and re.search(phrase, q, flags=re.I)):
+                    errors.append("task_plan_answer_clues_leaked_into_question")
+                    break
         else:
             for info in plan["clues"].values():
                 if info["value"].casefold() not in q.casefold():
