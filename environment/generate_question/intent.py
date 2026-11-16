@@ -38,6 +38,7 @@ FAMILY_OUTPUTS = {
     "macro_first_v2": "Return the confirmed domain-specific fact for the identified case.",
     "typed_knowledge_v1": "Name the entity reached by the documented YAGO relation path.",
     "typed_knowledge_v2": "Name the entity reached by the documented YAGO relation path.",
+    "typed_knowledge_v3": "Identify the fictional project, reconcile its candidate real references, then name the related YAGO entity.",
 }
 STYLES = (
     ("direct_lookup", "Start with a concise direct question, not a job title."),
@@ -87,7 +88,7 @@ def intent_contract(spec: dict) -> dict:
             spec["macro_plan"]["goal"]["public_label"] +
             " for exactly the identified case."
         )
-    elif pattern in {"typed_knowledge_v1", "typed_knowledge_v2"}:
+    elif pattern in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"}:
         plan = spec["macro_plan"]
         constraints = [
             "Reconcile all independent fictional dossier observations to identify one case.",
@@ -112,7 +113,7 @@ def intent_contract(spec: dict) -> dict:
     return {
         "visual_clue": (
             applied_clues if applied_clues is not None else
-            spec["macro_plan"]["clues"] if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2"} else None
+            spec["macro_plan"]["clues"] if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3"} else None
         ),
         "acquisition_chain": None,
         "topic": spec["scenario"]["topic"],
