@@ -39,6 +39,30 @@ def _knowledge_input_identity(args) -> dict | None:
     }
 
 
+def _user_task_identity(spec: dict, question: str) -> tuple:
+    """Deduplicate the entire visible task, not its generic question alone.
+
+    Different provided reference materials make two tasks genuinely distinct.
+    Ignore opaque reference IDs and ordinal seeds: they must never be used
+    to disguise equivalent question/material content as a new task.
+    Old scenes without separate user material keep question-only identity.
+    """
+    title = normalize_label(question)
+    card = spec.get("task_input")
+    if card is None:
+        return (title,)
+    observations = tuple(sorted(
+        (
+            normalize_label(str(item["modality"])),
+            normalize_label(str(item.get("content", "")))
+            if "content" in item else
+            normalize_label(str(item["feature"])) + "=" +
+            normalize_label(str(item["observed_value"])),
+        ) for item in card["observations"]
+    ))
+    return (title, observations)
+
+
 def _construction_identity(args) -> str:
     return stable_signature({
         "target": args.target,
@@ -259,7 +283,7 @@ def construct_scenes(args) -> dict:
     )
     order = list(seeds)
     random.Random(args.seed * 123457 + 137).shuffle(order)
-    chosen, rejected, seen_questions = [], Counter(), set()
+    chosen, rejected, seen_tasks = [], Counter(), set()
     # Freeze Goal, structure, source permissions and all substantive
     # constraints before calling any optional LLM or sampling World values.
     for candidate_ordinal, seed_record in enumerate(order):
@@ -318,11 +342,14 @@ def construct_scenes(args) -> dict:
                     ),
                 )
             q = reference_question(spec)
-            normalized = normalize_label(q)
-            if normalized in seen_questions:
-                rejected["duplicate_question"] += 1
+            identity = _user_task_identity(spec, q)
+            if identity in seen_tasks:
+                rejected[
+                    "duplicate_user_task" if "task_input" in spec
+                    else "duplicate_question"
+                ] += 1
                 continue
-            seen_questions.add(normalized)
+            seen_tasks.add(identity)
             chosen.append(spec)
         except (ValueError, TypeError, KeyError) as exc:
             rejected[type(exc).__name__ + ":" + str(exc)[:140]] += 1
