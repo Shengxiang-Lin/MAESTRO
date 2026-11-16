@@ -361,7 +361,7 @@ def validate_spec(spec: dict) -> list[str]:
             seen[task["macro_id"]] = task
         if (set(plan["source_schemas"]) !=
                 {r["source_id"] for r in spec["sources"]}
-                or Counter(scopes) != Counter(plan["source_schemas"])):
+                or Counter(scopes) != Counter(plan["source_schemas"].keys())):
             return ["hybrid_unused_or_duplicate_source"]
         if (len(plan["macro_tasks"]) > 9 or
                 plan["terminal_macro_id"] != plan["macro_tasks"][-1]["macro_id"]
