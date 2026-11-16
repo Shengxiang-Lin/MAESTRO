@@ -521,6 +521,13 @@ def _ground(kg, index, plan, *, seed: int, ordinal: int):
         try:
             return _semantic_ground(kg, index, plan, seed=seed, ordinal=ordinal)
         except ValueError as exc:
+            # Fall back only for legitimate RDF coverage shortfalls. Do not
+            # conceal programming / contract errors as fictional Worlds.
+            if not str(exc).startswith((
+                "no_interpretable_yago_goal_in_loaded_sample",
+                "no_goal_expressible_singleton_yago_with_complete_shadows",
+            )):
+                raise
             return _fictional_ground(
                 plan, seed=seed, ordinal=ordinal, real_failure=str(exc),
             )
