@@ -1,7 +1,8 @@
 # Current opt-in: one Task Plan -> direct real/synthetic World -> old Compiler/Replay.
 # Uses the SAME World/Program/Quality/Replay pipeline as the v2 scenes.
-# Source media and dossier cards remain explicitly simulated. YAGO RDF facts
-# are real and frozen as witnesses in each private ProblemSpec.
+# Source media and dossier cards remain explicitly simulated. Real YAGO
+# witnesses are preferred, but when a complete causal relation cannot be
+# grounded, the generator builds an explicitly fictional semantic world.
 version: 1
 
 input:

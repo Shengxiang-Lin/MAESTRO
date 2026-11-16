@@ -153,8 +153,14 @@ def generate_world(spec: dict) -> dict:
             tables["event_ref"] = event_refs
     if mode == "verify":
         from .real_motif_grounding import validate_frozen_required_fork
-        if validate_frozen_required_fork(b["real_fork"], paths):
-            raise ValueError("missing_required_yago_fork")
+        if b["candidate_paths"][b["target_case"]][0]["origin"] == "synthetic":
+            from .task_plan import _validate_fictional_fork
+            failures = _validate_fictional_fork(b["real_fork"], paths)
+        else:
+            failures = validate_frozen_required_fork(b["real_fork"], paths)
+        if failures:
+            raise ValueError("missing_required_relation_fork:" +
+                             ",".join(failures))
         for sid, shifts in (
             ("link_a", (0, 1, 2)), ("link_b", (0, 1, 3)),
         ):
@@ -194,6 +200,7 @@ def generate_world(spec: dict) -> dict:
                if role["access_mode"] == "keyed_lookup" else {}),
         }
         if sid.startswith("relation_") or sid == "real_fork":
+            fictional = paths[target][0]["origin"] == "synthetic"
             if sid.startswith("relation_"):
                 hop = int(sid.rsplit("_", 1)[-1]) - 1
                 source_facts = {
@@ -207,19 +214,24 @@ def generate_world(spec: dict) -> dict:
                     for fact in b["real_fork"]["candidate_forks"].values()
                 }
                 key = "entity_0"
-            src["evidence_kind"] = "real_yago_facts"
+            src["evidence_kind"] = (
+                "fictional_relation_facts" if fictional else "real_yago_facts"
+            )
             src["independence_note"] = (
-                "Each true RDF fact originates in YAGO, not a second "
-                "independent historical publisher."
+                "A simulated record within the fictional world, NOT "
+                "independent real-world corroboration." if fictional
+                else "Each true RDF fact originates in YAGO, not a second "
+                     "independent historical publisher."
             )
             for obs in src["observations"]:
                 row = source_facts[obs["values"][key]]
                 fact = {field: row[field]
                         for field in ("subject", "predicate", "object")}
                 obs["knowledge_fact"] = fact
-                obs["evidence_origin_id"] = "YAGO-4.6:" + digest(
-                    *fact.values()
-                )[:20]
+                obs["evidence_origin_id"] = (
+                    ("synthetic:" if fictional else "YAGO-4.6:")
+                    + digest(*fact.values())[:20]
+                )
         else:
             src["evidence_kind"] = (
                 "unverified_fictional_candidate_claims"
@@ -247,6 +259,8 @@ def generate_world(spec: dict) -> dict:
         "generation_seed": spec["seed"],
         "knowledge_witness": copy.deepcopy(spec["knowledge_witness"]),
         "value_sampling_contract": "direct_task_plan_grounding_v1",
+        **({"knowledge_origin": "synthetic"}
+           if paths[target][0]["origin"] == "synthetic" else {}),
     }
 
 

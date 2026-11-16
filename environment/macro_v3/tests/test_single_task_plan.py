@@ -262,10 +262,22 @@ class DirectTaskPlanTests(unittest.TestCase):
             input_file="bad-meaningful-route.ttl",
             scanned=2,
         )
-        with self.assertRaisesRegex(
-            ValueError, "no_goal_expressible_singleton_yago"
-        ):
-            make_spec(graph, seed=17, ordinal=0, difficulty="medium")
+        # An unsupported real path must become explicitly fictional, not
+        # a fabricated "real YAGO" witness.
+        spec = make_spec(graph, seed=17, ordinal=0, difficulty="medium")
+        self.assertEqual(spec["macro_plan"]["knowledge_origin"], "synthetic")
+        self.assertTrue(spec["knowledge_witness"]["fictional"])
+        self.assertTrue(all(
+            row["origin"] == "synthetic"
+            for path in spec["macro_plan"]["world_binding"][
+                "candidate_paths"].values()
+            for row in path
+        ))
+        scene = compile_and_validate(spec, reference_question(spec))
+        self.assertEqual(validate_replay(scene)["status"], "valid")
+        self.assertTrue(scene["difficulty_audit"]["macro_first_audit"][
+            "candidate_information_necessity"]["passed"])
+        self.assertFalse(guard_question(reference_question(spec), spec))
         kg = graph_fixture()
         extra = Edge(
             "https://example.org/Person0",
@@ -278,6 +290,60 @@ class DirectTaskPlanTests(unittest.TestCase):
                         and x.predicate == p+"birthPlace"
                         and x.object != extra.object)
         self.assertFalse(_loaded_yago_unique(index, [original]))
+
+
+    def test_sparse_world_fallback_across_modes_and_provenance(self):
+        from environment.generate_question.intent import intent_contract
+        kg = KnowledgeGraph(edges=[], input_file="empty-facts.ttl", scanned=0)
+        seen_modes = set()
+        for ordinal in range(16):
+            difficulty = "medium" if ordinal % 2 == 0 else "hard"
+            spec = make_spec(
+                kg, seed=17, ordinal=ordinal, difficulty=difficulty,
+            )
+            plan = spec["macro_plan"]
+            seen_modes.add(plan["mode"])
+            self.assertEqual(plan["knowledge_origin"], "synthetic")
+            self.assertEqual(spec["knowledge_witness"]["origin"], "synthetic")
+            self.assertFalse(validate_spec(spec))
+            question = reference_question(spec)
+            self.assertNotIn("YAGO", question)
+            self.assertNotIn("real-world", question)
+            self.assertIn("do not", " ".join(
+                intent_contract(spec)["nonnegotiable_conditions"]
+            ))
+            scene = compile_and_validate(spec, question)
+            self.assertEqual(validate_replay(scene)["status"], "valid")
+            self.assertTrue(scene["difficulty_audit"]["macro_first_audit"][
+                "candidate_information_necessity"]["passed"])
+            realized = realize_scene(scene, strict=True)
+            self.assertEqual(
+                len(realized["macro_tasks"]),
+                scene["macro_graph"]["macro_task_count"],
+            )
+            self.assertEqual(
+                scene["world"]["knowledge_origin"], "synthetic",
+            )
+            for sid, source in scene["world"]["sources"].items():
+                if sid.startswith("relation_") or sid == "real_fork":
+                    self.assertEqual(
+                        source["evidence_kind"], "fictional_relation_facts",
+                    )
+                    self.assertTrue(all(
+                        x["evidence_origin_id"].startswith("synthetic:")
+                        for x in source["observations"]
+                    ))
+            if plan["mode"] == "verify":
+                self.assertEqual(
+                    plan["world_binding"]["real_fork"]["motif_kind"],
+                    "fictional_fork",
+                )
+            altered = deepcopy(spec)
+            case = altered["macro_plan"]["world_binding"]["target_case"]
+            altered["macro_plan"]["world_binding"]["candidate_paths"][
+                case][0]["origin"] = "yago"
+            self.assertTrue(validate_spec(altered))
+        self.assertEqual(seen_modes, {"trace", "event", "verify"})
 
     def test_spec_tamper_and_replay_fail_closed(self):
         kg = graph_fixture()
@@ -300,6 +366,36 @@ class DirectTaskPlanTests(unittest.TestCase):
 
 @unittest.skipUnless(RDF_READY, "requires pyoxigraph")
 class TaskPlanCanonicalCliTests(unittest.TestCase):
+    def test_20_scene_cli_with_sparse_yago(self):
+        from environment.config import load_config, args_from_config
+        from environment.generate_question.pipeline import generate_questions
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ttl = root / "sparse.ttl"
+            ttl.write_text(
+                "@prefix x: <https://example.org/> .\n"
+                "@prefix s: <http://schema.org/> .\n"
+                "x:A s:location x:B .\n"
+                "x:B s:follows x:C .\n", encoding="utf-8",
+            )
+            cfg = load_config("environment/configs/questions_task_plan.yaml")
+            cfg["generation"]["knowledge_yago"] = str(ttl)
+            cfg["generation"]["output_dir"] = str(root / "output")
+            cfg["generation"]["target"] = 20
+            args = args_from_config(cfg)
+            args.no_progress = True
+            result = generate_questions(args)
+            self.assertEqual(result["status"], "done", result)
+            self.assertEqual(result["generated"], 20)
+            report = json.loads(
+                (args.output_dir / "quality_report.json").read_text()
+            )
+            stats = report["knowledge_world_grounding"]["single_task_plan"]
+            self.assertEqual(stats["scenes"], 20)
+            self.assertEqual(stats["necessity_passed"], 20)
+            self.assertEqual(stats["semantic_grounding"]["fictional_worlds"], 20)
+            self.assertEqual(report["replay_pass"], 20)
+
     def test_full_canonical_cli_and_quality_report(self):
         from environment.config import load_config, args_from_config
         from environment.generate_question.pipeline import generate_questions

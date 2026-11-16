@@ -738,3 +738,25 @@ relation combinations; a sparse source sample may yield no accepted
 combination and should be reported as such rather than filled with
 fabricated RDF witnesses. Real image/audio/video processing remains
 out of scope; the corresponding observations are explicitly simulated.
+
+
+### Task Plan: provenance-safe fictional semantic worlds
+
+The semantic Task Plan first searches for a complete interpretable YAGO
+relationship, including all necessary shadow candidates and a witnessed fork
+when required. When the bounded RDF sample cannot support that, the *same*
+Task Plan instead constructs deterministic **fictional** entity relationships
+with plausible semantic signatures. It does not label any synthetic relation
+as a real RDF/YAGO fact, and publishes synthetic provenance in the private
+witness, World observations, questions/intent, and quality report.
+
+Synthetic scenes still require complete counterfactual candidates, qualifying
+event fields when applicable, a separately documented simulated verification
+link for \`verify\` mode, exact Gold replay and information-necessity audits.
+The internal \`real_fork\` identifier is kept for old executor contracts,
+but its provenance and natural-language source title are explicitly fictional.
+
+The candidate loop now uses distinct Task Plan ordinals for rejected attempts
+and permits bounded replacements while keeping the accepted difficulty mix.
+Older frozen scenes retain their original replay semantics; this is a
+simulation-first orchestration benchmark, not historical or real multimodal QA.

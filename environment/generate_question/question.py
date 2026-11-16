@@ -116,6 +116,8 @@ def _intent_reference_question(spec: dict) -> str:
             f"{info['attribute']} '{info['value']}' in {info['title']}"
             for _, info in sorted(plan["clues"].items())
         )
+        fictional = (plan["world_binding"]["candidate_paths"][
+            plan["world_binding"]["target_case"]][0]["origin"] == "synthetic")
         condition = plan["condition"]
         if condition:
             qualifying = (
@@ -125,19 +127,23 @@ def _intent_reference_question(spec: dict) -> str:
             if plan["mode"] == "verify":
                 instruction = (
                     f"Using {qualifying}, reconcile the two independent "
-                    "candidate-reference reports with the documented genuine "
-                    "YAGO secondary relationship to identify the real-world "
-                    "entity referenced by the dossier."
+                    "candidate-reference reports with the separately recorded "
+                    + ("fictional registry relationship to identify the entity "
+                       "referenced by the dossier." if fictional else
+                       "genuine YAGO secondary relationship to identify the "
+                       "real-world entity referenced by the dossier.")
                 )
             else:
                 instruction = (
                     f"Use {qualifying} to locate the dossier's documented "
-                    "real-world entity reference."
+                    + ("fictional entity reference." if fictional
+                       else "real-world entity reference.")
                 )
         else:
             instruction = (
-                "Use the matching dossier's documented real-world entity "
-                "reference."
+                "Use the matching dossier's documented "
+                + ("fictional entity reference." if fictional
+                   else "real-world entity reference.")
             )
         return (
             f"The fictional {topic} has an unresolved dossier identified by "
