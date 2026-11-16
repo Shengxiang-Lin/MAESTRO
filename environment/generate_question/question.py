@@ -136,6 +136,22 @@ def _intent_reference_question(spec: dict) -> str:
             instruction = (
                 "Use the matching dossier's documented entity reference."
             )
+        if plan.get("question_surface_policy") == (
+            "varied_archive_reference_v1"
+        ):
+            lead = (
+                f"An archival review of the {topic} begins with these "
+                f"records: {clues}.",
+                f"Several entries in the {topic} refer to a dossier: "
+                f"{clues}.",
+                f"A researcher examining the {topic} has to reconcile "
+                f"the following identifying details: {clues}.",
+                f"The {topic} contains a record whose identity depends "
+                f"on comparing these sources: {clues}.",
+                f"To resolve a cross-reference in the {topic}, start "
+                f"with these archival clues: {clues}.",
+            )[spec["ordinal"] % 5]
+            return f"{lead} {instruction} {goal['question']}"
         return (
             f"The {topic} contains an unresolved dossier with the "
             f"following identifying clues: {clues}. {instruction} "
