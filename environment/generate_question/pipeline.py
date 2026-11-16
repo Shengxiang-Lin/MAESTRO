@@ -939,6 +939,11 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                         "task_input" in s["public"]
                         for s in current_scenes
                     ),
+                    "natural_reference_cards": sum(
+                        s["public"].get("task_input", {}).get("version")
+                        == "macro_goal_reference_card_v2"
+                        for s in current_scenes
+                    ),
                     "mean_question_characters": (
                         round(sum(len(s["question"]) for s in current_scenes)
                               / len(current_scenes), 1)
