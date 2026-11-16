@@ -40,6 +40,7 @@ FAMILY_OUTPUTS = {
     "typed_knowledge_v2": "Name the entity reached by the documented YAGO relation path.",
     "typed_knowledge_v3": "Identify the fictional project, reconcile its candidate real references, then name the related YAGO entity.",
     "typed_knowledge_v4": "Resolve the fictional event and its genuine secondary YAGO relation before tracing the related entity.",
+    "task_graph_first_v1": "Identify the project and its completed event, reconcile competing reference records and use genuine YAGO evidence to answer.",
 }
 STYLES = (
     ("direct_lookup", "Start with a concise direct question, not a job title."),
@@ -88,6 +89,30 @@ def intent_contract(spec: dict) -> dict:
             "Return the confirmed " +
             spec["macro_plan"]["goal"]["public_label"] +
             " for exactly the identified case."
+        )
+    elif pattern == "task_graph_first_v1":
+        plan = spec["macro_plan"]
+        relation_sketch = spec["task_first_relation_sketch"]
+        constraints = [
+            "All necessary simulated identifying clues must refer to one fictional project.",
+            "The required event-status condition is 'completed'; scheduled "
+            "follow-up events do NOT count as the chosen event.",
+            "Reconcile two source-specific candidate references and independently "
+            "check real YAGO secondary-fork evidence.",
+            "Use the documented real YAGO relationship trail to determine "
+            "one final linked entity's name.",
+            "Real RDF assertions are genuine YAGO witnesses. Project, "
+            "event, organizer, venue and evidence statements are fictional.",
+            "The internal Macro DAG, source keys, task numbers and exact "
+            "primitive operator sequence must not be shown to the user.",
+        ]
+        constraints.extend(
+            f"Required identifying observation: {item['attribute']} {item['value']}."
+            for item in plan["clues"].values()
+        )
+        constraints.append(
+            "Planning shape: " + spec["task_first_macro_graph"]["shape"]
+            + " (internal orchestration contract only)."
         )
     elif pattern == "typed_knowledge_v4":
         plan = spec["macro_plan"]
@@ -150,7 +175,7 @@ def intent_contract(spec: dict) -> dict:
     return {
         "visual_clue": (
             applied_clues if applied_clues is not None else
-            spec["macro_plan"]["clues"] if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4"} else None
+            spec["macro_plan"]["clues"] if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1"} else None
         ),
         "acquisition_chain": None,
         "topic": spec["scenario"]["topic"],
@@ -164,6 +189,8 @@ def intent_contract(spec: dict) -> dict:
         "difficulty": spec["difficulty_target"],
         "nonnegotiable_conditions": constraints,
         "output_contract": (
+            "Return one final linked real-world entity name."
+            if pattern == "task_graph_first_v1" else
             "Return the single final real YAGO-related entity name."
             if pattern == "typed_knowledge_v4" else
             "Return the confirmed " + spec["macro_plan"]["goal"]["public_label"] +

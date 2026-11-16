@@ -733,7 +733,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     knowledge_scenes = [
         scene for scene in scenes
         if scene.get("problem_spec", {}).get("reasoning_pattern")
-        in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4"}
+        in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1"}
     ]
     if knowledge_scenes:
         role_counts = Counter(
@@ -784,7 +784,63 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "candidate_information_necessity", {}
             ) for scene in v4_scenes
         ]
+        graph_first_scenes = [
+            scene for scene in knowledge_scenes
+            if scene["problem_spec"]["reasoning_pattern"] == "task_graph_first_v1"
+        ]
+        graph_first_audits = [
+            scene.get("difficulty_audit", {}).get("macro_first_audit", {}).get(
+                "candidate_information_necessity", {}
+            ) for scene in graph_first_scenes
+        ]
         data["knowledge_world_grounding"] = {
+            "task_graph_first_v1": {
+                "scenes": len(graph_first_scenes),
+                "information_necessity_passed": sum(
+                    r.get("passed", False) for r in graph_first_audits
+                ),
+                "identification_unique": sum(
+                    r.get("identification_unique", False)
+                    for r in graph_first_audits
+                ),
+                "completed_event_status_causal": sum(
+                    r.get("required_field_necessity", {}).get(
+                        "event_status", False)
+                    for r in graph_first_audits
+                ),
+                "real_yago_fork_causal": sum(
+                    r.get("required_field_necessity", {}).get(
+                        "real_fork_motif_object", False)
+                    for r in graph_first_audits
+                ),
+                "both_reference_sources_causal": sum(
+                    bool(r.get("simulated_directory_necessity"))
+                    and all(r["simulated_directory_necessity"].values())
+                    for r in graph_first_audits
+                ),
+                "abstract_graph_shape_distribution": dict(Counter(
+                    scene["task_first_macro_graph"]["shape"]
+                    if "task_first_macro_graph" in scene else
+                    scene["problem_spec"]["task_first_macro_graph"]["shape"]
+                    for scene in graph_first_scenes
+                )),
+                "distinct_graph_role_topologies": len({
+                    tuple(
+                        (node["role"], tuple(node["depends_on"]))
+                        for node in s["problem_spec"]["task_first_macro_graph"]["nodes"]
+                    ) for s in graph_first_scenes
+                }),
+                "synthetic_scheduled_event_count": sum(
+                    len(s["problem_spec"]["task_first_evidence"][
+                        "scheduled_event_records"])
+                    for s in graph_first_scenes
+                ),
+                "causal_vs_context_scope": (
+                    "Event status and the real fork are checked by executable "
+                    "field-level counterfactuals; organizer and venue remain "
+                    "explicitly contextual, not credited as causal work."
+                ),
+            },
             "causal_hybrid_v4": {
                 "scenes_checked": len(v4_scenes),
                 "necessity_passed": sum(
@@ -926,7 +982,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     "optimal agent information acquisition."
                 ),
             },
-            "version": "typed_knowledge_v1_v2_v3_v4",
+            "version": "typed_knowledge_v1_v2_v3_v4_and_task_graph_first_v1",
             "pattern_distribution": dict(Counter(
                 scene["problem_spec"]["reasoning_pattern"]
                 for scene in knowledge_scenes
