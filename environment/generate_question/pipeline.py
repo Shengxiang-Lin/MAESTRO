@@ -730,6 +730,57 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             "version-supersession cases require actual versioned records."
         ),
     }
+    knowledge_scenes = [
+        scene for scene in scenes
+        if scene.get("problem_spec", {}).get("reasoning_pattern")
+        == "typed_knowledge_v1"
+    ]
+    if knowledge_scenes:
+        role_counts = Counter(
+            task["role"]
+            for scene in knowledge_scenes
+            for task in scene["problem_spec"]["macro_plan"]["macro_tasks"]
+        )
+        hop_counts = Counter(
+            len(scene["problem_spec"]["macro_plan"]["real_facts"])
+            for scene in knowledge_scenes
+        )
+        macro_counts = Counter(
+            len(scene["problem_spec"]["macro_plan"]["macro_tasks"])
+            for scene in knowledge_scenes
+        )
+        sources_pass = sum(
+            all(row["changing_source_changes_answer"]
+                for row in scene.get("difficulty_audit", {}).get(
+                    "counterfactual_source_tests", {}).values())
+            for scene in knowledge_scenes
+        )
+        data["knowledge_world_grounding"] = {
+            "version": "typed_knowledge_v1",
+            "scenes": len(knowledge_scenes),
+            "yago_relation_hops_histogram": dict(sorted(hop_counts.items())),
+            "macro_count_histogram": dict(sorted(macro_counts.items())),
+            "macro_roles": dict(sorted(role_counts.items())),
+            "all_source_counterfactuals_passed": sources_pass,
+            "all_handoffs_necessary": sum(
+                scene.get("difficulty_audit", {}).get(
+                    "macro_first_audit", {}).get(
+                    "handoff_counterfactuals", {}).get(
+                    "all_handoffs_necessary", False)
+                for scene in knowledge_scenes
+            ),
+            "provenance_note": (
+                "YAGO triples are sampled from a local RDF file and frozen "
+                "as provenance-bearing witnesses; synthetic dossier "
+                "observations are fictional information carriers. Strict "
+                "Replay is self-contained, not independent online YAGO verification."
+            ),
+            "scope": (
+                "The first canonical typed family; variable Discovery/Macro "
+                "coarsening and 2-3 hop relationships, not the entire "
+                "six-role typed Macro grammar."
+            ),
+        }
     return data
 
 
