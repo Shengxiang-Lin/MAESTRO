@@ -211,6 +211,12 @@ def question_language_warnings(
                 and relation.get("operator") == "filter_gte"
                 and type(relation.get("value")) is int):
             missing_years.discard(str(relation["value"]))
+    if spec.get("reasoning_pattern") == "task_plan":
+        condition = spec.get("macro_plan", {}).get("condition") or {}
+        if (condition.get("field") == "event_year"
+                and condition.get("op") == "filter_gte"
+                and type(condition.get("value")) is int):
+            missing_years.discard(str(condition["value"]))
     if missing_years:
         warnings.append("unlicensed_calendar_year_not_in_topic")
     warnings.extend(unsupported_macro_predicates(question, spec, macro_graph))
