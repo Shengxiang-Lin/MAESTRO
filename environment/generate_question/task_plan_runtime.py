@@ -92,7 +92,7 @@ def generate_world(spec: dict) -> dict:
             if mode == "event":
                 event_rows.extend([
                     {"project_id": pid, "event_id": good_event,
-                     "event_name": "Completed project review " + case[-5:],
+                     "event_name": "Qualified project review " + case[-5:],
                      **eligible},
                     {"project_id": pid, "event_id": other_event,
                      "event_name": "Other project review " + case[-5:],
