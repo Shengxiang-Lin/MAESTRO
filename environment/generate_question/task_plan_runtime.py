@@ -282,6 +282,59 @@ def generate_world(spec: dict) -> dict:
                     "fictional_observation"
                 )
         bank[sid] = src
+    if composed and "context_version" in model:
+        # Every visible record is a partial projection of a shared canonical
+        # entity world. Same archive/institution and site can be referenced
+        # across multiple dossiers and different evidence sources.
+        case_by_project = {pid: case for case, pid in projects.items()}
+        case_by_event = {
+            event_key(pid, which): case
+            for case, pid in projects.items()
+            for which in ("qualified", "other")
+        }
+        start_case = {
+            path[0]["subject"]: case for case, path in paths.items()
+        }
+        hop_case = [
+            {path[hop]["subject"]: case for case, path in paths.items()}
+            for hop in range(plan["hops"])
+        ]
+        for sid, src in bank.items():
+            for obs in src["observations"]:
+                values = obs["values"]
+                if "case_id" in values:
+                    case = values["case_id"]
+                elif "project_id" in values:
+                    case = case_by_project[values["project_id"]]
+                elif "event_id" in values:
+                    case = case_by_event[values["event_id"]]
+                elif sid.startswith("relation_"):
+                    hop = int(sid.rsplit("_", 1)[-1]) - 1
+                    case = hop_case[hop][values[f"entity_{hop}"]]
+                elif sid == "real_fork":
+                    case = start_case[values["entity_0"]]
+                else:
+                    raise ValueError("unmapped_context_evidence:" + sid)
+                context = model["context_by_case"][case]
+                obs["document_context"] = {
+                    "collection_id": context["anchor_id"],
+                    "collection_title": context["anchor_label"],
+                    "site_id": context["site_id"],
+                    "site_title": context["site_label"],
+                    "record_id": "DOC-" + digest(
+                        spec["seed"], spec["ordinal"], case, sid,
+                    )[:12].upper(),
+                }
+                # Readable text is a redundant rendering of the existing
+                # executable fields, never another answer-defining predicate.
+                # In particular it may not encode target/eligibility in a
+                # descriptive field that bypasses a Macro's explicit filter.
+                obs["record_excerpt"] = (
+                    "The " + src["title"] + " lists " + ", ".join(
+                        str(k).replace("_", " ") + ": " + str(v)
+                        for k, v in values.items()
+                    ) + "."
+                )
     return {
         "version": WORLD_VERSION, "simulated_only": True,
         "sources": bank,
