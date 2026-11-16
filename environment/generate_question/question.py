@@ -128,7 +128,7 @@ def _intent_reference_question(spec: dict) -> str:
                 instruction = (
                     f"Using {qualifying}, reconcile the two independent "
                     "candidate-reference reports with the separately recorded "
-                    + ("fictional registry relationship to identify the subject "
+                    + ("fictional registry relationship to identify the entity "
                        "referenced by the dossier." if fictional else
                        "genuine YAGO secondary relationship to identify the "
                        "real-world entity referenced by the dossier.")
@@ -136,13 +136,13 @@ def _intent_reference_question(spec: dict) -> str:
             else:
                 instruction = (
                     f"Use {qualifying} to locate the dossier's documented "
-                    + ("fictional subject reference." if fictional
+                    + ("fictional entity reference." if fictional
                        else "real-world entity reference.")
                 )
         else:
             instruction = (
                 "Use the matching dossier's documented "
-                + ("fictional subject reference." if fictional
+                + ("fictional entity reference." if fictional
                    else "real-world entity reference.")
             )
         return (
