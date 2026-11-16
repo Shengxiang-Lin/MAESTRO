@@ -949,6 +949,10 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
             result = generate_questions(args)
             self.assertEqual(result["status"], "done", result)
             self.assertEqual(result["generated"], 20)
+            self.assertEqual(
+                Path(result["final_scenes"]),
+                args.output_dir / "constructed" / "scenes.jsonl",
+            )
             construction = json.loads(
                 (args.output_dir / "constructed" / "summary.json").read_text()
             )
