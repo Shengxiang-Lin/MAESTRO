@@ -24,7 +24,9 @@ python -m environment generate-untrusted-turns \
   --config environment/configs/untrusted_orchestration.yaml
 ```
 
-The default Stage-1 target is 1,000 Scenes (accepted count may be lower).
+The default Stage-1 pilot uses **100 fixed candidate Scenes** with local
+Qwen3.5-9B Question Author and Critic. The reviewed acceptance count may
+be lower than 100; Stage 2–4 consume the accepted `questions/scenes.jsonl`.
 See `configs/README.md` for the canonical input/output paths. Each stage
 has resumable journals and input/code signatures. Old experiment directories
 must not be reused with these paths. `python -m environment run` executes
