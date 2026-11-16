@@ -182,6 +182,18 @@ class CausalHybridFullPipelineTests(unittest.TestCase):
                 (args.output_dir / "quality_report.json").read_text()
             )
             self.assertEqual(report["replay_pass"], 4)
+            gates = report["knowledge_world_grounding"]["causal_hybrid_v4"]
+            self.assertEqual(gates["scenes_checked"], 4)
+            self.assertEqual(gates["necessity_passed"], 4)
+            self.assertEqual(gates["identification_unique"], 4)
+            self.assertEqual(gates["all_single_clues_necessary"], 4)
+            self.assertEqual(gates["all_discovery_macros_necessary"], 4)
+            self.assertEqual(gates["both_simulated_directories_necessary"], 4)
+            self.assertEqual(gates["synthetic_event_necessary"], 4)
+            self.assertEqual(gates["genuine_yago_fork_necessary"], 4)
+            self.assertEqual(
+                gates["required_real_motif_distribution"]["real_fork"], 4
+            )
             scenes = [
                 json.loads(line)
                 for line in (
