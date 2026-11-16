@@ -830,6 +830,11 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                    macro_graph: dict | None = None) -> tuple[str, dict]:
     """Model cannot edit World, Program, TaskGraph, or Gold Answer."""
     initial = reference_question(spec)
+    compact_task_plan = (
+        spec.get("reasoning_pattern") == "task_plan"
+        and spec["macro_plan"].get("question_surface_policy")
+        == "macro_goal_reference_card_v2"
+    )
     instruction = {
         "intent": intent_contract(spec),
         "style": style_contract(spec),
@@ -909,6 +914,15 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                     instruction["semantic_evidence_contract"],
             } if "semantic_evidence_contract" in instruction else {}),
         }
+        if compact_task_plan:
+            goal = spec["macro_plan"]["goal"]["semantic"]
+            author_contract["semantic_goal_question"] = goal["question"]
+            author_contract["required_event_condition"] = (
+                spec["macro_plan"]["condition"]
+            )
+            author_contract["verification_mode"] = (
+                spec["macro_plan"]["mode"] == "verify"
+            )
         if spec.get("question_semantic_lock_version"):
             from .question_semantic_lock import question_author_requirements
             author_contract["mandatory_question_semantics"] = (
@@ -968,10 +982,12 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
         try:
             from .prompt_templates import (
                 QUESTION_AUTHOR, QUESTION_CRITIC, QUESTION_AUTHOR_SINGLE_SLOT,
+                TASK_PLAN_QUESTION_AUTHOR, TASK_PLAN_QUESTION_CRITIC,
             )
             v2 = spec.get("reasoning_pattern") == "macro_first_v2"
             system_prompt = (
-                QUESTION_AUTHOR_SINGLE_SLOT if spec.get("scene_realism_version")
+                TASK_PLAN_QUESTION_AUTHOR if compact_task_plan
+                else QUESTION_AUTHOR_SINGLE_SLOT if spec.get("scene_realism_version")
                 else QUESTION_AUTHOR if v2 else AUTHOR_SYSTEM
             )
             candidate = author.complete_json(system_prompt, user_text)
@@ -998,13 +1014,34 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                     ),
                 })
                 continue
-            critic_prompt = QUESTION_CRITIC if v2 else CRITIC_SYSTEM
-            decision = critic.complete_json(critic_prompt, json.dumps({
-                "frozen_contract": {
+            critic_prompt = (
+                TASK_PLAN_QUESTION_CRITIC if compact_task_plan
+                else QUESTION_CRITIC if v2 else CRITIC_SYSTEM
+            )
+            if compact_task_plan:
+                # The Critic needs answer/constraint semantics, not a
+                # verbose private operator/DAG walkthrough. The public
+                # Question should never be forced to narrate Gold steps.
+                plan = spec["macro_plan"]
+                frozen_contract = {
+                    "topic": spec["scenario"]["topic"],
+                    "semantic_goal_question": plan["goal"]["semantic"]["question"],
+                    "relation_sequence": plan["goal"]["semantic"]["relation_sequence"],
+                    "answer_type_hint": plan["goal"]["semantic"]["answer_type_hint"],
+                    "required_event_condition": plan["condition"],
+                    "verification_mode": plan["mode"] == "verify",
+                    "user_intent": instruction["intent"]["nonnegotiable_conditions"],
+                    "reference_materials": "initially supplied textual observations",
+                    "frozen_reference_question": initial,
+                }
+            else:
+                frozen_contract = {
                     **instruction,
                     "frozen_reference_question": initial,
                     "frozen_program_output": spec["requirements"]["answer_kind"],
-                },
+                }
+            decision = critic.complete_json(critic_prompt, json.dumps({
+                "frozen_contract": frozen_contract,
                 "candidate_question": q,
             }, ensure_ascii=False))
             axes = ("all_constraints_preserved", "no_unlicensed_facts",

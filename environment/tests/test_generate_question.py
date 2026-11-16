@@ -63,7 +63,7 @@ class ConfigAndCliTests(unittest.TestCase):
     def test_yaml_is_canonical_and_fully_resolved(self):
         values = load_config(DEFAULT_CONFIG)
         args = args_from_config(values)
-        self.assertEqual(args.target, 20)
+        self.assertEqual(args.target, 100)
         self.assertEqual(args.difficulty_mix, "0,50,50")
         self.assertFalse(hasattr(args, "quota_refill"))
         self.assertFalse(hasattr(args, "max_candidate_multiplier"))
@@ -71,6 +71,9 @@ class ConfigAndCliTests(unittest.TestCase):
         self.assertEqual(args.scenario_workers, 4)
         self.assertEqual(args.question_workers, 4)
         self.assertIsNone(args.question_api_key_env)
+        self.assertEqual(args.question_model, "local-qwen3.5-9b")
+        self.assertEqual(args.question_critic_model, "local-qwen3.5-9b")
+        self.assertTrue(args.question_api_base.endswith(":8807/v1"))
         self.assertEqual(args.knowledge_variant, "task_plan")
         self.assertEqual(args.knowledge_world_mode, "compose")
 

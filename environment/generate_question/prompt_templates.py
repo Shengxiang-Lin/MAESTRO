@@ -212,3 +212,64 @@ preserve BOTH executed conditions: (1) the two report years differ and
 describe a single-source report scan as if the year disagreement had
 already been verified. Only the final Goal field is requested.
 """
+
+
+# Current production Stage-1 authoring: semantic Goal is frozen by Task Plan.
+# A compact Question should not narrate the task graph or enumerate evidence.
+TASK_PLAN_QUESTION_AUTHOR = """You are writing ONE natural English question for
+an archival research assistant. The semantic goal and user constraints in the
+input are FROZEN and cannot be changed. Return JSON: {"question":"..."}.
+
+PRIORITY: The supplied semantic_goal_question is the exact question to answer.
+Paraphrase it into natural user language without changing the ordered
+relationships, intermediate referent, final answer type, or requested scope.
+The goal may require a chain (e.g., a person's nationality, that country's
+capital, and the capital's location); preserve the entire chain rather than
+replacing it with a simpler property. Ask for ONE final result.
+
+The user has already provided separate TEXT DESCRIPTIONS of some photographs,
+recordings, tables, etc. Refer to these as supplied reference descriptions or
+observations, NOT as real image/audio/video attachments that the Agent must
+still decode. Do not copy any observed motif, name, code or source title into
+the Question. Do not describe an internal Macro, program, lookup key, YAGO
+graph, database schema, search order or validation workflow.
+
+Keep the EXACT topic phrase given in the frozen intent. Include the source
+reference pointer naturally ("supplied ... descriptions" or "provided ...
+record") so the solver knows which initial materials identify the record.
+If the frozen event condition is completed, explicitly say "completed";
+if a year condition is 2025 onward, include 2025 and preserve the inclusive
+direction. For verification mode, preserve the requirement for a corroborated
+reference without listing sources or checking steps.
+
+Avoid vague 'related entity' boilerplate, invented dates, external historical
+claims, new facts, another requested output, and words that present the
+working archive as fictional/synthetic/simulated. Prefer one or two fluent
+sentences, with the final one a direct question ending in '?'. The text must
+be self-contained (55-1200 characters), not a list or explanation.
+
+Return ONLY one JSON object with a string field "question".
+"""
+
+TASK_PLAN_QUESTION_CRITIC = """Independently judge an English Question against
+its FROZEN semantic goal and required event constraints.
+Return JSON only:
+{"verdict":"pass|revise|reject","all_constraints_preserved":true,
+"no_unlicensed_facts":true,"same_answer_scope":true,"natural":true,
+"reason":"one sentence"}.
+
+A pass requires EVERY boolean to be true. In particular:
+- The final answer type and ordered semantic relation sequence must remain
+  the same; dropping an intermediate relation or swapping its subject fails.
+- Required completed-event or inclusive >=2025 eligibility must be explicit.
+- The user-supplied reference materials must be identified, but their specific
+  clue values and intermediate private identity keys must NOT be listed.
+- Do not require intermediate identifiers, multiple outputs, new source
+  inspections, media decoding, unlicensed historical facts, or new filters.
+- Treat the provided photo/audio observations as textual reference
+  descriptions, NOT as proof that real binary media was attached.
+- The question must sound like an ordinary user request in the EXACT topic
+  and may paraphrase the frozen reference question without copying it.
+The internal steps and knowledge graph are not instructions to expose in the
+user-facing text. Surface fluency alone cannot justify semantic drift.
+"""

@@ -200,7 +200,7 @@ class TypedOperatorGrammarTests(unittest.TestCase):
         self.assertEqual(generation["knowledge_variant"], "task_plan")
         self.assertEqual(generation["knowledge_world_mode"], "compose")
         self.assertTrue(generation["knowledge_yago"])
-        scene_path = generation["output_dir"] + "/constructed/scenes.jsonl"
+        scene_path = generation["output_dir"] + "/questions/scenes.jsonl"
         self.assertEqual(reports["implementation"]["scenes"], scene_path)
         self.assertEqual(untrusted["input"]["scenes"], scene_path)
         self.assertEqual(

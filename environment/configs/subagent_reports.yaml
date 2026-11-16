@@ -3,8 +3,8 @@
 version: 1
 
 implementation:
-  # With question.model=null, Stage 1 publishes constructed/scenes.jsonl.
-  scenes: environment/data/stage1/constructed/scenes.jsonl
+  # Default Stage 1 runs Question Author/Critic; only reviewed scenes publish here.
+  scenes: environment/data/stage1/questions/scenes.jsonl
   output_dir: environment/data/stage2/oracle
   max_records: null
   evidence_limit: 12

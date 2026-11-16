@@ -32,7 +32,7 @@ class CanonicalStagePathsTests(TestCase):
         self.assertEqual(REPORTS.name, "subagent_reports.yaml")
         self.assertEqual(MAIN.name, "main_orchestration.yaml")
         self.assertEqual(UNTRUSTED.name, "untrusted_orchestration.yaml")
-        self.assertEqual(stage1["generation"]["target"], 20)
+        self.assertEqual(stage1["generation"]["target"], 100)
         self.assertGreaterEqual(stage1["input"]["max_records"], 20)
         self.assertEqual(
             stage1["generation"]["output_dir"],
@@ -44,7 +44,7 @@ class CanonicalStagePathsTests(TestCase):
             reports["source_subtasks"],
             subtask["output_dir"] / "subtasks.jsonl",
         )
-        scenes = root / "stage1" / "constructed" / "scenes.jsonl"
+        scenes = root / "stage1" / "questions" / "scenes.jsonl"
         self.assertEqual(subtask["scenes_path"], scenes)
         self.assertEqual(main["scenes_path"], scenes)
         self.assertEqual(stage4["scenes_path"], scenes)
