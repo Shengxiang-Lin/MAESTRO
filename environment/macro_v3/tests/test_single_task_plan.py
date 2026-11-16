@@ -498,8 +498,13 @@ class DirectTaskPlanTests(unittest.TestCase):
                 required["target_anchor_label"],
             )
             refs = Counter(row["anchor_id"] for row in mapping.values())
-            self.assertEqual(sorted(refs.values()),
-                             [1, len(binding["all_cases"])-1])
+            self.assertEqual(
+                sorted(refs.values()),
+                sorted([
+                    len(required["excluded_cases"]),
+                    len(binding["all_cases"])-len(required["excluded_cases"]),
+                ]),
+            )
             self.assertEqual(
                 len([r for r in model["context_relations"]
                      if r["scope"] == "required_clue"]),
@@ -509,6 +514,10 @@ class DirectTaskPlanTests(unittest.TestCase):
                 mapping[required["excluded_case"]]["anchor_label"],
                 plan["clues"][sid]["alternative"],
             )
+            for case in required["excluded_cases"]:
+                self.assertEqual(
+                    mapping[case]["anchor_id"], required["excluded_anchor_id"]
+                )
             question = reference_question(spec)
             seen_leads.add(question.split(":", 1)[0].split(
                 " with the following", 1
