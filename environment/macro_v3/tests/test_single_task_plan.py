@@ -366,6 +366,36 @@ class DirectTaskPlanTests(unittest.TestCase):
 
 @unittest.skipUnless(RDF_READY, "requires pyoxigraph")
 class TaskPlanCanonicalCliTests(unittest.TestCase):
+    def test_20_scene_cli_with_sparse_yago(self):
+        from environment.config import load_config, args_from_config
+        from environment.generate_question.pipeline import generate_questions
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ttl = root / "sparse.ttl"
+            ttl.write_text(
+                "@prefix x: <https://example.org/> .\n"
+                "@prefix s: <http://schema.org/> .\n"
+                "x:A s:location x:B .\n"
+                "x:B s:follows x:C .\n", encoding="utf-8",
+            )
+            cfg = load_config("environment/configs/questions_task_plan.yaml")
+            cfg["generation"]["knowledge_yago"] = str(ttl)
+            cfg["generation"]["output_dir"] = str(root / "output")
+            cfg["generation"]["target"] = 20
+            args = args_from_config(cfg)
+            args.no_progress = True
+            result = generate_questions(args)
+            self.assertEqual(result["status"], "done", result)
+            self.assertEqual(result["generated"], 20)
+            report = json.loads(
+                (args.output_dir / "quality_report.json").read_text()
+            )
+            stats = report["knowledge_world_grounding"]["single_task_plan"]
+            self.assertEqual(stats["scenes"], 20)
+            self.assertEqual(stats["necessity_passed"], 20)
+            self.assertEqual(stats["semantic_grounding"]["fictional_worlds"], 20)
+            self.assertEqual(report["replay_pass"], 20)
+
     def test_full_canonical_cli_and_quality_report(self):
         from environment.config import load_config, args_from_config
         from environment.generate_question.pipeline import generate_questions
