@@ -172,7 +172,7 @@ _ROLE_INPUT = {
 }
 
 
-def motif_features(graph, index) -> dict:
+def motif_features(graph, index, recipes=None) -> dict:
     """One cached, bounded inventory from *observed* YAGO relation edges.
 
     This is not an RDF type inference claim. Predicate role assignments
@@ -181,6 +181,10 @@ def motif_features(graph, index) -> dict:
     """
     cache = getattr(index, "_task_plan_motif_features", None)
     if cache is not None:
+        if recipes is not None and "join_support" not in cache:
+            cache["join_support"] = _observed_join_support(
+                cache["samples_by_predicate"], index, recipes,
+            )
         return cache
     counts = defaultdict(int)
     predicates = {}
@@ -199,15 +203,53 @@ def motif_features(graph, index) -> dict:
                     all(c.isalpha() or c in " -'" for c in label)
                     and not label.startswith("http")):
                 observed_fields.append(label)
+    fanouts = [len(x) for x in index.outgoing.values()]
     cache = {
         "edge_counts": dict(counts),
         "predicate_uris": predicates,
         "observed_field_labels": list(dict.fromkeys(observed_fields)),
         "samples_by_predicate": dict(by_name),
         "total_scanned_edges": len(graph.edges),
+        "observed_fork_fraction": (
+            round(sum(x >= 2 for x in fanouts) / len(fanouts), 4)
+            if fanouts else 0.0
+        ),
     }
+    if recipes is not None:
+        cache["join_support"] = _observed_join_support(
+            cache["samples_by_predicate"], index, recipes,
+        )
     index._task_plan_motif_features = cache
     return cache
+
+
+
+def _observed_join_support(by_name: dict, index, recipes: tuple) -> dict:
+    """Sample real YAGO contiguous predicate motifs. No invented join is
+    credited as observed, and incomplete RDF samples are not failure cases."""
+    def key_for(edge):
+        return "".join(c for c in edge.predicate.rsplit("/", 1)[-1]
+                       .rsplit("#", 1)[-1].casefold() if c.isalnum())
+    support = {}
+    for recipe in recipes:
+        keys = recipe[0]
+        matches = 0
+        for start in by_name.get(keys[0], ())[:64]:
+            cur, seen = start.object, {start.subject, start.object}
+            for key in keys[1:]:
+                options = [
+                    edge for edge in index.outgoing.get(cur, ())
+                    if key_for(edge) == key and edge.object not in seen
+                ]
+                if not options:
+                    break
+                edge = options[0]
+                cur = edge.object
+                seen.add(cur)
+            else:
+                matches += 1
+        support["_".join(keys)] = matches
+    return support
 
 
 def compose_relation_goal(features: dict, recipes: tuple,
@@ -221,8 +263,12 @@ def compose_relation_goal(features: dict, recipes: tuple,
     counts = features["edge_counts"]
     # A weak coverage preference; the corpus distribution must not collapse
     # all generated worlds to a handful of extremely popular predicates.
-    weights = [1 + sum(counts.get(key, 0) > 0 for key in recipe[0])
-               for recipe in recipes]
+    joins = features.get("join_support", {})
+    weights = [
+        1 + sum(counts.get(key, 0) > 0 for key in recipe[0])
+        + min(3, joins.get("_".join(recipe[0]), 0))
+        for recipe in recipes
+    ]
     return rng.choices(recipes, weights=weights, k=1)[0]
 
 
@@ -352,6 +398,9 @@ def compose_typed_world(graph, index, *, recipe: tuple,
         "policy": COMPOSE_VERSION,
         "goal_signature": list(keys),
         "source_yago_edges": features["total_scanned_edges"],
+        "observed_join_examples": features.get(
+            "join_support", {}).get("_".join(keys), 0),
+        "observed_fork_fraction": features["observed_fork_fraction"],
         "observed_predicate_counts": {
             key: features["edge_counts"].get(key, 0) for key in keys
         },
