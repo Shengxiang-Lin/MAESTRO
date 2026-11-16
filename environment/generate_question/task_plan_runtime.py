@@ -490,6 +490,17 @@ def audit_information(scene: dict) -> dict:
     program = scene["gold_program"]
     sources = scene["world"]["sources"]
     expected = scene["gold_answer"][0]["answer"]
+    def project_for_case(case):
+        # Resolve the frozen source-level identifier instead of guessing
+        # it from a particular URI or archive-key presentation scheme.
+        records = [
+            obs["values"]["project_id"] for obs in
+            sources["entity_index"]["observations"]
+            if obs["values"]["case_id"] == case
+        ]
+        if len(records) != 1:
+            raise ValueError("missing_or_duplicate_target_project")
+        return records[0]
     nodes = {n["id"]: n for n in program["nodes"]}
     cue_filters, condition_filter = {}, None
     for node in program["nodes"]:
@@ -552,10 +563,7 @@ def audit_information(scene: dict) -> dict:
         cases = b["all_cases"]
         target = b["target_case"]
         i = cases.index(target)
-        project = _project(
-            scene["problem_spec"]["seed"],
-            scene["problem_spec"]["ordinal"], target,
-        )
+        project = project_for_case(target)
         for sid, shift in (("link_a", 3), ("link_b", 2)):
             changed = copy.deepcopy(sources)
             uri = b["candidate_paths"][cases[(i+shift)%len(cases)]][0]["subject"]
@@ -597,10 +605,7 @@ def audit_information(scene: dict) -> dict:
             )]
             by_field = {}
             target_case = plan["world_binding"]["target_case"]
-            project = _project(
-                scene["problem_spec"]["seed"],
-                scene["problem_spec"]["ordinal"], target_case,
-            )
+            project = project_for_case(target_case)
             records = [
                 row["values"] for row in sources["event_ledger"]["observations"]
                 if row["values"]["project_id"] == project
