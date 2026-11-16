@@ -130,6 +130,18 @@ def validate_frozen_motif(motif: dict, anchored_path: list[dict]) -> list[str]:
 # This module does not alter the historical witnessed YAGO motif contracts.
 
 COMPOSE_VERSION = "maestro.composed_typed_world.v1"
+KEYED_EVENT_VERSION = "maestro.keyed_event_relation.v1"
+
+
+def composed_project_id(seed: int, ordinal: int, case: str) -> str:
+    from environment.schema import digest
+    return "PRJ-" + digest(seed, ordinal, case, "project")[:12].upper()
+
+
+def composed_event_id(project_id: str, role: str) -> str:
+    from environment.schema import digest
+    return "EVT-" + digest(project_id, role)[:12].upper()
+
 
 _GIVEN = (
     "Mara", "Evelyn", "Talia", "Jonas", "Soren", "Lina",
