@@ -102,6 +102,43 @@ def _intent_reference_question(spec: dict) -> str:
     """Deterministic fidelity fallback, not the Author's primary template."""
     intent = intent_contract(spec)
     context, kind, topic = intent["setting"], intent["entity_kind"], intent["topic"]
+    if spec.get("reasoning_pattern") == "task_graph_first_v2":
+        from environment.schema import digest
+        plan = spec["macro_plan"]
+        event = spec["task_first_v2_relation_sketch"]["event_relation"]
+        clues = [
+            f"{r['attribute']} '{r['value']}' in {r['title']}"
+            for _, r in sorted(plan["clues"].items())
+        ]
+        eligibility = (
+            "the completed event (not a scheduled one)"
+            if event["field"] == "event_status" else
+            "the event recorded in or after 2025 (not an older session)"
+        )
+        topic = spec["scenario"]["topic"]
+        statements = [
+            (
+                f"In {topic}, an unidentified fictional project is "
+                f"described by simulated clues: {'; '.join(clues)}. "
+                f"Determine the project, select {eligibility}, compare "
+                f"the two simulated candidate-reference sources against "
+                f"the event's recorded relations and genuine YAGO facts, "
+                f"and identify the single entity reached by the documented "
+                f"real-world relationship trail. Which entity is it?"
+            ),
+            (
+                f"Please resolve an archival investigation within {topic}. "
+                f"The observed clues are {'; '.join(clues)}. "
+                f"For the matching fictional project, use {eligibility} "
+                f"to establish the relevant evidence, reconcile competing "
+                f"reference records with genuine YAGO secondary relation "
+                f"evidence, and report the final linked real-world entity."
+            ),
+        ]
+        choice = int(digest(
+            spec["seed"], spec["ordinal"], "task-first-v2-question"
+        )[:10], 16) % len(statements)
+        return statements[choice]
     if spec.get("reasoning_pattern") == "task_graph_first_v1":
         from environment.schema import digest
         plan = spec["macro_plan"]
@@ -464,6 +501,20 @@ def guard_question(question: str, spec: dict,
     if not topic_mentioned(q, spec["scenario"]["topic"]):
         errors.append("topic_missing")
     pattern = spec.get("reasoning_pattern", "approval")
+    if pattern == "task_graph_first_v2":
+        relation = spec["task_first_v2_relation_sketch"]["event_relation"]
+        if relation["field"] == "event_status":
+            if not re.search(r"\bcompleted\b", q, flags=re.I):
+                errors.append("graph_first_v2_completed_event_missing")
+        else:
+            if not re.search(r"\b(?:2025|in or after 2025)\b",
+                             q, flags=re.I):
+                errors.append("graph_first_v2_year_threshold_missing")
+        if not re.search(r"\b(?:YAGO|real.world)\b", q, flags=re.I):
+            errors.append("graph_first_v2_real_relation_missing")
+        if not re.search(r"\b(?:reference|candidate|directory)\b",
+                         q, flags=re.I):
+            errors.append("graph_first_v2_reference_evidence_missing")
     if pattern == "task_graph_first_v1":
         if not re.search(r"\bcompleted\b", q, flags=re.I):
             errors.append("graph_first_required_event_status_missing")
