@@ -23,16 +23,16 @@ class DirectPipelineTests(unittest.TestCase):
 
             def generate_questions(options):
                 call_order.append("1")
-                target = questions_dir / "questions" / "scenes.jsonl"
+                target = questions_dir / "constructed" / "scenes.jsonl"
                 target.parent.mkdir(parents=True)
                 target.write_text('{"task_id":"Q1"}\n')
-                return {"status": "done"}
+                return {"status": "done", "final_scenes": str(target)}
 
             def generate_reports(**kwargs):
                 call_order.append("2")
                 self.assertEqual(
                     kwargs["scenes_path"],
-                    questions_dir / "questions" / "scenes.jsonl",
+                    questions_dir / "constructed" / "scenes.jsonl",
                 )
                 reports_dir.mkdir(parents=True)
                 (reports_dir / "subtasks.jsonl").write_text(
@@ -44,7 +44,7 @@ class DirectPipelineTests(unittest.TestCase):
                 call_order.append("4")
                 self.assertEqual(
                     kwargs["scenes_path"],
-                    questions_dir / "questions" / "scenes.jsonl",
+                    questions_dir / "constructed" / "scenes.jsonl",
                 )
                 self.assertEqual(
                     kwargs["reports_path"],

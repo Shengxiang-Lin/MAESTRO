@@ -43,7 +43,7 @@ def _write(path: Path, scenes: list[dict]) -> None:
 class Stage2ConfigTests(unittest.TestCase):
     def test_stage2_config_and_cli_are_separate_from_generation(self):
         cfg = load_config(DEFAULT_CONFIG)
-        self.assertTrue(str(cfg["scenes_path"]).endswith("questions/scenes.jsonl"))
+        self.assertTrue(str(cfg["scenes_path"]).endswith("constructed/scenes.jsonl"))
         self.assertTrue(cfg["strict_replay"])
         self.assertEqual(cfg["evidence_limit"], 12)
         cmds = parser()._subparsers._group_actions[0].choices

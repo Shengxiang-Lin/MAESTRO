@@ -3,8 +3,8 @@
 version: 1
 
 implementation:
-  # Must match questions.yaml generation.output_dir + /questions/scenes.jsonl.
-  scenes: environment/data/stage1/questions/scenes.jsonl
+  # With question.model=null, Stage 1 publishes constructed/scenes.jsonl.
+  scenes: environment/data/stage1/constructed/scenes.jsonl
   output_dir: environment/data/stage2/oracle
   max_records: null
   evidence_limit: 12
