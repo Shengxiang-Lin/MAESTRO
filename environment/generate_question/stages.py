@@ -76,7 +76,8 @@ def _construction_identity(args) -> str:
             for name in (
                 "spec.py", "macro_planning.py",
                 "knowledge_macro.py", "knowledge_macro_v2.py",
-                "hybrid_world.py", "world_motifs.py", "typed_role_grammar.py",
+                "hybrid_world.py", "hybrid_world_v4.py", "world_motifs.py",
+                "real_motif_grounding.py", "typed_role_grammar.py",
                 "typed_graph_generator.py", "typed_graph_validator.py",
                 "operator_grammar.py", "numeric_goal_world.py",
                 "evidence_operators.py", "evidence_relations.py",
@@ -261,7 +262,9 @@ def construct_scenes(args) -> dict:
         try:
             ordinal = len(chosen)
             if knowledge_mode:
-                if getattr(args, "knowledge_variant", "v1") == "v3":
+                if getattr(args, "knowledge_variant", "v1") == "v4":
+                    from .hybrid_world_v4 import make_spec as make_knowledge_spec
+                elif getattr(args, "knowledge_variant", "v1") == "v3":
                     from .hybrid_world import make_spec as make_knowledge_spec
                 elif getattr(args, "knowledge_variant", "v1") == "v2":
                     from .knowledge_macro_v2 import make_spec as make_knowledge_spec
