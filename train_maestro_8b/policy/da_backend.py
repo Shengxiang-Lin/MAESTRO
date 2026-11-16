@@ -189,6 +189,17 @@ def train_stage2(cfg: dict, baseline, *, resume: str | None, args):
         bias="none", use_gradient_checkpointing="unsloth",
         random_state=cfg["training"]["seed"],
     )
+    stage1_warmstart = None
+    if args.stage1_belief_adapter:
+        from train_maestro_8b.policy.belief_init import load_stage1_belief_adapter
+        stage1_warmstart = load_stage1_belief_adapter(
+            policy, args.stage1_belief_adapter,
+            stage2_model=args.model,
+            rank=model_cfg["lora_rank"],
+            alpha=model_cfg["lora_alpha"],
+        )
+        print("[MAESTRO/Stage2] Stage1 belief warm-start: " +
+              json.dumps(stage1_warmstart, ensure_ascii=False), flush=True)
     training_config = GRPOConfig(**baseline.build_grpo_kwargs(cfg))
     trainer = GRPOTrainer(
         model=policy,
@@ -324,6 +335,7 @@ def run(args):
         "rollout": "unsloth_colocated_vllm",
         "stage1_risk_head": False,
         "riskkv": False,
+        "stage1_belief_adapter": str(args.stage1_belief_adapter) if args.stage1_belief_adapter else None,
         "reward": args.reward_mode,
         "reward_formula": ("0.6*environment+0.4*semantic" if
                            args.reward_mode == "hybrid" and args.judge_weight == 0.4
@@ -347,6 +359,8 @@ def main(argv=None):
                    help="Stage2-owned Stage4 DA-format Parquet")
     p.add_argument("--output_dir", required=True)
     p.add_argument("--max_train_rows", type=int, default=0)
+    p.add_argument("--stage1_belief_adapter", default=None,
+                   help="Optional Stage1 PEFT adapter directory; loads weights into the existing LoRA")
     p.add_argument("--epochs", type=float, default=3.0)
     p.add_argument("--max_steps", type=int, default=-1)
     p.add_argument("--num_generations", type=int, default=8)

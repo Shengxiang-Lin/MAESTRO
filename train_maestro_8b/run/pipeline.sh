@@ -21,6 +21,16 @@ DA_PILOT_ROWS="${DA_PILOT_ROWS:-16}"
 DA_PILOT_NEW_TOKENS="${DA_PILOT_NEW_TOKENS:-1536}"
 DA_REVIEWED_ONLY="${DA_REVIEWED_ONLY:-0}"
 RISK_DATA="${RISK_DATA:-$STAGE4_DIR/private/window_risk}"
+BELIEF_DATA="${BELIEF_DATA:-$STAGE4_DIR/private/evidence_belief}"
+BELIEF_CKPT="${BELIEF_CKPT:-$RUN_ROOT/checkpoints/belief-stage1-pilot}"
+BELIEF_MAX_LENGTH="${BELIEF_MAX_LENGTH:-8192}"
+BELIEF_EPOCHS="${BELIEF_EPOCHS:-2}"
+BELIEF_MAX_STEPS="${BELIEF_MAX_STEPS:--1}"
+BELIEF_GRAD_ACCUM="${BELIEF_GRAD_ACCUM:-4}"
+BELIEF_BATCH_SIZE="${BELIEF_BATCH_SIZE:-1}"
+BELIEF_LR="${BELIEF_LR:-5e-5}"
+BELIEF_HEAD_LR="${BELIEF_HEAD_LR:-2e-4}"
+STAGE1_BELIEF_ADAPTER="${STAGE1_BELIEF_ADAPTER:-}"
 REWARD_STATES="${REWARD_STATES:-$STAGE4_DIR/private/decision_reward_states.jsonl}"
 GRPO_DATA="${GRPO_DATA:-$STAGE4_DIR/private/risk_grpo}"
 FEATURES_TRAIN="${FEATURES_TRAIN:-$RUN_ROOT/features/train-nf4}"
@@ -87,6 +97,8 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
 
   all           Default DA: prepare-grpo -> preflight -> pilot -> grpo
                 With STAGE2_TRAINER=riskkv: old Stage1 Risk Head -> RiskKV
+  belief-export Stage4 episodes/claim states -> Stage1 belief train/val JSONL
+  belief-train  Stage1 live Qwen3 LoRA + belief-head pilot (NO RiskKV)
   export        Stage4 episodes/claim states -> train/val risk rows
   features      Frozen Qwen3-8B NF4 train/val window-feature cache
   risk          Train Risk Head only, using cached NF4 features
@@ -106,6 +118,9 @@ Override settings via environment variables or run/config.env:
   DA_DATA, DA_GRPO_CKPT, DA_PILOT_CKPT,
   DA_PILOT_STEPS, DA_PILOT_ROWS, DA_PILOT_NEW_TOKENS, DA_REVIEWED_ONLY,
   MODEL, STAGE1_DIR, STAGE4_DIR, RUN_ROOT, MAX_LENGTH,
+  BELIEF_DATA, BELIEF_CKPT, BELIEF_MAX_LENGTH, BELIEF_EPOCHS,
+  BELIEF_MAX_STEPS, BELIEF_GRAD_ACCUM, BELIEF_BATCH_SIZE,
+  BELIEF_LR, BELIEF_HEAD_LR, STAGE1_BELIEF_ADAPTER,
   RISK_EPOCHS, RISK_BATCH_SIZE, GRPO_EPOCHS, GRPO_GENERATIONS,
   GRPO_GRAD_ACCUM, GRPO_MAX_PROMPT_TOKENS, GRPO_MAX_NEW_TOKENS,
   GRPO_TEMPERATURE, PILOT_MAX_NEW_TOKENS, GRPO_MAX_STEPS,
@@ -122,6 +137,39 @@ Override settings via environment variables or run/config.env:
 Run on a NEW RUN_ROOT to avoid mixing stale caches or experiments.
 This script DOES NOT generate Environment data or launch a local LLM.
 EOF
+}
+belief_export() {
+  need "$STAGE1_DIR/questions/scenes.jsonl"
+  need "$STAGE4_DIR/episodes.jsonl"
+  need "$STAGE4_DIR/private/claim_state_supervision.jsonl"
+  if [[ "$SKIP_COMPLETED" == "1" && -s "$BELIEF_DATA/train.jsonl" &&
+        -f "$BELIEF_DATA/summary.json" ]]; then
+    say "Reusing Stage1 belief rows: $BELIEF_DATA"; return
+  fi
+  say "Export Stage1 belief labels with exact O1 histories"
+  python -m train_maestro_8b.data.export_belief \
+    --scenes "$STAGE1_DIR/questions/scenes.jsonl" \
+    --episodes "$STAGE4_DIR/episodes.jsonl" \
+    --states "$STAGE4_DIR/private/claim_state_supervision.jsonl" \
+    --output_dir "$BELIEF_DATA"
+}
+belief_train() {
+  need_model
+  need "$BELIEF_DATA/train.jsonl"
+  if [[ "$SKIP_COMPLETED" == "1" && -f "$BELIEF_CKPT/manifest.json" &&
+        -f "$BELIEF_CKPT/adapter/adapter_model.safetensors" ]]; then
+    say "Reusing Stage1 belief checkpoint: $BELIEF_CKPT"; return
+  fi
+  say "Train live Qwen3+LoRA evidence belief model (no frozen feature cache)"
+  python -m train_maestro_8b.belief.train \
+    --model "$MODEL" --train_file "$BELIEF_DATA/train.jsonl" \
+    --val_file "$BELIEF_DATA/val.jsonl" \
+    --output_dir "$BELIEF_CKPT" \
+    --max_length "$BELIEF_MAX_LENGTH" \
+    --epochs "$BELIEF_EPOCHS" --max_steps "$BELIEF_MAX_STEPS" \
+    --batch_size "$BELIEF_BATCH_SIZE" --grad_accum "$BELIEF_GRAD_ACCUM" \
+    --lr "$BELIEF_LR" --head_lr "$BELIEF_HEAD_LR" \
+    --lora_rank "$GRPO_LORA_RANK" --lora_alpha "$GRPO_LORA_ALPHA"
 }
 verify_cache() {
   local folder="$1" source="$2"
@@ -315,6 +363,7 @@ init_stage2_da_args() {
     --logging_steps "$GRPO_LOGGING_STEPS"
     --save_steps "$GRPO_SAVE_STEPS"
   )
+  [[ -n "$STAGE1_BELIEF_ADAPTER" ]] && stage2_da_args+=(--stage1_belief_adapter "$STAGE1_BELIEF_ADAPTER")
 }
 stage2_da_check() {
   need_model; need "$DA_DATA/train.parquet"
@@ -505,12 +554,13 @@ status() {
   [[ -f "$DA_DATA/summary.json" ]] && cat "$DA_DATA/summary.json" || true
   [[ -f "$DA_PILOT_CKPT/stage2_da_training.json" ]] && echo "OK Stage2 DA Pilot" || true
   [[ -f "$DA_GRPO_CKPT/stage2_da_training.json" ]] && echo "OK Stage2 DA GRPO" || true
-  for file in "$STAGE4_DIR/main_turns.jsonl" "$RISK_DATA/train.jsonl" \
+  for file in "$STAGE4_DIR/main_turns.jsonl" "$BELIEF_DATA/train.jsonl" \
+              "$BELIEF_DATA/val.jsonl" "$RISK_DATA/train.jsonl" \
               "$RISK_DATA/val.jsonl" "$GRPO_DATA/train.jsonl"; do
     [[ -f "$file" ]] && printf '%7s rows %s\n' "$(wc -l < "$file")" "$file" ||
                        printf 'MISSING      %s\n' "$file"
   done
-  for file in "$REWARD_STATES" "$FEATURES_TRAIN/manifest.json" \
+  for file in "$REWARD_STATES" "$BELIEF_CKPT/manifest.json" "$FEATURES_TRAIN/manifest.json" \
               "$FEATURES_VAL/manifest.json" "$RISK_CKPT/risk_config.json" \
               "$GRPO_CKPT/risk_policy_config.json"; do
     [[ -f "$file" ]] && printf 'OK           %s\n' "$file" ||
@@ -525,6 +575,8 @@ case "${1:-help}" in
       export_data; extract_features; train_risk; prepare_grpo; inspect_io; preflight; pilot; grpo; status
     fi
     ;;
+  belief-export) belief_export ;;
+  belief-train) belief_train ;;
   export) export_data ;;
   features) extract_features ;;
   risk) train_risk ;;

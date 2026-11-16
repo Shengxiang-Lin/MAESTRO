@@ -75,7 +75,7 @@ jobs:
       - name: Install model integration dependencies
         run: python -m pip install "transformers==5.15.1" "peft==0.20.0" "accelerate>=1.15,<2"
       - name: Verify real tiny Qwen3 + LoRA cache semantics
-        run: python -m unittest train_maestro_8b.tests.test_risk_policy -v
+        run: python -m unittest train_maestro_8b.tests.test_risk_policy train_maestro_8b.tests.test_belief_pilot -v
 
   trl-grpo-cpu-integration:
     runs-on: ubuntu-latest
