@@ -1,6 +1,6 @@
 # Frozen OmniGAIA pretest / Orchestra-o1.
 # Orchestra-o1: OmniGAIA; Main-Agent qwen3.8-max; Sub-Agent qwen3.7-plus.
-main_model: "qwen3.8-max"
+main_model: "deepseek-v4.1-flash-1017"
 sub_models:
   - "qwen3.7-plus"
 
