@@ -980,6 +980,13 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
                 20,
             )
             self.assertEqual(
+                stats["semantic_grounding"]["natural_reference_cards"], 20,
+            )
+            self.assertEqual(
+                stats["semantic_grounding"]["reference_cards_in_public_view"],
+                20,
+            )
+            self.assertEqual(
                 stats["semantic_grounding"][
                     "required_shared_relation_necessity_passed"], 20,
             )
