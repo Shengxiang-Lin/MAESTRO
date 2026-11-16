@@ -168,7 +168,7 @@ class CausalHybridFullPipelineTests(unittest.TestCase):
                 ])
             rdf.write_text("\n".join(text), encoding="utf-8")
             config = load_config(
-                "environment/configs/questions_hybrid_motif_v4.yaml"
+                "environment/macro_v3/tests/fixtures/questions_hybrid_motif_v4.yaml"
             )
             config["generation"]["knowledge_yago"] = str(rdf)
             config["generation"]["output_dir"] = str(root / "results")
