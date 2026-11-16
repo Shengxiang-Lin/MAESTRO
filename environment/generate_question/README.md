@@ -802,3 +802,39 @@ the number of original YAGO fact paths; audit
 Note: media remain generated structured observations (not decoded images or
 videos), and the current Task Plan still uses three bounded Macro patterns;
 these are future realism/diversity targets, not completed features.
+
+
+### Shared-world evidence and stricter semantic labels (compose mode)
+
+Newly constructed Task Plan worlds now contain a **shared context subgraph**,
+separate from the unique-answer path: multiple dossiers can affiliate with
+the same institution or appear in the same regional survey archive, while
+some groups share a site/city. The canonical
+\`world_model.context_relations\` and \`context_by_case\` are the authority for
+these facts. No context relation is credited as required Gold evidence
+unless an explicit Macro consumes it; current shared-context links add
+referential realism and source continuity, **not a claim of new necessary
+Macro dependency depth**. Historical composed scenes without
+\`context_version\` replay unchanged.
+
+Each new source observation includes a reader-facing \`document_context\`
+(shared archive/site identity and a document reference) and a redundant
+\`record_excerpt\`. Both are derived from the same frozen World and original
+executable row fields, never an alternative eligibility shortcut. Stage 2
+carries these fields into the corresponding evidence atoms. Agent-facing
+content uses ordinary archive terminology; synthetic provenance remains in
+the private teacher material.
+
+Borrowed YAGO \`fieldOfWork\` labels pass a conservative academic-field
+type gate before sampling. For example, academic disciplines are allowed
+but entity-category values such as "Aerospace manufacturer" are excluded.
+A fixed set of sensible research-field labels supplies coverage if the
+bounded YAGO sample has no suitable terms. This is a lexical safety gate,
+not external RDF-type verification. Newly composed questions also vary
+their opening text while preserving the frozen clues and requested result.
+
+Quality reports for Task Plan include
+\`shared_context_worlds\`, \`shared_context_entity_groups\`,
+\`context_relations\`, \`source_records_with_context\`, and
+\`excluded_yago_nonacademic_field_labels\` alongside the original Replay,
+source-necessity and knowledge-motif metrics.

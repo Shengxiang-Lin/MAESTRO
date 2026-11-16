@@ -776,6 +776,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     plan["semantic_grounding_policy"] = SEMANTIC_GOALS
     if world_mode == "compose":
         plan["knowledge_world_mode"] = "compose"
+        plan["question_surface_policy"] = "varied_archive_reference_v1"
     grounding = _ground(
         kg, index or YagoKnowledgeIndex(kg),
         plan, seed=seed, ordinal=ordinal, world_mode=world_mode,
