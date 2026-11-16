@@ -164,6 +164,13 @@ class KnowledgeV2CliTests(unittest.TestCase):
                 (args.output_dir / "quality_report.json").read_text()
             )
             self.assertEqual(quality["replay_pass"], 3)
+            gates = quality["knowledge_world_grounding"]["necessity_v2"]
+            self.assertEqual(gates["scenes_checked"], 3)
+            self.assertEqual(gates["passed"], 3)
+            self.assertEqual(gates["identification_unique"], 3)
+            self.assertEqual(gates["all_clue_relaxations_ambiguous"], 3)
+            self.assertEqual(gates["all_discovery_relaxations_ambiguous"], 3)
+            self.assertEqual(gates["no_discovery_bypass_blocked"], 3)
             for row in (args.output_dir /
                         "constructed" / "scenes.jsonl").read_text().splitlines():
                 scene = json.loads(row)
