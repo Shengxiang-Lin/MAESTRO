@@ -177,6 +177,79 @@ class Stage2OutputTests(unittest.TestCase):
                     no_progress=True,
                 )
 
+    def test_unreviewed_deterministic_stage1_question_is_publishable(self):
+        # Stage 1's default question.model=null produces this exact shape:
+        # deterministic_frozen_problem_spec with no question_authoring.
+        valid = _scene(50, "medium")
+        valid.pop("question_authoring")
+        valid["question_origin"] = "deterministic_frozen_problem_spec"
+
+        # An LLM-authored question without a review is NOT allowed merely
+        # because its question_authoring field is missing.
+        unreviewed_llm = _scene(51, "medium")
+        unreviewed_llm.pop("question_authoring")
+
+        # Explicit negative review decisions must still fail closed.
+        failed = _scene(52, "easy")
+        failed["question_authoring"]["status"] = "failed"
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "scenes.jsonl"
+            _write(source, [valid, unreviewed_llm, failed])
+            result = materialize_subtasks(
+                scenes_path=source, output_dir=root / "stage2",
+                no_progress=True, strict_replay=True,
+            )
+            self.assertEqual(result["status"], "partial", result)
+            self.assertEqual(result["accepted_scenes"], 1)
+            self.assertEqual(result["failed_scenes"], 2)
+            self.assertEqual(
+                result["materialized_macro_tasks"],
+                valid["macro_graph"]["macro_task_count"],
+            )
+            failures = [
+                json.loads(row)
+                for row in (root / "stage2/failed.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(
+                {row["scene_task_id"] for row in failures},
+                {unreviewed_llm["task_id"], failed["task_id"]},
+            )
+            self.assertTrue(all(
+                row["reason"] == "ValueError:stage1_question_not_accepted"
+                for row in failures
+            ))
+
+    def test_empty_oracle_writes_real_summary_with_failure_causes(self):
+        from environment.implement_subtask.combined import (
+            generate_subagent_reports,
+        )
+
+        rejected = _scene(54, "medium")
+        rejected["question_authoring"]["status"] = "failed"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scenes = root / "scenes.jsonl"
+            _write(scenes, [rejected])
+            output = root / "stage2"
+            result = generate_subagent_reports(
+                scenes_path=scenes,
+                output_dir=output,
+                reporting_options={"overwrite": False},
+                no_progress=True,
+            )
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["oracle_accepted_scenes"], 0)
+            self.assertEqual(result["oracle_failed_scenes"], 1)
+            self.assertEqual(result["oracle_failure_reasons"], {
+                "ValueError:stage1_question_not_accepted": 1
+            })
+            self.assertEqual(
+                json.loads((output / "summary.json").read_text()),
+                result,
+            )
+
     def test_all_valid_scenes_publish_all_macro_answers(self):
         rows = [_scene(40, "hard"), _scene(41, "medium")]
         with tempfile.TemporaryDirectory() as td:
