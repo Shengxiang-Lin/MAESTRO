@@ -198,7 +198,20 @@ def question_language_warnings(
             and INCLUSIVE_INTERVAL.search(question)):
         warnings.append("strict_vs_inclusive_time_window")
     topic = spec.get("scenario", {}).get("topic", "")
-    if unlicensed_calendar_years(question, topic):
+    missing_years = set(unlicensed_calendar_years(question, topic))
+    # An otherwise unknown calendar year can be licensed by an
+    # explicitly frozen temporal Relation Sketch. This exception is
+    # narrowly scoped to task_graph_first_v2 and the very year used
+    # by its executable filter_gte. Any other invented year still fails.
+    if spec.get("reasoning_pattern") == "task_graph_first_v2":
+        relation = spec.get(
+            "task_first_v2_relation_sketch", {}
+        ).get("event_relation", {})
+        if (relation.get("field") == "event_year"
+                and relation.get("operator") == "filter_gte"
+                and type(relation.get("value")) is int):
+            missing_years.discard(str(relation["value"]))
+    if missing_years:
         warnings.append("unlicensed_calendar_year_not_in_topic")
     warnings.extend(unsupported_macro_predicates(question, spec, macro_graph))
     warnings.extend(question_output_issues(question, spec, macro_graph))
