@@ -911,6 +911,38 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                             "knowledge_world_mode"
                         ) == "compose" for s in current_scenes
                     ),
+                    "shared_context_worlds": sum(
+                        "context_version" in s["problem_spec"]["macro_plan"][
+                            "world_binding"
+                        ].get("world_model", {})
+                        for s in current_scenes
+                    ),
+                    "shared_context_entity_groups": sum(
+                        s["problem_spec"]["macro_plan"]["world_binding"].get(
+                            "world_model", {}
+                        ).get("profile", {}).get("shared_context_group_count", 0)
+                        for s in current_scenes
+                    ),
+                    "context_relations": sum(
+                        len(s["problem_spec"]["macro_plan"][
+                            "world_binding"
+                        ].get("world_model", {}).get("context_relations", []))
+                        for s in current_scenes
+                    ),
+                    "source_records_with_context": sum(
+                        "document_context" in obs
+                        for s in current_scenes
+                        for source in s["world"]["sources"].values()
+                        for obs in source["observations"]
+                    ),
+                    "excluded_yago_nonacademic_field_labels": max((
+                        s["problem_spec"]["macro_plan"]["world_binding"].get(
+                            "world_model", {}
+                        ).get("profile", {}).get(
+                            "rejected_nonacademic_field_labels", 0
+                        )
+                        for s in current_scenes
+                    ), default=0),
                     "observed_motif_predicate_coverage": dict(Counter(
                         key for scene in current_scenes
                         for key, count in scene["problem_spec"]["macro_plan"][
@@ -936,8 +968,10 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     ),
                     "scope": (
                         "In compose mode, observed YAGO relation types and "
-                        "generic vocabulary are recombined into novel typed "
-                        "Worlds; there are no claimed real YAGO assertions. "
+                        "type-filtered vocabulary are recombined into novel "
+                        "Worlds, with shared context entities and cross-source "
+                        "record references. Context edges are not yet required "
+                        "by the executable Gold task. "
                         "In witnessed mode, YAGO uniqueness is checked only "
                         "against the bounded loaded fact sample."
                     ),
