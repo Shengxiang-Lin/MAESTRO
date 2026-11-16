@@ -793,7 +793,66 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 "candidate_information_necessity", {}
             ) for scene in graph_first_scenes
         ]
+        graph_v2_scenes = [
+            scene for scene in knowledge_scenes
+            if scene["problem_spec"]["reasoning_pattern"] == "task_graph_first_v2"
+        ]
+        graph_v2_audits = [
+            scene.get("difficulty_audit", {}).get("macro_first_audit", {}).get(
+                "candidate_information_necessity", {}
+            ) for scene in graph_v2_scenes
+        ]
         data["knowledge_world_grounding"] = {
+            "task_graph_first_v2": {
+                "scenes_checked": len(graph_v2_scenes),
+                "information_necessity_passed": sum(
+                    a.get("passed", False) for a in graph_v2_audits
+                ),
+                "local_event_relation_distribution": dict(Counter(
+                    s["problem_spec"]["task_first_v2_relation_sketch"][
+                        "event_goal"] for s in graph_v2_scenes
+                )),
+                "abstract_macro_shape_distribution": dict(Counter(
+                    s["problem_spec"]["task_first_macro_graph"]["shape"]
+                    for s in graph_v2_scenes
+                )),
+                "unique_local_relation_signatures": len({
+                    tuple((
+                        s["problem_spec"]["task_first_macro_graph"]["shape"],
+                        s["problem_spec"]["task_first_v2_relation_sketch"][
+                            "event_relation"]["operator"],
+                        s["problem_spec"]["task_first_v2_relation_sketch"][
+                            "event_relation"]["field"],
+                    )) for s in graph_v2_scenes
+                }),
+                "status_or_year_field_necessary": sum(
+                    bool(a.get("local_relation_field_necessary"))
+                    and all(a["local_relation_field_necessary"].values())
+                    for a in graph_v2_audits
+                ),
+                "event_keyed_cases": sum(
+                    a.get("event_handoff_alternative_plan", {}).get(
+                        "required", False)
+                    for a in graph_v2_audits
+                ),
+                "event_keyed_bypass_blocked": sum(
+                    a.get("event_handoff_alternative_plan", {}).get(
+                        "required", False)
+                    and a.get("event_handoff_alternative_plan", {}).get(
+                        "bypass_introduces_real_alternatives", False
+                    ) and a.get("event_handoff_alternative_plan", {}).get(
+                        "source_candidate_sets_differ_by_event", False
+                    )
+                    for a in graph_v2_audits
+                ),
+                "limitation": (
+                    "A bounded replacement-plan re-execution checks that "
+                    "project_id cannot replace event_id without admitting "
+                    "other real YAGO answers. Status and year selection "
+                    "are two actually compiled local relation families. "
+                    "This is not proof against all possible strategies."
+                ),
+            },
             "task_graph_first_v1": {
                 "scenes": len(graph_first_scenes),
                 "information_necessity_passed": sum(
@@ -982,7 +1041,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     "optimal agent information acquisition."
                 ),
             },
-            "version": "typed_knowledge_v1_v2_v3_v4_and_task_graph_first_v1",
+            "version": "typed_knowledge_v1_v2_v3_v4_and_task_graph_first_v1_v2",
             "pattern_distribution": dict(Counter(
                 scene["problem_spec"]["reasoning_pattern"]
                 for scene in knowledge_scenes
