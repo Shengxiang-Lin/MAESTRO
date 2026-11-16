@@ -420,14 +420,18 @@ def _fictional_label(predicate: str, name: str, case_index: int,
     return name + " Region"
 
 
-def _fictional_fork(paths: dict) -> dict:
+def _fictional_fork(paths: dict, *, source_style: str = "legacy") -> dict:
     # A distinct simulated registry is an independent *world source*, not
     # independent historical corroboration.
     predicate = "urn:maestro:fictional:predicate:cataloguedIn"
     forks = {}
     for case, path in paths.items():
         subject = path[0]["subject"]
-        object_id = "urn:maestro:fictional:register:" + digest(case, subject)[:20]
+        object_id = (
+            "REG-" + digest(case, subject)[:12].upper()
+            if source_style == "archive" else
+            "urn:maestro:fictional:register:" + digest(case, subject)[:20]
+        )
         forks[case] = {
             "subject": subject, "predicate": predicate, "object": object_id,
             "subject_label": subject.rsplit(":", 1)[-1],
@@ -458,8 +462,9 @@ def _validate_fictional_fork(fork: dict, paths: dict) -> list[str]:
             if (fact["subject"] != path[0]["subject"]
                     or fact["predicate"] != fork["predicate"]
                     or fact["origin"] != "synthetic"
-                    or not fact["object"].startswith(
-                        "urn:maestro:fictional:register:")
+                    or not fact["object"].startswith((
+                        "urn:maestro:fictional:register:", "REG-"
+                    ))
                     or fact["fact_id"] != "synthetic:" + digest(
                         fact["subject"], fact["predicate"], fact["object"]
                     )[:20] or fact["object"] in seen):
@@ -558,7 +563,8 @@ def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
     paths, world_model = compose_typed_world(
         kg, index, recipe=recipe, cases=cases, seed=seed, ordinal=ordinal,
     )
-    fork = _fictional_fork(paths) if plan["mode"] == "verify" else None
+    fork = (_fictional_fork(paths, source_style="archive")
+            if plan["mode"] == "verify" else None)
     world_model["verification_facts"] = (
         {case: copy.deepcopy(row) for case, row
          in fork["candidate_forks"].items()} if fork else {}
@@ -980,8 +986,14 @@ def validate_spec(spec: dict) -> list[str]:
                         or fact["predicate"] != predicates[i]):
                     return ["task_plan_mixed_knowledge_predicate"]
                 if fictional and (
-                    not fact["subject"].startswith("urn:maestro:fictional:entity:")
-                    or not fact["object"].startswith("urn:maestro:fictional:entity:")
+                    not fact["subject"].startswith(
+                        "ENT-" if world_mode == "compose"
+                        else "urn:maestro:fictional:entity:"
+                    )
+                    or not fact["object"].startswith(
+                        "ENT-" if world_mode == "compose"
+                        else "urn:maestro:fictional:entity:"
+                    )
                     or _semantic_recipe(facts) is None
                 ):
                     return ["task_plan_invalid_fictional_relation"]
