@@ -470,61 +470,84 @@ class DirectTaskPlanTests(unittest.TestCase):
         self.assertTrue(_academic_field_label("comparative philology"))
         self.assertTrue(_academic_field_label("Crystallography"))
 
-    def test_composed_shared_context_is_visible_across_sources(self):
-        from collections import Counter, defaultdict
+    def test_composed_shared_relation_is_required_in_existing_macro(self):
+        from collections import Counter
         from environment.schema import digest
         from environment.generate_question.task_plan import SALT
         kg = graph_fixture()
         index = YagoKnowledgeIndex(kg)
         seen_leads = set()
-        for ordinal in range(10):
+        for ordinal in range(12):
             level = "medium" if ordinal % 2 == 0 else "hard"
             spec = make_spec(
                 kg, seed=17, ordinal=ordinal, difficulty=level,
                 index=index, world_mode="compose",
             )
-            binding = spec["macro_plan"]["world_binding"]
+            plan = spec["macro_plan"]
+            binding = plan["world_binding"]
             model = binding["world_model"]
             self.assertEqual(model["context_version"],
                              "maestro.shared_context.v1")
             mapping = model["context_by_case"]
-            refs = Counter(
-                row["anchor_id"] for row in mapping.values()
+            required = model["required_context_relation"]
+            sid = required["source_id"]
+            self.assertEqual(sid, "M1_b")
+            self.assertEqual(required["source_slot"], 1)
+            self.assertEqual(
+                plan["clues"][sid]["value"],
+                required["target_anchor_label"],
             )
-            self.assertGreaterEqual(len(refs), 2)
-            self.assertGreaterEqual(min(refs.values()), 2)
-            self.assertGreater(len(model["context_relations"]),
-                               len(binding["all_cases"]))
+            refs = Counter(row["anchor_id"] for row in mapping.values())
+            self.assertEqual(sorted(refs.values()),
+                             [1, len(binding["all_cases"])-1])
+            self.assertEqual(
+                len([r for r in model["context_relations"]
+                     if r["scope"] == "required_clue"]),
+                len(binding["all_cases"]),
+            )
+            self.assertEqual(
+                mapping[required["excluded_case"]]["anchor_label"],
+                plan["clues"][sid]["alternative"],
+            )
             question = reference_question(spec)
             seen_leads.add(question.split(":", 1)[0].split(
                 " with the following", 1
             )[0][:72])
+            self.assertIn(plan["clues"][sid]["value"], question)
             scene = compile_and_validate(spec, question)
             self.assertEqual(validate_replay(scene)["status"], "valid")
-            cross_source = defaultdict(set)
-            for sid, source in scene["world"]["sources"].items():
-                for obs in source["observations"]:
-                    document = obs["document_context"]
-                    cross_source[document["collection_id"]].add(sid)
-                    self.assertTrue(document["collection_title"])
-                    self.assertTrue(document["site_title"])
-                    self.assertTrue(obs["record_excerpt"])
-                    self.assertNotIn("fictional", obs["record_excerpt"])
-                    self.assertNotIn("simulated", obs["record_excerpt"])
-            self.assertGreaterEqual(
-                min(map(len, cross_source.values())), 2,
-            )
-            realized = realize_scene(scene, strict=True)
-            atoms = [
-                atom
-                for task in realized["macro_tasks"]
-                for step in task["trace_summary"]["steps"]
-                for atom in step["evidence_atoms"]
+            audit = scene["difficulty_audit"]["macro_first_audit"][
+                "candidate_information_necessity"
             ]
-            self.assertTrue(any(
-                "document_context" in atom and "record_excerpt" in atom
-                for atom in atoms
-            ))
+            self.assertTrue(audit["passed"], audit)
+            self.assertTrue(audit["required_shared_relation_necessary"])
+            self.assertTrue(audit["clue_necessary"][sid])
+            self.assertTrue(all(audit["clue_necessary"].values()))
+            self.assertEqual(audit["required_shared_relation_source"], sid)
+            source_values = {
+                obs["values"]["case_id"]: obs["values"]["cue"]
+                for obs in scene["world"]["sources"][sid]["observations"]
+            }
+            self.assertEqual(source_values, {
+                case: row["anchor_label"] for case, row in mapping.items()
+            })
+            # The relation is readable ONLY from its authorized source.
+            # Repeating its value in another record's document_context is
+            # a hidden shortcut, even if Gold still has to join the sources.
+            for other_sid, source in scene["world"]["sources"].items():
+                for obs in source["observations"]:
+                    self.assertNotIn("document_context", obs)
+                    self.assertNotIn("record_excerpt", obs)
+                    if other_sid != sid:
+                        self.assertNotIn(
+                            required["target_anchor_label"],
+                            list(map(str, obs["values"].values())),
+                        )
+            realized = realize_scene(scene, strict=True)
+            self.assertEqual(
+                len(realized["macro_tasks"]),
+                scene["macro_graph"]["macro_task_count"],
+            )
             tampered = deepcopy(spec)
             target = binding["target_case"]
             tampered["macro_plan"]["world_binding"][
@@ -537,6 +560,17 @@ class DirectTaskPlanTests(unittest.TestCase):
             )
             self.assertIn(
                 "composed_world_bad_context_reference", validate_spec(tampered),
+            )
+            tampered = deepcopy(spec)
+            tampered["macro_plan"]["world_binding"]["world_model"][
+                "required_context_relation"]["excluded_case"] = target
+            tampered["knowledge_contract_hash"] = digest(
+                tampered["macro_plan"], tampered["knowledge_witness"],
+                tampered["seed"], tampered["ordinal"], SALT,
+            )
+            self.assertIn(
+                "composed_world_required_relation_not_unique_shadow",
+                validate_spec(tampered),
             )
         self.assertGreaterEqual(len(seen_leads), 4)
 
@@ -591,9 +625,16 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
             self.assertEqual(stats["semantic_grounding"]["fictional_worlds"], 20)
             self.assertEqual(stats["semantic_grounding"]["composed_motif_worlds"], 20)
             self.assertEqual(stats["semantic_grounding"]["shared_context_worlds"], 20)
-            self.assertGreater(
-                stats["semantic_grounding"]["source_records_with_context"],
+            self.assertEqual(
+                stats["semantic_grounding"]["required_shared_relation_worlds"],
                 20,
+            )
+            self.assertEqual(
+                stats["semantic_grounding"][
+                    "required_shared_relation_necessity_passed"], 20,
+            )
+            self.assertEqual(
+                stats["semantic_grounding"]["source_records_with_context"], 0,
             )
             self.assertEqual(report["replay_pass"], 20)
 
