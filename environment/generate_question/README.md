@@ -465,3 +465,90 @@ the existing optional LLM Author/Critic.
 - The grounding layer currently leverages v4's established real
   candidate-path sampler, so its *fact-family diversity* is still
   narrower than the full macro/relationship grammar roadmap.
+
+## Task-Graph-First v2: causal ports and locally composed relation goals
+
+The previous `graph_first` v1 pilot demonstrated source-free DAG sampling
+before YAGO grounding, but revealed a critical false handoff: all seven
+`event_gated_association` scenes returned **the same candidate links for
+every event_id**. Replacing event_id joins with project_id joins yielded
+the exact same answer. v1 scenes are still frozen and replayable, but that
+test is now a regression *negative control*.
+
+**Use the new opt-in variant** (do not overwrite historical banks):
+
+```bash
+python -m environment generate-questions \
+  --config environment/configs/questions_task_graph_first_v2.yaml
+
+python -m environment quality \
+  --config environment/configs/questions_task_graph_first_v2.yaml \
+  --scenes environment/data/stage1_graph_first_v2_pilot/constructed/scenes.jsonl
+```
+
+The revised generation sequence is still
+**source-free Macro DAG -> task-local Relation Sketch -> genuine YAGO &
+fictional World -> event-dependent evidence -> original Gold Program &
+Quality -> Question**.
+
+### Composable local relations
+
+`relational_task_planner.plan_relations_v2` now selects one of two typed
+event information goals **before selecting any World facts**:
+
+- **status_completed:** use an actual `filter_eq(event_status,
+  "completed")` on fictional event records. Event dates are kept equal,
+  so year alone does not distinguish selected and excluded events.
+- **year_at_least_2025:** use an actual `filter_gte(event_year, 2025)`.
+  Event statuses are intentionally identical, so status alone cannot
+  reproduce the required temporal predicate.
+
+These are different executable Relation Sketch requirements, not cosmetic
+role names. Their 2 choices combine with 3 original partial-order DAG
+structures; this pilot supports up to **six typed local-relation / DAG
+combinations**. It is still a constrained subgrammar, **not arbitrary
+DAG generation**.
+
+### Genuine EventId Handoff and alternative-plan gate
+
+For the event-gated shape, the two source directories now expose
+**different candidate hypotheses for the qualifying and non-qualifying
+event**. The correct event-specific lookup has the original competing
+sets A={T,U,V}, B={T,U,W}. A supplementary, non-qualifying event
+contains an additional W in source A and an additional V in source B,
+each grounded in complete genuine YAGO candidate paths.
+
+Replacing BOTH event_id joins with project_id joins therefore admits
+extra, executable final YAGO answers. In contrast, the required
+event_id plan uniquely returns the intended answer.
+
+`evidence_planner.audit_information_v2` actively recompiles the
+alternative primitive joins and reruns the original Gold Program. It
+fails closed when removing event_id leaves the same singleton, returns
+empty results, or creates no distinct valid answer. It also verifies
+the actual source candidates differ by event and checks clue, Discovery,
+source, chosen event field and real-fork necessity.
+
+The public `quality_report.json -> knowledge_world_grounding.
+task_graph_first_v2` section records:
+`local_event_relation_distribution`, six typed graph/relation
+signatures, `event_keyed_cases` and `event_keyed_bypass_blocked`.
+Detailed per-scene counterfactuals are available under
+`difficulty_audit.macro_first_audit.candidate_information_necessity`.
+
+### Compatibility and limits
+
+- The old `task_graph_first_v1`, `typed_knowledge_v1`–v4 and original
+  `macro_first_v2` code paths, frozen World facts, and Replay remain
+  unchanged; v2 has an independent spec, evidence hash, Quality dispatch,
+  config and destination.
+- The new Relation Sketch still uses a single shared YAGO-path family
+  and fixed high-level role grammar; status vs year is one practical
+  compositional step, not full open-ended World/role recombination.
+- Real YAGO triples remain genuine frozen witnesses. Projects,
+  observations, events and simulated source claims are explicitly
+  fictional. Organizer and venue fields remain Context and are **not**
+  credited as causally necessary.
+- The alternative-plan test is a bounded, executable counterfactual in
+  the frozen World. It does not prove global optimality or exclude
+  shortcuts using knowledge not in the simulated corpus.

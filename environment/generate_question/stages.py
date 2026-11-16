@@ -78,7 +78,8 @@ def _construction_identity(args) -> str:
                 "knowledge_macro.py", "knowledge_macro_v2.py",
                 "hybrid_world.py", "hybrid_world_v4.py", "world_motifs.py",
                 "macro_graph_sampler.py", "relational_task_planner.py",
-                "world_grounder.py", "evidence_planner.py", "task_graph_first.py",
+                "world_grounder.py", "evidence_planner.py",
+                "task_graph_first.py", "task_graph_first_v2.py",
                 "real_motif_grounding.py", "typed_role_grammar.py",
                 "typed_graph_generator.py", "typed_graph_validator.py",
                 "operator_grammar.py", "numeric_goal_world.py",
@@ -264,7 +265,9 @@ def construct_scenes(args) -> dict:
         try:
             ordinal = len(chosen)
             if knowledge_mode:
-                if getattr(args, "knowledge_variant", "v1") == "graph_first":
+                if getattr(args, "knowledge_variant", "v1") == "graph_first_v2":
+                    from .task_graph_first_v2 import make_spec as make_knowledge_spec
+                elif getattr(args, "knowledge_variant", "v1") == "graph_first":
                     from .task_graph_first import make_spec as make_knowledge_spec
                 elif getattr(args, "knowledge_variant", "v1") == "v4":
                     from .hybrid_world_v4 import make_spec as make_knowledge_spec
