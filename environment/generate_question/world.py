@@ -191,6 +191,9 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 
 def compile_program(spec: dict) -> dict:
     """Compile only supported Easy or Macro-first V2 task programs."""
+    if spec.get("reasoning_pattern") == "typed_knowledge_v1":
+        from .knowledge_macro import compile_macro_solvers
+        return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "macro_first_v2":
         from .macro_planning import compile_macro_solvers
         return compile_macro_solvers(spec)
@@ -202,6 +205,9 @@ def compile_program(spec: dict) -> dict:
 
 def generate_world(spec: dict) -> dict:
     """Versioned synthetic sources; never rewrite old private World facts."""
+    if spec.get("reasoning_pattern") == "typed_knowledge_v1":
+        from .knowledge_macro import generate_world as generate_knowledge_world
+        return generate_knowledge_world(spec)
     if spec.get("reasoning_pattern") == "macro_first_v2":
         from .macro_evidence_world import generate_world as generate_v2_world
         return generate_v2_world(spec)
