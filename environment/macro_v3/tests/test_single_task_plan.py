@@ -978,6 +978,18 @@ class TaskPlanCanonicalCliTests(unittest.TestCase):
             report = json.loads(
                 (args.output_dir / "quality_report.json").read_text()
             )
+            self.assertEqual(
+                report["knowledge_world_grounding"]["version"],
+                "task_plan_compose_v2",
+            )
+            self.assertNotIn(
+                "task_graph_first_v1", report["knowledge_world_grounding"],
+            )
+            self.assertNotIn(
+                "hybrid_world_v3", report["knowledge_world_grounding"],
+            )
+            self.assertNotIn("macro_first_v2", report)
+            self.assertNotIn("semantic_evidence_diagnostics", report)
             stats = report["knowledge_world_grounding"]["single_task_plan"]
             self.assertEqual(stats["scenes"], 20)
             self.assertEqual(stats["necessity_passed"], 20)
