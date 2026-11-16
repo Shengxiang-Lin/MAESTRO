@@ -214,7 +214,7 @@ class TaskGraphFirstV2CliTests(unittest.TestCase):
                 ])
             rdf.write_text("\n".join(entries), encoding="utf-8")
             cfg = load_config(
-                "environment/configs/questions_task_graph_first_v2.yaml"
+                "environment/macro_v3/tests/fixtures/questions_task_graph_first_v2.yaml"
             )
             cfg["generation"]["knowledge_yago"] = str(rdf)
             cfg["generation"]["output_dir"] = str(root / "generated")
