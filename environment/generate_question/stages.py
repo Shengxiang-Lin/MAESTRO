@@ -357,9 +357,11 @@ def construct_scenes(args) -> dict:
                     min_hops=args.knowledge_min_hops,
                     max_hops=args.knowledge_max_hops,
                     index=knowledge_index,
-                    **({"world_mode": getattr(
-                        args, "knowledge_world_mode", "witnessed"
-                    )} if getattr(
+                    **({
+                        "world_mode": getattr(
+                            args, "knowledge_world_mode", "witnessed"),
+                        "composer": getattr(args, "task_plan_composer", "legacy"),
+                    } if getattr(
                         args, "knowledge_variant", "v1"
                     ) == "task_plan" else {}),
                 )

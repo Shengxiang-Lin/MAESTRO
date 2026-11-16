@@ -418,8 +418,15 @@ def compile_macro_solvers(spec: dict) -> dict:
 
         if op == "match_clues":
             matches = []
+            if len(parents) > 1:
+                raise ValueError("match_clues_requires_single_candidate_parent")
             for sid in task["source_scope"]:
-                scanned = add("scan", source_id=sid)
+                scanned = (
+                    add("lookup_by_key", parents[0], source_id=sid,
+                        input_key_field="case_id",
+                        source_key_field="case_id")
+                    if parents else add("scan", source_id=sid)
+                )
                 filtered = add(
                     "filter_eq", scanned, field="cue",
                     value=plan["clues"][sid]["value"],

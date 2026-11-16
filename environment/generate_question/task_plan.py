@@ -33,6 +33,7 @@ SEMANTIC_GOALS = "goal_constrained_yago_grounding_v1"
 SYNTHETIC_WORLD = "maestro.fictional_semantic_world.v1"
 SYNTHETIC_WITNESS = "maestro.task_plan.fictional_witness.v1"
 SYNTHETIC_FORK = "maestro.fictional_fork_grounding.v1"
+GOAL_COMPOSER = "goal_conditioned_typed_v2"
 # Local predicate combinations with interpretable user goals. These are
 # *predicate-signature hypotheses*, NOT RDF-type attestations. The bounded
 # YAGO loader intentionally excludes rdf:type triples.
@@ -556,7 +557,14 @@ def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
     recipes = tuple(r for r in _SEMANTIC_RECIPES
                     if len(r[0]) == plan["hops"])
     features = motif_features(kg, index, recipes)
-    recipe = compose_relation_goal(features, recipes, rng=rng)
+    chosen_keys = plan.get("goal_recipe_keys")
+    if chosen_keys is not None:
+        recipe = next((item for item in recipes
+                       if list(item[0]) == chosen_keys), None)
+        if recipe is None:
+            raise ValueError("composed_goal_recipe_not_supported")
+    else:
+        recipe = compose_relation_goal(features, recipes, rng=rng)
     n_clues = 2 * sum(
         t["operation"] == "match_clues" for t in plan["macro_tasks"]
     )
@@ -793,7 +801,8 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
             }
             source(sid, modality, title,
                    "Find dossier candidates by an observed clue",
-                   {"case_id": "str", "cue": "str"})
+                   {"case_id": "str", "cue": "str"},
+                   key="case_id" if task["depends_on"] else None)
     source("entity_index", "table",
            "Dossier identity crosswalk" if context else "Project identity crosswalk",
            "Map the identified dossier to one named project",
@@ -922,7 +931,8 @@ def _reference_card(plan: dict, sources: list[dict], *,
 def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
               min_hops: int = 2, max_hops: int = 3,
               index: YagoKnowledgeIndex | None = None,
-              world_mode: str = "witnessed") -> dict:
+              world_mode: str = "witnessed",
+              composer: str = "legacy") -> dict:
     """One contract, one direct World grounding, no nested frozen Specs."""
     if difficulty not in ("medium", "hard"):
         raise ValueError("task_plan_requires_medium_or_hard")
@@ -932,10 +942,30 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     # YAGO chain, Hard the longer; modes/independent clues are also
     # conditional on difficulty. This is NOT a learned-agent difficulty score.
     hops = min_hops if difficulty == "medium" else max_hops
-    plan = _sample_task_plan(
-        seed=seed, ordinal=ordinal, difficulty=difficulty, hops=hops,
-        sampling_policy=CALIBRATED, world_mode=world_mode,
-    )
+    if composer == GOAL_COMPOSER:
+        if world_mode != "compose":
+            raise ValueError("goal_composer_requires_composed_world")
+        from .goal_composer import compose_plan
+        from .world_motifs import motif_features, compose_relation_goal
+        yago_index = index or YagoKnowledgeIndex(kg)
+        choices = tuple(row for row in _SEMANTIC_RECIPES
+                        if len(row[0]) == hops)
+        features = motif_features(kg, yago_index, choices)
+        goal_rng = random.Random(int(digest(
+            seed, ordinal, "goal-conditioned-semantic-goal"
+        )[:15], 16))
+        goal_recipe = compose_relation_goal(features, choices, rng=goal_rng)
+        plan = compose_plan(
+            seed=seed, ordinal=ordinal, difficulty=difficulty,
+            hops=hops, goal_keys=goal_recipe[0],
+        )
+    elif composer == "legacy":
+        plan = _sample_task_plan(
+            seed=seed, ordinal=ordinal, difficulty=difficulty, hops=hops,
+            sampling_policy=CALIBRATED, world_mode=world_mode,
+        )
+    else:
+        raise ValueError("unknown_task_plan_composer")
     plan["semantic_grounding_policy"] = SEMANTIC_GOALS
     if world_mode == "compose":
         plan["knowledge_world_mode"] = "compose"
@@ -1261,7 +1291,25 @@ def validate_spec(spec: dict) -> list[str]:
                                    "question_sampling_policy")
         ):
             return ["task_plan_unpaired_sampling_policy"]
-        if plan["macro_tasks"] != _sample_task_plan(
+        composer = plan.get("composer_policy")
+        if composer == GOAL_COMPOSER:
+            from .goal_composer import compose_plan
+            expected = compose_plan(
+                seed=spec["seed"], ordinal=spec["ordinal"],
+                difficulty=spec["difficulty_target"], hops=plan["hops"],
+                goal_keys=plan["goal_recipe_keys"],
+            )
+            if (plan["goal_recipe_keys"] != [
+                    _predicate_key(fact["predicate"])
+                    for fact in paths[target]]
+                    or any(plan[key] != expected[key] for key in (
+                        "mode", "condition", "macro_tasks",
+                        "terminal_macro_id", "goal_recipe_keys"
+                    ))):
+                return ["task_plan_goal_composer_mismatch"]
+        elif composer is not None:
+            return ["task_plan_unknown_composer"]
+        elif plan["macro_tasks"] != _sample_task_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
             difficulty=spec["difficulty_target"], hops=plan["hops"],
             sampling_policy=sampling, world_mode=world_mode,
