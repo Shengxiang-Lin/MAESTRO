@@ -111,8 +111,9 @@ def intent_contract(spec: dict) -> dict:
             )
         compact = (
             plan.get("question_surface_policy") ==
-            "macro_goal_reference_card_v1"
-        )
+            "macro_goal_reference_card_v1",
+            "macro_goal_reference_card_v2",
+        }
         if compact:
             constraints.extend([
                 "The initial public view provides a separate reference card "
