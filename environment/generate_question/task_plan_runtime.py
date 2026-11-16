@@ -75,6 +75,13 @@ def generate_world(spec: dict) -> dict:
     required = (
         model.get("required_context_relation") if composed else None
     )
+    from .world_motifs import (
+        composed_project_id, composed_event_id, KEYED_EVENT_VERSION,
+    )
+    keyed_events = (
+        composed and model.get("keyed_event_relation_version")
+        == KEYED_EVENT_VERSION
+    )
     for sid, cue in plan["clues"].items():
         rows = []
         for case in cases:
@@ -96,16 +103,16 @@ def generate_world(spec: dict) -> dict:
         tables[sid] = rows
     projects = {
         case: (
-            "PRJ-" + digest(
-                spec["seed"], spec["ordinal"], case, "project"
-            )[:12].upper()
+            composed_project_id(
+                spec["seed"], spec["ordinal"], case
+            )
             if composed else _project(
                 spec["seed"], spec["ordinal"], case
             )
         ) for case in cases
     }
     def event_key(pid, which):
-        return ("EVT-" + digest(pid, which)[:12].upper()
+        return (composed_event_id(pid, which)
                 if composed else _event(pid, which))
     tables["entity_index"] = [{
         "case_id": case, "project_id": pid,
@@ -145,26 +152,51 @@ def generate_world(spec: dict) -> dict:
         event_rows = []
         if mode == "event":
             event_refs = []
+            indexed_links = {
+                (link["case_id"], link["event_role"]): link
+                for link in model["event_links"]
+            } if keyed_events else {}
         for i, case in enumerate(cases):
             pid = projects[case]
             good_event = event_key(pid, "qualified")
             other_event = event_key(pid, "other")
             if mode == "event":
+                qualified_link = indexed_links.get((case, "qualified"))
+                other_link = indexed_links.get((case, "other"))
+                if keyed_events:
+                    if (not qualified_link or not other_link
+                            or qualified_link["project_id"] != pid
+                            or other_link["project_id"] != pid
+                            or qualified_link["event_id"] != good_event
+                            or other_link["event_id"] != other_event):
+                        raise ValueError("event_relation_world_projection_mismatch")
+                    good_details = {
+                        field: qualified_link[field]
+                        for field in ("event_status", "event_year")
+                    }
+                    other_details = {
+                        field: other_link[field]
+                        for field in ("event_status", "event_year")
+                    }
+                    qualified_entity = qualified_link["entity_0"]
+                    other_entity = other_link["entity_0"]
+                else:
+                    good_details, other_details = eligible, ineligible
+                    qualified_entity = paths[case][0]["subject"]
+                    other_entity = paths[cases[(i+1) % len(cases)]][0]["subject"]
                 event_rows.extend([
                     {"project_id": pid, "event_id": good_event,
                      "event_name": ((neutral_label + " " + case[-5:]) if blind else
                                     ("Qualified project review " + case[-5:])),
-                     **eligible},
+                     **good_details},
                     {"project_id": pid, "event_id": other_event,
                      "event_name": ((neutral_label + " " + case[-5:]) if blind else
                                     ("Other project review " + case[-5:])),
-                     **ineligible},
+                     **other_details},
                 ])
                 event_refs.extend([
-                    {"event_id": good_event,
-                     "entity_0": paths[case][0]["subject"]},
-                    {"event_id": other_event,
-                     "entity_0": paths[cases[(i+1) % len(cases)]][0]["subject"]},
+                    {"event_id": good_event, "entity_0": qualified_entity},
+                    {"event_id": other_event, "entity_0": other_entity},
                 ])
             else:
                 fork = (model["verification_facts"] if composed else
@@ -239,6 +271,8 @@ def generate_world(spec: dict) -> dict:
             "mode": role["access_mode"],
             **({"key_field": role["key_field"]}
                if role["access_mode"] == "keyed_lookup" else {}),
+            **({"key_cardinality": "many"}
+               if sid == "event_ledger" and keyed_events else {}),
         }
         if sid.startswith("relation_") or sid == "real_fork":
             fictional = paths[target][0]["origin"] == "synthetic"
