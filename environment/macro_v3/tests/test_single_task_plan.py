@@ -692,6 +692,57 @@ class DirectTaskPlanTests(unittest.TestCase):
             old_question = question
         self.assertIsNotNone(old_question)
 
+    def test_stage2_accepts_default_unreviewed_composed_scenes(self):
+        """End-to-end Stage1 -> Stage2 Oracle without a Question LLM.
+
+        The production `questions_task_plan.yaml` uses question.model=null.
+        Its final constructed scenes intentionally omit question_authoring.
+        """
+        from environment.implement_subtask.pipeline import materialize_subtasks
+
+        kg = graph_fixture()
+        index = YagoKnowledgeIndex(kg)
+        scenes = []
+        for ordinal in range(5):
+            spec = make_spec(
+                kg, seed=17, ordinal=ordinal,
+                difficulty="medium" if ordinal % 2 == 0 else "hard",
+                index=index, world_mode="compose",
+            )
+            scene = compile_and_validate(spec, reference_question(spec))
+            self.assertNotIn("question_authoring", scene)
+            self.assertEqual(
+                scene["question_origin"], "deterministic_frozen_problem_spec"
+            )
+            self.assertEqual(validate_replay(scene)["status"], "valid")
+            scenes.append(scene)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "constructed" / "scenes.jsonl"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                "".join(
+                    json.dumps(scene, ensure_ascii=False) + "\n"
+                    for scene in scenes
+                ), encoding="utf-8",
+            )
+            result = materialize_subtasks(
+                scenes_path=source, output_dir=folder / "oracle",
+                no_progress=True, strict_replay=True,
+            )
+            self.assertEqual(result["status"], "done", result)
+            self.assertEqual(result["accepted_scenes"], 5)
+            self.assertEqual(result["failed_scenes"], 0)
+            self.assertEqual(
+                result["materialized_macro_tasks"],
+                sum(s["macro_graph"]["macro_task_count"] for s in scenes),
+            )
+            self.assertEqual(
+                len((folder / "oracle/scene_index.jsonl").read_text().splitlines()),
+                5,
+            )
+
     def test_question_identity_uses_visible_material_not_random_ids(self):
         from environment.generate_question.stages import _user_task_identity
 
