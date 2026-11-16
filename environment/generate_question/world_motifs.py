@@ -351,9 +351,9 @@ def compose_typed_world(graph, index, *, recipe: tuple,
     used_final = set()
     for case_index, case in enumerate(cases):
         nodes = [
-            "urn:maestro:fictional:entity:" + digest(
+            "ENT-" + digest(
                 seed, ordinal, case, i, "recomposed-motif"
-            )[:24] for i in range(len(keys)+1)
+            )[:12].upper() for i in range(len(keys)+1)
         ]
         for j, (nid, role) in enumerate(zip(nodes, roles)):
             label = _entity_name(role, case_index, j, rng, features)
@@ -446,10 +446,8 @@ def validate_composed_world(binding: dict) -> list[str]:
             return ["composed_world_duplicate_entity"]
         for fact in facts:
             if (fact["origin"] != "synthetic"
-                    or not fact["subject"].startswith(
-                        "urn:maestro:fictional:entity:")
-                    or not fact["object"].startswith(
-                        "urn:maestro:fictional:entity:")
+                    or not fact["subject"].startswith("ENT-")
+                    or not fact["object"].startswith("ENT-")
                     or role_by_id[fact["subject"]] != fact["subject_type"]
                     or role_by_id[fact["object"]] != fact["object_type"]
                     or entities[fact["object"]]["label"] != fact["object_label"]):
