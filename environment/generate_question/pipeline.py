@@ -733,7 +733,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     knowledge_scenes = [
         scene for scene in scenes
         if scene.get("problem_spec", {}).get("reasoning_pattern")
-        in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4"}
+        in {"typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1"}
     ]
     if knowledge_scenes:
         role_counts = Counter(
