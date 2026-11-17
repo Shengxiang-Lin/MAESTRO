@@ -5,6 +5,19 @@ python -m environment naturalize-subtasks --config environment/configs/subagent_
 ```
 
 
+## Oracle execution and restart
+
+`naturalize-subtasks` rebuilds its deterministic Oracle under
+`<report-output>/oracle/` on every invocation. There is no Oracle cache
+manifest or Scene/code/parameter fingerprint gate, and stale Oracle files
+are overwritten automatically. This stage makes no model calls.
+
+The **LLM report journal** is still protected separately: an interrupted run
+can resume if its reviewed-report inputs and model settings are unchanged.
+Previously completed LLM report output is not silently overwritten; use a
+fresh output directory or explicitly enable `reporting.overwrite` when
+changing the report inputs after a completed run.
+
 ## Current Task Plan: source-cited Result
 
 For current `task_plan` Scenes, Stage 2 retains the exact Oracle WorkProduct
