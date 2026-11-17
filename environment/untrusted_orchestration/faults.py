@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from copy import deepcopy
 import random
 
-from environment.generate_question.compiler import execute_task
-from environment.generate_question.program_ir import (
+from environment.generate_question.execution.compiler import execute_task
+from environment.generate_question.execution.program_ir import (
     Relation, ProgramError, _scan, _lookup_by_key, _apply,
 )
 

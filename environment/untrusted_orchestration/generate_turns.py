@@ -83,6 +83,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "trusted_prefix.py",
         "trajectory_builder.py", "generate_turns.py",
         "evidence_planning.py", "offline_pipeline.py",
+        "evidence_operators.py",
         "../generate_question/execution/compiler.py",
         "../generate_question/execution/program_ir.py",
         "../base_orchestration/o1_compat.py",
