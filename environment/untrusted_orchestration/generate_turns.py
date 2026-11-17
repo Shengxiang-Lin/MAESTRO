@@ -269,7 +269,9 @@ def _plan_branches(
             no_eligible += 1
     return planned, no_base, no_eligible
 
-def _publish(output: Path, planned: list[dict], base: dict[str, dict]) -> dict:
+def _publish(output: Path, planned: list[dict],
+             base: dict[str, dict] | None = None) -> dict:
+    base = base or {}
     journals = output / "journal"
     episodes, positive_turns, audits, failures = [], [], [], []
     counters = Counter()
@@ -342,7 +344,7 @@ def _publish(output: Path, planned: list[dict], base: dict[str, dict]) -> dict:
         recorded = (audit_pair.get("clean_reference_identity") or {}).get(
             "clean_reference_id"
         )
-        if recorded is not None and recorded != reference:
+        if base and recorded is not None and recorded != reference:
             raise RuntimeError("stage4_paired_clean_reference_drift")
         paired_trajectories.append({
             "scene_task_id": plan["task_id"],
