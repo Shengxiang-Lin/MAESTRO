@@ -282,9 +282,6 @@ class StageLocalScopeRegressions(unittest.TestCase):
         )
         self.assertEqual(len(critic.calls), 2)
 
-class VerifiedListCriticRegressions(unittest.TestCase):
-
-
 class EntryEvidenceMappingRegressions(unittest.TestCase):
     def test_wrong_fact_ref_is_not_accepted_as_an_entry_status(self):
         from environment.implement_subtask.oracle_review import (
