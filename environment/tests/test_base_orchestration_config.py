@@ -78,6 +78,49 @@ class TrajectoryConfigurationTests(TestCase):
         self.assertEqual(kwargs["critic_model"], "local-qwen3.5-9b")
         self.assertTrue(kwargs["scenes_path"].is_absolute())
 
+    def test_local_model_cost_is_zero_without_pricing_warning(self):
+        from base.engine.async_llm import (
+            AsyncLLM, LLMConfig, ModelPricing, TokenUsageTracker,
+        )
+        from orchestra.base_main_agent import build_model_pricing_table
+
+        with patch("base.engine.async_llm.logger.warning") as warning:
+            for name in ("local-qwen3.5-9b", "local-qwen3-8b"):
+                self.assertEqual(ModelPricing.get_price(name, "input"), 0.0)
+                self.assertEqual(ModelPricing.get_price(name, "output"), 0.0)
+            table = build_model_pricing_table(
+                ["model_1"], {"local-qwen3.5-9b": "model_1"},
+            )
+            self.assertIn("| model_1 | $0.00000 | $0.00000 |", table)
+            warning.assert_not_called()
+
+        # Both local vLLM and OpenAI-compatible local endpoints have zero
+        # provider API cost, without losing the original token statistics.
+        config = LLMConfig({
+            "model": "local-qwen3.5-9b", "backend": "api",
+            "base_url": "http://127.0.0.1:8807/v1",
+            "key": "test-only",
+        })
+        llm = AsyncLLM(config)
+        self.assertFalse(llm.usage_tracker.pricing_enabled)
+        result = llm.usage_tracker.add_usage(
+            config.model, 1000, 200,
+        )
+        self.assertEqual(result["total_cost"], 0.0)
+        self.assertEqual(result["input_cost"], 0.0)
+        self.assertEqual(result["output_cost"], 0.0)
+        self.assertTrue(result["coverage_complete"])
+        self.assertEqual(llm.usage_tracker.total_input_tokens, 1000)
+
+        # Paid and unknown non-local models retain their existing behavior.
+        self.assertGreater(ModelPricing.get_price("qwen3-8b", "input"), 0)
+        unknown = "unknown-remote-for-cost-regression-test"
+        ModelPricing._warned_unknown.discard(unknown)
+        with patch("base.engine.async_llm.logger.warning") as warning:
+            self.assertEqual(ModelPricing.get_price(unknown, "input"), 0)
+            self.assertEqual(ModelPricing.get_price(unknown, "output"), 0)
+            warning.assert_called_once()
+
     def test_template_mode_does_not_construct_llm_backends(self):
         with patch(
             "environment.generate_question.authoring.backend.OpenAICompatibleBackend"
