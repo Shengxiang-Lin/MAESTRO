@@ -898,13 +898,19 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                         "output_spec"]["kind"]
                     for s in current_scenes
                     if s["problem_spec"]["macro_plan"].get(
-                        "composer_policy") == "goal_conditioned_operation_dag_v5"
+                        "composer_policy") in {
+                            "goal_conditioned_operation_dag_v5",
+                            "goal_conditioned_output_first_v6",
+                        }
                 )),
                 "goal_operation_distribution": dict(Counter(
                     node["op"]
                     for s in current_scenes
                     if s["problem_spec"]["macro_plan"].get(
-                        "composer_policy") == "goal_conditioned_operation_dag_v5"
+                        "composer_policy") in {
+                            "goal_conditioned_operation_dag_v5",
+                            "goal_conditioned_output_first_v6",
+                        }
                     for node in s["problem_spec"]["macro_plan"][
                         "goal_spec"]["operations"]
                 )),
@@ -918,7 +924,25 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                         "goal_spec"]["output_spec"]["kind"]
                     for s in current_scenes
                     if s["problem_spec"]["macro_plan"].get(
-                        "composer_policy") == "goal_conditioned_operation_dag_v5"
+                        "composer_policy") in {
+                            "goal_conditioned_operation_dag_v5",
+                            "goal_conditioned_output_first_v6",
+                        }
+                )),
+                "output_first_semantic_fields": dict(Counter(
+                    field
+                    for s in current_scenes
+                    if s["problem_spec"]["macro_plan"].get(
+                        "composer_policy") == "goal_conditioned_output_first_v6"
+                    for field in s["problem_spec"]["macro_plan"]["goal_spec"][
+                        "output_spec"]["bindings"].values()
+                )),
+                "output_first_capability_combinations": dict(Counter(
+                    "+".join(s["problem_spec"]["macro_plan"][
+                        "goal_spec"]["capabilities"]) or "entity_only"
+                    for s in current_scenes
+                    if s["problem_spec"]["macro_plan"].get(
+                        "composer_policy") == "goal_conditioned_output_first_v6"
                 )),
                 "goal_answer_type_distribution": dict(Counter(
                     s["problem_spec"]["macro_plan"]["goal"]["answer_type"]

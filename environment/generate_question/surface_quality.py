@@ -225,6 +225,14 @@ def question_language_warnings(
             missing_years.discard(str(
                 goal["qualifying_observation_year_gte"]
             ))
+        if (plan.get("composer_policy") == "goal_conditioned_output_first_v6"
+                and "aggregate" in goal.get("capabilities", [])):
+            count_ops = [
+                node for node in goal.get("operations", [])
+                if node.get("op") == "count_aggregate"
+            ]
+            if len(count_ops) == 1 and type(count_ops[0].get("year_gte")) is int:
+                missing_years.discard(str(count_ops[0]["year_gte"]))
         if (plan.get("composer_policy") == "goal_conditioned_operation_dag_v5"
                 and goal.get("source_profile") == "aggregation"):
             count_operators = [

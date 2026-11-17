@@ -237,3 +237,58 @@ realization and replay are checked by `test_goal_ops_v5.py`.
 Report fields `goal_operation_distribution`,
 `goal_output_distribution` and `goal_operation_output_pairs` distinguish
 operator coverage from output coverage and Macro topology.
+
+### Output-first v6: Goal fields drive partial-order operation planning
+
+Run `--config environment/configs/questions_output_first_v6.yaml` for
+the opt-in `goal_conditioned_output_first_v6` pilot. Legacy v3/v4/v5
+configs and frozen Worlds stay unchanged.
+
+**P0 — Question-Critic semantic mismatch fixed.** v5's Author already
+received the frozen `goal_ops_v5.goal_question` and `output_spec`, but
+its Critic incorrectly obtained the intermediate entity relationship
+question via `goal_spec.kind` (absent from v5). Now both Author and
+Critic consume the true final Goal and typed output fields. This
+addresses a plausible major failure mode observed in v5's 64/100
+Question-acceptance pilot; any improvement in LLM acceptance must be
+measured by rerunning the same seeds, not assumed from unit tests.
+
+**P1 — Output-first backward composition.**
+
+1. Sample one of five answer structures. Choose typed *semantic* field
+   demands (e.g. `duration_days: int`, `distance_km: int`,
+   `entity: str`) rather than an arbitrary Profile category.
+2. Recursively expand each demanded field to valid primitive operators:
+   Lookup, Arithmetic, Temporal Difference/Midpoint, Geographic Distance,
+   Count/Aggregate, Compare/Select and evidence-bounded Verify.
+3. Intern identical lookup and intermediate operations. The resulting
+   DAG has a topological dependency order; `operation_subgraph_leq`
+   defines the *non-total* typed operation-subgraph partial order across
+   different Goal DAGs (independent of output format).
+4. Determine precisely which canonical source fields are needed. One
+   independently keyed record may contain both dates and coordinates
+   when both are necessary; absent requirements are not added.
+5. Bind the synthetic canonical World, create dependency-correct Macro
+   handoffs, compute group counts **before** joining scalar evidence,
+   execute typed Goal operations in Gold IR, format the final output,
+   and run the usual replay/information-necessity/counterfactual audits.
+
+To accommodate at most three independent evidence retrieval Macros,
+v6 alone allows up to **11** Macro tasks. This is an explicit
+cross-domain budget, not a relaxation of Source necessity; prior versions
+retain 9. v6's bounded generator still uses the original two- or
+three-hop entity-relation substrate, and generates *simulated textual
+observations* rather than consuming real image/audio/video assets.
+The evidence-based explanation output is a structured comparison with
+two supporting counts and cited fact references, not open-ended prose.
+
+In `quality_report.json` the operation/output cross-distribution is
+recorded separately from semantic fields and source capability mixes.
+As always, the 60 OmniGAIA pretest questions motivate the abstract
+operation coverage only; their original prompts/answers/media are not
+copied into synthesized data.
+
+Test coverage: `environment/tests/test_output_first_v6.py` checks
+output-first coverage, typed DAG partial order, multi-domain source
+sharing, canonical World, final answer, Replay, source-counterfactual
+necessity, Stage 2 realization and mock Author/Critic alignment.

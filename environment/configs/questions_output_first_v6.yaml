@@ -1,0 +1,50 @@
+# Current default: Task Plan -> typed motif composition -> one coherent World
+# -> scoped evidence views -> original Compiler/Replay and Stage 2–4 contracts.
+# YAGO supplies observed relation vocabulary and world-structure statistics,
+# NOT mandatory factual paths. Recombined entities/relations are new facts
+# within the generated scenario; their synthetic origin remains private.
+version: 1
+
+input:
+  mmqa: null  # current Task Plan does not consume MMQA
+  max_records: 1000
+
+generation:
+  output_dir: environment/data/stage1
+  target: 100
+  seed: 17
+  difficulty_mix: [0, 50, 50]
+  overwrite: false
+  flush_every: 1
+  no_progress: false
+  knowledge_variant: task_plan
+  knowledge_world_mode: compose
+  task_plan_composer: goal_conditioned_output_first_v6
+  knowledge_yago: data/world-source/YAGO-4.6
+  knowledge_max_triples: 1000000
+  knowledge_max_edges: 250000
+  knowledge_min_hops: 2
+  knowledge_max_hops: 3
+
+scenario:
+  api_base: null
+  model: null
+  critic_api_base: null
+  critic_model: null
+  api_key_env: null
+  critic_api_key_env: null
+  workers: 4
+  max_revisions: 2
+  timeout: 180
+
+question:
+  # Default Question Author and Critic: separate calls to the local Qwen endpoint.
+  # Frozen Task Plan, World, Evidence and Gold are never edited by the LLM.
+  api_base: http://127.0.0.1:8807/v1
+  model: local-qwen3.5-9b
+  critic_api_base: http://127.0.0.1:8807/v1
+  critic_model: local-qwen3.5-9b
+  api_key_env: null
+  workers: 4
+  max_revisions: 2
+  timeout: 180

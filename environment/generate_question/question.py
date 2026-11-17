@@ -126,6 +126,7 @@ def _intent_reference_question(spec: dict) -> str:
                 "goal_conditioned_evidence_needs_v3",
                 "goal_conditioned_typed_goal_v4",
                 "goal_conditioned_operation_dag_v5",
+                "goal_conditioned_output_first_v6",
             }:
                 # A frozen clue can accidentally equal an ordinary phrase
                 # in our deterministic lead (e.g. "catalog" in
@@ -152,6 +153,12 @@ def _intent_reference_question(spec: dict) -> str:
                     (candidate for candidate in safe_leads
                      if _safe_lead(candidate)), lead
                 )
+            if (plan.get("composer_policy") ==
+                    "goal_conditioned_output_first_v6"
+                    and plan["goal_spec"]["output_spec"]["bindings"] !=
+                    {"answer": "entity"}):
+                from .goal_ops_v6 import goal_question
+                return f"{lead} {goal_question(plan)}"
             if (plan.get("composer_policy") ==
                     "goal_conditioned_operation_dag_v5"
                     and plan["goal_spec"]["source_profile"] !=
@@ -781,6 +788,43 @@ def guard_question(question: str, spec: dict,
             elif not re.search(r"\b2025\b", q):
                 errors.append("task_plan_required_year_missing")
         errors.extend(_unlicensed_task_plan_condition(q, plan))
+        if plan.get("composer_policy") == "goal_conditioned_output_first_v6":
+            goal_spec = plan["goal_spec"]
+            fields = goal_spec["output_spec"]["bindings"]
+            # Each output semantic has a required public description.
+            clues = {
+                "difference": r"\b(?:difference|subtract|absolute)\b",
+                "ratio": r"\b(?:ratio|divide|divided)\b",
+                "duration_days": r"\b(?:elapsed|days|duration)\b",
+                "midpoint_date": r"\b(?:midpoint|middle)\b",
+                "distance_km": r"\b(?:distance|great.circle)\b",
+                "observation_count": r"\b(?:count|how many|number of)\b",
+                "higher_source": r"\b(?:higher|greater|larger)\b",
+                "conclusion": r"\b(?:supported|evidence|judgment|assessment)\b",
+            }
+            for semantic in fields.values():
+                if semantic in clues and not re.search(
+                    clues[semantic], q, re.I,
+                ):
+                    errors.append("v6_missing_output_semantics:" + semantic)
+            if goal_spec["output_spec"]["kind"] in {
+                "structured_multi_field", "evidence_based_explanation"
+            }:
+                for name in fields:
+                    field_pattern = (
+                        r"\b" + re.escape(name).replace("_", r"[_\s-]?")
+                        + r"\b"
+                    )
+                    if not re.search(field_pattern, q, re.I):
+                        errors.append("v6_output_field_missing:" + name)
+            if "aggregate" in goal_spec["capabilities"]:
+                if not re.search(r"\b2025\b", q):
+                    errors.append("v6_required_threshold_missing")
+            elif re.search(r"\b(?:19|20)\d{2}\b", q):
+                # Year selection may only be licensed by an exact Goal
+                # or the pre-existing v3 event condition.
+                if not plan["condition"]:
+                    errors.append("v6_unlicensed_year")
         if plan.get("composer_policy") == "goal_conditioned_operation_dag_v5":
             goal_spec = plan["goal_spec"]
             shape = goal_spec["output_spec"]["kind"]
@@ -1158,10 +1202,27 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             goal = plan["goal"]["semantic"]
             v5 = (plan.get("composer_policy") ==
                   "goal_conditioned_operation_dag_v5")
+            v6 = (plan.get("composer_policy") ==
+                  "goal_conditioned_output_first_v6")
             kind = plan.get("goal_spec", {}).get(
                 "kind", "entity_resolution"
             )
-            if v5:
+            if v6:
+                from .goal_ops_v6 import goal_question
+                goal_spec = plan["goal_spec"]
+                author_contract["semantic_goal_question"] = goal_question(plan)
+                author_contract["goal_operations"] = [
+                    {"op": item["op"], "inputs": item["inputs"],
+                     "output": item["output"]}
+                    for item in goal_spec["operations"]
+                ]
+                author_contract["final_output_spec"] = goal_spec["output_spec"]
+                author_contract["output_constraint"] = (
+                    "Treat the final output fields and their meanings as "
+                    "frozen, preserve all operations required by each field, "
+                    "do not add outputs or change time thresholds."
+                )
+            elif v5:
                 from .goal_ops_v5 import goal_question
                 goal_spec = plan["goal_spec"]
                 author_contract["semantic_goal_question"] = goal_question(plan)
@@ -1228,6 +1289,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 "goal_conditioned_evidence_needs_v3",
                 "goal_conditioned_typed_goal_v4",
                 "goal_conditioned_operation_dag_v5",
+                "goal_conditioned_output_first_v6",
             }:
                 condition = plan["condition"]
                 if condition and condition["field"] == "event_year":
@@ -1382,24 +1444,39 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 # verbose private operator/DAG walkthrough. The public
                 # Question should never be forced to narrate Gold steps.
                 plan = spec["macro_plan"]
-                goal_kind = plan.get("goal_spec", {}).get(
-                    "kind", "entity_resolution"
+                goal_spec = plan.get("goal_spec", {})
+                composer = plan.get("composer_policy")
+                goal_kind = goal_spec.get(
+                    "source_profile",
+                    goal_spec.get("kind", "entity_resolution"),
                 )
-                from .typed_goal_v4 import numeric_goal_question
-                target_question = (
-                    numeric_goal_question(plan) if
-                    goal_kind != "entity_resolution" else
-                    plan["goal"]["semantic"]["question"]
-                )
+                if composer == "goal_conditioned_operation_dag_v5":
+                    from .goal_ops_v5 import goal_question
+                    target_question = goal_question(plan)
+                elif composer == "goal_conditioned_output_first_v6":
+                    from .goal_ops_v6 import goal_question
+                    target_question = goal_question(plan)
+                elif goal_kind != "entity_resolution":
+                    from .typed_goal_v4 import numeric_goal_question
+                    target_question = numeric_goal_question(plan)
+                else:
+                    target_question = plan["goal"]["semantic"]["question"]
                 frozen_contract = {
                     "topic": spec["scenario"]["topic"],
                     "semantic_goal_question": target_question,
                     "goal_resolution_kind": goal_kind,
+                    "final_output_spec": goal_spec.get("output_spec"),
+                    "goal_operations": [
+                        {"op": item["op"], "inputs": item["inputs"],
+                         "output": item["output"]}
+                        for item in goal_spec.get("operations", [])
+                    ],
                     "relation_sequence": plan["goal"]["semantic"]["relation_sequence"],
                     "answer_type_hint": (
                         plan["goal"]["answer_type"]
-                        if goal_kind != "entity_resolution" else
-                        plan["goal"]["semantic"]["answer_type_hint"]
+                        if "output_spec" in goal_spec
+                        or goal_kind != "entity_resolution"
+                        else plan["goal"]["semantic"]["answer_type_hint"]
                     ),
                     "required_event_condition": plan["condition"],
                     "verification_mode": plan["mode"] == "verify",

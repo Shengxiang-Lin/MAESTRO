@@ -95,6 +95,7 @@ def intent_contract(spec: dict) -> dict:
     elif pattern == "task_plan":
         plan = spec["macro_plan"]
         v5 = plan.get("composer_policy") == "goal_conditioned_operation_dag_v5"
+        v6 = plan.get("composer_policy") == "goal_conditioned_output_first_v6"
         goal_kind = plan.get("goal_spec", {}).get(
             "source_profile", plan.get("goal_spec", {}).get(
                 "kind", "entity_resolution"
@@ -109,7 +110,7 @@ def intent_contract(spec: dict) -> dict:
                 "Report ONLY the frozen typed Goal output: "
                 + plan["goal"]["public_label"] + ". "
                 + ("Preserve every typed field and requested computation."
-                   if v5 else
+                   if v5 or v6 else
                    "Preserve the exact three-field structured answer."
                    if goal_kind == "structured_answer" else
                    "Do not request an additional intermediate entity.")
@@ -155,7 +156,10 @@ def intent_contract(spec: dict) -> dict:
             "goal_constrained_yago_grounding_v1"
         ):
             goal = plan["goal"]["semantic"]
-            if v5:
+            if v6:
+                from .goal_ops_v6 import goal_question
+                final_question = goal_question(plan)
+            elif v5:
                 from .goal_ops_v5 import goal_question
                 final_question = goal_question(plan)
             elif goal_kind != "entity_resolution":

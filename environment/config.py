@@ -133,7 +133,8 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
             "legacy", "goal_conditioned_typed_v2",
             "goal_conditioned_evidence_needs_v3",
             "goal_conditioned_typed_goal_v4",
-            "goal_conditioned_operation_dag_v5"
+            "goal_conditioned_operation_dag_v5",
+            "goal_conditioned_output_first_v6"
         }:
             raise ValueError("unsupported_task_plan_composer")
         if (generation.get("task_plan_composer", "legacy") != "legacy"
