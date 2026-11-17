@@ -149,6 +149,56 @@ def _rebuild_publication(
     return episodes, turns, private, failures
 
 
+
+def _select_stage2_accepted_scenes(
+    stage1_scenes: list[dict], stage2_reports: dict[str, list[dict]],
+    *, max_scenes: int | None,
+) -> tuple[list[dict], dict[str, int]]:
+    """Choose complete, reviewed Stage-2 Scenes in original Stage-1 order.
+
+    Stage 2 publishes a whole Scene atomically, so absent/incomplete reports
+    mean *not eligible*, not a Stage-3 rejection. The stricter replay, source,
+    and evidence checks still run inside build_episode for every selected
+    Scene; this lightweight filter is not a replacement for validation.
+    """
+    selected: list[dict] = []
+    counts = Counter()
+    for scene in stage1_scenes:
+        expected = [
+            task_id for wave in scene["macro_graph"]["reference_waves"]
+            for task_id in wave
+        ]
+        rows = stage2_reports.get(scene["task_id"], [])
+        if not rows:
+            counts["no_published_stage2_reports"] += 1
+            continue
+        ids = [row.get("macro_task_id") for row in rows]
+        # Do not silently treat malformed/duplicate published reports as a
+        # legitimate Stage-2 failure. Duplicates indicate a corrupt bank.
+        if len(ids) != len(set(ids)):
+            raise ValueError(
+                "stage3_duplicate_stage2_macro_report:" + scene["task_id"]
+            )
+        if len(ids) != len(expected) or set(ids) != set(expected):
+            counts["incomplete_stage2_reports"] += 1
+            continue
+        if any(row.get("report_authoring", {}).get("status") != "accepted"
+               for row in rows):
+            counts["unreviewed_stage2_reports"] += 1
+            continue
+        counts["eligible_stage2_scenes"] += 1
+        if max_scenes is None or len(selected) < max_scenes:
+            selected.append(scene)
+    counts["stage1_scenes"] = len(stage1_scenes)
+    counts["selected_stage3_scenes"] = len(selected)
+    counts["skipped_without_accepted_stage2"] = (
+        counts["no_published_stage2_reports"]
+        + counts["incomplete_stage2_reports"]
+        + counts["unreviewed_stage2_reports"]
+    )
+    return selected, dict(counts)
+
+
 def generate_turns(
     *, scenes_path: Path, reports_path: Path, output_dir: Path,
     max_scenes: int | None = None,
@@ -178,6 +228,20 @@ def generate_turns(
     if type(workers) is not int or not 1 <= workers <= 64:
         raise ValueError("stage3_workers_must_be_between_1_and_64")
     mode = "llm_reviewed" if author is not None else "template"
+    # Selection is based on Stage-2 PUBLISHED whole-Scene reports, not
+    # Stage-1 row positions. max_scenes counts eligible Stage-2 Scenes.
+    stage1_rows = read_jsonl(scenes_path)
+    stage1_ids = [row["task_id"] for row in stage1_rows]
+    if len(set(stage1_ids)) != len(stage1_ids):
+        raise ValueError("stage3_duplicate_scene_task_id")
+    reports = defaultdict(list)
+    for row in read_jsonl(reports_path):
+        reports[row["scene_task_id"]].append(row)
+    scene_rows, selection = _select_stage2_accepted_scenes(
+        stage1_rows, reports, max_scenes=max_scenes,
+    )
+    if not scene_rows:
+        raise ValueError("stage3_no_complete_accepted_stage2_scenes")
     signature = _signature(
         scenes_path, reports_path, max_scenes=max_scenes,
         sub_model=sub_model, model_alias=model_alias,
@@ -203,14 +267,6 @@ def generate_turns(
         _dump_json(manifest, signature)
     journal = output_dir / "journal"
     journal.mkdir(exist_ok=True)
-    scene_rows = read_jsonl(scenes_path, limit=max_scenes)
-    ids = [row["task_id"] for row in scene_rows]
-    if len(set(ids)) != len(ids):
-        raise ValueError("stage3_duplicate_scene_task_id")
-    reports = defaultdict(list)
-    for row in read_jsonl(reports_path):
-        reports[row["scene_task_id"]].append(row)
-
     # Only the coordinator writes shared public JSONL files. Each worker
     # owns one Scene's round checkpoints and final atomic Scene journal.
     # This isolates concurrent generation from publication, and preserves
@@ -294,6 +350,7 @@ def generate_turns(
             "mode": mode,
             "workers": workers,
             "requested_scenes": len(scene_rows),
+            "stage2_selection": selection,
             "processed_scenes": current,
             "accepted_scenes": counts["accepted"],
             "rejected_scenes": counts["rejected"],
@@ -397,6 +454,7 @@ def generate_turns(
         "mode": mode,
         "workers": workers,
         "requested_scenes": len(scene_rows),
+        "stage2_selection": selection,
         "accepted_scenes": len(episodes),
         "rejected_scenes": len(failures),
         "rejection_causes": dict(failure_causes),
