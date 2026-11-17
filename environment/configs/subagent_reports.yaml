@@ -30,7 +30,7 @@ reporting:
   critic_model: qwen3.8-flash
   api_key_env: DASHSCOPE_API_KEY
   critic_api_key_env: DASHSCOPE_API_KEY
-  workers: 4
+  workers: 10
   max_revisions: 2
   # LLM writes only a stage-local Summary; Result is compiled from
   # this Macro's exact delivered WorkProduct. Older scenes retain legacy mode.
