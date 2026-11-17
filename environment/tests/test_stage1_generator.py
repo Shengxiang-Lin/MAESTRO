@@ -332,6 +332,27 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertGreater(observed_media_first, 0)
         self.assertGreater(verification, 0)
 
+    def test_partial_order_freedom_is_not_graph_signature_count(self):
+        from environment.generate_question.auditing.decision_opportunities import (
+            audit_decision_opportunities,
+        )
+        # A and B are genuinely independent, C needs both.
+        plan = {"macro_tasks": [
+            {"macro_id": "A", "operation": "test", "depends_on": [],
+             "source_scope": []},
+            {"macro_id": "B", "operation": "test", "depends_on": [],
+             "source_scope": []},
+            {"macro_id": "C", "operation": "test", "depends_on": ["A", "B"],
+             "source_scope": []},
+        ]}
+        sample = {"macro_plan": plan, "sources": []}
+        stats = audit_decision_opportunities(sample)
+        self.assertEqual(stats["legal_topological_orders"], 2)
+        self.assertEqual(stats["incomparable_task_pairs"], 1)
+        self.assertEqual(stats["incomparable_pair_share"], 0.3333)
+        self.assertEqual(stats["source_independent_roots"], 2)
+        self.assertFalse(stats["conditional_feedback_dispatch"])
+
     def test_media_evidence_has_executable_source_affordances(self):
         from environment.generate_question.task_plan import make_spec
         from environment.generate_question.task_plan_runtime import compile_macro_solvers
