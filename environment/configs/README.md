@@ -28,6 +28,13 @@ its private deterministic Oracle cache is under `stage2/oracle/`.
 Stage 4 reconstructs its trusted execution prefix from Stages 1/2,
 rather than consuming Stage 3 generated Main data.
 
+Stages 1–4 use DashScope `qwen3.8-flash` for active LLM Author/Critic
+calls. Export `DASHSCOPE_API_KEY` before running; the endpoint is
+`https://dashscope.aliyuncs.com/compatible-mode/v1`. Stage 1 resolves it
+through `config/model_config.yaml`, while Stages 2–4 set the same endpoint
+explicitly. In Stage 3/4, `generation.sub_model` is the Sub-Agent model
+label recorded in the simulated Main history, not another API invocation.
+
 Keep output directories distinct between pilot runs, seeds and modified
 configuration. `python -m environment run` remains the Stage 1→2→4
 convenience command.
