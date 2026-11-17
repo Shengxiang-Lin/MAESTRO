@@ -514,25 +514,33 @@ def _o1_answer_requirements(record: dict) -> list[str]:
     return values
 
 
+def _exact_single_field_scalar_text(value, contract: dict) -> str | None:
+    """Canonical text only for a one-row, one-field, exact Oracle scalar.
+
+    Intermediate Macro handoffs often return an opaque PRJ-/ENT-/EVT- key,
+    and terminal answers may be short dates or numbers. A word count is not
+    a meaningful evidence-quality test for either. This does NOT authorize
+    shortened multi-field/multi-row results or altered identifiers.
+    """
+    rows = contract.get("exact_oracle_answer")
+    if (not isinstance(rows, list) or len(rows) != 1
+            or not isinstance(rows[0], dict) or len(rows[0]) != 1
+            or type(value) not in {str, int, float}):
+        return None
+    original = next(iter(rows[0].values()))
+    if type(original) not in {str, int, float}:
+        return None
+    exact = str(original).strip()
+    return exact if exact and str(value).strip() == exact else None
+
+
 def _o1_answer_issues(answer: str, contract: dict) -> list[str]:
     if not isinstance(answer, str):
         return ["answer_invalid_length_or_type"]
     answer_text = answer.strip()
-    rows = contract.get("exact_oracle_answer")
-    # A terminal scalar may itself be the complete natural-language answer.
-    # E.g. "132", "second", "2020-11-19". This exemption is allowed ONLY
-    # for a one-row final answer that matches the immutable Oracle exactly;
-    # intermediate handoffs still require an informative natural sentence.
-    exact_terminal_scalar = (
-        contract.get("macro_is_terminal") is True
-        and isinstance(rows, list) and len(rows) == 1
-        and isinstance(rows[0], dict) and set(rows[0]) == {"answer"}
-        and isinstance(rows[0]["answer"], (str, int, float))
-        and not isinstance(rows[0]["answer"], bool)
-        and answer_text == str(rows[0]["answer"]).strip()
-    )
+    exact_scalar = _exact_single_field_scalar_text(answer_text, contract)
     if (not answer_text or len(answer_text) > 6500
-            or (len(answer_text) < 18 and not exact_terminal_scalar)):
+            or (len(answer_text) < 18 and exact_scalar is None)):
         return ["answer_invalid_length_or_type"]
     missing = []
     for literal in contract.get("answer_required_literals", []):
@@ -675,8 +683,11 @@ Return ONLY a JSON object with TWO authored text fields:
 {"answer":"...", "trace_summary":"..."}
 
 ANSWER: directly answer the DELEGATED task. State the useful finding FIRST.
-For a final single-value task, you may return the exact value directly
-(e.g. a number, date, choice or place name); use TRACE_SUMMARY for explanation.
+For ANY one-field task, including intermediate identifier lookups,
+you may return the exact single value directly (e.g. PRJ-/ENT-/EVT- ID,
+number, date, choice or place name); use TRACE_SUMMARY for explanation.
+Do not pad a correct short identifier with invented facts merely to make
+the answer longer.
 All distinct entity identifiers, dates, measurements, scalar fields, and
 entity-to-value associations in exact_oracle_answer must be preserved
 verbatim in the answer, including when there are many rows. Use compact
@@ -726,9 +737,10 @@ CODE_OWNED_CRITIC_SYSTEM = CRITIC_SYSTEM + """
 The model authored a natural-language ANSWER (candidate_finish.result)
 and an execution trace_summary. The exact_oracle_answer is immutable
 and the application has already checked all distinct scalar values
-appear in the answer. For a final one-value answer, a bare exact number,
-date, choice or entity name is valid if the trace supports it; do not
-reject it solely for being concise. Critically check each entity/value association,
+appear in the answer. For ANY one-field Macro, including intermediate
+PRJ-/ENT-/EVT- handoffs, the exact identifier, number, date or name alone
+is valid if the trace supports it; do not reject it solely for brevity.
+Critically check each entity/value association,
 the meaning and local scope of this task, answer usefulness to Main,
 and the trace's factual evidence basis. The trace is a concise
 Orchestra-o1-style execution recap, not ungrounded success claims,
@@ -874,6 +886,16 @@ def author_critic_report(
                 if contract.get("requires_o1_answer"):
                     authored_answer = candidate.get("answer")
                     authored_trace = candidate.get("trace_summary")
+                    # Some OpenAI-compatible models JSON-decode a genuine
+                    # numeric scalar as int/float rather than as a string.
+                    # Convert ONLY if it equals the sole frozen Oracle value;
+                    # unrelated numbers still fail the existing Guard.
+                    if type(authored_answer) in {int, float}:
+                        exact = _exact_single_field_scalar_text(
+                            authored_answer, contract,
+                        )
+                        if exact is not None:
+                            authored_answer = exact
                     # Status and immutable Oracle rows are never model-owned.
                     candidate = {
                         "result": authored_answer,
