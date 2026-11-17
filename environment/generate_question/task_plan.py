@@ -1083,7 +1083,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     }
     scene_setting = (
         scene_variants[semantic["domain"]][ordinal % 2]
-        if composer == TYPED_GOAL_COMPOSER else
+        if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER) else
         "a research archive with personnel files, field records "
         "and independently maintained reference registers"
     )
@@ -1096,7 +1096,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
              + plan["goal"]["public_label"]
              + " from the available independent evidence")
             if plan.get("goal_spec", {}).get(
-                "kind", "entity_resolution"
+                "source_profile",
+                plan.get("goal_spec", {}).get("kind", "entity_resolution"),
             ) != "entity_resolution" else
             ("identify " + clause + " and determine the "
              + semantic["answer_type_hint"]
