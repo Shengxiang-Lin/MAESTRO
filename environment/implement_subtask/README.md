@@ -27,6 +27,28 @@ and writes a complete, deterministic JSON-list string into
 No row or citation is truncated to meet a text budget; oversized reports
 fail visibly. Legacy Scene reports keep their original readable Result.
 
+## Stage-1 observations and natural Stage-2 traces
+
+Stage 1 already creates `observed_content`, `observation_semantics`,
+`document_context`, and named source titles/purposes/modalities within
+synthetic World observations. Oracle realization now carries this **existing**
+evidence into `trace_summary.steps[].evidence_atoms`, plus a scoped
+`trace_summary.source_context` catalog. The original operator steps, full
+WorkProduct, and provenance remain code-owned.
+
+For current `result_encoding: typed_evidence_json_v1` tasks, one Qwen
+Author invocation returns **both** `summary` and `trace_narrative`.
+The Guard checks each field, and the independent Critic sees both alongside
+the exact evidence. Only the accepted narrative is published as
+`trace_summary.narrative` and shown to Main in Stage 3. The old operator
+paraphrase function remains a fallback for older, non-typed reporting modes.
+The frozen `finish_result.result` and fact references never change.
+
+No actual image, audio, video, network or tool execution occurs in Stage 2;
+the natural narrative must describe simulated, supplied observations. The
+earlier Stage-1 `evidence_acquisition` contract remains optional: without it,
+do **not** synthesize a fictitious tool-call history.
+
 ## Code-owned results and stage-local summaries
 
 `reporting.result_policy: code_owned` (in `environment/configs/subagent_reports.yaml`)
