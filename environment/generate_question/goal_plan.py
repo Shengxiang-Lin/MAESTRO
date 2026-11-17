@@ -579,46 +579,59 @@ def validate_measurements(plan: dict, binding: dict, *,
 
 
 def goal_question(plan: dict) -> str:
+    """Express the frozen semantic target as a user referent, not a DAG path.
+
+    Gold still follows every canonical relation. Only the surface avoids
+    exposing an internal 'relationship sequence' or instruction program.
+    """
+    from .grounding.goal_language import focus_phrase
+
     goal = plan["goal_spec"]
     output = goal["output_spec"]
-    chain = ", followed by ".join(
-        _RELATION_PHRASES[k] for k in plan["goal_recipe_keys"]
-    )
-    scope = (
-        "the entity reached by the documented relationship sequence "
-        "(" + chain + ")"
-    )
-    if plan["goal_recipe_keys"].count("containedinplace") >= 2:
-        scope += " in the larger administrative area"
+    scope = focus_phrase(tuple(plan["goal_recipe_keys"]))
     condition = plan.get("condition")
     if condition:
         if condition["field"] == "event_status":
-            scope += " selected through the completed event"
+            scope += ", using only the completed review event"
         elif condition["field"] == "event_year":
-            scope += " selected through an event in or after 2025"
+            scope += ", using only a review event in or after 2025"
         else:
             raise ValueError("unrecognized_event_condition_in_goal_question")
-    if output["kind"] == "single_entity" and (
-            output["bindings"]["answer"] == "entity"):
+    if (output["kind"] == "single_entity"
+            and output["bindings"]["answer"] == "entity"):
         return plan["goal"]["semantic"]["question"]
+
     descriptors = [
         FIELD_WORDING[semantic]
         for semantic in output["bindings"].values()
     ]
+    prefix = "For " + scope + ", "
     if output["kind"] == "single_entity":
-        end = "Determine " + descriptors[0] + ". Return one label."
-    elif output["kind"] == "single_number":
-        end = "Calculate " + descriptors[0] + ". Return only one number."
-    elif output["kind"] == "date_time":
-        end = "Determine " + descriptors[0] + ". Return a YYYY-MM-DD date."
-    else:
-        parts = ", ".join(
-            "'" + name + "'" for name in output["fields"]
+        return prefix + (
+            "identify " + descriptors[0] + ". Return one label."
         )
-        end = (
-            "Return a " + output["kind"].replace("_", " ") +
-            " with exactly these fields: " + parts +
-            ". They respectively represent " + "; ".join(descriptors) +
-            "."
+    if output["kind"] == "single_number":
+        return prefix + (
+            "calculate " + descriptors[0] + ". Return only one number."
         )
-    return "For " + scope + ", " + end
+    if output["kind"] == "date_time":
+        return prefix + (
+            "determine " + descriptors[0] + ". Return a YYYY-MM-DD date."
+        )
+    names = list(output["bindings"])
+    details = "; ".join(
+        "'" + name + "' means " + FIELD_WORDING[semantic]
+        for name, semantic in output["bindings"].items()
+    )
+    if output["kind"] == "evidence_based_explanation":
+        return prefix + (
+            "provide an evidence-supported judgment comparing the recorded "
+            "counts, including the first and second counts. Return exactly "
+            "the fields 'conclusion', 'first_count' and 'second_count'. "
+            + details + "."
+        )
+    return prefix + (
+        "report the requested measurements using fields "
+        + ", ".join("'" + name + "'" for name in names)
+        + ". " + details + "."
+    )
