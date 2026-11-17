@@ -31,6 +31,56 @@ def accepted_reports(scene):
 
 
 class CurrentStagePipelineTests(unittest.TestCase):
+    def test_default_author_critic_models_share_qwen_flash_registry(self):
+        """Ensure Stage 1–4 active API roles use the same DashScope model."""
+        from pathlib import Path
+        import yaml
+        root = Path(__file__).resolve().parents[2]
+        model_registry = yaml.safe_load(
+            (root / "config/model_config.yaml").read_text(encoding="utf-8")
+        )["models"]["qwen3.8-flash"]
+        endpoint = model_registry["base_url"]
+        configs = root / "environment/configs"
+
+        s1 = yaml.safe_load(
+            (configs / "questions.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(s1["question"]["model"], "qwen3.8-flash")
+        self.assertEqual(s1["question"]["critic_model"], "qwen3.8-flash")
+        self.assertEqual(s1["question"]["api_key_env"], "DASHSCOPE_API_KEY")
+        self.assertEqual(s1["question"]["registry"], "config/model_config.yaml")
+
+        s2 = yaml.safe_load(
+            (configs / "subagent_reports.yaml").read_text(encoding="utf-8")
+        )["reporting"]
+        self.assertEqual(s2["model"], "qwen3.8-flash")
+        self.assertEqual(s2["critic_model"], "qwen3.8-flash")
+        self.assertEqual(s2["api_base"], endpoint)
+        self.assertEqual(s2["api_key_env"], "DASHSCOPE_API_KEY")
+        self.assertEqual(s2["critic_api_key_env"], "DASHSCOPE_API_KEY")
+
+        s3 = yaml.safe_load(
+            (configs / "main_orchestration.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(s3["generation"]["sub_model"], "qwen3.8-flash")
+        self.assertEqual(s3["model"]["author_model"], "qwen3.8-flash")
+        self.assertEqual(s3["model"]["critic_model"], "qwen3.8-flash")
+        self.assertEqual(s3["model"]["author_api_base"], endpoint)
+        self.assertEqual(s3["model"]["api_key_env"], "DASHSCOPE_API_KEY")
+
+        s4 = yaml.safe_load(
+            (configs / "untrusted_orchestration.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(s4["generation"]["sub_model"], "qwen3.8-flash")
+        for section in ("model", "subagent_model"):
+            cfg = s4[section]
+            self.assertEqual(cfg["author_model"], "qwen3.8-flash")
+            self.assertEqual(cfg["critic_model"], "qwen3.8-flash")
+            self.assertEqual(cfg["author_api_base"], endpoint)
+            self.assertEqual(cfg["api_key_env"], "DASHSCOPE_API_KEY")
+
     def test_no_dangling_stage1_imports_in_any_current_environment_module(self):
         """Deleting old modules must not strand less frequently used consumers."""
         import ast
