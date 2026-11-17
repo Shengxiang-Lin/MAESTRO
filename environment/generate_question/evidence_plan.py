@@ -205,30 +205,23 @@ def compose_evidence_plan(*, seed: int, ordinal: int, difficulty: str,
                     "Resolve the eligible event's subject",
                 )
             else:
-                eligible = add(
-                    "investigation", "event_eligibility", [project],
-                    {"motif_object": "str"}, ["event_ledger"],
-                    "Find the eligible relation object",
-                )
-                a = add(
-                    "investigation", "directory_a", [project],
-                    {"route_key": "str", "entity_0": "str"}, ["link_a"],
-                    "Find candidate references in directory A",
-                )
-                b = add(
-                    "investigation", "directory_b", [project],
-                    {"route_key": "str", "entity_0": "str"}, ["link_b"],
-                    "Find candidate references in directory B",
-                )
+                # A Sub-Agent can reconcile two short directory sources in
+                # one coherent investigation WorkProduct. Preserve a
+                # separate Main-visible verification gate so the model
+                # must decide to dispatch it after candidate discovery.
+                # This coarsening makes genuine verification compatible
+                # with typed Goals and the 11-Macro budget.
                 association = add(
-                    "association", "intersect_references", [a, b],
-                    {"entity_0": "str"}, [],
-                    "Join independently observed reference candidates",
+                    "association", "reconcile_directories", [project],
+                    {"entity_0": "str"}, ["link_a", "link_b"],
+                    "Reconcile independently observed reference candidates",
                 )
                 produced[port] = add(
                     "verification", "verify_real_fork",
-                    [association, eligible], {"entity_0": "str"}, ["real_fork"],
-                    "Check the candidate's recorded eligible relation",
+                    [project, association], {"entity_0": "str"},
+                    ["event_ledger", "real_fork"],
+                    "Verify the candidate against event eligibility and an "
+                    "independent relationship source",
                 )
         else:
             raise ValueError("unsupported_information_need:" + port)

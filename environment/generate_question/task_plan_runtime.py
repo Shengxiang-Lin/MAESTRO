@@ -563,15 +563,62 @@ def compile_macro_solvers(spec: dict) -> dict:
                 "project", joined, fields=["entity_0"]
             )
             terminal = add("unique", projected)
-        elif op == "verify_real_fork":
-            real = add(
-                "lookup_by_key", parents[0], source_id="real_fork",
-                input_key_field="entity_0", source_key_field="entity_0",
-            )
+        elif op == "reconcile_directories":
+            if len(parents) != 1:
+                raise ValueError("reconciliation_needs_project")
+            branches = []
+            for sid in task["source_scope"]:
+                observed = add("scan", source_id=sid)
+                scoped = add(
+                    "join", parents[0], observed,
+                    left_on="project_id", right_on="project_id",
+                )
+                branches.append(add(
+                    "project", scoped, fields=["route_key", "entity_0"]
+                ))
             joined = add(
-                "join", real, parents[1],
-                left_on="motif_object", right_on="motif_object",
+                "join", branches[0], branches[1],
+                left_on="route_key", right_on="route_key",
             )
+            terminal = add(
+                "unique", add("project", joined, fields=["entity_0"])
+            )
+        elif op == "verify_real_fork":
+            if task["source_scope"] == ["event_ledger", "real_fork"]:
+                # New grouped verification: the event-eligibility evidence
+                # belongs to this separate Main-visible verification Macro.
+                # parents[0] is project_id, parents[1] candidate entity_0.
+                if len(parents) != 2:
+                    raise ValueError("verification_needs_project_and_candidates")
+                observed = add("scan", source_id="event_ledger")
+                condition = plan["condition"]
+                eligible = add(
+                    condition["op"], observed,
+                    field=condition["field"], value=condition["value"],
+                )
+                scoped = add(
+                    "join", parents[0], eligible,
+                    left_on="project_id", right_on="project_id",
+                )
+                real = add(
+                    "lookup_by_key", parents[1], source_id="real_fork",
+                    input_key_field="entity_0", source_key_field="entity_0",
+                )
+                joined = add(
+                    "join", real, scoped,
+                    left_on="motif_object", right_on="motif_object",
+                )
+            else:
+                # Historical frozen scenes keep their original two-parent
+                # contract and do not silently adopt the new grouping.
+                real = add(
+                    "lookup_by_key", parents[0], source_id="real_fork",
+                    input_key_field="entity_0", source_key_field="entity_0",
+                )
+                joined = add(
+                    "join", real, parents[1],
+                    left_on="motif_object", right_on="motif_object",
+                )
             projected = add(
                 "project", joined, fields=["entity_0"]
             )
