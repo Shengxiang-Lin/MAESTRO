@@ -90,12 +90,18 @@ def stage3_author_context(
             "==== AVAILABLE EVIDENCE SOURCES ====",
         ]
         for sid, source in sources.items():
+            path = source.get("resource_url") or (
+                "simulated-web-index://" + sid
+                if (scene.get("problem_spec", {}).get(
+                    "evidence_tool_contract_version", ""
+                ).endswith(".v2")
+                    and source["modality_hint"] in {"text", "table"})
+                else "workspace://" + sid
+            )
             source_lines.append(
                 "- " + sid + " [" + source["modality_hint"] + ", " +
                 source.get("access_mode", "browse") + "]: " +
-                source["title"] +
-                ("; known URL: " + source["resource_url"]
-                 if source.get("resource_url") else "")
+                source["title"] + "; path: " + path
             )
         instruction += "\n\n" + "\n".join(source_lines)
     return (
