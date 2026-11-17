@@ -63,72 +63,16 @@ def _user_task_identity(spec: dict, question: str) -> tuple:
 
 
 def _construction_identity(args) -> str:
-    # Only the current Task Plan + compose signature is independent of old
-    # generators. Changing a retired experiment must NOT invalidate a current
-    # production scene journal or trigger an expensive fresh generation.
-    if (
-        getattr(args, "knowledge_variant", None) == "task_plan"
-        and getattr(args, "knowledge_world_mode", None) == "compose"
-    ):
-        return stable_signature({
-            "stage": "task_plan_compose_v2",
-            "target": args.target,
-            "max_records": args.max_records,
-            "seed": args.seed,
-            "difficulty_mix": args.difficulty_mix,
-            "knowledge_source_identity": _knowledge_input_identity(args),
-            "knowledge_limits": [
-                getattr(args, field, None) for field in (
-                    "knowledge_max_triples", "knowledge_max_edges",
-                    "knowledge_min_hops", "knowledge_max_hops",
-                )
-            ],
-            "generation_code": {
-                filename: file_digest(Path(__file__).with_name(filename))
-                for filename in (
-                    "spec.py", "knowledge_macro.py", "knowledge_macro_v2.py",
-                    "real_motif_grounding.py", "world_motifs.py",
-                    "task_plan.py", "task_plan_runtime.py", "question.py",
-                    "intent.py", "world.py", "program_ir.py", "compiler.py",
-                    "quality.py", "evidence_tools.py", "stages.py",
-                )
-            },
-            "scenario_model": args.scenario_model,
-            "scenario_api_base": args.scenario_api_base,
-            "scenario_critic_model": args.scenario_critic_model,
-            "scenario_critic_api_base": args.scenario_critic_api_base,
-            "scenario_max_revisions": args.scenario_max_revisions,
-        })
+    """Resume identity of the only supported Stage 1 generation path."""
     return stable_signature({
+        "stage": "output_first",
         "target": args.target,
         "max_records": args.max_records,
         "seed": args.seed,
         "difficulty_mix": args.difficulty_mix,
-        "macro_first_v2_share": getattr(args, "macro_first_v2_share", 0),
-        "operator_grammar_share": getattr(args, "operator_grammar_share", 0),
-        "numeric_goal_diversity_share": getattr(
-            args, "numeric_goal_diversity_share", 0
-        ),
-        "question_semantic_lock_share": getattr(
-            args, "question_semantic_lock_share", 0
-        ),
-        "mmqa": str(args.mmqa),
-        "mmqa_sha256": (
-            file_digest(args.mmqa) if (
-                not getattr(args, "knowledge_yago", None)
-                and Path(args.mmqa).is_file()) else None
-        ),
-        "knowledge_yago": (
-            str(args.knowledge_yago) if getattr(args, "knowledge_yago", None)
-            else None
-        ),
         "knowledge_source_identity": _knowledge_input_identity(args),
-        "knowledge_variant": getattr(args, "knowledge_variant", "v1"),
-        "knowledge_world_mode": getattr(
-            args, "knowledge_world_mode", "witnessed"
-        ),
         "knowledge_limits": [
-            getattr(args, key, None) for key in (
+            getattr(args, key) for key in (
                 "knowledge_max_triples", "knowledge_max_edges",
                 "knowledge_min_hops", "knowledge_max_hops",
             )
@@ -136,27 +80,10 @@ def _construction_identity(args) -> str:
         "generation_code": {
             name: file_digest(Path(__file__).with_name(name))
             for name in (
-                "spec.py", "macro_planning.py",
-                "knowledge_macro.py", "knowledge_macro_v2.py",
-                "hybrid_world.py", "hybrid_world_v4.py", "world_motifs.py",
-                "macro_graph_sampler.py", "relational_task_planner.py",
-                "world_grounder.py", "evidence_planner.py",
-                "task_graph_first.py", "task_graph_first_v2.py",
-                "task_plan.py", "task_plan_runtime.py",
-                "real_motif_grounding.py", "typed_role_grammar.py",
-                "typed_graph_generator.py", "typed_graph_validator.py",
-                "operator_grammar.py", "numeric_goal_world.py",
-                "evidence_operators.py", "evidence_relations.py",
-                "question_semantic_lock.py", "macro_evidence_world.py", "information_necessity.py",
-                "source_title_contract.py", "difficulty_proxy.py",
-                "scenario_fields.py", "topic_quality.py",
-                "topic_domain.py", "question_fidelity.py",
-                "goal_resolution.py",
-                "semantic_evidence.py",
-                "prompt_templates.py", "intent.py", "surface_quality.py",
-                "program_ir.py",
-                "compiler.py", "scenario.py", "world.py", "quality.py",
-                "backend.py", "stages.py",
+                "task_plan.py", "task_plan_runtime.py", "goal_plan.py",
+                "evidence_plan.py", "world_motifs.py", "knowledge_macro.py",
+                "question.py", "intent.py", "surface_quality.py",
+                "program_ir.py", "quality.py", "stages.py",
             )
         },
         "scenario_model": args.scenario_model,
@@ -276,30 +203,25 @@ def _out_files(output_dir: Path) -> dict:
 def construct_scenes(args) -> dict:
     if args.target < 1 or args.max_records < 1:
         raise ValueError("target and max-records must be positive")
-    knowledge_mode = bool(getattr(args, "knowledge_yago", None))
-    if knowledge_mode:
-        from environment.macro_v3.yago import load_yago
-        knowledge_graph = load_yago(
-            args.knowledge_yago,
-            max_triples=args.knowledge_max_triples,
-            max_edges=args.knowledge_max_edges,
-        )
-        from .knowledge_macro import YagoKnowledgeIndex
-        knowledge_index = YagoKnowledgeIndex(knowledge_graph)
-        # Task Plan accepts replacement candidates after a rejected World.
-        # The target difficulty mix is still indexed by accepted Scenes.
-        candidate_budget = max(
-            args.target, min(args.max_records, args.target * 4)
-        ) if getattr(args, "knowledge_variant", "v1") == "task_plan" else args.target
-        seeds = [
-            {"topic": "archival reference collection",
-             "record_id": f"knowledge-{i:06d}"} for i in range(candidate_budget)
-        ]
-        seed_source = knowledge_graph.input_file
-    else:
-        from .sources import load_scenario_seeds
-        seeds, _ = load_scenario_seeds(args.mmqa, limit=args.max_records)
-        seed_source = str(args.mmqa)
+    if not getattr(args, "knowledge_yago", None):
+        raise ValueError("knowledge_yago_required_for_stage1")
+    from environment.macro_v3.yago import load_yago
+    from .knowledge_macro import YagoKnowledgeIndex
+    knowledge_graph = load_yago(
+        args.knowledge_yago,
+        max_triples=args.knowledge_max_triples,
+        max_edges=args.knowledge_max_edges,
+    )
+    knowledge_index = YagoKnowledgeIndex(knowledge_graph)
+    candidate_budget = max(
+        args.target, min(args.max_records, args.target * 4)
+    )
+    seeds = [
+        {"topic": "archival reference collection",
+         "record_id": f"knowledge-{i:06d}"}
+        for i in range(candidate_budget)
+    ]
+    seed_source = knowledge_graph.input_file
     if len(seeds) < args.target:
         raise ValueError(
             f"not enough scene/topic seeds: {len(seeds)} for target {args.target}"
@@ -324,60 +246,16 @@ def construct_scenes(args) -> dict:
     for candidate_ordinal, seed_record in enumerate(order):
         if len(chosen) >= args.target:
             break
-        if not knowledge_mode and getattr(args, "macro_first_v2_share", 0):
-            from .topic_quality import topic_seed_issues
-            problems = topic_seed_issues(seed_record)
-            if problems:
-                rejected.update(problems)
-                continue
         try:
-            ordinal = (
-                candidate_ordinal if knowledge_mode and
-                getattr(args, "knowledge_variant", "v1") == "task_plan"
-                else len(chosen)
+            ordinal = candidate_ordinal
+            from .task_plan import make_spec
+            spec = make_spec(
+                knowledge_graph, seed=args.seed, ordinal=ordinal,
+                difficulty=sequence[len(chosen)],
+                min_hops=args.knowledge_min_hops,
+                max_hops=args.knowledge_max_hops,
+                index=knowledge_index,
             )
-            if knowledge_mode:
-                if getattr(args, "knowledge_variant", "v1") == "task_plan":
-                    from .task_plan import make_spec as make_knowledge_spec
-                elif getattr(args, "knowledge_variant", "v1") == "graph_first_v2":
-                    from .task_graph_first_v2 import make_spec as make_knowledge_spec
-                elif getattr(args, "knowledge_variant", "v1") == "graph_first":
-                    from .task_graph_first import make_spec as make_knowledge_spec
-                elif getattr(args, "knowledge_variant", "v1") == "v4":
-                    from .hybrid_world_v4 import make_spec as make_knowledge_spec
-                elif getattr(args, "knowledge_variant", "v1") == "v3":
-                    from .hybrid_world import make_spec as make_knowledge_spec
-                elif getattr(args, "knowledge_variant", "v1") == "v2":
-                    from .knowledge_macro_v2 import make_spec as make_knowledge_spec
-                else:
-                    from .knowledge_macro import make_spec as make_knowledge_spec
-                spec = make_knowledge_spec(
-                    knowledge_graph, seed=args.seed, ordinal=ordinal,
-                    difficulty=sequence[len(chosen)],
-                    min_hops=args.knowledge_min_hops,
-                    max_hops=args.knowledge_max_hops,
-                    index=knowledge_index,
-                    **({
-                        "world_mode": getattr(
-                            args, "knowledge_world_mode", "witnessed"),
-                        "composer": getattr(args, "task_plan_composer", "legacy"),
-                    } if getattr(
-                        args, "knowledge_variant", "v1"
-                    ) == "task_plan" else {}),
-                )
-            else:
-                spec = make_spec(
-                    seed_record=seed_record, ordinal=ordinal,
-                    run_seed=args.seed, difficulty=sequence[ordinal],
-                    macro_first_v2_share=getattr(args, "macro_first_v2_share", 100),
-                    operator_grammar_share=getattr(args, "operator_grammar_share", 0),
-                    numeric_goal_diversity_share=getattr(
-                        args, "numeric_goal_diversity_share", 0
-                    ),
-                    question_semantic_lock_share=getattr(
-                        args, "question_semantic_lock_share", 0
-                    ),
-                )
             q = reference_question(spec)
             identity = _user_task_identity(spec, q)
             if identity in seen_tasks:
