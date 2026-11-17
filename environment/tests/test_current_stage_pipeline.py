@@ -118,6 +118,27 @@ class CurrentStagePipelineTests(unittest.TestCase):
         self.assertGreater(len(first), 10000)
         self.assertEqual(json.loads(first), rows)
         self.assertEqual(json.loads(second), rows)
+        from environment.implement_subtask.reporting import _guard
+        contract = {
+            "result_encoding": "typed_evidence_json_v1",
+            "code_owned_expected_result": first,
+            "exact_oracle_answer": record["answer"],
+            "terminal_output_schema_of_this_macro": record["output_schema"],
+            "all_evidence_refs": [
+                ref for row in rows for ref in row["source_fact_refs"]
+            ],
+            "observed_operator_steps": [],
+        }
+        candidate = {
+            "status": "done", "result": first,
+            "summary": "Returned the complete set of documented observations.",
+        }
+        self.assertEqual(_guard(candidate, contract), [])
+        altered = dict(candidate, result=first[:-1])
+        self.assertIn(
+            "code_owned_typed_result_changed",
+            _guard(altered, contract),
+        )
 
     def test_stage2_current_result_contains_all_rows_and_fact_refs(self):
         from environment.implement_subtask.reporting import code_owned_result
