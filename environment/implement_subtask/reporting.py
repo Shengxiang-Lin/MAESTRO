@@ -594,7 +594,10 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
                 or contract.get("requires_o1_answer")):
             if re.search(
                 r"\b(?:macro(?:s|\s+task)?|workproducts?|"
-                r"scan(?:ned)?|project(?:ed|ion)?|join(?:ed)?|uniqued|"
+                # 'project' alone names a real source/domain entity, e.g.
+                # 'Project event ledger' and 'project identifier'. Ban only
+                # verb/adjective operator forms, not the domain noun.
+                r"scan(?:ned)?|project(?:ed|ion)|join(?:ed)?|uniqued|"
                 r"lookup_by_key|filter_eq|filter_gte|row\(s\)|"
                 r"m\d+_[a-z]\w*|m\d+_op\d+|relation_\d+)\b",
                 value, re.I,
