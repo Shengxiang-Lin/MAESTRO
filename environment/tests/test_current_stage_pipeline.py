@@ -128,6 +128,9 @@ class CurrentStagePipelineTests(unittest.TestCase):
                 ref for row in rows for ref in row["source_fact_refs"]
             ],
             "observed_operator_steps": [],
+            "executed_operations_in_this_macro": [],
+            "macro_is_terminal": False,
+            "upstream_handoffs": [],
         }
         candidate = {
             "status": "done", "result": first,
