@@ -219,7 +219,7 @@ def generate_from_config(
     for key in ("scenes_path", "reports_path", "output_dir"):
         cfg[key] = _path(cfg[key])
 
-    from environment.generate_question.backend import OpenAICompatibleBackend
+    from environment.generate_question.authoring.backend import OpenAICompatibleBackend
     from .generate_turns import generate_turns
 
     main_mode = report_mode = cfg["mode"]
