@@ -685,8 +685,8 @@ class MainTurnDatasetTests(unittest.TestCase):
         from unittest.mock import patch
 
         scenes = [fixture(17), fixture(18)]
-        # First Scene has a complete reviewed Stage-2 bank and is accepted;
-        # second has no reports, so it is correctly rejected.
+        # First Scene has a complete reviewed Stage-2 bank and is selected;
+        # second has no published reports and must be skipped before Stage 3.
         reports = reviewed_rows(scenes[0])
         bars = []
 
@@ -731,25 +731,32 @@ class MainTurnDatasetTests(unittest.TestCase):
 
             self.assertEqual(summary, resumed)
             self.assertEqual(summary["accepted_scenes"], 1)
-            self.assertEqual(summary["rejected_scenes"], 1)
+            self.assertEqual(summary["rejected_scenes"], 0)
+            self.assertEqual(summary["status"], "done")
+            self.assertEqual(summary["stage2_selection"]["stage1_scenes"], 2)
+            self.assertEqual(
+                summary["stage2_selection"]["no_published_stage2_reports"], 1,
+            )
+            self.assertEqual(summary["stage2_selection"]["selected_stage3_scenes"], 1)
             self.assertGreater(summary["main_training_turns"], 1)
             self.assertEqual(len(bars), 2)
             self.assertEqual(bars[0].initial, 0)
-            self.assertEqual(bars[0].total, 2)
-            self.assertEqual(bars[0].completed, 2)
+            self.assertEqual(bars[0].total, 1)
+            self.assertEqual(bars[0].completed, 1)
             self.assertEqual(bars[0].states[0], {
                 "accepted": 0, "rejected": 0,
                 "written": 0, "turns": 0,
             })
             self.assertEqual(bars[0].states[-1], {
-                "accepted": 1, "rejected": 1,
-                "written": 2, "turns": summary["main_training_turns"],
+                "accepted": 1, "rejected": 0,
+                "written": 1, "turns": summary["main_training_turns"],
             })
-            self.assertEqual(bars[1].initial, 2)
+            self.assertEqual(bars[1].initial, 1)
             self.assertEqual(bars[1].states[0], bars[0].states[-1])
             saved = json.loads((root / "out" / "summary.json").read_text())
             self.assertEqual(saved["main_training_turns"], summary["main_training_turns"])
-            self.assertEqual(saved["accepted_scenes"] + saved["rejected_scenes"], 2)
+            self.assertEqual(saved["accepted_scenes"] + saved["rejected_scenes"], 1)
+            self.assertEqual(saved["stage2_selection"], summary["stage2_selection"])
 
     def test_round_journal_resumes_without_reauthoring_completed_round(self):
         """A process crash after round 1 must preserve round-1 O1 labels."""
@@ -1017,7 +1024,7 @@ class MainTurnDatasetTests(unittest.TestCase):
                 (root / "serial" / "main_turns.jsonl").read_bytes(),
             )
 
-    def test_parallel_rejection_never_publishes_partial_scene(self):
+    def test_parallel_selection_skips_stage2_incomplete_scenes(self):
         scenes = [fixture(i) for i in (25, 26, 27)]
         with TemporaryDirectory() as td:
             root = Path(td)
@@ -1042,8 +1049,12 @@ class MainTurnDatasetTests(unittest.TestCase):
             }
             result = generate_turns(**kwargs, workers=3)
             self.assertEqual(result["accepted_scenes"], 2)
-            self.assertEqual(result["rejected_scenes"], 1)
-            self.assertEqual(result["status"], "partial")
+            self.assertEqual(result["rejected_scenes"], 0)
+            self.assertEqual(result["status"], "done")
+            self.assertEqual(result["requested_scenes"], 2)
+            self.assertEqual(
+                result["stage2_selection"]["no_published_stage2_reports"], 1,
+            )
             rows = [
                 json.loads(x) for x in
                 (root / "output" / "main_turns.jsonl").read_text().splitlines()
