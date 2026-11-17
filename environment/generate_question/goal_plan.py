@@ -92,15 +92,30 @@ def sample_output(seed: int, ordinal: int) -> dict:
     else:
         # Two or three independently meaningful output requirements;
         # not one of a handful of hard-coded Profile/Output pairs.
+        # Sample an operational family first, then combine independently
+        # meaningful requirements inside the SAME investigation. Neutral
+        # entity/observation fields can accompany any family; mixing a
+        # geographic distance, a temporal midpoint and arbitrary numeric
+        # comparison without a semantic link is deliberately disallowed.
         palette = (
             "entity", "difference", "ratio", "duration_days",
             "midpoint_date", "distance_km", "observation_count",
             "higher_source",
         )
-        demands = rng.sample(palette, k=rng.choice((2, 3)))
-        # A multi-field answer must contain a derived field.
-        if all(name == "entity" for name in demands):
-            demands[-1] = "difference"
+        anchor = rng.choice((
+            "difference", "ratio", "higher_source", "duration_days",
+            "midpoint_date", "distance_km",
+        ))
+        family = PAIRED_NEEDS[anchor]
+        compatible = tuple(
+            field for field in palette
+            if field in {"entity", "observation_count"}
+            or PAIRED_NEEDS.get(field) == family
+        )
+        demands = rng.sample(compatible, k=min(rng.choice((2, 3)),
+                                               len(compatible)))
+        if anchor not in demands:
+            demands[0] = anchor
         bindings = {name: name for name in sorted(demands)}
     return {
         "kind": shape,

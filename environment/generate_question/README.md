@@ -66,6 +66,11 @@ necessity. All accepted Scenes must pass the Question Guard and LLM
 Author/Critic, if configured. Non-accepted Question attempts stay in
 `failed.jsonl`; acceptance and fallback counts are always separate.
 
+Multi-field Goals share a compatible numeric, temporal or geographic
+measurement family. Entity identity and observation counts can be reused as
+common prerequisites, but unrelated measurement families are not randomly
+bundled into one user request.
+
 Numerical facts (counts, ratios, dates, distances) are **seed-conditioned**
 and vary across questions; the algorithm preserves the same operation and
 source-dependency contract. Quality reports record `answer_value_diversity`

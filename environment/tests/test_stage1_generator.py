@@ -62,6 +62,25 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertTrue(operation_subgraph_leq(smaller, larger))
         self.assertFalse(operation_subgraph_leq(larger, smaller))
 
+    def test_multifield_semantic_coherence(self):
+        from environment.generate_question.goal_plan import (
+            PAIRED_NEEDS, sample_output,
+        )
+        kinds = set()
+        for ordinal in range(400):
+            output = sample_output(17, ordinal)
+            kinds.add(output["kind"])
+            if output["kind"] != "structured_multi_field":
+                continue
+            families = {
+                PAIRED_NEEDS[field]
+                for field in output["bindings"].values()
+                if field not in {"entity", "observation_count"}
+            }
+            self.assertLessEqual(len(families), 1, output)
+            self.assertGreaterEqual(len(families), 1, output)
+        self.assertEqual(kinds, set(OUTPUT_KINDS))
+
     def test_retired_config_keys_are_rejected(self):
         from environment.config import load_config, DEFAULT_CONFIG
         from pathlib import Path
