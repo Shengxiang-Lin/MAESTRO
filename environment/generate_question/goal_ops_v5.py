@@ -252,8 +252,12 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
         "answer_field": "answer", "answer_type": answer_type,
         "public_label": goal["output_spec"]["kind"].replace("_", " "),
         "cardinality": "exactly_one",
-        "meaning": "Evaluate the declared operation graph and format its "
-                   "declared typed output",
+        "meaning": (
+            "Determine the entity at the end of the documented relation chain"
+            if profile == "entity_resolution" else
+            "Evaluate the declared operation graph and format its "
+            "declared typed output"
+        ),
     }
     return plan
 
