@@ -11,8 +11,8 @@ import random
 from collections import Counter
 
 from environment.schema import digest
-from .knowledge_index import YagoKnowledgeIndex, predicate_label
-from .goal_plan import COMPOSER as OUTPUT_FIRST_COMPOSER
+from environment.generate_question.planning.knowledge_index import YagoKnowledgeIndex, predicate_label
+from environment.generate_question.planning.goal_plan import COMPOSER as OUTPUT_FIRST_COMPOSER
 
 PATTERN = "task_plan"
 VERSION = "maestro.task_plan.v1"
@@ -161,7 +161,7 @@ def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
     to any factual person. The new canonical World owns all target/shadow
     paths, and the same original Macro executor consumes its evidence views.
     """
-    from ..world_motifs import (
+    from environment.generate_question.grounding.world_motifs import (
         motif_features, compose_relation_goal, compose_typed_world,
     )
     rng = random.Random(int(digest(
@@ -235,10 +235,10 @@ def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
         # Two events per project force an actual keyed one-to-many lookup
         # followed by the existing eligibility condition. Neither source
         # invents a separate copy of the relationship.
-        from ..world_motifs import (
+        from environment.generate_question.grounding.world_motifs import (
             composed_project_id, composed_event_id, KEYED_EVENT_VERSION,
         )
-        from ..execution.task_plan_runtime import _condition_rows
+        from environment.generate_question.execution.task_plan_runtime import _condition_rows
         qualified, other = _condition_rows(plan)
         links = []
         for i, case in enumerate(cases):
@@ -313,7 +313,7 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
         else "institutional"
     )
     context = contextual_titles[semantic_domain]
-    from ..grounding.scene_semantics import clue_profiles
+    from environment.generate_question.grounding.scene_semantics import clue_profiles
     profiles = clue_profiles(semantic_domain)
     for i, task in enumerate(disc):
         for j, (modality, title, attr, choices) in enumerate(profiles[i]):
@@ -404,7 +404,7 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
     # These are executable media-derived facts, not decorative clue labels.
     # Media sources are browsed, then joined against the resolved entity;
     # text/table sources retain keyed lookup and explicit handoff semantics.
-    from ..grounding.scene_semantics import measurement_source_profile
+    from environment.generate_question.grounding.scene_semantics import measurement_source_profile
     domain = (_semantic_goal(
         grounding["candidate_paths"][grounding["target_case"]],
         len(grounding["all_cases"]),
@@ -504,8 +504,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         raise ValueError("task_plan_requires_medium_or_hard")
     if not 2 <= min_hops <= max_hops <= 4:
         raise ValueError("task_plan_invalid_hops")
-    from ..world_motifs import motif_features, compose_relation_goal
-    from .goal_plan import sample_output, compose_goal_plan
+    from environment.generate_question.grounding.world_motifs import motif_features, compose_relation_goal
+    from environment.generate_question.planning.goal_plan import sample_output, compose_goal_plan
     hops = min_hops if difficulty == "medium" else max_hops
     yago_index = index or YagoKnowledgeIndex(kg)
     choices = tuple(
@@ -535,7 +535,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     grounding = _compose_ground(
         kg, yago_index, plan, seed=seed, ordinal=ordinal,
     )
-    from .goal_plan import build_measurements
+    from environment.generate_question.planning.goal_plan import build_measurements
     measurements = build_measurements(
         plan=plan, binding=grounding, seed=seed, ordinal=ordinal,
     )
@@ -562,7 +562,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         )
     # Semantic scenarios are selected *after* the Goal/World is frozen.
     # Varying the working context must never alter the executable Gold.
-    from ..grounding.scene_semantics import scene_profile
+    from environment.generate_question.grounding.scene_semantics import scene_profile
     scenario = scene_profile(
         plan["goal"]["semantic"]["domain"], ordinal=ordinal,
         goal_label=plan["goal"]["public_label"],
@@ -669,7 +669,7 @@ def validate_spec(spec: dict) -> list[str]:
         if world_mode not in {"witnessed", "compose"}:
             return ["task_plan_unknown_world_mode"]
         if world_mode == "compose":
-            from ..world_motifs import (
+            from environment.generate_question.grounding.world_motifs import (
                 validate_composed_world, KEYED_EVENT_VERSION,
             )
             issues = validate_composed_world(binding)
@@ -691,7 +691,7 @@ def validate_spec(spec: dict) -> list[str]:
                         or event_source["access_mode"] != "keyed_lookup"
                         or event_source["key_field"] != "project_id"):
                     return ["task_plan_event_source_not_keyed"]
-                from ..execution.task_plan_runtime import _condition_rows
+                from environment.generate_question.execution.task_plan_runtime import _condition_rows
                 qualified, other = _condition_rows(plan)
                 if any(
                     link["event_status"] !=
@@ -776,7 +776,7 @@ def validate_spec(spec: dict) -> list[str]:
             if fictional:
                 problems = _validate_fictional_fork(binding["real_fork"], paths)
             else:
-                from ..real_motif_grounding import validate_frozen_required_fork
+                from environment.generate_question.grounding.real_motif_grounding import validate_frozen_required_fork
                 problems = validate_frozen_required_fork(
                     binding["real_fork"], paths)
             if problems:
@@ -839,7 +839,7 @@ def validate_spec(spec: dict) -> list[str]:
         composer = plan.get("composer_policy")
         if composer != OUTPUT_FIRST_COMPOSER:
             return ["task_plan_unsupported_composer"]
-        from .goal_plan import compose_goal_plan, validate_measurements
+        from environment.generate_question.planning.goal_plan import compose_goal_plan, validate_measurements
         expected = compose_goal_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
             difficulty=spec["difficulty_target"], hops=plan["hops"],

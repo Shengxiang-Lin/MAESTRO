@@ -378,7 +378,7 @@ def _apply(node: dict, inputs: list[Relation]) -> Relation:
         return Relation(src.columns, tuple(row for row in src.rows
                                            if matches(row)))
     if op in {"derive_comparison", "derive_percentage"}:
-        from ..goal_resolution import goal_values
+        from environment.generate_question.planning.goal_resolution import goal_values
         src = inputs[0]
         left_field, right_field = node["left_field"], node["right_field"]
         output_field = node["output_field"]

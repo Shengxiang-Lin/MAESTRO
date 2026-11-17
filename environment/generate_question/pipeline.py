@@ -14,13 +14,13 @@ from pathlib import Path
 
 from environment.schema import normalize_label
 
-from .stages import (
+from environment.generate_question.stages import (
     construct_scenes, review_questions, read_jsonl,
     _construction_identity, _question_signature,
 )
-from .quality import validate_replay
-from .macro_contract import macro_graph_profile, macro_question_contract
-from .authoring.surface_quality import question_language_warnings
+from environment.generate_question.auditing.quality import validate_replay
+from environment.generate_question.auditing.macro_contract import macro_graph_profile, macro_question_contract
+from environment.generate_question.authoring.surface_quality import question_language_warnings
 
 
 
@@ -136,7 +136,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 exact_questions[text] += 1
             if spec:
                 if spec.get("reasoning_pattern") == "macro_first_v2":
-                    from .semantic_evidence import (
+                    from environment.generate_question.authoring.semantic_evidence import (
                         compile_semantic_contract, semantic_text_issues,
                         semantic_scenario_issues, has_semantic_contract,
                     )
@@ -268,7 +268,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     head.startswith(("which ", "what ", "how ", "could ",
                                      "can ", "please ", "for which "))
                 )
-                from .question import reference_question
+                from environment.generate_question.authoring.question import reference_question
                 expected = reference_question(spec)
                 proximity = SequenceMatcher(
                     None, question_text.casefold(), expected.casefold()
@@ -906,8 +906,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 value = answer[name] if isinstance(answer, dict) else answer
                 encoded = json.dumps(value, sort_keys=True, ensure_ascii=False)
                 answer_value_counts.setdefault(semantic, Counter())[encoded] += 1
-        from .auditing.quality_metrics import summarize_decision_opportunities
-        from .auditing.quality_metrics import summarize_grounded_evidence
+        from environment.generate_question.auditing.quality_metrics import summarize_decision_opportunities
+        from environment.generate_question.auditing.quality_metrics import summarize_grounded_evidence
         decision_opportunities = summarize_decision_opportunities(current_scenes)
         grounded_evidence = summarize_grounded_evidence(current_scenes)
         answer_diversity = {
