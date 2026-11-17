@@ -9,8 +9,8 @@ from __future__ import annotations
 import random
 from environment.schema import digest
 
-from .program_ir import answer_values, evaluate_program
-from .spec import spec_issues, VERSION as SPEC_VERSION
+from environment.generate_question.execution.program_ir import answer_values, evaluate_program
+from environment.generate_question.planning.spec import spec_issues, VERSION as SPEC_VERSION
 
 WORLD_VERSION = "maestro.source_observation_world.v4"
 
@@ -196,28 +196,28 @@ def _finalize_current_program(program: dict, spec: dict) -> dict:
 def compile_program(spec: dict) -> dict:
     """Compile only supported Easy or Macro-first V2 task programs."""
     if spec.get("reasoning_pattern") == "task_plan":
-        from .task_plan_runtime import compile_macro_solvers
+        from environment.generate_question.execution.task_plan_runtime import compile_macro_solvers
         return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "task_graph_first_v2":
-        from .task_graph_first_v2 import compile_macro_solvers
+        from environment.generate_question.task_graph_first_v2 import compile_macro_solvers
         return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "task_graph_first_v1":
-        from .task_graph_first import compile_macro_solvers
+        from environment.generate_question.task_graph_first import compile_macro_solvers
         return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "typed_knowledge_v4":
-        from .hybrid_world_v4 import compile_macro_solvers
+        from environment.generate_question.hybrid_world_v4 import compile_macro_solvers
         return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "typed_knowledge_v3":
-        from .hybrid_world import compile_macro_solvers
+        from environment.generate_question.hybrid_world import compile_macro_solvers
         return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "typed_knowledge_v2":
-        from .knowledge_macro_v2 import compile_macro_solvers
+        from environment.generate_question.knowledge_macro_v2 import compile_macro_solvers
         return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "typed_knowledge_v1":
-        from .knowledge_macro import compile_macro_solvers
+        from environment.generate_question.planning.knowledge_index import compile_macro_solvers
         return compile_macro_solvers(spec)
     if spec.get("reasoning_pattern") == "macro_first_v2":
-        from .macro_planning import compile_macro_solvers
+        from environment.generate_question.macro_planning import compile_macro_solvers
         return compile_macro_solvers(spec)
     issues = spec_issues(spec)
     if issues:
@@ -228,28 +228,28 @@ def compile_program(spec: dict) -> dict:
 def generate_world(spec: dict) -> dict:
     """Versioned synthetic sources; never rewrite old private World facts."""
     if spec.get("reasoning_pattern") == "task_plan":
-        from .task_plan_runtime import generate_world as materialize_plan
+        from environment.generate_question.execution.task_plan_runtime import generate_world as materialize_plan
         return materialize_plan(spec)
     if spec.get("reasoning_pattern") == "task_graph_first_v2":
-        from .task_graph_first_v2 import generate_world as generate_task_first
+        from environment.generate_question.task_graph_first_v2 import generate_world as generate_task_first
         return generate_task_first(spec)
     if spec.get("reasoning_pattern") == "task_graph_first_v1":
-        from .task_graph_first import generate_world as generate_task_first
+        from environment.generate_question.task_graph_first import generate_world as generate_task_first
         return generate_task_first(spec)
     if spec.get("reasoning_pattern") == "typed_knowledge_v4":
-        from .hybrid_world_v4 import generate_world as generate_hybrid_world
+        from environment.generate_question.hybrid_world_v4 import generate_world as generate_hybrid_world
         return generate_hybrid_world(spec)
     if spec.get("reasoning_pattern") == "typed_knowledge_v3":
-        from .hybrid_world import generate_world as generate_hybrid_world
+        from environment.generate_question.hybrid_world import generate_world as generate_hybrid_world
         return generate_hybrid_world(spec)
     if spec.get("reasoning_pattern") == "typed_knowledge_v2":
-        from .knowledge_macro_v2 import generate_world as generate_knowledge_world
+        from environment.generate_question.knowledge_macro_v2 import generate_world as generate_knowledge_world
         return generate_knowledge_world(spec)
     if spec.get("reasoning_pattern") == "typed_knowledge_v1":
-        from .knowledge_macro import generate_world as generate_knowledge_world
+        from environment.generate_question.planning.knowledge_index import generate_world as generate_knowledge_world
         return generate_knowledge_world(spec)
     if spec.get("reasoning_pattern") == "macro_first_v2":
-        from .macro_evidence_world import generate_world as generate_v2_world
+        from environment.generate_question.macro_evidence_world import generate_world as generate_v2_world
         return generate_v2_world(spec)
     issues = spec_issues(spec)
     if issues:

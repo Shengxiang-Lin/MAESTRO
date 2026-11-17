@@ -77,7 +77,7 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     record_id = str(seed_record.get("record_id") or seed_record.get("scene_id")
                     or f"topic-{ordinal}")
     if difficulty != "easy":
-        from .macro_planning import make_spec as make_macro_v2_spec
+        from environment.generate_question.macro_planning import make_spec as make_macro_v2_spec
         return make_macro_v2_spec(
             seed_record=seed_record, ordinal=ordinal, run_seed=run_seed,
             difficulty=difficulty, topic=topic, record_id=record_id,
@@ -210,28 +210,28 @@ def spec_issues(spec: dict) -> list[str]:
             if not isinstance(source.get(key), str) or not source[key].strip():
                 errors.append("source_missing_" + key)
     if pattern == "macro_first_v2":
-        from .macro_planning import validate_spec
+        from environment.generate_question.macro_planning import validate_spec
         errors.extend(validate_spec(spec))
     if pattern == "task_plan":
-        from .task_plan import validate_spec
+        from environment.generate_question.planning.task_plan import validate_spec
         errors.extend(validate_spec(spec))
     if pattern == "task_graph_first_v2":
-        from .task_graph_first_v2 import validate_spec
+        from environment.generate_question.task_graph_first_v2 import validate_spec
         errors.extend(validate_spec(spec))
     if pattern == "task_graph_first_v1":
-        from .task_graph_first import validate_spec
+        from environment.generate_question.task_graph_first import validate_spec
         errors.extend(validate_spec(spec))
     if pattern == "typed_knowledge_v4":
-        from .hybrid_world_v4 import validate_spec
+        from environment.generate_question.hybrid_world_v4 import validate_spec
         errors.extend(validate_spec(spec))
     if pattern == "typed_knowledge_v3":
-        from .hybrid_world import validate_spec
+        from environment.generate_question.hybrid_world import validate_spec
         errors.extend(validate_spec(spec))
     if pattern == "typed_knowledge_v2":
-        from .knowledge_macro_v2 import validate_spec
+        from environment.generate_question.knowledge_macro_v2 import validate_spec
         errors.extend(validate_spec(spec))
     if pattern == "typed_knowledge_v1":
-        from .knowledge_macro import validate_spec
+        from environment.generate_question.planning.knowledge_index import validate_spec
         errors.extend(validate_spec(spec))
     if needs.get("simulation_only") is not True:
         errors.append("non_simulated_spec")

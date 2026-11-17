@@ -22,7 +22,7 @@ def _audit_knowledge_replanning(scene: dict) -> dict:
     as evidence of information necessity.
     """
     import copy
-    from .program_ir import evaluate_program, answer_values
+    from environment.generate_question.execution.program_ir import evaluate_program, answer_values
 
     spec = scene["problem_spec"]
     plan, world = spec["macro_plan"], scene["world"]["sources"]
@@ -186,7 +186,7 @@ def _audit_corroborated_dispute(scene: dict) -> dict:
             f"record_key_{plan['index_hops']}"
             if plan["index_hops"] else "case_id"
         )
-        from .goal_resolution import materialized_answer
+        from environment.generate_question.planning.goal_resolution import materialized_answer
         resolved[case_id] = materialized_answer(
             plan, sources, final_field, key,
         )
@@ -238,19 +238,19 @@ def audit_candidate_information(scene: dict) -> dict:
     plan = spec["macro_plan"]
     policy = plan.get("information_necessity_policy")
     if policy == "single_task_plan_counterfactual_v1":
-        from .task_plan_runtime import audit_information
+        from environment.generate_question.execution.task_plan_runtime import audit_information
         return audit_information(scene)
     if policy == "task_graph_first_port_and_relation_v2":
-        from .evidence_planner import audit_information_v2
+        from environment.generate_question.evidence_planner import audit_information_v2
         return audit_information_v2(scene)
     if policy == "task_graph_first_replanning_v1":
-        from .evidence_planner import audit_information_necessity
+        from environment.generate_question.evidence_planner import audit_information_necessity
         return audit_information_necessity(scene)
     if policy == "hybrid_world_causal_motif_v4":
-        from .hybrid_world_v4 import audit_hybrid_information
+        from environment.generate_question.hybrid_world_v4 import audit_hybrid_information
         return audit_hybrid_information(scene)
     if policy == "hybrid_world_replanning_v3":
-        from .hybrid_world import audit_hybrid_information
+        from environment.generate_question.hybrid_world import audit_hybrid_information
         return audit_hybrid_information(scene)
     if policy == KNOWLEDGE_REPLANNING_POLICY:
         return _audit_knowledge_replanning(scene)
@@ -298,7 +298,7 @@ def audit_candidate_information(scene: dict) -> dict:
             f"record_key_{plan['index_hops']}"
             if plan["index_hops"] else "marker_code"
         )
-        from .goal_resolution import materialized_answer
+        from environment.generate_question.planning.goal_resolution import materialized_answer
         key_to_goal[candidate_id] = materialized_answer(
             plan, sources, final_key, key,
         )

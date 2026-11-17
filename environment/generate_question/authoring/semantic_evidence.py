@@ -96,7 +96,7 @@ def compile_semantic_contract(
                 and spec.get("reasoning_pattern") == "macro_first_v2"):
             raise ValueError("semantic_evidence_contract_not_enabled")
     if program is None:
-        from .macro_planning import compile_macro_solvers
+        from environment.generate_question.macro_planning import compile_macro_solvers
         program = compile_macro_solvers(spec)
     source_by_id = {x["source_id"]: x for x in spec["sources"]}
     schema_by_id = spec["macro_plan"]["source_schemas"]
@@ -347,7 +347,7 @@ def semantic_text_issues(text: str, spec: dict, contract: dict,
     if context == "question":
         issues.extend(semantic_output_issues(q, contract))
         if contract.get("question_fidelity_version"):
-            from .authoring.question_checks import question_fidelity_issues
+            from environment.generate_question.authoring.question_checks import question_fidelity_issues
             issues.extend(question_fidelity_issues(text, contract))
 
     if "clearance" in contract["prohibited_new_filters"] and _CLEARANCE.search(q):

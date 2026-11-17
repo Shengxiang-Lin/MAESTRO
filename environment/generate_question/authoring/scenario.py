@@ -10,9 +10,9 @@ import copy
 import json
 import re
 
-from .spec import spec_issues, VERSION as SPEC_VERSION
-from .intent import intent_contract
-from .authoring.surface_quality import unlicensed_calendar_years, topic_mentioned
+from environment.generate_question.planning.spec import spec_issues, VERSION as SPEC_VERSION
+from environment.generate_question.authoring.intent import intent_contract
+from environment.generate_question.authoring.surface_quality import unlicensed_calendar_years, topic_mentioned
 
 AUTHOR_SYSTEM = """Design one coherent, concrete FICTIONAL information-work scenario
 based on a topic label and a FROZEN reasoning contract. Keep the original
@@ -134,7 +134,7 @@ def _narrative_issues(spec: dict, proposal: dict) -> list[str]:
             errors.append("v2_unsupported_goal_substitution")
     if (spec.get("reasoning_pattern") == "macro_first_v2"
             and spec.get("semantic_evidence_contract_version")):
-        from .semantic_evidence import (
+        from environment.generate_question.authoring.semantic_evidence import (
             compile_semantic_contract, semantic_scenario_issues,
         )
         # Validate the *proposed* narrative and source titles, before
@@ -175,7 +175,7 @@ def enrich_one(spec: dict, *, author, critic,
         raise ValueError("max revisions must be 0..8")
     semantic_contract = None
     if spec.get("semantic_evidence_contract_version"):
-        from .semantic_evidence import compile_semantic_contract
+        from environment.generate_question.authoring.semantic_evidence import compile_semantic_contract
         semantic_contract = compile_semantic_contract(spec)
     frozen = {
         "topic": spec["scenario"]["topic"],
@@ -205,7 +205,7 @@ def enrich_one(spec: dict, *, author, critic,
             ),
         } if spec.get("reasoning_pattern") == "macro_first_v2" else {}),
     }
-    from .authoring.scenario_contracts import (
+    from environment.generate_question.authoring.scenario_contracts import (
         has_scene_realism, canonicalize_scenario_proposal,
         scenario_domain_context,
     )
@@ -215,7 +215,7 @@ def enrich_one(spec: dict, *, author, critic,
     repair_history = []
     for attempt in range(max_revisions + 1):
         try:
-            from .authoring.prompt_templates import (
+            from environment.generate_question.authoring.prompt_templates import (
                 SCENARIO_AUTHOR, SCENARIO_CRITIC, SCENARIO_AUTHOR_SCHEMA_LOCKED,
             )
             v2 = spec.get("reasoning_pattern") == "macro_first_v2"
@@ -231,7 +231,7 @@ def enrich_one(spec: dict, *, author, critic,
             # the frozen modality/schema; LLM-authored titles are ignored.
             proposal = canonicalize_scenario_proposal(spec, proposal)
             if has_scene_realism(spec):
-                from .authoring.scenario_contracts import repair_scenario_fields
+                from environment.generate_question.authoring.scenario_contracts import repair_scenario_fields
                 proposal, repairs = repair_scenario_fields(spec, proposal)
                 if repairs:
                     repair_history.append({"attempt": attempt + 1,
