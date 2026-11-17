@@ -26,6 +26,29 @@ def scene(i, difficulty="medium"):
     return result
 
 
+def _mock_o1_draft(contract):
+    """A complete, schema-independent human answer for typed task-plan tests."""
+    rows = contract["exact_oracle_answer"]
+    details = "; ".join(
+        ", ".join(str(value) for value in row.values())
+        for row in rows
+    ) or "no matching observations"
+    return {
+        "answer": (
+            f"The assigned investigation returned {len(rows)} records: "
+            f"{details}. Further qualification has not been assessed."
+        ),
+        "trace_summary": (
+            "- Reviewed the supplied source annotations to identify "
+            "the evidence relevant to the delegated task.\n"
+            "- Compared the documented observations using only "
+            "the local task's established checks.\n"
+            "- Returned the matching records for subsequent review "
+            "without claiming unperformed eligibility checks."
+        ),
+    }
+
+
 class ReportAuthor:
     def __init__(self, *, fail_topic=None, forged_tool=False):
         self.calls = []
@@ -572,49 +595,37 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(len(critic.calls), 2)
 
 
-    def test_current_task_plan_code_owned_result_and_authored_summary(self):
-        frozen = scene(42, "medium")
-        realized = realize_scene(frozen)
-        # Very large delivered relations must fail closed rather than silently
-        # truncate their fields. Select a bounded current WorkProduct to test
-        # the program-owned-result and model-authored-summary contract.
-        record = next(
-            row for row in realized["macro_tasks"]
-            if len(code_owned_result(row)) < 1200
-        )
-        class SummaryOnlyAuthor:
+    def test_current_task_plan_publishes_complete_natural_answer(self):
+        record = realize_scene(scene(42, "medium"))["macro_tasks"][0]
+        class O1Author:
             def complete_json(self, system_prompt, user_prompt):
-                assert "ONLY" in system_prompt
-                return {
-                    "summary": (
-                        "The assigned evidence records support the current "
-                        "handoff; later qualification checks were not performed."
-                    ),
-                    "trace_narrative": (
-                        "I reviewed the supplied source observations and "
-                        "their recorded identifying details. I compared the "
-                        "relevant findings within the available source scope "
-                        "and passed on the established results without making "
-                        "claims about any unperformed later checks."
-                    ),
-                }
+                self.contract = json.loads(user_prompt)[
+                    "frozen_task_and_evidence"
+                ]
+                return _mock_o1_draft(self.contract)
+        author, critic = O1Author(), ReportCritic()
         reviewed, info = author_critic_report(
-            record, question=frozen["question"],
-            author=SummaryOnlyAuthor(), critic=ReportCritic(),
+            record, question=None, author=author, critic=critic,
             max_revisions=0, result_policy="code_owned",
         )
         self.assertEqual(info["status"], "accepted", info)
-        self.assertEqual(
-            reviewed["finish_result"]["result"], code_owned_result(record)
-        )
-        self.assertEqual(info["result_policy"], "code_owned")
-        self.assertIn(
-            "reviewed the supplied source observations",
-            reviewed["trace_summary"]["narrative"].lower(),
-        )
+        self.assertEqual(info["public_result_format"], "natural_answer")
+        self.assertEqual(reviewed["answer_text"], code_owned_result(record))
+        self.assertFalse(reviewed["finish_result"]["result"].startswith("[{"))
+        self.assertIn("assigned investigation returned",
+                      reviewed["finish_result"]["result"])
+        for literal in author.contract["answer_required_literals"]:
+            self.assertIn(str(literal), reviewed["finish_result"]["result"])
         self.assertEqual(
             reviewed["trace_summary"]["steps"],
             record["trace_summary"]["steps"],
+        )
+        self.assertIn(
+            "- Reviewed the supplied source annotations",
+            reviewed["trace_summary"]["narrative"],
+        )
+        self.assertIn(
+            "trace_summary", critic.calls[0]["candidate_finish"]
         )
 
     def test_task_plan_preserves_stage1_observation_descriptions(self):
@@ -640,92 +651,88 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertTrue(any(atom.get("observed_content") for atom in atoms))
         self.assertTrue(any(atom.get("observation_semantics") for atom in atoms))
 
-    def test_natural_trace_guard_rejects_missing_and_technical_prose(self):
-        from environment.implement_subtask.reporting import _guard, _teacher_contract
+    def test_o1_guard_rejects_missing_values_and_fabricated_tool_actions(self):
+        from environment.implement_subtask.reporting import (
+            _guard, _teacher_contract, _o1_answer_requirements,
+        )
         row = realize_scene(scene(0, "medium"))["macro_tasks"][0]
         contract = _teacher_contract(row, question=None, is_terminal=False)
-        contract["result_encoding"] = "typed_evidence_json_v1"
-        contract["code_owned_expected_result"] = code_owned_result(row)
-        contract["requires_natural_trace"] = True
+        contract["requires_o1_answer"] = True
+        contract["answer_required_literals"] = _o1_answer_requirements(row)
         contract["all_evidence_refs"] = row["trace_summary"][
             "answer_supporting_fact_refs"
         ] + [
             ref for step in row["trace_summary"]["steps"]
             for ref in step["supporting_fact_refs"]
         ]
-        result = code_owned_result(row)
-        summary = (
-            "The supplied source annotations identify matching records "
-            "that can be carried forward for the next investigation."
-        )
-        missing = {"result": result, "summary": summary, "status": "done"}
+        draft = _mock_o1_draft(contract)
+        candidate = {
+            "result": draft["answer"],
+            "summary": "Reviewed the supplied evidence and checked its local clues.",
+            "status": "done",
+        }
         self.assertIn(
-            "trace_narrative_invalid_length_or_type",
-            _guard(missing, contract),
+            "trace_summary_invalid_length_or_type",
+            _guard(candidate, contract),
         )
+        missing = dict(candidate)
+        missing["result"] = "The investigation reported matching records."
+        missing["trace_summary"] = draft["trace_summary"]
+        self.assertTrue(any(
+            "answer_missing_required_values" in issue
+            for issue in _guard(missing, contract)
+        ))
         technical = dict(
-            missing,
-            trace_narrative=(
-                "I scanned M1_a, projected case_id and joined two "
-                "workproducts in the Oracle. These operator steps "
-                "returned verified matching records."
-            ),
-        )
-        violations = _guard(technical, contract)
-        self.assertTrue(any("technical_execution_jargon" in x for x in violations))
-        false_action = dict(
-            missing,
-            trace_narrative=(
-                "I watched the video and searched the internet for external "
-                "records. These details were not observed in the supplied "
-                "source evidence and cannot support the local handoff."
+            candidate,
+            trace_summary=(
+                "- I scanned M1_a and projected case_id values.\n"
+                "- I joined two workproducts in the Oracle.\n"
+                "- The operator steps returned matching records."
             ),
         )
         self.assertTrue(any(
-            "claims_unperformed_tool_or_media_action" in x
-            for x in _guard(false_action, contract)
+            "technical_execution_jargon" in issue
+            for issue in _guard(technical, contract)
+        ))
+        invented = dict(
+            candidate,
+            trace_summary=(
+                "- Watched the video and searched the internet.\n"
+                "- Retrieved a website not present in the evidence.\n"
+                "- Returned the observations as matching records."
+            ),
+        )
+        self.assertTrue(any(
+            "claims_unperformed_tool_or_media_action" in issue
+            for issue in _guard(invented, contract)
         ))
 
-    def test_stage3_receives_authored_trace_not_operator_template(self):
+    def test_stage3_receives_o1_answer_and_trace(self):
         from environment.base_orchestration.trajectory_builder import _main_report
         record = realize_scene(scene(0, "medium"))["macro_tasks"][0]
         class GroundedAuthor:
             def complete_json(self, system_prompt, user_prompt):
-                return {
-                    "summary": (
-                        "The annotated field-survey evidence supports a set "
-                        "of matching records for the next investigation."
-                    ),
-                    "trace_narrative": (
-                        "I compared the location clues documented in the "
-                        "supplied field survey annotations with related "
-                        "reference records. The matching identifiers were "
-                        "retained as an intermediate handoff, without claiming "
-                        "that any downstream conditions had been checked."
-                    ),
-                }
+                return _mock_o1_draft(json.loads(user_prompt)[
+                    "frozen_task_and_evidence"
+                ])
         author, critic = GroundedAuthor(), ReportCritic()
         reviewed, info = author_critic_report(
             record, question=None, author=author, critic=critic,
             max_revisions=0, result_policy="code_owned",
         )
         self.assertEqual(info["status"], "accepted", info)
-        self.assertIn(
-            "supplied field survey annotations",
-            reviewed["trace_summary"]["narrative"],
-        )
-        self.assertIn(
-            "trace_narrative", critic.calls[0]["candidate_finish"]
-        )
         delivered = _main_report(
             reviewed, {"task_instruction": "Review the supplied reference records"},
             0, model_alias="model_1",
         )
-        self.assertEqual(
-            delivered["trace_summary"],
-            reviewed["trace_summary"]["narrative"],
-        )
-        self.assertNotIn("workproduct", delivered["trace_summary"].lower())
+        self.assertEqual(delivered["finish_result"]["result"],
+                         reviewed["finish_result"]["result"])
+        self.assertEqual(delivered["trace_summary"],
+                         reviewed["trace_summary"]["narrative"])
+        self.assertNotIn("source_fact_refs",
+                         delivered["finish_result"]["result"])
+        self.assertIn("trace_summary",
+                      critic.calls[0]["candidate_finish"])
 
     def test_config_has_model_roles_and_does_not_break_oracle_mode(self):
         cfg = load_reporting_config(DEFAULT_CONFIG)
