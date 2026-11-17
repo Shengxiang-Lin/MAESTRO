@@ -679,6 +679,12 @@ the trace itself confirms it. Do not invent errors, retries or omissions.
 
 Neither field may expose raw SQL/graph operator names, field-schema
 labels, Macro/work_M identifiers, FactRefs or 'workproduct', 'row(s)'.
+Describe the observation in ordinary investigation language: "reviewed
+the supplied annotations", "cross-referenced the candidate lists", and
+"retained the requested values". Do NOT narrate SQL-style actions as
+"scanned", "joined", "projected", "rows" or "workproducts". Use public source
+titles rather than internal source keys such as M1_a, and never claim
+validation against an Oracle, private ground truth or an output schema.
 Natural source titles such as "Project event ledger" and phrases such as
 "project identifier" ARE legitimate domain names, not SQL projection.
 Preserve source titles instead of avoiding the noun "project".
@@ -885,9 +891,10 @@ def author_critic_report(
                                  and not contract.get("requires_o1_answer"))) else value
                     for key, value in candidate.items()
                 }
-                # Surface-only repair of known internal jargon. Preserve
-                # claims, rows and provenance; all subsequent guards and
-                # Critic review still run on the revised prose.
+                # Surface-only repair of known internal jargon and common
+                # operator-style verbs. Preserve claims, values and provenance:
+                # the unchanged Guard and independent Critic still review
+                # the revised prose, and no Oracle rows are modified.
                 for field in ("result", "summary", "trace_narrative",
                               "trace_summary"):
                     if (field == "result" and result_policy == "code_owned"

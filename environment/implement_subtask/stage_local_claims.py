@@ -114,6 +114,23 @@ _JARGON_REPLACEMENTS = (
     (re.compile(r"\bsynthetic\s+ground\s+truth\b", re.I),
      "supplied evidence"),
     (re.compile(r"\bmacro\s+taskgraph\b", re.I), "work sequence"),
+    # Natural language from small local models often mirrors the supplied
+    # low-level execution trace. Rephrase only these surface verbs/nouns;
+    # never change IDs, scalar values, evidence scope or the Oracle itself.
+    (re.compile(r"\bscanned\b", re.I), "reviewed"),
+    (re.compile(r"\bscanning\b", re.I), "reviewing"),
+    (re.compile(r"\bscan\b", re.I), "review"),
+    (re.compile(r"\bjoined\b", re.I), "cross-referenced"),
+    (re.compile(r"\bjoining\b", re.I), "cross-referencing"),
+    (re.compile(r"\bjoin\b", re.I), "cross-reference"),
+    (re.compile(r"\bprojected\b", re.I), "retained"),
+    (re.compile(r"\bprojecting\b", re.I), "retaining"),
+    (re.compile(r"\bprojection\b", re.I), "field selection"),
+    (re.compile(r"\brow\(s\)(?!\w)", re.I), "records"),
+    (re.compile(r"\brows\b", re.I), "records"),
+    (re.compile(r"\brow\b", re.I), "record"),
+    (re.compile(r"\bworkproducts\b", re.I), "sets of evidence"),
+    (re.compile(r"\bworkproduct\b", re.I), "set of evidence"),
 )
 
 
@@ -184,7 +201,12 @@ def normalize_report_language(text: str) -> tuple[str, list[str]]:
         return text, []
     revised, replacements = text, []
     for regex, phrase in _JARGON_REPLACEMENTS:
-        revised, n = regex.subn(phrase, revised)
+        # Keep sentence/bullet capitalization (e.g. "Scanned" -> "Reviewed").
+        revised, n = regex.subn(
+            lambda match: (phrase[0].upper() + phrase[1:]
+                           if match.group(0)[0].isupper() else phrase),
+            revised,
+        )
         if n:
             replacements.append(regex.pattern)
     return revised, replacements
