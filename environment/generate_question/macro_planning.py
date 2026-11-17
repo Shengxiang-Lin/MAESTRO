@@ -508,8 +508,8 @@ def make_spec(*, seed_record: dict, ordinal: int, run_seed: int,
     )
     from .goal_resolution import GOAL_RESOLUTION_VERSION
     from .semantic_evidence import CONTRACT_VERSION
-    from .question_fidelity import QUESTION_FIDELITY_VERSION
-    from .source_title_contract import (
+    from .authoring.question_fidelity import QUESTION_FIDELITY_VERSION
+    from .authoring.source_title_contract import (
         SCENE_REALISM_VERSION, expected_source_titles, DOMAIN_FRAMES,
     )
     _, domain_materials = DOMAIN_FRAMES[domain]
@@ -608,10 +608,10 @@ def validate_spec(spec: dict) -> list[str]:
         None, INFORMATION_NECESSITY_VERSION
     }:
         return ["invalid_macro_information_necessity_version"]
-    from .source_title_contract import SCENE_REALISM_VERSION
+    from .authoring.source_title_contract import SCENE_REALISM_VERSION
     if spec.get("scene_realism_version") not in {None, SCENE_REALISM_VERSION}:
         return ["invalid_scene_realism_version"]
-    from .question_fidelity import QUESTION_FIDELITY_VERSION
+    from .authoring.question_fidelity import QUESTION_FIDELITY_VERSION
     if spec.get("question_fidelity_version") not in {
         None, QUESTION_FIDELITY_VERSION,
     }:
@@ -695,7 +695,7 @@ def validate_spec(spec: dict) -> list[str]:
                 or plan["terminal_macro_id"] != plan["macro_tasks"][-1]["macro_id"]):
             errors.append("macro_first_v2_terminal_changed")
         if spec.get("scene_realism_version"):
-            from .source_title_contract import expected_source_titles
+            from .authoring.source_title_contract import expected_source_titles
             titles = expected_source_titles(spec)
             if any(source["title"] != titles[source["source_id"]]
                    for source in spec["sources"]):

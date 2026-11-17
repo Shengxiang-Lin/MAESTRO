@@ -20,7 +20,7 @@ from .stages import (
 )
 from .quality import validate_replay
 from .macro_contract import macro_graph_profile, macro_question_contract
-from .surface_quality import question_language_warnings
+from .authoring.surface_quality import question_language_warnings
 
 
 

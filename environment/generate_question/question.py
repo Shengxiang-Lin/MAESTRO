@@ -12,7 +12,7 @@ from difflib import SequenceMatcher
 from .spec import spec_issues, VERSION
 from .intent import intent_contract, style_contract
 from .macro_contract import macro_question_contract
-from .surface_quality import (
+from .authoring.surface_quality import (
     question_language_warnings, normalize_question_punctuation,
     topic_mentioned, is_explicit_user_request,
 )
@@ -925,7 +925,7 @@ def guard_question(question: str, spec: dict,
                 q, spec, compile_semantic_contract(spec),
             ))
         if spec.get("question_semantic_lock_version"):
-            from .question_semantic_lock import (
+            from .authoring.question_semantic_lock import (
                 question_semantic_lock_issues,
             )
             errors.extend(question_semantic_lock_issues(q, spec))
@@ -1097,7 +1097,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                         "Do not introduce one."
                     )
         if spec.get("question_semantic_lock_version"):
-            from .question_semantic_lock import question_author_requirements
+            from .authoring.question_semantic_lock import question_author_requirements
             author_contract["mandatory_question_semantics"] = (
                 question_author_requirements(spec)
             )
@@ -1199,7 +1199,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                           "exact grounded topic label and temporal direction.",
         }, ensure_ascii=False)
         try:
-            from .prompt_templates import (
+            from .authoring.prompt_templates import (
                 QUESTION_AUTHOR, QUESTION_CRITIC, QUESTION_AUTHOR_SINGLE_SLOT,
                 TASK_PLAN_QUESTION_AUTHOR, TASK_PLAN_QUESTION_CRITIC,
             )

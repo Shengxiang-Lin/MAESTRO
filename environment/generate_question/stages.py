@@ -116,7 +116,7 @@ def _question_signature(args, rows: list[dict]) -> str:
         "surface_quality_code": file_digest(
             Path(__file__).with_name("surface_quality.py")),
         "prompt_templates_code": file_digest(
-            Path(__file__).with_name("prompt_templates.py")),
+            Path(__file__).with_name("authoring") / "prompt_templates.py"),
         "stage_code": file_digest(Path(__file__)),
         "backend_code": file_digest(Path(__file__).with_name("backend.py")),
     })
@@ -301,7 +301,7 @@ def construct_scenes(args) -> dict:
                 Path(__file__).with_name("semantic_evidence.py")),
             "intent_code": file_digest(Path(__file__).with_name("intent.py")),
             "prompt_templates_code": file_digest(
-                Path(__file__).with_name("prompt_templates.py")),
+                Path(__file__).with_name("authoring") / "prompt_templates.py"),
             "stage_code": file_digest(Path(__file__)),
             "backend_code": file_digest(Path(__file__).with_name("backend.py")),
         })
