@@ -494,15 +494,23 @@ def _stage_scope_issues(text: str, contract: dict) -> list[str]:
 def _o1_answer_requirements(record: dict) -> list[str]:
     """Distinct delivered scalar values a natural answer must preserve."""
     values = []
-    for row in record["answer"]:
-        for value in row.values():
-            if value is None or isinstance(value, bool):
-                continue
-            if not isinstance(value, (str, int, float)):
-                continue
+    def collect(value):
+        if value is None or isinstance(value, bool):
+            return
+        if isinstance(value, dict):
+            for member in value.values():
+                collect(member)
+            return
+        if isinstance(value, (tuple, list)):
+            for member in value:
+                collect(member)
+            return
+        if isinstance(value, (str, int, float)):
             literal = str(value).strip()
             if literal and literal not in values:
                 values.append(literal)
+    for row in record["answer"]:
+        collect(row)
     return values
 
 
