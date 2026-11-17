@@ -160,6 +160,5 @@ class HybridWorldTests(unittest.TestCase):
         self.assertEqual(original["reasoning_pattern"], "typed_knowledge_v2")
 
 
-@unittest.skipUnless(RDF_READY, "requires RDF loader")
 if __name__ == "__main__":
     unittest.main()
