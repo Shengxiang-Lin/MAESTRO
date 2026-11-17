@@ -438,7 +438,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         }
         if (spec.get("reasoning_pattern") == "macro_first_v2"
                 and spec.get("scene_realism_version")):
-            from .difficulty_proxy import scene_difficulty_profile
+            from .auditing.difficulty_proxy import scene_difficulty_profile
             result["macro_first_audit"]["structural_difficulty_profile"] = (
                 scene_difficulty_profile(
                     scene, information_report=information_report

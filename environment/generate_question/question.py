@@ -12,7 +12,7 @@ from difflib import SequenceMatcher
 from .spec import spec_issues, VERSION
 from .intent import intent_contract, style_contract
 from .macro_contract import macro_question_contract
-from .surface_quality import (
+from .authoring.surface_quality import (
     question_language_warnings, normalize_question_punctuation,
     topic_mentioned, is_explicit_user_request,
 )
@@ -119,8 +119,8 @@ def _intent_reference_question(spec: dict) -> str:
             lead = (
                 f"The supplied photograph and recording descriptions concern a record in the {topic}.",
                 f"A record in the {topic} is described by supplied image and audio observations.",
-                f"The provided archive-photo and spoken-catalog observations concern a record in the {topic}.",
-                f"The supplied image description and audio observation refer to a record in the {topic}.",
+                f"The provided photographic and spoken descriptions concern a record in the {topic}.",
+                f"The supplied visual and spoken evidence refers to a record in the {topic}.",
             )[spec["ordinal"] % 4]
             if plan.get("composer_policy") == "output_first":
                 # A frozen clue can accidentally equal an ordinary phrase
@@ -653,7 +653,15 @@ def _unlicensed_task_plan_condition(question: str, plan: dict) -> list[str]:
         return []
     if condition["field"] == "event_status":
         errors = []
-        if year_terms:
+        # Goal-level filtering of *observation rows* is independent of the
+        # event-eligibility rule. Do not reject its licensed year threshold.
+        goal_years = {
+            str(node["year_gte"])
+            for node in plan["goal_spec"]["operations"]
+            if node["op"] == "count_aggregate"
+        }
+        mentioned_years = set(re.findall(r"\b(?:19|20)\d{2}\b", q))
+        if mentioned_years - goal_years:
             errors.append("task_plan_unlicensed_year_condition")
         if re.search(r"\b(?:not|never)\s+completed\b", q):
             errors.append("task_plan_reversed_completed_status")
@@ -925,7 +933,7 @@ def guard_question(question: str, spec: dict,
                 q, spec, compile_semantic_contract(spec),
             ))
         if spec.get("question_semantic_lock_version"):
-            from .question_semantic_lock import (
+            from .authoring.question_semantic_lock import (
                 question_semantic_lock_issues,
             )
             errors.extend(question_semantic_lock_issues(q, spec))
@@ -1097,7 +1105,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                         "Do not introduce one."
                     )
         if spec.get("question_semantic_lock_version"):
-            from .question_semantic_lock import question_author_requirements
+            from .authoring.question_semantic_lock import question_author_requirements
             author_contract["mandatory_question_semantics"] = (
                 question_author_requirements(spec)
             )
@@ -1199,7 +1207,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                           "exact grounded topic label and temporal direction.",
         }, ensure_ascii=False)
         try:
-            from .prompt_templates import (
+            from .authoring.prompt_templates import (
                 QUESTION_AUTHOR, QUESTION_CRITIC, QUESTION_AUTHOR_SINGLE_SLOT,
                 TASK_PLAN_QUESTION_AUTHOR, TASK_PLAN_QUESTION_CRITIC,
             )

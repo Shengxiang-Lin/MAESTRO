@@ -78,7 +78,11 @@ def _construction_identity(args) -> str:
             )
         ],
         "generation_code": {
-            name: file_digest(Path(__file__).with_name(name))
+            name: file_digest(
+                Path(__file__).with_name("authoring") / name
+                if name in {"surface_quality.py"}
+                else Path(__file__).with_name(name)
+            )
             for name in (
                 "task_plan.py", "task_plan_runtime.py", "goal_plan.py",
                 "evidence_plan.py", "world_motifs.py", "knowledge_macro.py",
@@ -109,14 +113,14 @@ def _question_signature(args, rows: list[dict]) -> str:
         "semantic_evidence_code": file_digest(
             Path(__file__).with_name("semantic_evidence.py")),
         "question_fidelity_code": file_digest(
-            Path(__file__).with_name("question_fidelity.py")),
+            Path(__file__).with_name("authoring") / "question_fidelity.py"),
         "question_semantic_lock_code": file_digest(
-            Path(__file__).with_name("question_semantic_lock.py")),
+            Path(__file__).with_name("authoring") / "question_semantic_lock.py"),
         "intent_code": file_digest(Path(__file__).with_name("intent.py")),
         "surface_quality_code": file_digest(
-            Path(__file__).with_name("surface_quality.py")),
+            Path(__file__).with_name("authoring") / "surface_quality.py"),
         "prompt_templates_code": file_digest(
-            Path(__file__).with_name("prompt_templates.py")),
+            Path(__file__).with_name("authoring") / "prompt_templates.py"),
         "stage_code": file_digest(Path(__file__)),
         "backend_code": file_digest(Path(__file__).with_name("backend.py")),
     })
@@ -301,7 +305,7 @@ def construct_scenes(args) -> dict:
                 Path(__file__).with_name("semantic_evidence.py")),
             "intent_code": file_digest(Path(__file__).with_name("intent.py")),
             "prompt_templates_code": file_digest(
-                Path(__file__).with_name("prompt_templates.py")),
+                Path(__file__).with_name("authoring") / "prompt_templates.py"),
             "stage_code": file_digest(Path(__file__)),
             "backend_code": file_digest(Path(__file__).with_name("backend.py")),
         })

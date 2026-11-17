@@ -92,15 +92,30 @@ def sample_output(seed: int, ordinal: int) -> dict:
     else:
         # Two or three independently meaningful output requirements;
         # not one of a handful of hard-coded Profile/Output pairs.
+        # Sample an operational family first, then combine independently
+        # meaningful requirements inside the SAME investigation. Neutral
+        # entity/observation fields can accompany any family; mixing a
+        # geographic distance, a temporal midpoint and arbitrary numeric
+        # comparison without a semantic link is deliberately disallowed.
         palette = (
             "entity", "difference", "ratio", "duration_days",
             "midpoint_date", "distance_km", "observation_count",
             "higher_source",
         )
-        demands = rng.sample(palette, k=rng.choice((2, 3)))
-        # A multi-field answer must contain a derived field.
-        if all(name == "entity" for name in demands):
-            demands[-1] = "difference"
+        anchor = rng.choice((
+            "difference", "ratio", "higher_source", "duration_days",
+            "midpoint_date", "distance_km",
+        ))
+        family = PAIRED_NEEDS[anchor]
+        compatible = tuple(
+            field for field in palette
+            if field in {"entity", "observation_count"}
+            or PAIRED_NEEDS.get(field) == family
+        )
+        demands = rng.sample(compatible, k=min(rng.choice((2, 3)),
+                                               len(compatible)))
+        if anchor not in demands:
+            demands[0] = anchor
         bindings = {name: name for name in sorted(demands)}
     return {
         "kind": shape,
@@ -291,9 +306,9 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
             seed=seed, ordinal=probe, difficulty=difficulty,
             hops=hops, goal_keys=goal_keys,
         )
-        if (not source_ids or
-            plan["mode"] == "trace" and
-            len(plan["macro_tasks"]) <= max_base):
+        # Budget applies to every feasible evidence route, not just Trace.
+        # Event-qualified investigations must remain available to typed Goals.
+        if len(plan["macro_tasks"]) <= max_base:
             break
     else:
         raise ValueError("goal_no_source_feasible_macro_budget")
@@ -568,6 +583,14 @@ def goal_question(plan: dict) -> str:
     )
     if plan["goal_recipe_keys"].count("containedinplace") >= 2:
         scope += " in the larger administrative area"
+    condition = plan.get("condition")
+    if condition:
+        if condition["field"] == "event_status":
+            scope += " selected through the completed event"
+        elif condition["field"] == "event_year":
+            scope += " selected through an event in or after 2025"
+        else:
+            raise ValueError("unrecognized_event_condition_in_goal_question")
     if output["kind"] == "single_entity" and (
             output["bindings"]["answer"] == "entity"):
         return plan["goal"]["semantic"]["question"]

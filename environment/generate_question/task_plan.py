@@ -398,12 +398,22 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
                f"{predicate_label(fact['predicate'])} relationship index",
                "Look up the documented relationship required by the goal",
                {input_key: "str", output_key: "str"}, key=input_key)
+    # These are executable media-derived facts, not decorative clue labels.
+    # Media sources are browsed, then joined against the resolved entity;
+    # text/table sources retain keyed lookup and explicit handoff semantics.
+    from .grounding.measurement_sources import measurement_source_profile
+    domain = (_semantic_goal(
+        grounding["candidate_paths"][grounding["target_case"]],
+        len(grounding["all_cases"]),
+    )["domain"] if plan.get("semantic_grounding_policy") == SEMANTIC_GOALS
+        else "institutional")
     for sid, fields in typed_goal["source_fields"].items():
+        profile = measurement_source_profile(
+            sid, domain=domain, capabilities=typed_goal["capabilities"],
+        )
         source(
-            sid, "table",
-            "Independent typed observation source " + sid,
-            "Acquire the precise typed observations needed by the Goal",
-            fields, key="entity_final",
+            sid, profile["modality"], profile["title"],
+            profile["purpose"], fields, key=profile["key_field"],
         )
     expected = Counter(
         sid for t in plan["macro_tasks"] for sid in t["source_scope"]
@@ -547,61 +557,14 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         plan["goal"]["meaning"] = (
             "Determine the entity at the end of the documented relation chain"
         )
-    condition = plan["condition"]
-    clause = (
-        "the completed event" if condition and
-        condition["field"] == "event_status" else
-        "the event held in or after 2025" if condition else
-        "the documented project reference"
+    # Semantic scenarios are selected *after* the Goal/World is frozen.
+    # Varying the working context must never alter the executable Gold.
+    from .grounding.measurement_sources import scene_profile
+    scenario = scene_profile(
+        plan["goal"]["semantic"]["domain"], ordinal=ordinal,
+        goal_label=plan["goal"]["public_label"],
+        output_kind=plan["goal_spec"]["output_spec"]["kind"],
     )
-    topics = {
-        "biographical": "biographical collection",
-        "academic": "academic correspondence archive",
-        "institutional": "institutional records collection",
-        "geographical": "regional survey collection",
-    }
-    semantic = plan["goal"]["semantic"]
-    scene_variants = {
-        "biographical": (
-            "an oral-history collection with biographical field notes",
-            "a museum biography investigation with independent records",
-        ),
-        "academic": (
-            "an academic research survey with separately curated datasets",
-            "a science documentary archive with technical observation logs",
-        ),
-        "institutional": (
-            "an organizational activity register and external statistics",
-            "a historical corporate registry with supporting documents",
-        ),
-        "geographical": (
-            "a regional journey investigation with recorded site coordinates",
-            "an environmental field survey with geospatial observation notes",
-        ),
-    }
-    scene_setting = scene_variants[semantic["domain"]][ordinal % 2]
-    scenario = {
-        "topic": topics[semantic["domain"]],
-        "setting": scene_setting,
-        "user_role": "archive researcher",
-        "purpose": (
-            ("identify the relation-linked entity and obtain the "
-             + plan["goal"]["public_label"]
-             + " from the available independent evidence")
-            if plan.get("goal_spec", {}).get(
-                "source_profile",
-                plan.get("goal_spec", {}).get("kind", "entity_resolution"),
-            ) != "entity_resolution" else
-            ("identify " + clause + " and determine the "
-             + semantic["answer_type_hint"]
-             + " specified by the recorded relationships")
-        ),
-        "motivation": (
-            "resolve inconsistent or incomplete references across "
-            "separate archival records"
-        ),
-        "entity_kind": "archive dossier",
-    }
     witness = {
         "version": (SYNTHETIC_WITNESS if fictional else
                     "maestro.task_plan.yago_witness.v1"),

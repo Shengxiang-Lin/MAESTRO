@@ -62,6 +62,25 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertTrue(operation_subgraph_leq(smaller, larger))
         self.assertFalse(operation_subgraph_leq(larger, smaller))
 
+    def test_multifield_semantic_coherence(self):
+        from environment.generate_question.goal_plan import (
+            PAIRED_NEEDS, sample_output,
+        )
+        kinds = set()
+        for ordinal in range(400):
+            output = sample_output(17, ordinal)
+            kinds.add(output["kind"])
+            if output["kind"] != "structured_multi_field":
+                continue
+            families = {
+                PAIRED_NEEDS[field]
+                for field in output["bindings"].values()
+                if field not in {"entity", "observation_count"}
+            }
+            self.assertLessEqual(len(families), 1, output)
+            self.assertGreaterEqual(len(families), 1, output)
+        self.assertEqual(kinds, set(OUTPUT_KINDS))
+
     def test_retired_config_keys_are_rejected(self):
         from environment.config import load_config, DEFAULT_CONFIG
         from pathlib import Path
@@ -217,6 +236,44 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertFalse(task_stats["answer_shortcut_warning_fields"])
         self.assertEqual(report["evidence_acquisition"][
             "task_plan_keyed_source_contract_mismatches"], 0)
+
+    def test_media_evidence_has_executable_source_affordances(self):
+        from environment.generate_question.task_plan import make_spec
+        from environment.generate_question.task_plan_runtime import compile_macro_solvers
+        from environment.generate_question.auditing.decision_opportunities import (
+            audit_decision_opportunities,
+        )
+        seen = set()
+        for ordinal in range(36):
+            spec = make_spec(
+                fixture(), seed=17, ordinal=ordinal,
+                difficulty="medium",
+            )
+            plan = spec["macro_plan"]
+            seen.add(plan["mode"])
+            catalog = {s["source_id"]: s for s in spec["sources"]}
+            for sid, modality in (("metric_a", "image"),
+                                  ("metric_b", "audio")):
+                if sid not in plan["goal_spec"]["source_fields"]:
+                    continue
+                self.assertEqual(catalog[sid]["modality"], modality)
+                self.assertEqual(catalog[sid]["access_mode"], "browse")
+            if plan["goal_spec"]["source_fields"]:
+                compiled = compile_macro_solvers(spec)
+                media_scan = {
+                    n["source_id"] for n in compiled["nodes"]
+                    if n["op"] == "scan" and
+                    n.get("source_id") in {"metric_a", "metric_b"}
+                }
+                self.assertEqual(media_scan, {
+                    sid for sid in ("metric_a", "metric_b")
+                    if sid in plan["goal_spec"]["source_fields"]
+                })
+            report = audit_decision_opportunities(spec)
+            self.assertGreaterEqual(report["max_parallel_width"], 1)
+            self.assertGreaterEqual(report["keyed_handoffs"], 1)
+        self.assertIn("trace", seen)
+        self.assertIn("event", seen)
 
     def test_critic_receives_final_goal_and_exact_fields(self):
         from environment.generate_question.task_plan import make_spec

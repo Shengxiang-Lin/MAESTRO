@@ -20,7 +20,7 @@ from .stages import (
 )
 from .quality import validate_replay
 from .macro_contract import macro_graph_profile, macro_question_contract
-from .surface_quality import question_language_warnings
+from .authoring.surface_quality import question_language_warnings
 
 
 
@@ -887,6 +887,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 value = answer[name] if isinstance(answer, dict) else answer
                 encoded = json.dumps(value, sort_keys=True, ensure_ascii=False)
                 answer_value_counts.setdefault(semantic, Counter())[encoded] += 1
+        from .auditing.decision_opportunities import summarize_decision_opportunities
+        decision_opportunities = summarize_decision_opportunities(current_scenes)
         answer_diversity = {
             semantic: {
                 "count": sum(freq.values()),
@@ -960,6 +962,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     for x in current_scenes
                 )),
                 "answer_value_diversity": answer_diversity,
+                "macro_decision_opportunities": decision_opportunities,
                 "answer_shortcut_warning_fields": sorted(
                     field for field, stats in answer_diversity.items()
                     if stats["potential_answer_shortcut"]

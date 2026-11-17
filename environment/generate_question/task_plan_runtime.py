@@ -573,11 +573,22 @@ def compile_macro_solvers(spec: dict) -> dict:
             )
         elif op == "fetch_typed_evidence":
             sid = task["source_scope"][0]
-            retrieved = add(
-                "lookup_by_key", parents[0], source_id=sid,
-                input_key_field="entity_final",
-                source_key_field="entity_final",
-            )
+            role = next(row for row in spec["sources"]
+                        if row["source_id"] == sid)
+            if role["access_mode"] == "browse":
+                # An image/audio observation is acquired independently;
+                # only the resolved entity label may select its relevant row.
+                observed = add("scan", source_id=sid)
+                retrieved = add(
+                    "join", parents[0], observed,
+                    left_on="entity_final", right_on="entity_final",
+                )
+            else:
+                retrieved = add(
+                    "lookup_by_key", parents[0], source_id=sid,
+                    input_key_field="entity_final",
+                    source_key_field="entity_final",
+                )
             terminal = add(
                 "project", retrieved, fields=list(task["output_schema"])
             )
