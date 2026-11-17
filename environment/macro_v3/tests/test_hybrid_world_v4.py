@@ -147,6 +147,5 @@ class CausalHybridTests(unittest.TestCase):
         self.assertEqual(validate_replay(scene)["status"], "valid")
 
 
-@unittest.skipUnless(RDF_READY, "requires pyoxigraph")
 if __name__ == "__main__":
     unittest.main()
