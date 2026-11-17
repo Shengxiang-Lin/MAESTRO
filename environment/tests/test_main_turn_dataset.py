@@ -833,6 +833,7 @@ class MainTurnDatasetTests(unittest.TestCase):
             kwargs = {
                 "scenes_path": scenes_path, "reports_path": reports_path,
                 "output_dir": root / "out", "workers": 1,
+                "max_attempts": 16,  # Current 12-Macro fixture can exceed 10 waves.
             }
             with patch("environment.base_orchestration.generate_turns.tqdm", RecordingBar):
                 summary = generate_turns(**kwargs)
