@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from environment.generate_question.authoring.scenario_fields import repair_scenario_fields
+from environment.generate_question.authoring.scenario_contracts import repair_scenario_fields
 from environment.generate_question.scenario import _narrative_issues
 
 
@@ -49,7 +49,7 @@ class ScenarioFieldRepairTests(unittest.TestCase):
 
 class TopicQualityTests(unittest.TestCase):
     def test_reject_placeholder_not_real_topic(self):
-        from environment.generate_question.authoring.topic_quality import topic_seed_issues
+        from environment.generate_question.authoring.scenario_contracts import topic_seed_issues
         self.assertIn(
             "topic_generated_placeholder",
             topic_seed_issues({

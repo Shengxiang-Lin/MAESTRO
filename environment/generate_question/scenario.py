@@ -205,7 +205,7 @@ def enrich_one(spec: dict, *, author, critic,
             ),
         } if spec.get("reasoning_pattern") == "macro_first_v2" else {}),
     }
-    from .authoring.source_title_contract import (
+    from .authoring.scenario_contracts import (
         has_scene_realism, canonicalize_scenario_proposal,
         scenario_domain_context,
     )
@@ -231,7 +231,7 @@ def enrich_one(spec: dict, *, author, critic,
             # the frozen modality/schema; LLM-authored titles are ignored.
             proposal = canonicalize_scenario_proposal(spec, proposal)
             if has_scene_realism(spec):
-                from .authoring.scenario_fields import repair_scenario_fields
+                from .authoring.scenario_contracts import repair_scenario_fields
                 proposal, repairs = repair_scenario_fields(spec, proposal)
                 if repairs:
                     repair_history.append({"attempt": attempt + 1,

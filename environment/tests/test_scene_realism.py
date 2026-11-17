@@ -7,7 +7,7 @@ from environment.generate_question.spec import make_spec, spec_issues
 from environment.generate_question.question import reference_question, guard_question
 from environment.generate_question.quality import compile_and_validate, validate_replay
 from environment.generate_question.scenario import enrich_one
-from environment.generate_question.authoring.source_title_contract import (
+from environment.generate_question.authoring.scenario_contracts import (
     SCENE_REALISM_VERSION, expected_source_titles,
 )
 from environment.generate_question.information_necessity import (

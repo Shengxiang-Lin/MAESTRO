@@ -311,6 +311,8 @@ def construct_scenes(args) -> dict:
             "critic_api_base": args.scenario_critic_api_base,
             "max_revisions": args.scenario_max_revisions,
             "scenario_code": file_digest(Path(__file__).with_name("scenario.py")),
+            "scenario_contracts_code": file_digest(
+                Path(__file__).with_name("authoring") / "scenario_contracts.py"),
             "semantic_evidence_code": file_digest(
                 Path(__file__).with_name("semantic_evidence.py")),
             "intent_code": file_digest(Path(__file__).with_name("intent.py")),
