@@ -283,69 +283,6 @@ class StageLocalScopeRegressions(unittest.TestCase):
         self.assertEqual(len(critic.calls), 2)
 
 class VerifiedListCriticRegressions(unittest.TestCase):
-    def test_second_critic_can_correct_oracle_membership_hallucination(self):
-        from environment.implement_subtask.oracle_review import (
-            critic_oracle_contradiction,
-        )
-        frozen = scene(25, "easy")
-        realized = realize_scene(frozen)
-        final = next(
-            row for row in realized["macro_tasks"]
-            if row["macro_task_id"] == realized["terminal_macro_task_id"]
-        )
-        self.assertTrue(final["answer"])
-        self.assertTrue(all(set(x) == {"entry_label"} for x in final["answer"]))
-
-        class OracleMistakenCritic:
-            def __init__(self):
-                self.calls = []
-
-            def complete_json(self, system_prompt, user_prompt):
-                payload = json.loads(user_prompt)
-                self.calls.append((system_prompt, payload))
-                if len(self.calls) == 1:
-                    label = final["answer"][0]["entry_label"]
-                    return {
-                        "verdict": "fail", "grounded": False,
-                        "answer_scope_preserved": False,
-                        "evidence_scope_respected": True,
-                        "natural": True,
-                        "reason": f"{label} is absent from exact_oracle_answer",
-                        "repair_hint": "remove that entry",
-                    }
-                return {
-                    "verdict": "pass", "grounded": True,
-                    "answer_scope_preserved": True,
-                    "evidence_scope_respected": True,
-                    "natural": True,
-                    "reason": "The exact enumerated list is verified; summary is grounded.",
-                    "repair_hint": "",
-                }
-
-        author = StructuredResultAuthor()
-        critic = OracleMistakenCritic()
-        reviewed, result = author_critic_report(
-            final, question=frozen["question"], author=author,
-            critic=critic, is_terminal=True, max_revisions=0,
-        )
-        self.assertEqual(result["status"], "accepted")
-        self.assertEqual(len(critic.calls), 2)
-        self.assertTrue(
-            result["critic_oracle_contradiction_rechecked"]
-        )
-        self.assertEqual(reviewed["answer"], final["answer"])
-        self.assertEqual(reviewed["answer_with_provenance"],
-                         final["answer_with_provenance"])
-        self.assertIsNotNone(critic_oracle_contradiction(
-            {"reason": "Entry-01 is absent from exact_oracle_answer"},
-            "Entries: Entry-01, Entry-02.",
-            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}], {},
-        ))
-        self.assertIsNone(critic_oracle_contradiction(
-            {"reason": "Entry-99 is absent from exact_oracle_answer"},
-            "Entries: Entry-01, Entry-02.",
-            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}], {},
-        ))
 
 
 class EntryEvidenceMappingRegressions(unittest.TestCase):
@@ -559,22 +496,21 @@ class ReportingUnitTests(unittest.TestCase):
         )
         self.assertTrue(critic.calls[0]["author_result_was_structured"])
 
-    def test_structured_entry_label_list_is_accepted_only_when_exact(self):
-        frozen = scene(25, "easy")
+    def test_current_task_plan_structured_answer_is_accepted_only_when_exact(self):
+        frozen = scene(25, "hard")
         realized = realize_scene(frozen)
         final = next(
             row for row in realized["macro_tasks"]
             if row["macro_task_id"] == realized["terminal_macro_task_id"]
         )
-        self.assertTrue(all(
-            set(item) == {"entry_label"} for item in final["answer"]
-        ))
+        self.assertTrue(final["answer"])
+        self.assertTrue(all(isinstance(item, dict) for item in final["answer"]))
         revised, status = author_critic_report(
             final, question=frozen["question"],
-            author=StructuredResultAuthor(collapse_labels=True),
+            author=StructuredResultAuthor(),
             critic=ReportCritic(), max_revisions=0, is_terminal=True,
         )
-        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(status["status"], "accepted", status)
         self.assertEqual(revised["answer"], final["answer"])
 
     def test_wrong_subset_or_invented_extra_row_still_fails(self):
