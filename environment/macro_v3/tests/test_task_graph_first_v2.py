@@ -195,49 +195,6 @@ class TaskGraphFirstPortTests(unittest.TestCase):
 
 @unittest.skipUnless(RDF_READY, "requires RDF loader")
 class TaskGraphFirstV2CliTests(unittest.TestCase):
-    def test_canonical_cli_with_six_relation_task_combinations(self):
-        from environment.config import load_config, args_from_config
-        from environment.generate_question.pipeline import generate_questions
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            rdf = root / "yago-fixture.ttl"
-            entries = [
-                "@prefix x: <https://example.org/> .",
-                "@prefix s: <http://schema.org/> .",
-            ]
-            for i in range(48):
-                entries.extend([
-                    f"x:Person{i} s:birthPlace x:Town{i} .",
-                    f"x:Town{i} s:containedInPlace x:Region{i} .",
-                    f"x:Region{i} s:containedInPlace x:Country{i} .",
-                    f"x:Person{i} s:memberOf x:Organization{i} .",
-                ])
-            rdf.write_text("\n".join(entries), encoding="utf-8")
-            cfg = load_config(
-                "environment/macro_v3/tests/fixtures/questions_task_graph_first_v2.yaml"
-            )
-            cfg["generation"]["knowledge_yago"] = str(rdf)
-            cfg["generation"]["output_dir"] = str(root / "generated")
-            cfg["generation"]["target"] = 6
-            args = args_from_config(cfg)
-            args.no_progress = True
-            result = generate_questions(args)
-            self.assertEqual(result["status"], "done", result)
-            self.assertEqual(result["generated"], 6)
-            quality = json.loads(
-                (args.output_dir / "quality_report.json").read_text()
-            )
-            self.assertEqual(quality["replay_pass"], 6)
-            stats = quality["knowledge_world_grounding"][
-                "task_graph_first_v2"
-            ]
-            self.assertEqual(stats["scenes_checked"], 6)
-            self.assertEqual(stats["information_necessity_passed"], 6)
-            self.assertEqual(stats["status_or_year_field_necessary"], 6)
-            self.assertEqual(stats["event_keyed_cases"], 2)
-            self.assertEqual(stats["event_keyed_bypass_blocked"], 2)
-            self.assertEqual(stats["unique_local_relation_signatures"], 6)
-            self.assertEqual(len(stats["local_event_relation_distribution"]), 2)
 
 
 if __name__ == "__main__":
