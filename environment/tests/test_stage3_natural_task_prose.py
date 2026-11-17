@@ -122,6 +122,26 @@ class FrozenTaskProseTests(unittest.TestCase):
         ))
         self.assertFalse(any("work_M" in item for item in guidance))
 
+        # Both errors must be collected from a single invalid draft.
+        # Previously the too-short context caused an early continue,
+        # hiding the generic instruction until a later LLM retry.
+        simultaneous = _stage3_task_prose_issues({
+            "reasoning": (
+                "The current source investigation can establish "
+                "the requested evidence using the provided clues."
+            ),
+            "tasks": [{
+                "task_instruction": (
+                    "Identify the candidates meeting the evidence "
+                    "described in the user question for the assigned "
+                    "investigation, without checking later sources."
+                ),
+                "context": "Follow up.",
+            }],
+        }, [assignment], prompt=scene["question"])
+        self.assertIn("task_0_authored_context_invalid", simultaneous)
+        self.assertIn("task_0_generic_template_repeated", simultaneous)
+
         class RepairingAuthor:
             def __init__(self):
                 self.requests = []
