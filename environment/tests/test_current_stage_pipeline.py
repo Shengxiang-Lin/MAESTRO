@@ -94,6 +94,31 @@ class CurrentStagePipelineTests(unittest.TestCase):
         self.assertEqual(recovered["trajectory"][-1]["action"], "complete")
 
 
+    def test_many_row_code_owned_delivery_never_truncates(self):
+        from environment.implement_subtask.reporting import code_owned_result
+        from environment.untrusted_orchestration.report_contract import (
+            render_delivered_result,
+        )
+        rows = [{
+            "values": {"entity_final": "Entity-" + str(i),
+                       "observation_year": 2026},
+            "source_fact_refs": ["observation_log:F" + str(i).zfill(5)],
+        } for i in range(220)]
+        record = {
+            "result_encoding": "typed_evidence_json_v1",
+            "answer": [row["values"] for row in rows],
+            "answer_with_provenance": rows,
+            "output_schema": ["entity_final", "observation_year"],
+        }
+        first = code_owned_result(record)
+        second = render_delivered_result({
+            "result_encoding": "typed_evidence_json_v1",
+            "actual_delivered_rows": rows,
+        })
+        self.assertGreater(len(first), 10000)
+        self.assertEqual(json.loads(first), rows)
+        self.assertEqual(json.loads(second), rows)
+
     def test_stage2_current_result_contains_all_rows_and_fact_refs(self):
         from environment.implement_subtask.reporting import code_owned_result
         scene = current_scene(4, "medium")
