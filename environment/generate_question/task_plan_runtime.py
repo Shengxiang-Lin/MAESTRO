@@ -273,9 +273,22 @@ def generate_world(spec: dict) -> dict:
         # No values are derived from a public Question or copied from
         # any real OmniGAIA evaluation record.
         facts = b["world_model"]["goal_measurements"]
-        if facts["kind"] != typed_kind:
+        if plan.get("composer_policy") == "goal_conditioned_output_first_v6":
+            for sid, fields in typed_goal["source_fields"].items():
+                if sid == "observation_log":
+                    tables[sid] = [
+                        copy.deepcopy(row)
+                        for record in facts["by_case"].values()
+                        for row in record["observations"]
+                    ]
+                else:
+                    tables[sid] = [
+                        {field: record[field] for field in fields}
+                        for record in facts["by_case"].values()
+                    ]
+        elif facts["kind"] != typed_kind:
             raise ValueError("v4_metric_kind_mismatch")
-        if typed_kind == "aggregation":
+        elif typed_kind == "aggregation":
             tables["observation_log"] = [
                 copy.deepcopy(row)
                 for item in facts["by_case"].values()
@@ -579,7 +592,7 @@ def compile_macro_solvers(spec: dict) -> dict:
                 "project", last, fields=list(task["output_schema"])
             )
         elif op in {"lookup_metric_a", "lookup_metric_b",
-                    "fetch_observations"}:
+                    "fetch_observations", "fetch_typed_evidence"}:
             sid = task["source_scope"][0]
             retrieved = add(
                 "lookup_by_key", parents[0], source_id=sid,
@@ -634,6 +647,93 @@ def compile_macro_solvers(spec: dict) -> dict:
                     left_field="metric_a", right_field="metric_b",
                     output_field="answer",
                 )
+        elif op == "synthesize_operation_dag" and (
+                plan.get("composer_policy") == "goal_conditioned_output_first_v6"):
+            from .goal_ops_v6 import validate_operation_graph
+            goal = plan["goal_spec"]
+            invalid = validate_operation_graph(goal)
+            if invalid:
+                raise ValueError("v6_invalid_goal_dag:" + ",".join(invalid))
+            source_tasks = {
+                plan_task["macro_id"]: plan_task["source_scope"][0]
+                for plan_task in plan["macro_tasks"]
+                if plan_task["operation"] == "fetch_typed_evidence"
+            }
+            products = {
+                source_tasks[mid]: parent
+                for mid, parent in zip(task["depends_on"], parents)
+            }
+            if set(products) != set(goal["source_fields"]):
+                raise ValueError("v6_source_handoff_mismatch")
+            # Aggregate the one-to-many ledger BEFORE joining a pair of
+            # scalar sources; otherwise the join would multiply row counts.
+            if "observation_log" in products:
+                valid = add(
+                    "filter_gte", products["observation_log"],
+                    field="observation_year", value=2025,
+                )
+                grouped = add(
+                    "group_count", valid, field="entity_final",
+                )
+                products["observation_log"] = add(
+                    "project", grouped, fields=["entity_final", "count"],
+                    rename_fields={"count": "observation_count"},
+                )
+            pairs = [products[name] for name in (
+                "metric_a", "metric_b", "observation_log"
+            ) if name in products]
+            if not pairs:
+                raise ValueError("v6_synthesis_without_evidence")
+            last = pairs[0]
+            for parent in pairs[1:]:
+                last = add(
+                    "join", last, parent, left_on="entity_final",
+                    right_on="entity_final",
+                )
+            outputs_by_op = {
+                "entity": "entity_final", "a": "metric_a",
+                "b": "metric_b", "observations": "observation_count",
+            }
+            for goal_op in goal["operations"]:
+                ident, kind = goal_op["id"], goal_op["op"]
+                if kind == "lookup":
+                    continue
+                if kind == "source_value":
+                    outputs_by_op[ident] = goal_op["source_field"]
+                    continue
+                if kind == "count_aggregate":
+                    outputs_by_op[ident] = "observation_count"
+                    continue
+                if kind in ("arithmetic", "compare_select"):
+                    input_fields = ["metric_a", "metric_b"]
+                elif kind == "verify":
+                    input_fields = [
+                        outputs_by_op[goal_op["inputs"][0]],
+                        "metric_a", "metric_b",
+                    ]
+                elif kind in ("temporal_difference", "temporal_midpoint"):
+                    input_fields = ["date_a", "date_b"]
+                elif kind == "geographic_distance":
+                    input_fields = ["coords_a", "coords_b"]
+                else:
+                    raise ValueError("v6_uncompiled_operation:" + kind)
+                last = add(
+                    "goal_compute", last,
+                    goal_operation=copy.deepcopy(goal_op),
+                    input_fields=input_fields,
+                    output_field=ident,
+                )
+                outputs_by_op[ident] = ident
+            bindings = {
+                key: outputs_by_op[ref]
+                for key, ref in goal["output_spec"]["bindings"].items()
+            }
+            terminal = add(
+                "goal_format", last,
+                output_kind=goal["output_spec"]["kind"],
+                field_types=copy.deepcopy(goal["output_spec"]["fields"]),
+                bindings=bindings, output_field="answer",
+            )
         elif op == "synthesize_operation_dag":
             from .goal_ops_v5 import validate_operation_graph
             goal = plan["goal_spec"]
