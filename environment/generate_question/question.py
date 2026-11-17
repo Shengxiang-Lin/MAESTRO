@@ -831,7 +831,8 @@ def guard_question(question: str, spec: dict,
                 r"\b(?:date|YYYY-MM-DD)\b", q, re.I
             ):
                 errors.append("v5_date_output_missing")
-            if (goal_spec["source_profile"] != "aggregation"
+            if (goal_spec["source_profile"] not in {
+                    "aggregation", "entity_resolution"}
                     and re.search(r"\b(?:19|20)\d{2}\b", q)):
                 errors.append("v5_unlicensed_calendar_year")
         if (plan.get("composer_policy") ==
