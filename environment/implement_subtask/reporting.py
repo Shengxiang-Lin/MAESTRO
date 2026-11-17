@@ -716,13 +716,23 @@ def author_critic_report(
                 }
                 candidate = {
                     key: _public_field_text(value, fields)
-                    if key in {"result", "summary"} and isinstance(value, str) else value
+                    if (key in {"result", "summary"}
+                        and isinstance(value, str)
+                        and not (key == "result"
+                                 and result_policy == "code_owned"
+                                 and teacher_record.get("result_encoding") ==
+                                 "typed_evidence_json_v1")) else value
                     for key, value in candidate.items()
                 }
                 # Surface-only repair of known internal jargon. Preserve
                 # claims, rows and provenance; all subsequent guards and
                 # Critic review still run on the revised prose.
                 for field in ("result", "summary"):
+                    if (field == "result" and result_policy == "code_owned"
+                            and teacher_record.get("result_encoding") ==
+                            "typed_evidence_json_v1"):
+                        # Never rewrite machine-readable JSON keys or refs.
+                        continue
                     if isinstance(candidate.get(field), str):
                         revised, replacements = normalize_report_language(
                             candidate[field]
