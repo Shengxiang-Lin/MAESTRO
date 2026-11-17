@@ -653,7 +653,15 @@ def _unlicensed_task_plan_condition(question: str, plan: dict) -> list[str]:
         return []
     if condition["field"] == "event_status":
         errors = []
-        if year_terms:
+        # Goal-level filtering of *observation rows* is independent of the
+        # event-eligibility rule. Do not reject its licensed year threshold.
+        goal_years = {
+            str(node["year_gte"])
+            for node in plan["goal_spec"]["operations"]
+            if node["op"] == "count_aggregate"
+        }
+        mentioned_years = set(re.findall(r"\b(?:19|20)\d{2}\b", q))
+        if mentioned_years - goal_years:
             errors.append("task_plan_unlicensed_year_condition")
         if re.search(r"\b(?:not|never)\s+completed\b", q):
             errors.append("task_plan_reversed_completed_status")
