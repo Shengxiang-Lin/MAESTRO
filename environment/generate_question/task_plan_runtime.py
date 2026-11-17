@@ -261,7 +261,8 @@ def generate_world(spec: dict) -> dict:
         )
         tables[f"relation_{hop+1}"] = [{
             left: path[hop]["subject"],
-            right: path[hop]["object_label"] if right == "answer"
+            right: path[hop]["object_label"]
+                   if right in {"answer", "entity_final"}
                    else path[hop]["object"],
         } for path in paths.values()]
     if typed_kind != "entity_resolution":
