@@ -888,7 +888,9 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 encoded = json.dumps(value, sort_keys=True, ensure_ascii=False)
                 answer_value_counts.setdefault(semantic, Counter())[encoded] += 1
         from .auditing.decision_opportunities import summarize_decision_opportunities
+        from .auditing.grounded_evidence import summarize_grounded_evidence
         decision_opportunities = summarize_decision_opportunities(current_scenes)
+        grounded_evidence = summarize_grounded_evidence(current_scenes)
         answer_diversity = {
             semantic: {
                 "count": sum(freq.values()),
@@ -963,6 +965,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 )),
                 "answer_value_diversity": answer_diversity,
                 "macro_decision_opportunities": decision_opportunities,
+                "grounded_evidence": grounded_evidence,
                 "answer_shortcut_warning_fields": sorted(
                     field for field, stats in answer_diversity.items()
                     if stats["potential_answer_shortcut"]

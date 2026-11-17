@@ -237,6 +237,67 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertEqual(report["evidence_acquisition"][
             "task_plan_keyed_source_contract_mismatches"], 0)
 
+    def test_context_and_modality_annotations_are_value_faithful(self):
+        from environment.generate_question.task_plan import make_spec
+        from environment.generate_question.quality import compile_and_validate
+        from environment.generate_question.question import reference_question
+        from environment.generate_question.auditing.grounded_evidence import (
+            audit_scene_grounding,
+        )
+        for ordinal in range(8):
+            spec = make_spec(
+                fixture(), seed=19, ordinal=ordinal, difficulty="medium",
+            )
+            scene = compile_and_validate(spec, reference_question(spec))
+            audit = audit_scene_grounding(scene)
+            self.assertEqual(audit["value_mismatches"], 0, audit)
+            self.assertEqual(audit["missing_semantic_annotations"], 0, audit)
+            self.assertGreater(audit["observations_with_context"], 0)
+            self.assertGreater(audit["media_observations"], 0)
+            self.assertFalse(
+                "documented relationship sequence" in scene["question"]
+            )
+
+    def test_source_first_media_dispatch_and_target_bound_synthesis(self):
+        from environment.generate_question.task_plan import make_spec
+        from environment.generate_question.task_plan_runtime import compile_macro_solvers
+        from environment.generate_question.quality import (
+            compile_and_validate, validate_replay,
+        )
+        from environment.generate_question.question import reference_question
+        observed_media_first = 0
+        verification = 0
+        for ordinal in range(40):
+            spec = make_spec(
+                fixture(), seed=17, ordinal=ordinal, difficulty="medium",
+            )
+            plan = spec["macro_plan"]
+            if plan["mode"] == "verify":
+                verification += 1
+            by_id = {task["macro_id"]: task
+                     for task in plan["macro_tasks"]}
+            media = [task for task in plan["macro_tasks"]
+                     if task["operation"] == "fetch_typed_evidence"
+                     and task["source_scope"][0] in {"metric_a", "metric_b"}]
+            if media:
+                observed_media_first += 1
+                self.assertTrue(all(not t["depends_on"] for t in media))
+                terminal = by_id[plan["terminal_macro_id"]]
+                self.assertIn(
+                    next(t["macro_id"] for t in plan["macro_tasks"]
+                         if t["operation"] == "follow_yago"
+                         and t["output_schema"].get("entity_final")),
+                    terminal["depends_on"],
+                )
+                nodes = compile_macro_solvers(spec)["nodes"]
+                self.assertTrue(any(n["op"] == "join" and
+                    n.get("left_on") == "entity_final"
+                    for n in nodes))
+                scene = compile_and_validate(spec, reference_question(spec))
+                self.assertEqual(validate_replay(scene)["status"], "valid")
+        self.assertGreater(observed_media_first, 0)
+        self.assertGreater(verification, 0)
+
     def test_media_evidence_has_executable_source_affordances(self):
         from environment.generate_question.task_plan import make_spec
         from environment.generate_question.task_plan_runtime import compile_macro_solvers
