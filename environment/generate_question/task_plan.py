@@ -857,15 +857,17 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
                f"{predicate_label(fact['predicate'])} relationship index",
                "Look up the documented relationship required by the goal",
                {input_key: "str", output_key: "str"}, key=input_key)
-    if typed_kind == "comparison":
-        source("metric_a", "table", "Independent observation tally A",
-               "Obtain the first independently recorded count",
-               {"entity_final": "str", "metric_a": "int"},
-               key="entity_final")
-        source("metric_b", "table", "Independent observation tally B",
-               "Obtain the second independently recorded count",
-               {"entity_final": "str", "metric_b": "int"},
-               key="entity_final")
+    if typed_kind in {
+        "comparison", "structured_answer", "numeric_difference",
+        "numeric_ratio", "temporal_gap", "geographic_distance",
+    }:
+        from .typed_goal_v4 import _metric_fields
+        source("metric_a", "table", "Independent evidence source A",
+               "Obtain the first independent metric or factual observation",
+               _metric_fields(typed_kind, "a"), key="entity_final")
+        source("metric_b", "table", "Independent evidence source B",
+               "Obtain the second independent metric or factual observation",
+               _metric_fields(typed_kind, "b"), key="entity_final")
     elif typed_kind == "aggregation":
         source("observation_log", "table", "Observation entry ledger",
                "Retrieve individually recorded dated observation entries",
@@ -1017,7 +1019,10 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     )
     if fictional:
         plan["knowledge_origin"] = "synthetic"
-    if world_mode == "compose":
+    if (world_mode == "compose" and
+            plan.get("goal_spec", {}).get(
+                "kind", "entity_resolution"
+            ) == "entity_resolution"):
         plan["goal"]["meaning"] = (
             "Determine the entity at the end of the documented relation chain"
         )
@@ -1043,12 +1048,12 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         ),
         "user_role": "archive researcher",
         "purpose": (
-            ("identify the relation-linked entity and compare its two "
-             "independent observation tallies")
-            if plan.get("goal_spec", {}).get("kind") == "comparison" else
-            ("identify the relation-linked entity and count its "
-             "observations in or after 2025")
-            if plan.get("goal_spec", {}).get("kind") == "aggregation" else
+            ("identify the relation-linked entity and obtain the "
+             + plan["goal"]["public_label"]
+             + " from the available independent evidence")
+            if plan.get("goal_spec", {}).get(
+                "kind", "entity_resolution"
+            ) != "entity_resolution" else
             ("identify " + clause + " and determine the "
              + semantic["answer_type_hint"]
              + " specified by the recorded relationships")
