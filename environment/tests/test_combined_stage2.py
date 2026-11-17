@@ -26,8 +26,14 @@ class Author:
         self.calls += 1
         contract = json.loads(payload)["frozen_task_and_evidence"]
         rows = contract["exact_oracle_answer"]
+        def flatten(value):
+            if isinstance(value, dict):
+                return ", ".join(flatten(x) for x in value.values())
+            if isinstance(value, list):
+                return ", ".join(flatten(x) for x in value)
+            return str(value)
         details = "; ".join(
-            ", ".join(str(value) for value in row.values())
+            ", ".join(flatten(value) for value in row.values())
             for row in rows
         ) or "no matching entries"
         return {
@@ -120,15 +126,13 @@ class CombinedStage2Tests(unittest.TestCase):
                 self.assertEqual(after["finish_result"]["status"], "done")
                 from environment.implement_subtask.reporting import (
                     code_owned_result, _o1_answer_issues,
+                    _o1_answer_requirements,
                 )
                 self.assertEqual(after["answer_text"], code_owned_result(before))
                 self.assertEqual(_o1_answer_issues(
                     after["finish_result"]["result"],
-                    {"answer_required_literals": [
-                        str(value) for row in before["answer"]
-                        for value in row.values()
-                        if not isinstance(value, bool) and value is not None
-                    ]},
+                    {"answer_required_literals":
+                     _o1_answer_requirements(before)},
                 ), [])
                 self.assertFalse(after["finish_result"]["result"].startswith("[{"))
                 self.assertEqual(after["report_authoring"]["result_policy"],
