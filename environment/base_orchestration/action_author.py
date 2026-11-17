@@ -776,6 +776,7 @@ def author_delegate_action(
     critic_system: str | None = None,
     freeze_assignment_prose: bool = False,
     reasoning_only_stage3: bool = False,
+    naturalize_assignment_prose: bool = False,
     round_evidence_contract: dict | None = None,
     reasoning_goals: list[dict] | None = None,
     reasoning_guard=None,
@@ -811,13 +812,36 @@ def author_delegate_action(
             request = {
                 "question_and_subagent_history": prompt,
                 "pending_investigations": [
-                    {"instruction": item["target_instruction"],
-                     "context": item["context"]}
+                    ({
+                        "reference_instruction": item["target_instruction"],
+                        "prior_visible_context": item["context"],
+                        "public_source_descriptions": item.get(
+                            "public_source_descriptions", []
+                        ),
+                        "allowed_source_ids": item["source_ids"],
+                        "required_output_fields": item["output_fields"],
+                        "requires_upstream_result": item["needs_upstream"],
+                        "investigation_type": (
+                            "lookup_by_returned_key"
+                            if item.get("keyed_lookup") else
+                            ("source_investigation" if item["source_ids"]
+                             else "combine_prior_findings")
+                        ),
+                    } if naturalize_assignment_prose else {
+                        "instruction": item["target_instruction"],
+                        "context": item["context"],
+                    })
                     for item in assignments
                 ],
-                "output_format": {
-                    "reasoning": "grounded explanation of next investigations"
-                },
+                "output_format": (
+                    {"reasoning": "explain the next fixed batch",
+                     "tasks": [{
+                         "task_instruction": "specific investigative request",
+                         "context": "natural handoff and known clues",
+                     } for _ in assignments]}
+                    if naturalize_assignment_prose else
+                    {"reasoning": "grounded explanation of next investigations"}
+                ),
                 **({
                     "round_evidence_contract":
                         round_evidence_contract["public"],
@@ -835,7 +859,11 @@ def author_delegate_action(
                     "that a previous lookup failed just because another "
                     "key must still be resolved. No invented past failures, "
                     "completed checks, or hidden future results. "
-                    "Return only the reasoning field."
+                    + ("Write reasoning and one task_instruction/context "
+                       "pair per frozen slot; keep allowed source identities "
+                       "and output fields unchanged."
+                       if naturalize_assignment_prose else
+                       "Return only the reasoning field.")
                 ),
             }
             if failures:
@@ -942,15 +970,30 @@ def author_delegate_action(
         if (decision_contract is not None and isinstance(candidate, dict)
                 and "action" not in candidate):
             candidate = {**candidate, "action": "delegate_task"}
+        if (freeze_assignment_prose and reasoning_only_stage3
+                and naturalize_assignment_prose):
+            task_prose_errors = _stage3_task_prose_issues(
+                candidate, assignments, prompt=prompt,
+            )
+            if task_prose_errors:
+                failures.append({
+                    "stage": "stage3_task_prose_guard",
+                    "errors": task_prose_errors,
+                })
+                continue
+            candidate = _stage3_compile_task_prose(
+                candidate, assignments, template,
+            )
         # Stage-4C can explicitly freeze the entire evidence dispatch
         # contract. The Author writes *reasoning*, while all task language,
         # handoff context, tool routing and parallelism come from the
         # verified evidence plan. This avoids silently publishing an
         # Author's unrelated deliverable (e.g. a winner instead of the
         # planned marker key) as a valid executor-bound assignment.
-        if freeze_assignment_prose and isinstance(candidate, dict) and (
-            candidate.get("action", "delegate_task") == "delegate_task"
-        ):
+        if (freeze_assignment_prose and not naturalize_assignment_prose
+                and isinstance(candidate, dict) and (
+                candidate.get("action", "delegate_task") == "delegate_task"
+        )):
             candidate = {
                 "action": "delegate_task",
                 "reasoning": candidate.get("reasoning"),
@@ -958,7 +1001,9 @@ def author_delegate_action(
             }
         # Default Stage-3 and legacy callers remain free to author the
         # task prose, subject to the original O1 Guard and critic.
-        elif isinstance(candidate, dict) and candidate.get("action") == "delegate_task":
+        elif (not naturalize_assignment_prose
+              and isinstance(candidate, dict)
+              and candidate.get("action") == "delegate_task"):
             parameters = candidate.get("params")
             generated = (parameters.get("tasks")
                          if isinstance(parameters, dict) else None)
@@ -1041,7 +1086,9 @@ def author_delegate_action(
                             "task contract and visible prior history. "
                             "Do not replace this round with the final "
                             "question's later dependent tasks. Reject "
-                            "only unsupported claims in authored reasoning."
+                            ("unsupported reasoning and task prose."
+ if naturalize_assignment_prose else
+ "only unsupported claims in authored reasoning.")
                         ),
                     } if freeze_assignment_prose
                     and reasoning_only_stage3 else {}),
@@ -1054,6 +1101,21 @@ def author_delegate_action(
                         authored_reasoning if decision_contract is not None
                         else candidate["reasoning"]
                     ),
+                    **({
+                        "candidate_task_prose_only": [{
+                            "task_instruction": task["task_instruction"],
+                            "context": task["context"],
+                        } for task in candidate["params"]["tasks"]],
+                        "task_prose_constraints": [{
+                            "allowed_source_ids": item["source_ids"],
+                            "required_output_fields": item["output_fields"],
+                            "public_source_descriptions": item.get(
+                                "public_source_descriptions", []
+                            ),
+                            "prior_visible_context": item["context"],
+                            "requires_upstream": item["needs_upstream"],
+                        } for item in assignments],
+                    } if naturalize_assignment_prose else {}),
                     "published_reasoning": candidate["reasoning"],
                     "main_visible_evidence_requests": reasoning_goals or [],
                     **({
@@ -1069,9 +1131,14 @@ def author_delegate_action(
                         "or treat Result as independently verified. "
                         "Never approve an invented source, premature "
                         "verification, hidden reviewer dialogue or an "
-                        "incorrect dependency claim. Do not assess or "
-                        "rewrite task_instruction, context, model, tools, "
-                        "or the overall frozen delegation plan. "
+                        "incorrect dependency claim. "
+                        + ("Review authored task_instruction/context for "
+                           "evidence fidelity and specificity, never "
+                           "slot order, model or tools. "
+                           if naturalize_assignment_prose else
+                           "Do not assess or rewrite task_instruction, "
+                           "context, model, tools, or the overall frozen "
+                           "delegation plan. ") +
                         "In trusted Stage-3 review, distinguish this round's "
                         "returned fields from later dependent evidence, "
                         "and distinguish the number of sources from the "
@@ -1224,9 +1291,11 @@ def author_delegate_action(
                          if freeze_assignment_prose else "llm_reviewed"),
                 "assignment_contract_frozen": freeze_assignment_prose,
                 "authored_fields": (
-                    ["reasoning"] if freeze_assignment_prose else
+                    ["reasoning"] if freeze_assignment_prose
+                    and not naturalize_assignment_prose else
                     ["reasoning", "task_instruction", "context"]
                 ),
+                "naturalized_task_prose": naturalize_assignment_prose,
                 "attempts": revision + 1, "review": review,
                 **({
                     "reasoning_fidelity_rejections": [
