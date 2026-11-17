@@ -328,6 +328,25 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                            != node.get("source_key_field")
                         for node in keyed
                     )
+                if spec.get("reasoning_pattern") == "task_plan":
+                    # Count *executed-source* annotation predicates rather
+                    # than only legacy compare_fields primitive names.
+                    # This measures synthetic evidence affordances, not
+                    # real binary image/audio/video perception.
+                    scopes = {
+                        sid for macro in spec["macro_plan"]["macro_tasks"]
+                        for sid in macro["source_scope"]
+                    }
+                    for sid, role in declared.items():
+                        if sid not in scopes or role["modality"] not in {
+                            "image", "audio", "video"
+                        }:
+                            continue
+                        for observation in scene["world"]["sources"][sid]["observations"]:
+                            semantic = observation.get("observation_semantics", {})
+                            predicate = semantic.get("predicate")
+                            if predicate:
+                                operational_media_fields[predicate] += 1
                 if spec.get("version") == "maestro.problem_spec.v4":
                     for node in nodes:
                         if node["op"] == "compare_fields":

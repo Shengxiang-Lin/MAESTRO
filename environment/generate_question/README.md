@@ -18,17 +18,24 @@ canonical World → Gold Program → Question** pipeline. Question Author and
 Critic may paraphrase the request, but may not edit the factual World, Goal
 answer schema, evidence sources or Gold.
 
-The internal Stage 1 code is organized by responsibility:
+The active Stage-1 code is grouped by function:
 
-| File | Responsibility |
+| Package | Responsibility |
 |---|---|
-| `goal_plan.py` | Select output structure, recursively compose typed operations, normalize shared dependencies, synthesize diverse measurements and independently validate Gold |
-| `evidence_plan.py` | Select feasible discovery/verification producers and source affordances; build the Macro acquisition DAG |
-| `task_plan.py` | Compose a single frozen ProblemSpec, source catalog, modality observations, World binding and contract validator |
-| `task_plan_runtime.py` | Materialize source views, compile Gold IR and test executable information necessity |
-| `program_ir.py` | Shared typed relational executor and answer formatter |
-| `question.py`, `intent.py`, `authoring/surface_quality.py` | Author/Critic prompt contract, exact output-field checking, semantic naturalization and fallback handling |
-| `stages.py`, `pipeline.py` | Resumable generation and quality/audit reports |
+| `planning/` | Canonical output-first `goal_plan`, `evidence_plan`, `task_plan` |
+| `grounding/` | Domain-specific clue sources, simulated media observation descriptions, goal referents and source profiles |
+| `execution/` | `task_plan_runtime` and shared `program_ir` Gold executor |
+| `authoring/` | Question/scenario prompts, field guards, semantic and surface checks |
+| `auditing/` | Decision-opportunity, grounded observation and structural-quality audits |
+| `stages.py`, `pipeline.py` | Resumable generation, Question Author/Critic and reports |
+
+Root-level `goal_plan.py`, `evidence_plan.py`, `task_plan.py`,
+`task_plan_runtime.py`, and `program_ir.py` are compatibility facades
+for historical Stage-2/3/4 imports; the implementations live only in the
+corresponding packages. Older experimental `hybrid_world*` and
+`task_graph_first*` modules remain for historical snapshot Replay and
+their independently maintained regression suites. Do not use them for new
+Stage-1 question generation.
 
 The active code is grouped by responsibility: `grounding/` holds domain-aware
 synthetic observation profiles, `authoring/` holds question/scenario
@@ -37,11 +44,19 @@ decision-opportunity and difficulty diagnostics. Thin compatibility shims
 preserve older Stage-2/3/4 import paths for shared surface contracts. The CLI, typed solvers and
 Stage-2/3/4 data contracts remain at their established import paths.
 
-Numeric, date and coordinate source annotations can now be acquired from
-simulated image/audio evidence rather than only generic tables. A media source
-is browse-only and its rows are joined to the resolved entity; no real media
-decoding is claimed. Evidence mode selection is budget-based rather than
-forcing Trace for every multi-source Goal.
+Numeric, date and coordinate values can be acquired from simulated
+image/audio observations rather than only generic tables. Browse-only media
+Macros are now independent of target identification; the final synthesis
+joins their records to the resolved entity. Keyed sources still require an
+upstream key. Each source observation also contains a modality-specific
+`observed_content` rendering and a typed `observation_semantics` marker,
+strictly derived from the original executable values. No real binary media
+decoding is claimed.
+
+Candidate reference reconciliation and independently necessary verification
+remain **two distinct Main-visible Macros**, while the pair of directory
+lookups is a single coherent Sub-Agent investigation. This allows event and
+verification routes with typed Goals inside the 11-Macro budget.
 
 The quality report adds `macro_decision_opportunities` for parallel batches,
 key-dependent handoffs, reusable intermediate results and true evidence
@@ -96,3 +111,35 @@ python -m environment quality --config environment/configs/questions.yaml \
 Stage 2, trusted orchestration and untrusted orchestration maintain their
 existing public data contracts. Version strings in persisted data are
 **schema identifiers**, not separately selectable generator implementations.
+
+## 100-task pilot, reproducibility and limits
+
+Offline, network-free CI and local smoke benchmark:
+
+```bash
+python -m environment.tests.stage1_pilot \
+  --target 100 --output-dir environment/data/stage1_offline_100
+```
+
+This command uses a deliberately tiny **test RDF motif**; outputs are
+`constructed/scenes.jsonl`, `pilot_summary.json` and
+`quality_report.json`. The GitHub workflow
+`.github/workflows/stage1-pilot-100.yml` also uploads those files as an
+artifact. This validates 100 frozen Question/World/Gold Scenes and strict
+Replay but **does not** run Qwen Author/Critic or establish benchmark
+realism. You can use `--knowledge-yago /path/to/real/YAGO-4.6` to test
+with your local graph (still offline deterministic Question fallback).
+
+For the full Author/Critic experiment use the existing production command
+at the start of this README, with the YAGO corpus and Qwen endpoint
+configured in `environment/configs/questions.yaml`. Use a NEW output
+directory to avoid mixing incompatible frozen Worlds.
+
+Review the new `grounded_evidence` and `macro_decision_opportunities`
+fields under `knowledge_world_grounding.single_task_plan`. In particular:
+`with_independent_media_acquisition` is structural source-first work,
+not conditional feedback dispatch; `with_evidence_corroboration`
+means an independently sourced verification gate, not an arithmetic
+`verify` Goal operator. The static trusted Stage-1 DAG does not yet
+encode branching policy decisions based on the *contents* of future
+Sub-Agent messages; those require Stage-3 trajectory integration.
