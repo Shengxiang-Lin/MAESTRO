@@ -113,6 +113,10 @@ def _question_signature(args, rows: list[dict]) -> str:
         "api_base": args.question_api_base,
         "critic_model": args.question_critic_model,
         "critic_api_base": args.question_critic_api_base,
+        "author_temperature": getattr(args, "question_author_temperature", None),
+        "author_top_p": getattr(args, "question_author_top_p", None),
+        "critic_temperature": getattr(args, "question_critic_temperature", None),
+        "critic_top_p": getattr(args, "question_critic_top_p", None),
         "max_revisions": args.max_revisions,
         "question_code": file_digest(Path(__file__).with_name("question.py")),
         "semantic_evidence_code": file_digest(
@@ -500,17 +504,41 @@ def _llm_clients(args):
         raise ValueError("both question endpoint and model are required")
     key = (os.environ.get(args.question_api_key_env)
            if args.question_api_key_env else None)
+    critic_key = (
+        os.environ.get(args.question_critic_api_key_env)
+        if args.question_critic_api_key_env else key
+    )
+    if args.question_api_key_env and not key:
+        raise ValueError(
+            "Stage-1 Question Author API key missing: export "
+            + args.question_api_key_env
+        )
+    if args.question_critic_api_key_env and not critic_key:
+        raise ValueError(
+            "Stage-1 Question Critic API key missing: export "
+            + args.question_critic_api_key_env
+        )
+    author_temperature = getattr(args, "question_author_temperature", None)
+    author_top_p = getattr(args, "question_author_top_p", None)
+    critic_temperature = getattr(args, "question_critic_temperature", None)
+    critic_top_p = getattr(args, "question_critic_top_p", None)
     return (
         OpenAICompatibleBackend(
             base_url=args.question_api_base, model=args.question_model,
-            api_key=key, temperature=0.55, max_tokens=1800,
-            timeout=args.question_timeout,
+            api_key=key,
+            temperature=(author_temperature if author_temperature is not None
+                         else 0.55),
+            top_p=author_top_p,
+            max_tokens=1800, timeout=args.question_timeout,
         ),
         OpenAICompatibleBackend(
             base_url=args.question_critic_api_base or args.question_api_base,
             model=args.question_critic_model or args.question_model,
-            api_key=key, temperature=0.0, max_tokens=1400,
-            timeout=args.question_timeout,
+            api_key=critic_key,
+            temperature=(critic_temperature if critic_temperature is not None
+                         else 0.0),
+            top_p=critic_top_p,
+            max_tokens=1400, timeout=args.question_timeout,
         ),
     )
 

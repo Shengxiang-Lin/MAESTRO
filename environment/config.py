@@ -23,7 +23,7 @@ SECTIONS = {
         "max_revisions", "timeout",
     },
     "question": {
-        "api_base", "model", "critic_api_base", "critic_model",
+        "registry", "api_base", "model", "critic_api_base", "critic_model",
         "api_key_env", "critic_api_key_env", "workers",
         "max_revisions", "timeout",
     },
@@ -59,6 +59,48 @@ def _path(value: str | Path) -> Path:
     return path if path.is_absolute() else ROOT / path
 
 
+def _resolve_question_registry(data: dict) -> tuple[dict, dict, dict]:
+    """Resolve only the selected remote API models from the shared registry.
+
+    Stage-1 config owns model selection and secret *environment variable names*.
+    The central registry owns base URLs and sampling parameters. Existing
+    explicit endpoints remain supported when registry is omitted.
+    """
+    values = dict(data)
+    registry = values.get("registry")
+    if not registry:
+        return values, {}, {}
+    path = _path(registry)
+    if not path.is_file():
+        raise FileNotFoundError("question_model_registry_missing:" + str(path))
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("models"), dict):
+        raise ValueError("question_model_registry_invalid")
+    models = payload["models"]
+
+    def resolve(model_field: str, endpoint_field: str) -> dict:
+        name = values.get(model_field)
+        if not name:
+            return {}
+        entry = models.get(name)
+        if not isinstance(entry, dict):
+            raise ValueError("question_model_not_in_registry:" + str(name))
+        if entry.get("backend") != "api" or entry.get("api_type") != "openai":
+            raise ValueError("question_registry_model_not_openai_api:" + str(name))
+        base = entry.get("base_url")
+        if not isinstance(base, str) or not base.startswith(("https://", "http://")):
+            raise ValueError("question_model_registry_missing_base_url:" + str(name))
+        if not values.get(endpoint_field):
+            values[endpoint_field] = base
+        return entry
+
+    author = resolve("model", "api_base")
+    critic = resolve("critic_model", "critic_api_base")
+    if not values.get("critic_model") and author:
+        critic = author
+    return values, author, critic
+
+
 def _client_settings(name: str, data: dict, *, required: bool):
     if bool(data.get("api_base")) != bool(data.get("model")):
         raise ValueError(name + "_api_base_and_model_must_be_paired")
@@ -76,7 +118,9 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
                      no_progress=False) -> argparse.Namespace:
     generation = config["generation"]
     scenario = config["scenario"]
-    question = config["question"]
+    question, author_model_config, critic_model_config = (
+        _resolve_question_registry(config["question"])
+    )
     _client_settings("scenario", scenario, required=False)
     _client_settings("question", question, required=False)
 
@@ -136,6 +180,10 @@ def args_from_config(config: dict, *, output_dir=None, target=None,
         question_critic_model=question.get("critic_model"),
         question_api_key_env=question.get("api_key_env"),
         question_critic_api_key_env=question.get("critic_api_key_env"),
+        question_author_temperature=author_model_config.get("temperature"),
+        question_author_top_p=author_model_config.get("top_p"),
+        question_critic_temperature=critic_model_config.get("temperature"),
+        question_critic_top_p=critic_model_config.get("top_p"),
         question_workers=question["workers"],
         max_revisions=question["max_revisions"],
         question_timeout=question["timeout"],

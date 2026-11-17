@@ -34,13 +34,18 @@ scenario:
   timeout: 180
 
 question:
-  # Default Question Author and Critic: separate calls to the local Qwen endpoint.
-  # Frozen Task Plan, World, Evidence and Gold are never edited by the LLM.
-  api_base: http://127.0.0.1:8807/v1
-  model: local-qwen3.5-9b
-  critic_api_base: http://127.0.0.1:8807/v1
-  critic_model: local-qwen3.5-9b
-  api_key_env: null
+  # Default Question Author/Critic: DashScope qwen3.8-flash, selected from
+  # the shared model registry. Base URL, temperature and top_p are resolved
+  # from config/model_config.yaml; never duplicate provider settings here.
+  # Export DASHSCOPE_API_KEY before generating reviewed Questions.
+  # Frozen Task Plan, World, Evidence and Gold remain code-owned.
+  registry: config/model_config.yaml
+  api_base: null
+  model: qwen3.8-flash
+  critic_api_base: null
+  critic_model: qwen3.8-flash
+  api_key_env: DASHSCOPE_API_KEY
+  critic_api_key_env: DASHSCOPE_API_KEY
   workers: 4
   max_revisions: 2
   timeout: 180
