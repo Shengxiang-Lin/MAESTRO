@@ -38,7 +38,7 @@ def export_full_prompts(*, scenes_path: Path, turns_path: Path,
     for source in (
         "../../orchestra/base_main_agent.py",
         "../../orchestra/prompts/omnigaia.py",
-        "../generate_question/evidence_tools.py",
+        "../generate_question/execution/evidence_tools.py",
         "../../benchmark/omnigaia/tools/google_search.py",
         "../../benchmark/omnigaia/tools/extract_url_jina.py",
         "../../benchmark/omnigaia/tools/multimodal_toolkit.py",
