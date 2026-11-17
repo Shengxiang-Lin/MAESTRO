@@ -181,7 +181,11 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
                     if field != subject_field and _typed_scalar(value):
                         add(subject, field, value, "result", refs)
                 if subject_field is not None and len(row) == 1:
-                    add(subject, "identifier_present", True, "result", refs)
+                    if subject_field == "case_id":
+                        add(subject, "identifier_present", True, "result", refs)
+                    elif source_id is not None:
+                        add("source:" + source_id, subject_field,
+                            row[subject_field], "result", refs)
         else:
             match = _CASE_LIST.fullmatch(result.strip())
             if match:
@@ -209,7 +213,11 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
                             if field != subject_field and _typed_scalar(value):
                                 add(subject, field, value, "result")
                         if subject_field is not None and len(row) == 1:
-                            add(subject, "identifier_present", True, "result")
+                            if subject_field == "case_id":
+                                add(subject, "identifier_present", True, "result")
+                            elif source_id is not None:
+                                add("source:" + source_id, subject_field,
+                                    row[subject_field], "result")
 
     for surface, prose in (("result", result), ("summary", summary)):
         if not isinstance(prose, str):
