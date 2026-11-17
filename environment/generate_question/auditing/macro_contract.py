@@ -135,31 +135,31 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
                 or not ops["lookup_by_key"]):
             raise ValueError("macro_first_terminal_or_lookup_missing")
     if pattern == "task_plan":
-        from .task_plan import VERSION as K_VERSION
+        from environment.generate_question.planning.task_plan import VERSION as K_VERSION
         if plan.get("version") != K_VERSION:
             raise ValueError("incorrect_single_task_plan_version")
     if pattern == "task_graph_first_v2":
-        from .task_graph_first_v2 import VERSION as K_VERSION
+        from environment.generate_question.task_graph_first_v2 import VERSION as K_VERSION
         if plan.get("version") != K_VERSION:
             raise ValueError("incorrect_task_graph_first_v2_macro_version")
     if pattern == "task_graph_first_v1":
-        from .task_graph_first import VERSION as K_VERSION
+        from environment.generate_question.task_graph_first import VERSION as K_VERSION
         if plan.get("version") != K_VERSION:
             raise ValueError("incorrect_task_graph_first_macro_version")
     if pattern == "typed_knowledge_v4":
-        from .hybrid_world_v4 import VERSION as K_VERSION
+        from environment.generate_question.hybrid_world_v4 import VERSION as K_VERSION
         if plan.get("version") != K_VERSION:
             raise ValueError("incorrect_causal_hybrid_macro_version")
     if pattern == "typed_knowledge_v3":
-        from .hybrid_world import VERSION as K_VERSION
+        from environment.generate_question.hybrid_world import VERSION as K_VERSION
         if plan.get("version") != K_VERSION:
             raise ValueError("incorrect_hybrid_macro_version")
     if pattern == "typed_knowledge_v2":
-        from .knowledge_macro_v2 import VERSION as K_VERSION
+        from environment.generate_question.knowledge_macro_v2 import VERSION as K_VERSION
         if plan.get("version") != K_VERSION:
             raise ValueError("incorrect_knowledge_macro_version")
     if pattern == "typed_knowledge_v1":
-        from .knowledge_macro import VERSION as K_VERSION
+        from environment.generate_question.planning.knowledge_index import VERSION as K_VERSION
         if plan.get("version") != K_VERSION:
             raise ValueError("incorrect_knowledge_macro_version")
         if len(graph["tasks"]) != len(plan["macro_tasks"]):
@@ -256,9 +256,9 @@ def validate_handoffs(scene: dict) -> dict:
     Removing the *edge input product* differs from removing a source. Every
     edge must affect the terminal Gold Answer, not merely the execution graph.
     """
-    from .compiler import execute_task
-    from .program_ir import Relation
-    from .dag import compile_waves
+    from environment.generate_question.execution.compiler import execute_task
+    from environment.generate_question.execution.program_ir import Relation
+    from environment.generate_question.execution.dag import compile_waves
 
     graph = scene["macro_graph"]
     tasks = {row["task_id"]: row for row in graph["tasks"]}

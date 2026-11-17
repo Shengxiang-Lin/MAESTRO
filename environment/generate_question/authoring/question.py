@@ -9,10 +9,10 @@ import json
 import re
 from difflib import SequenceMatcher
 
-from .spec import spec_issues, VERSION
-from .intent import intent_contract, style_contract
-from .macro_contract import macro_question_contract
-from .authoring.surface_quality import (
+from environment.generate_question.planning.spec import spec_issues, VERSION
+from environment.generate_question.authoring.intent import intent_contract, style_contract
+from environment.generate_question.auditing.macro_contract import macro_question_contract
+from environment.generate_question.authoring.surface_quality import (
     question_language_warnings, normalize_question_punctuation,
     topic_mentioned, is_explicit_user_request,
 )
@@ -151,7 +151,7 @@ def _intent_reference_question(spec: dict) -> str:
             if plan["goal_spec"]["output_spec"]["bindings"] != {
                 "answer": "entity"
             }:
-                from .goal_plan import goal_question
+                from environment.generate_question.planning.goal_plan import goal_question
                 return f"{lead} {goal_question(plan)}"
             condition = plan["condition"]
             if condition is None:
@@ -296,7 +296,7 @@ def _intent_reference_question(spec: dict) -> str:
         return options[slot]
     if spec.get("reasoning_pattern") == "typed_knowledge_v4":
         from environment.schema import digest
-        from .knowledge_macro import predicate_label
+        from environment.generate_question.planning.knowledge_index import predicate_label
         plan = spec["macro_plan"]
         clue_phrases = [
             f"{info['attribute']} '{info['value']}' in the {info['title']}"
@@ -343,7 +343,7 @@ def _intent_reference_question(spec: dict) -> str:
         return variants[slot]
     if spec.get("reasoning_pattern") == "typed_knowledge_v3":
         from environment.schema import digest
-        from .knowledge_macro import predicate_label
+        from environment.generate_question.planning.knowledge_index import predicate_label
         plan = spec["macro_plan"]
         clues = [
             f"{item['attribute']} '{item['value']}' in the {item['title']}"
@@ -714,7 +714,7 @@ def guard_question(question: str, spec: dict,
         # every underlying relation concept, not exact surface wording.
         # This is a conservative semantic *surface* check in addition to
         # the existing Question Critic, never a proof of equivalence.
-        from .task_plan import _predicate_key
+        from environment.generate_question.planning.task_plan import _predicate_key
         goal = spec["macro_plan"]["goal"]["semantic"]
         patterns = {
             "birthplace": r"\b(?:birth\s?place|born)\b",
@@ -864,7 +864,7 @@ def guard_question(question: str, spec: dict,
     if pattern == "macro_first_v2":
         plan = spec["macro_plan"]
         mode, clues = plan["pattern"], plan["clues"]
-        from .macro_planning import GOAL_PHRASES
+        from environment.generate_question.macro_planning import GOAL_PHRASES
         label = plan["goal"]["public_label"]
         goal_field = plan["goal"]["answer_field"]
         mentions_goal = any(
@@ -926,14 +926,14 @@ def guard_question(question: str, spec: dict,
                      topic_masked, re.I):
             errors.append("macro_first_v2_meta_fiction_framing")
         if spec.get("semantic_evidence_contract_version"):
-            from .semantic_evidence import (
+            from environment.generate_question.authoring.semantic_evidence import (
                 compile_semantic_contract, semantic_text_issues
             )
             errors.extend(semantic_text_issues(
                 q, spec, compile_semantic_contract(spec),
             ))
         if spec.get("question_semantic_lock_version"):
-            from .authoring.question_checks import (
+            from environment.generate_question.authoring.question_checks import (
                 question_semantic_lock_issues,
             )
             errors.extend(question_semantic_lock_issues(q, spec))
@@ -1021,7 +1021,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             for i, task in enumerate(macro_graph["tasks"])
         ]
     if spec.get("semantic_evidence_contract_version"):
-        from .semantic_evidence import compile_semantic_contract
+        from environment.generate_question.authoring.semantic_evidence import compile_semantic_contract
         instruction["semantic_evidence_contract"] = compile_semantic_contract(spec)
     if max_revisions < 0 or max_revisions > 8:
         raise ValueError("revisions must be 0..8")
@@ -1064,7 +1064,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
         if compact_task_plan:
             plan = spec["macro_plan"]
             goal = plan["goal"]["semantic"]
-            from .goal_plan import goal_question
+            from environment.generate_question.planning.goal_plan import goal_question
             goal_spec = plan["goal_spec"]
             author_contract["semantic_goal_question"] = goal_question(plan)
             author_contract["goal_operations"] = [
@@ -1105,7 +1105,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                         "Do not introduce one."
                     )
         if spec.get("question_semantic_lock_version"):
-            from .authoring.question_checks import question_author_requirements
+            from environment.generate_question.authoring.question_checks import question_author_requirements
             author_contract["mandatory_question_semantics"] = (
                 question_author_requirements(spec)
             )
@@ -1207,7 +1207,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                           "exact grounded topic label and temporal direction.",
         }, ensure_ascii=False)
         try:
-            from .authoring.prompt_templates import (
+            from environment.generate_question.authoring.prompt_templates import (
                 QUESTION_AUTHOR, QUESTION_CRITIC, QUESTION_AUTHOR_SINGLE_SLOT,
                 TASK_PLAN_QUESTION_AUTHOR, TASK_PLAN_QUESTION_CRITIC,
             )
@@ -1250,7 +1250,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 # verbose private operator/DAG walkthrough. The public
                 # Question should never be forced to narrate Gold steps.
                 plan = spec["macro_plan"]
-                from .goal_plan import goal_question
+                from environment.generate_question.planning.goal_plan import goal_question
                 goal_spec = plan["goal_spec"]
                 goal_kind = goal_spec["source_profile"]
                 target_question = goal_question(plan)

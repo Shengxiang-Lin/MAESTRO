@@ -146,7 +146,7 @@ def intent_contract(spec: dict) -> dict:
             "goal_constrained_yago_grounding_v1"
         ):
             goal = plan["goal"]["semantic"]
-            from .goal_plan import goal_question
+            from environment.generate_question.planning.goal_plan import goal_question
             final_question = goal_question(plan)
             constraints.extend([
                 "The precise final user goal must be semantically equivalent "
@@ -274,7 +274,7 @@ def intent_contract(spec: dict) -> dict:
         constraints = constraints[:1]
     applied_clues = None
     if spec.get("semantic_evidence_contract_version"):
-        from .semantic_evidence import compile_semantic_contract
+        from environment.generate_question.authoring.semantic_evidence import compile_semantic_contract
         applied_clues = compile_semantic_contract(spec)[
             "necessary_question_clues"
         ]

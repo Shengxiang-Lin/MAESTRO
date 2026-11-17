@@ -8,18 +8,18 @@ from __future__ import annotations
 import copy
 import json
 
-from .program_ir import (
+from environment.generate_question.execution.program_ir import (
     MissingSourceError, answer_values, evaluate_program, program_complexity,
 )
-from .compiler import (
+from environment.generate_question.execution.compiler import (
     compile_macro_tasks, compile_frozen_macro_plan,
     oracle_schedule, run_macro_tasks,
 )
-from .world import build_scene, generate_world, compile_program
-from .question import guard_question
-from .spec import spec_issues, VERSION
-from .macro_contract import macro_question_contract
-from .evidence_tools import validate_scene_evidence_tools
+from environment.generate_question.execution.world import build_scene, generate_world, compile_program
+from environment.generate_question.authoring.question import guard_question
+from environment.generate_question.planning.spec import spec_issues, VERSION
+from environment.generate_question.auditing.macro_contract import macro_question_contract
+from environment.generate_question.execution.evidence_tools import validate_scene_evidence_tools
 
 
 def _mutate_answer_witness(sources: dict, source_id: str,
@@ -37,28 +37,28 @@ def _mutate_answer_witness(sources: dict, source_id: str,
     if not refs:
         raise ValueError("missing_gold_source_witness:" + source_id)
     if (spec or {}).get("reasoning_pattern") == "task_plan":
-        from .task_plan_runtime import mutate_witness
+        from environment.generate_question.execution.task_plan_runtime import mutate_witness
         return mutate_witness(sources, source_id, gold_workproducts, spec)
     if (spec or {}).get("reasoning_pattern") == "task_graph_first_v2":
-        from .task_graph_first_v2 import mutate_witness
+        from environment.generate_question.task_graph_first_v2 import mutate_witness
         return mutate_witness(sources, source_id, gold_workproducts, spec)
     if (spec or {}).get("reasoning_pattern") == "task_graph_first_v1":
-        from .task_graph_first import mutate_witness
+        from environment.generate_question.task_graph_first import mutate_witness
         return mutate_witness(sources, source_id, gold_workproducts, spec)
     if (spec or {}).get("reasoning_pattern") == "typed_knowledge_v4":
-        from .hybrid_world_v4 import mutate_witness
+        from environment.generate_question.hybrid_world_v4 import mutate_witness
         return mutate_witness(sources, source_id, gold_workproducts, spec)
     if (spec or {}).get("reasoning_pattern") == "typed_knowledge_v3":
-        from .hybrid_world import mutate_witness
+        from environment.generate_question.hybrid_world import mutate_witness
         return mutate_witness(sources, source_id, gold_workproducts, spec)
     if (spec or {}).get("reasoning_pattern") == "typed_knowledge_v2":
-        from .knowledge_macro_v2 import mutate_witness
+        from environment.generate_question.knowledge_macro_v2 import mutate_witness
         return mutate_witness(sources, source_id, gold_workproducts, spec)
     if (spec or {}).get("reasoning_pattern") == "typed_knowledge_v1":
-        from .knowledge_macro import mutate_witness
+        from environment.generate_question.planning.knowledge_index import mutate_witness
         return mutate_witness(sources, source_id, gold_workproducts, spec)
     if (spec or {}).get("reasoning_pattern") == "macro_first_v2":
-        from .macro_evidence_world import mutate_witness
+        from environment.generate_question.macro_evidence_world import mutate_witness
         return mutate_witness(sources, source_id, gold_workproducts, spec)
     revised = copy.deepcopy(sources)
     rows = revised[source_id]["observations"]
@@ -130,8 +130,8 @@ def _audit_operator_grammar_equivalence(scene: dict, execution: dict) -> dict:
     This verifies concrete witness equivalence, not universal theorem-level
     equivalence across all possible World values.
     """
-    from .operator_grammar import canonical_spec
-    from .macro_planning import compile_macro_solvers
+    from environment.generate_question.operator_grammar import canonical_spec
+    from environment.generate_question.macro_planning import compile_macro_solvers
 
     canonical = compile_macro_solvers(canonical_spec(scene["problem_spec"]))
     baseline = evaluate_program(canonical, sources=scene["world"]["sources"])
@@ -210,7 +210,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
     if scene["question_origin"] == "deterministic_frozen_problem_spec":
         issues.extend(guard_question(scene["question"], spec, scene.get("macro_graph")))
     if spec.get("semantic_evidence_contract_version"):
-        from .semantic_evidence import (
+        from environment.generate_question.authoring.semantic_evidence import (
             compile_semantic_contract, semantic_scenario_issues
         )
         expected_contract = compile_semantic_contract(spec, program=program)
@@ -223,7 +223,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
     evidence_relation_audit = None
     try:
         if spec.get("evidence_relation_version"):
-            from .evidence_relations import (
+            from environment.generate_question.auditing.evidence_relations import (
                 VERSION as RELATION_VERSION, compile_evidence_ledger,
             )
             if spec["evidence_relation_version"] != RELATION_VERSION:
@@ -319,7 +319,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         }
         if provenance != set(world["sources"]):
             issues.append("macro_first_missing_source_witness")
-        from .macro_contract import validate_handoffs
+        from environment.generate_question.auditing.macro_contract import validate_handoffs
         handoff_report = validate_handoffs(scene)
         if not handoff_report["all_handoffs_necessary"]:
             issues.append("macro_first_redundant_macro_handoffs")
@@ -335,7 +335,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
     information_report = None
     if (spec.get("macro_information_necessity_version")
             and spec.get("macro_plan", {}).get("information_necessity_policy")):
-        from .information_necessity import audit_candidate_information
+        from environment.generate_question.auditing.information_necessity import audit_candidate_information
         information_report = audit_candidate_information(scene)
         if not information_report["passed"]:
             issues.append("macro_branches_not_informationally_necessary")
@@ -438,7 +438,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         }
         if (spec.get("reasoning_pattern") == "macro_first_v2"
                 and spec.get("scene_realism_version")):
-            from .auditing.difficulty_proxy import scene_difficulty_profile
+            from environment.generate_question.auditing.difficulty_proxy import scene_difficulty_profile
             result["macro_first_audit"]["structural_difficulty_profile"] = (
                 scene_difficulty_profile(
                     scene, information_report=information_report
@@ -457,7 +457,7 @@ def compile_and_validate(spec: dict, question: str) -> dict:
     )
     scene["macro_graph"] = graph
     if spec.get("semantic_evidence_contract_version"):
-        from .semantic_evidence import compile_semantic_contract
+        from environment.generate_question.authoring.semantic_evidence import compile_semantic_contract
         scene["semantic_evidence_contract"] = compile_semantic_contract(
             spec, program=program
         )
@@ -465,7 +465,7 @@ def compile_and_validate(spec: dict, question: str) -> dict:
         graph, sources=scene["world"]["sources"]
     )["task_feedback"]
     if spec.get("evidence_relation_version"):
-        from .evidence_relations import compile_evidence_ledger
+        from environment.generate_question.auditing.evidence_relations import compile_evidence_ledger
         scene["evidence_ledger"] = compile_evidence_ledger(scene)
     report = audit_scene(scene)
     if report["status"] != "valid":

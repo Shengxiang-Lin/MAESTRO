@@ -6,9 +6,9 @@ Teacher-World access is possible during execution.
 """
 from __future__ import annotations
 
-from .dag import compile_waves
-from .evidence_tools import tools_from_primitive_steps
-from .program_ir import (
+from environment.generate_question.execution.dag import compile_waves
+from environment.generate_question.execution.evidence_tools import tools_from_primitive_steps
+from environment.generate_question.execution.program_ir import (
     MissingSourceError, ProgramError, Relation, _apply, _scan, _lookup_by_key,
     answer_values, evaluate_program, validate_program,
 )
@@ -403,40 +403,40 @@ def compile_frozen_macro_plan(spec: dict, program: dict,
     primitive dependency fails closed.
     """
     if spec.get("reasoning_pattern") == "task_plan":
-        from .task_plan import validate_spec as validate_macro_first_spec
-        from .task_plan_runtime import compile_macro_solvers
+        from environment.generate_question.planning.task_plan import validate_spec as validate_macro_first_spec
+        from environment.generate_question.execution.task_plan_runtime import compile_macro_solvers
     elif spec.get("reasoning_pattern") == "task_graph_first_v2":
-        from .task_graph_first_v2 import (
+        from environment.generate_question.task_graph_first_v2 import (
             validate_spec as validate_macro_first_spec,
             compile_macro_solvers,
         )
     elif spec.get("reasoning_pattern") == "task_graph_first_v1":
-        from .task_graph_first import (
+        from environment.generate_question.task_graph_first import (
             validate_spec as validate_macro_first_spec,
             compile_macro_solvers,
         )
     elif spec.get("reasoning_pattern") == "typed_knowledge_v4":
-        from .hybrid_world_v4 import (
+        from environment.generate_question.hybrid_world_v4 import (
             validate_spec as validate_macro_first_spec,
             compile_macro_solvers,
         )
     elif spec.get("reasoning_pattern") == "typed_knowledge_v3":
-        from .hybrid_world import (
+        from environment.generate_question.hybrid_world import (
             validate_spec as validate_macro_first_spec,
             compile_macro_solvers,
         )
     elif spec.get("reasoning_pattern") == "typed_knowledge_v2":
-        from .knowledge_macro_v2 import (
+        from environment.generate_question.knowledge_macro_v2 import (
             validate_spec as validate_macro_first_spec,
             compile_macro_solvers,
         )
     elif spec.get("reasoning_pattern") == "typed_knowledge_v1":
-        from .knowledge_macro import (
+        from environment.generate_question.planning.knowledge_index import (
             validate_spec as validate_macro_first_spec,
             compile_macro_solvers,
         )
     else:
-        from .macro_planning import (
+        from environment.generate_question.macro_planning import (
             validate_spec as validate_macro_first_spec,
             compile_macro_solvers,
         )
