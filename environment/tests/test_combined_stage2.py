@@ -32,6 +32,12 @@ class Author:
                 "operations for this specific handoff. The exact records "
                 "were returned without inventing any later eligibility test."
             ),
+            "trace_narrative": (
+                "I compared the descriptions in the supplied evidence records "
+                "and traced which named observations supported the returned "
+                "identifiers. This establishes the current handoff only, "
+                "without assuming a later eligibility or verification step."
+            ),
             "status": "done",
         }
 
@@ -113,6 +119,13 @@ class CombinedStage2Tests(unittest.TestCase):
                                  code_owned_result(before))
                 self.assertEqual(after["report_authoring"]["result_policy"],
                                  "code_owned")
+                self.assertGreater(
+                    len(after["trace_summary"]["narrative"]), 60
+                )
+                self.assertIn(
+                    "supplied evidence records",
+                    after["trace_summary"]["narrative"],
+                )
 
     def test_oracle_rebuilt_after_report_interruption(self):
         from environment.implement_subtask.pipeline import materialize_subtasks
