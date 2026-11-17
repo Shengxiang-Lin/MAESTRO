@@ -193,8 +193,8 @@ def render_delivered_result(contract: dict) -> str:
                 f"The handoff contains {len(rows)} delivered records: "
                 + "; ".join(render(row) for row in rows) + "."
             )
-        if contract["delivery_status"] == "partial":
-            missing = contract["unresolved_fields"]
+        if contract.get("delivery_status") == "partial":
+            missing = contract.get("unresolved_fields", [])
             if "remaining_rows" in missing:
                 result += " This is an incomplete delivered row set."
             elif missing:
