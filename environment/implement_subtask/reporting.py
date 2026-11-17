@@ -679,6 +679,13 @@ the trace itself confirms it. Do not invent errors, retries or omissions.
 
 Neither field may expose raw SQL/graph operator names, field-schema
 labels, Macro/work_M identifiers, FactRefs or 'workproduct', 'row(s)'.
+Natural source titles such as "Project event ledger" and phrases such as
+"project identifier" ARE legitimate domain names, not SQL projection.
+Preserve source titles instead of avoiding the noun "project".
+Keep evidence at its actual grain: an observation count grouped by an
+entity/location is not necessarily a count belonging to an upstream
+dossier. Do not reattribute measured results to a dossier, project or
+other entity unless the supplied observation explicitly links them.
 Avoid repetitive procedure narration. Prefer concise investigation
 findings that help Main plan follow-up tasks.
 
