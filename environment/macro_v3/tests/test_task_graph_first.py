@@ -171,8 +171,5 @@ class MacroGraphFirstTests(unittest.TestCase):
 
 
 @unittest.skipUnless(RDF_READY, "pyoxigraph required")
-class TaskGraphFirstCanonicalCliTests(unittest.TestCase):
-
-
 if __name__ == "__main__":
     unittest.main()
