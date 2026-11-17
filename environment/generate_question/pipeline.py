@@ -328,6 +328,25 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                            != node.get("source_key_field")
                         for node in keyed
                     )
+                if spec.get("reasoning_pattern") == "task_plan":
+                    # Count *executed-source* annotation predicates rather
+                    # than only legacy compare_fields primitive names.
+                    # This measures synthetic evidence affordances, not
+                    # real binary image/audio/video perception.
+                    scopes = {
+                        sid for macro in spec["macro_plan"]["macro_tasks"]
+                        for sid in macro["source_scope"]
+                    }
+                    for sid, role in declared.items():
+                        if sid not in scopes or role["modality"] not in {
+                            "image", "audio", "video"
+                        }:
+                            continue
+                        for observation in scene["world"]["sources"][sid]["observations"]:
+                            semantic = observation.get("observation_semantics", {})
+                            predicate = semantic.get("predicate")
+                            if predicate:
+                                operational_media_fields[predicate] += 1
                 if spec.get("version") == "maestro.problem_spec.v4":
                     for node in nodes:
                         if node["op"] == "compare_fields":
@@ -888,7 +907,9 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 encoded = json.dumps(value, sort_keys=True, ensure_ascii=False)
                 answer_value_counts.setdefault(semantic, Counter())[encoded] += 1
         from .auditing.decision_opportunities import summarize_decision_opportunities
+        from .auditing.grounded_evidence import summarize_grounded_evidence
         decision_opportunities = summarize_decision_opportunities(current_scenes)
+        grounded_evidence = summarize_grounded_evidence(current_scenes)
         answer_diversity = {
             semantic: {
                 "count": sum(freq.values()),
@@ -963,6 +984,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 )),
                 "answer_value_diversity": answer_diversity,
                 "macro_decision_opportunities": decision_opportunities,
+                "grounded_evidence": grounded_evidence,
                 "answer_shortcut_warning_fields": sorted(
                     field for field, stats in answer_diversity.items()
                     if stats["potential_answer_shortcut"]

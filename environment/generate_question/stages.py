@@ -79,9 +79,14 @@ def _construction_identity(args) -> str:
         ],
         "generation_code": {
             name: file_digest(
-                Path(__file__).with_name("authoring") / name
-                if name in {"surface_quality.py"}
-                else Path(__file__).with_name(name)
+                Path(__file__).parent / (
+                    "planning" if name in {
+                        "task_plan.py", "goal_plan.py", "evidence_plan.py"
+                    } else "execution" if name in {
+                        "task_plan_runtime.py", "program_ir.py"
+                    } else "authoring" if name == "surface_quality.py"
+                    else ""
+                ) / name
             )
             for name in (
                 "task_plan.py", "task_plan_runtime.py", "goal_plan.py",

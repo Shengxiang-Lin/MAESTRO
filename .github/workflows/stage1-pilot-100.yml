@@ -1,0 +1,32 @@
+name: Stage 1 offline 100-question pilot
+
+on:
+  pull_request:
+    paths:
+      - "environment/**"
+      - ".github/workflows/stage1-pilot-100.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stage1-offline-100:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install isolated Stage-1 dependencies
+        run: python -m pip install "tqdm>=4.65" "PyYAML>=6.0" "pydantic>=2,<3" "openai>=1,<3" "pyoxigraph>=0.5,<0.6"
+      - name: Execute 100 frozen synthetic tasks with strict Replay
+        run: python -m environment.tests.stage1_pilot --target 100 --output-dir environment/data/stage1_offline_100_ci
+      - name: Upload generated tasks and audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage1-offline-100
+          path: environment/data/stage1_offline_100_ci/
+          retention-days: 14
