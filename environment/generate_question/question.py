@@ -136,10 +136,10 @@ def _intent_reference_question(spec: dict) -> str:
                 allowed = topic + " " + goal["question"]
                 def _safe_lead(candidate):
                     return not any(
-                        re.search(r"\\b" + re.escape(str(info["value"])) + r"\\b",
+                        re.search(r"\b" + re.escape(str(info["value"])) + r"\b",
                                   candidate, re.I)
                         and not re.search(
-                            r"\\b" + re.escape(str(info["value"])) + r"\\b",
+                            r"\b" + re.escape(str(info["value"])) + r"\b",
                             allowed, re.I
                         )
                         for info in plan["clues"].values()
