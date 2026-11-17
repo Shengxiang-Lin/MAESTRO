@@ -117,6 +117,39 @@ class CurrentStagePipelineTests(unittest.TestCase):
              for item in bounded["answer_with_provenance"]],
         )
 
+    def test_structured_stage2_reports_feed_validated_clean_stage3(self):
+        from environment.implement_subtask.reporting import code_owned_result
+        from environment.untrusted_orchestration.trusted_prefix import (
+            compile_trusted_prefixes,
+        )
+        scene = current_scene(8, "medium")
+        reports = []
+        for item in realize_scene(scene)["macro_tasks"]:
+            reports.append({
+                **deepcopy(item),
+                "finish_result": {
+                    "status": "done",
+                    "result": code_owned_result(item),
+                    "summary": "Reported only the source-scoped finding.",
+                },
+                "report_authoring": {"status": "accepted"},
+            })
+        expected, turns, _, status = build_episode(
+            scene, reports, freeze_dispatch=True,
+        )
+        self.assertEqual(status["status"], "accepted", status)
+        self.assertTrue(turns)
+        compiled, review = compile_trusted_prefixes(
+            [scene], reports, max_rounds=16,
+            sub_model="qwen3-8b", model_alias="model_1",
+            clean_episodes={scene["task_id"]: expected},
+        )
+        self.assertEqual(review[0]["status"], "accepted", review)
+        self.assertEqual(
+            compiled[scene["task_id"]]["clean_reference_id"],
+            expected["clean_reference_id"],
+        )
+
     def test_stage4_retry_contract_keeps_stage2_citations(self):
         from environment.untrusted_orchestration.state_machine import (
             ExecutionState,
