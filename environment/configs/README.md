@@ -38,8 +38,8 @@ separate resume safeguards.
 
 Stage 2 reviewed reports are stored in `environment/data/stage2/subtasks.jsonl`;
 its private deterministic Oracle cache is under `stage2/oracle/`.
-Stage 4 reconstructs its trusted execution prefix from Stages 1/2,
-rather than consuming Stage 3 generated Main data.
+During this pilot, Stage 4 checks and reuses the reviewed Stage 3
+`episodes.jsonl` against the frozen Stage 1/2 evidence bank.
 
 Stages 1–4 use DashScope `qwen3.8-flash` for active LLM Author/Critic
 calls. Export `DASHSCOPE_API_KEY` before running; the endpoint is
