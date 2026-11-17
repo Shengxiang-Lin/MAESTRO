@@ -631,7 +631,7 @@ def _unlicensed_task_plan_condition(question: str, plan: dict) -> list[str]:
     This high-precision guard checks only new v3 tasks; the independent
     LLM Critic remains responsible for subtler semantic entailment errors.
     """
-    if plan.get("composer_policy") != "goal_conditioned_evidence_needs_v3":
+    if plan.get("composer_policy") != "output_first":
         return []
     q = question.casefold()
     condition = plan["condition"]
@@ -1074,55 +1074,6 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 "Preserve the semantic type and calculation of each field; "
                 "do not add an intermediate entity as a separate answer."
             )
-            author_contract["required_event_condition"] = plan["condition"]
-                author_contract["output_constraint"] = (
-                    "Do not drop operations, reverse numerical direction, "
-                    "invent extra filters, or add answer fields. Exactly "
-                    "preserve the frozen output bindings."
-                )
-            elif kind != "entity_resolution":
-                from .typed_goal_v4 import numeric_goal_question
-                author_contract["semantic_goal_question"] = (
-                    numeric_goal_question(plan)
-                )
-                author_contract["goal_resolution_kind"] = kind
-                author_contract["final_answer_type"] = (
-                    plan["goal"]["answer_type"]
-                )
-                author_contract["relation_goal_question"] = goal["question"]
-                author_contract["numeric_evidence_constraints"] = {
-                    "comparison": (
-                        "Compare two independent counts; return only first "
-                        "or second, never an intermediate entity name."
-                    ),
-                    "aggregation": (
-                        "Count dated observations from 2025 onward inclusive; "
-                        "return only one integer, no event status filter."
-                    ),
-                    "numeric_difference": (
-                        "Compute the absolute difference of independently "
-                        "looked-up counts and return one integer."
-                    ),
-                    "numeric_ratio": (
-                        "Divide first independent count by the second, "
-                        "round to two decimal places."
-                    ),
-                    "temporal_gap": (
-                        "Compute absolute elapsed days between the two "
-                        "independently dated milestones."
-                    ),
-                    "geographic_distance": (
-                        "Compute a straight-line great-circle distance from "
-                        "two location coordinates; report integer kilometres."
-                    ),
-                    "structured_answer": (
-                        "Return the exact three-field structured result: "
-                        "entity, higher_source and count_difference. "
-                        "Do not invent extra answer fields."
-                    ),
-                }[kind]
-            else:
-                author_contract["semantic_goal_question"] = goal["question"]
             author_contract["required_event_condition"] = plan["condition"]
             author_contract["verification_mode"] = (
                 plan["mode"] == "verify"
