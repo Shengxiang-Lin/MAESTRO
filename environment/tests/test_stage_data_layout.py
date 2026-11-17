@@ -28,6 +28,7 @@ class CanonicalStagePathsTests(TestCase):
         main = load_main(MAIN)
         stage4 = load_untrusted(UNTRUSTED)
         root = Path(__file__).resolve().parents[1] / "data"
+        pilot = root / "pilots" / "qwen_stage234_10"
         self.assertEqual(QUESTIONS.name, "questions.yaml")
         self.assertEqual(REPORTS.name, "subagent_reports.yaml")
         self.assertEqual(MAIN.name, "main_orchestration.yaml")
@@ -38,8 +39,8 @@ class CanonicalStagePathsTests(TestCase):
             stage1["generation"]["output_dir"],
             "environment/data/stage1",
         )
-        self.assertEqual(subtask["output_dir"], root / "stage2" / "oracle")
-        self.assertEqual(reports["output_dir"], root / "stage2")
+        self.assertEqual(subtask["output_dir"], pilot / "stage2" / "oracle")
+        self.assertEqual(reports["output_dir"], pilot / "stage2")
         self.assertEqual(
             reports["source_subtasks"],
             subtask["output_dir"] / "subtasks.jsonl",
@@ -52,11 +53,17 @@ class CanonicalStagePathsTests(TestCase):
             main["reports_path"], reports["output_dir"] / "subtasks.jsonl",
         )
         self.assertEqual(stage4["reports_path"], main["reports_path"])
-        self.assertEqual(main["output_dir"], root / "stage3")
-        self.assertEqual(stage4["output_dir"], root / "stage4")
+        self.assertEqual(main["output_dir"], pilot / "stage3")
+        self.assertEqual(stage4["output_dir"], pilot / "stage4")
         for p in (subtask["output_dir"], reports["output_dir"],
                   main["output_dir"], stage4["output_dir"]):
             self.assertNotRegex(str(p), r"v\d+[_\.]\d+")
+        self.assertEqual(stage4["clean_episodes_path"],
+                         main["output_dir"] / "episodes.jsonl")
+        self.assertEqual(reports["max_scenes"], 10)
+        self.assertEqual(main["max_scenes"], 10)
+        self.assertEqual(stage4["max_scenes"], 10)
+        self.assertEqual(stage4["branches_per_scene"], 1)
         self.assertTrue(main["freeze_dispatch"])
         self.assertEqual(stage4["max_fault_atoms"], 1)
         self.assertEqual(stage4["delayed_evidence_probability"], 0.0)
