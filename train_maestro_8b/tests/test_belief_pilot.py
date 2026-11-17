@@ -27,7 +27,7 @@ def snapshot():
                 "answer_supporting_subject_private": True,
             },
         },
-        "transitions": [{
+        "state_changes": [{
             "claim_key": "project|year", "before": "unverified",
             "after": "disputed", "next_main_decision_round": 3,
         }],
@@ -164,6 +164,11 @@ class TinyLoRABeliefTests(unittest.TestCase):
             LoraConfig(task_type=TaskType.CAUSAL_LM, r=4, lora_alpha=8,
                        target_modules=["q_proj", "v_proj"]),
         )
+        from train_maestro_8b.belief.train import check_checkpointing
+        policy.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False},
+        )
+        self.assertGreater(check_checkpointing(policy.get_base_model().model), 0)
         head = EvidenceBeliefHead(32, head_size=12, dropout=0)
         ids = torch.randint(2, 128, (1, 18))
         out = policy.get_base_model().model(
