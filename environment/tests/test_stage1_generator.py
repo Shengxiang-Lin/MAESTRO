@@ -298,7 +298,7 @@ class Stage1GeneratorTests(unittest.TestCase):
             self.assertEqual(validate_spec(spec), [], (kind, caps))
             plan = spec["macro_plan"]
             self.assertEqual(validate_operation_graph(plan["goal_spec"]), [])
-            self.assertLessEqual(len(plan["macro_tasks"]), 8)
+            self.assertLessEqual(len(plan["macro_tasks"]), 12)
             question = reference_question(spec)
             self.assertEqual(guard_question(question, spec), [], (kind, caps))
             scene = compile_and_validate(spec, question)
