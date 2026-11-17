@@ -99,6 +99,14 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
     graph_counterfactual_pass = 0
     graph_parallel_widths = []
     keyed_lookup_total = 0
+    # Task Plan stores counterfactuals in macro_first_audit, not in the
+    # older evidence_acquisition block. Count its actual Gold operations
+    # directly, including the source access contract for each lookup.
+    task_plan_keyed_lookup_total = 0
+    task_plan_keyed_lookup_scenes = 0
+    task_plan_clue_keyed_lookup_total = 0
+    task_plan_clue_keyed_lookup_scenes = 0
+    task_plan_keyed_source_mismatches = 0
     v2_keyed_lookup_total = 0
     v2_keyed_lookup_scenes = 0
     acquisition_depths = []
@@ -290,6 +298,36 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 key = tuple((node["op"], tuple(node["inputs"]))
                             for node in nodes)
                 programs[str(key)] += 1
+                if spec.get("reasoning_pattern") == "task_plan":
+                    keyed = [
+                        node for node in nodes
+                        if node["op"] == "lookup_by_key"
+                    ]
+                    task_plan_keyed_lookup_total += len(keyed)
+                    task_plan_keyed_lookup_scenes += int(bool(keyed))
+                    clue_sources = {
+                        sid
+                        for task in spec["macro_plan"]["macro_tasks"]
+                        if task["operation"] == "match_clues"
+                        for sid in task["source_scope"]
+                    }
+                    clue_keyed = sum(
+                        node["source_id"] in clue_sources for node in keyed
+                    )
+                    task_plan_clue_keyed_lookup_total += clue_keyed
+                    task_plan_clue_keyed_lookup_scenes += int(clue_keyed > 0)
+                    declared = {
+                        source["source_id"]: source
+                        for source in spec["sources"]
+                    }
+                    task_plan_keyed_source_mismatches += sum(
+                        declared.get(node["source_id"], {}).get(
+                            "access_mode"
+                        ) != "keyed_lookup"
+                        or declared[node["source_id"]].get("key_field")
+                           != node.get("source_key_field")
+                        for node in keyed
+                    )
                 if spec.get("version") == "maestro.problem_spec.v4":
                     for node in nodes:
                         if node["op"] == "compare_fields":
@@ -613,12 +651,31 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             "scope": "Frozen synthetic typed graphs, not independently solved agent tasks.",
         },
         "evidence_acquisition": {
-            "scenes_with_keyed_clue_chain": acquisition_scenes,
+            "scenes_with_keyed_clue_chain": (
+                acquisition_scenes + task_plan_clue_keyed_lookup_scenes
+            ),
             "scenes_with_keyed_acquisition": (
                 acquisition_scenes + v2_keyed_lookup_scenes
+                + task_plan_keyed_lookup_scenes
             ),
-            "keyed_lookup_count": keyed_lookup_total + v2_keyed_lookup_total,
-            "clue_chain_keyed_lookup_count": keyed_lookup_total,
+            "keyed_lookup_count": (
+                keyed_lookup_total + v2_keyed_lookup_total
+                + task_plan_keyed_lookup_total
+            ),
+            "clue_chain_keyed_lookup_count": (
+                keyed_lookup_total + task_plan_clue_keyed_lookup_total
+            ),
+            "task_plan_keyed_lookup_count": task_plan_keyed_lookup_total,
+            "task_plan_scenes_with_keyed_lookup": task_plan_keyed_lookup_scenes,
+            "task_plan_clue_keyed_lookup_count": (
+                task_plan_clue_keyed_lookup_total
+            ),
+            "task_plan_scenes_with_keyed_clue_chain": (
+                task_plan_clue_keyed_lookup_scenes
+            ),
+            "task_plan_keyed_source_contract_mismatches": (
+                task_plan_keyed_source_mismatches
+            ),
             "v2_keyed_lookup_count": v2_keyed_lookup_total,
             "v2_scenes_with_keyed_lookup": v2_keyed_lookup_scenes,
             "mean_evidence_acquisition_depth": (
