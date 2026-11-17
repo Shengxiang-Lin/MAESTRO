@@ -100,12 +100,15 @@ def intent_contract(spec: dict) -> dict:
         constraints = [
             "Combine the independently recorded identifying clues.",
             "Identify the matching dossier before following its relationship records.",
-            ("Report ONLY the comparison result, not the relation-linked "
-             "entity or intermediate tallies."
-             if goal_kind == "comparison" else
-             "Report ONLY the integer count of qualifying dated observations."
-             if goal_kind == "aggregation" else
-             "Report the entity reached by the documented relation sequence."),
+            (
+                "Report ONLY the entity at the end of the relation chain."
+                if goal_kind == "entity_resolution" else
+                "Report ONLY the frozen typed Goal output: "
+                + plan["goal"]["public_label"] + ". "
+                + ("Preserve the exact three-field structured answer."
+                   if goal_kind == "structured_answer" else
+                   "Do not request an additional intermediate entity.")
+            ),
             "Write the user request as an ordinary archival investigation; "
             "do not mention generators, simulated worlds, YAGO or provenance.",
             "Do not assert unsupported external historical facts.",
