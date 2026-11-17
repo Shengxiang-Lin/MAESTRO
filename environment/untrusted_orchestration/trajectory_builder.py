@@ -22,6 +22,7 @@ from environment.base_orchestration.o1_compat import (
 )
 from environment.base_orchestration.trajectory_builder import (
     _answer_text, _strict_reports, _main_local_terminal,
+    clean_reference_identity,
 )
 from .faults import Fault, FaultUnsupported, choose_targets
 from .atomic_faults import AtomicFault
@@ -368,6 +369,11 @@ def build_branch(
     if base_episode.get("task_id") != scene["task_id"]:
         raise ValueError("base_episode_wrong_scene")
     reviewed = _strict_reports(scene, stage2_rows)
+    clean_identity = clean_reference_identity(scene, reviewed)
+    declared_reference = base_episode.get("clean_reference_id")
+    if (declared_reference is not None and
+            declared_reference != clean_identity["clean_reference_id"]):
+        raise ValueError("stage4_clean_reference_fingerprint_mismatch")
     state, task_entries, trajectory, injected = _clean_prefix(
         scene, reviewed, base_episode,
         branch_round=branch_round, faults=faults,
@@ -744,6 +750,7 @@ def build_branch(
     episode = {
         "task_id": scene["task_id"], "question": scene["question"],
         "format": "maestro_untrusted_round_branch.v1",
+        "clean_reference_id": clean_identity["clean_reference_id"],
         "branch_round": branch_round,
         "trajectory": trajectory,
         "outcome": stopped,
@@ -752,6 +759,7 @@ def build_branch(
     }
     audit = {
         "task_id": scene["task_id"], "branch_round": branch_round,
+        "clean_reference_identity": clean_identity,
         "faults": injected,
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
