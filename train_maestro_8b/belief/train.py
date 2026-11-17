@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import nullcontext
 import json
 import math
 from pathlib import Path
@@ -53,6 +54,7 @@ class BeliefDataset(Dataset):
         self.offsets = []
         self.overlong = 0
         self.class_counts = Counter()
+        self.token_lengths = []
         with self.path.open("rb") as handle:
             while True:
                 offset = handle.tell()
@@ -68,6 +70,7 @@ class BeliefDataset(Dataset):
                     self.overlong += 1
                     continue  # Never truncate the earlier evidence.
                 self.offsets.append(offset)
+                self.token_lengths.append(len(tokens))
                 self.class_counts.update(
                     report["belief_label"] for report in record["reports"]
                     if report["belief_label"] != UNKNOWN
@@ -133,12 +136,39 @@ class BeliefCollator:
         }
 
 
+def safe_attention_context(attention_backend: str):
+    """Fail closed instead of using quadratic-memory math SDPA at long length."""
+    if attention_backend != "sdpa":
+        return nullcontext()
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+    return sdpa_kernel([SDPBackend.FLASH_ATTENTION,
+                        SDPBackend.EFFICIENT_ATTENTION])
+
+
+def check_checkpointing(backbone):
+    """Verify checkpointing on the decoder ACTUALLY called by Stage1."""
+    enabled = [
+        module for module in backbone.modules()
+        if getattr(module, "gradient_checkpointing", False)
+    ]
+    if not enabled:
+        raise RuntimeError(
+            "No gradient-checkpointed Qwen decoder modules found in "
+            "the live LoRA backbone. Long-context training would OOM."
+        )
+    return len(enabled)
+
+
 def make_lora_backbone(model_name: str, *, load_in_4bit: bool,
-                       rank: int, alpha: int, max_length: int):
+                       rank: int, alpha: int, max_length: int,
+                       attention_backend: str = "sdpa"):
     """PEFT CausalLM architecture matches the Stage2 LoRA target modules."""
     from transformers import AutoModelForCausalLM
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-    kwargs = {"torch_dtype": torch.bfloat16, "attn_implementation": "sdpa"}
+    if attention_backend not in ("sdpa", "flash_attention_2"):
+        raise ValueError("Unsupported attention backend")
+    kwargs = {"dtype": torch.bfloat16,
+              "attn_implementation": attention_backend}
     if load_in_4bit:
         from transformers import BitsAndBytesConfig
         kwargs["quantization_config"] = BitsAndBytesConfig(
@@ -162,6 +192,11 @@ def make_lora_backbone(model_name: str, *, load_in_4bit: bool,
         lora_dropout=0.0, bias="none", target_modules=TARGET_MODULES,
     )
     model = get_peft_model(base, config)
+    # Stage1 calls the inner decoder directly, bypassing CausalLM.forward.
+    # Verify that gradient checkpointing was propagated after PEFT wrapping.
+    model.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+    )
     if not load_in_4bit:
         model.to("cuda")
     # Avoid computing giant vocabulary logits in belief-only Stage1.
@@ -169,6 +204,9 @@ def make_lora_backbone(model_name: str, *, load_in_4bit: bool,
     backbone = model.get_base_model().model
     if not hasattr(backbone, "forward"):
         raise RuntimeError("Cannot access LoRA-enabled Qwen3 base model")
+    count = check_checkpointing(backbone)
+    print(f"[MAESTRO/Stage1] gradient_checkpointing_enabled: {count} modules",
+          flush=True)
     return model, backbone
 
 
@@ -262,7 +300,10 @@ def parse_args(argv=None):
     p.add_argument("--train_file", default="environment/data/stage4/private/evidence_belief/train.jsonl")
     p.add_argument("--val_file", default="environment/data/stage4/private/evidence_belief/val.jsonl")
     p.add_argument("--output_dir", default="workspace/maestro_8b/checkpoints/belief-stage1-pilot")
-    p.add_argument("--max_length", type=int, default=8192)
+    p.add_argument("--max_length", type=int, default=4096,
+                   help="No-truncation context max; 8192 only after GPU pilot.")
+    p.add_argument("--attention_backend", choices=("sdpa", "flash_attention_2"),
+                   default="sdpa", help="SDPA math fallback disabled.")
     p.add_argument("--epochs", type=int, default=2)
     p.add_argument("--batch_size", type=int, default=1)
     p.add_argument("--grad_accum", type=int, default=4)
@@ -305,13 +346,24 @@ def main(argv=None):
         raise ValueError("No Stage1 belief rows within context length")
     if val_set is not None and not len(val_set):
         val_set = None
+    lengths = sorted(train_set.token_lengths)
     print("[MAESTRO/Stage1] data " + json.dumps({
         "schema": SCHEMA, "train": len(train_set),
         "validation": len(val_set) if val_set else 0,
         "train_overlong": train_set.overlong,
         "val_overlong": val_set.overlong if val_set else 0,
         "train_class_counts": dict(train_set.class_counts),
+        "token_length_p50": lengths[len(lengths) // 2],
+        "token_length_p90": lengths[min(len(lengths) - 1, int(len(lengths) * 0.9))],
+        "token_length_max": lengths[-1],
     }), flush=True)
+    missing = [CLASSES[i] for i in (1, 2) if not train_set.class_counts[i]]
+    if missing:
+        print("[MAESTRO/Stage1] WARNING: no examples for " +
+              ", ".join(missing) +
+              "; this dataset cannot test independent corroboration or "
+              "disputed beliefs. Inspect and diversify Stage4 evidence.",
+              flush=True)
     collator = BeliefCollator(tokenizer, args.max_length)
     train_loader = DataLoader(
         train_set, batch_size=args.batch_size, shuffle=True, collate_fn=collator,
@@ -321,8 +373,16 @@ def main(argv=None):
     policy, backbone = make_lora_backbone(
         args.model, load_in_4bit=args.load_in_4bit,
         rank=args.lora_rank, alpha=args.lora_alpha, max_length=args.max_length,
+        attention_backend=args.attention_backend,
     )
     device = next(backbone.parameters()).device
+    if torch.cuda.is_available():
+        allocated = round(torch.cuda.memory_allocated() / 2**30, 2)
+        reserved = round(torch.cuda.memory_reserved() / 2**30, 2)
+        print(f"[MAESTRO/Stage1] GPU after load: allocated={allocated}GiB "
+              f"reserved={reserved}GiB; attention={args.attention_backend}",
+              flush=True)
+        torch.cuda.reset_peak_memory_stats()
     head = EvidenceBeliefHead(
         policy.config.hidden_size, head_size=args.head_size
     ).to(device)
@@ -355,12 +415,20 @@ def main(argv=None):
     head.train()
     for epoch in range(args.epochs):
         for i, batch in enumerate(train_loader):
-            result = belief_forward(
-                backbone, head, batch, device=device,
-                state_weight=class_weight,
-                update_loss_weight=args.update_loss_weight,
-            )
-            (result["loss"] / args.grad_accum).backward()
+            try:
+                with safe_attention_context(args.attention_backend):
+                    result = belief_forward(
+                        backbone, head, batch, device=device,
+                        state_weight=class_weight,
+                        update_loss_weight=args.update_loss_weight,
+                    )
+                    (result["loss"] / args.grad_accum).backward()
+            except torch.OutOfMemoryError:
+                print("[MAESTRO/Stage1] CUDA OOM: try BELIEF_MAX_LENGTH=2048 "
+                      "or 4096, check nvidia-smi, or use "
+                      "--attention_backend flash_attention_2 if supported. "
+                      "No prompt truncation is used.", flush=True)
+                raise
             accumulation += 1
             if accumulation == args.grad_accum or i + 1 == len(train_loader):
                 # If no LoRA gradient exists, Head-only fitting is a bug.
@@ -383,13 +451,16 @@ def main(argv=None):
                         "update_loss": round(float(result["update_loss"].detach()), 6),
                         "n_states": result["state_count"],
                         "n_updates": result["update_count"],
+                        "gpu_peak_allocated_GiB": round(
+                            torch.cuda.max_memory_allocated() / 2**30, 2),
                     }), flush=True)
                 if steps >= max_steps:
                     break
         if val_loader is not None:
-            score = evaluate(backbone, head, val_loader, device=device,
-                             state_weight=class_weight,
-                             update_loss_weight=args.update_loss_weight)
+            with safe_attention_context(args.attention_backend):
+                score = evaluate(backbone, head, val_loader, device=device,
+                                 state_weight=class_weight,
+                                 update_loss_weight=args.update_loss_weight)
             metrics.append({"epoch": epoch + 1, "step": steps, **score})
             print("[MAESTRO/Stage1] validation: " +
                   json.dumps(metrics[-1], ensure_ascii=False), flush=True)
@@ -407,7 +478,9 @@ def main(argv=None):
         "lora_rank": args.lora_rank, "lora_alpha": args.lora_alpha,
         "lora_target_modules": TARGET_MODULES,
         "head_size": args.head_size, "classes": list(CLASSES),
-        "max_length": args.max_length, "trained_parameters": "lora_plus_head",
+        "max_length": args.max_length,
+        "attention_backend": args.attention_backend,
+        "trained_parameters": "lora_plus_head",
         "quantization": "nf4" if args.load_in_4bit else "bf16",
         "steps": steps, "train_samples": len(train_set),
         "val_samples": len(val_set) if val_set else 0,

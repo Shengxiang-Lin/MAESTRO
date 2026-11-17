@@ -17,7 +17,7 @@ from train_maestro_8b.data.export_risk import (
     branch_from_sample_id, index_states, render_samples,
 )
 
-SCHEMA = "maestro.evidence_belief.v1"
+SCHEMA = "maestro.evidence_belief.v2"
 CLASSES = ("unverified", "corroborated", "disputed", "partial")
 CLASS_TO_ID = {name: idx for idx, name in enumerate(CLASSES)}
 # The exporter is conservative: a report with multiple incompatible
@@ -79,7 +79,7 @@ def annotate_beliefs(risk_row: dict, state: dict) -> dict | None:
                 task_keys.setdefault(task, set()).add(key)
     transitions = {
         item["claim_key"]
-        for item in state.get("transitions", [])
+        for item in state.get("state_changes", [])
         if item.get("before") not in (None, "missing")
         and item.get("before") != item.get("after")
         and item.get("next_main_decision_round") == risk_row["decision_round"]
@@ -188,6 +188,17 @@ def export(scenes_path, episodes_path, states_path, output_dir,
     stats["episodes"] = len(seen)
     stats["schema"] = SCHEMA
     stats["classes"] = list(CLASSES)
+    stats["missing_core_states"] = [
+        state for state in ("corroborated", "disputed")
+        if not stats["status_" + state]
+    ]
+    stats["warning"] = (
+        "Missing core belief states: " +
+        ", ".join(stats["missing_core_states"]) +
+        ". Current Stage4 accepted episodes do not provide sufficient "
+        "supervision for those abilities."
+        if stats["missing_core_states"] else None
+    )
     result = dict(stats)
     (output / "summary.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

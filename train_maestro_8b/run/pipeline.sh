@@ -23,7 +23,8 @@ DA_REVIEWED_ONLY="${DA_REVIEWED_ONLY:-0}"
 RISK_DATA="${RISK_DATA:-$STAGE4_DIR/private/window_risk}"
 BELIEF_DATA="${BELIEF_DATA:-$STAGE4_DIR/private/evidence_belief}"
 BELIEF_CKPT="${BELIEF_CKPT:-$RUN_ROOT/checkpoints/belief-stage1-pilot}"
-BELIEF_MAX_LENGTH="${BELIEF_MAX_LENGTH:-8192}"
+BELIEF_MAX_LENGTH="${BELIEF_MAX_LENGTH:-4096}"
+BELIEF_ATTN_BACKEND="${BELIEF_ATTN_BACKEND:-sdpa}"
 BELIEF_EPOCHS="${BELIEF_EPOCHS:-2}"
 BELIEF_MAX_STEPS="${BELIEF_MAX_STEPS:--1}"
 BELIEF_GRAD_ACCUM="${BELIEF_GRAD_ACCUM:-4}"
@@ -120,7 +121,7 @@ Override settings via environment variables or run/config.env:
   MODEL, STAGE1_DIR, STAGE4_DIR, RUN_ROOT, MAX_LENGTH,
   BELIEF_DATA, BELIEF_CKPT, BELIEF_MAX_LENGTH, BELIEF_EPOCHS,
   BELIEF_MAX_STEPS, BELIEF_GRAD_ACCUM, BELIEF_BATCH_SIZE,
-  BELIEF_LR, BELIEF_HEAD_LR, STAGE1_BELIEF_ADAPTER,
+  BELIEF_LR, BELIEF_HEAD_LR, BELIEF_ATTN_BACKEND, STAGE1_BELIEF_ADAPTER,
   RISK_EPOCHS, RISK_BATCH_SIZE, GRPO_EPOCHS, GRPO_GENERATIONS,
   GRPO_GRAD_ACCUM, GRPO_MAX_PROMPT_TOKENS, GRPO_MAX_NEW_TOKENS,
   GRPO_TEMPERATURE, PILOT_MAX_NEW_TOKENS, GRPO_MAX_STEPS,
@@ -143,8 +144,17 @@ belief_export() {
   need "$STAGE4_DIR/episodes.jsonl"
   need "$STAGE4_DIR/private/claim_state_supervision.jsonl"
   if [[ "$SKIP_COMPLETED" == "1" && -s "$BELIEF_DATA/train.jsonl" &&
-        -f "$BELIEF_DATA/summary.json" ]]; then
-    say "Reusing Stage1 belief rows: $BELIEF_DATA"; return
+        -f "$BELIEF_DATA/summary.json" ]] &&
+        python - "$BELIEF_DATA/summary.json" <<'PY'
+import json,sys
+try:
+    obj=json.load(open(sys.argv[1], encoding="utf-8"))
+    assert obj["schema"] == "maestro.evidence_belief.v2"
+except (OSError, ValueError, KeyError, AssertionError):
+    sys.exit(1)
+PY
+  then
+    say "Reusing Stage1 belief v2 rows: $BELIEF_DATA"; return
   fi
   say "Export Stage1 belief labels with exact O1 histories"
   python -m train_maestro_8b.data.export_belief \
@@ -165,7 +175,7 @@ belief_train() {
     --model "$MODEL" --train_file "$BELIEF_DATA/train.jsonl" \
     --val_file "$BELIEF_DATA/val.jsonl" \
     --output_dir "$BELIEF_CKPT" \
-    --max_length "$BELIEF_MAX_LENGTH" \
+    --max_length "$BELIEF_MAX_LENGTH" --attention_backend "$BELIEF_ATTN_BACKEND" \
     --epochs "$BELIEF_EPOCHS" --max_steps "$BELIEF_MAX_STEPS" \
     --batch_size "$BELIEF_BATCH_SIZE" --grad_accum "$BELIEF_GRAD_ACCUM" \
     --lr "$BELIEF_LR" --head_lr "$BELIEF_HEAD_LR" \
