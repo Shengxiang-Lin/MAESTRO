@@ -122,7 +122,10 @@ def _intent_reference_question(spec: dict) -> str:
                 f"The provided archive-photo and spoken-catalog observations concern a record in the {topic}.",
                 f"The supplied image description and audio observation refer to a record in the {topic}.",
             )[spec["ordinal"] % 4]
-            if plan.get("composer_policy") == "goal_conditioned_evidence_needs_v3":
+            if plan.get("composer_policy") in {
+                "goal_conditioned_evidence_needs_v3",
+                "goal_conditioned_typed_goal_v4",
+            }:
                 # A frozen clue can accidentally equal an ordinary phrase
                 # in our deterministic lead (e.g. "catalog" in
                 # "spoken-catalog"). Do not weaken the leakage guard; select
@@ -148,6 +151,11 @@ def _intent_reference_question(spec: dict) -> str:
                     (candidate for candidate in safe_leads
                      if _safe_lead(candidate)), lead
                 )
+            if (plan.get("composer_policy") ==
+                    "goal_conditioned_typed_goal_v4"
+                    and plan["goal_spec"]["kind"] != "entity_resolution"):
+                from .typed_goal_v4 import numeric_goal_question
+                return f"{lead} {numeric_goal_question(plan)}"
             condition = plan["condition"]
             if condition is None:
                 qualifier = ""
@@ -766,6 +774,45 @@ def guard_question(question: str, spec: dict,
             elif not re.search(r"\b2025\b", q):
                 errors.append("task_plan_required_year_missing")
         errors.extend(_unlicensed_task_plan_condition(q, plan))
+        if (plan.get("composer_policy") ==
+                "goal_conditioned_typed_goal_v4"):
+            kind = plan["goal_spec"]["kind"]
+            if kind == "comparison":
+                if not re.search(
+                    r"\b(?:higher|larger|greater|more|most)\b", q, re.I
+                ) or not re.search(
+                    r"\b(?:count|tally|total|number|observations?)\b",
+                    q, re.I,
+                ):
+                    errors.append("task_plan_comparison_goal_missing")
+                if re.search(
+                    r"\b(?:lower|smaller|fewer|less)\b", q, re.I
+                ):
+                    errors.append("task_plan_reversed_comparison")
+                if re.search(r"\b(?:19|20)\d{2}\b", q):
+                    errors.append("task_plan_unlicensed_numeric_year_filter")
+            elif kind == "aggregation":
+                if not re.search(
+                    r"\b(?:how many|count|number of|total number)\b",
+                    q, re.I,
+                ):
+                    errors.append("task_plan_aggregation_goal_missing")
+                if not re.search(r"\b2025\b", q):
+                    errors.append("task_plan_aggregation_year_missing")
+                if re.search(
+                    r"\b(?:completed|scheduled|cancelled|canceled)\b",
+                    q, re.I,
+                ):
+                    errors.append("task_plan_unlicensed_aggregation_status")
+                if any(
+                    not re.search(
+                        r"\b(?:in|on)\s+(?:or|and)\s+$",
+                        q[max(0, m.start()-20):m.start()],
+                    ) for m in re.finditer(
+                        r"\b(?:after|later than)\s+2025\b", q, re.I
+                    )
+                ):
+                    errors.append("task_plan_exclusive_year_threshold")
         if not compact and not re.search(
             r"\b(?:related|relation|entity)\b", q, re.I
         ):
@@ -1014,12 +1061,38 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
         if compact_task_plan:
             plan = spec["macro_plan"]
             goal = plan["goal"]["semantic"]
-            author_contract["semantic_goal_question"] = goal["question"]
+            kind = plan.get("goal_spec", {}).get(
+                "kind", "entity_resolution"
+            )
+            if kind != "entity_resolution":
+                from .typed_goal_v4 import numeric_goal_question
+                author_contract["semantic_goal_question"] = (
+                    numeric_goal_question(plan)
+                )
+                author_contract["goal_resolution_kind"] = kind
+                author_contract["final_answer_type"] = (
+                    plan["goal"]["answer_type"]
+                )
+                author_contract["relation_goal_question"] = goal["question"]
+                author_contract["numeric_evidence_constraints"] = (
+                    "Use TWO independent tallies and compare higher counts; "
+                    "return ONLY first or second; never request the entity "
+                    "name or an intermediate record."
+                    if kind == "comparison" else
+                    "Count individual dated log entries from 2025 onward, "
+                    "inclusive; return ONLY one integer, not the entity "
+                    "name, percentage, or event status."
+                )
+            else:
+                author_contract["semantic_goal_question"] = goal["question"]
             author_contract["required_event_condition"] = plan["condition"]
             author_contract["verification_mode"] = (
                 plan["mode"] == "verify"
             )
-            if plan.get("composer_policy") == "goal_conditioned_evidence_needs_v3":
+            if plan.get("composer_policy") in {
+                "goal_conditioned_evidence_needs_v3",
+                "goal_conditioned_typed_goal_v4",
+            }:
                 condition = plan["condition"]
                 if condition and condition["field"] == "event_year":
                     author_contract["event_condition_scope"] = (
@@ -1173,11 +1246,25 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 # verbose private operator/DAG walkthrough. The public
                 # Question should never be forced to narrate Gold steps.
                 plan = spec["macro_plan"]
+                goal_kind = plan.get("goal_spec", {}).get(
+                    "kind", "entity_resolution"
+                )
+                from .typed_goal_v4 import numeric_goal_question
+                target_question = (
+                    numeric_goal_question(plan) if
+                    goal_kind != "entity_resolution" else
+                    plan["goal"]["semantic"]["question"]
+                )
                 frozen_contract = {
                     "topic": spec["scenario"]["topic"],
-                    "semantic_goal_question": plan["goal"]["semantic"]["question"],
+                    "semantic_goal_question": target_question,
+                    "goal_resolution_kind": goal_kind,
                     "relation_sequence": plan["goal"]["semantic"]["relation_sequence"],
-                    "answer_type_hint": plan["goal"]["semantic"]["answer_type_hint"],
+                    "answer_type_hint": (
+                        plan["goal"]["answer_type"]
+                        if goal_kind != "entity_resolution" else
+                        plan["goal"]["semantic"]["answer_type_hint"]
+                    ),
                     "required_event_condition": plan["condition"],
                     "verification_mode": plan["mode"] == "verify",
                     "user_intent": instruction["intent"]["nonnegotiable_conditions"],
