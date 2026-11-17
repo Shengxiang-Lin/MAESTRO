@@ -156,7 +156,7 @@ def generate_graph(*, seed: int, ordinal: int, max_branches: int = 3,
         if (len(graph["nodes"]) <= max_macros
                 and len(graph["reference_waves"]) <= max_waves
                 and max(map(len, graph["reference_waves"])) <= max_parallel):
-            from .typed_graph_validator import validate_graph
+            from .graph_validator import validate_graph
             validate_graph(graph)
             return graph
     raise ValueError("unable_to_sample_graph_within_budgets")
