@@ -37,6 +37,7 @@ GOAL_COMPOSER = "goal_conditioned_typed_v2"
 NEEDS_COMPOSER = "goal_conditioned_evidence_needs_v3"
 TYPED_GOAL_COMPOSER = "goal_conditioned_typed_goal_v4"
 OPERATION_GOAL_COMPOSER = "goal_conditioned_operation_dag_v5"
+OUTPUT_FIRST_COMPOSER = "goal_conditioned_output_first_v6"
 # Local predicate combinations with interpretable user goals. These are
 # *predicate-signature hypotheses*, NOT RDF-type attestations. The bounded
 # YAGO loader intentionally excludes rdf:type triples.
@@ -861,7 +862,15 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
                f"{predicate_label(fact['predicate'])} relationship index",
                "Look up the documented relationship required by the goal",
                {input_key: "str", output_key: "str"}, key=input_key)
-    if typed_kind in {
+    if plan.get("composer_policy") == OUTPUT_FIRST_COMPOSER:
+        for sid, fields in typed_goal["source_fields"].items():
+            source(
+                sid, "table",
+                "Independent typed observation source " + sid,
+                "Acquire the precise typed observations needed by the Goal",
+                fields, key="entity_final",
+            )
+    elif typed_kind in {
         "comparison", "structured_answer", "numeric_difference",
         "numeric_ratio", "temporal_gap", "geographic_distance",
     }:
@@ -970,7 +979,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     # conditional on difficulty. This is NOT a learned-agent difficulty score.
     hops = min_hops if difficulty == "medium" else max_hops
     if composer in (GOAL_COMPOSER, NEEDS_COMPOSER, TYPED_GOAL_COMPOSER,
-                     OPERATION_GOAL_COMPOSER):
+                     OPERATION_GOAL_COMPOSER, OUTPUT_FIRST_COMPOSER):
         if world_mode != "compose":
             raise ValueError("goal_composer_requires_composed_world")
         from .goal_composer import compose_plan
@@ -978,8 +987,19 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         yago_index = index or YagoKnowledgeIndex(kg)
         choices = tuple(row for row in _SEMANTIC_RECIPES
                         if len(row[0]) == hops)
-        if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER):
-            if composer == OPERATION_GOAL_COMPOSER:
+        if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER,
+                        OUTPUT_FIRST_COMPOSER):
+            if composer == OUTPUT_FIRST_COMPOSER:
+                from .goal_ops_v6 import selected_output
+                typed_goal_fields = set(
+                    selected_output(seed, ordinal)["bindings"].values()
+                )
+                typed_kind = (
+                    "geographic_distance"
+                    if "distance_km" in typed_goal_fields else
+                    "other"
+                )
+            elif composer == OPERATION_GOAL_COMPOSER:
                 from .goal_ops_v5 import selected_profile_output
                 typed_kind = selected_profile_output(seed, ordinal)[0]
             else:
@@ -1016,8 +1036,11 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         kg, index or YagoKnowledgeIndex(kg),
         plan, seed=seed, ordinal=ordinal, world_mode=world_mode,
     )
-    if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER):
-        if composer == OPERATION_GOAL_COMPOSER:
+    if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER,
+                    OUTPUT_FIRST_COMPOSER):
+        if composer == OUTPUT_FIRST_COMPOSER:
+            from .goal_ops_v6 import measurement_world
+        elif composer == OPERATION_GOAL_COMPOSER:
             from .goal_ops_v5 import measurement_world
         else:
             from .typed_goal_v4 import measurement_world
@@ -1083,7 +1106,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     }
     scene_setting = (
         scene_variants[semantic["domain"]][ordinal % 2]
-        if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER) else
+        if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER,
+                        OUTPUT_FIRST_COMPOSER) else
         "a research archive with personnel files, field records "
         "and independently maintained reference registers"
     )
@@ -1379,7 +1403,7 @@ def validate_spec(spec: dict) -> list[str]:
             return ["task_plan_unpaired_sampling_policy"]
         composer = plan.get("composer_policy")
         if composer in (GOAL_COMPOSER, NEEDS_COMPOSER, TYPED_GOAL_COMPOSER,
-                     OPERATION_GOAL_COMPOSER):
+                     OPERATION_GOAL_COMPOSER, OUTPUT_FIRST_COMPOSER):
             from .goal_composer import compose_plan
             expected = compose_plan(
                 seed=spec["seed"], ordinal=spec["ordinal"],
@@ -1394,8 +1418,11 @@ def validate_spec(spec: dict) -> list[str]:
                         "terminal_macro_id", "goal_recipe_keys"
                     ))):
                 return ["task_plan_goal_composer_mismatch"]
-            if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER):
-                if composer == OPERATION_GOAL_COMPOSER:
+            if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER,
+                            OUTPUT_FIRST_COMPOSER):
+                if composer == OUTPUT_FIRST_COMPOSER:
+                    from .goal_ops_v6 import validate_measurement_world
+                elif composer == OPERATION_GOAL_COMPOSER:
                     from .goal_ops_v5 import validate_measurement_world
                 else:
                     from .typed_goal_v4 import validate_measurement_world
