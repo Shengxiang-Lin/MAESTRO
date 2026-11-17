@@ -37,29 +37,29 @@ generation:
   mode: llm              # reviewed Sub-Agent and Main language generation
   report_max_revisions: 2
   main_max_revisions: 2
-  sub_model: qwen3.8-flash
+  sub_model: local-qwen3.5-9b
   model_alias: model_1
   overwrite: false
   no_progress: false
 
 # Stage-4 Main reasoning Author + independent Critic.
 model:
-  author_api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
-  author_model: qwen3.8-flash
+  author_api_base: http://127.0.0.1:8807/v1
+  author_model: local-qwen3.5-9b
   critic_api_base: null  # inherit author_api_base
-  critic_model: qwen3.8-flash
+  critic_model: local-qwen3.5-9b
   temperature: 0.1
   author_max_tokens: 2800
   critic_max_tokens: 1200
-  api_key_env: DASHSCOPE_API_KEY
+  api_key_env: null
 
 # Stage-4 Sub-Agent report naturalization Author + independent Critic.
 subagent_model:
-  author_api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
-  author_model: qwen3.8-flash
+  author_api_base: http://127.0.0.1:8807/v1
+  author_model: local-qwen3.5-9b
   critic_api_base: null  # inherit author_api_base
-  critic_model: qwen3.8-flash
+  critic_model: local-qwen3.5-9b
   temperature: 0.1
   author_max_tokens: 2800
   critic_max_tokens: 1200
-  api_key_env: DASHSCOPE_API_KEY
+  api_key_env: null
