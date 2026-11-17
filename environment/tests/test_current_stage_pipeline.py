@@ -117,6 +117,33 @@ class CurrentStagePipelineTests(unittest.TestCase):
              for item in bounded["answer_with_provenance"]],
         )
 
+    def test_stage4_retry_contract_keeps_stage2_citations(self):
+        from environment.untrusted_orchestration.state_machine import (
+            ExecutionState,
+        )
+        from environment.untrusted_orchestration.report_contract import (
+            build_report_contract, render_delivered_result,
+        )
+        from environment.untrusted_orchestration.faults import relation_rows
+        scene = current_scene(7, "medium")
+        rows = accepted_reports(scene)
+        reviewed = {r["macro_task_id"]: r for r in rows}
+        runtime = ExecutionState(scene, reviewed)
+        tid = scene["macro_graph"]["reference_waves"][0][0]
+        attempt = runtime.register(tid)
+        contract = build_report_contract(
+            runtime.tasks[tid], attempt, "Read the assigned source.",
+            result_encoding=reviewed[tid]["result_encoding"],
+        )
+        self.assertEqual(
+            json.loads(render_delivered_result(contract)),
+            relation_rows(attempt.product),
+        )
+        self.assertEqual(
+            json.loads(contract["fact_spine"]["delivery"]["result_text"]),
+            relation_rows(attempt.product),
+        )
+
     def test_clean_reference_is_stable_and_fails_closed_when_tampered(self):
         from environment.untrusted_orchestration.trusted_prefix import (
             validate_clean_episode,
