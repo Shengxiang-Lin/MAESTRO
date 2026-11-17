@@ -60,7 +60,10 @@ class CanonicalStagePathsTests(TestCase):
             self.assertNotRegex(str(p), r"v\d+[_\.]\d+")
         self.assertEqual(stage4["clean_episodes_path"],
                          main["output_dir"] / "episodes.jsonl")
-        self.assertEqual(reports["max_scenes"], 10)
+        # The Stage-2 bank may be larger than the Stage-3/4 pilot.
+        # Check the handoff capacity, not a stale pilot-specific count.
+        self.assertEqual(reports["max_scenes"], subtask["max_records"])
+        self.assertGreaterEqual(reports["max_scenes"], main["max_scenes"])
         self.assertEqual(main["max_scenes"], 10)
         self.assertEqual(stage4["max_scenes"], 10)
         self.assertEqual(stage4["branches_per_scene"], 1)

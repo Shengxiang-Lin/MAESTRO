@@ -248,6 +248,11 @@ class ModelPricing:
 
     @classmethod
     def get_price(cls, model_name, token_type):
+        # Locally hosted models have no provider API charge. Check this
+        # before substring matching: "local-qwen3-8b" must not inherit
+        # the paid "qwen3-8b" list price or emit an unknown-model warning.
+        if isinstance(model_name, str) and model_name.startswith("local-"):
+            return 0.0
         if model_name in cls.PRICES:
             return cls.PRICES[model_name][token_type]
         for key in cls.PRICES:
@@ -328,7 +333,10 @@ class AsyncLLM:
         self.sys_msg = system_msg
         self.usage_tracker = TokenUsageTracker(
             model=self.config.model,
-            pricing_enabled=self.config.backend != "vllm",
+            pricing_enabled=(
+                self.config.backend != "vllm"
+                and not str(self.config.model).startswith("local-")
+            ),
         )
         self.max_completion_tokens = max_completion_tokens
         
