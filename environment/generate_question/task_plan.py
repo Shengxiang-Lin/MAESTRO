@@ -36,6 +36,7 @@ SYNTHETIC_FORK = "maestro.fictional_fork_grounding.v1"
 GOAL_COMPOSER = "goal_conditioned_typed_v2"
 NEEDS_COMPOSER = "goal_conditioned_evidence_needs_v3"
 TYPED_GOAL_COMPOSER = "goal_conditioned_typed_goal_v4"
+OPERATION_GOAL_COMPOSER = "goal_conditioned_operation_dag_v5"
 # Local predicate combinations with interpretable user goals. These are
 # *predicate-signature hypotheses*, NOT RDF-type attestations. The bounded
 # YAGO loader intentionally excludes rdf:type triples.
@@ -845,7 +846,10 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
                "Check the candidate against the independent registry record",
                {"entity_0": "str", "motif_object": "str"}, key="entity_0")
     facts = grounding["candidate_paths"][grounding["target_case"]]
-    typed_kind = plan.get("goal_spec", {}).get("kind", "entity_resolution")
+    typed_goal = plan.get("goal_spec", {})
+    typed_kind = typed_goal.get(
+        "source_profile", typed_goal.get("kind", "entity_resolution")
+    )
     for i, fact in enumerate(facts, 1):
         input_key = f"entity_{i-1}"
         output_key = (
@@ -965,7 +969,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     # YAGO chain, Hard the longer; modes/independent clues are also
     # conditional on difficulty. This is NOT a learned-agent difficulty score.
     hops = min_hops if difficulty == "medium" else max_hops
-    if composer in (GOAL_COMPOSER, NEEDS_COMPOSER, TYPED_GOAL_COMPOSER):
+    if composer in (GOAL_COMPOSER, NEEDS_COMPOSER, TYPED_GOAL_COMPOSER,
+                     OPERATION_GOAL_COMPOSER):
         if world_mode != "compose":
             raise ValueError("goal_composer_requires_composed_world")
         from .goal_composer import compose_plan
@@ -973,9 +978,13 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         yago_index = index or YagoKnowledgeIndex(kg)
         choices = tuple(row for row in _SEMANTIC_RECIPES
                         if len(row[0]) == hops)
-        if composer == TYPED_GOAL_COMPOSER:
-            from .typed_goal_v4 import selected_kind
-            typed_kind = selected_kind(seed, ordinal)
+        if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER):
+            if composer == OPERATION_GOAL_COMPOSER:
+                from .goal_ops_v5 import selected_profile_output
+                typed_kind = selected_profile_output(seed, ordinal)[0]
+            else:
+                from .typed_goal_v4 import selected_kind
+                typed_kind = selected_kind(seed, ordinal)
             # A literal great-circle distance needs geographic subjects,
             # not abstract research-field or nationality terms.
             if typed_kind == "geographic_distance":
@@ -1007,8 +1016,11 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         kg, index or YagoKnowledgeIndex(kg),
         plan, seed=seed, ordinal=ordinal, world_mode=world_mode,
     )
-    if composer == TYPED_GOAL_COMPOSER:
-        from .typed_goal_v4 import measurement_world
+    if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER):
+        if composer == OPERATION_GOAL_COMPOSER:
+            from .goal_ops_v5 import measurement_world
+        else:
+            from .typed_goal_v4 import measurement_world
         measurements = measurement_world(
             plan=plan, binding=grounding, seed=seed, ordinal=ordinal,
         )
@@ -1031,7 +1043,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         plan["knowledge_origin"] = "synthetic"
     if (world_mode == "compose" and
             plan.get("goal_spec", {}).get(
-                "kind", "entity_resolution"
+                "source_profile",
+                plan.get("goal_spec", {}).get("kind", "entity_resolution"),
             ) == "entity_resolution"):
         plan["goal"]["meaning"] = (
             "Determine the entity at the end of the documented relation chain"
@@ -1070,7 +1083,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     }
     scene_setting = (
         scene_variants[semantic["domain"]][ordinal % 2]
-        if composer == TYPED_GOAL_COMPOSER else
+        if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER) else
         "a research archive with personnel files, field records "
         "and independently maintained reference registers"
     )
@@ -1083,7 +1096,8 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
              + plan["goal"]["public_label"]
              + " from the available independent evidence")
             if plan.get("goal_spec", {}).get(
-                "kind", "entity_resolution"
+                "source_profile",
+                plan.get("goal_spec", {}).get("kind", "entity_resolution"),
             ) != "entity_resolution" else
             ("identify " + clause + " and determine the "
              + semantic["answer_type_hint"]
@@ -1364,7 +1378,8 @@ def validate_spec(spec: dict) -> list[str]:
         ):
             return ["task_plan_unpaired_sampling_policy"]
         composer = plan.get("composer_policy")
-        if composer in (GOAL_COMPOSER, NEEDS_COMPOSER, TYPED_GOAL_COMPOSER):
+        if composer in (GOAL_COMPOSER, NEEDS_COMPOSER, TYPED_GOAL_COMPOSER,
+                     OPERATION_GOAL_COMPOSER):
             from .goal_composer import compose_plan
             expected = compose_plan(
                 seed=spec["seed"], ordinal=spec["ordinal"],
@@ -1379,8 +1394,11 @@ def validate_spec(spec: dict) -> list[str]:
                         "terminal_macro_id", "goal_recipe_keys"
                     ))):
                 return ["task_plan_goal_composer_mismatch"]
-            if composer == TYPED_GOAL_COMPOSER:
-                from .typed_goal_v4 import validate_measurement_world
+            if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER):
+                if composer == OPERATION_GOAL_COMPOSER:
+                    from .goal_ops_v5 import validate_measurement_world
+                else:
+                    from .typed_goal_v4 import validate_measurement_world
                 if plan.get("goal_spec") != expected["goal_spec"]:
                     return ["task_plan_typed_goal_not_frozen"]
                 if any(plan["goal"].get(key) != expected["goal"][key]

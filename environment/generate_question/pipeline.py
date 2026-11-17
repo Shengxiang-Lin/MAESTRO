@@ -886,8 +886,39 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 )),
                 "goal_kind_distribution": dict(Counter(
                     s["problem_spec"]["macro_plan"].get(
-                        "goal_spec", {}).get("kind", "entity_resolution")
+                        "goal_spec", {}).get(
+                        "source_profile",
+                        s["problem_spec"]["macro_plan"].get(
+                            "goal_spec", {}).get("kind", "entity_resolution"),
+                    )
                     for s in current_scenes
+                )),
+                "goal_output_distribution": dict(Counter(
+                    s["problem_spec"]["macro_plan"]["goal_spec"][
+                        "output_spec"]["kind"]
+                    for s in current_scenes
+                    if s["problem_spec"]["macro_plan"].get(
+                        "composer_policy") == "goal_conditioned_operation_dag_v5"
+                )),
+                "goal_operation_distribution": dict(Counter(
+                    node["op"]
+                    for s in current_scenes
+                    if s["problem_spec"]["macro_plan"].get(
+                        "composer_policy") == "goal_conditioned_operation_dag_v5"
+                    for node in s["problem_spec"]["macro_plan"][
+                        "goal_spec"]["operations"]
+                )),
+                "goal_operation_output_pairs": dict(Counter(
+                    ",".join(
+                        n["op"]
+                        for n in s["problem_spec"]["macro_plan"][
+                            "goal_spec"]["operations"]
+                        if n["op"] != "lookup"
+                    ) + " -> " + s["problem_spec"]["macro_plan"][
+                        "goal_spec"]["output_spec"]["kind"]
+                    for s in current_scenes
+                    if s["problem_spec"]["macro_plan"].get(
+                        "composer_policy") == "goal_conditioned_operation_dag_v5"
                 )),
                 "goal_answer_type_distribution": dict(Counter(
                     s["problem_spec"]["macro_plan"]["goal"]["answer_type"]

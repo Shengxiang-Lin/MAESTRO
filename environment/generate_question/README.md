@@ -192,3 +192,48 @@ established by passing Replay. See the `goal_kind_distribution` and
 `quality_report.json`. Future iterations should enrich media clue
 dependencies and source capabilities after confirming Goal-level
 execution correctness.
+
+
+### Goal operation DAG × answer output (v5, opt-in)
+
+`environment/configs/questions_goal_ops_v5.yaml` enables
+`goal_conditioned_operation_dag_v5`. Stable v3 and v4 generation configs
+and frozen datasets remain unchanged.
+
+Based on the **operation patterns** in the explicitly selected OmniGAIA
+pretest 60 IDs stored in `data/OmniGAIA/splits/pretest_60_ids.txt`,
+v5 models two independent axes:
+
+- **Operations**: `lookup`, `arithmetic`, `temporal_difference`,
+  `temporal_midpoint`, `geographic_distance`,
+  `count_aggregate`, `compare_select`, `verify`.
+  Each node is typed and topologically depends on previous outputs.
+- **Output contract**: `single_entity`, `single_number`, `date_time`,
+  `structured_multi_field`, `evidence_based_explanation`.
+  `output_spec.fields` declares each field's type;
+  `output_spec.bindings` selects its producer in the operation graph.
+
+This is a **bounded compositional grammar**, not a random concatenation of
+operators. One source capability (entity relationships, two count tables,
+two dated records, two coordinate records, or a dated observation ledger)
+is selected; compatible operations and an independent output schema are
+sampled thereafter. In multi-field cases the same acquired evidence can
+be used for multiple computations (for example **difference AND ratio**,
+or **date gap AND midpoint**). Gold IR executes each operation and formats
+the typed answer, rather than treating `structured_answer` as an opaque
+single operation. The Macro DAG acquires evidence before the synthesis
+barrier; a bounded number of computations run inside the synthesis Macro.
+
+`evidence_based_explanation` here is a **structured, source-grounded
+assessment** containing a comparison conclusion and both recorded counts;
+the complete source fact references remain in WorkProduct provenance.
+It is **not** unrestricted natural-language explanatory reasoning or
+fully general verification of contradictory real-world statements.
+
+The reference 60 questions inform goal coverage only; their specific
+answers, descriptions and media are not used as synthetic labels.
+Program correctness, counterfactual source sensitivity, Stage 2
+realization and replay are checked by `test_goal_ops_v5.py`.
+Report fields `goal_operation_distribution`,
+`goal_output_distribution` and `goal_operation_output_pairs` distinguish
+operator coverage from output coverage and Macro topology.

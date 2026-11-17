@@ -251,7 +251,10 @@ def generate_world(spec: dict) -> dict:
             model["verification_facts"] if composed else
             b["real_fork"]["candidate_forks"]
         ).items()]
-    typed_kind = plan.get("goal_spec", {}).get("kind", "entity_resolution")
+    typed_goal = plan.get("goal_spec", {})
+    typed_kind = typed_goal.get(
+        "source_profile", typed_goal.get("kind", "entity_resolution")
+    )
     for hop in range(plan["hops"]):
         left = f"entity_{hop}"
         right = (
@@ -631,6 +634,67 @@ def compile_macro_solvers(spec: dict) -> dict:
                     left_field="metric_a", right_field="metric_b",
                     output_field="answer",
                 )
+        elif op == "synthesize_operation_dag":
+            from .goal_ops_v5 import validate_operation_graph
+            goal = plan["goal_spec"]
+            problems = validate_operation_graph(goal)
+            if problems:
+                raise ValueError("invalid_v5_goal_graph:" + ",".join(problems))
+            source_profile = goal["source_profile"]
+            if source_profile == "aggregation":
+                if len(parents) != 1:
+                    raise ValueError("v5_count_requires_one_log_parent")
+                filtered = add(
+                    "filter_gte", parents[0],
+                    field="observation_year", value=2025,
+                )
+                last = add("group_count", filtered, field="entity_final")
+                outputs_by_op = {"entity": "entity_final",
+                                 "observations": "observation_id",
+                                 "count": "count"}
+            else:
+                if len(parents) != 2:
+                    raise ValueError("v5_paired_evidence_required")
+                last = add(
+                    "join", parents[0], parents[1],
+                    left_on="entity_final", right_on="entity_final",
+                )
+                left = (
+                    "date_a" if source_profile == "temporal_gap" else
+                    "coords_a" if source_profile == "geographic_distance" else
+                    "metric_a"
+                )
+                right = (
+                    "date_b" if source_profile == "temporal_gap" else
+                    "coords_b" if source_profile == "geographic_distance" else
+                    "metric_b"
+                )
+                outputs_by_op = {
+                    "entity": "entity_final", "a": left, "b": right,
+                }
+                for goal_op in goal["operations"]:
+                    if goal_op["op"] == "lookup":
+                        continue
+                    last = add(
+                        "goal_compute", last,
+                        goal_operation=copy.deepcopy(goal_op),
+                        input_fields=[
+                            outputs_by_op[dep] for dep in goal_op["inputs"]
+                        ],
+                        output_field=goal_op["output"],
+                    )
+                    outputs_by_op[goal_op["id"]] = goal_op["output"]
+            bindings = {
+                key: outputs_by_op[goal_id] for key, goal_id
+                in goal["output_spec"]["bindings"].items()
+            }
+            terminal = add(
+                "goal_format", last,
+                output_kind=goal["output_spec"]["kind"],
+                field_types=copy.deepcopy(goal["output_spec"]["fields"]),
+                bindings=bindings,
+                output_field="answer",
+            )
         elif op == "count_qualifying_observations":
             qualifying = add(
                 "filter_gte", parents[0],
@@ -699,7 +763,8 @@ def mutate_witness(sources: dict, sid: str,
                f"entity_{int(sid.rsplit('_',1)[-1])-1}"][0]
         data[key] = "urn:maestro:counterfactual:broken-relation"
     elif sid in {"metric_a", "metric_b"}:
-        kind = spec["macro_plan"]["goal_spec"]["kind"]
+        goal = spec["macro_plan"]["goal_spec"]
+        kind = goal.get("source_profile", goal.get("kind"))
         if kind == "temporal_gap":
             data["date_" + sid[-1]] = (
                 "1900-01-01" if sid == "metric_a" else "2100-01-01"

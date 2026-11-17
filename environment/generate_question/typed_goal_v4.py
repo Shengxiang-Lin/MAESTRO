@@ -64,9 +64,12 @@ def _metric_fields(kind: str, side: str) -> dict:
 
 
 def compose_typed_goal_plan(*, seed: int, ordinal: int, difficulty: str,
-                            hops: int, goal_keys: tuple[str, ...]) -> dict:
+                            hops: int, goal_keys: tuple[str, ...],
+                            kind_override: str | None = None) -> dict:
     from .goal_composer import compose_plan, NEEDS_VERSION
-    kind = selected_kind(seed, ordinal)
+    kind = kind_override or selected_kind(seed, ordinal)
+    if kind not in KINDS:
+        raise ValueError("unknown_v4_source_profile")
     # A two-branch numeric Goal needs three extra Macros, keeping a MAX-9
     # budget, and must use the single entity-reference route. This is a
     # compatibility limitation, not a claim that all producer types are valid.

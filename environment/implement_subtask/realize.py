@@ -118,6 +118,24 @@ def _describe_operation(node: dict) -> str:
             "Compose the requested structured result from the resolved "
             "entity, comparison winner and absolute count difference"
         )
+    if op == "goal_compute":
+        goal_op = node["goal_operation"]
+        labels = {
+            "arithmetic": "Calculate the requested arithmetic expression",
+            "temporal_difference": "Calculate elapsed days between source dates",
+            "temporal_midpoint": "Find the midpoint date between source dates",
+            "geographic_distance": "Calculate the great-circle site distance",
+            "compare_select": "Select the higher of two source counts",
+            "verify": "Check the count comparison using both independent facts",
+        }
+        return (labels[goal_op["op"]] + " and retain its input evidence "
+                "before producing " + node["output_field"])
+    if op == "goal_format":
+        return (
+            "Render the frozen " + node["output_kind"] +
+            " answer contract with fields " +
+            ", ".join(node["field_types"])
+        )
     if op == "attach_evidence":
         return "Attach the source fact references supporting each result"
     raise ValueError("unsupported_subtask_operation:" + op)
