@@ -10,7 +10,7 @@ input:
 generation:
   output_dir: environment/data/pilots/qwen_stage234_10/stage3
   max_scenes: 10  # reuse first 10 accepted Stage-1 Scenes
-  workers: 4
+  workers: 10
   mode: llm           # llm or template
   freeze_dispatch: true  # Compiler fixes task batches; LLM writes reasoning only
   max_revisions: 2
