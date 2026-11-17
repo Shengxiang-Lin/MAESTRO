@@ -515,6 +515,73 @@ class StructuredFactSpineTests(unittest.TestCase):
         self.assertIn("Case-012", result)
         self.assertIn("incomplete delivered row set", result)
 
+    def test_typed_fault_report_delivers_full_natural_answer_to_main(self):
+        from environment.untrusted_orchestration.visible_claim_extraction import (
+            extract_visible_claims,
+        )
+        contract = {
+            "result_encoding": "typed_evidence_json_v1",
+            "actual_delivered_rows": [
+                {"values": {"case_id": "Case-004", "reported_year_b": 2003},
+                 "source_fact_refs": ["report_b:F001"]},
+                {"values": {"case_id": "Case-005", "reported_year_b": 2004},
+                 "source_fact_refs": ["report_b:F002"]},
+            ],
+            "delivery_status": "done", "unresolved_fields": [],
+        }
+        result = render_delivered_result(contract)
+        self.assertTrue(result.startswith("The handoff contains 2"))
+        self.assertIn("Case-004", result)
+        self.assertIn("2003", result)
+        self.assertIn("Case-005", result)
+        self.assertIn("2004", result)
+        self.assertNotIn("source_fact_refs", result)
+        claims, status = extract_visible_claims(
+            {"finish_result": {
+                "result": result, "summary": "Returned two recorded years.",
+                "status": "done",
+            }},
+            output_fields=["case_id", "reported_year_b"],
+            source_id="report_b",
+        )
+        self.assertTrue(status["parsed"], status)
+        self.assertIn("code_owned_record_prose", status["parse_mode"])
+        self.assertTrue(any(
+            claim["subject"] == "Case-004" and claim["value"] == 2003
+            for claim in claims
+        ))
+        self.assertTrue(all(not claim["fact_refs"] for claim in claims))
+
+    def test_natural_stage2_ids_do_not_infer_hidden_or_negated_claims(self):
+        from environment.untrusted_orchestration.visible_claim_extraction import (
+            extract_visible_claims,
+        )
+        def extract(result):
+            return extract_visible_claims(
+                {"finish_result": {
+                    "result": result, "summary": "Local evidence reviewed.",
+                    "status": "done",
+                }},
+                output_fields=["case_id"], source_id="field_notes",
+            )
+        claims, status = extract(
+            "Three survey dossiers match the location cues: "
+            "Dossier-AAA1, Dossier-BBB2 and Dossier-CCC3. "
+            "Further eligibility has not been checked."
+        )
+        self.assertEqual(
+            {item["subject"] for item in claims
+             if item["attribute"] == "identifier_present"},
+            {"Dossier-AAA1", "Dossier-BBB2", "Dossier-CCC3"},
+        )
+        self.assertIn("natural_answer_identifier_list", status["parse_mode"])
+        missing, status = extract(
+            "No dossiers matched: Dossier-EXCLUDED1. "
+            "The source did not establish eligibility."
+        )
+        self.assertFalse(missing)
+        self.assertFalse(status["parsed"])
+
     def test_missing_author_can_omit_result_without_creating_finish_result(self):
         task = {
             "task_id": "missing", "source_ids": ["table"],

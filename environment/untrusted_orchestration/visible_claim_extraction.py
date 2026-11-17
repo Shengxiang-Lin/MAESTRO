@@ -75,6 +75,8 @@ def _parse_current_record_prose(result: str, fields: set[str]) -> list[dict] | N
                 parsed = _parse_scalar(raw)
             elif raw.lower() in ("yes", "no"):
                 parsed = raw.lower() == "yes"
+            elif raw.lower() in ("not specified", "not delivered", "unavailable"):
+                parsed = None
             else:
                 parsed = raw
             values[field] = parsed
@@ -82,6 +84,39 @@ def _parse_current_record_prose(result: str, fields: set[str]) -> list[dict] | N
             return None
         rows.append(values)
     return rows if len(rows) == expected else None
+
+
+_DELIVERED_CASE_ID = re.compile(
+    r"(?:Case-\d+|Dossier-[A-Za-z0-9]+)", re.I,
+)
+_CASE_HUMAN_LIST = re.compile(
+    r"(?:Case-\d+|Dossier-[A-Za-z0-9]+)"
+    r"(?:\s*(?:,|;|\band\b)\s*"
+    r"(?:Case-\d+|Dossier-[A-Za-z0-9]+))*",
+    re.I,
+)
+
+
+def _literal_case_mentions(result: str) -> list[str]:
+    """Read only an explicitly returned case-ID list from visible prose.
+
+    Never use private World/Oracle rows to infer values not literally
+    present in Main's received answer. Abstain if the wording is
+    ambiguous, negative or mixed with excluded candidates.
+    """
+    opening = result.strip().split(". ", 1)[0].rstrip(".")
+    lead, colon, values = opening.partition(":")
+    if not colon or not re.search(
+        r"\b(?:match(?:es|ed)?|return(?:s|ed)?|found|identified|"
+        r"contain(?:s|ed)?|include(?:s|d)?|records?)\b",
+        lead, re.I,
+    ):
+        return []
+    if re.search(r"\b(?:no|not|excluded|rejected)\b", lead, re.I):
+        return []
+    if not _CASE_HUMAN_LIST.fullmatch(values.strip()):
+        return []
+    return list(dict.fromkeys(_DELIVERED_CASE_ID.findall(values)))
 
 
 def _typed_scalar(value):
@@ -218,6 +253,17 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
                             elif source_id is not None:
                                 add("source:" + source_id, subject_field,
                                     row[subject_field], "result")
+
+    # Only identifier lists literally present in an authored O1 answer
+    # become public claims. Hidden Oracle values are never substituted.
+    if ("case_id" in declared and isinstance(result, str)
+            and not ({"structured_result", "code_owned_record_prose",
+                      "literal_identifier_list"} & modes)):
+        ids = _literal_case_mentions(result)
+        if ids:
+            modes.add("natural_answer_identifier_list")
+            for case in ids:
+                add(case, "identifier_present", True, "result")
 
     for surface, prose in (("result", result), ("summary", summary)):
         if not isinstance(prose, str):

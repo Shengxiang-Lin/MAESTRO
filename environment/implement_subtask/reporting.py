@@ -15,7 +15,7 @@ from .stage_local_claims import (
     normalize_report_language,
 )
 
-PRESENTATION = "grounded_natural_trace_v3"
+PRESENTATION = "o1_answer_and_trace_v4"
 
 
 AUTHOR_SYSTEM = """You are writing the FINAL message that a real specialized
@@ -491,16 +491,68 @@ def _stage_scope_issues(text: str, contract: dict) -> list[str]:
     return sorted(set(errors))
 
 
+def _o1_answer_requirements(record: dict) -> list[str]:
+    """Distinct delivered scalar values a natural answer must preserve."""
+    values = []
+    def collect(value):
+        if value is None or isinstance(value, bool):
+            return
+        if isinstance(value, dict):
+            for member in value.values():
+                collect(member)
+            return
+        if isinstance(value, (tuple, list)):
+            for member in value:
+                collect(member)
+            return
+        if isinstance(value, (str, int, float)):
+            literal = str(value).strip()
+            if literal and literal not in values:
+                values.append(literal)
+    for row in record["answer"]:
+        collect(row)
+    return values
+
+
+def _o1_answer_issues(answer: str, contract: dict) -> list[str]:
+    if not isinstance(answer, str) or not 18 <= len(answer.strip()) <= 6500:
+        return ["answer_invalid_length_or_type"]
+    missing = []
+    for literal in contract.get("answer_required_literals", []):
+        # A trailing sentence period is punctuation, not part of an
+        # identifier. For numbers only, reject decimal continuations.
+        number = re.fullmatch(r"-?\d+(?:\.\d+)?", literal)
+        left = r"(?<![A-Za-z0-9_.-])" if number else r"(?<![A-Za-z0-9_-])"
+        right = (r"(?![A-Za-z0-9_-]|\.\d)" if number
+                 else r"(?![A-Za-z0-9_-])")
+        pattern = left + re.escape(literal) + right
+        if not re.search(pattern, answer, re.I):
+            missing.append(literal)
+    return (
+        ["answer_missing_required_values:" + ", ".join(missing[:8])]
+        if missing else []
+    )
+
+
+def _o1_finish_summary(trace: str, answer: str) -> str:
+    """Use the first evidence-recap bullet as short O1 finish summary."""
+    for line in trace.splitlines():
+        item = line.strip().lstrip("-*• ").strip()
+        if len(item) >= 25:
+            return item[:750]
+    return answer[:750]
+
+
 def _guard(candidate: dict, contract: dict) -> list[str]:
     errors = []
     if not isinstance(candidate, dict):
         return ["report_not_object"]
     if candidate.get("status") != "done":
         errors.append("status_not_done_for_complete_oracle")
-    if contract.get("result_encoding") == "typed_evidence_json_v1":
-        # Full code-owned JSON is not a natural-language result and must
-        # not be subjected to the 1600-character prose limit. Its exact
-        # trusted serialization is the sole acceptance contract.
+    if contract.get("requires_o1_answer"):
+        result_text = candidate.get("result")
+        result_errors = _o1_answer_issues(result_text, contract)
+    elif contract.get("result_encoding") == "typed_evidence_json_v1":
         result_text = candidate.get("result")
         result_errors = (
             [] if result_text == contract.get("code_owned_expected_result")
@@ -516,21 +568,30 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
     if (not isinstance(summary, str)
             or not 25 <= len(summary.strip()) <= 750):
         errors.append("summary_invalid_length_or_type")
-    narrative = candidate.get("trace_narrative")
-    if contract.get("requires_natural_trace"):
+    narrative = (candidate.get("trace_summary")
+                 if contract.get("requires_o1_answer")
+                 else candidate.get("trace_narrative"))
+    if contract.get("requires_o1_answer"):
+        if (not isinstance(narrative, str)
+                or not 75 <= len(narrative.strip()) <= 2800):
+            errors.append("trace_summary_invalid_length_or_type")
+    elif contract.get("requires_natural_trace"):
         if (not isinstance(narrative, str)
                 or not 60 <= len(narrative.strip()) <= 1800):
             errors.append("trace_narrative_invalid_length_or_type")
     for field, value in (
         ("result", result_text), ("summary", summary),
-        *((("trace_narrative", narrative),) if
-          contract.get("requires_natural_trace") else ()),
+        *((("trace_summary", narrative),) if
+          contract.get("requires_o1_answer") else
+          ((("trace_narrative", narrative),) if
+           contract.get("requires_natural_trace") else ())),
     ):
         if not isinstance(value, str):
             continue
         if re.search(r"\bwork_[a-z0-9_]+\b", value, re.I):
             errors.append(field + "_internal_macro_identifier")
-        if contract.get("requires_natural_trace") and field != "result":
+        if (contract.get("requires_natural_trace")
+                or contract.get("requires_o1_answer")):
             if re.search(
                 r"\b(?:macro(?:s|\s+task)?|workproducts?|"
                 r"scan(?:ned)?|project(?:ed|ion)?|join(?:ed)?|uniqued|"
@@ -586,61 +647,56 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
 
 
 
-CODE_OWNED_AUTHOR_SYSTEM = """You are a specialized Sub-Agent returning TWO
-natural-language descriptions of ONE completed delegated investigation.
-The exact result and status are created by the program, not by you.
+CODE_OWNED_AUTHOR_SYSTEM = """You are a specialist Sub-Agent sending
+the completed delegated-task feedback to the Main-Agent. Facts are supplied
+by an immutable offline Oracle; the source observations are simulated.
 
-Return ONLY a JSON object with these TWO keys:
-  {"summary":"...", "trace_narrative":"..."}
+Return ONLY a JSON object with TWO authored text fields:
+{"answer":"...", "trace_summary":"..."}
 
-summary: 1-2 concise sentences describing the finding, useful count or identity,
-and any limitation. With more than 3 returned records, summarize their count
-and at most 2 examples; the full result and citations travel separately.
+ANSWER: directly answer the DELEGATED task. State the useful finding FIRST.
+All distinct entity identifiers, dates, measurements, scalar fields, and
+entity-to-value associations in exact_oracle_answer must be preserved
+verbatim in the answer, including when there are many rows. Use compact
+readable lists, not machine JSON, and include the number of matched rows.
+If this is an intermediate task, never claim future eligibility,
+comparisons or checks were completed. The complete evidence/provenance
+rows are held separately by the application.
 
-trace_narrative: 2-5 natural sentences about which *named sources* were
-consulted according to the supplied observations, what their provided
-observation descriptions say, how clues or records were connected, and what
-this task established. The trace is an EVIDENCE-GROUNDED INVESTIGATION, not
-a SQL/graph/operator sequence or repeated counts after every step.
+TRACE_SUMMARY: 3-6 concise dash-prefixed bullet points recounting
+meaningful EXECUTED observations, source materials, supported clues,
+comparisons and returned findings, plus genuine unresolved limitations.
+Use descriptive source titles, modalities and observed_content from
+the provided source_context and sampled_evidence_atoms. The source
+observations are SIMULATED: you may describe 'the supplied photograph
+annotation' or 'recording description' but NEVER claim to have actually
+watched video, listened to audio, searched the web, visited pages or
+used a tool. Only state tool execution when tool_executed=true and
+the trace itself confirms it. Do not invent errors, retries or omissions.
 
-Use source_context titles, purposes and modalities and observed_content within
-sampled_evidence_atoms. These are real fields in the provided FICTIONAL
-Stage-1 generated evidence; do not invent additional visual details, quotes,
-locations, conversations, webpages, URLs, numbers, dates or measurements.
-You are working from SYNTHETIC observations, NOT actual web/tool/media
-execution. Say 'the supplied photograph annotation records ...', not
-'I viewed the image'; similarly say 'the supplied recording description',
-never claim you listened to the audio or transcribed it.
-A source title does not establish claims beyond that source's observed facts.
+Neither field may expose raw SQL/graph operator names, field-schema
+labels, Macro/work_M identifiers, FactRefs or 'workproduct', 'row(s)'.
+Avoid repetitive procedure narration. Prefer concise investigation
+findings that help Main plan follow-up tasks.
 
-Only describe the checks and conditions actually present in THIS task's
-observed_operator_steps and available evidence. Do not pre-empt later
-eligibility tests, independent comparisons or verification. Unfiltered
-observations are not automatically qualified matches. For an empty result,
-say that no matches were found under the checks performed.
+STYLE EXAMPLE ONLY; do not reuse its factual content:
+{"answer":"Three survey dossiers match the two location clues: Dossier-A, Dossier-B and Dossier-C. Later qualification is not yet checked.",
+ "trace_summary":"- Checked supplied photograph annotations for the first location clue.\\n- Compared dossier identifiers against the survey gazetteer records.\\n- Found three identifiers common to both sources.\\n- Returned the matches for further checking."}
 
-Do not print internal source IDs (M1_a, relation_1), work_M IDs, op
-identifiers, raw schema keys, FactRefs, 'Macro', 'workproduct', 'scan',
-'project', 'join', 'unique' or 'row(s)'. Prefer human investigation language:
-'compared the supplied location clues', 'matched dossier identifiers',
-'checked the field-survey description', etc. Do not merely paraphrase
-the operator log.
-
-Example illustrating STYLE ONLY (not facts to reuse):
-{"summary":"Three dossier identifiers are supported by both clue sources; any further site qualification remains unchecked.",
- "trace_narrative":"I compared the location cues in the supplied photograph annotations with the corresponding gazetteer entries. The first source records the valley clue, while the gazetteer provides a second location reference. Three dossiers occur in both sets of observations, so I returned these cross-source matches without claiming they satisfy downstream conditions."}
-
-Specific assertions must be grounded in THIS task input, not the example.
+Use ONLY the evidence supplied for THIS delegated task. No invented facts,
+numbers, records, source statements, tool actions or final qualifications.
 """
 
 CODE_OWNED_CRITIC_SYSTEM = CRITIC_SYSTEM + """
-candidate_finish.result is PROGRAM-OWNED and was not model-authored. Review
-BOTH the summary AND trace_narrative against the named Stage-1 source_context,
-observed_content, actual operator evidence, authorized scope and exact answer.
-Reject fabricated media/tool activity, unsupported details, future-stage
-claims and technical execution logs masquerading as natural investigations.
-Both texts must read like a realistic specialized Sub-Agent's update.
-Do not demand edits to the program-owned Result. Use the same four axes.
+The model authored a natural-language ANSWER (candidate_finish.result)
+and an execution trace_summary. The exact_oracle_answer is immutable
+and the application has already checked all distinct scalar values
+appear in the answer. Critically check each entity/value association,
+the meaning and local scope of this task, answer usefulness to Main,
+and the trace's factual evidence basis. The trace is a concise
+Orchestra-o1-style execution recap, not ungrounded success claims,
+invented problems, real tool/media actions or technical operator logs.
+Do not require changing the frozen Oracle rows. Keep the same four axes.
 """
 
 
@@ -730,7 +786,10 @@ def author_critic_report(
     ):
         contract["result_encoding"] = "typed_evidence_json_v1"
         contract["code_owned_expected_result"] = frozen_result
-        contract["requires_natural_trace"] = True
+        contract["requires_o1_answer"] = True
+        contract["answer_required_literals"] = _o1_answer_requirements(
+            teacher_record
+        )
     author_contract = deepcopy(contract)
     if result_policy == "code_owned":
         # The overall question often mentions downstream conditions that
@@ -746,21 +805,21 @@ def author_critic_report(
                 "errors": f.get("errors", []),
                 "reason": f.get("reason"),
                 "repair_hint": (
-                    "Revise BOTH natural-language fields against only the "
-                    "executed local evidence, without claiming unperformed "
-                    "media/tools or later-stage eligibility; keep the result "
-                    "rows unchanged."
+                    "Revise the natural ANSWER and execution trace_summary "
+                    "against only local evidence. Preserve every literal "
+                    "entity/value and its correct association. Do not claim "
+                    "unperformed actions or downstream eligibility."
                     if f.get("stage") == "critic" else None
                 ),
             } for f in failures[-2:]],
             "style": (
                 "Act like a real Sub-Agent returning finish to Main-Agent. "
-                "For code-owned results, return summary AND trace_narrative: "
-                "a brief finding plus a natural account of Stage-1 source "
-                "titles, observed_content and the checks actually performed. "
-                "Avoid internal operator names, unperformed media/tool calls "
-                "and later-stage eligibility. The result remains frozen. "
-                "On repair, revise only the two prose fields."
+                "For typed code-owned outputs, return ANSWER and trace_summary, "
+                "not a programmatic table or machine JSON. Answer with all "
+                "entities, dates, numbers and their correct associations. "
+                "Give Main an O1-style recap of observed source evidence "
+                "without inventing tool actions or later checks. The full "
+                "Oracle relation remains frozen separately."
             ),
         }
         try:
@@ -775,14 +834,27 @@ def author_critic_report(
                 and "result" in candidate
             )
             if isinstance(candidate, dict) and result_policy == "code_owned":
-                # Neither a model's wrong result nor an invented status
-                # may overwrite the actual delivered WorkProduct.
-                candidate = {
-                    "result": frozen_result,
-                    "summary": candidate.get("summary"),
-                    "trace_narrative": candidate.get("trace_narrative"),
-                    "status": candidate.get("status", "done"),
-                }
+                if contract.get("requires_o1_answer"):
+                    authored_answer = candidate.get("answer")
+                    authored_trace = candidate.get("trace_summary")
+                    # Status and immutable Oracle rows are never model-owned.
+                    candidate = {
+                        "result": authored_answer,
+                        "trace_summary": authored_trace,
+                        "summary": _o1_finish_summary(
+                            authored_trace, authored_answer
+                        ) if isinstance(authored_trace, str) and isinstance(
+                            authored_answer, str
+                        ) else "",
+                        "status": "done",
+                    }
+                else:
+                    candidate = {
+                        "result": frozen_result,
+                        "summary": candidate.get("summary"),
+                        "trace_narrative": candidate.get("trace_narrative"),
+                        "status": "done",
+                    }
             surface_rewrites = []
             if isinstance(candidate, dict):
                 fields = {
@@ -793,21 +865,25 @@ def author_critic_report(
                 }
                 candidate = {
                     key: _public_field_text(value, fields)
-                    if (key in {"result", "summary", "trace_narrative"}
+                    if (key in {"result", "summary", "trace_narrative",
+                                "trace_summary"}
                         and isinstance(value, str)
                         and not (key == "result"
                                  and result_policy == "code_owned"
                                  and teacher_record.get("result_encoding") ==
-                                 "typed_evidence_json_v1")) else value
+                                 "typed_evidence_json_v1"
+                                 and not contract.get("requires_o1_answer"))) else value
                     for key, value in candidate.items()
                 }
                 # Surface-only repair of known internal jargon. Preserve
                 # claims, rows and provenance; all subsequent guards and
                 # Critic review still run on the revised prose.
-                for field in ("result", "summary", "trace_narrative"):
+                for field in ("result", "summary", "trace_narrative",
+                              "trace_summary"):
                     if (field == "result" and result_policy == "code_owned"
                             and teacher_record.get("result_encoding") ==
-                            "typed_evidence_json_v1"):
+                            "typed_evidence_json_v1"
+                            and not contract.get("requires_o1_answer")):
                         # Never rewrite machine-readable JSON keys or refs.
                         continue
                     if isinstance(candidate.get(field), str):
@@ -836,11 +912,13 @@ def author_critic_report(
                         and isinstance(candidate.get("summary"), str)
                         else None
                     ),
-                    "candidate_trace_narrative": (
-                        candidate["trace_narrative"][:1800]
+                    "candidate_trace_summary": (
+                        candidate.get("trace_summary",
+                                      candidate.get("trace_narrative"))[:2800]
                         if isinstance(candidate, dict)
-                        and isinstance(candidate.get("trace_narrative"), str)
-                        else None
+                        and isinstance(candidate.get(
+                            "trace_summary", candidate.get("trace_narrative")
+                        ), str) else None
                     ),
                 })
                 continue
@@ -868,8 +946,10 @@ def author_critic_report(
                     "candidate_finish": {
                         "result": normalized_result,
                         "summary": candidate["summary"],
-                        **({"trace_narrative": candidate["trace_narrative"]}
-                           if result_policy == "code_owned" else {}),
+                        **({"trace_summary": candidate["trace_summary"]}
+                           if contract.get("requires_o1_answer") else
+                           ({"trace_narrative": candidate["trace_narrative"]}
+                            if result_policy == "code_owned" else {})),
                         "status": "done",
                     },
                     "author_result_was_structured": not isinstance(
@@ -912,11 +992,18 @@ def author_critic_report(
                     and all(decision.get(axis) is True for axis in axes)):
                 summary_text = candidate["summary"].strip()
                 row = deepcopy(teacher_record)
-                row["answer_text"] = normalized_result
+                # This internal text remains a byte-exact structured Oracle
+                # rendering for offline verification; it is NOT given to Main.
+                row["answer_text"] = (
+                    frozen_result if contract.get("requires_o1_answer")
+                    else normalized_result
+                )
                 row["trace_summary"]["narrative"] = (
-                    candidate["trace_narrative"].strip()
-                    if contract.get("requires_natural_trace")
-                    else trace_narrative(teacher_record["trace_summary"])
+                    candidate["trace_summary"].strip()
+                    if contract.get("requires_o1_answer")
+                    else (candidate["trace_narrative"].strip()
+                          if contract.get("requires_natural_trace")
+                          else trace_narrative(teacher_record["trace_summary"]))
                 )
                 # Code-owned, source-scoped observations are added AFTER
                 # the LLM's natural-language prose has been independently
@@ -938,6 +1025,11 @@ def author_critic_report(
                 row["report_authoring"] = {
                     "status": "accepted",
                     "result_policy": result_policy,
+                    "public_result_format": (
+                        "natural_answer" if contract.get("requires_o1_answer")
+                        else "legacy"
+                    ),
+                    "oracle_result_immutable": True,
                     "ignored_model_result": ignored_model_result,
                     "attempts": revision + 1,
                     "surface_rewrites": surface_rewrites,
@@ -955,11 +1047,13 @@ def author_critic_report(
             failures.append({
                 "stage": "critic", "reason": decision.get("reason"),
                 "candidate_summary": candidate.get("summary"),
-                "candidate_trace_narrative": candidate.get("trace_narrative"),
+                "candidate_trace_summary": candidate.get(
+                    "trace_summary", candidate.get("trace_narrative")
+                ),
                 "repair_hint": (
-                    "Correct stage-local summary/prose only. Preserve the "
-                    "entire frozen answer exactly; do not pre-filter or "
-                    "alter any result rows."
+                    "Correct the natural answer and trace_summary, preserving "
+                    "all original identifiers and their values, without "
+                    "pre-filtering or changing frozen Oracle rows."
                 ),
                 "axes": {key: decision.get(key) for key in axes},
                 "preview": str(candidate)[:220],

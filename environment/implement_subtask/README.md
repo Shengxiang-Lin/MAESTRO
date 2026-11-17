@@ -18,53 +18,60 @@ Previously completed LLM report output is not silently overwritten; use a
 fresh output directory or explicitly enable `reporting.overwrite` when
 changing the report inputs after a completed run.
 
-## Current Task Plan: source-cited Result
+## Current Task Plan: O1-style Answer + Trace Summary
 
-For current `task_plan` Scenes, Stage 2 retains the exact Oracle WorkProduct
-and writes a complete, deterministic JSON-list string into
-`finish_result.result`. Each entry contains `values` and
-`source_fact_refs`. The LLM writes the human-readable `summary` only.
-No row or citation is truncated to meet a text budget; oversized reports
-fail visibly. Legacy Scene reports keep their original readable Result.
+For the maintained `task_plan` and `result_encoding:
+typed_evidence_json_v1` Scenes, Stage 2 uses two representations:
 
-## Stage-1 observations and natural Stage-2 traces
+- **Offline Oracle (private):** `answer`, `answer_with_provenance`,
+  `trace_summary.steps`, and `answer_text` (the exact typed JSON-string
+  serialization). These are immutable and remain available for Replay,
+  fact checking, fault construction and regression tests.
+- **Main-visible delivery:** `finish_result.result` is a natural-language
+  **Answer** to the delegated task, `finish_result.summary` is a short
+  execution note derived from the first trace bullet, and
+  `trace_summary.narrative` is the natural execution **Trace Summary**.
+  Stage 3 renders these in its O1-compatible subtask history.
 
-Stage 1 already creates `observed_content`, `observation_semantics`,
-`document_context`, and named source titles/purposes/modalities within
-synthetic World observations. Oracle realization now carries this **existing**
-evidence into `trace_summary.steps[].evidence_atoms`, plus a scoped
-`trace_summary.source_context` catalog. The original operator steps, full
-WorkProduct, and provenance remain code-owned.
+One Qwen Author request returns exactly `{"answer": "...",
+"trace_summary": "..."}`. The Guard requires all distinct identifiers,
+dates and numeric scalar values from the frozen delivered rows to occur
+verbatim in the Answer (up to 6,500 characters), and rejects invented
+tool/media execution or internal procedural identifiers. The independent
+Critic checks whether the Answer correctly associates entities with
+their values and whether both texts are grounded and stage-local.
+An answer missing a required value is repaired or rejected; the Oracle
+is never changed merely to make a report pass.
 
-For current `result_encoding: typed_evidence_json_v1` tasks, one Qwen
-Author invocation returns **both** `summary` and `trace_narrative`.
-The Guard checks each field, and the independent Critic sees both alongside
-the exact evidence. Only the accepted narrative is published as
-`trace_summary.narrative` and shown to Main in Stage 3. The old operator
-paraphrase function remains a fallback for older, non-typed reporting modes.
-The frozen `finish_result.result` and fact references never change.
+The full Oracle JSON is **not** inserted into Main's `finish_result.result`.
+Stage 4 similarly renders actually delivered *faulty* or *partial* typed
+rows into readable prose, never substituting the private clean result.
+Its visible-claim parser recovers only explicitly communicated facts:
+structured prose it can parse, or literal case-ID lists; otherwise it
+abstains rather than inferring hidden facts.
 
-No actual image, audio, video, network or tool execution occurs in Stage 2;
-the natural narrative must describe simulated, supplied observations. The
-earlier Stage-1 `evidence_acquisition` contract remains optional: without it,
-do **not** synthesize a fictitious tool-call history.
+## Reusing Stage-1 observation language
 
-## Code-owned results and stage-local summaries
+Stage 1 has already generated `observed_content`,
+`observation_semantics`, `document_context`, and source titles,
+purposes and modalities within its synthetic World. Stage 2 passes
+these through the scoped `trace_summary.steps[].evidence_atoms`
+and `trace_summary.source_context`. They ground the Answer and Trace,
+rather than forcing the model to paraphrase `scan/project/join` names.
 
-`reporting.result_policy: code_owned` (in `environment/configs/subagent_reports.yaml`)
-enables a safer V1.4 report format. The model authors **only**
-`finish_result.summary` from the current Macro's frozen step/evidence
-contract; code renders `finish_result.result` and `status=done` from the
-complete currently delivered WorkProduct. The model is not asked to describe
-the overall question; the complete frozen question can contain downstream
-conditions that a current Macro has not checked.
+**No real image, audio, video, network or tool execution happens here.**
+Without Stage 1 evidence-acquisition contracts, do not fabricate a tool
+call history. The natural Trace reports work performed over supplied
+simulated observations and only limitations established by that work.
 
-For example, a context-log filter returns candidate case IDs, NOT
-independently confirmed report-year disagreements. Its Result enumerates the
-actual candidate IDs, while the LLM's Summary must describe only context-log
-filtering. Both the code result and authored summary run the normal Guard and
-independent Critic. Existing scenes without the V1.4 marker retain the legacy
-report mode.
+## Report generation and resumability
+
+`reporting.result_policy: code_owned` keeps status and exact typed
+evidence owned by the application; it no longer means that the Main-visible
+Answer is a raw JSON WorkProduct. Non-typed legacy report modes are
+left as compatibility paths. An interrupted Author/Critic journal may
+resume with unchanged inputs, model and prompt; use a fresh report
+output directory or `reporting.overwrite: true` for a full rerun.
 
 The config's `implementation.scenes` is the accepted Question bank.
 Without `--scenes`, the command automatically reads that path. This is

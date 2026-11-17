@@ -25,20 +25,30 @@ class Author:
     def complete_json(self, system, payload):
         self.calls += 1
         contract = json.loads(payload)["frozen_task_and_evidence"]
+        rows = contract["exact_oracle_answer"]
+        def flatten(value):
+            if isinstance(value, dict):
+                return ", ".join(flatten(x) for x in value.values())
+            if isinstance(value, list):
+                return ", ".join(flatten(x) for x in value)
+            return str(value)
+        details = "; ".join(
+            ", ".join(flatten(value) for value in row.values())
+            for row in rows
+        ) or "no matching entries"
         return {
-            "result": contract["exact_oracle_answer"],
-            "summary": (
-                "I checked the authorized input and applied the recorded "
-                "operations for this specific handoff. The exact records "
-                "were returned without inventing any later eligibility test."
+            "answer": (
+                f"The assigned evidence returned {len(rows)} records: "
+                f"{details}. Subsequent eligibility has not been checked."
             ),
-            "trace_narrative": (
-                "I compared the descriptions in the supplied evidence records "
-                "and traced which named observations supported the returned "
-                "identifiers. This establishes the current handoff only, "
-                "without assuming a later eligibility or verification step."
+            "trace_summary": (
+                "- Reviewed the named source observations supplied for "
+                "the current delegated inquiry.\n"
+                "- Compared their documented clues and identifying "
+                "values within the local task scope.\n"
+                "- Returned the supported records for the next stage, "
+                "without asserting that later checks had been performed."
             ),
-            "status": "done",
         }
 
 
@@ -114,16 +124,24 @@ class CombinedStage2Tests(unittest.TestCase):
                 self.assertEqual(before["trace_summary"]["steps"],
                                  after["trace_summary"]["steps"])
                 self.assertEqual(after["finish_result"]["status"], "done")
-                from environment.implement_subtask.reporting import code_owned_result
-                self.assertEqual(after["finish_result"]["result"],
-                                 code_owned_result(before))
+                from environment.implement_subtask.reporting import (
+                    code_owned_result, _o1_answer_issues,
+                    _o1_answer_requirements,
+                )
+                self.assertEqual(after["answer_text"], code_owned_result(before))
+                self.assertEqual(_o1_answer_issues(
+                    after["finish_result"]["result"],
+                    {"answer_required_literals":
+                     _o1_answer_requirements(before)},
+                ), [])
+                self.assertFalse(after["finish_result"]["result"].startswith("[{"))
                 self.assertEqual(after["report_authoring"]["result_policy"],
                                  "code_owned")
                 self.assertGreater(
                     len(after["trace_summary"]["narrative"]), 60
                 )
                 self.assertIn(
-                    "supplied evidence records",
+                    "- Reviewed the named source observations",
                     after["trace_summary"]["narrative"],
                 )
 
