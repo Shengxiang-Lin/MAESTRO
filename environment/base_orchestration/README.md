@@ -12,12 +12,27 @@ The default output is `environment/data/stage3/`. For an isolated pilot,
 specify `--max-scenes 10 --output-dir environment/data/pilots/stage3`.
 
 The deterministic compiler owns the legal Macro batches, dependencies,
-model and tool routing. When `freeze_dispatch: true`, the LLM writes only
-brief Main Reasoning. The current-round Evidence Contract guards invalid
-output fields, wrong delegate counts, and premature completion. An
-independent Critic reviews the authored prose. The public turn remains
-`input.subtask_history` → `output.{action,reasoning,params}`;
-private contracts and reviewer diagnostics stay in
+task count and order, model and tool routing. With `freeze_dispatch: true`,
+**the same Qwen Author call** now writes `reasoning` plus natural
+`task_instruction`/`context` for each preassigned slot. The Author receives
+the current baseline O1 question/history, allowed source IDs and public
+titles/modalities, required output fields and the fixed slot's existing
+instruction as a semantic reference. No hidden future result, DAG or
+private teacher alignment is passed to the Author.
+
+Before publication, programmatic Guards check task count/order, permitted
+source references, invented identifiers and fixed model/tools. The compiler
+adds required return fields as needed and appends *only already delivered*
+public Sub-Agent result text verbatim to dependent contexts. An independent
+Critic reviews **all three natural fields** for source specificity,
+stage-local reasoning and no premature claims. The actual Macro dispatch,
+execution sequence and Stage-2 feedback are not altered. Stage 4's existing
+frozen reasoning-only author path remains unchanged.
+
+The output remains `input.subtask_history` →
+`output.{action,reasoning,params}`, while the internal authoring record
+indicates `authored_fields: [reasoning, task_instruction, context]`.
+Private contracts and reviewer diagnostics stay in
 `private/teacher_alignment.jsonl`.
 
 Sub-Agent summaries are normalized as **copies** of previously reviewed
