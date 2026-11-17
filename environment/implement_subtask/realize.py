@@ -315,6 +315,9 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
                     scene["problem_spec"]["evidence_trust_version"]}
                    if scene["problem_spec"].get("evidence_trust_version") else {}),
                 "macro_task_id": macro_id,
+                **({"result_encoding": "typed_evidence_json_v1"}
+                   if scene["problem_spec"].get("reasoning_pattern") == "task_plan"
+                   else {}),
                 "depends_on": list(macro["depends_on"]),
                 "authorized_source_ids": list(macro["source_ids"]),
                 **({"required_tools": list(macro["required_tools"])}

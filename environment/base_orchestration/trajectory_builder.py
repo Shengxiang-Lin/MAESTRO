@@ -38,6 +38,31 @@ def _hash(value: Any) -> str:
     ).hexdigest()
 
 
+def clean_reference_identity(scene: dict, reports: dict[str, dict]) -> dict:
+    """Stable pairing identity for Stage-3 and Stage-4 clean histories.
+
+    Depends on the frozen environment and ACTUALLY reviewed Stage-2 returns,
+    not on optional LLM wording of Main actions. No private facts are
+    published through the ID itself.
+    """
+    world_sha = _hash(scene["world"])
+    graph_sha = _hash(scene["macro_graph"])
+    report_sha = _hash({
+        tid: reports[tid]["finish_result"]
+        for tid in sorted(reports)
+    })
+    identity = _hash([
+        scene["task_id"], world_sha, graph_sha, report_sha,
+    ])
+    return {
+        "version": "maestro.clean_reference.v1",
+        "clean_reference_id": "clean-" + identity[:24],
+        "world_sha256": world_sha,
+        "macro_graph_sha256": graph_sha,
+        "stage2_public_reports_sha256": report_sha,
+    }
+
+
 def _strict_reports(scene: dict, rows: list[dict]) -> dict[str, dict]:
     if validate_replay(scene)["status"] != "valid":
         raise ValueError("stage3_invalid_frozen_scene")
@@ -306,10 +331,10 @@ def build_episode(
     graph = scene["macro_graph"]
     # Versioned V1.4 scenes train Main reasoning over a frozen
     # dependency-safe dispatch, not redundant action-structure synthesis.
-    freeze_trusted_dispatch = bool(
-        freeze_dispatch
-        and scene.get("problem_spec", {}).get("evidence_trust_version")
-    )
+    # Stage-1 was consolidated into the current Task Plan. The old
+    # evidence_trust_version marker is no longer issued, so it must not
+    # disable the explicitly requested clean frozen-dispatch baseline.
+    freeze_trusted_dispatch = bool(freeze_dispatch)
     tasks = {row["task_id"]: row for row in graph["tasks"]}
     if len(tasks) != len(graph["tasks"]):
         raise ValueError("stage3_duplicate_graph_task")
@@ -619,10 +644,12 @@ def build_episode(
         "result": {"success": True, "done": True},
         "raw_response": json.dumps(final_action, ensure_ascii=False),
     })
+    reference = clean_reference_identity(scene, reports)
     return {
         "task_id": scene["task_id"],
         "question": scene["question"],
         "format": "orchestra_o1_main_trajectory.v3",
+        "clean_reference_id": reference["clean_reference_id"],
         "trajectory": trajectory,
         "main_decision_rounds": len(trajectory),
         "trusted_subagent_feedback": True,
@@ -632,4 +659,5 @@ def build_episode(
         "main_local_goal_resolution": main_compute,
         "visible_answer_shortcut": visible_answer_shortcut,
         "completion_generation_mode": completion_status["mode"],
+        "clean_reference_identity": reference,
     }

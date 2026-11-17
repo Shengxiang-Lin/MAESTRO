@@ -9,8 +9,17 @@ python -m environment generate-untrusted-turns \
 ```
 
 Default output: `environment/data/stage4/`.
-Stage 4 internally creates a deterministic clean O1 prefix. A separate
-Stage-3 LLM dataset is **not** required as input.
+Stage 4 normally creates a deterministic clean O1 prefix. A separate
+Stage-3 LLM dataset is **not** required, but `input.clean_episodes` can point
+to a reviewed Stage-3 `episodes.jsonl` for exact trajectory reuse. The
+supplied episodes are checked against a fresh, executable Stage-1/2 baseline;
+invalid/missing references are rejected rather than silently substituted.
+
+`private/clean_references.jsonl` stores validated clean reference episodes;
+`private/paired_trajectories.jsonl` links fault branches to the stable
+`clean_reference_id` and records the no-repair continuation outcome. Neither
+is included in Main prompts. Fault episodes carry the same reference ID for
+later pairing across Stage 3 and Stage 4.
 
 ## Functional pipeline
 

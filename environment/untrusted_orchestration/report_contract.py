@@ -172,7 +172,12 @@ def _fact_spine(contract: dict) -> dict:
 
 
 def render_delivered_result(contract: dict) -> str:
-    """Readable *actual delivered* result without extra observed values."""
+    """Render only actually delivered rows, preserving citations when typed."""
+    if contract.get("result_encoding") == "typed_evidence_json_v1":
+        result = json.dumps(contract["actual_delivered_rows"],
+                            ensure_ascii=False, separators=(",", ":"))
+        # Do not silently shorten a large observed WorkProduct.
+        return result
     rows = [row["values"] for row in contract["actual_delivered_rows"]]
     if len(rows) == 1 and len(rows[0]) <= 5:
         pairs = ", ".join(
@@ -213,7 +218,10 @@ def render_delivered_result(contract: dict) -> str:
     return result
 
 
-def build_report_contract(task: dict, attempt: Attempt, instruction: str) -> dict:
+def build_report_contract(
+    task: dict, attempt: Attempt, instruction: str, *,
+    result_encoding: str | None = None,
+) -> dict:
     """Build the Stage-2-shaped contract from THIS execution, never Oracle.
 
     In the real runner observed_operator_steps comes from run_attempt's
@@ -251,6 +259,7 @@ def build_report_contract(task: dict, attempt: Attempt, instruction: str) -> dic
     })
     contract = {
         "assigned_task_instruction": instruction,
+        "result_encoding": result_encoding,
         "observed_operator_steps": observed,
         "observed_handoff_discrepancies":
             observed_handoff_discrepancies(observed),

@@ -6,6 +6,9 @@ version: 1
 input:
   scenes: environment/data/stage1/questions/scenes.jsonl
   reports: environment/data/stage2/subtasks.jsonl
+  # Optional reviewed Stage-3 reference for exact clean/fault pairing.
+  # Null keeps deterministic Stage-4 bootstrap for independent experiments.
+  clean_episodes: null
 
 generation:
   output_dir: environment/data/stage4

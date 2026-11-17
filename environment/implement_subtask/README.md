@@ -5,6 +5,15 @@ python -m environment naturalize-subtasks --config environment/configs/subagent_
 ```
 
 
+## Current Task Plan: source-cited Result
+
+For current `task_plan` Scenes, Stage 2 retains the exact Oracle WorkProduct
+and writes a complete, deterministic JSON-list string into
+`finish_result.result`. Each entry contains `values` and
+`source_fact_refs`. The LLM writes the human-readable `summary` only.
+No row or citation is truncated to meet a text budget; oversized reports
+fail visibly. Legacy Scene reports keep their original readable Result.
+
 ## V1.4: source-scoped code-owned Result
 
 `reporting.result_policy: code_owned` (in `environment/configs/subagent_reports.yaml`)

@@ -158,6 +158,29 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
         for sid, source in source_info.items()
         if isinstance(source, dict)
     }
+    # Current Task Plan attaches origins to *observations*, not to the
+    # entire source. Match only explicitly cited FactRefs from the public
+    # Result. Never infer the value or its provenance from private rows.
+    origin_by_ref = {}
+    for source in source_info.values():
+        for observation in source.get("observations", []):
+            origin = observation.get("evidence_origin_id")
+            for ref in observation.get("fact_refs", []):
+                if isinstance(ref, str) and isinstance(origin, str):
+                    origin_by_ref[ref] = origin
+
+    def claim_origin(claim, fallback_source):
+        refs = claim.get("fact_refs", [])
+        if refs:
+            origins = {origin_by_ref.get(ref) for ref in refs}
+            # A multi-origin WorkProduct is not one independent observation.
+            return next(iter(origins)) if len(origins) == 1 and None not in origins else None
+        return origin_by_source.get(fallback_source)
+
+    def claim_source(claim, fallback_source):
+        refs = claim.get("fact_refs", [])
+        ids = {ref.split(":", 1)[0] for ref in refs if ":" in ref}
+        return next(iter(ids)) if len(ids) == 1 else fallback_source
     supporting_subjects = {
         item["subject"]
         for item in scene.get("evidence_ledger", {}).get(
@@ -214,10 +237,8 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
                 **c, "claim_id": _claim_id(tid, round_number, c),
                 "report_task_id": tid, "observed_in_round": round_number,
                 "delivery_status": parse["status"],
-                "evidence_origin_id": (
-                    origin_by_source.get(source_id)
-                    if source_id is not None else None
-                ),
+                "source_id": claim_source(c, source_id),
+                "evidence_origin_id": claim_origin(c, source_id),
                 "revision_seq": versions_by_task[tid],
                 "revision_of": prior_claim(c),
                 "authoritative": False,

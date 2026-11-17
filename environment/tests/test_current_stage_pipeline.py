@@ -94,5 +94,163 @@ class CurrentStagePipelineTests(unittest.TestCase):
         self.assertEqual(recovered["trajectory"][-1]["action"], "complete")
 
 
+    def test_many_row_code_owned_delivery_never_truncates(self):
+        from environment.implement_subtask.reporting import code_owned_result
+        from environment.untrusted_orchestration.report_contract import (
+            render_delivered_result,
+        )
+        rows = [{
+            "values": {"entity_final": "Entity-" + str(i),
+                       "observation_year": 2026},
+            "source_fact_refs": ["observation_log:F" + str(i).zfill(5)],
+        } for i in range(220)]
+        record = {
+            "result_encoding": "typed_evidence_json_v1",
+            "answer": [row["values"] for row in rows],
+            "answer_with_provenance": rows,
+            "output_schema": ["entity_final", "observation_year"],
+        }
+        first = code_owned_result(record)
+        second = render_delivered_result({
+            "result_encoding": "typed_evidence_json_v1",
+            "actual_delivered_rows": rows,
+        })
+        self.assertGreater(len(first), 10000)
+        self.assertEqual(json.loads(first), rows)
+        self.assertEqual(json.loads(second), rows)
+        from environment.implement_subtask.reporting import _guard
+        contract = {
+            "result_encoding": "typed_evidence_json_v1",
+            "code_owned_expected_result": first,
+            "exact_oracle_answer": record["answer"],
+            "terminal_output_schema_of_this_macro": record["output_schema"],
+            "all_evidence_refs": [
+                ref for row in rows for ref in row["source_fact_refs"]
+            ],
+            "observed_operator_steps": [],
+            "executed_operations_in_this_macro": [],
+            "macro_is_terminal": False,
+            "upstream_handoffs": [],
+        }
+        candidate = {
+            "status": "done", "result": first,
+            "summary": "Returned the complete set of documented observations.",
+        }
+        self.assertEqual(_guard(candidate, contract), [])
+        altered = dict(candidate, result=first[:-1])
+        self.assertIn(
+            "code_owned_typed_result_changed",
+            _guard(altered, contract),
+        )
+
+    def test_stage2_current_result_contains_all_rows_and_fact_refs(self):
+        from environment.implement_subtask.reporting import code_owned_result
+        scene = current_scene(4, "medium")
+        rows = realize_scene(scene)["macro_tasks"]
+        self.assertTrue(all(
+            row.get("result_encoding") == "typed_evidence_json_v1"
+            for row in rows
+        ))
+        bounded = next(
+            row for row in rows if len(code_owned_result(row)) < 5000
+        )
+        result = json.loads(code_owned_result(bounded))
+        self.assertEqual(len(result), len(bounded["answer"]))
+        self.assertEqual(
+            [item["values"] for item in result],
+            bounded["answer"],
+        )
+        self.assertEqual(
+            [item["source_fact_refs"] for item in result],
+            [item["source_fact_refs"]
+             for item in bounded["answer_with_provenance"]],
+        )
+
+    def test_structured_stage2_reports_feed_validated_clean_stage3(self):
+        from environment.implement_subtask.reporting import code_owned_result
+        from environment.untrusted_orchestration.trusted_prefix import (
+            compile_trusted_prefixes,
+        )
+        scene = current_scene(8, "medium")
+        reports = []
+        for item in realize_scene(scene)["macro_tasks"]:
+            reports.append({
+                **deepcopy(item),
+                "finish_result": {
+                    "status": "done",
+                    "result": code_owned_result(item),
+                    "summary": "Reported only the source-scoped finding.",
+                },
+                "report_authoring": {"status": "accepted"},
+            })
+        expected, turns, _, status = build_episode(
+            scene, reports, freeze_dispatch=True,
+        )
+        self.assertEqual(status["status"], "accepted", status)
+        self.assertTrue(turns)
+        compiled, review = compile_trusted_prefixes(
+            [scene], reports, max_rounds=16,
+            sub_model="qwen3-8b", model_alias="model_1",
+            clean_episodes={scene["task_id"]: expected},
+        )
+        self.assertEqual(review[0]["status"], "accepted", review)
+        self.assertEqual(
+            compiled[scene["task_id"]]["clean_reference_id"],
+            expected["clean_reference_id"],
+        )
+
+    def test_stage4_retry_contract_keeps_stage2_citations(self):
+        from environment.untrusted_orchestration.state_machine import (
+            ExecutionState,
+        )
+        from environment.untrusted_orchestration.report_contract import (
+            build_report_contract, render_delivered_result,
+        )
+        from environment.untrusted_orchestration.faults import relation_rows
+        scene = current_scene(7, "medium")
+        rows = accepted_reports(scene)
+        reviewed = {r["macro_task_id"]: r for r in rows}
+        runtime = ExecutionState(scene, reviewed)
+        tid = scene["macro_graph"]["reference_waves"][0][0]
+        attempt = runtime.register(tid)
+        contract = build_report_contract(
+            runtime.tasks[tid], attempt, "Read the assigned source.",
+            result_encoding=reviewed[tid]["result_encoding"],
+        )
+        self.assertEqual(
+            json.loads(render_delivered_result(contract)),
+            relation_rows(attempt.product),
+        )
+        self.assertEqual(
+            json.loads(contract["fact_spine"]["delivery"]["result_text"]),
+            relation_rows(attempt.product),
+        )
+
+    def test_clean_reference_is_stable_and_fails_closed_when_tampered(self):
+        from environment.untrusted_orchestration.trusted_prefix import (
+            validate_clean_episode,
+        )
+        scene = current_scene(5, "medium")
+        reports = accepted_reports(scene)
+        expected, _turns, _audit, status = build_episode(
+            scene, reports, freeze_dispatch=True,
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertTrue(expected["clean_reference_id"].startswith("clean-"))
+        duplicate, _, _, _ = build_episode(
+            scene, reports, freeze_dispatch=True,
+        )
+        self.assertEqual(
+            expected["clean_reference_id"], duplicate["clean_reference_id"],
+        )
+        validate_clean_episode(expected, duplicate)
+        altered = deepcopy(duplicate)
+        altered["trajectory"][0]["result"]["subtask_results"][0][
+            "finish_result"]["result"] = "untrusted replacement"
+        with self.assertRaisesRegex(ValueError, "clean_report_mismatch"):
+            validate_clean_episode(expected, altered)
+
+
+
 if __name__ == "__main__":
     unittest.main()

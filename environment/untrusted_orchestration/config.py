@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "environment" / "configs" / "untrusted_orchestration.yaml"
 
 _REQUIRED = {
-    "input": {"scenes", "reports"},
+    "input": {"scenes", "reports", "clean_episodes"},
     "generation": {
         "output_dir", "max_scenes", "branches_per_scene", "seed",
         "max_rounds", "max_cost", "max_retries", "max_parallel_tasks",
@@ -59,6 +59,10 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
     config = {
         "scenes_path": _path(source.get("scenes")),
         "reports_path": _path(source.get("reports")),
+        "clean_episodes_path": (
+            _path(source["clean_episodes"])
+            if source.get("clean_episodes") else None
+        ),
         "output_dir": _path(run.get("output_dir")),
         "max_scenes": run.get("max_scenes"),
         "branches_per_scene": run.get("branches_per_scene"),
