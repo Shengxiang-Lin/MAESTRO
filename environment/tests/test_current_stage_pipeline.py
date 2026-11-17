@@ -124,6 +124,28 @@ class CurrentStagePipelineTests(unittest.TestCase):
         self.assertTrue(all(row["trace_summary"]["steps"] for row in teacher["macro_tasks"]))
         self.assertTrue(all(row["answer_with_provenance"] for row in teacher["macro_tasks"]))
 
+    def test_stage4_bootstraps_from_stage1_and_stage2_only(self):
+        from environment.untrusted_orchestration.trusted_prefix import (
+            compile_trusted_prefixes,
+        )
+        scene = current_scene(0, "medium")
+        rows = accepted_reports(scene)
+        clean, reviews = compile_trusted_prefixes(
+            [scene], rows, max_rounds=16,
+            sub_model="qwen3.8-flash", model_alias="model_1",
+        )
+        self.assertEqual(reviews[0]["status"], "accepted", reviews)
+        self.assertEqual(reviews[0]["mode"],
+                         "deterministic_template_not_published")
+        self.assertEqual(clean[scene["task_id"]]["trajectory"][-1]["action"],
+                         "complete")
+        missing, rejected = compile_trusted_prefixes(
+            [scene], [], max_rounds=16,
+            sub_model="qwen3.8-flash", model_alias="model_1",
+        )
+        self.assertFalse(missing)
+        self.assertEqual(rejected[0]["status"], "rejected")
+
     def test_stage3_and_stage4_consume_frozen_current_scene(self):
         scene = current_scene(3)
         reports = accepted_reports(scene)

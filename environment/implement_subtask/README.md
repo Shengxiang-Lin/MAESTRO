@@ -79,12 +79,7 @@ output path, and resume behavior. Internal status, failure reasons and
 source-preservation checks are written to summary and failure JSONL files.
 Nothing here represents an actual Web/media tool invocation.
 
-For research/recovery you can separately materialize an Oracle bank to the **independent** `implementation.output_dir` (by default `environment/data/maestro_subtask_oracle_100`) with:
-
-```bash
-python -m environment implement-subtasks --config environment/configs/subagent_reports.yaml
-```
-
-Or use `naturalize-subtasks --source-subtasks ... --source-scene-index ...`
-to review an existing compatible Oracle snapshot without regenerating it.
-Those overrides are intentionally optional in normal runs.
+For offline Oracle-only inspection, use the internal
+`environment.implement_subtask.pipeline.materialize_subtasks` function.
+The maintained public Stage-2 command is `naturalize-subtasks`, which runs
+Oracle execution and Author/Critic review together.
