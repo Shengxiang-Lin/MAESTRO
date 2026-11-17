@@ -27,6 +27,9 @@ _RELATION_PHRASES = {
 GOAL_SCHEMA = "maestro.goal_plan.v1"
 COMPOSER = "output_first"
 WORLD_SCHEMA = "maestro.goal_measurements.v1"
+# Single source of truth for Stage-1 total Macro Tasks (including
+# additional typed evidence sources and terminal synthesis).
+MAX_MACRO_TASKS = 12
 
 OUTPUT_KINDS = (
     "single_entity", "single_number", "date_time",
@@ -298,8 +301,9 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
     source_ids = list(goal["source_fields"])
     # One Macro per distinct evidence source, then a terminal synthesis.
     # Cross-domain outputs can require three independent source Macros.
-    # Reserve capacity for typed evidence and final synthesis under the 12-Macro cap.
-    max_base = 12 - (len(source_ids)+1 if source_ids else 0)
+    # Reserve capacity for typed evidence and final synthesis under the
+    # total Macro Task cap.
+    max_base = MAX_MACRO_TASKS - (len(source_ids)+1 if source_ids else 0)
     for attempt in range(140):
         probe = ordinal + 1009*attempt
         plan = compose_evidence_plan(
@@ -391,7 +395,7 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
             "dependent typed evidence operation graph"
         ),
     }
-    if len(plan["macro_tasks"]) > 12:
+    if len(plan["macro_tasks"]) > MAX_MACRO_TASKS:
         raise ValueError("goal_macro_budget_exceeded")
     return plan
 
