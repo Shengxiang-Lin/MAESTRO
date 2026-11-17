@@ -465,11 +465,14 @@ def _stage3_task_prose_issues(
         ) <= 1200:
             issues.append(f"task_{i}_authored_instruction_invalid")
             continue
-        if not isinstance(context, str) or not 25 <= len(
-            context.strip()
-        ) <= 700:
+        if not isinstance(context, str):
             issues.append(f"task_{i}_authored_context_invalid")
             continue
+        if not 25 <= len(context.strip()) <= 700:
+            # Still check the instruction for other independent errors
+            # (e.g. generic templates): a single revision should repair
+            # both issues instead of burning two model retries.
+            issues.append(f"task_{i}_authored_context_invalid")
         if instruction.strip() == expected["target_instruction"].strip():
             issues.append(f"task_{i}_instruction_not_naturalized")
         if re.search(

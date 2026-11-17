@@ -753,12 +753,23 @@ class ReportingUnitTests(unittest.TestCase):
                       _o1_answer_issues("Dossier-X", intermediate))
 
     def test_terminal_short_answer_passes_review_without_oracle_drift(self):
-        records = realize_scene(scene(42, "medium"))["macro_tasks"]
+        from environment.generate_question.planning.goal_plan import sample_output
+        # Pick a scalar date rather than an unrelated multi-field Goal.
+        # Dictionary string renderings can be naturalized (field labels
+        # with underscores become spaces); that is not the short-answer
+        # behavior under test.
+        ordinal = next(
+            i for i in range(64)
+            if sample_output(17, i)["kind"] == "date_time"
+        )
+        records = realize_scene(scene(ordinal, "medium"))["macro_tasks"]
         terminal = next(
             record for record in records
             if record["output_schema"] == ["answer"]
         )
         expected = str(terminal["answer"][0]["answer"])
+        self.assertLess(len(expected), 18)
+        self.assertEqual(len(terminal["answer"]), 1)
 
         class ShortAnswerAuthor:
             def complete_json(self, system_prompt, user_prompt):
