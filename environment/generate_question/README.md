@@ -33,7 +33,8 @@ The internal Stage 1 code is organized by responsibility:
 The active code is grouped by responsibility: `grounding/` holds domain-aware
 synthetic observation profiles, `authoring/` holds question/scenario
 naturalization and validation helpers, and `auditing/` holds structural
-decision-opportunity and difficulty diagnostics. The CLI, typed solvers and
+decision-opportunity and difficulty diagnostics. Thin compatibility shims
+preserve older Stage-2/3/4 import paths for shared surface contracts. The CLI, typed solvers and
 Stage-2/3/4 data contracts remain at their established import paths.
 
 Numeric, date and coordinate source annotations can now be acquired from

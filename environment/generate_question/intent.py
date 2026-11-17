@@ -97,7 +97,7 @@ def intent_contract(spec: dict) -> dict:
         goal_kind = plan["goal_spec"]["source_profile"]
         constraints = [
             "Combine the independently recorded identifying clues.",
-            "Identify the matching dossier before following its relationship records.",
+            "Resolve the matching subject from the supplied observations before consulting its related records.",
             (
                 "Report ONLY the entity at the end of the relation chain."
                 if goal_kind == "entity_resolution" else
@@ -105,7 +105,7 @@ def intent_contract(spec: dict) -> dict:
                 + plan["goal"]["public_label"] + ". "
                 + "Preserve every typed field and requested computation."
             ),
-            "Write the user request as an ordinary archival investigation; "
+            "Write the user request as a domain-specific information investigation; "
             "do not mention generators, simulated worlds, YAGO or provenance.",
             "Do not assert unsupported external historical facts.",
         ]
@@ -159,12 +159,12 @@ def intent_contract(spec: dict) -> dict:
                  "The goal follows the exact recorded relationship sequence. "
                  "Do not invent additional comparisons, eligibility conditions "
                  "or relationships."),
-                "Use only the dossier records and relationship sources provided.",
+                "Use only the supplied observations and documented relationship sources.",
                 ("Keep the reference-material pointer and the exact "
                  "conditional event eligibility requirement; individual "
                  "feature values live in the separate public task input."
                  if compact else
-                 "Keep all dossier identifying cues and the exact conditional "
+                 "Keep all identifying observations and the exact conditional "
                  "event eligibility requirement when applicable."),
             ])
     elif pattern == "task_graph_first_v2":

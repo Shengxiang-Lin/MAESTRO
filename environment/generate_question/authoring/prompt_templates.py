@@ -217,7 +217,7 @@ already been verified. Only the final Goal field is requested.
 # Current production Stage-1 authoring: semantic Goal is frozen by Task Plan.
 # A compact Question should not narrate the task graph or enumerate evidence.
 TASK_PLAN_QUESTION_AUTHOR = """You are writing ONE natural English question for
-an archival research assistant. The semantic goal and user constraints in the
+an information research assistant. The semantic goal and user constraints in the
 input are FROZEN and cannot be changed. Return JSON: {"question":"..."}.
 
 PRIORITY: The supplied semantic_goal_question is the exact question to answer.
