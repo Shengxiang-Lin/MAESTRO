@@ -15,7 +15,7 @@ from .stage_local_claims import (
     normalize_report_language,
 )
 
-PRESENTATION = "clean_finish_v2"
+PRESENTATION = "grounded_natural_trace_v3"
 
 
 AUTHOR_SYSTEM = """You are writing the FINAL message that a real specialized
@@ -188,6 +188,13 @@ def _teacher_contract(record: dict, *, question: str | None,
         "upstream_handoffs": record["depends_on"],
         "authorized_direct_sources": record["authorized_source_ids"],
         "available_provenance_sources": sorted(allowed),
+        # Grounded names and source roles come from Stage 1, not SQL op IDs.
+        "source_context": trace.get("source_context", []),
+        "result_overview": {
+            "row_count": len(rows),
+            "sample_rows": rows[:3],
+            "additional_rows_not_shown": max(0, len(rows) - 3),
+        },
         "terminal_output_schema_of_this_macro": record["output_schema"],
         "exact_oracle_answer": rows,
         "entry_fact_index": entry_fact_index(record),
@@ -206,6 +213,11 @@ def _teacher_contract(record: dict, *, question: str | None,
             {
                 "action": step["action"],
                 "operation": step["operation"],
+                "source_id": step.get("source_id"),
+                "source_title": next((
+                    src["title"] for src in trace.get("source_context", [])
+                    if src["source_id"] == step.get("source_id")
+                ), None),
                 "observed_result": step["observed_result"],
                 "output_row_count": step["output_row_count"],
                 "source_fact_refs": step["supporting_fact_refs"][:16],
@@ -504,11 +516,29 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
     if (not isinstance(summary, str)
             or not 25 <= len(summary.strip()) <= 750):
         errors.append("summary_invalid_length_or_type")
-    for field, value in (("result", result_text), ("summary", summary)):
+    narrative = candidate.get("trace_narrative")
+    if contract.get("requires_natural_trace"):
+        if (not isinstance(narrative, str)
+                or not 60 <= len(narrative.strip()) <= 1800):
+            errors.append("trace_narrative_invalid_length_or_type")
+    for field, value in (
+        ("result", result_text), ("summary", summary),
+        *((("trace_narrative", narrative),) if
+          contract.get("requires_natural_trace") else ()),
+    ):
         if not isinstance(value, str):
             continue
         if re.search(r"\bwork_[a-z0-9_]+\b", value, re.I):
             errors.append(field + "_internal_macro_identifier")
+        if contract.get("requires_natural_trace") and field != "result":
+            if re.search(
+                r"\b(?:macro(?:s|\s+task)?|workproducts?|"
+                r"scan(?:ned)?|project(?:ed|ion)?|join(?:ed)?|uniqued|"
+                r"lookup_by_key|filter_eq|filter_gte|row\(s\)|"
+                r"m\d+_[a-z]\w*|m\d+_op\d+|relation_\d+)\b",
+                value, re.I,
+            ):
+                errors.append(field + "_technical_execution_jargon")
         if _TOOL_HALLUCINATION.search(value):
             errors.append(field + "_claims_unperformed_tool_or_media_action")
         if any(ref not in contract["all_evidence_refs"]
@@ -556,33 +586,61 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
 
 
 
-CODE_OWNED_AUTHOR_SYSTEM = """You are a specialized Sub-Agent describing
-ONLY the work already performed for ONE delegated task. Return JSON with
-ONLY {"summary":"..."} containing 1-2 concise, grounded sentences.
+CODE_OWNED_AUTHOR_SYSTEM = """You are a specialized Sub-Agent returning TWO
+natural-language descriptions of ONE completed delegated investigation.
+The exact result and status are created by the program, not by you.
 
-The program will supply Result and status from the current Macro's frozen
-executed WorkProduct. DO NOT write a result or status.
-You must respect the local operation and provenance contract supplied in
-observed_operator_steps: a context-log filter yields context candidates,
-NOT cases independently verified to have disagreeing report years.
-Do not claim a downstream year disagreement or final eligibility condition
-has been established until a step here explicitly checked it. A different
-independent Macro may do that later.
+Return ONLY a JSON object with these TWO keys:
+  {"summary":"...", "trace_narrative":"..."}
 
-Only describe local evidence and actual upstream handoffs. Do not invent
-facts, sources, numeric values, checks or tool/media execution. The trace
-represents simulated evidence; never claim to have actually searched
-the web, watched a video or visited a real source. Empty results mean a
-successfully executed step with no matching records, not a failed lookup.
+summary: 1-2 concise sentences describing the finding, useful count or identity,
+and any limitation. With more than 3 returned records, summarize their count
+and at most 2 examples; the full result and citations travel separately.
+
+trace_narrative: 2-5 natural sentences about which *named sources* were
+consulted according to the supplied observations, what their provided
+observation descriptions say, how clues or records were connected, and what
+this task established. The trace is an EVIDENCE-GROUNDED INVESTIGATION, not
+a SQL/graph/operator sequence or repeated counts after every step.
+
+Use source_context titles, purposes and modalities and observed_content within
+sampled_evidence_atoms. These are real fields in the provided FICTIONAL
+Stage-1 generated evidence; do not invent additional visual details, quotes,
+locations, conversations, webpages, URLs, numbers, dates or measurements.
+You are working from SYNTHETIC observations, NOT actual web/tool/media
+execution. Say 'the supplied photograph annotation records ...', not
+'I viewed the image'; similarly say 'the supplied recording description',
+never claim you listened to the audio or transcribed it.
+A source title does not establish claims beyond that source's observed facts.
+
+Only describe the checks and conditions actually present in THIS task's
+observed_operator_steps and available evidence. Do not pre-empt later
+eligibility tests, independent comparisons or verification. Unfiltered
+observations are not automatically qualified matches. For an empty result,
+say that no matches were found under the checks performed.
+
+Do not print internal source IDs (M1_a, relation_1), work_M IDs, op
+identifiers, raw schema keys, FactRefs, 'Macro', 'workproduct', 'scan',
+'project', 'join', 'unique' or 'row(s)'. Prefer human investigation language:
+'compared the supplied location clues', 'matched dossier identifiers',
+'checked the field-survey description', etc. Do not merely paraphrase
+the operator log.
+
+Example illustrating STYLE ONLY (not facts to reuse):
+{"summary":"Three dossier identifiers are supported by both clue sources; any further site qualification remains unchecked.",
+ "trace_narrative":"I compared the location cues in the supplied photograph annotations with the corresponding gazetteer entries. The first source records the valley clue, while the gazetteer provides a second location reference. Three dossiers occur in both sets of observations, so I returned these cross-source matches without claiming they satisfy downstream conditions."}
+
+Specific assertions must be grounded in THIS task input, not the example.
 """
 
 CODE_OWNED_CRITIC_SYSTEM = CRITIC_SYSTEM + """
-candidate_finish.result is PROGRAM-OWNED and has already been rendered from
-the complete frozen current Macro output. It was not model-authored. Review
-ONLY the model-authored summary for grounding, stage-local evidence scope and
-naturalness. Do not demand changes to the program-owned Result, add filters,
-or infer the overall question was completed by an intermediate Macro.
-Return the same four boolean axes.
+candidate_finish.result is PROGRAM-OWNED and was not model-authored. Review
+BOTH the summary AND trace_narrative against the named Stage-1 source_context,
+observed_content, actual operator evidence, authorized scope and exact answer.
+Reject fabricated media/tool activity, unsupported details, future-stage
+claims and technical execution logs masquerading as natural investigations.
+Both texts must read like a realistic specialized Sub-Agent's update.
+Do not demand edits to the program-owned Result. Use the same four axes.
 """
 
 
@@ -672,11 +730,13 @@ def author_critic_report(
     ):
         contract["result_encoding"] = "typed_evidence_json_v1"
         contract["code_owned_expected_result"] = frozen_result
+        contract["requires_natural_trace"] = True
     author_contract = deepcopy(contract)
     if result_policy == "code_owned":
         # The overall question often mentions downstream conditions that
         # are not established in the current source-only Macro.
         author_contract.pop("overall_question_for_context_only", None)
+        author_contract.pop("code_owned_expected_result", None)
     failures = []
     for revision in range(max_revisions + 1):
         request = {
@@ -686,19 +746,21 @@ def author_critic_report(
                 "errors": f.get("errors", []),
                 "reason": f.get("reason"),
                 "repair_hint": (
-                    "Revise the prose to describe only operations actually "
-                    "executed by this Macro; leave ALL exact Oracle answer "
-                    "rows unchanged. Do not apply future-stage filters."
+                    "Revise BOTH natural-language fields against only the "
+                    "executed local evidence, without claiming unperformed "
+                    "media/tools or later-stage eligibility; keep the result "
+                    "rows unchanged."
                     if f.get("stage") == "critic" else None
                 ),
             } for f in failures[-2:]],
             "style": (
                 "Act like a real Sub-Agent returning finish to Main-Agent. "
-                "result = actionable finding; summary = actual work and evidence. "
-                "Describe ONLY this Macro's executed operations and stage-local "
-                "findings. Preserve ALL exact Oracle answer rows including "
-                "candidates that may fail later filters. When repairing, "
-                "correct only prose, not the answer."
+                "For code-owned results, return summary AND trace_narrative: "
+                "a brief finding plus a natural account of Stage-1 source "
+                "titles, observed_content and the checks actually performed. "
+                "Avoid internal operator names, unperformed media/tool calls "
+                "and later-stage eligibility. The result remains frozen. "
+                "On repair, revise only the two prose fields."
             ),
         }
         try:
@@ -718,6 +780,7 @@ def author_critic_report(
                 candidate = {
                     "result": frozen_result,
                     "summary": candidate.get("summary"),
+                    "trace_narrative": candidate.get("trace_narrative"),
                     "status": candidate.get("status", "done"),
                 }
             surface_rewrites = []
@@ -730,7 +793,7 @@ def author_critic_report(
                 }
                 candidate = {
                     key: _public_field_text(value, fields)
-                    if (key in {"result", "summary"}
+                    if (key in {"result", "summary", "trace_narrative"}
                         and isinstance(value, str)
                         and not (key == "result"
                                  and result_policy == "code_owned"
@@ -741,7 +804,7 @@ def author_critic_report(
                 # Surface-only repair of known internal jargon. Preserve
                 # claims, rows and provenance; all subsequent guards and
                 # Critic review still run on the revised prose.
-                for field in ("result", "summary"):
+                for field in ("result", "summary", "trace_narrative"):
                     if (field == "result" and result_policy == "code_owned"
                             and teacher_record.get("result_encoding") ==
                             "typed_evidence_json_v1"):
@@ -773,6 +836,12 @@ def author_critic_report(
                         and isinstance(candidate.get("summary"), str)
                         else None
                     ),
+                    "candidate_trace_narrative": (
+                        candidate["trace_narrative"][:1800]
+                        if isinstance(candidate, dict)
+                        and isinstance(candidate.get("trace_narrative"), str)
+                        else None
+                    ),
                 })
                 continue
             if (result_policy == "code_owned"
@@ -799,6 +868,8 @@ def author_critic_report(
                     "candidate_finish": {
                         "result": normalized_result,
                         "summary": candidate["summary"],
+                        **({"trace_narrative": candidate["trace_narrative"]}
+                           if result_policy == "code_owned" else {}),
                         "status": "done",
                     },
                     "author_result_was_structured": not isinstance(
@@ -842,8 +913,10 @@ def author_critic_report(
                 summary_text = candidate["summary"].strip()
                 row = deepcopy(teacher_record)
                 row["answer_text"] = normalized_result
-                row["trace_summary"]["narrative"] = trace_narrative(
-                    teacher_record["trace_summary"]
+                row["trace_summary"]["narrative"] = (
+                    candidate["trace_narrative"].strip()
+                    if contract.get("requires_natural_trace")
+                    else trace_narrative(teacher_record["trace_summary"])
                 )
                 # Code-owned, source-scoped observations are added AFTER
                 # the LLM's natural-language prose has been independently
@@ -882,6 +955,7 @@ def author_critic_report(
             failures.append({
                 "stage": "critic", "reason": decision.get("reason"),
                 "candidate_summary": candidate.get("summary"),
+                "candidate_trace_narrative": candidate.get("trace_narrative"),
                 "repair_hint": (
                     "Correct stage-local summary/prose only. Preserve the "
                     "entire frozen answer exactly; do not pre-filter or "

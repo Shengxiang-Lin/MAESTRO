@@ -32,6 +32,11 @@ def _fact_index(world: dict) -> dict[str, dict]:
                     )} if "document_context" in observation else {}),
                     **({"record_excerpt": observation["record_excerpt"]}
                        if "record_excerpt" in observation else {}),
+                    **({"observed_content": observation["observed_content"]}
+                       if "observed_content" in observation else {}),
+                    **({"observation_semantics": deepcopy(
+                        observation["observation_semantics"]
+                    )} if "observation_semantics" in observation else {}),
                 }
     return index
 
@@ -184,6 +189,7 @@ def _operator_evidence(
     return {
         "node_id": node["id"],
         "operation": node["op"],
+        "source_id": node.get("source_id"),
         "input_nodes": list(node["inputs"]),
         "action": _describe_operation(node),
         "observed_result": (
@@ -301,6 +307,19 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
                 step["action"] + f" ({step['output_row_count']} row(s))"
                 for step in evidence_steps
             ]
+            # Source descriptions and simulated observation text were
+            # already generated in Stage 1. Preserve them for the Stage-2
+            # language Author instead of reducing each source to an ID.
+            source_context = [{
+                "source_id": sid,
+                "title": source_roles.get(sid, {}).get("title")
+                         or scene["world"]["sources"][sid]["title"],
+                "purpose": source_roles.get(sid, {}).get("purpose")
+                           or scene["world"]["sources"][sid].get("description", ""),
+                "modality": source_roles.get(sid, {}).get("modality")
+                            or scene["world"]["sources"][sid].get("modality", "text"),
+                "simulated_only": True,
+            } for sid in sorted(accessible)]
             summary = (
                 "To produce " + ", ".join(terminal_schema) + ", "
                 + "; then ".join(
@@ -331,6 +350,7 @@ def realize_scene(scene: dict, *, evidence_limit: int = 12,
                     "objective": "Produce " + ", ".join(terminal_schema),
                     "summary": summary,
                     "steps": evidence_steps,
+                    "source_context": source_context,
                     "upstream_macro_tasks": list(macro["depends_on"]),
                     "direct_source_ids": list(macro["source_ids"]),
                     "available_evidence_source_ids": sorted(accessible),
