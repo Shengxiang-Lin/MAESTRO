@@ -516,7 +516,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 "source_key_field": "record_key_1",
             }],
         }
-        from environment.generate_question.program_ir import Relation
+        from environment.generate_question.execution.program_ir import Relation
         observed = Attempt(
             task_id="faulty-lookup", version=1, status="done",
             product=Relation(("record_key_1", "completed_count"), ({
@@ -589,7 +589,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertNotIn("KEY1-94705", rejected["finish_result"]["result"])
 
     def test_4b_critic_boundary_rereview_does_not_rewrite_results(self):
-        from environment.generate_question.program_ir import Relation
+        from environment.generate_question.execution.program_ir import Relation
         task = {
             "task_id": "lookup-record",
             "source_ids": ["index"],
@@ -672,7 +672,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertEqual(failed["mode"], "grounded_template_fallback")
 
     def test_llm_author_preserves_partial_and_missing_status(self):
-        from environment.generate_question.program_ir import Relation
+        from environment.generate_question.execution.program_ir import Relation
         task = {
             "task_id": "read-ledger", "source_ids": ["ledger"],
             "operator_chain": [{
@@ -764,7 +764,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             def __init__(self, *, model, **kwargs):
                 instances.append(model)
         with patch(
-            "environment.generate_question.backend.OpenAICompatibleBackend",
+            "environment.generate_question.authoring.backend.OpenAICompatibleBackend",
             Backend,
         ), patch(
             "environment.untrusted_orchestration.generate_turns.generate_turns",
