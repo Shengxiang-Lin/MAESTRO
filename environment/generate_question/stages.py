@@ -124,10 +124,8 @@ def _question_signature(args, rows: list[dict]) -> str:
         "question_code": file_digest(Path(__file__).with_name("question.py")),
         "semantic_evidence_code": file_digest(
             Path(__file__).with_name("semantic_evidence.py")),
-        "question_fidelity_code": file_digest(
-            Path(__file__).with_name("authoring") / "question_fidelity.py"),
-        "question_semantic_lock_code": file_digest(
-            Path(__file__).with_name("authoring") / "question_semantic_lock.py"),
+        "question_checks_code": file_digest(
+            Path(__file__).with_name("authoring") / "question_checks.py"),
         "intent_code": file_digest(Path(__file__).with_name("intent.py")),
         "surface_quality_code": file_digest(
             Path(__file__).with_name("authoring") / "surface_quality.py"),
