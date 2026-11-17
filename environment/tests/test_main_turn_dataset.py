@@ -682,7 +682,7 @@ class MainTurnDatasetTests(unittest.TestCase):
 
     def test_stage3_max_scenes_selects_from_accepted_stage2_not_stage1_prefix(self):
         """Stage-2 failures do not consume max_scenes or Stage-3 attempts."""
-        scenes = [fixture(i) for i in (33, 34, 35, 36, 37)]
+        scenes = [fixture(i) for i in (0, 1, 2, 3, 4)]
         # Source order: no reports, complete, partial, complete, complete.
         # max_scenes=2 must choose positions 1 and 3 (not 0 and 1).
         reports = (
@@ -747,7 +747,7 @@ class MainTurnDatasetTests(unittest.TestCase):
         from environment.base_orchestration.generate_turns import (
             _select_stage2_accepted_scenes,
         )
-        scenes = [fixture(39), fixture(40)]
+        scenes = [fixture(5), fixture(6)]
         unreviewed = reviewed_rows(scenes[0])
         unreviewed[0]["report_authoring"]["status"] = "failed"
         good = reviewed_rows(scenes[1])
@@ -770,7 +770,7 @@ class MainTurnDatasetTests(unittest.TestCase):
             )
 
     def test_stage3_refuses_empty_accepted_stage2_bank(self):
-        scene = fixture(38)
+        scene = fixture(7)
         with TemporaryDirectory() as td:
             root = Path(td)
             scenes, reports = root / "scenes.jsonl", root / "reports.jsonl"
