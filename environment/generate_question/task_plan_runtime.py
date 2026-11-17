@@ -865,7 +865,33 @@ def mutate_witness(sources: dict, sid: str,
     elif sid in {"metric_a", "metric_b"}:
         goal = spec["macro_plan"]["goal_spec"]
         kind = goal.get("source_profile", goal.get("kind"))
-        if kind == "temporal_gap":
+        if spec["macro_plan"].get("composer_policy") == (
+                "goal_conditioned_output_first_v6"):
+            capabilities = goal["capabilities"]
+            if "numeric" in capabilities:
+                from .goal_resolution import goal_values
+                numeric = spec["macro_plan"]["world_binding"][
+                    "world_model"]["goal_measurements"]["by_case"][
+                        spec["macro_plan"]["world_binding"]["target_case"]
+                    ]
+                if any(node["op"] in {"compare_select", "verify"}
+                       for node in goal["operations"]):
+                    winner = goal_values(
+                        "comparison", numeric["metric_a"], numeric["metric_b"],
+                    )
+                    side = "first" if sid == "metric_a" else "second"
+                    data[sid] = 0 if winner == side else 999999
+                else:
+                    data[sid] = 0 if sid == "metric_a" else 999999
+            elif "temporal" in capabilities:
+                data["date_"+sid[-1]] = (
+                    "1900-01-01" if sid == "metric_a" else "2100-01-01"
+                )
+            elif "geographic" in capabilities:
+                data["latitude_"+sid[-1]] += 8.0
+            else:
+                raise ValueError("v6_unnecessary_metric_source")
+        elif kind == "temporal_gap":
             data["date_" + sid[-1]] = (
                 "1900-01-01" if sid == "metric_a" else "2100-01-01"
             )
