@@ -884,6 +884,28 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     s["problem_spec"]["macro_plan"]["mode"]
                     for s in current_scenes
                 )),
+                "goal_kind_distribution": dict(Counter(
+                    s["problem_spec"]["macro_plan"].get(
+                        "goal_spec", {}).get("kind", "entity_resolution")
+                    for s in current_scenes
+                )),
+                "goal_answer_type_distribution": dict(Counter(
+                    s["problem_spec"]["macro_plan"]["goal"]["answer_type"]
+                    for s in current_scenes
+                )),
+                "typed_goal_synthesis_operations": dict(Counter(
+                    step["op"]
+                    for scene in current_scenes
+                    if scene["problem_spec"]["macro_plan"].get(
+                        "goal_spec", {}).get("version") ==
+                        "goal_conditioned_typed_goal_v4"
+                    for step in scene["gold_program"]["nodes"]
+                    if step["op"] in {
+                        "derive_arithmetic", "derive_date_gap",
+                        "derive_great_circle", "derive_comparison",
+                        "compose_typed_result", "group_count",
+                    }
+                )),
                 "macro_task_count_range": [
                     min(sizes, default=0), max(sizes, default=0)
                 ],
