@@ -538,9 +538,10 @@ def _o1_answer_issues(answer: str, contract: dict) -> list[str]:
     if not isinstance(answer, str):
         return ["answer_invalid_length_or_type"]
     answer_text = answer.strip()
-    exact_scalar = _exact_single_field_scalar_text(answer_text, contract)
-    if (not answer_text or len(answer_text) > 6500
-            or (len(answer_text) < 18 and exact_scalar is None)):
+    # O1 finish(result) may be an exact key, short number, date, or concise
+    # answer. Length is not evidence quality. The literal/association,
+    # provenance and independent Critic checks below still apply.
+    if not answer_text or len(answer_text) > 6500:
         return ["answer_invalid_length_or_type"]
     missing = []
     for literal in contract.get("answer_required_literals", []):
