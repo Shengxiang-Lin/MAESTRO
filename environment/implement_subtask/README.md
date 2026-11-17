@@ -43,6 +43,14 @@ their values and whether both texts are grounded and stage-local.
 An answer missing a required value is repaired or rejected; the Oracle
 is never changed merely to make a report pass.
 
+Before the exact-value Guard and independent Critic, the reporter
+normalizes a small whitelist of *surface-only* operator-style wording
+(e.g. "Scanned" -> "Reviewed", "Joined" -> "Cross-referenced",
+"Projected" -> "Retained", "rows" -> "records"). This does not change
+structured rows, IDs, measured values or provenance. Internal source keys,
+private Oracle claims, invented tool actions and premature downstream
+conclusions are still rejected by the original checks.
+
 The full Oracle JSON is **not** inserted into Main's `finish_result.result`.
 Stage 4 similarly renders actually delivered *faulty* or *partial* typed
 rows into readable prose, never substituting the private clean result.
