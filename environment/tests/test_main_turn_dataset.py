@@ -743,6 +743,32 @@ class MainTurnDatasetTests(unittest.TestCase):
                              first["main_training_turns"])
             self.assertEqual(resumed["rejected_scenes"], 0)
 
+    def test_stage3_filters_unreviewed_reports_and_rejects_duplicate_macros(self):
+        from environment.base_orchestration.generate_turns import (
+            _select_stage2_accepted_scenes,
+        )
+        scenes = [fixture(39), fixture(40)]
+        unreviewed = reviewed_rows(scenes[0])
+        unreviewed[0]["report_authoring"]["status"] = "failed"
+        good = reviewed_rows(scenes[1])
+        selected, stats = _select_stage2_accepted_scenes(
+            scenes, {
+                scenes[0]["task_id"]: unreviewed,
+                scenes[1]["task_id"]: good,
+            }, max_scenes=1,
+        )
+        self.assertEqual([x["task_id"] for x in selected],
+                         [scenes[1]["task_id"]])
+        self.assertEqual(stats["unreviewed_stage2_reports"], 1)
+        self.assertEqual(stats["selected_stage3_scenes"], 1)
+        with self.assertRaisesRegex(
+            ValueError, "stage3_duplicate_stage2_macro_report",
+        ):
+            _select_stage2_accepted_scenes(
+                scenes, {scenes[1]["task_id"]: good + [good[0]]},
+                max_scenes=1,
+            )
+
     def test_stage3_refuses_empty_accepted_stage2_bank(self):
         scene = fixture(38)
         with TemporaryDirectory() as td:
