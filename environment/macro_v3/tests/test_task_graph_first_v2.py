@@ -194,8 +194,5 @@ class TaskGraphFirstPortTests(unittest.TestCase):
 
 
 @unittest.skipUnless(RDF_READY, "requires RDF loader")
-class TaskGraphFirstV2CliTests(unittest.TestCase):
-
-
 if __name__ == "__main__":
     unittest.main()
