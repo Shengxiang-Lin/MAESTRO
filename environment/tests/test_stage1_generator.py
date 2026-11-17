@@ -272,6 +272,26 @@ class Stage1GeneratorTests(unittest.TestCase):
             )
         self.assertEqual(len(seen["conclusion"]), 2)
 
+    def test_twelve_macro_task_scene_passes_final_quality_audit(self):
+        """Regression: final quality gate must match the planner's 12 cap."""
+        from environment.generate_question.planning.goal_plan import MAX_MACRO_TASKS
+        from environment.generate_question.auditing.quality import (
+            audit_scene, compile_and_validate,
+        )
+        from environment.generate_question.authoring.question import reference_question
+        from environment.tests.current_stage1 import current_scene
+
+        self.assertEqual(MAX_MACRO_TASKS, 12)
+        # Ordinal 9 uses the output-first hard route with exactly 12 Macros.
+        scene = current_scene(9)
+        self.assertEqual(scene["macro_graph"]["macro_task_count"], MAX_MACRO_TASKS)
+        self.assertEqual(audit_scene(scene)["status"], "valid")
+        rebuilt = compile_and_validate(
+            scene["problem_spec"], reference_question(scene["problem_spec"]),
+        )
+        self.assertEqual(rebuilt["macro_graph"]["macro_task_count"],
+                         MAX_MACRO_TASKS)
+
     def test_world_gold_replay_necessity_and_stage2(self):
         from environment.generate_question.planning.task_plan import make_spec, validate_spec
         from environment.generate_question.authoring.question import reference_question, guard_question
