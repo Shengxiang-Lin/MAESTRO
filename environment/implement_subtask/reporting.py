@@ -773,7 +773,10 @@ def author_critic_report(
     ):
         contract["result_encoding"] = "typed_evidence_json_v1"
         contract["code_owned_expected_result"] = frozen_result
-        contract["requires_natural_trace"] = True
+        contract["requires_o1_answer"] = True
+        contract["answer_required_literals"] = _o1_answer_requirements(
+            teacher_record
+        )
     author_contract = deepcopy(contract)
     if result_policy == "code_owned":
         # The overall question often mentions downstream conditions that
@@ -789,21 +792,21 @@ def author_critic_report(
                 "errors": f.get("errors", []),
                 "reason": f.get("reason"),
                 "repair_hint": (
-                    "Revise BOTH natural-language fields against only the "
-                    "executed local evidence, without claiming unperformed "
-                    "media/tools or later-stage eligibility; keep the result "
-                    "rows unchanged."
+                    "Revise the natural ANSWER and execution trace_summary "
+                    "against only local evidence. Preserve every literal "
+                    "entity/value and its correct association. Do not claim "
+                    "unperformed actions or downstream eligibility."
                     if f.get("stage") == "critic" else None
                 ),
             } for f in failures[-2:]],
             "style": (
                 "Act like a real Sub-Agent returning finish to Main-Agent. "
-                "For code-owned results, return summary AND trace_narrative: "
-                "a brief finding plus a natural account of Stage-1 source "
-                "titles, observed_content and the checks actually performed. "
-                "Avoid internal operator names, unperformed media/tool calls "
-                "and later-stage eligibility. The result remains frozen. "
-                "On repair, revise only the two prose fields."
+                "For typed code-owned outputs, return ANSWER and trace_summary, "
+                "not a programmatic table or machine JSON. Answer with all "
+                "entities, dates, numbers and their correct associations. "
+                "Give Main an O1-style recap of observed source evidence "
+                "without inventing tool actions or later checks. The full "
+                "Oracle relation remains frozen separately."
             ),
         }
         try:
@@ -818,14 +821,27 @@ def author_critic_report(
                 and "result" in candidate
             )
             if isinstance(candidate, dict) and result_policy == "code_owned":
-                # Neither a model's wrong result nor an invented status
-                # may overwrite the actual delivered WorkProduct.
-                candidate = {
-                    "result": frozen_result,
-                    "summary": candidate.get("summary"),
-                    "trace_narrative": candidate.get("trace_narrative"),
-                    "status": candidate.get("status", "done"),
-                }
+                if contract.get("requires_o1_answer"):
+                    authored_answer = candidate.get("answer")
+                    authored_trace = candidate.get("trace_summary")
+                    # Status and immutable Oracle rows are never model-owned.
+                    candidate = {
+                        "result": authored_answer,
+                        "trace_summary": authored_trace,
+                        "summary": _o1_finish_summary(
+                            authored_trace, authored_answer
+                        ) if isinstance(authored_trace, str) and isinstance(
+                            authored_answer, str
+                        ) else "",
+                        "status": "done",
+                    }
+                else:
+                    candidate = {
+                        "result": frozen_result,
+                        "summary": candidate.get("summary"),
+                        "trace_narrative": candidate.get("trace_narrative"),
+                        "status": "done",
+                    }
             surface_rewrites = []
             if isinstance(candidate, dict):
                 fields = {
@@ -836,21 +852,25 @@ def author_critic_report(
                 }
                 candidate = {
                     key: _public_field_text(value, fields)
-                    if (key in {"result", "summary", "trace_narrative"}
+                    if (key in {"result", "summary", "trace_narrative",
+                                "trace_summary"}
                         and isinstance(value, str)
                         and not (key == "result"
                                  and result_policy == "code_owned"
                                  and teacher_record.get("result_encoding") ==
-                                 "typed_evidence_json_v1")) else value
+                                 "typed_evidence_json_v1"
+                                 and not contract.get("requires_o1_answer"))) else value
                     for key, value in candidate.items()
                 }
                 # Surface-only repair of known internal jargon. Preserve
                 # claims, rows and provenance; all subsequent guards and
                 # Critic review still run on the revised prose.
-                for field in ("result", "summary", "trace_narrative"):
+                for field in ("result", "summary", "trace_narrative",
+                              "trace_summary"):
                     if (field == "result" and result_policy == "code_owned"
                             and teacher_record.get("result_encoding") ==
-                            "typed_evidence_json_v1"):
+                            "typed_evidence_json_v1"
+                            and not contract.get("requires_o1_answer")):
                         # Never rewrite machine-readable JSON keys or refs.
                         continue
                     if isinstance(candidate.get(field), str):
@@ -879,11 +899,13 @@ def author_critic_report(
                         and isinstance(candidate.get("summary"), str)
                         else None
                     ),
-                    "candidate_trace_narrative": (
-                        candidate["trace_narrative"][:1800]
+                    "candidate_trace_summary": (
+                        candidate.get("trace_summary",
+                                      candidate.get("trace_narrative"))[:2800]
                         if isinstance(candidate, dict)
-                        and isinstance(candidate.get("trace_narrative"), str)
-                        else None
+                        and isinstance(candidate.get(
+                            "trace_summary", candidate.get("trace_narrative")
+                        ), str) else None
                     ),
                 })
                 continue
@@ -911,8 +933,10 @@ def author_critic_report(
                     "candidate_finish": {
                         "result": normalized_result,
                         "summary": candidate["summary"],
-                        **({"trace_narrative": candidate["trace_narrative"]}
-                           if result_policy == "code_owned" else {}),
+                        **({"trace_summary": candidate["trace_summary"]}
+                           if contract.get("requires_o1_answer") else
+                           ({"trace_narrative": candidate["trace_narrative"]}
+                            if result_policy == "code_owned" else {})),
                         "status": "done",
                     },
                     "author_result_was_structured": not isinstance(
@@ -955,11 +979,18 @@ def author_critic_report(
                     and all(decision.get(axis) is True for axis in axes)):
                 summary_text = candidate["summary"].strip()
                 row = deepcopy(teacher_record)
-                row["answer_text"] = normalized_result
+                # This internal text remains a byte-exact structured Oracle
+                # rendering for offline verification; it is NOT given to Main.
+                row["answer_text"] = (
+                    frozen_result if contract.get("requires_o1_answer")
+                    else normalized_result
+                )
                 row["trace_summary"]["narrative"] = (
-                    candidate["trace_narrative"].strip()
-                    if contract.get("requires_natural_trace")
-                    else trace_narrative(teacher_record["trace_summary"])
+                    candidate["trace_summary"].strip()
+                    if contract.get("requires_o1_answer")
+                    else (candidate["trace_narrative"].strip()
+                          if contract.get("requires_natural_trace")
+                          else trace_narrative(teacher_record["trace_summary"]))
                 )
                 # Code-owned, source-scoped observations are added AFTER
                 # the LLM's natural-language prose has been independently
@@ -981,6 +1012,11 @@ def author_critic_report(
                 row["report_authoring"] = {
                     "status": "accepted",
                     "result_policy": result_policy,
+                    "public_result_format": (
+                        "natural_answer" if contract.get("requires_o1_answer")
+                        else "legacy"
+                    ),
+                    "oracle_result_immutable": True,
                     "ignored_model_result": ignored_model_result,
                     "attempts": revision + 1,
                     "surface_rewrites": surface_rewrites,
@@ -998,11 +1034,13 @@ def author_critic_report(
             failures.append({
                 "stage": "critic", "reason": decision.get("reason"),
                 "candidate_summary": candidate.get("summary"),
-                "candidate_trace_narrative": candidate.get("trace_narrative"),
+                "candidate_trace_summary": candidate.get(
+                    "trace_summary", candidate.get("trace_narrative")
+                ),
                 "repair_hint": (
-                    "Correct stage-local summary/prose only. Preserve the "
-                    "entire frozen answer exactly; do not pre-filter or "
-                    "alter any result rows."
+                    "Correct the natural answer and trace_summary, preserving "
+                    "all original identifiers and their values, without "
+                    "pre-filtering or changing frozen Oracle rows."
                 ),
                 "axes": {key: decision.get(key) for key in axes},
                 "preview": str(candidate)[:220],
