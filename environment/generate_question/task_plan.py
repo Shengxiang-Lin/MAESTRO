@@ -35,6 +35,7 @@ SYNTHETIC_WITNESS = "maestro.task_plan.fictional_witness.v1"
 SYNTHETIC_FORK = "maestro.fictional_fork_grounding.v1"
 GOAL_COMPOSER = "goal_conditioned_typed_v2"
 NEEDS_COMPOSER = "goal_conditioned_evidence_needs_v3"
+TYPED_GOAL_COMPOSER = "goal_conditioned_typed_goal_v4"
 # Local predicate combinations with interpretable user goals. These are
 # *predicate-signature hypotheses*, NOT RDF-type attestations. The bounded
 # YAGO loader intentionally excludes rdf:type triples.
@@ -844,13 +845,34 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
                "Check the candidate against the independent registry record",
                {"entity_0": "str", "motif_object": "str"}, key="entity_0")
     facts = grounding["candidate_paths"][grounding["target_case"]]
+    typed_kind = plan.get("goal_spec", {}).get("kind", "entity_resolution")
     for i, fact in enumerate(facts, 1):
         input_key = f"entity_{i-1}"
-        output_key = "answer" if i == plan["hops"] else f"entity_{i}"
+        output_key = (
+            "entity_final" if i == plan["hops"] and
+            typed_kind != "entity_resolution" else
+            "answer" if i == plan["hops"] else f"entity_{i}"
+        )
         source(f"relation_{i}", "text",
                f"{predicate_label(fact['predicate'])} relationship index",
                "Look up the documented relationship required by the goal",
                {input_key: "str", output_key: "str"}, key=input_key)
+    if typed_kind in {
+        "comparison", "structured_answer", "numeric_difference",
+        "numeric_ratio", "temporal_gap", "geographic_distance",
+    }:
+        from .typed_goal_v4 import _metric_fields
+        source("metric_a", "table", "Independent evidence source A",
+               "Obtain the first independent metric or factual observation",
+               _metric_fields(typed_kind, "a"), key="entity_final")
+        source("metric_b", "table", "Independent evidence source B",
+               "Obtain the second independent metric or factual observation",
+               _metric_fields(typed_kind, "b"), key="entity_final")
+    elif typed_kind == "aggregation":
+        source("observation_log", "table", "Observation entry ledger",
+               "Retrieve individually recorded dated observation entries",
+               {"entity_final": "str", "observation_id": "str",
+                "observation_year": "int"}, key="entity_final")
     expected = Counter(
         sid for t in plan["macro_tasks"] for sid in t["source_scope"]
     )
@@ -943,7 +965,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     # YAGO chain, Hard the longer; modes/independent clues are also
     # conditional on difficulty. This is NOT a learned-agent difficulty score.
     hops = min_hops if difficulty == "medium" else max_hops
-    if composer in (GOAL_COMPOSER, NEEDS_COMPOSER):
+    if composer in (GOAL_COMPOSER, NEEDS_COMPOSER, TYPED_GOAL_COMPOSER):
         if world_mode != "compose":
             raise ValueError("goal_composer_requires_composed_world")
         from .goal_composer import compose_plan
@@ -951,6 +973,16 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         yago_index = index or YagoKnowledgeIndex(kg)
         choices = tuple(row for row in _SEMANTIC_RECIPES
                         if len(row[0]) == hops)
+        if composer == TYPED_GOAL_COMPOSER:
+            from .typed_goal_v4 import selected_kind
+            typed_kind = selected_kind(seed, ordinal)
+            # A literal great-circle distance needs geographic subjects,
+            # not abstract research-field or nationality terms.
+            if typed_kind == "geographic_distance":
+                choices = tuple(row for row in choices
+                                if row[1] == "geographical")
+            if not choices:
+                raise ValueError("typed_goal_no_semantically_compatible_recipe")
         features = motif_features(kg, yago_index, choices)
         goal_rng = random.Random(int(digest(
             seed, ordinal, "goal-conditioned-semantic-goal"
@@ -975,6 +1007,13 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         kg, index or YagoKnowledgeIndex(kg),
         plan, seed=seed, ordinal=ordinal, world_mode=world_mode,
     )
+    if composer == TYPED_GOAL_COMPOSER:
+        from .typed_goal_v4 import measurement_world
+        measurements = measurement_world(
+            plan=plan, binding=grounding, seed=seed, ordinal=ordinal,
+        )
+        if measurements is not None:
+            grounding["world_model"]["goal_measurements"] = measurements
     fictional = grounding["candidate_paths"][grounding["target_case"]][0][
         "origin"] == "synthetic"
     clues, sources, schemas = _bind_sources(
@@ -990,7 +1029,10 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     )
     if fictional:
         plan["knowledge_origin"] = "synthetic"
-    if world_mode == "compose":
+    if (world_mode == "compose" and
+            plan.get("goal_spec", {}).get(
+                "kind", "entity_resolution"
+            ) == "entity_resolution"):
         plan["goal"]["meaning"] = (
             "Determine the entity at the end of the documented relation chain"
         )
@@ -1008,16 +1050,45 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         "geographical": "regional survey collection",
     }
     semantic = plan["goal"]["semantic"]
+    scene_variants = {
+        "biographical": (
+            "an oral-history collection with biographical field notes",
+            "a museum biography investigation with independent records",
+        ),
+        "academic": (
+            "an academic research survey with separately curated datasets",
+            "a science documentary archive with technical observation logs",
+        ),
+        "institutional": (
+            "an organizational activity register and external statistics",
+            "a historical corporate registry with supporting documents",
+        ),
+        "geographical": (
+            "a regional journey investigation with recorded site coordinates",
+            "an environmental field survey with geospatial observation notes",
+        ),
+    }
+    scene_setting = (
+        scene_variants[semantic["domain"]][ordinal % 2]
+        if composer == TYPED_GOAL_COMPOSER else
+        "a research archive with personnel files, field records "
+        "and independently maintained reference registers"
+    )
     scenario = {
         "topic": topics[semantic["domain"]],
-        "setting": (
-            "a research archive with personnel files, field records "
-            "and independently maintained reference registers"
-        ),
+        "setting": scene_setting,
         "user_role": "archive researcher",
-        "purpose": ("identify " + clause + " and determine the "
-                    + semantic["answer_type_hint"]
-                    + " specified by the recorded relationships"),
+        "purpose": (
+            ("identify the relation-linked entity and obtain the "
+             + plan["goal"]["public_label"]
+             + " from the available independent evidence")
+            if plan.get("goal_spec", {}).get(
+                "kind", "entity_resolution"
+            ) != "entity_resolution" else
+            ("identify " + clause + " and determine the "
+             + semantic["answer_type_hint"]
+             + " specified by the recorded relationships")
+        ),
         "motivation": (
             "resolve inconsistent or incomplete references across "
             "separate archival records"
@@ -1293,7 +1364,7 @@ def validate_spec(spec: dict) -> list[str]:
         ):
             return ["task_plan_unpaired_sampling_policy"]
         composer = plan.get("composer_policy")
-        if composer in (GOAL_COMPOSER, NEEDS_COMPOSER):
+        if composer in (GOAL_COMPOSER, NEEDS_COMPOSER, TYPED_GOAL_COMPOSER):
             from .goal_composer import compose_plan
             expected = compose_plan(
                 seed=spec["seed"], ordinal=spec["ordinal"],
@@ -1308,6 +1379,20 @@ def validate_spec(spec: dict) -> list[str]:
                         "terminal_macro_id", "goal_recipe_keys"
                     ))):
                 return ["task_plan_goal_composer_mismatch"]
+            if composer == TYPED_GOAL_COMPOSER:
+                from .typed_goal_v4 import validate_measurement_world
+                if plan.get("goal_spec") != expected["goal_spec"]:
+                    return ["task_plan_typed_goal_not_frozen"]
+                if any(plan["goal"].get(key) != expected["goal"][key]
+                       for key in ("answer_field", "answer_type",
+                                   "public_label", "cardinality", "meaning")):
+                    return ["task_plan_typed_goal_output_not_frozen"]
+                issues = validate_measurement_world(
+                    plan, binding, seed=spec["seed"],
+                    ordinal=spec["ordinal"],
+                )
+                if issues:
+                    return issues
             if composer == NEEDS_COMPOSER:
                 if plan.get("information_requirements") != expected[
                         "information_requirements"]:
@@ -1341,7 +1426,9 @@ def validate_spec(spec: dict) -> list[str]:
             by_id[task["macro_id"]] = task
         if (len(by_id) > 9
                 or plan["terminal_macro_id"] != plan["macro_tasks"][-1]["macro_id"]
-                or plan["macro_tasks"][-1]["output_schema"] != {"answer": "str"}
+                or plan["macro_tasks"][-1]["output_schema"] != {
+                    "answer": plan["goal"]["answer_type"]
+                }
                 or Counter(scopes) != Counter(plan["source_schemas"].keys())
                 or set(plan["source_schemas"]) != {
                     s["source_id"] for s in spec["sources"]}):

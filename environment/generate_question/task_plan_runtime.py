@@ -251,14 +251,42 @@ def generate_world(spec: dict) -> dict:
             model["verification_facts"] if composed else
             b["real_fork"]["candidate_forks"]
         ).items()]
+    typed_kind = plan.get("goal_spec", {}).get("kind", "entity_resolution")
     for hop in range(plan["hops"]):
         left = f"entity_{hop}"
-        right = "answer" if hop == plan["hops"]-1 else f"entity_{hop+1}"
+        right = (
+            "entity_final" if hop == plan["hops"]-1
+            and typed_kind != "entity_resolution" else
+            "answer" if hop == plan["hops"]-1 else f"entity_{hop+1}"
+        )
         tables[f"relation_{hop+1}"] = [{
             left: path[hop]["subject"],
-            right: path[hop]["object_label"] if right == "answer"
+            right: path[hop]["object_label"]
+                   if right in {"answer", "entity_final"}
                    else path[hop]["object"],
         } for path in paths.values()]
+    if typed_kind != "entity_resolution":
+        # Independent evidence views of canonical private World facts.
+        # No values are derived from a public Question or copied from
+        # any real OmniGAIA evaluation record.
+        facts = b["world_model"]["goal_measurements"]
+        if facts["kind"] != typed_kind:
+            raise ValueError("v4_metric_kind_mismatch")
+        if typed_kind == "aggregation":
+            tables["observation_log"] = [
+                copy.deepcopy(row)
+                for item in facts["by_case"].values()
+                for row in item["observations"]
+            ]
+        else:
+            from .typed_goal_v4 import _metric_fields
+            for side in ("a", "b"):
+                sid = "metric_" + side
+                fields = _metric_fields(typed_kind, side)
+                tables[sid] = [{
+                    name: record[name]
+                    for name in fields
+                } for record in facts["by_case"].values()]
     bank = {}
     for role in spec["sources"]:
         sid = role["source_id"]
@@ -272,7 +300,8 @@ def generate_world(spec: dict) -> dict:
             **({"key_field": role["key_field"]}
                if role["access_mode"] == "keyed_lookup" else {}),
             **({"key_cardinality": "many"}
-               if sid == "event_ledger" and keyed_events else {}),
+               if (sid == "event_ledger" and keyed_events)
+               or sid == "observation_log" else {}),
         }
         if sid.startswith("relation_") or sid == "real_fork":
             fictional = paths[target][0]["origin"] == "synthetic"
@@ -340,6 +369,9 @@ def generate_world(spec: dict) -> dict:
         start_case = {
             path[0]["subject"]: case for case, path in paths.items()
         }
+        final_case = {
+            path[-1]["object_label"]: case for case, path in paths.items()
+        }
         hop_case = [
             {path[hop]["subject"]: case for case, path in paths.items()}
             for hop in range(plan["hops"])
@@ -358,6 +390,8 @@ def generate_world(spec: dict) -> dict:
                     case = hop_case[hop][values[f"entity_{hop}"]]
                 elif sid == "real_fork":
                     case = start_case[values["entity_0"]]
+                elif sid in {"metric_a", "metric_b", "observation_log"}:
+                    case = final_case[values["entity_final"]]
                 else:
                     raise ValueError("unmapped_context_evidence:" + sid)
                 context = model["context_by_case"][case]
@@ -541,6 +575,74 @@ def compile_macro_solvers(spec: dict) -> dict:
             terminal = add(
                 "project", last, fields=list(task["output_schema"])
             )
+        elif op in {"lookup_metric_a", "lookup_metric_b",
+                    "fetch_observations"}:
+            sid = task["source_scope"][0]
+            retrieved = add(
+                "lookup_by_key", parents[0], source_id=sid,
+                input_key_field="entity_final",
+                source_key_field="entity_final",
+            )
+            terminal = add(
+                "project", retrieved, fields=list(task["output_schema"])
+            )
+        elif op in {
+            "compare_metrics", "derive_numeric_difference",
+            "derive_numeric_ratio", "derive_temporal_gap",
+            "derive_geographic_distance", "compose_structured_answer",
+        }:
+            both = add(
+                "join", parents[0], parents[1],
+                left_on="entity_final", right_on="entity_final",
+            )
+            if op == "compare_metrics":
+                terminal = add(
+                    "derive_comparison", both,
+                    left_field="metric_a", right_field="metric_b",
+                    output_field="answer",
+                )
+            elif op in {"derive_numeric_difference", "derive_numeric_ratio"}:
+                terminal = add(
+                    "derive_arithmetic", both,
+                    left_field="metric_a", right_field="metric_b",
+                    operation=(
+                        "absolute_difference"
+                        if op == "derive_numeric_difference" else "ratio"
+                    ), output_field="answer",
+                    round_digits=2 if op == "derive_numeric_ratio" else 0,
+                )
+            elif op == "derive_temporal_gap":
+                terminal = add(
+                    "derive_date_gap", both,
+                    left_field="date_a", right_field="date_b",
+                    output_field="answer",
+                )
+            elif op == "derive_geographic_distance":
+                terminal = add(
+                    "derive_great_circle", both,
+                    lat_a="latitude_a", lon_a="longitude_a",
+                    lat_b="latitude_b", lon_b="longitude_b",
+                    output_field="answer",
+                )
+            else:
+                terminal = add(
+                    "compose_typed_result", both,
+                    entity_field="entity_final",
+                    left_field="metric_a", right_field="metric_b",
+                    output_field="answer",
+                )
+        elif op == "count_qualifying_observations":
+            qualifying = add(
+                "filter_gte", parents[0],
+                field="observation_year", value=2025,
+            )
+            grouped = add(
+                "group_count", qualifying, field="entity_final",
+            )
+            terminal = add(
+                "project", grouped, fields=["count"],
+                rename_fields={"count": "answer"},
+            )
         else:
             raise ValueError("unsupported_task_plan_operation:" + op)
         nodes.extend(local)
@@ -596,6 +698,31 @@ def mutate_witness(sources: dict, sid: str,
         key = [f for f in data if f !=
                f"entity_{int(sid.rsplit('_',1)[-1])-1}"][0]
         data[key] = "urn:maestro:counterfactual:broken-relation"
+    elif sid in {"metric_a", "metric_b"}:
+        kind = spec["macro_plan"]["goal_spec"]["kind"]
+        if kind == "temporal_gap":
+            data["date_" + sid[-1]] = (
+                "1900-01-01" if sid == "metric_a" else "2100-01-01"
+            )
+        elif kind == "geographic_distance":
+            data["latitude_" + sid[-1]] += 8.0
+        else:
+            if kind in {"comparison", "structured_answer"}:
+                from .goal_resolution import goal_values
+                world = spec["macro_plan"]["world_binding"]["world_model"][
+                    "goal_measurements"
+                ]
+                target = spec["macro_plan"]["world_binding"]["target_case"]
+                row = world["by_case"][target]
+                winner = goal_values(
+                    "comparison", row["metric_a"], row["metric_b"]
+                )
+                side = "first" if sid == "metric_a" else "second"
+                data[sid] = 0 if winner == side else 999999
+            else:
+                data[sid] = 0 if sid == "metric_a" else 999999
+    elif sid == "observation_log":
+        data["observation_year"] = 2024
     else:
         raise ValueError("unexpected_task_plan_mutation_source:" + sid)
     return updated
@@ -660,8 +787,15 @@ def audit_information(scene: dict) -> dict:
         ))
 
     def ambiguous(rows):
-        labels = {row["answer"] for row in rows}
-        return len(labels) > 1 and expected in labels
+        # Structured Goal answers are JSON objects, not hashable scalars.
+        import json
+        labels = {
+            json.dumps(row["answer"], sort_keys=True, ensure_ascii=False)
+            for row in rows
+        }
+        return (len(labels) > 1 and
+                json.dumps(expected, sort_keys=True,
+                           ensure_ascii=False) in labels)
 
     clue = {
         sid: ambiguous(_run(drop=[sid])) for sid in plan["clues"]

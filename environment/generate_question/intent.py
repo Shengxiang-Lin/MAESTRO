@@ -94,10 +94,21 @@ def intent_contract(spec: dict) -> dict:
         )
     elif pattern == "task_plan":
         plan = spec["macro_plan"]
+        goal_kind = plan.get("goal_spec", {}).get(
+            "kind", "entity_resolution"
+        )
         constraints = [
             "Combine the independently recorded identifying clues.",
             "Identify the matching dossier before following its relationship records.",
-            "Report the entity reached by the documented relation sequence.",
+            (
+                "Report ONLY the entity at the end of the relation chain."
+                if goal_kind == "entity_resolution" else
+                "Report ONLY the frozen typed Goal output: "
+                + plan["goal"]["public_label"] + ". "
+                + ("Preserve the exact three-field structured answer."
+                   if goal_kind == "structured_answer" else
+                   "Do not request an additional intermediate entity.")
+            ),
             "Write the user request as an ordinary archival investigation; "
             "do not mention generators, simulated worlds, YAGO or provenance.",
             "Do not assert unsupported external historical facts.",
@@ -139,12 +150,22 @@ def intent_contract(spec: dict) -> dict:
             "goal_constrained_yago_grounding_v1"
         ):
             goal = plan["goal"]["semantic"]
+            if goal_kind != "entity_resolution":
+                from .typed_goal_v4 import numeric_goal_question
+                final_question = numeric_goal_question(plan)
+            else:
+                final_question = goal["question"]
             constraints.extend([
                 "The precise final user goal must be semantically equivalent "
-                "to: " + goal["question"],
-                "The goal follows the exact recorded relationship sequence. "
-                "Do not invent additional comparisons, eligibility conditions "
-                "or relationships.",
+                "to: " + final_question,
+                ("The Goal follows the exact recorded relationship "
+                 "sequence and then its frozen numeric resolution. "
+                 "Do not request any intermediate entity as a second output "
+                 "or invent extra filters or calculations."
+                 if goal_kind != "entity_resolution" else
+                 "The goal follows the exact recorded relationship sequence. "
+                 "Do not invent additional comparisons, eligibility conditions "
+                 "or relationships."),
                 "Use only the dossier records and relationship sources provided.",
                 ("Keep the reference-material pointer and the exact "
                  "conditional event eligibility requirement; individual "

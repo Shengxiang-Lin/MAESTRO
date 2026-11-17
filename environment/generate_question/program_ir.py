@@ -31,6 +31,8 @@ _ARITY = {
     "attach_evidence": 1,
     "lookup_by_key": 1,
     "derive_comparison": 1, "derive_percentage": 1,
+    "derive_arithmetic": 1, "derive_date_gap": 1,
+    "derive_great_circle": 1, "compose_typed_result": 1,
 }
 
 
@@ -68,13 +70,20 @@ def validate_program(program: dict) -> list[str]:
             not isinstance(node.get("value"), (float, int))
         ):
             issues.append("filter_gte_missing_numeric_value")
-        if op == "project" and (
-            not isinstance(node.get("fields"), list) or
-            not node["fields"] or
-            any(not isinstance(x, str) for x in node["fields"]) or
-            len(set(node["fields"])) != len(node["fields"])
-        ):
-            issues.append("project_invalid_fields")
+        if op == "project":
+            fields = node.get("fields")
+            if (not isinstance(fields, list) or not fields
+                    or any(not isinstance(x, str) for x in fields)
+                    or len(set(fields)) != len(fields)):
+                issues.append("project_invalid_fields")
+            renamed = node.get("rename_fields", {})
+            if (not isinstance(renamed, dict)
+                    or not isinstance(fields, list)
+                    or any(k not in fields or not isinstance(v, str) or not v
+                           for k, v in renamed.items())
+                    or len(set(renamed.get(k, k) for k in fields))
+                       != len(fields)):
+                issues.append("project_invalid_renames")
         if op == "claim_relation_filter" and (
             node.get("relation") != "contradicts"
             or not all(isinstance(node.get(k), str) and node[k]
@@ -92,12 +101,30 @@ def validate_program(program: dict) -> list[str]:
             or node.get("comparison") not in {"eq", "ne", "gte", "lte"}
         ):
             issues.append("compare_fields_invalid")
-        if op in {"derive_comparison", "derive_percentage"} and (
+        if op in {
+            "derive_comparison", "derive_percentage",
+            "derive_arithmetic", "derive_date_gap", "compose_typed_result",
+        } and (
             not isinstance(node.get("left_field"), str)
             or not isinstance(node.get("right_field"), str)
             or not isinstance(node.get("output_field"), str)
         ):
             issues.append("derived_goal_invalid_fields")
+        if op == "derive_arithmetic" and (
+            node.get("operation") not in {"ratio", "absolute_difference"}
+            or type(node.get("round_digits")) is not int
+            or node["round_digits"] not in (0, 2)
+        ):
+            issues.append("derived_arithmetic_invalid_contract")
+        if op == "derive_great_circle" and any(
+            not isinstance(node.get(f), str) or not node[f]
+            for f in ("lat_a", "lon_a", "lat_b", "lon_b", "output_field")
+        ):
+            issues.append("derived_geography_invalid_contract")
+        if op == "compose_typed_result" and (
+            not isinstance(node.get("entity_field"), str)
+        ):
+            issues.append("derived_structured_invalid_contract")
         if op == "group_count" and not isinstance(node.get("field"), str):
             issues.append("group_count_invalid_field")
         if op == "sort" and (not isinstance(node.get("field"), str) or
@@ -220,6 +247,24 @@ def _lookup_by_key(node: dict, key_product: Relation,
     return Relation(result_columns, tuple(rows))
 
 
+def great_circle_km(lat_a, lon_a, lat_b, lon_b) -> float:
+    """Haversine distance (km) between two source-observed coordinates."""
+    import math
+    coordinates = (lat_a, lon_a, lat_b, lon_b)
+    if any(type(x) not in (int, float)
+           or not math.isfinite(x) for x in coordinates):
+        raise ProgramError("v4_invalid_geo_coordinate_type")
+    if (not -90 <= lat_a <= 90 or not -90 <= lat_b <= 90
+            or not -180 <= lon_a <= 180 or not -180 <= lon_b <= 180):
+        raise ProgramError("v4_geo_coordinates_out_of_range")
+    a, b = math.radians(lat_a), math.radians(lat_b)
+    d_lat = b - a
+    d_lon = math.radians(lon_b - lon_a)
+    h = (math.sin(d_lat/2)**2
+         + math.cos(a) * math.cos(b) * math.sin(d_lon/2)**2)
+    return 6371.0088 * 2 * math.asin(math.sqrt(min(1.0, max(0.0, h))))
+
+
 def _apply(node: dict, inputs: list[Relation]) -> Relation:
     op = node["op"]
     if op in {"filter_eq", "filter_gte"}:
@@ -315,6 +360,66 @@ def _apply(node: dict, inputs: list[Relation]) -> Relation:
             },
             "support": row["support"],
         } for row in src.rows))
+    if op in {
+        "derive_arithmetic", "derive_date_gap",
+        "derive_great_circle", "compose_typed_result",
+    }:
+        import datetime
+        src = inputs[0]
+        output_field = node["output_field"]
+        columns = (
+            [node[k] for k in ("lat_a", "lon_a", "lat_b", "lon_b")]
+            if op == "derive_great_circle" else
+            [node[k] for k in ("left_field", "right_field")]
+        )
+        if op == "compose_typed_result":
+            columns.append(node["entity_field"])
+        for field in columns:
+            _check(src, field)
+
+        def materialize(row):
+            values = row["values"]
+            if op == "derive_great_circle":
+                result = round(great_circle_km(
+                    *(values[node[k]] for k in (
+                        "lat_a", "lon_a", "lat_b", "lon_b"
+                    ))
+                ))
+            elif op == "derive_date_gap":
+                left = datetime.date.fromisoformat(values[node["left_field"]])
+                right = datetime.date.fromisoformat(values[node["right_field"]])
+                result = abs((right - left).days)
+            else:
+                left, right = (
+                    values[node["left_field"]],
+                    values[node["right_field"]],
+                )
+                if (type(left) not in (int, float)
+                        or type(right) not in (int, float)):
+                    raise ProgramError("v4_numeric_type_mismatch")
+                if op == "compose_typed_result":
+                    result = {
+                        "entity": values[node["entity_field"]],
+                        "higher_source": (
+                            "first" if left > right
+                            else "second" if left < right else "equal"
+                        ),
+                        "count_difference": abs(left - right),
+                    }
+                elif node["operation"] == "absolute_difference":
+                    result = abs(left - right)
+                else:
+                    if right == 0:
+                        raise ProgramError("v4_ratio_denominator_zero")
+                    result = round(left / right, node["round_digits"])
+            return {
+                "values": {output_field: result},
+                "support": row["support"],
+            }
+
+        return Relation((output_field,), tuple(
+            materialize(row) for row in src.rows
+        ))
     if op == "attach_evidence":
         src = inputs[0]
         if "evidence_refs" in src.columns:
@@ -328,10 +433,17 @@ def _apply(node: dict, inputs: list[Relation]) -> Relation:
         src = inputs[0]
         for field in node["fields"]:
             _check(src, field)
-        return Relation(tuple(node["fields"]), tuple({
-            "values": {field: row["values"][field] for field in node["fields"]},
-            "support": row["support"],
-        } for row in src.rows))
+        renamed = node.get("rename_fields", {})
+        return Relation(
+            tuple(renamed.get(field, field) for field in node["fields"]),
+            tuple({
+                "values": {
+                    renamed.get(field, field): row["values"][field]
+                    for field in node["fields"]
+                },
+                "support": row["support"],
+            } for row in src.rows),
+        )
     if op == "unique":
         src, grouped = inputs[0], {}
         for row in src.rows:

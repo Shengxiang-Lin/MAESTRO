@@ -75,7 +75,12 @@ def _describe_operation(node: dict) -> str:
     if op == "take":
         return f"Select the first {node['limit']} row(s)"
     if op == "project":
-        return "Keep only the output field(s): " + ", ".join(node["fields"])
+        renames = node.get("rename_fields", {})
+        return (
+            "Keep only the output field(s): " + ", ".join(
+                renames.get(field, field) for field in node["fields"]
+            )
+        )
     if op == "unique":
         return "Remove duplicate output rows"
     if op == "count":
@@ -91,6 +96,27 @@ def _describe_operation(node: dict) -> str:
         return (
             f"Compute 100 * {node['left_field']} / {node['right_field']} "
             "as a whole percentage rounded down"
+        )
+    if op == "derive_arithmetic":
+        return (
+            f"Calculate {node['operation']} from the independently "
+            f"observed {node['left_field']} and {node['right_field']}; "
+            f"round to {node['round_digits']} decimal places"
+        )
+    if op == "derive_date_gap":
+        return (
+            f"Calculate elapsed calendar days between the dated "
+            f"{node['left_field']} and {node['right_field']} milestones"
+        )
+    if op == "derive_great_circle":
+        return (
+            "Calculate the great-circle distance in kilometers between "
+            "the two independently sourced coordinate pairs"
+        )
+    if op == "compose_typed_result":
+        return (
+            "Compose the requested structured result from the resolved "
+            "entity, comparison winner and absolute count difference"
         )
     if op == "attach_evidence":
         return "Attach the source fact references supporting each result"
