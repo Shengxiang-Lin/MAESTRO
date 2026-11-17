@@ -880,7 +880,13 @@ def mutate_witness(sources: dict, sid: str,
                         "comparison", numeric["metric_a"], numeric["metric_b"],
                     )
                     side = "first" if sid == "metric_a" else "second"
-                    data[sid] = 0 if winner == side else 999999
+                    # B is also a divisor in mixed ratio+comparison
+                    # Goals: flip the winner WITHOUT introducing a
+                    # mathematically invalid zero denominator.
+                    data[sid] = (
+                        (1 if sid == "metric_b" else 0)
+                        if winner == side else 999999
+                    )
                 else:
                     data[sid] = 0 if sid == "metric_a" else 999999
             elif "temporal" in capabilities:
