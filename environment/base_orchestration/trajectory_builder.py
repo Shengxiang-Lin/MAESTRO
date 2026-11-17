@@ -20,7 +20,10 @@ from environment.generate_question.auditing.quality import validate_replay
 from environment.implement_subtask.realize import realize_scene
 from environment.implement_subtask.public_surface import reviewed_public_view
 
-from .o1_compat import o1_prompt, o1_history, o1_prompt_from_turn, source_catalog
+from .o1_compat import (
+    o1_prompt, o1_history, o1_prompt_from_turn, source_catalog,
+    stage3_author_context,
+)
 from .action_author import (
     _assignment, action_issues, completion_issues,
     author_delegate_action, author_complete_action,
@@ -392,6 +395,15 @@ def build_episode(
             max_attempts=max_attempts, sub_model=sub_model,
             model_alias=model_alias,
         )
+        # Keep the exact O1 prompt for training/replay and its unchanged
+        # identifier Guard. Do not send baseline tutorials/tool JSON schemas
+        # to the prose Author or Critic in frozen-dispatch Stage 3.
+        author_prompt = (
+            stage3_author_context(
+                scene, history, attempt=wave_number,
+                max_attempts=max_attempts,
+            ) if freeze_trusted_dispatch else main_prompt
+        )
         assignment = [
             _assignment(
                 tasks[tid], catalog, delivered, model_alias=model_alias
@@ -452,7 +464,8 @@ def build_episode(
                 raise RuntimeError("stage3_checkpoint_action_invalid")
         else:
             action, status = author_delegate_action(
-                assignments=assignment, prompt=main_prompt,
+                assignments=assignment, prompt=author_prompt,
+                validation_prompt=main_prompt,
                 author=author, critic=critic, max_revisions=max_revisions,
                 freeze_assignment_prose=freeze_trusted_dispatch,
                 reasoning_only_stage3=freeze_trusted_dispatch,
@@ -518,6 +531,8 @@ def build_episode(
             "visible_macros_before_round": available_before,
             "newly_delivered_macro_ids": list(wave),
             "prompt_sha256": _hash(main_prompt),
+            "full_o1_prompt_chars": len(main_prompt),
+            "author_context_chars": len(author_prompt),
             "action_sha256": _hash(action),
             "o1_history_sha256": _hash(history),
             "dependencies_satisfied": True,
@@ -565,6 +580,13 @@ def build_episode(
         max_attempts=max_attempts, sub_model=sub_model,
         model_alias=model_alias,
     )
+    completion_history = o1_history(task_entries)
+    completion_author_prompt = (
+        stage3_author_context(
+            scene, completion_history, attempt=completion_round,
+            max_attempts=max_attempts,
+        ) if freeze_trusted_dispatch else completion_prompt
+    )
     completion_template = {
         "action": "complete",
         "reasoning": _grounded_completion_reasoning(
@@ -594,7 +616,7 @@ def build_episode(
             raise RuntimeError("stage3_checkpoint_completion_prompt_mismatch")
     else:
         final_action, completion_status = author_complete_action(
-            template=completion_template, prompt=completion_prompt,
+            template=completion_template, prompt=completion_author_prompt,
             delivered=delivered, author=author, critic=critic,
             max_revisions=max_revisions,
         )
@@ -609,7 +631,7 @@ def build_episode(
     final_example = {
         "sample_id": scene["task_id"] + f"-round-{completion_round:02d}",
         "task_id": scene["task_id"], "round": completion_round,
-        "input": {"subtask_history": o1_history(task_entries)},
+        "input": {"subtask_history": completion_history},
         "output": final_action,
         "generation_mode": completion_status["mode"],
     }
@@ -622,6 +644,8 @@ def build_episode(
         "visible_macros_before_round": list(delivered),
         "newly_delivered_macro_ids": [],
         "prompt_sha256": _hash(completion_prompt),
+        "full_o1_prompt_chars": len(completion_prompt),
+        "author_context_chars": len(completion_author_prompt),
         "action_sha256": _hash(final_action),
         "main_locally_computed": main_compute,
         "visible_answer_shortcut": visible_answer_shortcut,
