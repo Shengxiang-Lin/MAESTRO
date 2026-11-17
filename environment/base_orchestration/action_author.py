@@ -1060,11 +1060,11 @@ def author_delegate_action(
                 continue
         try:
             if freeze_assignment_prose:
-                # The LLM critic must not attempt to rewrite frozen
-                # evidence acquisition instructions or tool routing.
-                # It reviews only Main's *reasoning* against the visible
-                # history and the STRUCTURAL goal summaries. The code
-                # validates and emits the executable task assignments.
+                # The LLM critic cannot alter code-frozen dispatch,
+                # source scope, model or tool routing. In Stage 3 it also
+                # reviews authored instructions/contexts for semantic
+                # fidelity; Stage 4's existing reasoning-only path is
+                # unchanged.
                 review_payload = {
                     "current_main_visible_prompt": prompt,
                     "expected_current_evidence_goals": [{
@@ -1091,7 +1091,7 @@ def author_delegate_action(
                             "task contract and visible prior history. "
                             "Do not replace this round with the final "
                             "question's later dependent tasks. Reject "
-                            ("unsupported reasoning and task prose."
+                            + ("unsupported reasoning and task prose."
  if naturalize_assignment_prose else
  "only unsupported claims in authored reasoning.")
                         ),
