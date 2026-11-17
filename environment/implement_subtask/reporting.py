@@ -596,9 +596,8 @@ def code_owned_result(record: dict) -> str:
             "values": item["values"],
             "source_fact_refs": list(item["source_fact_refs"]),
         } for item in cited], ensure_ascii=False, separators=(",", ":"))
-        # Never silently truncate a WorkProduct or drop provenance.
-        if len(result) > 10000:
-            raise ValueError("code_owned_result_exceeds_finish_budget")
+        # Keep full typed evidence even for one-to-many observation logs.
+        # Size is a separate prompt-budget concern, not a license to drop rows.
         return result
     if not isinstance(rows, list) or not fields:
         raise ValueError("code_owned_invalid_oracle_relation")
