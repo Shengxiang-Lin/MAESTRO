@@ -303,6 +303,72 @@ class GeneralVisibleClaimStateTests(unittest.TestCase):
         self.assertEqual(claims[0]["attribute"], "metric_a")
         self.assertEqual(claims[0]["value"], 7)
 
+    def test_current_dossier_identifier_has_observation_provenance(self):
+        from environment.untrusted_orchestration.visible_claim_extraction import (
+            extract_visible_claims,
+        )
+        world = scene(known_origins=False)
+        world["macro_graph"]["tasks"][0]["outputs"]["typed_relation"] = [
+            "case_id",
+        ]
+        world["macro_graph"]["tasks"][1]["outputs"]["typed_relation"] = [
+            "case_id",
+        ]
+        for sid, origin in (("alpha", "actual-root-A"),
+                            ("beta", "actual-root-B")):
+            world["world"]["sources"][sid]["observations"] = [{
+                "observation_id": sid + ".OBS001",
+                "fact_refs": [sid + ":F001"],
+                "evidence_origin_id": origin,
+                "values": {"case_id": "Dossier-a1b2c3d4e5"},
+            }]
+
+        def delivered(sid):
+            return {
+                "finish_result": {
+                    "status": "done",
+                    "result": json.dumps([{
+                        "values": {"case_id": "Dossier-a1b2c3d4e5"},
+                        "source_fact_refs": [sid + ":F001"],
+                    }]),
+                    "summary": "Read the assigned dossier source.",
+                },
+            }
+
+        found, diagnostics = extract_visible_claims(
+            delivered("alpha"), output_fields=["case_id"],
+            source_id="alpha",
+        )
+        self.assertTrue(diagnostics["parsed"])
+        self.assertEqual(found[0]["subject"], "Dossier-a1b2c3d4e5")
+        self.assertEqual(found[0]["fact_refs"], ["alpha:F001"])
+        trajectory = [{
+            "attempt": i, "action": "delegate_task",
+            "result": {"subtask_results": [delivered(sid)]},
+        } for i, sid in enumerate(("alpha", "beta"), 1)]
+        audit = audit_visible_claim_states(
+            world, trajectory, task_ids_by_round={1: ["a"], 2: ["b"]},
+        )
+        current = next(iter(audit["rounds"][-1]["claim_states"].values()))
+        self.assertEqual(current["status"], "corroborated")
+        self.assertEqual(current["independent_origins"], 2)
+
+    def test_natural_code_owned_result_remains_parseable(self):
+        from environment.untrusted_orchestration.visible_claim_extraction import (
+            extract_visible_claims,
+        )
+        found, diagnostics = extract_visible_claims({
+            "finish_result": {
+                "status": "done",
+                "result": "The current task returned 1 record(s): "
+                          "project id: PRJ-001.",
+                "summary": "Matched a documented project.",
+            },
+        }, output_fields=["project_id"], source_id="entity_index")
+        self.assertTrue(diagnostics["parsed"])
+        self.assertEqual(found[0]["attribute"], "project_id")
+        self.assertEqual(found[0]["value"], "PRJ-001")
+
     def test_round_alignment_failure_is_detected(self):
         world = scene()
         with self.assertRaisesRegex(
