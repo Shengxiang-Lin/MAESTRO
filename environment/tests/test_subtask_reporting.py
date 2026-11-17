@@ -692,6 +692,33 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertIn("frozen oracle relation", cleaned)
         self.assertIn("GoogleSearchAction", cleaned)
 
+        # Style normalization must not turn private identifiers or invented
+        # tool usage into publishable, ostensibly grounded claims.
+        from environment.implement_subtask.reporting import (
+            _guard, _teacher_contract, _o1_answer_requirements,
+        )
+        record = realize_scene(scene(42, "medium"))["macro_tasks"][0]
+        contract = _teacher_contract(record, question=None, is_terminal=False)
+        contract["requires_o1_answer"] = True
+        contract["answer_required_literals"] = _o1_answer_requirements(record)
+        contract["all_evidence_refs"] = list({
+            ref for step in record["trace_summary"]["steps"]
+            for ref in step["supporting_fact_refs"]
+        } | set(record["trace_summary"]["answer_supporting_fact_refs"]))
+        bad = {
+            "result": _mock_o1_draft(contract)["answer"],
+            "summary": "Reviewed the assigned source annotations for matching clues.",
+            "trace_summary": (
+                "- " + cleaned + "\n"
+                "- Returned the matching records without any later eligibility check."
+            ),
+            "status": "done",
+        }
+        problems = _guard(bad, contract)
+        self.assertIn("trace_summary_technical_execution_jargon", problems)
+        self.assertIn("trace_summary_internal_teacher_jargon", problems)
+        self.assertIn("trace_summary_claims_unperformed_tool_or_media_action", problems)
+
     def test_task_plan_preserves_stage1_observation_descriptions(self):
         source_scene = scene(0, "medium")
         source = source_scene["world"]["sources"]
