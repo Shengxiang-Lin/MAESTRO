@@ -275,7 +275,7 @@ class Stage1GeneratorTests(unittest.TestCase):
         from environment.generate_question.task_plan import make_spec
         from environment.generate_question.quality import compile_and_validate
         from environment.generate_question.question import reference_question
-        from environment.generate_question.auditing.grounded_evidence import (
+        from environment.generate_question.auditing.quality_metrics import (
             audit_scene_grounding,
         )
         for ordinal in range(8):
@@ -333,7 +333,7 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertGreater(verification, 0)
 
     def test_partial_order_freedom_is_not_graph_signature_count(self):
-        from environment.generate_question.auditing.decision_opportunities import (
+        from environment.generate_question.auditing.quality_metrics import (
             audit_decision_opportunities,
         )
         # A and B are genuinely independent, C needs both.
@@ -356,7 +356,7 @@ class Stage1GeneratorTests(unittest.TestCase):
     def test_media_evidence_has_executable_source_affordances(self):
         from environment.generate_question.task_plan import make_spec
         from environment.generate_question.task_plan_runtime import compile_macro_solvers
-        from environment.generate_question.auditing.decision_opportunities import (
+        from environment.generate_question.auditing.quality_metrics import (
             audit_decision_opportunities,
         )
         seen = set()
