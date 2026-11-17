@@ -15,18 +15,18 @@ generation:
   freeze_dispatch: true  # Freeze DAG batches/models/tools; LLM authors reasoning + scoped task prose
   max_revisions: 2
   max_attempts: 16
-  sub_model: qwen3.8-flash
+  sub_model: local-qwen3.5-9b
   model_alias: model_1
   overwrite: false
   no_progress: false
   verbose_progress: false
 
 model:
-  author_api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
-  author_model: qwen3.8-flash
+  author_api_base: http://127.0.0.1:8807/v1
+  author_model: local-qwen3.5-9b
   critic_api_base: null  # null: same endpoint as author
-  critic_model: qwen3.8-flash
-  api_key_env: DASHSCOPE_API_KEY
+  critic_model: local-qwen3.5-9b
+  api_key_env: null
   temperature: 0.1
   author_max_tokens: 2800
   critic_max_tokens: 1200
