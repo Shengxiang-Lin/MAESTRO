@@ -120,7 +120,7 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         for step in steps
         if step["op"] in {"compare_fields", "claim_relation_filter"}
     ]
-    if pattern in {"macro_first_v2", "typed_knowledge_v1", "typed_knowledge_v2", "typed_knowledge_v3", "typed_knowledge_v4", "task_graph_first_v1", "task_graph_first_v2", "task_plan"}:
+    if pattern in {"task_plan"}:
         plan = spec["macro_plan"]
         if (len(graph["tasks"]) != len(plan["macro_tasks"])
                 or graph.get("plan_origin") != "macro_first"):
@@ -138,32 +138,6 @@ def macro_question_contract(spec: dict, graph: dict) -> dict:
         from environment.generate_question.planning.task_plan import VERSION as K_VERSION
         if plan.get("version") != K_VERSION:
             raise ValueError("incorrect_single_task_plan_version")
-    if pattern == "task_graph_first_v2":
-        from environment.generate_question.task_graph_first_v2 import VERSION as K_VERSION
-        if plan.get("version") != K_VERSION:
-            raise ValueError("incorrect_task_graph_first_v2_macro_version")
-    if pattern == "task_graph_first_v1":
-        from environment.generate_question.task_graph_first import VERSION as K_VERSION
-        if plan.get("version") != K_VERSION:
-            raise ValueError("incorrect_task_graph_first_macro_version")
-    if pattern == "typed_knowledge_v4":
-        from environment.generate_question.hybrid_world_v4 import VERSION as K_VERSION
-        if plan.get("version") != K_VERSION:
-            raise ValueError("incorrect_causal_hybrid_macro_version")
-    if pattern == "typed_knowledge_v3":
-        from environment.generate_question.hybrid_world import VERSION as K_VERSION
-        if plan.get("version") != K_VERSION:
-            raise ValueError("incorrect_hybrid_macro_version")
-    if pattern == "typed_knowledge_v2":
-        from environment.generate_question.knowledge_macro_v2 import VERSION as K_VERSION
-        if plan.get("version") != K_VERSION:
-            raise ValueError("incorrect_knowledge_macro_version")
-    if pattern == "typed_knowledge_v1":
-        from environment.generate_question.planning.knowledge_index import VERSION as K_VERSION
-        if plan.get("version") != K_VERSION:
-            raise ValueError("incorrect_knowledge_macro_version")
-        if len(graph["tasks"]) != len(plan["macro_tasks"]):
-            raise ValueError("knowledge_macro_count_changed")
     if family == "evidence_reconcile" and not ops["attach_evidence"]:
         raise ValueError("macro_question_missing_evidence_output")
     sorts = [step for step in steps if step["op"] == "sort"]
