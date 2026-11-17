@@ -124,6 +124,12 @@ ENTITY_PRODUCERS = (
 def compose_plan(*, seed: int, ordinal: int, difficulty: str, hops: int,
                  goal_keys: tuple[str, ...] | list[str],
                  policy: str = VERSION) -> dict:
+    if policy == "goal_conditioned_output_first_v6":
+        from .goal_ops_v6 import compose_goal_plan
+        return compose_goal_plan(
+            seed=seed, ordinal=ordinal, difficulty=difficulty,
+            hops=hops, goal_keys=tuple(goal_keys),
+        )
     if policy == "goal_conditioned_operation_dag_v5":
         from .goal_ops_v5 import compose_goal_plan
         return compose_goal_plan(
