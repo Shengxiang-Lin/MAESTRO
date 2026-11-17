@@ -198,7 +198,7 @@ class TypedOperatorGrammarTests(unittest.TestCase):
         )
         generation = questions["generation"]
         self.assertIn("knowledge_yago", generation)
-        self.assertEqual(generation["knowledge_world_mode"], "compose")
+        self.assertNotIn("knowledge_world_mode", generation)
         self.assertTrue(generation["knowledge_yago"])
         scene_path = generation["output_dir"] + "/questions/scenes.jsonl"
         self.assertEqual(reports["implementation"]["scenes"], scene_path)
