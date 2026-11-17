@@ -485,10 +485,20 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
         return ["report_not_object"]
     if candidate.get("status") != "done":
         errors.append("status_not_done_for_complete_oracle")
-    result_text, result_errors = _normalize_author_result(
-        candidate.get("result"), contract["exact_oracle_answer"],
-        contract["terminal_output_schema_of_this_macro"],
-    )
+    if contract.get("result_encoding") == "typed_evidence_json_v1":
+        # Full code-owned JSON is not a natural-language result and must
+        # not be subjected to the 1600-character prose limit. Its exact
+        # trusted serialization is the sole acceptance contract.
+        result_text = candidate.get("result")
+        result_errors = (
+            [] if result_text == contract.get("code_owned_expected_result")
+            else ["code_owned_typed_result_changed"]
+        )
+    else:
+        result_text, result_errors = _normalize_author_result(
+            candidate.get("result"), contract["exact_oracle_answer"],
+            contract["terminal_output_schema_of_this_macro"],
+        )
     errors.extend(result_errors)
     summary = candidate.get("summary")
     if (not isinstance(summary, str)
@@ -657,6 +667,11 @@ def author_critic_report(
         code_owned_result(teacher_record)
         if result_policy == "code_owned" else None
     )
+    if result_policy == "code_owned" and (
+        teacher_record.get("result_encoding") == "typed_evidence_json_v1"
+    ):
+        contract["result_encoding"] = "typed_evidence_json_v1"
+        contract["code_owned_expected_result"] = frozen_result
     author_contract = deepcopy(contract)
     if result_policy == "code_owned":
         # The overall question often mentions downstream conditions that
