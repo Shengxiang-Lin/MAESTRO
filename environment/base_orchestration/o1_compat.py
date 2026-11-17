@@ -110,7 +110,7 @@ def stage3_author_context(
     return (
         "Task Type: Multi-source investigation\n" +
         "Category: " + str(category) +
-        "\n\n==== QUESTION AND INITIAL OBSERVATIONS ====\n" +
+        "\n\n==== QUESTION ====\n" +
         instruction +
         "\n\n==== PROGRESS ====\n" +
         f"Attempt {attempt}/{max_attempts}; "
