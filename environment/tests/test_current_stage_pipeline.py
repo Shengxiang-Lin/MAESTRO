@@ -31,6 +31,32 @@ def accepted_reports(scene):
 
 
 class CurrentStagePipelineTests(unittest.TestCase):
+    def test_no_dangling_stage1_imports_in_any_current_environment_module(self):
+        """Deleting old modules must not strand less frequently used consumers."""
+        import ast
+        from pathlib import Path
+        env = Path(__file__).resolve().parents[1]
+        prefix = "environment.generate_question."
+        failures = []
+        for file in env.rglob("*.py"):
+            if "tests" in file.relative_to(env).parts:
+                continue
+            tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+            imports = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    imports.append((node.lineno, node.module))
+                elif isinstance(node, ast.Import):
+                    imports.extend((node.lineno, alias.name) for alias in node.names)
+            for line, name in imports:
+                if name.startswith(prefix):
+                    path = env / "generate_question" / name[len(prefix):].replace(".", "/")
+                    if not path.with_suffix(".py").is_file() and not (
+                        path / "__init__.py"
+                    ).is_file():
+                        failures.append((str(file.relative_to(env)), line, name))
+        self.assertEqual(failures, [])
+
     def test_only_task_plan_is_supported(self):
         scene = current_scene(0)
         self.assertEqual(scene["problem_spec"]["reasoning_pattern"], "task_plan")
