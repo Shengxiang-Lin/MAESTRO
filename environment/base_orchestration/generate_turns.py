@@ -153,7 +153,7 @@ def generate_turns(
     *, scenes_path: Path, reports_path: Path, output_dir: Path,
     max_scenes: int | None = None,
     author=None, critic=None, max_revisions: int = 2,
-    max_attempts: int = 16, sub_model: str = "qwen3-8b",
+    max_attempts: int = 10, sub_model: str = "qwen3-8b",
     model_alias: str = "model_1",
     author_model: str | None = None,
     critic_model: str | None = None,
@@ -461,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--api-key-env", default="OPENAI_API_KEY")
     p.add_argument("--temperature", type=float, default=0.4)
     p.add_argument("--max-revisions", type=int, default=2)
-    p.add_argument("--max-attempts", type=int, default=16)
+    p.add_argument("--max-attempts", type=int, default=10)
     p.add_argument("--sub-model", default="qwen3-8b")
     p.add_argument("--model-alias", default="model_1")
     p.add_argument("--freeze-dispatch", action="store_true",

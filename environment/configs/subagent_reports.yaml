@@ -23,13 +23,13 @@ reporting:
   source_scene_index: environment/data/pilots/qwen_stage234_10/stage2/oracle/scene_index.jsonl
   # Reviewed Sub-Agent report bank; stable path across datasets.
   output_dir: environment/data/pilots/qwen_stage234_10/stage2
-  # DashScope OpenAI-compatible endpoint; same model as Stage 1.
-  api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
-  model: qwen3.8-flash
+  # Local vLLM OpenAI-compatible endpoint; same model as Stage 1.
+  api_base: http://127.0.0.1:8807/v1
+  model: local-qwen3.5-9b
   critic_api_base: null  # inherit api_base
-  critic_model: qwen3.8-flash
-  api_key_env: DASHSCOPE_API_KEY
-  critic_api_key_env: DASHSCOPE_API_KEY
+  critic_model: local-qwen3.5-9b
+  api_key_env: null
+  critic_api_key_env: null
   workers: 10
   max_revisions: 2
   # LLM writes only a stage-local Summary; Result is compiled from

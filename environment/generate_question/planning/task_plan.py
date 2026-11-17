@@ -885,7 +885,7 @@ def validate_spec(spec: dict) -> list[str]:
                 return ["task_plan_input_contract_mismatch"]
             scopes += task["source_scope"]
             by_id[task["macro_id"]] = task
-        budget = 11
+        budget = 8
         if (len(by_id) > budget
                 or plan["terminal_macro_id"] != plan["macro_tasks"][-1]["macro_id"]
                 or plan["macro_tasks"][-1]["output_schema"] != {
