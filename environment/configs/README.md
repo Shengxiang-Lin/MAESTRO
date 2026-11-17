@@ -23,6 +23,10 @@ journaled. Its latest output is a single schema, not a selectable
 v3/v4/v5/v6 series. Only accepted Scenes enter later stages; the
 private Oracle and Gold results never enter public Main prompts.
 
+Stage 2 always rebuilds its deterministic Oracle from current Scenes
+(no Oracle cache signatures or manifest checks). Reviewed LLM reports keep
+separate resume safeguards.
+
 Stage 2 reviewed reports are stored in `environment/data/stage2/subtasks.jsonl`;
 its private deterministic Oracle cache is under `stage2/oracle/`.
 Stage 4 reconstructs its trusted execution prefix from Stages 1/2,
