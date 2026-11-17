@@ -82,17 +82,32 @@ python -m train_maestro_8b.belief.train \
   --train_file environment/data/stage4/private/evidence_belief/train.jsonl \
   --val_file environment/data/stage4/private/evidence_belief/val.jsonl \
   --output_dir workspace/maestro_8b/checkpoints/belief-stage1-pilot \
-  --max_length 8192 --epochs 2 --max_steps 20 \
+  --max_length 4096 --epochs 2 --max_steps 20 \
   --batch_size 1 --grad_accum 4 --lr 5e-5 --head_lr 2e-4 \
   --lora_rank 32 --lora_alpha 64 --load_in_4bit
 ```
 
-Default is NF4 to conserve GPU memory; `--bf16_full` optionally uses
-BF16 backbone if GPU headroom permits. **No prompt truncation**: data
-longer than `max_length` is counted and skipped. The loss includes
-class-balanced report-state CE and 0.3× masked status-update CE.
-A missing/zero LoRA gradient stops training. Start with max_length 8192;
-raise to 12288 only if OOM headroom and coverage justify it.
+Default is NF4 and **4096 tokens** for a first single-GPU pilot. The
+training code now verifies decoder-layer gradient checkpointing and forbids
+quadratic-memory math SDPA fallback: `--attention_backend sdpa` uses only
+fused Flash/Efficient SDPA kernels, including during backward and validation.
+If fused SDPA is unsupported on your GPU/PyTorch build, try
+`BELIEF_ATTN_BACKEND=flash_attention_2` (requires compatible flash-attn).
+`--bf16_full` optionally loads BF16 weights when GPU headroom permits.
+**No prompt truncation**: rows longer than max_length are counted and
+skipped; review `token_length_p50/p90/max` in the training log.
+A missing/zero LoRA gradient stops training.
+
+Important data issue: Stage4 label snapshots use `state_changes` (not
+`transitions`); Stage1 belief export v2 fixes the belief-update loss
+supervision. **Re-run `belief-export` after pulling the fix**: the pipeline
+regenerates stale v1 samples automatically.
+
+If the export shows no `corroborated` or `disputed` examples, it cannot
+validate independent source corroboration or observable conflicts. This is
+a **data coverage problem, not a GPU problem**; run a short memory smoke
+test if useful, but diversify/rebuild Stage4 evidence before claiming
+the model learned evidence reliability.
 
 Artifacts:
 
