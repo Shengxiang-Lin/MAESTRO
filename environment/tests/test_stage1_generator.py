@@ -6,7 +6,7 @@ import copy
 import json
 import unittest
 
-from environment.generate_question.goal_plan import (
+from environment.generate_question.planning.goal_plan import (
     OUTPUT_KINDS, _build_operation_dag, build_measurements,
     evaluate_goal_value, goal_question, operation_subgraph_leq,
     sample_output, validate_operation_graph,
@@ -96,7 +96,7 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertFalse(operation_subgraph_leq(larger, smaller))
 
     def test_multifield_semantic_coherence(self):
-        from environment.generate_question.goal_plan import (
+        from environment.generate_question.planning.goal_plan import (
             PAIRED_NEEDS, sample_output,
         )
         kinds = set()
@@ -162,7 +162,7 @@ class Stage1GeneratorTests(unittest.TestCase):
         from tempfile import TemporaryDirectory
         from environment.config import DEFAULT_CONFIG, load_config, args_from_config
         from environment.generate_question.stages import construct_scenes
-        from environment.generate_question.question import reference_question
+        from environment.generate_question.authoring.question import reference_question
         with TemporaryDirectory() as temp:
             root = Path(temp)
             rdf = root / "yago-4.6-facts.ttl"
@@ -240,9 +240,9 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertEqual(len(seen["conclusion"]), 2)
 
     def test_world_gold_replay_necessity_and_stage2(self):
-        from environment.generate_question.task_plan import make_spec, validate_spec
-        from environment.generate_question.question import reference_question, guard_question
-        from environment.generate_question.quality import (
+        from environment.generate_question.planning.task_plan import make_spec, validate_spec
+        from environment.generate_question.authoring.question import reference_question, guard_question
+        from environment.generate_question.auditing.quality import (
             compile_and_validate, validate_replay,
         )
         from environment.implement_subtask.realize import realize_scene
@@ -293,9 +293,9 @@ class Stage1GeneratorTests(unittest.TestCase):
             "task_plan_keyed_source_contract_mismatches"], 0)
 
     def test_context_and_modality_annotations_are_value_faithful(self):
-        from environment.generate_question.task_plan import make_spec
-        from environment.generate_question.quality import compile_and_validate
-        from environment.generate_question.question import reference_question
+        from environment.generate_question.planning.task_plan import make_spec
+        from environment.generate_question.auditing.quality import compile_and_validate
+        from environment.generate_question.authoring.question import reference_question
         from environment.generate_question.auditing.quality_metrics import (
             audit_scene_grounding,
         )
@@ -314,12 +314,12 @@ class Stage1GeneratorTests(unittest.TestCase):
             )
 
     def test_source_first_media_dispatch_and_target_bound_synthesis(self):
-        from environment.generate_question.task_plan import make_spec
-        from environment.generate_question.task_plan_runtime import compile_macro_solvers
-        from environment.generate_question.quality import (
+        from environment.generate_question.planning.task_plan import make_spec
+        from environment.generate_question.execution.task_plan_runtime import compile_macro_solvers
+        from environment.generate_question.auditing.quality import (
             compile_and_validate, validate_replay,
         )
-        from environment.generate_question.question import reference_question
+        from environment.generate_question.authoring.question import reference_question
         observed_media_first = 0
         verification = 0
         for ordinal in range(40):
@@ -375,8 +375,8 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertFalse(stats["conditional_feedback_dispatch"])
 
     def test_media_evidence_has_executable_source_affordances(self):
-        from environment.generate_question.task_plan import make_spec
-        from environment.generate_question.task_plan_runtime import compile_macro_solvers
+        from environment.generate_question.planning.task_plan import make_spec
+        from environment.generate_question.execution.task_plan_runtime import compile_macro_solvers
         from environment.generate_question.auditing.quality_metrics import (
             audit_decision_opportunities,
         )
@@ -413,8 +413,8 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertIn("event", seen)
 
     def test_critic_receives_final_goal_and_exact_fields(self):
-        from environment.generate_question.task_plan import make_spec
-        from environment.generate_question.question import naturalize_one
+        from environment.generate_question.planning.task_plan import make_spec
+        from environment.generate_question.authoring.question import naturalize_one
 
         class Author:
             def __init__(self, question):

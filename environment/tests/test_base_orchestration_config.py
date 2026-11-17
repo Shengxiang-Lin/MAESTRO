@@ -70,7 +70,7 @@ class TrajectoryConfigurationTests(TestCase):
 
     def test_runner_uses_yaml_values_without_hidden_defaults(self):
         with patch(
-            "environment.generate_question.backend.OpenAICompatibleBackend"
+            "environment.generate_question.authoring.backend.OpenAICompatibleBackend"
         ) as backend, patch(
             "environment.base_orchestration.generate_turns.generate_turns",
             return_value={"status": "done"},
@@ -93,7 +93,7 @@ class TrajectoryConfigurationTests(TestCase):
 
     def test_template_mode_does_not_construct_llm_backends(self):
         with patch(
-            "environment.generate_question.backend.OpenAICompatibleBackend"
+            "environment.generate_question.authoring.backend.OpenAICompatibleBackend"
         ) as backend, patch(
             "environment.base_orchestration.generate_turns.generate_turns",
             return_value={"status": "done"},
