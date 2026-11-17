@@ -67,10 +67,6 @@ def parser() -> argparse.ArgumentParser:
     naturalize.add_argument("--no-progress", action="store_true")
     naturalize.add_argument("--flush-every", type=int,
                             help="Commit a durable checkpoint every N Macro reports")
-    naturalize.add_argument(
-        "--reuse-from", type=Path,
-        help="Completed prior reporting directory: reuse accepted Macros, retry only rejected ones in a NEW output folder",
-    )
     trusted = sub.add_parser(
         "generate-main-turns",
         help="Stage 3: reviewed, dependency-safe Main decisions",
@@ -113,8 +109,6 @@ def main(argv: list[str] | None = None) -> int:
             options["no_progress"] = True
         if cli.flush_every is not None:
             options["flush_every"] = cli.flush_every
-        if cli.reuse_from is not None:
-            options["reuse_from"] = cli.reuse_from
         impl = load_stage2_config(cli.config)
         result = generate_subagent_reports(
             scenes_path=cli.scenes or impl["scenes_path"],
