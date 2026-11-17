@@ -530,7 +530,7 @@ def evaluate_goal_value(row: dict, goal: dict):
     return answer
 
 
-def validate_build_measurements(plan: dict, binding: dict, *,
+def validate_measurements(plan: dict, binding: dict, *,
                                seed: int, ordinal: int) -> list[str]:
     goal = plan.get("goal_spec", {})
     issues = validate_operation_graph(goal)
