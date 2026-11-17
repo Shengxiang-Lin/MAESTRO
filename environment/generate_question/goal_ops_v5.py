@@ -105,7 +105,7 @@ def _design_goal(profile: str, shape: str) -> dict:
                     function=operation, round_digits=2 if operation == "ratio" else 0,
                 ))
                 selections = {"answer": "value"}
-            else:
+            elif shape == "structured_multi_field":
                 operations.extend([
                     _node("difference", "arithmetic", ["a", "b"],
                           "difference", "int", function="absolute_difference",
@@ -113,18 +113,17 @@ def _design_goal(profile: str, shape: str) -> dict:
                     _node("ratio", "arithmetic", ["a", "b"],
                           "ratio", "float", function="ratio", round_digits=2),
                 ])
-                if shape == "structured_multi_field":
-                    selections = {"entity": "entity", "difference": "difference",
-                                  "ratio": "ratio"}
-                else:
-                    operations.append(_node(
-                        "assessment", "verify", ["a", "b"], "assessment",
-                        "str", relation="higher_count",
-                    ))
-                    selections = {
-                        "conclusion": "assessment",
-                        "first_count": "a", "second_count": "b",
-                    }
+                selections = {"entity": "entity", "difference": "difference",
+                              "ratio": "ratio"}
+            else:
+                operations.append(_node(
+                    "assessment", "verify", ["a", "b"], "assessment",
+                    "str", relation="higher_count",
+                ))
+                selections = {
+                    "conclusion": "assessment",
+                    "first_count": "a", "second_count": "b",
+                }
         elif profile == "temporal_gap":
             if shape == "single_number":
                 operations.append(_node(
