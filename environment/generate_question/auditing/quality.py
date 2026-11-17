@@ -249,14 +249,6 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
             **({"candidate_information_necessity": information_report}
                if information_report is not None else {}),
         }
-        if (spec.get("reasoning_pattern") == "macro_first_v2"
-                and spec.get("scene_realism_version")):
-            from environment.generate_question.auditing.difficulty_proxy import scene_difficulty_profile
-            result["macro_first_audit"]["structural_difficulty_profile"] = (
-                scene_difficulty_profile(
-                    scene, information_report=information_report
-                )
-            )
     return result
 
 
@@ -267,17 +259,9 @@ def compile_and_validate(spec: dict, question: str) -> dict:
         compile_frozen_macro_plan(spec, program, scene["gold_trace"])
     )
     scene["macro_graph"] = graph
-    if spec.get("semantic_evidence_contract_version"):
-        from environment.generate_question.authoring.semantic_evidence import compile_semantic_contract
-        scene["semantic_evidence_contract"] = compile_semantic_contract(
-            spec, program=program
-        )
     scene["task_feedback"] = run_macro_tasks(
         graph, sources=scene["world"]["sources"]
     )["task_feedback"]
-    if spec.get("evidence_relation_version"):
-        from environment.generate_question.auditing.evidence_relations import compile_evidence_ledger
-        scene["evidence_ledger"] = compile_evidence_ledger(scene)
     report = audit_scene(scene)
     if report["status"] != "valid":
         raise ValueError(
