@@ -350,6 +350,9 @@ def generate_world(spec: dict) -> dict:
                     if sid in {"link_a", "link_b"} else
                     "fictional_observation"
                 )
+        from .grounding.observations import annotate_source_observations
+        annotate_source_observations(src, role, seed=spec["seed"],
+                                     ordinal=spec["ordinal"])
         bank[sid] = src
     if composed and "context_version" in model and not required:
         # Old frozen composed Worlds retain their original source metadata.
@@ -410,6 +413,20 @@ def generate_world(spec: dict) -> dict:
                         for k, v in values.items()
                     ) + "."
                 )
+    # A required affiliation/survey-volume is not duplicated in the
+    # explanatory context of other sources. Neutral provenance metadata
+    # remains visible without leaking the identity-discriminating anchor.
+    if required:
+        for sid, src in bank.items():
+            for observation in src["observations"]:
+                observation["document_context"] = {
+                    "record_id": "DOC-" + digest(
+                        spec["seed"], spec["ordinal"],
+                        sid, observation["values"],
+                    )[:12].upper(),
+                    "source_series": src["title"],
+                    "context_scope": "source_local_only",
+                }
     return {
         "version": WORLD_VERSION, "simulated_only": True,
         "sources": bank,

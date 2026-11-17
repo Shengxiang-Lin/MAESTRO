@@ -7,34 +7,36 @@ by the unchanged Goal operator DAG. No external images or audio are loaded.
 from __future__ import annotations
 
 
+# Topic variants are *types of legitimate investigations*, not arbitrary
+# labels pasted onto an unrelated person/place relationship.
 _CONTEXT = {
     "biographical": (
-        "oral-history evidence collection",
-        "biographical fieldwork",
-        "oral-history researcher",
-        "a biographical investigation linking interview evidence and records",
-        "compare independent observations about a documented person's context",
+        ("oral-history field study", "historical biography investigation",
+         "cultural heritage research", "sports biography survey"),
+        "biographical investigator",
+        "a biographical investigation connecting person records and field observations",
+        "identify the subject before comparing independently documented observations",
     ),
     "academic": (
-        "research fieldwork investigation",
-        "academic observation records",
+        ("research experiment review", "academic correspondence study",
+         "scientific publication investigation", "education history survey"),
         "research coordinator",
-        "a scientific record review combining experimental notes and interviews",
-        "resolve the relevant research context before comparing observed facts",
+        "an academic investigation connecting scholar records to measured evidence",
+        "resolve the researcher and the applicable observations before reporting",
     ),
     "institutional": (
-        "organizational records investigation",
-        "institutional activity survey",
+        ("organization operations audit", "business affiliation review",
+         "institutional transport survey", "civic services investigation"),
         "operations analyst",
-        "an operations review reconciling separately maintained observations",
-        "check that the reporting entity and evidence are correctly aligned",
+        "an organizational investigation using membership and location evidence",
+        "resolve the related organization before comparing its documented facts",
     ),
     "geographical": (
-        "regional survey investigation",
-        "geospatial fieldwork evidence",
+        ("regional geography study", "environmental field survey",
+         "transport route investigation", "urban infrastructure review"),
         "field survey analyst",
-        "a geographic site investigation combining recorded field observations",
-        "locate the correct survey area before comparing its documented observations",
+        "a spatial investigation involving places and independent observations",
+        "locate the area before interpreting comparative source measurements",
     ),
 }
 
@@ -42,8 +44,8 @@ _CONTEXT = {
 def scene_profile(domain: str, *, ordinal: int, goal_label: str,
                   output_kind: str) -> dict:
     """Plausible user intent, never a new source fact or solver requirement."""
-    topic, alt_topic, role, setting, motivation = _CONTEXT[domain]
-    selected_topic = (topic, alt_topic)[ordinal % 2]
+    topics, role, setting, motivation = _CONTEXT[domain]
+    selected_topic = topics[ordinal % len(topics)]
     purpose = (
         "identify the correct subject and derive the requested " + goal_label
         + " from separately documented evidence"
