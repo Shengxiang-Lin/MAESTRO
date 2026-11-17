@@ -42,7 +42,7 @@ class TrajectoryConfigurationTests(TestCase):
             cfg["workers"],
             yaml.safe_load(DEFAULT_CONFIG.read_text())["generation"]["workers"],
         )
-        self.assertEqual(cfg["author_model"], "qwen3.8-flash")
+        self.assertEqual(cfg["author_model"], "local-qwen3.5-9b")
 
         from environment.config import DEFAULT_CONFIG as QUESTIONS
         from environment.implement_subtask.config import DEFAULT_CONFIG as SUBAGENTS
@@ -74,8 +74,8 @@ class TrajectoryConfigurationTests(TestCase):
         )
         self.assertEqual(kwargs["max_revisions"], 2)
         self.assertEqual(kwargs["max_attempts"], 10)
-        self.assertEqual(kwargs["author_model"], "qwen3.8-flash")
-        self.assertEqual(kwargs["critic_model"], "qwen3.8-flash")
+        self.assertEqual(kwargs["author_model"], "local-qwen3.5-9b")
+        self.assertEqual(kwargs["critic_model"], "local-qwen3.5-9b")
         self.assertTrue(kwargs["scenes_path"].is_absolute())
 
     def test_template_mode_does_not_construct_llm_backends(self):

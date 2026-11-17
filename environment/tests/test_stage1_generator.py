@@ -88,18 +88,17 @@ class Stage1GeneratorTests(unittest.TestCase):
         args = args_from_config(config)
         self.assertEqual(args.difficulty_mix, "0,50,50")
         self.assertIsNotNone(args.knowledge_yago)
-        self.assertEqual(args.question_model, "qwen3.8-flash")
-        self.assertEqual(args.question_critic_model, "qwen3.8-flash")
-        self.assertEqual(
-            args.question_api_base,
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
-        self.assertEqual(args.question_critic_api_base, args.question_api_base)
-        self.assertEqual(args.question_api_key_env, "DASHSCOPE_API_KEY")
-        self.assertEqual(args.question_author_temperature, 0.1)
-        self.assertEqual(args.question_author_top_p, 0.9)
-        self.assertEqual(args.question_critic_temperature, 0.1)
-        self.assertEqual(args.question_critic_top_p, 0.9)
+        self.assertEqual(args.question_model, "local-qwen3.5-9b")
+        self.assertEqual(args.question_critic_model, "local-qwen3.5-9b")
+        self.assertEqual(args.question_api_base, "http://127.0.0.1:8807/v1")
+        # A null Critic endpoint inherits the Author API base in the
+        # client factory; args_from_config preserves the explicit null.
+        self.assertIsNone(args.question_critic_api_base)
+        self.assertIsNone(args.question_api_key_env)
+        self.assertIsNone(args.question_author_temperature)
+        self.assertIsNone(args.question_author_top_p)
+        self.assertIsNone(args.question_critic_temperature)
+        self.assertIsNone(args.question_critic_top_p)
         modified = copy.deepcopy(config)
         modified["generation"]["task_plan_composer"] = "legacy"
         self.assertIn("task_plan_composer", modified["generation"])
@@ -164,10 +163,27 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertEqual(legacy.question_model, "local-qwen3.5-9b")
         self.assertEqual(legacy.question_api_base, "http://127.0.0.1:8807/v1")
         self.assertIsNone(legacy.question_author_top_p)
+        # Missing names are errors when the registry is explicitly enabled;
+        # the currently configured local vLLM bypasses that registry.
         invalid = copy.deepcopy(values)
+        invalid["question"]["registry"] = "config/model_config.yaml"
         invalid["question"]["model"] = "absent_model_123"
         with self.assertRaisesRegex(ValueError, "question_model_not_in_registry"):
             args_from_config(invalid)
+        remote = copy.deepcopy(values)
+        remote["question"].update({
+            "registry": "config/model_config.yaml",
+            "model": "qwen3.8-flash",
+            "critic_model": "qwen3.8-flash",
+            "api_base": None,
+            "critic_api_base": None,
+        })
+        registry_args = args_from_config(remote)
+        self.assertEqual(
+            registry_args.question_api_base,
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+        self.assertEqual(registry_args.question_author_top_p, 0.9)
 
     def test_retired_config_keys_are_rejected(self):
         from environment.config import load_config, DEFAULT_CONFIG

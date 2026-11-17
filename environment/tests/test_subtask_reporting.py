@@ -749,7 +749,7 @@ class ReportingUnitTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         _o1_answer_issues("not the answer", contract),
-                        ["answer_invalid_length_or_type"],
+                        ["answer_missing_required_values:" + str(value)],
                     )
                     self.assertTrue(_o1_answer_issues(
                         "A different answer is recorded here.", contract,
@@ -762,14 +762,30 @@ class ReportingUnitTests(unittest.TestCase):
         }
         self.assertIsNone(_exact_single_field_scalar_text("96", multi_field))
         self.assertEqual(_o1_answer_issues("96", multi_field),
-                         ["answer_invalid_length_or_type"])
+                         ["answer_missing_required_values:2013-11-02"])
         multi_row = {
             "exact_oracle_answer": [{"case_id": "A"}, {"case_id": "B"}],
             "answer_required_literals": ["A", "B"],
         }
         self.assertIsNone(_exact_single_field_scalar_text("A", multi_row))
         self.assertEqual(_o1_answer_issues("A", multi_row),
+                         ["answer_missing_required_values:B"])
+
+    def test_o1_answer_guard_accepts_short_grounded_non_scalar_prose(self):
+        from environment.implement_subtask.reporting import _o1_answer_issues
+        contract = {
+            "exact_oracle_answer": [{"answer": "yes"}],
+            "answer_required_literals": ["yes"],
+        }
+        self.assertEqual(_o1_answer_issues("yes.", contract), [])
+        self.assertEqual(_o1_answer_issues("  ", contract),
                          ["answer_invalid_length_or_type"])
+        self.assertEqual(_o1_answer_issues(None, contract),
+                         ["answer_invalid_length_or_type"])
+        self.assertEqual(_o1_answer_issues("x" * 6501, contract),
+                         ["answer_invalid_length_or_type"])
+        self.assertEqual(_o1_answer_issues("no", contract),
+                         ["answer_missing_required_values:yes"])
 
     def test_terminal_short_answer_passes_review_without_oracle_drift(self):
         from environment.generate_question.planning.goal_plan import sample_output
