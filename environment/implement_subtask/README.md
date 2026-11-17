@@ -41,12 +41,15 @@ tool/media execution or internal procedural identifiers. The independent
 Critic checks whether the Answer correctly associates entities with
 their values and whether both texts are grounded and stage-local.
 An answer missing a required value is repaired or rejected; the Oracle
-is never changed merely to make a report pass. One-row terminal Macros
-may return their exact scalar answer directly (e.g. `132` or a short
-date/name) even when it is shorter than 18 characters; this narrow
-exception requires a byte-exact match to the immutable Oracle value.
-Intermediate evidence handoffs still need informative prose, and the
-independent Critic still checks the terminal answer and trace.
+is never changed merely to make a report pass. Any Macro (including intermediate ID lookups) may
+return its exact single-row, single-field scalar directly (e.g.
+`PRJ-6C3E1089F38D`, `132` or a short date/name) even when it is shorter
+than 18 characters; this narrow exception requires an exact match to the
+immutable Oracle value. When the local model returns a JSON number instead
+of a string, the code converts it to canonical text only after verifying
+the same exact one-field Oracle value. Multi-field/multi-row outputs still
+require complete informative answers, and the independent Critic still
+checks the evidence-grounded answer and trace for every Macro.
 
 Before the exact-value Guard and independent Critic, the reporter
 normalizes a small whitelist of *surface-only* operator-style wording
