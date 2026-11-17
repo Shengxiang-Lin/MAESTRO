@@ -536,10 +536,10 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
         return ["report_not_object"]
     if candidate.get("status") != "done":
         errors.append("status_not_done_for_complete_oracle")
-    if contract.get("result_encoding") == "typed_evidence_json_v1":
-        # Full code-owned JSON is not a natural-language result and must
-        # not be subjected to the 1600-character prose limit. Its exact
-        # trusted serialization is the sole acceptance contract.
+    if contract.get("requires_o1_answer"):
+        result_text = candidate.get("result")
+        result_errors = _o1_answer_issues(result_text, contract)
+    elif contract.get("result_encoding") == "typed_evidence_json_v1":
         result_text = candidate.get("result")
         result_errors = (
             [] if result_text == contract.get("code_owned_expected_result")
@@ -555,21 +555,30 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
     if (not isinstance(summary, str)
             or not 25 <= len(summary.strip()) <= 750):
         errors.append("summary_invalid_length_or_type")
-    narrative = candidate.get("trace_narrative")
-    if contract.get("requires_natural_trace"):
+    narrative = (candidate.get("trace_summary")
+                 if contract.get("requires_o1_answer")
+                 else candidate.get("trace_narrative"))
+    if contract.get("requires_o1_answer"):
+        if (not isinstance(narrative, str)
+                or not 75 <= len(narrative.strip()) <= 2800):
+            errors.append("trace_summary_invalid_length_or_type")
+    elif contract.get("requires_natural_trace"):
         if (not isinstance(narrative, str)
                 or not 60 <= len(narrative.strip()) <= 1800):
             errors.append("trace_narrative_invalid_length_or_type")
     for field, value in (
         ("result", result_text), ("summary", summary),
-        *((("trace_narrative", narrative),) if
-          contract.get("requires_natural_trace") else ()),
+        *((("trace_summary", narrative),) if
+          contract.get("requires_o1_answer") else
+          ((("trace_narrative", narrative),) if
+           contract.get("requires_natural_trace") else ())),
     ):
         if not isinstance(value, str):
             continue
         if re.search(r"\bwork_[a-z0-9_]+\b", value, re.I):
             errors.append(field + "_internal_macro_identifier")
-        if contract.get("requires_natural_trace") and field != "result":
+        if (contract.get("requires_natural_trace")
+                or contract.get("requires_o1_answer")):
             if re.search(
                 r"\b(?:macro(?:s|\s+task)?|workproducts?|"
                 r"scan(?:ned)?|project(?:ed|ion)?|join(?:ed)?|uniqued|"
