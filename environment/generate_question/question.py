@@ -125,6 +125,7 @@ def _intent_reference_question(spec: dict) -> str:
             if plan.get("composer_policy") in {
                 "goal_conditioned_evidence_needs_v3",
                 "goal_conditioned_typed_goal_v4",
+                "goal_conditioned_operation_dag_v5",
             }:
                 # A frozen clue can accidentally equal an ordinary phrase
                 # in our deterministic lead (e.g. "catalog" in
@@ -151,6 +152,9 @@ def _intent_reference_question(spec: dict) -> str:
                     (candidate for candidate in safe_leads
                      if _safe_lead(candidate)), lead
                 )
+            if plan.get("composer_policy") == "goal_conditioned_operation_dag_v5":
+                from .goal_ops_v5 import goal_question
+                return f"{lead} {goal_question(plan)}"
             if (plan.get("composer_policy") ==
                     "goal_conditioned_typed_goal_v4"
                     and plan["goal_spec"]["kind"] != "entity_resolution"):
@@ -774,6 +778,59 @@ def guard_question(question: str, spec: dict,
             elif not re.search(r"\b2025\b", q):
                 errors.append("task_plan_required_year_missing")
         errors.extend(_unlicensed_task_plan_condition(q, plan))
+        if plan.get("composer_policy") == "goal_conditioned_operation_dag_v5":
+            goal_spec = plan["goal_spec"]
+            shape = goal_spec["output_spec"]["kind"]
+            ops = {row["op"] for row in goal_spec["operations"]}
+            if shape in {"structured_multi_field",
+                         "evidence_based_explanation"}:
+                # Field names are an immutable answer contract, not examples.
+                for field in goal_spec["output_spec"]["fields"]:
+                    if not re.search(
+                        r"\\b" + re.escape(field).replace("_", r"[_\\s-]?")
+                        + r"\\b", q, re.I,
+                    ):
+                        errors.append("v5_output_field_missing:" + field)
+            if "temporal_difference" in ops and not re.search(
+                r"\\b(?:elapsed|days?|duration)\\b", q, re.I
+            ):
+                errors.append("v5_temporal_difference_missing")
+            if "temporal_midpoint" in ops and not re.search(
+                r"\\b(?:midpoint|middle)\\b", q, re.I
+            ):
+                errors.append("v5_midpoint_goal_missing")
+            if "geographic_distance" in ops and not re.search(
+                r"\\b(?:distance|great.circle)\\b", q, re.I
+            ):
+                errors.append("v5_geographic_goal_missing")
+            if "arithmetic" in ops and not re.search(
+                r"\\b(?:ratio|difference|subtract|divide|divided)\\b",
+                q, re.I,
+            ):
+                errors.append("v5_arithmetic_goal_missing")
+            if "count_aggregate" in ops and not re.search(
+                r"\\b(?:count|how many|number of)\\b", q, re.I
+            ):
+                errors.append("v5_count_goal_missing")
+            if "count_aggregate" in ops and not re.search(
+                r"\\b2025\\b", q
+            ):
+                errors.append("v5_count_threshold_missing")
+            if "compare_select" in ops and not re.search(
+                r"\\b(?:higher|larger|greater)\\b", q, re.I
+            ):
+                errors.append("v5_comparison_goal_missing")
+            if "verify" in ops and not re.search(
+                r"\\b(?:evidence|assessment|verify|confirm)\\b", q, re.I
+            ):
+                errors.append("v5_evidence_request_missing")
+            if shape == "date_time" and not re.search(
+                r"\\b(?:date|YYYY-MM-DD)\\b", q, re.I
+            ):
+                errors.append("v5_date_output_missing")
+            if (goal_spec["source_profile"] != "aggregation"
+                    and re.search(r"\\b(?:19|20)\\d{2}\\b", q)):
+                errors.append("v5_unlicensed_calendar_year")
         if (plan.get("composer_policy") ==
                 "goal_conditioned_typed_goal_v4"):
             kind = plan["goal_spec"]["kind"]
@@ -1095,10 +1152,28 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
         if compact_task_plan:
             plan = spec["macro_plan"]
             goal = plan["goal"]["semantic"]
+            v5 = (plan.get("composer_policy") ==
+                  "goal_conditioned_operation_dag_v5")
             kind = plan.get("goal_spec", {}).get(
                 "kind", "entity_resolution"
             )
-            if kind != "entity_resolution":
+            if v5:
+                from .goal_ops_v5 import goal_question
+                goal_spec = plan["goal_spec"]
+                author_contract["semantic_goal_question"] = goal_question(plan)
+                author_contract["goal_operations"] = [
+                    {"op": item["op"], "inputs": item["inputs"],
+                     "output": item["output"]}
+                    for item in goal_spec["operations"]
+                ]
+                author_contract["final_output_spec"] = goal_spec["output_spec"]
+                author_contract["required_event_condition"] = plan["condition"]
+                author_contract["output_constraint"] = (
+                    "Do not drop operations, reverse numerical direction, "
+                    "invent extra filters, or add answer fields. Exactly "
+                    "preserve the frozen output bindings."
+                )
+            elif kind != "entity_resolution":
                 from .typed_goal_v4 import numeric_goal_question
                 author_contract["semantic_goal_question"] = (
                     numeric_goal_question(plan)
@@ -1148,6 +1223,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             if plan.get("composer_policy") in {
                 "goal_conditioned_evidence_needs_v3",
                 "goal_conditioned_typed_goal_v4",
+                "goal_conditioned_operation_dag_v5",
             }:
                 condition = plan["condition"]
                 if condition and condition["field"] == "event_year":
