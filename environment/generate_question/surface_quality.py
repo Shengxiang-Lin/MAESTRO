@@ -212,11 +212,19 @@ def question_language_warnings(
                 and type(relation.get("value")) is int):
             missing_years.discard(str(relation["value"]))
     if spec.get("reasoning_pattern") == "task_plan":
-        condition = spec.get("macro_plan", {}).get("condition") or {}
+        plan = spec.get("macro_plan", {})
+        condition = plan.get("condition") or {}
         if (condition.get("field") == "event_year"
                 and condition.get("op") == "filter_gte"
                 and type(condition.get("value")) is int):
             missing_years.discard(str(condition["value"]))
+        goal = plan.get("goal_spec", {})
+        if (plan.get("composer_policy") == "goal_conditioned_typed_goal_v4"
+                and goal.get("kind") == "aggregation"
+                and type(goal.get("qualifying_observation_year_gte")) is int):
+            missing_years.discard(str(
+                goal["qualifying_observation_year_gte"]
+            ))
     if missing_years:
         warnings.append("unlicensed_calendar_year_not_in_topic")
     warnings.extend(unsupported_macro_predicates(question, spec, macro_graph))
