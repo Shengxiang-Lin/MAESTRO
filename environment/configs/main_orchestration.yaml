@@ -14,7 +14,7 @@ generation:
   mode: llm           # llm or template
   freeze_dispatch: true  # Freeze DAG batches/models/tools; LLM authors reasoning + scoped task prose
   max_revisions: 2
-  max_attempts: 16
+  max_attempts: 10
   sub_model: local-qwen3.5-9b
   model_alias: model_1
   overwrite: false
