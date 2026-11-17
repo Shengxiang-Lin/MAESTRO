@@ -27,6 +27,27 @@ def fixture():
 
 
 class Stage1GeneratorTests(unittest.TestCase):
+    def test_all_stage1_relative_imports_resolve_after_cleanup(self):
+        """Catch dormant legacy imports, not only imports reached by a pilot."""
+        import ast
+        from pathlib import Path
+        package = Path(__file__).resolve().parents[1] / "generate_question"
+        failures = []
+        for file in sorted(package.rglob("*.py")):
+            tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom) or not node.level or not node.module:
+                    continue
+                base = file.parent
+                for _ in range(node.level - 1):
+                    base = base.parent
+                module = base.joinpath(*node.module.split("."))
+                if not (module.with_suffix(".py").is_file() or
+                        (module / "__init__.py").is_file()):
+                    failures.append((str(file.relative_to(package)),
+                                     node.lineno, node.module))
+        self.assertFalse(failures, failures)
+
     def test_single_supported_config_and_output_first_partial_order(self):
         from environment.config import DEFAULT_CONFIG, args_from_config, load_config
         self.assertEqual(DEFAULT_CONFIG.name, "questions.yaml")
