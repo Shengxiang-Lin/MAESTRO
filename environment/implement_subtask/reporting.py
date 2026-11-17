@@ -775,13 +775,22 @@ def author_critic_report(
                     ),
                 })
                 continue
-            normalized_result, _ = _normalize_author_result(
-                candidate["result"], contract["exact_oracle_answer"],
-                contract["terminal_output_schema_of_this_macro"],
-            )
-            verified_entry_list = full_entry_list_matches(
-                normalized_result, contract["exact_oracle_answer"],
-            )
+            if (result_policy == "code_owned"
+                    and contract.get("result_encoding") ==
+                    "typed_evidence_json_v1"):
+                # The Guard already checked byte-exact program-owned JSON.
+                # Never run the legacy <=1600-character prose normalizer:
+                # it returns None for long structured evidence reports.
+                normalized_result = candidate["result"]
+                verified_entry_list = False
+            else:
+                normalized_result, _ = _normalize_author_result(
+                    candidate["result"], contract["exact_oracle_answer"],
+                    contract["terminal_output_schema_of_this_macro"],
+                )
+                verified_entry_list = full_entry_list_matches(
+                    normalized_result, contract["exact_oracle_answer"],
+                )
             decision = critic.complete_json(
                 CODE_OWNED_CRITIC_SYSTEM if result_policy == "code_owned"
                 else (VERIFIED_ENTRY_CRITIC_SYSTEM if verified_entry_list

@@ -14,7 +14,7 @@ from environment.generate_question.planning.goal_plan import (
 
 
 def fixture():
-    from environment.macro_v3.yago import Edge, KnowledgeGraph
+    from environment.generate_question.grounding.yago import Edge, KnowledgeGraph
     prefix = "http://schema.org/"
     return KnowledgeGraph(edges=[
         Edge("https://example.org/person", prefix+"birthPlace",
@@ -27,6 +27,39 @@ def fixture():
 
 
 class Stage1GeneratorTests(unittest.TestCase):
+    def test_current_yago_reader_turtle_and_zip(self):
+        """Retain YAGO parsing tests after removing old Macro v3 generators."""
+        import random
+        import tempfile
+        import zipfile
+        from pathlib import Path
+        from environment.generate_question.grounding.yago import load_yago
+
+        turtle = (
+            "@prefix ex: <http://example.org/> .\n"
+            "@prefix schema: <http://schema.org/> .\n"
+            "ex:Alice schema:birthPlace ex:Town .\n"
+            "ex:Town schema:containedInPlace ex:Country .\n"
+            "ex:Bob schema:memberOf ex:Team .\n"
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "yago-4.6-facts.ttl"
+            raw.write_text(turtle, encoding="utf-8")
+            graph = load_yago(root, max_triples=100, max_edges=20)
+            self.assertEqual(len(graph.edges), 3)
+            self.assertEqual(
+                len(graph.choose_walk(random.Random(4), min_hops=2,
+                                     max_hops=2)), 2,
+            )
+            raw.unlink()
+            zipped = root / "yago-4.6-facts.zip"
+            with zipfile.ZipFile(zipped, "w") as archive:
+                archive.writestr("yago-facts.ttl", turtle)
+            zipped_graph = load_yago(root, max_triples=100, max_edges=20)
+            self.assertEqual(len(zipped_graph.edges), 3)
+            self.assertTrue(zipped_graph.input_file.endswith(".zip"))
+
     def test_all_stage1_relative_imports_resolve_after_cleanup(self):
         """Catch dormant legacy imports, not only imports reached by a pilot."""
         import ast

@@ -11,7 +11,6 @@ from tqdm.auto import tqdm
 from environment.generate_question.authoring.backend import OpenAICompatibleBackend
 from environment.generate_question.stages import read_jsonl
 from .reporting import author_critic_report
-from .reuse import load_completed_accepted
 from environment.streaming import (
     OrderedJournal, StreamingError, file_digest, output_lock,
     run_ordered, stable_signature,
@@ -82,7 +81,6 @@ class _ScenePublisher:
         self.accepted_scenes = 0
         self.failed_scenes = 0
         self.published_macro_tasks = 0
-        self.reused_accepted_macros = 0
         self._pending_scene = []
         self.rejection_causes = Counter()
         self.flush_every = flush_every
@@ -100,9 +98,6 @@ class _ScenePublisher:
             "macro_task_id": macro_id,
             "status": meta["status"],
             "attempts": meta.get("attempts", 0),
-            "reused_previous_review": meta.get(
-                "reused_previous_review", False
-            ),
             "failures": meta.get("failures", []),
             "accepted_preview": meta.get("accepted_preview"),
         })
@@ -116,8 +111,6 @@ class _ScenePublisher:
             elif attempt.get("stage") in {"backend", "oracle_contract"}:
                 self.rejection_causes.update([attempt["stage"]])
         self._pending_scene.append((macro_id, accepted, payload, meta))
-        if accepted and meta.get("reused_previous_review") is True:
-            self.reused_accepted_macros += 1
         end_of_scene = (
             index == len(self.ordered) - 1
             or expected != self.ordered[index + 1][0]
@@ -172,10 +165,6 @@ class _ScenePublisher:
             "completed_macro_tasks": completed,
             "author_critic_passed_macros": self.journal.accepted,
             "author_critic_failed_macros": self.journal.rejected,
-            "reused_accepted_macros": self.reused_accepted_macros,
-            "freshly_reviewed_macro_tasks": (
-                completed - self.reused_accepted_macros
-            ),
             "published_macro_tasks": self.published_macro_tasks,
             "review_counts": {
                 "accepted": self.journal.accepted,
@@ -220,7 +209,6 @@ def naturalize_subtasks(
     workers: int = 8, max_revisions: int = 2, timeout: int = 180,
     max_scenes: int | None = None, no_progress: bool = False,
     overwrite: bool = False, flush_every: int = 1,
-    reuse_from: Path | None = None,
     result_policy: str = "llm_authored",
     clients: tuple | None = None,
 ) -> dict:
@@ -296,15 +284,6 @@ def naturalize_subtasks(
                 sid, row, scene["question"],
                 task_id == scene["terminal_macro_task_id"],
             ))
-    previous = {}
-    previous_fingerprint = None
-    if reuse_from is not None:
-        reuse_from = Path(reuse_from).expanduser().resolve()
-        if reuse_from == output_dir.resolve():
-            raise ValueError("reuse_from and output_dir must be different")
-        previous, previous_fingerprint = load_completed_accepted(
-            reuse_from, ordered,
-        )
     if clients is None:
         clients = _clients(
             api_base=api_base, model=model,
@@ -316,23 +295,14 @@ def naturalize_subtasks(
 
     def review(entry):
         sid, row, question, is_terminal = entry
-        key = sid + "::" + row["macro_task_id"]
-        if key in previous:
-            # The old report passed the independent Critic and has been
-            # checked against this EXACT Oracle. No LLM call is needed.
-            return sid, row["macro_task_id"], previous[key], {
-                "status": "accepted", "attempts": 0, "failures": [],
-                "reused_previous_review": True,
-            }
         try:
             accepted, feedback = author_critic_report(
                 row, question=question, author=author, critic=critic,
                 max_revisions=max_revisions, is_terminal=is_terminal,
-                result_policy=(
-                    "code_owned" if result_policy == "code_owned"
-                    and row.get("evidence_trust_version")
-                    else "llm_authored"
-                ),
+                # The current Task Plan carries typed evidence rather than
+                # the retired evidence_trust_version marker. Honor the
+                # configured policy directly instead of downgrading it.
+                result_policy=result_policy,
             )
         except (KeyError, TypeError, ValueError) as exc:
             accepted, feedback = None, {
@@ -354,9 +324,6 @@ def naturalize_subtasks(
         return ok, data, {
             "status": feedback["status"],
             "attempts": feedback.get("attempts", 0),
-            "reused_previous_review": feedback.get(
-                "reused_previous_review", False
-            ),
             "failures": feedback.get("failures", []),
             "accepted_preview": (
                 accepted["finish_result"] if ok else None
@@ -378,7 +345,6 @@ def naturalize_subtasks(
         "critic_endpoint": critic_api_base or api_base,
         "max_revisions": max_revisions, "timeout": timeout,
         "result_policy": result_policy,
-        "reuse_source_fingerprint": previous_fingerprint,
         "prompt_code_hash": file_digest(code_root / "reporting.py"),
         "visible_evidence_code_hash": file_digest(
             code_root / "visible_evidence.py"

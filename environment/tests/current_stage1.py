@@ -8,7 +8,7 @@ from functools import lru_cache
 
 @lru_cache(maxsize=128)
 def _scene(i: int, difficulty: str):
-    from environment.macro_v3.yago import Edge, KnowledgeGraph
+    from environment.generate_question.grounding.yago import Edge, KnowledgeGraph
     from environment.generate_question.planning.knowledge_index import YagoKnowledgeIndex
     from environment.generate_question.planning.task_plan import make_spec
     from environment.generate_question.authoring.question import reference_question

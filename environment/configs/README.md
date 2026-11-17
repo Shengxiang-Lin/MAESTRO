@@ -49,5 +49,6 @@ explicitly. In Stage 3/4, `generation.sub_model` is the Sub-Agent model
 label recorded in the simulated Main history, not another API invocation.
 
 Keep output directories distinct between pilot runs, seeds and modified
-configuration. `python -m environment run` remains the Stage 1→2→4
-convenience command.
+configuration. The maintained entrypoints are the four stage-specific
+commands above; the old Stage 1→2→4 shortcut was removed because it skipped
+the Stage 3 Clean Reference now required by the paired pilot.
