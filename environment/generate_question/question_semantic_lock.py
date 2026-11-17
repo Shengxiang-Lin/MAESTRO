@@ -2,4 +2,4 @@
 
 The implementation lives in the authoring package.
 """
-from .authoring.question_semantic_lock import *  # noqa: F401,F403
+from .authoring.question_checks import *  # noqa: F401,F403

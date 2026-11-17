@@ -933,7 +933,7 @@ def guard_question(question: str, spec: dict,
                 q, spec, compile_semantic_contract(spec),
             ))
         if spec.get("question_semantic_lock_version"):
-            from .authoring.question_semantic_lock import (
+            from .authoring.question_checks import (
                 question_semantic_lock_issues,
             )
             errors.extend(question_semantic_lock_issues(q, spec))
@@ -1105,7 +1105,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                         "Do not introduce one."
                     )
         if spec.get("question_semantic_lock_version"):
-            from .authoring.question_semantic_lock import question_author_requirements
+            from .authoring.question_checks import question_author_requirements
             author_contract["mandatory_question_semantics"] = (
                 question_author_requirements(spec)
             )

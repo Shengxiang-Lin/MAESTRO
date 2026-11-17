@@ -584,7 +584,7 @@ def goal_question(plan: dict) -> str:
     Gold still follows every canonical relation. Only the surface avoids
     exposing an internal 'relationship sequence' or instruction program.
     """
-    from ..grounding.goal_language import focus_phrase
+    from ..grounding.scene_semantics import focus_phrase
 
     goal = plan["goal_spec"]
     output = goal["output_spec"]

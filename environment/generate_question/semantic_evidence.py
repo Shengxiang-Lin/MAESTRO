@@ -347,7 +347,7 @@ def semantic_text_issues(text: str, spec: dict, contract: dict,
     if context == "question":
         issues.extend(semantic_output_issues(q, contract))
         if contract.get("question_fidelity_version"):
-            from .authoring.question_fidelity import question_fidelity_issues
+            from .authoring.question_checks import question_fidelity_issues
             issues.extend(question_fidelity_issues(text, contract))
 
     if "clearance" in contract["prohibited_new_filters"] and _CLEARANCE.search(q):

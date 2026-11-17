@@ -23,10 +23,13 @@ The active Stage-1 code is grouped by function:
 | Package | Responsibility |
 |---|---|
 | `planning/` | Canonical output-first `goal_plan`, `evidence_plan`, `task_plan` |
-| `grounding/` | Domain-specific clue sources, simulated media observation descriptions, goal referents and source profiles |
+| `grounding/scene_semantics.py` | One cohesive home for domain clue profiles, goal referents, readable simulated-media observations and source titles |
 | `execution/` | `task_plan_runtime` and shared `program_ir` Gold executor |
-| `authoring/` | Question/scenario prompts, field guards, semantic and surface checks |
-| `auditing/` | Decision-opportunity, grounded observation and structural-quality audits |
+| `authoring/question_checks.py` | Consolidated fidelity and frozen-goal semantic checks |
+| `authoring/scenario_contracts.py` | Scenario source-title, field repair and topic contracts |
+| `authoring/surface_quality.py` / `prompt_templates.py` | Question surface guards and LLM prompts |
+| `auditing/quality_metrics.py` | Source-evidence integrity and DAG scheduling-opportunity metrics |
+| `auditing/difficulty_proxy.py` | Historical structural-difficulty diagnostics |
 | `stages.py`, `pipeline.py` | Resumable generation, Question Author/Critic and reports |
 
 Root-level `goal_plan.py`, `evidence_plan.py`, `task_plan.py`,
@@ -37,12 +40,21 @@ corresponding packages. Older experimental `hybrid_world*` and
 their independently maintained regression suites. Do not use them for new
 Stage-1 question generation.
 
-The active code is grouped by responsibility: `grounding/` holds domain-aware
-synthetic observation profiles, `authoring/` holds question/scenario
-naturalization and validation helpers, and `auditing/` holds structural
-decision-opportunity and difficulty diagnostics. Thin compatibility shims
-preserve older Stage-2/3/4 import paths for shared surface contracts. The CLI, typed solvers and
-Stage-2/3/4 data contracts remain at their established import paths.
+This cleanup reduces the Stage-1 Python module count from **73 to 66**.
+The active implementation now has one shared grounding helper, one Question
+semantic-contract module, one Scenario contract module and one quality-metrics
+module. These replace 11 formerly separate helpers with 4 cohesive files.
+Version constants and model/World/Macro/Gold contracts are unchanged.
+Existing root-level compatibility facades remain available for the archived
+Stage-1 paths consumed by Stage 2–4. The legacy `macro_planning.py` now
+imports the consolidated contracts directly.
+
+**Not deleted:** old `hybrid_world*`, `task_graph_first*`,
+`knowledge_macro*`, `evidence_planner.py` and similar large historical
+implementations. They still participate in frozen historical Replay or
+the regression suite. Removing them merely to reduce file count would
+silently break existing data and tests. They are not called by the canonical
+100-task output-first generator.
 
 Numeric, date and coordinate values can be acquired from simulated
 image/audio observations rather than only generic tables. Browse-only media
@@ -103,6 +115,7 @@ overwriting it.
 ## Validation
 
 ```bash
+python -m unittest discover -s environment/tests -p 'test_*.py'
 python -m unittest environment.tests.test_stage1_generator
 python -m environment quality --config environment/configs/questions.yaml \
   --scenes environment/data/stage1/questions/scenes.jsonl

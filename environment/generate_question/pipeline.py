@@ -906,8 +906,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 value = answer[name] if isinstance(answer, dict) else answer
                 encoded = json.dumps(value, sort_keys=True, ensure_ascii=False)
                 answer_value_counts.setdefault(semantic, Counter())[encoded] += 1
-        from .auditing.decision_opportunities import summarize_decision_opportunities
-        from .auditing.grounded_evidence import summarize_grounded_evidence
+        from .auditing.quality_metrics import summarize_decision_opportunities
+        from .auditing.quality_metrics import summarize_grounded_evidence
         decision_opportunities = summarize_decision_opportunities(current_scenes)
         grounded_evidence = summarize_grounded_evidence(current_scenes)
         answer_diversity = {

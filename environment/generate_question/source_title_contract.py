@@ -1,5 +1,5 @@
 """Compatibility import for historical source-title contracts.
 
-New code should import from generate_question.authoring.source_title_contract.
+New code should import from generate_question.authoring.scenario_contracts.
 """
-from .authoring.source_title_contract import *  # noqa: F401,F403
+from .authoring.scenario_contracts import *  # noqa: F401,F403

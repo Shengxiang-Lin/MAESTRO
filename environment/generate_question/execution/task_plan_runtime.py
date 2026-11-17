@@ -350,7 +350,7 @@ def generate_world(spec: dict) -> dict:
                     if sid in {"link_a", "link_b"} else
                     "fictional_observation"
                 )
-        from ..grounding.observations import annotate_source_observations
+        from ..grounding.scene_semantics import annotate_source_observations
         annotate_source_observations(src, role, seed=spec["seed"],
                                      ordinal=spec["ordinal"])
         bank[sid] = src
