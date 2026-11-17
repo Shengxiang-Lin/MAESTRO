@@ -9,7 +9,7 @@ input:
 
 generation:
   output_dir: environment/data/pilots/qwen_stage234_10/stage3
-  max_scenes: 10  # reuse first 10 accepted Stage-1 Scenes
+  max_scenes: 10  # select first 10 complete accepted Stage-2 Scenes in Stage-1 order
   workers: 10
   mode: llm           # llm or template
   freeze_dispatch: true  # Freeze DAG batches/models/tools; LLM authors reasoning + scoped task prose
