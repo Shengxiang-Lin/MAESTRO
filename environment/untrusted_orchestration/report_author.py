@@ -224,7 +224,10 @@ def naturalize_report(task: dict, attempt: Attempt, *,
     # completed verification differ from the old Stage 2 trace.
     if critic is None:
         raise ValueError("subagent_naturalization_requires_critic")
-    contract = build_report_contract(task, attempt, instruction)
+    contract = build_report_contract(
+        task, attempt, instruction,
+        result_encoding=(reviewed or {}).get("result_encoding"),
+    )
     failures = []
     witness_review_attempted = False
     for revision in range(max_revisions + 1):
