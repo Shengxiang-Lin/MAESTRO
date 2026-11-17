@@ -1,25 +1,26 @@
+# Stage-4 Qwen pilot: 10 Scenes, one fault-feedback fork per Scene.
 # MAESTRO trusted evidence -> untrusted Main decision training.
-# Inputs: Stage-1 frozen scenes + Stage-2 reviewed reports ONLY.
-# A deterministic clean O1 prefix is compiled internally; Stage 3 is not run.
+# Pilot: first 10 Stage-1 Scenes + reviewed Stage-2 reports and Stage-3 clean episodes.
+# Stage 4 checks and reuses the actual Stage-3 Clean Reference.
 version: 1
 
 input:
   scenes: environment/data/stage1/questions/scenes.jsonl
-  reports: environment/data/stage2/subtasks.jsonl
+  reports: environment/data/pilots/qwen_stage234_10/stage2/subtasks.jsonl
   # Optional reviewed Stage-3 reference for exact clean/fault pairing.
   # Null keeps deterministic Stage-4 bootstrap for independent experiments.
-  clean_episodes: null
+  clean_episodes: environment/data/pilots/qwen_stage234_10/stage3/episodes.jsonl
 
 generation:
-  output_dir: environment/data/stage4
-  max_scenes: null
-  branches_per_scene: null  # optional debugging cap
+  output_dir: environment/data/pilots/qwen_stage234_10/stage4
+  max_scenes: 10
+  branches_per_scene: 1  # one feedback fork per Scene for this pilot
   seed: 17
   # Enumerate executable one-atom variants with provenance-grounded distractors.
-  max_candidates_per_round: 24
-  max_distractors_per_fault: 2
+  max_candidates_per_round: 12
+  max_distractors_per_fault: 1
   max_selected_per_round: 1
-  max_language_attempts_per_round: 3
+  max_language_attempts_per_round: 2
   atomic_fault_kinds:
     - no_result
     - incomplete_retrieval
@@ -32,7 +33,7 @@ generation:
   max_cost: 80
   max_retries: 1
   max_parallel_tasks: 4
-  workers: 8
+  workers: 4
   mode: llm              # reviewed Sub-Agent and Main language generation
   report_max_revisions: 2
   main_max_revisions: 2
