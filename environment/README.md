@@ -24,14 +24,18 @@ python -m environment generate-untrusted-turns \
   --config environment/configs/untrusted_orchestration.yaml
 ```
 
-The default Stage-1 pilot uses **100 fixed candidate Scenes** with local
-Qwen3.5-9B Question Author and Critic. The reviewed acceptance count may
-be lower than 100; Stage 2–4 consume the accepted `questions/scenes.jsonl`.
-See `configs/README.md` for the canonical input/output paths. Each stage
-has resumable journals and input/code signatures. Old experiment directories
-must not be reused with these paths. `python -m environment run` executes
-Stages 1, 2 and 4; Stage 4 internally compiles its clean history from
-Stage-1 scenes + Stage-2 reports, not from a Stage-3 artifact.
+Stage 1 uses the maintained output-first Task Plan builder and loads real
+YAGO relations via `generate_question/grounding/yago.py`. Obsolete
+`macro_v3/` synthesizers and the unused `scenarios/` and `sources/`
+packages have been removed. Stage 1 Question Author/Critic and Stage 2–4
+language review use DashScope `qwen3.8-flash`.
+
+The current Stage 2–4 pilot consumes the first 10 accepted Scenes from
+`environment/data/stage1/questions/scenes.jsonl`, without regenerating
+Stage 1; see `configs/README.md`. Stage 2 deterministically recompiles
+its Oracle every run and keeps separately resumable LLM report journals.
+Stage 4 validates and reuses the Stage 3 Clean Reference when
+`input.clean_episodes` is configured.
 
 ## Stage 4 supervision
 

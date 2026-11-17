@@ -26,7 +26,7 @@ def _knowledge_input_identity(args) -> dict | None:
     location = getattr(args, "knowledge_yago", None)
     if not location:
         return None
-    from environment.macro_v3.yago import _files
+    from environment.generate_question.grounding.yago import _files
     candidates = _files(Path(location))
     if not candidates:
         raise FileNotFoundError("knowledge_yago_has_no_supported_facts_file")
@@ -223,7 +223,7 @@ def construct_scenes(args) -> dict:
         raise ValueError("target and max-records must be positive")
     if not getattr(args, "knowledge_yago", None):
         raise ValueError("knowledge_yago_required_for_stage1")
-    from environment.macro_v3.yago import load_yago
+    from environment.generate_question.grounding.yago import load_yago
     from environment.generate_question.planning.knowledge_index import YagoKnowledgeIndex
     knowledge_graph = load_yago(
         args.knowledge_yago,
