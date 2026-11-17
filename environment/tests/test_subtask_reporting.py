@@ -651,6 +651,77 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertTrue(any(atom.get("observed_content") for atom in atoms))
         self.assertTrue(any(atom.get("observation_semantics") for atom in atoms))
 
+    def test_o1_guard_keeps_domain_project_names_but_rejects_projection_ops(self):
+        from environment.implement_subtask.reporting import (
+            _guard, _teacher_contract, _o1_answer_requirements,
+        )
+        record = realize_scene(scene(0, "medium"))["macro_tasks"][0]
+        contract = _teacher_contract(
+            record, question=None, is_terminal=False,
+        )
+        contract["requires_o1_answer"] = True
+        contract["answer_required_literals"] = _o1_answer_requirements(
+            record
+        )
+        contract["all_evidence_refs"] = list({
+            ref for step in record["trace_summary"]["steps"]
+            for ref in step["supporting_fact_refs"]
+        } | set(record["trace_summary"]["answer_supporting_fact_refs"]))
+        literals = ", ".join(contract["answer_required_literals"])
+        natural = {
+            "status": "done",
+            "result": (
+                "The project identifier register returned "
+                + literals + ". Later qualification was not checked."
+            ),
+            "summary": (
+                "The Project event ledger contains the recorded "
+                "evidence relevant to this delegated inquiry."
+            ),
+            "trace_summary": (
+                "- Consulted the Project event ledger and Project "
+                "reference report A for the assigned evidence.\n"
+                "- Compared the named project identifier against "
+                "the supplied source annotations.\n"
+                "- Returned the project association without "
+                "claiming any later qualification."
+            ),
+        }
+        problems = _guard(natural, contract)
+        self.assertFalse(
+            any("technical_execution_jargon" in problem
+                for problem in problems),
+            problems,
+        )
+        improper = dict(natural, trace_summary=(
+            natural["trace_summary"]
+            + "\n- Projected the source rows into a new table."
+        ))
+        self.assertIn(
+            "trace_summary_technical_execution_jargon",
+            _guard(improper, contract),
+        )
+
+    def test_pending_source_disagreement_check_is_not_a_positive_claim(self):
+        from environment.implement_subtask.stage_local_claims import (
+            stage_local_claim_issues,
+        )
+        contract = {"reported_year_disagreement_established": False}
+        negative = (
+            "This is an intermediate finding; later eligibility, "
+            "comparison, or source-disagreement checks were not completed."
+        )
+        self.assertEqual(
+            stage_local_claim_issues(negative, contract), []
+        )
+        self.assertIn(
+            "claims_unverified_independent_report_disagreement",
+            stage_local_claim_issues(
+                "The two report sources have a confirmed disagreement.",
+                contract,
+            ),
+        )
+
     def test_o1_guard_rejects_missing_values_and_fabricated_tool_actions(self):
         from environment.implement_subtask.reporting import (
             _guard, _teacher_contract, _o1_answer_requirements,
