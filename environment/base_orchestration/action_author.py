@@ -115,6 +115,69 @@ Do not ask for changes to task prose or frozen dispatch. Return the normal
 three axes.
 """
 
+STAGE3_TASK_PROSE_AUTHOR_SYSTEM = """You are an Orchestra-o1 Main-Agent
+writing the next real-looking decision and its delegated task instructions.
+
+The dispatch is ALREADY FIXED by a dependency-safe task graph. You CANNOT
+add, remove, reorder, merge, split, retry or substitute task slots; you also
+CANNOT choose models, tools, source permissions or output schemas.
+Within these fixed slots, write useful, concrete Sub-Agent assignments.
+
+Return EXACTLY:
+{"reasoning":"...",
+ "tasks":[{"task_instruction":"...","context":"..."}]}
+
+Write precisely one tasks entry for each pending investigation, in order.
+For each task_instruction, explain the specific investigation: the
+relevant provided source(s), the precise entity/date/measurement/
+relationship or evidence to inspect, how the available clue should be
+used, and the requested deliverable. Refer to permitted source IDs
+literally at least once; preserve their public names and modalities.
+Use natural, actionable investigative language, NOT generic phrases
+like 'identify candidates meeting evidence in the user question'.
+Do NOT copy the reference_instructions wholesale. Do not include
+model, tools or task IDs. Return fields must remain within the locked
+output_fields; later downstream investigation is OUT OF SCOPE.
+
+For each context, write a short, natural handoff describing why this
+task is needed and what earlier results are relevant. Earlier public
+result strings will be attached VERBATIM by the application as a
+separate evidence suffix when there are prerequisite results. Do not
+reproduce a full result list unnecessarily, but use relevant public
+identifiers accurately in the task_instruction or context.
+When no earlier Sub-Agent has returned, do NOT imply prior attempts.
+Do not invent observations, tool failures, retries, missing evidence,
+verification, sources, URLs, IDs, numbers or future results.
+
+Reasoning explains WHY this exact fixed batch can run now and what
+it will establish for the user. Prior successful intermediate lookups
+are not failures. Parallelism/ordering is fixed, NOT yours to optimize.
+The provided source titles, schemas and reference instructions are
+CURRENT-ROUND information, never results of a future task.
+Only claim facts already visible in the original O1 question/history.
+Use JSON only, with reasoning and tasks, no extra fields.
+"""
+
+STAGE3_TASK_PROSE_CRITIC_SYSTEM = _CRITIC_SYSTEM + """
+This is Stage-3 trusted, fixed-dispatch natural-language authoring.
+The number/order of slots, model, tool routing, source permissions
+and required output fields are code-verified and IMMUTABLE.
+Assess the authored reasoning AND EACH task_instruction/context:
+Does each assignment explain the actual local evidence question and
+requested fields, name only permitted sources, correctly use existing
+Sub-Agent feedback, and avoid pretending later dependencies or checks
+have already completed? Reject generic boilerplate that could apply
+to any source, wrong entity-to-field attribution, invented source
+content, fake earlier errors, or future task results.
+A short verbatim earlier public result may be appended by the code for
+evidence fidelity; this is not model-generated hallucination.
+Do not change or criticize frozen dispatch, tools, model or slot order.
+In particular, an intermediate key lookup is valid even if the overall
+question eventually requires later downstream evidence.
+Return the normal JSON verdict and boolean review axes.
+"""
+
+
 # A narrow check for a claim of a previous failed tool/Sub-Agent execution
 # in trusted history consisting entirely of completed Sub-Agent reports.
 _PAST_FAILED_ATTEMPT = re.compile(
@@ -344,6 +407,120 @@ def _assignment(target: dict, catalog: dict[str, dict],
         "output_fields": list(target["outputs"]["typed_relation"]),
         "needs_upstream": bool(target["depends_on"]),
         "keyed_lookup": has_keyed,
+    }
+
+
+_STAGE3_IDENTIFIER = re.compile(
+    r"\b(?:Case-\d+|Dossier-[A-Za-z0-9]+|PRJ-[A-Za-z0-9]+|"
+    r"Entity-[A-Za-z0-9]+|MK-\d+|RK-\d+|Entry-\d+)\b", re.I,
+)
+
+
+def _stage3_task_prose_issues(
+    draft: dict, assignments: list[dict], *, prompt: str,
+) -> list[str]:
+    """Fail closed on authored task prose before the fixed O1 slots are built.
+
+    Source identities and task count are code-owned. Author can phrase a
+    request, never fabricate a new lookup, upstream key, or output schema.
+    The independent Critic separately reviews semantic correctness.
+    """
+    if not isinstance(draft, dict) or set(draft) != {"reasoning", "tasks"}:
+        return ["stage3_task_prose_shape"]
+    tasks = draft.get("tasks")
+    if not isinstance(tasks, list) or len(tasks) != len(assignments):
+        return ["stage3_task_prose_slot_count"]
+    allowed_identifiers = {
+        token.casefold()
+        for token in _STAGE3_IDENTIFIER.findall(
+            prompt + "\n" + "\n".join(
+                item["target_instruction"] + "\n" + item["context"]
+                for item in assignments
+            )
+        )
+    }
+    issues = []
+    for i, (item, expected) in enumerate(zip(tasks, assignments)):
+        if not isinstance(item, dict) or set(item) != {
+            "task_instruction", "context",
+        }:
+            issues.append(f"task_{i}_prose_shape")
+            continue
+        instruction = item["task_instruction"]
+        context = item["context"]
+        if not isinstance(instruction, str) or not 50 <= len(
+            instruction.strip()
+        ) <= 1200:
+            issues.append(f"task_{i}_authored_instruction_invalid")
+            continue
+        if not isinstance(context, str) or not 25 <= len(
+            context.strip()
+        ) <= 700:
+            issues.append(f"task_{i}_authored_context_invalid")
+            continue
+        if instruction.strip() == expected["target_instruction"].strip():
+            issues.append(f"task_{i}_instruction_not_naturalized")
+        if re.search(
+            r"\b(?:identify the candidates meeting the evidence described "
+            r"in the user question|combine the returned records by their "
+            r"matching identifiers)\b", instruction, re.I,
+        ):
+            issues.append(f"task_{i}_generic_template_repeated")
+        for sid in expected["source_ids"]:
+            if not re.search(
+                r"(?<![\w])" + re.escape(sid) + r"(?![\w])",
+                instruction + " " + context,
+                re.I,
+            ):
+                issues.append(f"task_{i}_source_scope_missing:{sid}")
+        for identifier in _STAGE3_IDENTIFIER.findall(
+            instruction + " " + context
+        ):
+            if identifier.casefold() not in allowed_identifiers:
+                issues.append(f"task_{i}_invented_visible_identifier")
+                break
+        if _FORBIDDEN.search(instruction + " " + context):
+            issues.append(f"task_{i}_private_contract_leak")
+        if _GENERATION_META.search(instruction + " " + context):
+            issues.append(f"task_{i}_generation_process_leak")
+    return sorted(set(issues))
+
+
+def _stage3_compile_task_prose(
+    draft: dict, assignments: list[dict], template: dict,
+) -> dict:
+    """Keep exact fixed slots; edit only publicly visible task prose.
+
+    The source/field contract is appended by code only when necessary.
+    The original already-visible parent Result is attached verbatim to
+    dependent contexts, avoiding accidental information loss in paraphrase.
+    """
+    tasks = deepcopy(template["params"]["tasks"])
+    for i, (item, expected) in enumerate(zip(draft["tasks"], assignments)):
+        instruction = item["task_instruction"].strip()
+        missing = [
+            field.replace("_", " ")
+            for field in expected["output_fields"]
+            if field.casefold() not in instruction.casefold()
+            and field.replace("_", " ").casefold() not in instruction.casefold()
+        ]
+        if missing:
+            instruction = instruction.rstrip().rstrip(".") + (
+                ". Report " + ", ".join(missing) + "."
+            )
+        context = item["context"].strip()
+        if expected["needs_upstream"]:
+            evidence = expected["context"]
+            # _prior_context has a 3200-character bound; the O1 action
+            # contract permits 3500 characters in total.
+            available = 3500 - len(evidence) - 2
+            context = context[:available].rstrip() + "\n\n" + evidence
+        tasks[i]["task_instruction"] = instruction
+        tasks[i]["context"] = context
+    return {
+        "action": "delegate_task",
+        "reasoning": draft["reasoning"],
+        "params": {"tasks": tasks},
     }
 
 
