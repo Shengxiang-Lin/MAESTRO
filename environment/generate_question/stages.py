@@ -12,7 +12,7 @@ from pathlib import Path
 from tqdm.auto import tqdm
 
 from environment.schema import normalize_label
-from environment.generate_question.planning.spec import difficulty_sequence, make_spec
+from environment.generate_question.planning.spec import difficulty_sequence
 from environment.generate_question.authoring.question import naturalize_one, reference_question
 from environment.generate_question.auditing.quality import compile_and_validate, validate_replay
 from environment.streaming import (
@@ -128,8 +128,6 @@ def _question_signature(args, rows: list[dict]) -> str:
         "critic_top_p": getattr(args, "question_critic_top_p", None),
         "max_revisions": args.max_revisions,
         "question_code": file_digest(Path(__file__).parent / "authoring/question.py"),
-        "semantic_evidence_code": file_digest(
-            Path(__file__).parent / "authoring/semantic_evidence.py"),
         "question_checks_code": file_digest(
             Path(__file__).with_name("authoring") / "question_checks.py"),
         "intent_code": file_digest(Path(__file__).parent / "authoring/intent.py"),
@@ -319,8 +317,6 @@ def construct_scenes(args) -> dict:
             "scenario_code": file_digest(Path(__file__).parent / "authoring/scenario.py"),
             "scenario_contracts_code": file_digest(
                 Path(__file__).with_name("authoring") / "scenario_contracts.py"),
-            "semantic_evidence_code": file_digest(
-                Path(__file__).parent / "authoring/semantic_evidence.py"),
             "intent_code": file_digest(Path(__file__).parent / "authoring/intent.py"),
             "prompt_templates_code": file_digest(
                 Path(__file__).with_name("authoring") / "prompt_templates.py"),
