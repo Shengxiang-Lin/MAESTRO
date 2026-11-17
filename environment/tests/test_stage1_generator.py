@@ -91,7 +91,9 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertEqual(args.question_model, "local-qwen3.5-9b")
         self.assertEqual(args.question_critic_model, "local-qwen3.5-9b")
         self.assertEqual(args.question_api_base, "http://127.0.0.1:8807/v1")
-        self.assertEqual(args.question_critic_api_base, args.question_api_base)
+        # A null Critic endpoint inherits the Author API base in the
+        # client factory; args_from_config preserves the explicit null.
+        self.assertIsNone(args.question_critic_api_base)
         self.assertIsNone(args.question_api_key_env)
         self.assertIsNone(args.question_author_temperature)
         self.assertIsNone(args.question_author_top_p)
