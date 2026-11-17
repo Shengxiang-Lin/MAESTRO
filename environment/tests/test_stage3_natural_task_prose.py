@@ -14,7 +14,9 @@ from environment.base_orchestration.action_author import (
     _stage3_compile_task_prose,
     proposed_template_action,
 )
-from environment.base_orchestration.o1_compat import source_catalog
+from environment.base_orchestration.o1_compat import (
+    source_catalog, o1_prompt_from_turn, stage3_author_context,
+)
 from environment.base_orchestration.trajectory_builder import build_episode
 from environment.tests.current_stage1 import current_scene
 from environment.tests.test_main_turn_dataset import reviewed_rows
@@ -241,6 +243,54 @@ class FrozenTaskProseTests(unittest.TestCase):
             request["assignment_contract_validated_by_code"]
             for request in reviewer_calls
         ))
+
+        # Generation-only prompt is compact, but the stored turn still
+        # reconstructs the original byte-for-byte O1 training prompt.
+        self.assertEqual(len(author.requests), len(turns))
+        self.assertEqual(len(critic.requests), len(turns))
+        for turn, audit, authored, reviewed in zip(
+                turns, audits, author.requests, critic.requests):
+            context = authored.get(
+                "question_and_subagent_history",
+                authored.get("current_main_visible_prompt"),
+            )
+            self.assertEqual(context, reviewed["current_main_visible_prompt"])
+            self.assertIn(scene["question"], context)
+            self.assertIn(
+                "==== SUBTASK HISTORY ====\n" +
+                turn["input"]["subtask_history"], context,
+            )
+            self.assertNotIn("==== AVAILABLE TOOLS (for SubAgents) ====", context)
+            self.assertNotIn("==== OUTPUT FORMAT ====", context)
+            self.assertNotIn("gold_answer", context)
+            self.assertNotIn("private_macro_alignment", context)
+
+            full_prompt = o1_prompt_from_turn(
+                scene, turn, max_attempts=16,
+                sub_model="qwen3-8b", model_alias="model_1",
+            )
+            self.assertIn("==== AVAILABLE TOOLS (for SubAgents) ====", full_prompt)
+            self.assertIn("==== OUTPUT FORMAT ====", full_prompt)
+            self.assertLess(len(context), len(full_prompt))
+            self.assertEqual(audit["full_o1_prompt_chars"], len(full_prompt))
+            self.assertEqual(audit["author_context_chars"], len(context))
+
+    def test_compact_context_includes_legacy_public_sources(self):
+        scene = deepcopy(current_scene(0))
+        scene["public"].pop("task_input", None)
+        history = "[Attempt 1] A previously completed public result."
+        context = stage3_author_context(
+            scene, history, attempt=2, max_attempts=10,
+        )
+        self.assertIn(scene["question"], context)
+        self.assertIn(history, context)
+        self.assertIn("Attempt 2/10; remaining 8", context)
+        self.assertIn("==== AVAILABLE EVIDENCE SOURCES ====", context)
+        for entry in scene["public"]["available_source_descriptions"]:
+            self.assertIn(entry["source_id"], context)
+            self.assertIn(entry["title"], context)
+            if entry.get("resource_url"):
+                self.assertIn(entry["resource_url"], context)
 
 
 if __name__ == "__main__":
