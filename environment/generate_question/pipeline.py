@@ -896,7 +896,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     freq.most_common(1)[0][1]/sum(freq.values()), 4
                 ),
                 "potential_answer_shortcut": (
-                    sum(freq.values()) >= 5 and (
+                    semantic not in {"conclusion", "higher_source"}
+                    and sum(freq.values()) >= 5 and (
                         len(freq) < 4 or
                         freq.most_common(1)[0][1]/sum(freq.values()) > 0.45
                     )
