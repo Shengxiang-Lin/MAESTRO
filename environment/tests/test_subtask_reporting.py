@@ -719,38 +719,57 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertIn("trace_summary_internal_teacher_jargon", problems)
         self.assertIn("trace_summary_claims_unperformed_tool_or_media_action", problems)
 
-    def test_exact_terminal_scalar_answers_do_not_need_filler(self):
-        """Qwen's four valid short terminal answers must pass unchanged."""
-        from environment.implement_subtask.reporting import _o1_answer_issues
-        for value in (132, "Ashbourne County", "second", "2020-11-19"):
-            with self.subTest(value=value):
-                contract = {
-                    "macro_is_terminal": True,
-                    "exact_oracle_answer": [{"answer": value}],
-                    "answer_required_literals": [str(value)],
-                }
-                self.assertEqual(_o1_answer_issues(str(value), contract), [])
-                self.assertEqual(
-                    _o1_answer_issues(str(value), {
-                        **contract, "macro_is_terminal": False,
-                    }),
-                    ["answer_invalid_length_or_type"],
-                )
-                self.assertEqual(
-                    _o1_answer_issues("not the answer", contract),
-                    ["answer_invalid_length_or_type"],
-                )
-                self.assertTrue(_o1_answer_issues(
-                    "A different answer is recorded here.", contract,
-                ))
-        # A short intermediate handoff is NOT a final answer.
-        intermediate = {
-            "macro_is_terminal": True,
-            "exact_oracle_answer": [{"case_id": "Dossier-X"}],
-            "answer_required_literals": ["Dossier-X"],
+    def test_exact_one_field_scalar_answers_do_not_need_filler(self):
+        """Accept exact short intermediate IDs and final scalar answers."""
+        from environment.implement_subtask.reporting import (
+            _o1_answer_issues, _exact_single_field_scalar_text,
+        )
+        values = (
+            ("answer", 132), ("answer", "Ashbourne County"),
+            ("answer", "second"), ("answer", "2020-11-19"),
+            ("answer", 2.75),
+            ("project_id", "PRJ-6C3E1089F38D"),
+            ("entity_0", "ENT-5C0C78138EBD"),
+            ("event_id", "EVT-E6BD31819766"),
+            ("entity_final", "City of Alderwick"),
+            ("case_id", "Dossier-X"),
+        )
+        for field, value in values:
+            for terminal in (False, True):
+                with self.subTest(field=field, value=value, terminal=terminal):
+                    contract = {
+                        "macro_is_terminal": terminal,
+                        "exact_oracle_answer": [{field: value}],
+                        "answer_required_literals": [str(value)],
+                    }
+                    self.assertEqual(_o1_answer_issues(str(value), contract), [])
+                    self.assertEqual(
+                        _exact_single_field_scalar_text(value, contract),
+                        str(value),
+                    )
+                    self.assertEqual(
+                        _o1_answer_issues("not the answer", contract),
+                        ["answer_invalid_length_or_type"],
+                    )
+                    self.assertTrue(_o1_answer_issues(
+                        "A different answer is recorded here.", contract,
+                    ))
+        multi_field = {
+            "exact_oracle_answer": [{
+                "duration_days": 96, "midpoint_date": "2013-11-02",
+            }],
+            "answer_required_literals": ["96", "2013-11-02"],
         }
-        self.assertIn("answer_invalid_length_or_type",
-                      _o1_answer_issues("Dossier-X", intermediate))
+        self.assertIsNone(_exact_single_field_scalar_text("96", multi_field))
+        self.assertEqual(_o1_answer_issues("96", multi_field),
+                         ["answer_invalid_length_or_type"])
+        multi_row = {
+            "exact_oracle_answer": [{"case_id": "A"}, {"case_id": "B"}],
+            "answer_required_literals": ["A", "B"],
+        }
+        self.assertIsNone(_exact_single_field_scalar_text("A", multi_row))
+        self.assertEqual(_o1_answer_issues("A", multi_row),
+                         ["answer_invalid_length_or_type"])
 
     def test_terminal_short_answer_passes_review_without_oracle_drift(self):
         from environment.generate_question.planning.goal_plan import sample_output
@@ -792,6 +811,68 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(published["answer_with_provenance"],
                          terminal["answer_with_provenance"])
         self.assertEqual(len(critic.calls), 1)
+
+    def test_exact_short_intermediate_handoff_survives_review(self):
+        """Public Main history must receive the intact short PRJ identifier."""
+        record = next(
+            row for row in realize_scene(scene(42, "medium"))["macro_tasks"]
+            if row["output_schema"] == ["project_id"]
+        )
+        expected = record["answer"][0]["project_id"]
+        self.assertLess(len(expected), 18)
+
+        class ExactKeyAuthor:
+            def complete_json(self, system_prompt, user_prompt):
+                contract = json.loads(user_prompt)["frozen_task_and_evidence"]
+                return {
+                    "answer": expected,
+                    "trace_summary": _mock_o1_draft(contract)["trace_summary"],
+                }
+
+        critic = ReportCritic()
+        published, info = author_critic_report(
+            record, question=None, author=ExactKeyAuthor(),
+            critic=critic, max_revisions=0, is_terminal=False,
+            result_policy="code_owned",
+        )
+        self.assertEqual(info["status"], "accepted", info)
+        self.assertEqual(info["attempts"], 1)
+        self.assertEqual(published["finish_result"]["result"], expected)
+        self.assertEqual(published["answer"], record["answer"])
+        self.assertEqual(published["answer_with_provenance"],
+                         record["answer_with_provenance"])
+        self.assertEqual(len(critic.calls), 1)
+
+    def test_exact_numeric_json_answer_is_coerced_only_when_verified(self):
+        """The local model can JSON-decode a short answer as a bare float."""
+        from environment.generate_question.planning.goal_plan import sample_output
+        ordinal = next(
+            i for i in range(64)
+            if sample_output(17, i)["kind"] == "single_number"
+        )
+        record = next(
+            row for row in realize_scene(scene(ordinal, "medium"))["macro_tasks"]
+            if row["output_schema"] == ["answer"]
+        )
+        numeric = record["answer"][0]["answer"]
+        self.assertIn(type(numeric), (int, float))
+
+        class NumericAuthor:
+            def complete_json(self, system_prompt, user_prompt):
+                contract = json.loads(user_prompt)["frozen_task_and_evidence"]
+                return {
+                    "answer": numeric,
+                    "trace_summary": _mock_o1_draft(contract)["trace_summary"],
+                }
+
+        reviewed, info = author_critic_report(
+            record, question=None, author=NumericAuthor(),
+            critic=ReportCritic(), max_revisions=0, is_terminal=True,
+            result_policy="code_owned",
+        )
+        self.assertEqual(info["status"], "accepted", info)
+        self.assertEqual(reviewed["finish_result"]["result"], str(numeric))
+        self.assertEqual(reviewed["answer"], record["answer"])
 
     def test_task_plan_preserves_stage1_observation_descriptions(self):
         source_scene = scene(0, "medium")
