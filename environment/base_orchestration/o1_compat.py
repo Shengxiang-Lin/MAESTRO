@@ -65,6 +65,48 @@ def o1_initial_instruction(scene: dict) -> str:
     return question + "\n\n" + "\n".join(lines)
 
 
+
+def stage3_author_context(
+    scene: dict, task_entries: list[dict], *,
+    attempt: int, max_attempts: int,
+) -> str:
+    """Compact generation-only view; NOT the model's training prompt.
+
+    Reuse the exact initial user-visible instruction and O1 history without
+    truncation, while omitting the baseline's static orchestration tutorial,
+    pricing table, tool JSON schemas and output-format examples. Current
+    dispatch/source/output contracts are supplied separately by Stage 3.
+    """
+    if attempt < 1 or attempt > max_attempts:
+        raise ValueError("stage3_attempt_exceeds_budget")
+    instruction = o1_initial_instruction(scene)
+    if "task_input" not in scene["public"]:
+        # Legacy scenes enumerate sources in O1 modal_inputs rather than the
+        # initial instruction. Keep every publicly visible source and URL.
+        sources = source_catalog(scene)
+        source_lines = [
+            "==== AVAILABLE EVIDENCE SOURCES ====",
+        ]
+        for sid, source in sources.items():
+            source_lines.append(
+                "- " + sid + " [" + source["modality_hint"] + ", " +
+                source.get("access_mode", "browse") + "]: " +
+                source["title"] +
+                ("; known URL: " + source["resource_url"]
+                 if source.get("resource_url") else "")
+            )
+        instruction += "\n\n" + "\n".join(source_lines)
+    return (
+        "==== QUESTION AND INITIAL OBSERVATIONS ====\n" +
+        instruction +
+        "\n\n==== PROGRESS ====\n" +
+        f"Attempt {attempt}/{max_attempts}; "
+        f"remaining {max_attempts - attempt} attempts." +
+        "\n\n==== SUBTASK HISTORY ====\n" +
+        o1_history(task_entries)
+    )
+
+
 def o1_history(task_entries: list[dict]) -> str:
     """Call the baseline's real formatter on a minimal history-only view."""
     state = SimpleNamespace(
