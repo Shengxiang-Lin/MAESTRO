@@ -313,7 +313,7 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
         else "institutional"
     )
     context = contextual_titles[semantic_domain]
-    from ..grounding.clues import clue_profiles
+    from ..grounding.scene_semantics import clue_profiles
     profiles = clue_profiles(semantic_domain)
     for i, task in enumerate(disc):
         for j, (modality, title, attr, choices) in enumerate(profiles[i]):
@@ -404,7 +404,7 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
     # These are executable media-derived facts, not decorative clue labels.
     # Media sources are browsed, then joined against the resolved entity;
     # text/table sources retain keyed lookup and explicit handoff semantics.
-    from ..grounding.measurement_sources import measurement_source_profile
+    from ..grounding.scene_semantics import measurement_source_profile
     domain = (_semantic_goal(
         grounding["candidate_paths"][grounding["target_case"]],
         len(grounding["all_cases"]),
@@ -562,7 +562,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         )
     # Semantic scenarios are selected *after* the Goal/World is frozen.
     # Varying the working context must never alter the executable Gold.
-    from ..grounding.measurement_sources import scene_profile
+    from ..grounding.scene_semantics import scene_profile
     scenario = scene_profile(
         plan["goal"]["semantic"]["domain"], ordinal=ordinal,
         goal_label=plan["goal"]["public_label"],

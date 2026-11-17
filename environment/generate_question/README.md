@@ -23,7 +23,7 @@ The active Stage-1 code is grouped by function:
 | Package | Responsibility |
 |---|---|
 | `planning/` | Canonical output-first `goal_plan`, `evidence_plan`, `task_plan` |
-| `grounding/` | Domain-specific clue sources, simulated media observation descriptions, goal referents and source profiles |
+| `grounding/scene_semantics.py` | One cohesive home for domain clue profiles, goal referents, readable simulated-media observations and source titles |
 | `execution/` | `task_plan_runtime` and shared `program_ir` Gold executor |
 | `authoring/` | Question/scenario prompts, field guards, semantic and surface checks |
 | `auditing/` | Decision-opportunity, grounded observation and structural-quality audits |

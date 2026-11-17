@@ -77,6 +77,9 @@ def _construction_identity(args) -> str:
                 "knowledge_min_hops", "knowledge_max_hops",
             )
         ],
+        "grounding_semantics_code": file_digest(
+            Path(__file__).with_name("grounding") / "scene_semantics.py"
+        ),
         "generation_code": {
             name: file_digest(
                 Path(__file__).parent / (
