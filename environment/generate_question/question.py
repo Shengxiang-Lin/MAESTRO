@@ -119,7 +119,7 @@ def _intent_reference_question(spec: dict) -> str:
             lead = (
                 f"The supplied photograph and recording descriptions concern a record in the {topic}.",
                 f"A record in the {topic} is described by supplied image and audio observations.",
-                f"Photographic and spoken descriptions are supplied for an investigation in the {topic}.",
+                f"The provided photographic and spoken descriptions concern a record in the {topic}.",
                 f"The supplied visual and spoken evidence refers to a record in the {topic}.",
             )[spec["ordinal"] % 4]
             if plan.get("composer_policy") == "output_first":
