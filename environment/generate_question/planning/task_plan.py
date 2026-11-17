@@ -11,7 +11,7 @@ import random
 from collections import Counter
 
 from environment.schema import digest
-from ..knowledge_macro import YagoKnowledgeIndex, predicate_label
+from .knowledge_index import YagoKnowledgeIndex, predicate_label
 from .goal_plan import COMPOSER as OUTPUT_FIRST_COMPOSER
 
 PATTERN = "task_plan"

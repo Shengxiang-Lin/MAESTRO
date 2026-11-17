@@ -220,7 +220,7 @@ def construct_scenes(args) -> dict:
     if not getattr(args, "knowledge_yago", None):
         raise ValueError("knowledge_yago_required_for_stage1")
     from environment.macro_v3.yago import load_yago
-    from .knowledge_macro import YagoKnowledgeIndex
+    from .planning.knowledge_index import YagoKnowledgeIndex
     knowledge_graph = load_yago(
         args.knowledge_yago,
         max_triples=args.knowledge_max_triples,
