@@ -568,6 +568,14 @@ def goal_question(plan: dict) -> str:
     )
     if plan["goal_recipe_keys"].count("containedinplace") >= 2:
         scope += " in the larger administrative area"
+    condition = plan.get("condition")
+    if condition:
+        if condition["field"] == "event_status":
+            scope += " selected through the completed event"
+        elif condition["field"] == "event_year":
+            scope += " selected through an event in or after 2025"
+        else:
+            raise ValueError("unrecognized_event_condition_in_goal_question")
     if output["kind"] == "single_entity" and (
             output["bindings"]["answer"] == "entity"):
         return plan["goal"]["semantic"]["question"]
