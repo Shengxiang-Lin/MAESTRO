@@ -209,8 +209,8 @@ def compose_evidence_plan(*, seed: int, ordinal: int, difficulty: str,
                 # one coherent investigation WorkProduct. Preserve a
                 # separate Main-visible verification gate so the model
                 # must decide to dispatch it after candidate discovery.
-                # This coarsening makes genuine verification compatible
-                # with typed Goals and the 11-Macro budget.
+                # This coarsening keeps verification compatible with
+                # typed Goals and the overall Macro budget.
                 association = add(
                     "association", "reconcile_directories", [project],
                     {"entity_0": "str"}, ["link_a", "link_b"],
