@@ -1382,24 +1382,39 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 # verbose private operator/DAG walkthrough. The public
                 # Question should never be forced to narrate Gold steps.
                 plan = spec["macro_plan"]
-                goal_kind = plan.get("goal_spec", {}).get(
-                    "kind", "entity_resolution"
+                goal_spec = plan.get("goal_spec", {})
+                composer = plan.get("composer_policy")
+                goal_kind = goal_spec.get(
+                    "source_profile",
+                    goal_spec.get("kind", "entity_resolution"),
                 )
-                from .typed_goal_v4 import numeric_goal_question
-                target_question = (
-                    numeric_goal_question(plan) if
-                    goal_kind != "entity_resolution" else
-                    plan["goal"]["semantic"]["question"]
-                )
+                if composer == "goal_conditioned_operation_dag_v5":
+                    from .goal_ops_v5 import goal_question
+                    target_question = goal_question(plan)
+                elif composer == "goal_conditioned_output_first_v6":
+                    from .goal_ops_v6 import goal_question
+                    target_question = goal_question(plan)
+                elif goal_kind != "entity_resolution":
+                    from .typed_goal_v4 import numeric_goal_question
+                    target_question = numeric_goal_question(plan)
+                else:
+                    target_question = plan["goal"]["semantic"]["question"]
                 frozen_contract = {
                     "topic": spec["scenario"]["topic"],
                     "semantic_goal_question": target_question,
                     "goal_resolution_kind": goal_kind,
+                    "final_output_spec": goal_spec.get("output_spec"),
+                    "goal_operations": [
+                        {"op": item["op"], "inputs": item["inputs"],
+                         "output": item["output"]}
+                        for item in goal_spec.get("operations", [])
+                    ],
                     "relation_sequence": plan["goal"]["semantic"]["relation_sequence"],
                     "answer_type_hint": (
                         plan["goal"]["answer_type"]
-                        if goal_kind != "entity_resolution" else
-                        plan["goal"]["semantic"]["answer_type_hint"]
+                        if "output_spec" in goal_spec
+                        or goal_kind != "entity_resolution"
+                        else plan["goal"]["semantic"]["answer_type_hint"]
                     ),
                     "required_event_condition": plan["condition"],
                     "verification_mode": plan["mode"] == "verify",
