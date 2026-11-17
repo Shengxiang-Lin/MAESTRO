@@ -176,8 +176,7 @@ def render_delivered_result(contract: dict) -> str:
     if contract.get("result_encoding") == "typed_evidence_json_v1":
         result = json.dumps(contract["actual_delivered_rows"],
                             ensure_ascii=False, separators=(",", ":"))
-        if len(result) > 10000:
-            raise ValueError("stage4_delivered_result_exceeds_finish_budget")
+        # Do not silently shorten a large observed WorkProduct.
         return result
     rows = [row["values"] for row in contract["actual_delivered_rows"]]
     if len(rows) == 1 and len(rows[0]) <= 5:
