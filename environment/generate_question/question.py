@@ -122,6 +122,32 @@ def _intent_reference_question(spec: dict) -> str:
                 f"The provided archive-photo and spoken-catalog observations concern a record in the {topic}.",
                 f"The supplied image description and audio observation refer to a record in the {topic}.",
             )[spec["ordinal"] % 4]
+            if plan.get("composer_policy") == "goal_conditioned_evidence_needs_v3":
+                # A frozen clue can accidentally equal an ordinary phrase
+                # in our deterministic lead (e.g. "catalog" in
+                # "spoken-catalog"). Do not weaken the leakage guard; select
+                # a neutral alternative that never quotes a private cue.
+                safe_leads = (
+                    lead,
+                    f"The supplied reference card concerns a record in the {topic}.",
+                    f"The provided observation descriptions refer to a record in the {topic}.",
+                    f"The enclosed reference notes concern a record in the {topic}.",
+                )
+                allowed = topic + " " + goal["question"]
+                def _safe_lead(candidate):
+                    return not any(
+                        re.search(r"\\b" + re.escape(str(info["value"])) + r"\\b",
+                                  candidate, re.I)
+                        and not re.search(
+                            r"\\b" + re.escape(str(info["value"])) + r"\\b",
+                            allowed, re.I
+                        )
+                        for info in plan["clues"].values()
+                    )
+                lead = next(
+                    (candidate for candidate in safe_leads
+                     if _safe_lead(candidate)), lead
+                )
             condition = plan["condition"]
             if condition is None:
                 qualifier = ""
