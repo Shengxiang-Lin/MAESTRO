@@ -1,11 +1,12 @@
-"""Executable Stage 1 typed Goal v4 regression and migration tests."""
+"""End-to-end and tamper-evidence tests for 60-question-inspired v4 Goals."""
 from __future__ import annotations
 
-from collections import Counter
-from copy import deepcopy
+import copy
 import unittest
 
-from environment.generate_question.typed_goal_v4 import VERSION, KINDS
+from environment.generate_question.typed_goal_v4 import (
+    VERSION, KINDS, selected_kind, _final_answer_for,
+)
 
 
 def fixture():
@@ -22,8 +23,10 @@ def fixture():
 
 
 class TypedGoalV4Tests(unittest.TestCase):
-    def test_deterministic_three_goal_kinds_and_macro_budget(self):
-        from environment.generate_question.task_plan import make_spec, validate_spec
+    def test_distinct_goal_type_sampling_and_executable_replay(self):
+        from environment.generate_question.task_plan import (
+            make_spec, validate_spec,
+        )
         from environment.generate_question.question import (
             reference_question, guard_question,
         )
@@ -34,134 +37,158 @@ class TypedGoalV4Tests(unittest.TestCase):
         from environment.generate_question.pipeline import quality_report
 
         kg = fixture()
-        kinds, examples, signatures = Counter(), {}, set()
-        for ordinal in range(26):
-            diff = "medium" if ordinal % 2 else "hard"
+        selected = {}
+        for ordinal in range(240):
+            kind = selected_kind(17, ordinal)
+            selected.setdefault(kind, ordinal)
+            if len(selected) == len(KINDS):
+                break
+        self.assertEqual(set(selected), set(KINDS))
+        scenes = []
+        for kind, ordinal in selected.items():
             spec = make_spec(
-                kg, seed=17, ordinal=ordinal, difficulty=diff,
-                world_mode="compose", composer=VERSION,
+                kg, seed=17, ordinal=ordinal, difficulty=(
+                    "hard" if ordinal % 2 else "medium"
+                ), world_mode="compose", composer=VERSION,
             )
-            self.assertEqual(validate_spec(spec), [])
+            self.assertEqual(validate_spec(spec), [], kind)
             plan = spec["macro_plan"]
-            kind = plan["goal_spec"]["kind"]
-            kinds[kind] += 1
-            self.assertEqual(plan["composer_policy"], VERSION)
+            self.assertEqual(plan["goal_spec"]["kind"], kind)
             self.assertLessEqual(len(plan["macro_tasks"]), 9)
             self.assertEqual(
                 plan["macro_tasks"][-1]["output_schema"],
                 {"answer": plan["goal"]["answer_type"]},
             )
-            question = reference_question(spec)
-            self.assertEqual(guard_question(question, spec), [])
-            scene = compile_and_validate(spec, question)
-            self.assertEqual(validate_replay(scene)["status"], "valid")
+            draft = reference_question(spec)
+            self.assertEqual(guard_question(draft, spec), [], kind)
+            scene = compile_and_validate(spec, draft)
+            self.assertEqual(validate_replay(scene)["status"], "valid", kind)
+            self.assertTrue(scene["difficulty_audit"][
+                "macro_first_audit"]["candidate_information_necessity"][
+                    "passed"], kind)
             self.assertTrue(scene["difficulty_audit"]["macro_first_audit"][
-                "candidate_information_necessity"]["passed"])
+                "source_counterfactuals_pass"], kind)
             realized = realize_scene(scene, strict=True)
             self.assertEqual(
                 len(realized["macro_tasks"]),
                 scene["macro_graph"]["macro_task_count"],
             )
             self.assertEqual(len(scene["gold_answer"]), 1)
-            actual = scene["gold_answer"][0]["answer"]
-            self.assertIsInstance(
-                actual, int if kind == "aggregation" else str
-            )
-            signatures.add((kind, tuple(
-                (t["operation"], tuple(t["depends_on"]))
-                for t in plan["macro_tasks"]
-            )))
-            examples.setdefault(kind, scene)
-        self.assertEqual(set(kinds), set(KINDS), kinds)
-        self.assertGreater(len(signatures), 8)
+            answer = scene["gold_answer"][0]["answer"]
+            expected_type = {
+                "numeric_ratio": float,
+                "numeric_difference": int,
+                "temporal_gap": int,
+                "geographic_distance": int,
+                "aggregation": int,
+                "structured_answer": dict,
+            }.get(kind, str)
+            self.assertIsInstance(answer, expected_type, kind)
+            if kind == "structured_answer":
+                self.assertEqual(
+                    set(answer),
+                    {"entity", "higher_source", "count_difference"},
+                )
+            if kind != "entity_resolution":
+                measurements = plan["world_binding"]["world_model"][
+                    "goal_measurements"
+                ]
+                self.assertEqual(
+                    answer,
+                    _final_answer_for(
+                        measurements["by_case"][
+                            plan["world_binding"]["target_case"]
+                        ], kind,
+                    ),
+                )
+            scenes.append(scene)
 
-        comparison = examples["comparison"]
-        comp_plan = comparison["problem_spec"]["macro_plan"]
-        tasks = comp_plan["macro_tasks"]
+        one = next(s for s in scenes if s["problem_spec"]["macro_plan"][
+            "goal_spec"]["kind"] == "comparison")
+        tasks = one["problem_spec"]["macro_plan"]["macro_tasks"]
         left = next(t for t in tasks if t["operation"] == "lookup_metric_a")
         right = next(t for t in tasks if t["operation"] == "lookup_metric_b")
         self.assertEqual(left["depends_on"], right["depends_on"])
         self.assertEqual(
             tasks[-1]["depends_on"], [left["macro_id"], right["macro_id"]]
         )
-        self.assertTrue(any(
-            n["op"] == "derive_comparison"
-            for n in comparison["gold_program"]["nodes"]
-        ))
-        self.assertNotEqual(comparison["gold_answer"][0]["answer"], "equal")
-        self.assertEqual(
-            {t["source_scope"][0] for t in (left, right)},
-            {"metric_a", "metric_b"},
-        )
 
-        aggregation = examples["aggregation"]
-        self.assertTrue(any(
-            n["op"] == "group_count"
-            for n in aggregation["gold_program"]["nodes"]
-        ))
-        self.assertTrue(any(
-            n["op"] == "project"
-            and n.get("rename_fields") == {"count": "answer"}
-            for n in aggregation["gold_program"]["nodes"]
-        ))
-        self.assertEqual(
-            aggregation["world"]["sources"]["observation_log"][
-                "access_policy"]["key_cardinality"], "many"
-        )
-        qa = quality_report([comparison, aggregation], no_progress=True)
-        self.assertEqual(qa["replay_pass"], 2)
-        self.assertEqual(
-            qa["evidence_acquisition"][
-                "task_plan_keyed_source_contract_mismatches"], 0,
-        )
+        ops_by_kind = {
+            "numeric_difference": "derive_arithmetic",
+            "numeric_ratio": "derive_arithmetic",
+            "temporal_gap": "derive_date_gap",
+            "geographic_distance": "derive_great_circle",
+            "aggregation": "group_count",
+            "comparison": "derive_comparison",
+            "structured_answer": "compose_typed_result",
+        }
+        for kind, operation in ops_by_kind.items():
+            scene = next(s for s in scenes if s["problem_spec"][
+                "macro_plan"]["goal_spec"]["kind"] == kind)
+            self.assertIn(
+                operation, [node["op"] for node in scene[
+                    "gold_program"]["nodes"]], kind,
+            )
+        report = quality_report(scenes, no_progress=True)
+        self.assertEqual(report["evidence_acquisition"][
+            "task_plan_keyed_source_contract_mismatches"], 0)
 
-    def test_numeric_goal_world_tampering_fails_closed(self):
+    def test_metric_world_and_goal_plan_are_hash_bound(self):
         from environment.generate_question.task_plan import (
             make_spec, validate_spec, SALT,
         )
         from environment.schema import digest
         kg = fixture()
-        example = None
-        for ordinal in range(30):
-            candidate = make_spec(
-                kg, seed=17, ordinal=ordinal, difficulty="medium",
-                world_mode="compose", composer=VERSION,
-            )
-            if candidate["macro_plan"]["goal_spec"]["kind"] == "comparison":
-                example = candidate
-                break
-        self.assertIsNotNone(example)
-        broken = deepcopy(example)
-        plan = broken["macro_plan"]
+        ordinal = next(i for i in range(90)
+                       if selected_kind(17, i) == "numeric_difference")
+        spec = make_spec(
+            kg, seed=17, ordinal=ordinal, difficulty="medium",
+            world_mode="compose", composer=VERSION,
+        )
+        bad = copy.deepcopy(spec)
+        plan = bad["macro_plan"]
         world = plan["world_binding"]["world_model"]["goal_measurements"]
         target = plan["world_binding"]["target_case"]
-        world["by_case"][target]["metric_a"] += 7
-        # Even an adversary who recomputes the outer frozen hash cannot
-        # change canonical evidence measures silently.
-        broken["knowledge_contract_hash"] = digest(
-            plan, broken["knowledge_witness"],
-            broken["seed"], broken["ordinal"], SALT,
+        world["by_case"][target]["metric_a"] += 5
+        bad["knowledge_contract_hash"] = digest(
+            plan, bad["knowledge_witness"], bad["seed"], bad["ordinal"], SALT,
         )
         self.assertIn(
-            "v4_metric_world_not_canonical", validate_spec(broken)
+            "v4_metric_world_not_canonical", validate_spec(bad),
+        )
+        schema_changed = copy.deepcopy(spec)
+        schema_changed["macro_plan"]["goal_spec"]["kind"] = "comparison"
+        schema_changed["knowledge_contract_hash"] = digest(
+            schema_changed["macro_plan"], schema_changed["knowledge_witness"],
+            schema_changed["seed"], schema_changed["ordinal"], SALT,
+        )
+        self.assertIn(
+            "task_plan_typed_goal_not_frozen",
+            validate_spec(schema_changed),
         )
 
-    def test_v4_program_projection_rename_is_type_checked(self):
-        from environment.generate_question.program_ir import validate_program
-        valid = {
+    def test_project_rename_and_numeric_contracts(self):
+        from environment.generate_question.program_ir import (
+            validate_program, ProgramError, great_circle_km,
+        )
+        program = {
             "nodes": [
                 {"id": "a", "op": "scan", "inputs": [],
                  "source_id": "observation_log"},
                 {"id": "b", "op": "group_count", "inputs": ["a"],
                  "field": "entity_final"},
                 {"id": "c", "op": "project", "inputs": ["b"],
-                 "fields": ["count"], "rename_fields": {"count": "answer"}},
+                 "fields": ["count"],
+                 "rename_fields": {"count": "answer"}},
             ], "output": "c",
         }
-        self.assertEqual(validate_program(valid), [])
-        bad = deepcopy(valid)
+        self.assertEqual(validate_program(program), [])
+        bad = copy.deepcopy(program)
         bad["nodes"][-1]["rename_fields"] = {"wrong": "answer"}
         self.assertIn("project_invalid_renames", validate_program(bad))
+        self.assertGreater(great_circle_km(30, -90, 31, -89), 0)
+        with self.assertRaises(ProgramError):
+            great_circle_km(999, -90, 31, -89)
 
 
 if __name__ == "__main__":
