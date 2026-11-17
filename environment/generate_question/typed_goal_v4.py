@@ -235,3 +235,41 @@ def validate_measurement_world(plan: dict, binding: dict, *,
                 if case != target)):
             return ["v4_aggregation_shadow_not_discriminating"]
     return []
+
+
+_RELATION_PHRASES = {
+    "birthplace": "birthplace", "deathplace": "place of death",
+    "containedinplace": "contained administrative area",
+    "location": "location", "doctoraladvisor": "doctoral advisor",
+    "fieldofwork": "research field", "spouse": "spouse",
+    "memberof": "organization membership", "neighbor": "neighboring place",
+    "twinnedwith": "twin municipality", "nationality": "nationality",
+    "capital": "capital",
+}
+
+
+def numeric_goal_question(plan: dict) -> str:
+    """User-facing final Goal; no private identifiers or source values."""
+    kind = plan["goal_spec"]["kind"]
+    if kind not in {"comparison", "aggregation"}:
+        raise ValueError("not_a_numeric_goal")
+    keys = plan["goal_recipe_keys"]
+    chain = ", followed by ".join(
+        _RELATION_PHRASES[key] for key in keys
+    )
+    scope = (
+        "the entity reached by the record's documented relation chain "
+        f"({chain})"
+    )
+    if keys.count("containedinplace") >= 2:
+        scope += " in the larger administrative area"
+    if kind == "comparison":
+        return (
+            f"For {scope}, which independent observation tally has "
+            "the higher count, the first source or the second source? "
+            "Return only 'first' or 'second'."
+        )
+    return (
+        f"For {scope}, how many distinct observation log entries "
+        "dated in or after 2025 are recorded? Return only the count."
+    )
