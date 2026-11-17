@@ -1,4 +1,4 @@
-# Current default: Task Plan -> typed motif composition -> one coherent World
+# Canonical Stage 1: output-first Goal -> typed evidence -> composed World
 # -> scoped evidence views -> original Compiler/Replay and Stage 2–4 contracts.
 # YAGO supplies observed relation vocabulary and world-structure statistics,
 # NOT mandatory factual paths. Recombined entities/relations are new facts
@@ -6,7 +6,6 @@
 version: 1
 
 input:
-  mmqa: null  # current Task Plan does not consume MMQA
   max_records: 1000
 
 generation:
@@ -17,9 +16,6 @@ generation:
   overwrite: false
   flush_every: 1
   no_progress: false
-  knowledge_variant: task_plan
-  knowledge_world_mode: compose
-  task_plan_composer: goal_conditioned_evidence_needs_v3
   knowledge_yago: data/world-source/YAGO-4.6
   knowledge_max_triples: 1000000
   knowledge_max_edges: 250000

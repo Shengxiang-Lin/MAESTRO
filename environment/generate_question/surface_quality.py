@@ -219,13 +219,7 @@ def question_language_warnings(
                 and type(condition.get("value")) is int):
             missing_years.discard(str(condition["value"]))
         goal = plan.get("goal_spec", {})
-        if (plan.get("composer_policy") == "goal_conditioned_typed_goal_v4"
-                and goal.get("kind") == "aggregation"
-                and type(goal.get("qualifying_observation_year_gte")) is int):
-            missing_years.discard(str(
-                goal["qualifying_observation_year_gte"]
-            ))
-        if (plan.get("composer_policy") == "goal_conditioned_output_first_v6"
+        if (plan.get("composer_policy") == "output_first"
                 and "aggregate" in goal.get("capabilities", [])):
             count_ops = [
                 node for node in goal.get("operations", [])
@@ -233,15 +227,6 @@ def question_language_warnings(
             ]
             if len(count_ops) == 1 and type(count_ops[0].get("year_gte")) is int:
                 missing_years.discard(str(count_ops[0]["year_gte"]))
-        if (plan.get("composer_policy") == "goal_conditioned_operation_dag_v5"
-                and goal.get("source_profile") == "aggregation"):
-            count_operators = [
-                node for node in goal.get("operations", [])
-                if node.get("op") == "count_aggregate"
-            ]
-            if len(count_operators) == 1 and type(
-                    count_operators[0].get("year_gte")) is int:
-                missing_years.discard(str(count_operators[0]["year_gte"]))
     if missing_years:
         warnings.append("unlicensed_calendar_year_not_in_topic")
     warnings.extend(unsupported_macro_predicates(question, spec, macro_graph))

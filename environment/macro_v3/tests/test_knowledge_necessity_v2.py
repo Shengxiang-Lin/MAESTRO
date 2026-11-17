@@ -131,54 +131,5 @@ class KnowledgeV2QualityTests(unittest.TestCase):
         self.assertFalse(report["identification_unique"])
 
 
-@unittest.skipUnless(RDF_READY, "requires RDF loader")
-class KnowledgeV2CliTests(unittest.TestCase):
-    def test_original_generate_questions_command_with_rdf(self):
-        from environment.config import load_config, args_from_config
-        from environment.generate_question.pipeline import generate_questions
-        with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
-            rdf = home / "yago-4.6-facts.ttl"
-            entries = [
-                "@prefix x: <https://example.org/> .",
-                "@prefix s: <http://schema.org/> .",
-            ]
-            for i in range(28):
-                entries.extend([
-                    f"x:Subject{i} s:birthPlace x:City{i} .",
-                    f"x:City{i} s:containedInPlace x:Region{i} .",
-                    f"x:Region{i} s:containedInPlace x:Country{i} .",
-                    f"x:Subject{i} s:memberOf x:Institute{i} .",
-                ])
-            rdf.write_text("\n".join(entries), encoding="utf-8")
-            config = load_config("environment/macro_v3/tests/fixtures/questions_knowledge_v2.yaml")
-            config["generation"]["knowledge_yago"] = str(rdf)
-            config["generation"]["output_dir"] = str(home / "generated")
-            config["generation"]["target"] = 3
-            args = args_from_config(config)
-            args.no_progress = True
-            result = generate_questions(args)
-            self.assertEqual(result["status"], "done", result)
-            self.assertEqual(result["generated"], 3)
-            quality = json.loads(
-                (args.output_dir / "quality_report.json").read_text()
-            )
-            self.assertEqual(quality["replay_pass"], 3)
-            gates = quality["knowledge_world_grounding"]["necessity_v2"]
-            self.assertEqual(gates["scenes_checked"], 3)
-            self.assertEqual(gates["passed"], 3)
-            self.assertEqual(gates["identification_unique"], 3)
-            self.assertEqual(gates["all_clue_relaxations_ambiguous"], 3)
-            self.assertEqual(gates["all_discovery_relaxations_ambiguous"], 3)
-            self.assertEqual(gates["no_discovery_bypass_blocked"], 3)
-            for row in (args.output_dir /
-                        "constructed" / "scenes.jsonl").read_text().splitlines():
-                scene = json.loads(row)
-                self.assertEqual(scene["problem_spec"]["reasoning_pattern"],
-                                 "typed_knowledge_v2")
-                self.assertTrue(scene["difficulty_audit"]["macro_first_audit"][
-                    "candidate_information_necessity"]["passed"])
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -1,11 +1,8 @@
-"""Single Task Plan for NEW MAESTRO Stage-1 generation.
+"""Canonical Stage 1 Task Plan, evidence binding and frozen validation.
 
-Decisions: typed information tasks + their relation needs -> actual YAGO
-witnesses and fictional observations. No historical make_spec is called.
-Old typed_knowledge / graph_first versions remain replay-only.
-
-macro_plan.macro_tasks is the *only* authoritative task graph. There is
-no nested legacy Spec, duplicate Relation Sketch, or duplicate DAG.
+An output-first Goal determines the typed evidence to acquire. The Macro
+DAG is the only authoritative orchestration structure; World, Gold and
+Question all depend on its frozen contracts.
 """
 from __future__ import annotations
 
@@ -15,8 +12,7 @@ from collections import Counter
 
 from environment.schema import digest
 from .knowledge_macro import YagoKnowledgeIndex, CUES, predicate_label
-from .knowledge_macro_v2 import _alternatives, _serialized_path
-from .real_motif_grounding import mine_required_fork
+from .goal_plan import COMPOSER as OUTPUT_FIRST_COMPOSER
 
 PATTERN = "task_plan"
 VERSION = "maestro.task_plan.v1"
@@ -33,11 +29,6 @@ SEMANTIC_GOALS = "goal_constrained_yago_grounding_v1"
 SYNTHETIC_WORLD = "maestro.fictional_semantic_world.v1"
 SYNTHETIC_WITNESS = "maestro.task_plan.fictional_witness.v1"
 SYNTHETIC_FORK = "maestro.fictional_fork_grounding.v1"
-GOAL_COMPOSER = "goal_conditioned_typed_v2"
-NEEDS_COMPOSER = "goal_conditioned_evidence_needs_v3"
-TYPED_GOAL_COMPOSER = "goal_conditioned_typed_goal_v4"
-OPERATION_GOAL_COMPOSER = "goal_conditioned_operation_dag_v5"
-OUTPUT_FIRST_COMPOSER = "goal_conditioned_output_first_v6"
 # Local predicate combinations with interpretable user goals. These are
 # *predicate-signature hypotheses*, NOT RDF-type attestations. The bounded
 # YAGO loader intentionally excludes rdf:type triples.
@@ -66,171 +57,6 @@ _SEMANTIC_RECIPES = (
     (("deathplace","location","neighbor"), "biographical", "person", "neighboring area", "Which area neighbors the location recorded for the referenced person's place of death?"),
     (("location","capital","twinnedwith"), "geographical", "entity", "twin municipality", "Which municipality is twinned with the capital of the area containing the referenced entity?"),
 )
-
-
-def _sample_task_plan(*, seed: int, ordinal: int, difficulty: str,
-                      hops: int, sampling_policy: str | None = None,
-                      world_mode: str = "witnessed") -> dict:
-    """Choose typed information work before consulting World facts.
-
-    Legacy samples retain their exact old deterministic choices. The new
-    sampling policy gives Hard samples more independent information work,
-    without treating this proxy as measured live-Agent hardness.
-    """
-    if sampling_policy == CALIBRATED:
-        if difficulty not in {"medium", "hard"}:
-            raise ValueError("unsupported_task_plan_difficulty")
-        # Block-wise balancing avoids accidental coupling to the
-        # parity of the Medium/Hard schedule (the old pilot inverted it).
-        selector = (seed + ordinal // 2) % 2
-        mode = (
-            ("trace", "event") if difficulty == "medium"
-            else ("event", "verify")
-        )[selector]
-        discoveries = 2 if difficulty == "medium" or mode == "verify" else 3
-    elif sampling_policy is None:
-        mode = MODES[(seed + ordinal) % len(MODES)]
-        discoveries = 2 if mode == "verify" else 2 + (ordinal % 2)
-    else:
-        raise ValueError("unsupported_task_plan_sampling_policy")
-    condition = (
-        {"field": "event_status", "op": "filter_eq", "value": "completed"}
-        if ordinal % 2 == 0 else
-        {"field": "event_year", "op": "filter_gte", "value": 2025}
-    ) if mode != "trace" else None
-    tasks = []
-
-    def add(role, op, dependencies, output, sources, relation_need):
-        mid = f"M{len(tasks)+1}"
-        previous = {t["macro_id"]: t for t in tasks}
-        if any(pid not in previous for pid in dependencies):
-            raise ValueError("task_plan_non_topological_dependency")
-        tasks.append({
-            "macro_id": mid, "role": role, "operation": op,
-            "depends_on": list(dependencies),
-            "input_contract": {
-                pid: copy.deepcopy(previous[pid]["output_schema"])
-                for pid in dependencies
-            },
-            "output_schema": dict(output),
-            "source_scope": list(sources),
-            "solver_template": op,
-            "relation_need": relation_need,
-            "evidence_plan": {
-                "description": relation_need,
-                "source_observation_targets": {
-                    sid: 1 for sid in sources
-                },
-            },
-        })
-        return mid
-
-    ds = []
-    for i in range(discoveries):
-        j = len(tasks) + 1
-        ds.append(add(
-            "discovery", "match_clues", [],
-            {"case_id": "str"}, [f"M{j}_a", f"M{j}_b"],
-            "Find dossier candidates using two complementary source clues",
-        ))
-    identified = add(
-        "identification", "identify_project", ds,
-        {"project_id": "str"}, ["entity_index"],
-        "Intersect dossier candidates and resolve the fictional project",
-    )
-    if mode == "trace":
-        last = add(
-            "investigation", "reference", [identified],
-            {"entity_0": "str"}, ["project_ref"],
-            "Resolve the project's real YAGO reference",
-        )
-    elif mode == "event":
-        event = add(
-            "investigation", "qualifying_event", [identified],
-            {"event_id": "str"}, ["event_ledger"],
-            "Select the project's event satisfying the status or time condition",
-        )
-        last = add(
-            "association", "event_reference", [event],
-            {"entity_0": "str"}, ["event_ref"],
-            "Use the qualified event as a key for the real YAGO reference",
-        )
-    else:
-        event = add(
-            "investigation", "event_eligibility", [identified],
-            {"motif_object": "str"}, ["event_ledger"],
-            "Determine eligible relation objects from the qualified event",
-        )
-        a = add(
-            "investigation", "directory_a", [identified],
-            {"route_key": "str", "entity_0": "str"}, ["link_a"],
-            "Investigate reference hypotheses in simulated source A",
-        )
-        b = add(
-            "investigation", "directory_b", [identified],
-            {"route_key": "str", "entity_0": "str"}, ["link_b"],
-            "Independently investigate reference hypotheses in source B",
-        )
-        assoc = add(
-            "association", "intersect_references", [a, b],
-            {"entity_0": "str"}, [],
-            "Associate references supported by both competing sources",
-        )
-        last = add(
-            "verification", "verify_real_fork", [assoc, event],
-            {"entity_0": "str"}, ["real_fork"],
-            "Cross-check fictional eligibility against a genuine YAGO relation",
-        )
-
-    groups = [[i for i in range(1, hops + 1)]]
-    if mode != "verify" and hops > 2 and (
-        sampling_policy == CALIBRATED or ordinal % 2
-    ):
-        groups = [[1], list(range(2, hops+1))]
-    for group in groups:
-        tail = group[-1]
-        out = "answer" if tail == hops else f"entity_{tail}"
-        last = add(
-            "synthesis" if tail == hops else "investigation",
-            "follow_yago", [last], {out: "str"},
-            [f"relation_{i}" for i in group],
-            "Follow the documented genuine YAGO relationship sequence",
-        )
-
-    if len(tasks) > 9:
-        raise ValueError("task_plan_macro_budget_exceeded")
-    if world_mode == "compose":
-        for task in tasks:
-            task["relation_need"] = task["relation_need"].replace(
-                "genuine YAGO", "recorded").replace(
-                "real YAGO", "recorded").replace(
-                "fictional", "documented").replace(
-                "simulated", "observed")
-            task["evidence_plan"]["description"] = task["relation_need"]
-        discovery = next(t for t in tasks if t["operation"] == "match_clues")
-        discovery["relation_need"] = (
-            "Combine a visible dossier clue with its recorded affiliation "
-            "or shared survey-volume association"
-        )
-        discovery["evidence_plan"]["description"] = discovery["relation_need"]
-    elif world_mode != "witnessed":
-        raise ValueError("unknown_task_plan_world_mode")
-    return {
-        "version": VERSION,
-        "mode": mode, "condition": condition,
-        **({"difficulty_sampling_policy": CALIBRATED,
-            "evidence_sampling_policy": BLIND_EVENTS,
-            "question_sampling_policy": GOAL_QUESTIONS}
-           if sampling_policy == CALIBRATED else {}),
-        "hops": hops, "macro_tasks": tasks,
-        "terminal_macro_id": last,
-        "goal": {
-            "answer_field": "answer", "answer_type": "str",
-            "public_label": "related entity", "cardinality": "exactly_one",
-            "meaning": "Name the entity at the end of the stated real YAGO relation sequence",
-        },
-        "information_necessity_policy": POLICY,
-    }
 
 
 def _predicate_key(iri: str) -> str:
@@ -270,166 +96,6 @@ def _semantic_goal(path: list, count: int) -> dict:
         ),
         "candidate_count": count,
     }
-
-
-def _loaded_yago_unique(index: YagoKnowledgeIndex, path: list) -> bool:
-    """A single selected RDF edge must not hide other same-key outputs."""
-    return all(
-        {edge.object for edge in index.outgoing.get(fact.subject, ())
-         if edge.predicate == fact.predicate} == {fact.object}
-        for fact in path
-    )
-
-
-def _semantic_ground(kg, index, plan, *, seed: int, ordinal: int):
-    """Choose a human-interpretable relation goal before YAGO facts.
-
-    Both the target and all COMPLETE shadow paths must have exactly one
-    output for each required predicate within the LOADED YAGO sample.
-    This does not claim global uniqueness in the entire public YAGO.
-    """
-    rng = random.Random(int(digest(
-        seed, ordinal, "task-plan-semantic-ground"
-    )[:15], 16))
-    n_clues = 2 * sum(
-        t["operation"] == "match_clues" for t in plan["macro_tasks"]
-    )
-    n_cases = n_clues + 4
-    # Shared index cache: do not rescan the RDF for every Scene.
-    by_name = getattr(index, "_task_plan_semantic_index", None)
-    if by_name is None:
-        by_name = {}
-        for predicate, edges in index.by_predicate.items():
-            by_name.setdefault(_predicate_key(predicate), []).extend(edges)
-        index._task_plan_semantic_index = by_name
-    profiles = [
-        recipe for recipe in _SEMANTIC_RECIPES
-        if len(recipe[0]) == plan["hops"] and by_name.get(recipe[0][0])
-    ]
-    if not profiles:
-        raise ValueError("no_interpretable_yago_goal_in_loaded_sample")
-    rng.shuffle(profiles)
-    rejects = {"missing_join": 0, "multivalued": 0,
-               "incomplete_shadows": 0, "missing_fork": 0}
-    for attempt in range(128):
-        keys = profiles[attempt % len(profiles)][0]
-        start = rng.choice(by_name[keys[0]])
-        path, seen = [start], {start.subject, start.object}
-        for key in keys[1:]:
-            options = [
-                e for e in index.outgoing.get(path[-1].object, ())
-                if _predicate_key(e.predicate) == key
-                and e.object not in seen and e.subject != e.object
-            ]
-            if not options:
-                break
-            step = rng.choice(options)
-            path.append(step)
-            seen.add(step.object)
-        if len(path) != len(keys):
-            rejects["missing_join"] += 1
-            continue
-        if not _loaded_yago_unique(index, path):
-            rejects["multivalued"] += 1
-            continue
-        alternatives = _alternatives(
-            kg, index, path, count=n_cases-1, rng=rng,
-            candidate_filter=lambda row: _loaded_yago_unique(index, row),
-        )
-        if not alternatives:
-            rejects["incomplete_shadows"] += 1
-            continue
-        if not all(_loaded_yago_unique(index, row)
-                   for row in alternatives):
-            rejects["multivalued"] += 1
-            continue
-        target = "Dossier-" + digest(seed, ordinal, "target")[:10]
-        cases = [target] + [
-            "Dossier-" + digest(seed, ordinal, i, "case")[:10]
-            for i in range(n_cases-1)
-        ]
-        rng.shuffle(cases)
-        paths = {
-            target: _serialized_path(kg, path),
-            **{case: _serialized_path(kg, row)
-               for case, row in zip(
-                   [c for c in cases if c != target], alternatives)},
-        }
-        fork = None
-        if plan["mode"] == "verify":
-            try:
-                fork = mine_required_fork(
-                    kg, index, paths, seed=seed, ordinal=ordinal,
-                )
-            except ValueError:
-                rejects["missing_fork"] += 1
-                continue
-        return {
-            "target_case": target, "all_cases": cases,
-            "candidate_paths": paths, "real_fork": fork,
-            "case_shadow_slots": {
-                case: i if i < n_clues else None
-                for i, case in enumerate(c for c in cases if c != target)
-            },
-            "origin_file": str(kg.input_file),
-            "sample_triples_scanned": kg.scanned,
-            "semantic_audit": {
-                "policy": SEMANTIC_GOALS,
-                "attempts": attempt + 1,
-                "rejections": rejects,
-                "loaded_yago_singleton_witness": True,
-                "complete_candidate_count": n_cases,
-                "rdf_type_verification": False,
-            },
-        }
-    raise ValueError(
-        "no_goal_expressible_singleton_yago_with_complete_shadows:"
-        + str(rejects)
-    )
-
-
-
-# Fictional relation worlds reuse approved interpretable relation signatures,
-# but no simulated edge is ever represented as a witnessed YAGO fact.
-_FICTIONAL_NAMES = (
-    "Alder", "Briar", "Cedar", "Dunmere", "Elden", "Farrow",
-    "Glenwick", "Hawthorn", "Iver", "Juniper", "Kestrel", "Linden",
-)
-_FICTIONAL_FIELDS = (
-    "river ecology", "historical cartography", "computational linguistics",
-    "maritime archaeology", "urban hydrology", "cultural astronomy",
-    "digital paleography", "environmental history", "heritage informatics",
-    "landscape modeling", "comparative philology", "materials conservation",
-)
-_PREDICATE_NAMES = {
-    "birthplace": "birthPlace", "deathplace": "deathPlace",
-    "containedinplace": "containedInPlace", "location": "location",
-    "doctoraladvisor": "doctoralAdvisor", "fieldofwork": "fieldOfWork",
-    "spouse": "spouse", "memberof": "memberOf",
-    "neighbor": "neighbor", "nationality": "nationality",
-    "capital": "capital", "twinnedwith": "twinnedWith",
-}
-
-
-def _fictional_label(predicate: str, name: str, case_index: int,
-                     hop: int) -> str:
-    if predicate in {"doctoraladvisor", "spouse"}:
-        return "Dr. " + name + " Merrow"
-    if predicate == "fieldofwork":
-        return _FICTIONAL_FIELDS[case_index % len(_FICTIONAL_FIELDS)]
-    if predicate == "memberof":
-        return name + " Research Institute"
-    if predicate == "nationality":
-        return "Republic of " + name
-    if predicate == "capital":
-        return name + " City"
-    if predicate == "twinnedwith":
-        return "City of " + name + "haven"
-    if predicate == "containedinplace":
-        return ("Province of " if hop > 1 else "County of ") + name
-    if predicate in {"birthplace", "deathplace", "location", "neighbor"}:
-        return name + (" District" if hop > 1 else " Township")
-    return name + " Region"
 
 
 def _fictional_fork(paths: dict, *, source_style: str = "legacy") -> dict:
@@ -485,63 +151,6 @@ def _validate_fictional_fork(fork: dict, paths: dict) -> list[str]:
         return []
     except (KeyError, TypeError, ValueError, IndexError) as exc:
         return ["task_plan_fictional_fork_invalid:" + str(exc)[:140]]
-
-
-def _fictional_ground(plan, *, seed: int, ordinal: int,
-                      real_failure: str) -> dict:
-    """Make a coherent synthetic world with complete alternative paths."""
-    rng = random.Random(int(digest(
-        seed, ordinal, "task-plan-fictional-semantic-world"
-    )[:15], 16))
-    recipes = [r for r in _SEMANTIC_RECIPES if len(r[0]) == plan["hops"]]
-    if not recipes:
-        raise ValueError("no_interpretable_fictional_relation_goal")
-    keys = rng.choice(recipes)[0]
-    n_clues = 2 * sum(
-        t["operation"] == "match_clues" for t in plan["macro_tasks"]
-    )
-    n_cases = n_clues + 4
-    target = "Dossier-" + digest(seed, ordinal, "target")[:10]
-    cases = [target] + [
-        "Dossier-" + digest(seed, ordinal, i, "case")[:10]
-        for i in range(n_cases-1)
-    ]
-    rng.shuffle(cases)
-    paths = {}
-    for i, case in enumerate(cases):
-        name = _FICTIONAL_NAMES[i % len(_FICTIONAL_NAMES)]
-        nodes = [
-            "urn:maestro:fictional:entity:" + digest(
-                seed, ordinal, case, j, "semantic-entity"
-            )[:24] for j in range(len(keys)+1)
-        ]
-        paths[case] = [{
-            "subject": nodes[j],
-            "predicate": "http://schema.org/" + _PREDICATE_NAMES[predicate],
-            "object": nodes[j+1],
-            "object_label": _fictional_label(predicate, name, i, j),
-            "origin": "synthetic",
-        } for j, predicate in enumerate(keys)]
-    fork = _fictional_fork(paths) if plan["mode"] == "verify" else None
-    return {
-        "target_case": target, "all_cases": cases,
-        "candidate_paths": paths, "real_fork": fork,
-        "case_shadow_slots": {
-            case: i if i < n_clues else None
-            for i, case in enumerate(c for c in cases if c != target)
-        },
-        "origin_file": SYNTHETIC_WORLD, "sample_triples_scanned": 0,
-        "semantic_audit": {
-            "policy": SEMANTIC_GOALS, "attempts": 1, "rejections": {},
-            "grounding_origin": "synthetic", "fallback_from_yago": True,
-            "fallback_reason": real_failure[:240],
-            "loaded_yago_singleton_witness": False,
-            "synthetic_consistency_checked": True,
-            "complete_candidate_count": n_cases,
-            "rdf_type_verification": False,
-        },
-    }
-
 
 
 def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
@@ -677,79 +286,6 @@ def _compose_ground(kg, index, plan, *, seed: int, ordinal: int):
     }
 
 
-def _ground(kg, index, plan, *, seed: int, ordinal: int,
-            world_mode: str = "witnessed"):
-    """Compose new Worlds or preserve historical real-YAGO-first semantics."""
-    if world_mode == "compose":
-        return _compose_ground(
-            kg, index, plan, seed=seed, ordinal=ordinal,
-        )
-    if world_mode != "witnessed":
-        raise ValueError("unknown_task_plan_world_mode")
-    if plan.get("semantic_grounding_policy") == SEMANTIC_GOALS:
-        try:
-            return _semantic_ground(kg, index, plan, seed=seed, ordinal=ordinal)
-        except ValueError as exc:
-            # Fall back only for legitimate RDF coverage shortfalls. Do not
-            # conceal programming / contract errors as fictional Worlds.
-            if not str(exc).startswith((
-                "no_interpretable_yago_goal_in_loaded_sample",
-                "no_goal_expressible_singleton_yago_with_complete_shadows",
-            )):
-                raise
-            return _fictional_ground(
-                plan, seed=seed, ordinal=ordinal, real_failure=str(exc),
-            )
-    rng = random.Random(int(digest(seed, ordinal, "task-plan-ground")[:15], 16))
-    n_clues = 2 * sum(
-        t["operation"] == "match_clues" for t in plan["macro_tasks"]
-    )
-    n_cases = n_clues + 4
-    for _ in range(110):
-        path = index.connected_path(
-            rng, min_hops=plan["hops"], max_hops=plan["hops"],
-        )
-        others = _alternatives(
-            kg, index, path, count=n_cases-1, rng=rng,
-        )
-        if not others:
-            continue
-        target = "Dossier-" + digest(seed, ordinal, "target")[:10]
-        cases = [target] + [
-            "Dossier-" + digest(seed, ordinal, i, "case")[:10]
-            for i in range(n_cases-1)
-        ]
-        rng.shuffle(cases)
-        candidate_paths = {
-            target: _serialized_path(kg, path),
-            **{case: _serialized_path(kg, p)
-               for case, p in zip(
-                   [x for x in cases if x != target], others)}
-        }
-        fork = None
-        if plan["mode"] == "verify":
-            try:
-                fork = mine_required_fork(
-                    kg, index, candidate_paths,
-                    seed=seed, ordinal=ordinal,
-                )
-            except ValueError:
-                continue
-        return {
-            "target_case": target,
-            "all_cases": cases,
-            "candidate_paths": candidate_paths,
-            "real_fork": fork,
-            "case_shadow_slots": {
-                case: i if i < n_clues else None
-                for i, case in enumerate(x for x in cases if x != target)
-            },
-            "origin_file": str(kg.input_file),
-            "sample_triples_scanned": kg.scanned,
-        }
-    raise ValueError("task_plan_no_complete_real_yago_world")
-
-
 def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
     rng = random.Random(int(digest(seed, ordinal, "task-plan-evidence")[:15], 16))
     clues, catalog, schemas = {}, [], {}
@@ -862,30 +398,13 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
                f"{predicate_label(fact['predicate'])} relationship index",
                "Look up the documented relationship required by the goal",
                {input_key: "str", output_key: "str"}, key=input_key)
-    if plan.get("composer_policy") == OUTPUT_FIRST_COMPOSER:
-        for sid, fields in typed_goal["source_fields"].items():
-            source(
-                sid, "table",
-                "Independent typed observation source " + sid,
-                "Acquire the precise typed observations needed by the Goal",
-                fields, key="entity_final",
-            )
-    elif typed_kind in {
-        "comparison", "structured_answer", "numeric_difference",
-        "numeric_ratio", "temporal_gap", "geographic_distance",
-    }:
-        from .typed_goal_v4 import _metric_fields
-        source("metric_a", "table", "Independent evidence source A",
-               "Obtain the first independent metric or factual observation",
-               _metric_fields(typed_kind, "a"), key="entity_final")
-        source("metric_b", "table", "Independent evidence source B",
-               "Obtain the second independent metric or factual observation",
-               _metric_fields(typed_kind, "b"), key="entity_final")
-    elif typed_kind == "aggregation":
-        source("observation_log", "table", "Observation entry ledger",
-               "Retrieve individually recorded dated observation entries",
-               {"entity_final": "str", "observation_id": "str",
-                "observation_year": "int"}, key="entity_final")
+    for sid, fields in typed_goal["source_fields"].items():
+        source(
+            sid, "table",
+            "Independent typed observation source " + sid,
+            "Acquire the precise typed observations needed by the Goal",
+            fields, key="entity_final",
+        )
     expected = Counter(
         sid for t in plan["macro_tasks"] for sid in t["source_scope"]
     )
@@ -966,89 +485,49 @@ def _reference_card(plan: dict, sources: list[dict], *,
 
 def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
               min_hops: int = 2, max_hops: int = 3,
-              index: YagoKnowledgeIndex | None = None,
-              world_mode: str = "witnessed",
-              composer: str = "legacy") -> dict:
-    """One contract, one direct World grounding, no nested frozen Specs."""
+              index: YagoKnowledgeIndex | None = None) -> dict:
+    """Construct the canonical output-first Goal, World and Task Plan."""
     if difficulty not in ("medium", "hard"):
         raise ValueError("task_plan_requires_medium_or_hard")
     if not 2 <= min_hops <= max_hops <= 4:
         raise ValueError("task_plan_invalid_hops")
-    # Structural proxy calibration: Medium samples the shorter admissible
-    # YAGO chain, Hard the longer; modes/independent clues are also
-    # conditional on difficulty. This is NOT a learned-agent difficulty score.
+    from .world_motifs import motif_features, compose_relation_goal
+    from .goal_plan import sample_output, compose_goal_plan
     hops = min_hops if difficulty == "medium" else max_hops
-    if composer in (GOAL_COMPOSER, NEEDS_COMPOSER, TYPED_GOAL_COMPOSER,
-                     OPERATION_GOAL_COMPOSER, OUTPUT_FIRST_COMPOSER):
-        if world_mode != "compose":
-            raise ValueError("goal_composer_requires_composed_world")
-        from .goal_composer import compose_plan
-        from .world_motifs import motif_features, compose_relation_goal
-        yago_index = index or YagoKnowledgeIndex(kg)
-        choices = tuple(row for row in _SEMANTIC_RECIPES
-                        if len(row[0]) == hops)
-        if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER,
-                        OUTPUT_FIRST_COMPOSER):
-            if composer == OUTPUT_FIRST_COMPOSER:
-                from .goal_ops_v6 import selected_output
-                typed_goal_fields = set(
-                    selected_output(seed, ordinal)["bindings"].values()
-                )
-                typed_kind = (
-                    "geographic_distance"
-                    if "distance_km" in typed_goal_fields else
-                    "other"
-                )
-            elif composer == OPERATION_GOAL_COMPOSER:
-                from .goal_ops_v5 import selected_profile_output
-                typed_kind = selected_profile_output(seed, ordinal)[0]
-            else:
-                from .typed_goal_v4 import selected_kind
-                typed_kind = selected_kind(seed, ordinal)
-            # A literal great-circle distance needs geographic subjects,
-            # not abstract research-field or nationality terms.
-            if typed_kind == "geographic_distance":
-                choices = tuple(row for row in choices
-                                if row[1] == "geographical")
-            if not choices:
-                raise ValueError("typed_goal_no_semantically_compatible_recipe")
-        features = motif_features(kg, yago_index, choices)
-        goal_rng = random.Random(int(digest(
-            seed, ordinal, "goal-conditioned-semantic-goal"
-        )[:15], 16))
-        goal_recipe = compose_relation_goal(features, choices, rng=goal_rng)
-        plan = compose_plan(
-            seed=seed, ordinal=ordinal, difficulty=difficulty,
-            hops=hops, goal_keys=goal_recipe[0], policy=composer,
-        )
-    elif composer == "legacy":
-        plan = _sample_task_plan(
-            seed=seed, ordinal=ordinal, difficulty=difficulty, hops=hops,
-            sampling_policy=CALIBRATED, world_mode=world_mode,
-        )
-    else:
-        raise ValueError("unknown_task_plan_composer")
-    plan["semantic_grounding_policy"] = SEMANTIC_GOALS
-    if world_mode == "compose":
-        plan["knowledge_world_mode"] = "compose"
-        plan["question_surface_policy"] = MACRO_GOAL_QUESTION
-    grounding = _ground(
-        kg, index or YagoKnowledgeIndex(kg),
-        plan, seed=seed, ordinal=ordinal, world_mode=world_mode,
+    yago_index = index or YagoKnowledgeIndex(kg)
+    choices = tuple(
+        row for row in _SEMANTIC_RECIPES if len(row[0]) == hops
     )
-    if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER,
-                    OUTPUT_FIRST_COMPOSER):
-        if composer == OUTPUT_FIRST_COMPOSER:
-            from .goal_ops_v6 import measurement_world
-        elif composer == OPERATION_GOAL_COMPOSER:
-            from .goal_ops_v5 import measurement_world
-        else:
-            from .typed_goal_v4 import measurement_world
-        measurements = measurement_world(
-            plan=plan, binding=grounding, seed=seed, ordinal=ordinal,
+    output_fields = set(
+        sample_output(seed, ordinal)["bindings"].values()
+    )
+    if "distance_km" in output_fields:
+        choices = tuple(
+            row for row in choices if row[1] == "geographical"
         )
-        if measurements is not None:
-            grounding["world_model"]["goal_measurements"] = measurements
+    if not choices:
+        raise ValueError("no_semantically_compatible_goal_recipe")
+    features = motif_features(kg, yago_index, choices)
+    goal_rng = random.Random(int(digest(
+        seed, ordinal, "goal-conditioned-semantic-goal"
+    )[:15], 16))
+    goal_recipe = compose_relation_goal(features, choices, rng=goal_rng)
+    plan = compose_goal_plan(
+        seed=seed, ordinal=ordinal, difficulty=difficulty,
+        hops=hops, goal_keys=goal_recipe[0],
+    )
+    plan["semantic_grounding_policy"] = SEMANTIC_GOALS
+    plan["knowledge_world_mode"] = "compose"
+    plan["question_surface_policy"] = MACRO_GOAL_QUESTION
+    grounding = _compose_ground(
+        kg, yago_index, plan, seed=seed, ordinal=ordinal,
+    )
+    from .goal_plan import build_measurements
+    measurements = build_measurements(
+        plan=plan, binding=grounding, seed=seed, ordinal=ordinal,
+    )
+    if measurements is not None:
+        grounding["world_model"]["goal_measurements"] = measurements
     fictional = grounding["candidate_paths"][grounding["target_case"]][0][
         "origin"] == "synthetic"
     clues, sources, schemas = _bind_sources(
@@ -1064,11 +543,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
     )
     if fictional:
         plan["knowledge_origin"] = "synthetic"
-    if (world_mode == "compose" and
-            plan.get("goal_spec", {}).get(
-                "source_profile",
-                plan.get("goal_spec", {}).get("kind", "entity_resolution"),
-            ) == "entity_resolution"):
+    if plan["goal_spec"]["source_profile"] == "entity_resolution":
         plan["goal"]["meaning"] = (
             "Determine the entity at the end of the documented relation chain"
         )
@@ -1104,13 +579,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
             "an environmental field survey with geospatial observation notes",
         ),
     }
-    scene_setting = (
-        scene_variants[semantic["domain"]][ordinal % 2]
-        if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER,
-                        OUTPUT_FIRST_COMPOSER) else
-        "a research archive with personnel files, field records "
-        "and independently maintained reference registers"
-    )
+    scene_setting = scene_variants[semantic["domain"]][ordinal % 2]
     scenario = {
         "topic": topics[semantic["domain"]],
         "setting": scene_setting,
@@ -1402,64 +871,45 @@ def validate_spec(spec: dict) -> list[str]:
         ):
             return ["task_plan_unpaired_sampling_policy"]
         composer = plan.get("composer_policy")
-        if composer in (GOAL_COMPOSER, NEEDS_COMPOSER, TYPED_GOAL_COMPOSER,
-                     OPERATION_GOAL_COMPOSER, OUTPUT_FIRST_COMPOSER):
-            from .goal_composer import compose_plan
-            expected = compose_plan(
-                seed=spec["seed"], ordinal=spec["ordinal"],
-                difficulty=spec["difficulty_target"], hops=plan["hops"],
-                goal_keys=plan["goal_recipe_keys"], policy=composer,
-            )
-            if (plan["goal_recipe_keys"] != [
-                    _predicate_key(fact["predicate"])
-                    for fact in paths[target]]
-                    or any(plan[key] != expected[key] for key in (
-                        "mode", "condition", "macro_tasks",
-                        "terminal_macro_id", "goal_recipe_keys"
-                    ))):
-                return ["task_plan_goal_composer_mismatch"]
-            if composer in (TYPED_GOAL_COMPOSER, OPERATION_GOAL_COMPOSER,
-                            OUTPUT_FIRST_COMPOSER):
-                if composer == OUTPUT_FIRST_COMPOSER:
-                    from .goal_ops_v6 import validate_measurement_world
-                elif composer == OPERATION_GOAL_COMPOSER:
-                    from .goal_ops_v5 import validate_measurement_world
-                else:
-                    from .typed_goal_v4 import validate_measurement_world
-                if plan.get("goal_spec") != expected["goal_spec"]:
-                    return ["task_plan_typed_goal_not_frozen"]
-                if any(plan["goal"].get(key) != expected["goal"][key]
-                       for key in ("answer_field", "answer_type",
-                                   "public_label", "cardinality", "meaning")):
-                    return ["task_plan_typed_goal_output_not_frozen"]
-                issues = validate_measurement_world(
-                    plan, binding, seed=spec["seed"],
-                    ordinal=spec["ordinal"],
-                )
-                if issues:
-                    return issues
-            if composer == NEEDS_COMPOSER:
-                if plan.get("information_requirements") != expected[
-                        "information_requirements"]:
-                    return ["task_plan_information_need_mismatch"]
-                discovery = [
-                    task for task in plan["macro_tasks"]
-                    if task["operation"] == "match_clues"
-                ]
-                access = plan["information_requirements"]["source_access"]
-                if (len(discovery) != len(access)
-                        or any(bool(task["depends_on"]) !=
-                               (mode == "keyed_lookup")
-                               for task, mode in zip(discovery, access))):
-                    return ["task_plan_source_affordance_mismatch"]
-        elif composer is not None:
-            return ["task_plan_unknown_composer"]
-        elif plan["macro_tasks"] != _sample_task_plan(
+        if composer != OUTPUT_FIRST_COMPOSER:
+            return ["task_plan_unsupported_composer"]
+        from .goal_plan import compose_goal_plan, validate_measurements
+        expected = compose_goal_plan(
             seed=spec["seed"], ordinal=spec["ordinal"],
             difficulty=spec["difficulty_target"], hops=plan["hops"],
-            sampling_policy=sampling, world_mode=world_mode,
-        )["macro_tasks"]:
-            return ["task_plan_graph_not_from_information_needs"]
+            goal_keys=tuple(plan["goal_recipe_keys"]),
+        )
+        if (plan["goal_recipe_keys"] != [
+                _predicate_key(fact["predicate"])
+                for fact in paths[target]]
+                or any(plan[key] != expected[key] for key in (
+                    "mode", "condition", "macro_tasks",
+                    "terminal_macro_id", "goal_recipe_keys",
+                    "information_requirements",
+                ))):
+            return ["task_plan_evidence_plan_mismatch"]
+        if plan.get("goal_spec") != expected["goal_spec"]:
+            return ["task_plan_goal_not_frozen"]
+        if any(plan["goal"].get(key) != expected["goal"][key]
+               for key in ("answer_field", "answer_type",
+                           "public_label", "cardinality", "meaning")):
+            return ["task_plan_goal_output_not_frozen"]
+        issues = validate_measurements(
+            plan, binding, seed=spec["seed"],
+            ordinal=spec["ordinal"],
+        )
+        if issues:
+            return issues
+        discovery = [
+            task for task in plan["macro_tasks"]
+            if task["operation"] == "match_clues"
+        ]
+        access = plan["information_requirements"]["source_access"]
+        if (len(discovery) != len(access)
+                or any(bool(task["depends_on"]) != (
+                    mode == "keyed_lookup"
+                ) for task, mode in zip(discovery, access))):
+            return ["task_plan_source_affordance_mismatch"]
         by_id, scopes = {}, []
         for task in plan["macro_tasks"]:
             if (task["input_contract"] != {
@@ -1469,7 +919,7 @@ def validate_spec(spec: dict) -> list[str]:
                 return ["task_plan_input_contract_mismatch"]
             scopes += task["source_scope"]
             by_id[task["macro_id"]] = task
-        budget = 11 if composer == OUTPUT_FIRST_COMPOSER else 9
+        budget = 11
         if (len(by_id) > budget
                 or plan["terminal_macro_id"] != plan["macro_tasks"][-1]["macro_id"]
                 or plan["macro_tasks"][-1]["output_schema"] != {

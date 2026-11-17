@@ -1,4 +1,4 @@
-"""Output-first, typed backward Goal planning (opt-in Stage 1 v6).
+"""Canonical Stage 1 output-first Goal planning and measurement World.
 
 Output demands are sampled first, with semantic units. Required operators,
 source capabilities and the partial-order DAG are then recursively derived
@@ -13,10 +13,20 @@ import json
 import random
 
 from environment.schema import digest
-from .typed_goal_v4 import measurement_world as _v4_measurements, _RELATION_PHRASES
+_RELATION_PHRASES = {
+    "birthplace": "birthplace", "deathplace": "place of death",
+    "containedinplace": "contained administrative area",
+    "location": "location", "doctoraladvisor": "doctoral advisor",
+    "fieldofwork": "research field", "spouse": "spouse",
+    "memberof": "organization membership", "neighbor": "neighboring place",
+    "twinnedwith": "twin municipality", "nationality": "nationality",
+    "capital": "capital",
+}
 
-VERSION = "goal_conditioned_output_first_v6"
-WORLD_VERSION = "maestro.output_first_observations.v1"
+
+GOAL_SCHEMA = "maestro.goal_plan.v1"
+COMPOSER = "output_first"
+WORLD_SCHEMA = "maestro.goal_measurements.v1"
 
 OUTPUT_KINDS = (
     "single_entity", "single_number", "date_time",
@@ -58,9 +68,9 @@ FIELD_WORDING = {
 }
 
 
-def selected_output(seed: int, ordinal: int) -> dict:
+def sample_output(seed: int, ordinal: int) -> dict:
     rng = random.Random(int(digest(
-        seed, ordinal, VERSION, "output-first-selection",
+        seed, ordinal, GOAL_SCHEMA, "output-first-selection",
     )[:15], 16))
     shape = rng.choice(OUTPUT_KINDS)
     if shape == "single_entity":
@@ -100,12 +110,12 @@ def selected_output(seed: int, ordinal: int) -> dict:
     }
 
 
-def _backward_goal(output: dict) -> dict:
+def _build_operation_dag(output: dict) -> dict:
     """Resolve requested fields against typed producer rules; memoize nodes."""
     if output["kind"] not in OUTPUT_KINDS:
-        raise ValueError("v6_unsupported_output")
+        raise ValueError("goal_unsupported_output")
     if set(output["fields"]) != set(output["bindings"]):
-        raise ValueError("v6_output_schema_mismatch")
+        raise ValueError("goal_output_schema_mismatch")
     nodes = []
     seen = {}
     capabilities = set()
@@ -170,7 +180,7 @@ def _backward_goal(output: dict) -> dict:
             solve("observations")
             return add("count_aggregate", field, ("observations",), "int",
                        year_gte=2025, unique_by="observation_id")
-        raise ValueError("v6_unresolved_semantic_field:"+field)
+        raise ValueError("goal_unresolved_semantic_field:"+field)
 
     for demand in output["bindings"].values():
         solve(demand)
@@ -202,7 +212,7 @@ def _backward_goal(output: dict) -> dict:
                 fields["longitude_"+side] = "float"
         source_fields[sid] = fields
     return {
-        "version": VERSION,
+        "version": GOAL_SCHEMA,
         "source_profile": (
             "entity_resolution" if not capabilities else
             "+".join(sorted(capabilities))
@@ -215,39 +225,39 @@ def _backward_goal(output: dict) -> dict:
 
 
 def validate_operation_graph(goal: dict) -> list[str]:
-    if not isinstance(goal, dict) or goal.get("version") != VERSION:
-        return ["v6_bad_goal_version"]
+    if not isinstance(goal, dict) or goal.get("version") != GOAL_SCHEMA:
+        return ["goal_bad_goal_version"]
     output = goal.get("output_spec")
     if not isinstance(output, dict):
-        return ["v6_missing_output_spec"]
+        return ["goal_missing_output_spec"]
     if output.get("kind") not in OUTPUT_KINDS:
-        return ["v6_bad_output_kind"]
+        return ["goal_bad_output_kind"]
     if not isinstance(output.get("bindings"), dict):
-        return ["v6_bad_output_bindings"]
+        return ["goal_bad_output_bindings"]
     if not isinstance(output.get("fields"), dict):
-        return ["v6_bad_output_types"]
+        return ["goal_bad_output_types"]
     if any(field not in FIELD_TYPES or
            output["fields"].get(name) != FIELD_TYPES[field]
            for name, field in output["bindings"].items()):
-        return ["v6_semantic_type_mismatch"]
+        return ["goal_semantic_type_mismatch"]
     if (output["kind"] == "structured_multi_field" and
             not 2 <= len(output["fields"]) <= 3):
-        return ["v6_multi_field_budget"]
+        return ["goal_multi_field_budget"]
     if (output["kind"] in ("single_number", "single_entity", "date_time") and
             set(output["bindings"]) != {"answer"}):
-        return ["v6_single_field_mismatch"]
+        return ["goal_single_field_mismatch"]
     if output["kind"] == "evidence_based_explanation" and (
             set(output["bindings"]) !=
             {"conclusion", "first_count", "second_count"}):
-        return ["v6_explanation_fields_mismatch"]
+        return ["goal_explanation_fields_mismatch"]
     try:
-        expected = _backward_goal(output)
+        expected = _build_operation_dag(output)
     except ValueError:
-        return ["v6_unresolvable_output_demands"]
+        return ["goal_unresolvable_output_demands"]
     if goal != expected:
-        return ["v6_goal_graph_not_canonical"]
+        return ["goal_goal_graph_not_canonical"]
     if not 1 <= len(goal["operations"]) <= 13:
-        return ["v6_operation_budget"]
+        return ["goal_operation_budget"]
     return []
 
 
@@ -267,9 +277,9 @@ def operation_subgraph_leq(smaller: dict, larger: dict) -> bool:
 
 def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
                       hops: int, goal_keys: tuple[str, ...]) -> dict:
-    from .goal_composer import compose_plan, NEEDS_VERSION
-    output = selected_output(seed, ordinal)
-    goal = _backward_goal(output)
+    from .evidence_plan import compose_evidence_plan
+    output = sample_output(seed, ordinal)
+    goal = _build_operation_dag(output)
     source_ids = list(goal["source_fields"])
     # One Macro per distinct evidence source, then a terminal synthesis.
     # Cross-domain outputs can require three independent source Macros.
@@ -277,24 +287,24 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
     max_base = 11 - (len(source_ids)+1 if source_ids else 0)
     for attempt in range(140):
         probe = ordinal + 1009*attempt
-        plan = compose_plan(
+        plan = compose_evidence_plan(
             seed=seed, ordinal=probe, difficulty=difficulty,
-            hops=hops, goal_keys=goal_keys, policy=NEEDS_VERSION,
+            hops=hops, goal_keys=goal_keys,
         )
         if (not source_ids or
             plan["mode"] == "trace" and
             len(plan["macro_tasks"]) <= max_base):
             break
     else:
-        raise ValueError("v6_no_source_feasible_macro_budget")
-    plan["composer_policy"] = VERSION
+        raise ValueError("goal_no_source_feasible_macro_budget")
+    plan["composer_policy"] = COMPOSER
     plan["goal_spec"] = goal
     if source_ids:
         tasks = plan["macro_tasks"]
         terminal = tasks[-1]
         if (terminal["operation"] != "follow_yago" or
                 terminal["output_schema"] != {"answer": "str"}):
-            raise ValueError("v6_missing_typed_entity_handoff")
+            raise ValueError("goal_missing_typed_entity_handoff")
         terminal["output_schema"] = {"entity_final": "str"}
         terminal["role"] = "investigation"
         entity_mid = terminal["macro_id"]
@@ -360,45 +370,105 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
         ),
     }
     if len(plan["macro_tasks"]) > 11:
-        raise ValueError("v6_macro_budget_exceeded")
+        raise ValueError("goal_macro_budget_exceeded")
     return plan
 
 
-def measurement_world(*, plan: dict, binding: dict,
-                      seed: int, ordinal: int) -> dict | None:
-    goal = plan["goal_spec"]
-    capabilities = goal["capabilities"]
-    if not capabilities:
-        return None
-    world = {
-        case: {"entity_final": path[-1]["object_label"]}
-        for case, path in binding["candidate_paths"].items()
-    }
-    for capability in capabilities:
-        v4kind = {
-            "numeric": (
-                "comparison" if any(
-                    item["op"] in {"compare_select", "verify"}
-                    for item in goal["operations"]
-                ) else "numeric_ratio"
-            ),
-            "temporal": "temporal_gap",
-            "geographic": "geographic_distance",
-            "aggregate": "aggregation",
-        }[capability]
-        measured = _v4_measurements(
-            plan={"goal_spec": {"kind": v4kind}},
-            binding=binding, seed=seed, ordinal=ordinal,
-        )
-        for case, values in measured["by_case"].items():
-            for field, value in values.items():
-                if field != "entity_final":
-                    if field in world[case]:
-                        raise ValueError("v6_duplicate_measurement_field")
-                    world[case][field] = value
-    return {"version": WORLD_VERSION, "by_case": world,
-            "source_fields": copy.deepcopy(goal["source_fields"])}
+def build_measurements(*, plan: dict, binding: dict,
+                       seed: int, ordinal: int) -> dict | None:
+    """Sample canonical private measurements with non-degenerate answers.
 
+    The target and counterfactual candidate cases share the same observation
+    schema, but have distinct dependent answers. Values vary with task seed
+    and ordinal so none of the common numeric outputs is globally constant.
+    """
+    from environment.schema import digest
+    goal = plan["goal_spec"]
+    needs = goal["capabilities"]
+    if not needs:
+        return None
+    rng = random.Random(int(digest(
+        seed, ordinal, "stage1-world-measurements", GOAL_SCHEMA,
+    )[:15], 16))
+    target = binding["target_case"]
+    paths = binding["candidate_paths"]
+    cases = [target] + sorted(x for x in paths if x != target)
+    base_delta = rng.randrange(14, 240)
+    base_denominator = rng.randrange(12, 87)
+    base_smaller = rng.randrange(11, 170)
+    base_gap_days = rng.randrange(8, 240)
+    base_first_day = rng.randrange(2300, 8500)
+    base_latitude = rng.uniform(8.0, 51.0)
+    base_longitude = rng.uniform(-120.0, -43.0)
+    base_lat_step = rng.uniform(0.10, 1.15)
+    base_long_step = rng.uniform(0.10, 1.85)
+    base_qualified = rng.randrange(2, 14)
+    comparison = any(
+        node["op"] in {"compare_select", "verify"}
+        for node in goal["operations"]
+    )
+    target_first = bool(rng.randrange(2))
+    entries = {}
+    for index, case in enumerate(cases):
+        label = paths[case][-1]["object_label"]
+        row = {"entity_final": label}
+        if "numeric" in needs:
+            if comparison:
+                smaller = base_smaller + 5*index
+                larger = smaller + base_delta + 19*index
+                first_wins = target_first if index == 0 else not target_first
+                row.update({
+                    "metric_a": larger if first_wins else smaller,
+                    "metric_b": smaller if first_wins else larger,
+                })
+            else:
+                difference = base_delta + 17*index
+                row.update({
+                    "metric_b": base_denominator,
+                    "metric_a": base_denominator + difference,
+                })
+        if "temporal" in needs:
+            first = dt.date(2000, 1, 1) + dt.timedelta(
+                days=base_first_day + index*250,
+            )
+            gap = base_gap_days + index*19
+            row.update({
+                "date_a": first.isoformat(),
+                "date_b": (first + dt.timedelta(days=gap)).isoformat(),
+            })
+        if "geographic" in needs:
+            # A task-specific pair of synthetic coordinates, NOT a claim
+            # about the real-world location of the source entity.
+            lat = base_latitude + index*0.03
+            lon = base_longitude + index*0.04
+            row.update({
+                "latitude_a": round(lat, 6),
+                "longitude_a": round(lon, 6),
+                "latitude_b": round(
+                    lat + base_lat_step + index*0.31, 6,
+                ),
+                "longitude_b": round(
+                    lon + base_long_step + index*0.27, 6,
+                ),
+            })
+        if "aggregate" in needs:
+            n = base_qualified + index
+            older = rng.randrange(1, 5)
+            row["observations"] = [{
+                "entity_final": label,
+                "observation_id": "OBS-" + digest(
+                    seed, ordinal, case, j, "observation"
+                )[:12].upper(),
+                "observation_year": (
+                    (2025 + (j % 2)) if j < n else (2020 + j%4)
+                ),
+            } for j in range(n+older)]
+        entries[case] = row
+    return {
+        "version": WORLD_SCHEMA,
+        "by_case": entries,
+        "source_fields": copy.deepcopy(goal["source_fields"]),
+    }
 
 def evaluate_goal_value(row: dict, goal: dict):
     """Independent reference for final answer, separate from Gold IR."""
@@ -450,7 +520,7 @@ def evaluate_goal_value(row: dict, goal: dict):
                 "comparison", row["metric_a"], row["metric_b"],
             )
         else:
-            raise ValueError("v6_unsupported_reference_operation")
+            raise ValueError("goal_unsupported_reference_operation")
     answer = {
         name: values[producing_op] for name, producing_op
         in goal["output_spec"]["bindings"].items()
@@ -460,18 +530,18 @@ def evaluate_goal_value(row: dict, goal: dict):
     return answer
 
 
-def validate_measurement_world(plan: dict, binding: dict, *,
+def validate_measurements(plan: dict, binding: dict, *,
                                seed: int, ordinal: int) -> list[str]:
     goal = plan.get("goal_spec", {})
     issues = validate_operation_graph(goal)
     if issues:
         return issues
-    expected = measurement_world(
+    expected = build_measurements(
         plan=plan, binding=binding, seed=seed, ordinal=ordinal,
     )
     actual = binding.get("world_model", {}).get("goal_measurements")
     if actual != expected:
-        return ["v6_noncanonical_goal_measurements"]
+        return ["goal_noncanonical_goal_measurements"]
     if expected is None:
         return []
     target = binding["target_case"]
@@ -482,7 +552,7 @@ def validate_measurement_world(plan: dict, binding: dict, *,
     baseline = json.dumps(answers[target], sort_keys=True)
     if any(json.dumps(value, sort_keys=True) == baseline
            for case, value in answers.items() if case != target):
-        return ["v6_non_discriminating_shadow_answer"]
+        return ["goal_non_discriminating_shadow_answer"]
     return []
 
 

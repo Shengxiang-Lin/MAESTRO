@@ -1,9 +1,7 @@
-"""Goal-conditioned, typed producer composition for Stage-1 Task Plans.
+"""Evidence acquisition planner: typed source capabilities and Macro handoffs.
 
-Only supported source-scoped operators are composed.  Dependencies on
-candidate sets use *keyed* access to downstream stores, rather than adding
-decorative DAG edges.  This is deliberately bounded to the current entity
-answer contract; other Goal output kinds require separate executable solvers.
+Builds a single entity-resolution chain with genuine keyed, event, or
+corroborated evidence. The output-first Goal planner extends this substrate.
 """
 from __future__ import annotations
 
@@ -12,8 +10,7 @@ import random
 
 from environment.schema import digest
 
-VERSION = "goal_conditioned_typed_v2"
-NEEDS_VERSION = "goal_conditioned_evidence_needs_v3"
+EVIDENCE_SCHEMA = "maestro.evidence_plan.v1"
 
 # Explicit producer capabilities. A producer must satisfy the whole
 # requested evidence contract using sources that actually exist.
@@ -50,7 +47,7 @@ def _plan_information_needs(*, seed: int, ordinal: int,
     invents a status condition merely to add Macro steps.
     """
     rng = random.Random(int(digest(
-        seed, ordinal, goal_keys, NEEDS_VERSION, "source-inventory"
+        seed, ordinal, goal_keys, EVIDENCE_SCHEMA, "source-inventory"
     )[:15], 16))
     probabilities = {
         "project_ref": .78, "event_ledger": .94, "event_ref": .78,
@@ -92,7 +89,7 @@ def _plan_information_needs(*, seed: int, ordinal: int,
             for _ in range(discoveries - 1)
         ]
         return {
-            "version": NEEDS_VERSION,
+            "version": EVIDENCE_SCHEMA,
             "requested": {
                 "terminal_relation_keys": list(goal_keys),
                 "event_eligibility": (
@@ -111,63 +108,22 @@ def _plan_information_needs(*, seed: int, ordinal: int,
     raise ValueError("goal_has_no_feasible_source_producer")
 
 
-# These are local ways to produce an initial entity reference, not full DAG
-# templates. The required information ports are satisfied before the producer
-# is emitted; final relationship needs are planned independently.
-ENTITY_PRODUCERS = (
-    "project_reference",
-    "qualified_event_reference",
-    "corroborated_reference",
-)
-
-
-def compose_plan(*, seed: int, ordinal: int, difficulty: str, hops: int,
-                 goal_keys: tuple[str, ...] | list[str],
-                 policy: str = VERSION) -> dict:
-    if policy == "goal_conditioned_output_first_v6":
-        from .goal_ops_v6 import compose_goal_plan
-        return compose_goal_plan(
-            seed=seed, ordinal=ordinal, difficulty=difficulty,
-            hops=hops, goal_keys=tuple(goal_keys),
-        )
-    if policy == "goal_conditioned_operation_dag_v5":
-        from .goal_ops_v5 import compose_goal_plan
-        return compose_goal_plan(
-            seed=seed, ordinal=ordinal, difficulty=difficulty,
-            hops=hops, goal_keys=tuple(goal_keys),
-        )
-    if policy == "goal_conditioned_typed_goal_v4":
-        from .typed_goal_v4 import compose_typed_goal_plan
-        return compose_typed_goal_plan(
-            seed=seed, ordinal=ordinal, difficulty=difficulty,
-            hops=hops, goal_keys=tuple(goal_keys),
-        )
+def compose_evidence_plan(*, seed: int, ordinal: int, difficulty: str,
+                          hops: int, goal_keys: tuple[str, ...]) -> dict:
+    """Plan keyed discovery and source-scoped entity investigation."""
     if difficulty not in {"medium", "hard"}:
         raise ValueError("unsupported_composed_difficulty")
     if not 2 <= hops <= 3 or len(goal_keys) != hops:
         raise ValueError("invalid_composed_goal_depth")
-    if policy not in {VERSION, NEEDS_VERSION}:
-        raise ValueError("unsupported_goal_composer_policy")
     rng = random.Random(int(digest(
-        seed, ordinal, tuple(goal_keys), policy
+        seed, ordinal, tuple(goal_keys), EVIDENCE_SCHEMA
     )[:15], 16))
-    needs = (
-        _plan_information_needs(
-            seed=seed, ordinal=ordinal, goal_keys=tuple(goal_keys),
-            difficulty=difficulty,
-        ) if policy == NEEDS_VERSION else None
+    needs = _plan_information_needs(
+        seed=seed, ordinal=ordinal, goal_keys=tuple(goal_keys),
+        difficulty=difficulty,
     )
-    if needs:
-        producer = needs["selected_producer"]
-        condition = needs["requested"]["event_eligibility"]
-    else:
-        # Old policy keeps its exact original random-number stream.
-        producer = rng.choice(ENTITY_PRODUCERS)
-        condition = None if producer == "project_reference" else (
-            {"field": "event_status", "op": "filter_eq", "value": "completed"}
-            if rng.randrange(2) == 0 else
-            {"field": "event_year", "op": "filter_gte", "value": 2025}
-        )
+    producer = needs["selected_producer"]
+    condition = needs["requested"]["event_eligibility"]
     mode = {
         "project_reference": "trace",
         "qualified_event_reference": "event",
@@ -204,11 +160,8 @@ def compose_plan(*, seed: int, ordinal: int, difficulty: str, hops: int,
         # their source permissions become keyed_lookup in _bind_sources.
         tips = []
         for i in range(discoveries):
-            if needs:
-                access = needs["source_access"][i]
-                parent = rng.choice(tips) if access == "keyed_lookup" else None
-            else:
-                parent = rng.choice(tips) if tips and rng.random() < 0.58 else None
+            access = needs["source_access"][i]
+            parent = rng.choice(tips) if access == "keyed_lookup" else None
             deps = [parent] if parent else []
             mid = f"M{len(tasks) + 1}"
             tips = [x for x in tips if x != parent]
@@ -313,8 +266,8 @@ def compose_plan(*, seed: int, ordinal: int, difficulty: str, hops: int,
         raise ValueError("composed_macro_budget_exceeded")
     return {
         "version": "maestro.task_plan.v1",
-        "composer_policy": policy,
-        **({"information_requirements": needs} if needs else {}),
+        "composer_policy": "output_first",
+        "information_requirements": needs,
         "goal_recipe_keys": list(goal_keys),
         "mode": mode, "condition": condition, "hops": hops,
         "difficulty_sampling_policy": "calibrated_structural_difficulty_v1",

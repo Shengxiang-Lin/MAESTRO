@@ -874,6 +874,37 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             len(scene["problem_spec"]["macro_plan"]["macro_tasks"])
             for scene in current_scenes
         ]
+        answer_value_counts = {}
+        for scene in current_scenes:
+            goal_spec = scene["problem_spec"]["macro_plan"].get(
+                "goal_spec", {}
+            )
+            output = goal_spec.get("output_spec", {})
+            if not output:
+                continue
+            answer = scene["gold_answer"][0]["answer"]
+            for name, semantic in output["bindings"].items():
+                value = answer[name] if isinstance(answer, dict) else answer
+                encoded = json.dumps(value, sort_keys=True, ensure_ascii=False)
+                answer_value_counts.setdefault(semantic, Counter())[encoded] += 1
+        answer_diversity = {
+            semantic: {
+                "count": sum(freq.values()),
+                "unique_values": len(freq),
+                "most_common_count": freq.most_common(1)[0][1],
+                "most_common_share": round(
+                    freq.most_common(1)[0][1]/sum(freq.values()), 4
+                ),
+                "potential_answer_shortcut": (
+                    semantic not in {"conclusion", "higher_source"}
+                    and sum(freq.values()) >= 5 and (
+                        len(freq) < 4 or
+                        freq.most_common(1)[0][1]/sum(freq.values()) > 0.45
+                    )
+                ),
+            }
+            for semantic, freq in sorted(answer_value_counts.items())
+        }
         data["knowledge_world_grounding"] = {
             "single_task_plan": {
                 "scenes": len(current_scenes),
@@ -884,82 +915,58 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     s["problem_spec"]["macro_plan"]["mode"]
                     for s in current_scenes
                 )),
-                "goal_kind_distribution": dict(Counter(
-                    s["problem_spec"]["macro_plan"].get(
-                        "goal_spec", {}).get(
-                        "source_profile",
-                        s["problem_spec"]["macro_plan"].get(
-                            "goal_spec", {}).get("kind", "entity_resolution"),
-                    )
-                    for s in current_scenes
+                "goal_profile_distribution": dict(Counter(
+                    x["problem_spec"]["macro_plan"].get(
+                        "goal_spec", {}).get("source_profile", "unknown")
+                    for x in current_scenes
                 )),
                 "goal_output_distribution": dict(Counter(
-                    s["problem_spec"]["macro_plan"]["goal_spec"][
+                    x["problem_spec"]["macro_plan"]["goal_spec"][
                         "output_spec"]["kind"]
-                    for s in current_scenes
-                    if s["problem_spec"]["macro_plan"].get(
-                        "composer_policy") in {
-                            "goal_conditioned_operation_dag_v5",
-                            "goal_conditioned_output_first_v6",
-                        }
+                    for x in current_scenes
+                    if "output_spec" in x["problem_spec"]["macro_plan"].get(
+                        "goal_spec", {}
+                    )
                 )),
                 "goal_operation_distribution": dict(Counter(
                     node["op"]
-                    for s in current_scenes
-                    if s["problem_spec"]["macro_plan"].get(
-                        "composer_policy") in {
-                            "goal_conditioned_operation_dag_v5",
-                            "goal_conditioned_output_first_v6",
-                        }
-                    for node in s["problem_spec"]["macro_plan"][
-                        "goal_spec"]["operations"]
+                    for x in current_scenes
+                    for node in x["problem_spec"]["macro_plan"].get(
+                        "goal_spec", {}).get("operations", [])
                 )),
                 "goal_operation_output_pairs": dict(Counter(
                     ",".join(
-                        n["op"]
-                        for n in s["problem_spec"]["macro_plan"][
+                        node["op"]
+                        for node in x["problem_spec"]["macro_plan"][
                             "goal_spec"]["operations"]
-                        if n["op"] != "lookup"
-                    ) + " -> " + s["problem_spec"]["macro_plan"][
+                        if node["op"] != "lookup"
+                    ) + " -> " + x["problem_spec"]["macro_plan"][
                         "goal_spec"]["output_spec"]["kind"]
-                    for s in current_scenes
-                    if s["problem_spec"]["macro_plan"].get(
-                        "composer_policy") in {
-                            "goal_conditioned_operation_dag_v5",
-                            "goal_conditioned_output_first_v6",
-                        }
+                    for x in current_scenes
+                    if "output_spec" in x["problem_spec"]["macro_plan"].get(
+                        "goal_spec", {}
+                    )
                 )),
-                "output_first_semantic_fields": dict(Counter(
-                    field
-                    for s in current_scenes
-                    if s["problem_spec"]["macro_plan"].get(
-                        "composer_policy") == "goal_conditioned_output_first_v6"
-                    for field in s["problem_spec"]["macro_plan"]["goal_spec"][
-                        "output_spec"]["bindings"].values()
+                "semantic_output_fields": dict(Counter(
+                    semantic
+                    for x in current_scenes
+                    for semantic in x["problem_spec"]["macro_plan"].get(
+                        "goal_spec", {}).get("output_spec", {}).get(
+                        "bindings", {}).values()
                 )),
-                "output_first_capability_combinations": dict(Counter(
-                    "+".join(s["problem_spec"]["macro_plan"][
-                        "goal_spec"]["capabilities"]) or "entity_only"
-                    for s in current_scenes
-                    if s["problem_spec"]["macro_plan"].get(
-                        "composer_policy") == "goal_conditioned_output_first_v6"
+                "capability_combinations": dict(Counter(
+                    "+".join(x["problem_spec"]["macro_plan"].get(
+                        "goal_spec", {}).get("capabilities", [])) or "entity_only"
+                    for x in current_scenes
                 )),
+                "answer_value_diversity": answer_diversity,
+                "answer_shortcut_warning_fields": sorted(
+                    field for field, stats in answer_diversity.items()
+                    if stats["potential_answer_shortcut"]
+                ),
                 "goal_answer_type_distribution": dict(Counter(
-                    s["problem_spec"]["macro_plan"]["goal"]["answer_type"]
-                    for s in current_scenes
-                )),
-                "typed_goal_synthesis_operations": dict(Counter(
-                    step["op"]
-                    for scene in current_scenes
-                    if scene["problem_spec"]["macro_plan"].get(
-                        "goal_spec", {}).get("version") ==
-                        "goal_conditioned_typed_goal_v4"
-                    for step in scene["gold_program"]["nodes"]
-                    if step["op"] in {
-                        "derive_arithmetic", "derive_date_gap",
-                        "derive_great_circle", "derive_comparison",
-                        "compose_typed_result", "group_count",
-                    }
+                    x["problem_spec"]["macro_plan"]["goal"]["answer_type"]
+                    for x in current_scenes
                 )),
                 "macro_task_count_range": [
                     min(sizes, default=0), max(sizes, default=0)

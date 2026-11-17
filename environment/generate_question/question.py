@@ -122,12 +122,7 @@ def _intent_reference_question(spec: dict) -> str:
                 f"The provided archive-photo and spoken-catalog observations concern a record in the {topic}.",
                 f"The supplied image description and audio observation refer to a record in the {topic}.",
             )[spec["ordinal"] % 4]
-            if plan.get("composer_policy") in {
-                "goal_conditioned_evidence_needs_v3",
-                "goal_conditioned_typed_goal_v4",
-                "goal_conditioned_operation_dag_v5",
-                "goal_conditioned_output_first_v6",
-            }:
+            if plan.get("composer_policy") == "output_first":
                 # A frozen clue can accidentally equal an ordinary phrase
                 # in our deterministic lead (e.g. "catalog" in
                 # "spoken-catalog"). Do not weaken the leakage guard; select
@@ -153,23 +148,11 @@ def _intent_reference_question(spec: dict) -> str:
                     (candidate for candidate in safe_leads
                      if _safe_lead(candidate)), lead
                 )
-            if (plan.get("composer_policy") ==
-                    "goal_conditioned_output_first_v6"
-                    and plan["goal_spec"]["output_spec"]["bindings"] !=
-                    {"answer": "entity"}):
-                from .goal_ops_v6 import goal_question
+            if plan["goal_spec"]["output_spec"]["bindings"] != {
+                "answer": "entity"
+            }:
+                from .goal_plan import goal_question
                 return f"{lead} {goal_question(plan)}"
-            if (plan.get("composer_policy") ==
-                    "goal_conditioned_operation_dag_v5"
-                    and plan["goal_spec"]["source_profile"] !=
-                    "entity_resolution"):
-                from .goal_ops_v5 import goal_question
-                return f"{lead} {goal_question(plan)}"
-            if (plan.get("composer_policy") ==
-                    "goal_conditioned_typed_goal_v4"
-                    and plan["goal_spec"]["kind"] != "entity_resolution"):
-                from .typed_goal_v4 import numeric_goal_question
-                return f"{lead} {numeric_goal_question(plan)}"
             condition = plan["condition"]
             if condition is None:
                 qualifier = ""
@@ -648,7 +631,7 @@ def _unlicensed_task_plan_condition(question: str, plan: dict) -> list[str]:
     This high-precision guard checks only new v3 tasks; the independent
     LLM Critic remains responsible for subtler semantic entailment errors.
     """
-    if plan.get("composer_policy") != "goal_conditioned_evidence_needs_v3":
+    if plan.get("composer_policy") != "output_first":
         return []
     q = question.casefold()
     condition = plan["condition"]
@@ -788,7 +771,7 @@ def guard_question(question: str, spec: dict,
             elif not re.search(r"\b2025\b", q):
                 errors.append("task_plan_required_year_missing")
         errors.extend(_unlicensed_task_plan_condition(q, plan))
-        if plan.get("composer_policy") == "goal_conditioned_output_first_v6":
+        if plan.get("composer_policy") == "output_first":
             goal_spec = plan["goal_spec"]
             fields = goal_spec["output_spec"]["bindings"]
             # Each output semantic has a required public description.
@@ -806,7 +789,7 @@ def guard_question(question: str, spec: dict,
                 if semantic in clues and not re.search(
                     clues[semantic], q, re.I,
                 ):
-                    errors.append("v6_missing_output_semantics:" + semantic)
+                    errors.append("goal_missing_output_semantics:" + semantic)
             if goal_spec["output_spec"]["kind"] in {
                 "structured_multi_field", "evidence_based_explanation"
             }:
@@ -816,142 +799,15 @@ def guard_question(question: str, spec: dict,
                         + r"\b"
                     )
                     if not re.search(field_pattern, q, re.I):
-                        errors.append("v6_output_field_missing:" + name)
+                        errors.append("goal_output_field_missing:" + name)
             if "aggregate" in goal_spec["capabilities"]:
                 if not re.search(r"\b2025\b", q):
-                    errors.append("v6_required_threshold_missing")
+                    errors.append("goal_required_threshold_missing")
             elif re.search(r"\b(?:19|20)\d{2}\b", q):
                 # Year selection may only be licensed by an exact Goal
                 # or the pre-existing v3 event condition.
                 if not plan["condition"]:
-                    errors.append("v6_unlicensed_year")
-        if plan.get("composer_policy") == "goal_conditioned_operation_dag_v5":
-            goal_spec = plan["goal_spec"]
-            shape = goal_spec["output_spec"]["kind"]
-            ops = {row["op"] for row in goal_spec["operations"]}
-            if shape in {"structured_multi_field",
-                         "evidence_based_explanation"}:
-                # Field names are an immutable answer contract, not examples.
-                for field in goal_spec["output_spec"]["fields"]:
-                    if not re.search(
-                        r"\b" + re.escape(field).replace("_", r"[_\s-]?")
-                        + r"\b", q, re.I,
-                    ):
-                        errors.append("v5_output_field_missing:" + field)
-            if "temporal_difference" in ops and not re.search(
-                r"\b(?:elapsed|days?|duration)\b", q, re.I
-            ):
-                errors.append("v5_temporal_difference_missing")
-            if "temporal_midpoint" in ops and not re.search(
-                r"\b(?:midpoint|middle)\b", q, re.I
-            ):
-                errors.append("v5_midpoint_goal_missing")
-            if "geographic_distance" in ops and not re.search(
-                r"\b(?:distance|great.circle)\b", q, re.I
-            ):
-                errors.append("v5_geographic_goal_missing")
-            if "arithmetic" in ops and not re.search(
-                r"\b(?:ratio|difference|subtract|divide|divided)\b",
-                q, re.I,
-            ):
-                errors.append("v5_arithmetic_goal_missing")
-            if "count_aggregate" in ops and not re.search(
-                r"\b(?:count|how many|number of)\b", q, re.I
-            ):
-                errors.append("v5_count_goal_missing")
-            if "count_aggregate" in ops and not re.search(
-                r"\b2025\b", q
-            ):
-                errors.append("v5_count_threshold_missing")
-            if "compare_select" in ops and not re.search(
-                r"\b(?:higher|larger|greater)\b", q, re.I
-            ):
-                errors.append("v5_comparison_goal_missing")
-            if "verify" in ops and not re.search(
-                r"\b(?:evidence|assessment|verify|confirm)\b", q, re.I
-            ):
-                errors.append("v5_evidence_request_missing")
-            if shape == "date_time" and not re.search(
-                r"\b(?:date|YYYY-MM-DD)\b", q, re.I
-            ):
-                errors.append("v5_date_output_missing")
-            if (goal_spec["source_profile"] not in {
-                    "aggregation", "entity_resolution"}
-                    and re.search(r"\b(?:19|20)\d{2}\b", q)):
-                errors.append("v5_unlicensed_calendar_year")
-        if (plan.get("composer_policy") ==
-                "goal_conditioned_typed_goal_v4"):
-            kind = plan["goal_spec"]["kind"]
-            if kind == "comparison":
-                if not re.search(
-                    r"\b(?:higher|larger|greater|more|most)\b", q, re.I
-                ) or not re.search(
-                    r"\b(?:count|tally|total|number|observations?)\b",
-                    q, re.I,
-                ):
-                    errors.append("task_plan_comparison_goal_missing")
-                if re.search(
-                    r"\b(?:lower|smaller|fewer|less)\b", q, re.I
-                ):
-                    errors.append("task_plan_reversed_comparison")
-                if re.search(r"\b(?:19|20)\d{2}\b", q):
-                    errors.append("task_plan_unlicensed_numeric_year_filter")
-            elif kind == "aggregation":
-                if not re.search(
-                    r"\b(?:how many|count|number of|total number)\b",
-                    q, re.I,
-                ):
-                    errors.append("task_plan_aggregation_goal_missing")
-                if not re.search(r"\b2025\b", q):
-                    errors.append("task_plan_aggregation_year_missing")
-                if re.search(
-                    r"\b(?:completed|scheduled|cancelled|canceled)\b",
-                    q, re.I,
-                ):
-                    errors.append("task_plan_unlicensed_aggregation_status")
-                if any(
-                    not re.search(
-                        r"\b(?:in|on)\s+(?:or|and)\s+$",
-                        q[max(0, m.start()-20):m.start()],
-                    ) for m in re.finditer(
-                        r"\b(?:after|later than)\s+2025\b", q, re.I
-                    )
-                ):
-                    errors.append("task_plan_exclusive_year_threshold")
-            elif kind == "numeric_difference" and not re.search(
-                r"\b(?:absolute|difference|subtract)\b", q, re.I
-            ):
-                errors.append("task_plan_difference_goal_missing")
-            elif kind == "numeric_ratio" and not re.search(
-                r"\b(?:ratio|divide|divided)\b", q, re.I
-            ):
-                errors.append("task_plan_ratio_goal_missing")
-            elif kind == "temporal_gap" and not (
-                re.search(r"\b(?:days?|elapsed|duration)\b", q, re.I)
-                and re.search(
-                    r"\b(?:between|from|until|to)\b", q, re.I
-                )
-            ):
-                errors.append("task_plan_temporal_goal_missing")
-            elif kind == "geographic_distance" and not (
-                re.search(r"\b(?:distance|great.circle|straight.line)\b",
-                          q, re.I)
-                and re.search(r"\b(?:km|kilometres?|kilometers?)\b",
-                              q, re.I)
-            ):
-                errors.append("task_plan_geographic_goal_missing")
-            elif kind == "structured_answer" and not all(
-                re.search(token, q, re.I) for token in (
-                    r"\b(?:entity|label)\b",
-                    r"\b(?:higher|larger|greater)\b",
-                    r"\b(?:difference|gap)\b",
-                )
-            ):
-                errors.append("task_plan_structured_goal_missing")
-            if kind not in {"entity_resolution", "aggregation"} and (
-                re.search(r"\b(?:19|20)\d{2}\b", q)
-            ):
-                errors.append("task_plan_unlicensed_numeric_year_filter")
+                    errors.append("goal_unlicensed_year")
         if not compact and not re.search(
             r"\b(?:related|relation|entity)\b", q, re.I
         ):
@@ -1200,97 +1056,29 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
         if compact_task_plan:
             plan = spec["macro_plan"]
             goal = plan["goal"]["semantic"]
-            v5 = (plan.get("composer_policy") ==
-                  "goal_conditioned_operation_dag_v5")
-            v6 = (plan.get("composer_policy") ==
-                  "goal_conditioned_output_first_v6")
-            kind = plan.get("goal_spec", {}).get(
-                "kind", "entity_resolution"
+            from .goal_plan import goal_question
+            goal_spec = plan["goal_spec"]
+            author_contract["semantic_goal_question"] = goal_question(plan)
+            author_contract["goal_operations"] = [
+                {"op": item["op"], "inputs": item["inputs"],
+                 "output": item["output"]}
+                for item in goal_spec["operations"]
+            ]
+            author_contract["final_output_spec"] = goal_spec["output_spec"]
+            author_contract["required_literal_fields"] = list(
+                goal_spec["output_spec"]["fields"]
             )
-            if v6:
-                from .goal_ops_v6 import goal_question
-                goal_spec = plan["goal_spec"]
-                author_contract["semantic_goal_question"] = goal_question(plan)
-                author_contract["goal_operations"] = [
-                    {"op": item["op"], "inputs": item["inputs"],
-                     "output": item["output"]}
-                    for item in goal_spec["operations"]
-                ]
-                author_contract["final_output_spec"] = goal_spec["output_spec"]
-                author_contract["output_constraint"] = (
-                    "Treat the final output fields and their meanings as "
-                    "frozen, preserve all operations required by each field, "
-                    "do not add outputs or change time thresholds."
-                )
-            elif v5:
-                from .goal_ops_v5 import goal_question
-                goal_spec = plan["goal_spec"]
-                author_contract["semantic_goal_question"] = goal_question(plan)
-                author_contract["goal_operations"] = [
-                    {"op": item["op"], "inputs": item["inputs"],
-                     "output": item["output"]}
-                    for item in goal_spec["operations"]
-                ]
-                author_contract["final_output_spec"] = goal_spec["output_spec"]
-                author_contract["required_event_condition"] = plan["condition"]
-                author_contract["output_constraint"] = (
-                    "Do not drop operations, reverse numerical direction, "
-                    "invent extra filters, or add answer fields. Exactly "
-                    "preserve the frozen output bindings."
-                )
-            elif kind != "entity_resolution":
-                from .typed_goal_v4 import numeric_goal_question
-                author_contract["semantic_goal_question"] = (
-                    numeric_goal_question(plan)
-                )
-                author_contract["goal_resolution_kind"] = kind
-                author_contract["final_answer_type"] = (
-                    plan["goal"]["answer_type"]
-                )
-                author_contract["relation_goal_question"] = goal["question"]
-                author_contract["numeric_evidence_constraints"] = {
-                    "comparison": (
-                        "Compare two independent counts; return only first "
-                        "or second, never an intermediate entity name."
-                    ),
-                    "aggregation": (
-                        "Count dated observations from 2025 onward inclusive; "
-                        "return only one integer, no event status filter."
-                    ),
-                    "numeric_difference": (
-                        "Compute the absolute difference of independently "
-                        "looked-up counts and return one integer."
-                    ),
-                    "numeric_ratio": (
-                        "Divide first independent count by the second, "
-                        "round to two decimal places."
-                    ),
-                    "temporal_gap": (
-                        "Compute absolute elapsed days between the two "
-                        "independently dated milestones."
-                    ),
-                    "geographic_distance": (
-                        "Compute a straight-line great-circle distance from "
-                        "two location coordinates; report integer kilometres."
-                    ),
-                    "structured_answer": (
-                        "Return the exact three-field structured result: "
-                        "entity, higher_source and count_difference. "
-                        "Do not invent extra answer fields."
-                    ),
-                }[kind]
-            else:
-                author_contract["semantic_goal_question"] = goal["question"]
+            author_contract["output_constraint"] = (
+                "Keep every answer field spelled EXACTLY as in "
+                "required_literal_fields, including underscores. "
+                "Preserve the semantic type and calculation of each field; "
+                "do not add an intermediate entity as a separate answer."
+            )
             author_contract["required_event_condition"] = plan["condition"]
             author_contract["verification_mode"] = (
                 plan["mode"] == "verify"
             )
-            if plan.get("composer_policy") in {
-                "goal_conditioned_evidence_needs_v3",
-                "goal_conditioned_typed_goal_v4",
-                "goal_conditioned_operation_dag_v5",
-                "goal_conditioned_output_first_v6",
-            }:
+            if plan.get("composer_policy") == "output_first":
                 condition = plan["condition"]
                 if condition and condition["field"] == "event_year":
                     author_contract["event_condition_scope"] = (
@@ -1326,7 +1114,7 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             ]
             if compact_task_plan and spec["macro_plan"].get(
                 "composer_policy"
-            ) == "goal_conditioned_evidence_needs_v3":
+            ) == "output_first":
                 condition = spec["macro_plan"]["condition"]
                 if ("task_plan_unlicensed_status_condition" in prior_errors
                         and condition and
@@ -1379,6 +1167,16 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                         "'What [single Goal] applies to the record matching "
                         "[all evidence predicates]?'"
                     )
+            if compact_task_plan and any(
+                "output_field_missing:" in issue or
+                "reference_material_not_identified" in issue
+                for issue in prior_errors
+            ):
+                author_contract["repair_priority"].insert(
+                    0, "Reproduce every required output field name "
+                    "VERBATIM (underscores included). Explicitly mention "
+                    "the supplied reference card or observation material."
+                )
             if "topic_missing" in failures[-1].get("errors", ()):
                 author_contract["topic_repair"] = (
                     ("Mention the exact topic naturally in the supplied "
@@ -1444,23 +1242,10 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 # verbose private operator/DAG walkthrough. The public
                 # Question should never be forced to narrate Gold steps.
                 plan = spec["macro_plan"]
-                goal_spec = plan.get("goal_spec", {})
-                composer = plan.get("composer_policy")
-                goal_kind = goal_spec.get(
-                    "source_profile",
-                    goal_spec.get("kind", "entity_resolution"),
-                )
-                if composer == "goal_conditioned_operation_dag_v5":
-                    from .goal_ops_v5 import goal_question
-                    target_question = goal_question(plan)
-                elif composer == "goal_conditioned_output_first_v6":
-                    from .goal_ops_v6 import goal_question
-                    target_question = goal_question(plan)
-                elif goal_kind != "entity_resolution":
-                    from .typed_goal_v4 import numeric_goal_question
-                    target_question = numeric_goal_question(plan)
-                else:
-                    target_question = plan["goal"]["semantic"]["question"]
+                from .goal_plan import goal_question
+                goal_spec = plan["goal_spec"]
+                goal_kind = goal_spec["source_profile"]
+                target_question = goal_question(plan)
                 frozen_contract = {
                     "topic": spec["scenario"]["topic"],
                     "semantic_goal_question": target_question,
