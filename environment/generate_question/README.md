@@ -27,8 +27,25 @@ The internal Stage 1 code is organized by responsibility:
 | `task_plan.py` | Compose a single frozen ProblemSpec, source catalog, modality observations, World binding and contract validator |
 | `task_plan_runtime.py` | Materialize source views, compile Gold IR and test executable information necessity |
 | `program_ir.py` | Shared typed relational executor and answer formatter |
-| `question.py`, `intent.py`, `surface_quality.py` | Author/Critic prompt contract, exact output-field checking, semantic naturalization and fallback handling |
+| `question.py`, `intent.py`, `authoring/surface_quality.py` | Author/Critic prompt contract, exact output-field checking, semantic naturalization and fallback handling |
 | `stages.py`, `pipeline.py` | Resumable generation and quality/audit reports |
+
+The active code is grouped by responsibility: `grounding/` holds domain-aware
+synthetic observation profiles, `authoring/` holds question/scenario
+naturalization and validation helpers, and `auditing/` holds structural
+decision-opportunity and difficulty diagnostics. The CLI, typed solvers and
+Stage-2/3/4 data contracts remain at their established import paths.
+
+Numeric, date and coordinate source annotations can now be acquired from
+simulated image/audio evidence rather than only generic tables. A media source
+is browse-only and its rows are joined to the resolved entity; no real media
+decoding is claimed. Evidence mode selection is budget-based rather than
+forcing Trace for every multi-source Goal.
+
+The quality report adds `macro_decision_opportunities` for parallel batches,
+key-dependent handoffs, reusable intermediate results and true evidence
+corroboration (distinct from a Goal comparison operator). These are *structural
+opportunities*, not proof that an LLM made adaptive decisions.
 
 The output structure is sampled **before** operations. Individual semantic
 fields require compatible producers: Lookup; Arithmetic; Temporal
