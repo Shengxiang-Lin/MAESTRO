@@ -813,6 +813,40 @@ def guard_question(question: str, spec: dict,
                     )
                 ):
                     errors.append("task_plan_exclusive_year_threshold")
+            elif kind == "numeric_difference" and not re.search(
+                r"\b(?:absolute|difference|subtract)\b", q, re.I
+            ):
+                errors.append("task_plan_difference_goal_missing")
+            elif kind == "numeric_ratio" and not re.search(
+                r"\b(?:ratio|divide|divided)\b", q, re.I
+            ):
+                errors.append("task_plan_ratio_goal_missing")
+            elif kind == "temporal_gap" and not (
+                re.search(r"\b(?:days?|elapsed|duration)\b", q, re.I)
+                and re.search(
+                    r"\b(?:between|from|until|to)\b", q, re.I
+                )
+            ):
+                errors.append("task_plan_temporal_goal_missing")
+            elif kind == "geographic_distance" and not (
+                re.search(r"\b(?:distance|great.circle|straight.line)\b",
+                          q, re.I)
+                and re.search(r"\b(?:km|kilometres?|kilometers?)\b",
+                              q, re.I)
+            ):
+                errors.append("task_plan_geographic_goal_missing")
+            elif kind == "structured_answer" and not all(
+                re.search(token, q, re.I) for token in (
+                    r"\b(?:entity|label)\b",
+                    r"\b(?:higher|larger|greater)\b",
+                    r"\b(?:difference|gap)\b",
+                )
+            ):
+                errors.append("task_plan_structured_goal_missing")
+            if kind not in {"entity_resolution", "aggregation"} and (
+                re.search(r"\b(?:19|20)\d{2}\b", q)
+            ):
+                errors.append("task_plan_unlicensed_numeric_year_filter")
         if not compact and not re.search(
             r"\b(?:related|relation|entity)\b", q, re.I
         ):
@@ -1074,15 +1108,37 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                     plan["goal"]["answer_type"]
                 )
                 author_contract["relation_goal_question"] = goal["question"]
-                author_contract["numeric_evidence_constraints"] = (
-                    "Use TWO independent tallies and compare higher counts; "
-                    "return ONLY first or second; never request the entity "
-                    "name or an intermediate record."
-                    if kind == "comparison" else
-                    "Count individual dated log entries from 2025 onward, "
-                    "inclusive; return ONLY one integer, not the entity "
-                    "name, percentage, or event status."
-                )
+                author_contract["numeric_evidence_constraints"] = {
+                    "comparison": (
+                        "Compare two independent counts; return only first "
+                        "or second, never an intermediate entity name."
+                    ),
+                    "aggregation": (
+                        "Count dated observations from 2025 onward inclusive; "
+                        "return only one integer, no event status filter."
+                    ),
+                    "numeric_difference": (
+                        "Compute the absolute difference of independently "
+                        "looked-up counts and return one integer."
+                    ),
+                    "numeric_ratio": (
+                        "Divide first independent count by the second, "
+                        "round to two decimal places."
+                    ),
+                    "temporal_gap": (
+                        "Compute absolute elapsed days between the two "
+                        "independently dated milestones."
+                    ),
+                    "geographic_distance": (
+                        "Compute a straight-line great-circle distance from "
+                        "two location coordinates; report integer kilometres."
+                    ),
+                    "structured_answer": (
+                        "Return the exact three-field structured result: "
+                        "entity, higher_source and count_difference. "
+                        "Do not invent extra answer fields."
+                    ),
+                }[kind]
             else:
                 author_contract["semantic_goal_question"] = goal["question"]
             author_contract["required_event_condition"] = plan["condition"]
