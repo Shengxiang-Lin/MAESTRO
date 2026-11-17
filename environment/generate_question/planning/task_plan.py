@@ -11,7 +11,7 @@ import random
 from collections import Counter
 
 from environment.schema import digest
-from ..knowledge_macro import YagoKnowledgeIndex, CUES, predicate_label
+from ..knowledge_macro import YagoKnowledgeIndex, predicate_label
 from .goal_plan import COMPOSER as OUTPUT_FIRST_COMPOSER
 
 PATTERN = "task_plan"
@@ -304,16 +304,19 @@ def _bind_sources(plan, grounding, *, seed: int, ordinal: int):
         "institutional": "institutional registry",
         "geographical": "regional fieldwork",
     }
-    context = (
-        contextual_titles[_semantic_goal(
+    semantic_domain = (
+        _semantic_goal(
             grounding["candidate_paths"][grounding["target_case"]],
             len(grounding["all_cases"]),
-        )["domain"]]
+        )["domain"]
         if plan.get("semantic_grounding_policy") == SEMANTIC_GOALS
-        else None
+        else "institutional"
     )
+    context = contextual_titles[semantic_domain]
+    from ..grounding.clues import clue_profiles
+    profiles = clue_profiles(semantic_domain)
     for i, task in enumerate(disc):
-        for j, (modality, title, attr, choices) in enumerate(CUES[i]):
+        for j, (modality, title, attr, choices) in enumerate(profiles[i]):
             if context is not None:
                 title = f"{context} — {title}"
             sid = task["source_scope"][j]
