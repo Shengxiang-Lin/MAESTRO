@@ -68,7 +68,7 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
         "workers": options.get("workers", 4),
         "mode": options.get("mode", "llm"),
         "max_revisions": options.get("max_revisions", 2),
-        "max_attempts": options.get("max_attempts", 16),
+        "max_attempts": options.get("max_attempts", 10),
         "sub_model": options.get("sub_model", "qwen3-8b"),
         "model_alias": options.get("model_alias", "model_1"),
         "overwrite": options.get("overwrite", False),
