@@ -193,6 +193,5 @@ class TaskGraphFirstPortTests(unittest.TestCase):
         self.assertEqual(validate_replay(broken)["status"], "invalid")
 
 
-@unittest.skipUnless(RDF_READY, "requires RDF loader")
 if __name__ == "__main__":
     unittest.main()
