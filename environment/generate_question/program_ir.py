@@ -33,6 +33,7 @@ _ARITY = {
     "derive_comparison": 1, "derive_percentage": 1,
     "derive_arithmetic": 1, "derive_date_gap": 1,
     "derive_great_circle": 1, "compose_typed_result": 1,
+    "goal_compute": 1, "goal_format": 1,
 }
 
 
@@ -125,6 +126,40 @@ def validate_program(program: dict) -> list[str]:
             not isinstance(node.get("entity_field"), str)
         ):
             issues.append("derived_structured_invalid_contract")
+        if op == "goal_compute":
+            spec = node.get("goal_operation")
+            valid_ops = {
+                "arithmetic", "temporal_difference",
+                "temporal_midpoint", "geographic_distance",
+                "compare_select", "verify",
+            }
+            if (not isinstance(spec, dict)
+                    or spec.get("op") not in valid_ops
+                    or spec.get("output") != node.get("output_field")
+                    or not isinstance(node.get("input_fields"), list)
+                    or len(node["input_fields"]) != len(spec.get("inputs", []))
+                    or len(node["input_fields"]) not in (2, 3)
+                    or not all(isinstance(field, str) and field
+                               for field in node["input_fields"])):
+                issues.append("v5_invalid_goal_compute")
+        if op == "goal_format":
+            valid_formats = {
+                "single_entity", "single_number", "date_time",
+                "structured_multi_field", "evidence_based_explanation",
+            }
+            types = node.get("field_types")
+            binds = node.get("bindings")
+            if (node.get("output_kind") not in valid_formats
+                    or not isinstance(types, dict) or not types
+                    or not isinstance(binds, dict)
+                    or set(types) != set(binds)
+                    or not all(isinstance(k, str) and k
+                               and isinstance(v, str) and v
+                               for k, v in binds.items())
+                    or not all(v in {"str", "int", "float"}
+                               for v in types.values())
+                    or node.get("output_field") != "answer"):
+                issues.append("v5_invalid_goal_format")
         if op == "group_count" and not isinstance(node.get("field"), str):
             issues.append("group_count_invalid_field")
         if op == "sort" and (not isinstance(node.get("field"), str) or
@@ -420,6 +455,99 @@ def _apply(node: dict, inputs: list[Relation]) -> Relation:
         return Relation((output_field,), tuple(
             materialize(row) for row in src.rows
         ))
+    if op == "goal_compute":
+        import datetime
+        src = inputs[0]
+        spec = node["goal_operation"]
+        kind = spec["op"]
+        refs = node["input_fields"]
+        if kind != "geographic_distance":
+            for field in refs:
+                _check(src, field)
+        else:
+            for field in ("latitude_a", "longitude_a",
+                          "latitude_b", "longitude_b"):
+                _check(src, field)
+        out = node["output_field"]
+        if out in src.columns:
+            raise ProgramError("v5_goal_output_field_collision:" + out)
+
+        def apply_one(row):
+            values = row["values"]
+            if kind == "geographic_distance":
+                result = round(great_circle_km(
+                    values["latitude_a"], values["longitude_a"],
+                    values["latitude_b"], values["longitude_b"],
+                ))
+            elif kind in {"temporal_difference", "temporal_midpoint"}:
+                a, b = (datetime.date.fromisoformat(values[field])
+                        for field in refs)
+                if kind == "temporal_difference":
+                    result = abs((b-a).days)
+                else:
+                    result = (min(a,b) + datetime.timedelta(
+                        days=abs((b-a).days)//2
+                    )).isoformat()
+            else:
+                # A verify operation may also consume an upstream winner.
+                first, second = (values[field] for field in refs[-2:])
+                if (type(first) not in (int, float)
+                        or type(second) not in (int, float)):
+                    raise ProgramError("v5_goal_numeric_type_mismatch")
+                if kind == "arithmetic":
+                    if spec["function"] == "absolute_difference":
+                        result = abs(first-second)
+                    elif spec["function"] == "ratio":
+                        if second == 0:
+                            raise ProgramError("v5_division_by_zero")
+                        result = round(first/second, spec["round_digits"])
+                    else:
+                        raise ProgramError("v5_unknown_arithmetic")
+                elif kind in {"compare_select", "verify"}:
+                    result = ("first" if first > second else
+                              "second" if second > first else "equal")
+                    if kind == "verify" and len(refs) == 3:
+                        if values[refs[0]] != result:
+                            raise ProgramError("v5_verification_not_consistent")
+                else:
+                    raise ProgramError("v5_unsupported_goal_operation")
+            return {
+                "values": {**values, out: result},
+                "support": row["support"],
+            }
+
+        return Relation((*src.columns, out), tuple(
+            apply_one(row) for row in src.rows
+        ))
+    if op == "goal_format":
+        src = inputs[0]
+        fields = node["field_types"]
+        binds = node["bindings"]
+        for field in binds.values():
+            _check(src, field)
+        structured = node["output_kind"] in {
+            "structured_multi_field", "evidence_based_explanation",
+        }
+        if not structured and set(fields) != {"answer"}:
+            raise ProgramError("v5_single_output_has_multiple_fields")
+        if structured and "answer" in fields:
+            raise ProgramError("v5_structured_has_scalar_binding")
+        results = []
+        for row in src.rows:
+            values = {}
+            for field, column in binds.items():
+                value = row["values"][column]
+                typ = fields[field]
+                if (typ == "str" and not isinstance(value, str)
+                        or typ == "int" and type(value) is not int
+                        or typ == "float" and type(value) is not float):
+                    raise ProgramError("v5_goal_output_type_mismatch:" + field)
+                values[field] = value
+            results.append({
+                "values": {"answer": values if structured else values["answer"]},
+                "support": row["support"],
+            })
+        return Relation(("answer",), tuple(results))
     if op == "attach_evidence":
         src = inputs[0]
         if "evidence_refs" in src.columns:
