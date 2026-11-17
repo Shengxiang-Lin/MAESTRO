@@ -576,14 +576,19 @@ def compile_macro_solvers(spec: dict) -> dict:
             role = next(row for row in spec["sources"]
                         if row["source_id"] == sid)
             if role["access_mode"] == "browse":
-                # An image/audio observation is acquired independently;
-                # only the resolved entity label may select its relevant row.
                 observed = add("scan", source_id=sid)
-                retrieved = add(
-                    "join", parents[0], observed,
-                    left_on="entity_final", right_on="entity_final",
+                # Independent visual/audio inspection returns candidate
+                # observations with their matching labels intact.
+                # The target-specific join belongs to the final consumer.
+                retrieved = (
+                    observed if not parents else add(
+                        "join", parents[0], observed,
+                        left_on="entity_final", right_on="entity_final",
+                    )
                 )
             else:
+                if len(parents) != 1:
+                    raise ValueError("keyed_typed_evidence_needs_entity")
                 retrieved = add(
                     "lookup_by_key", parents[0], source_id=sid,
                     input_key_field="entity_final",
@@ -606,8 +611,14 @@ def compile_macro_solvers(spec: dict) -> dict:
             products = {
                 source_tasks[mid]: parent
                 for mid, parent in zip(task["depends_on"], parents)
+                if mid in source_tasks
             }
-            if set(products) != set(goal["source_fields"]):
+            identity_inputs = [
+                parent for mid, parent in zip(task["depends_on"], parents)
+                if mid not in source_tasks
+            ]
+            if (set(products) != set(goal["source_fields"])
+                    or len(identity_inputs) != 1):
                 raise ValueError("goal_source_handoff_mismatch")
             # Aggregate the one-to-many ledger BEFORE joining a pair of
             # scalar sources; otherwise the join would multiply row counts.
@@ -628,8 +639,11 @@ def compile_macro_solvers(spec: dict) -> dict:
             ) if name in products]
             if not pairs:
                 raise ValueError("goal_synthesis_without_evidence")
-            last = pairs[0]
-            for parent in pairs[1:]:
+            # Join all facts against the *specific resolved target*.
+            # Otherwise a browse-only media source contains observations
+            # for every candidate and can leak extra answers.
+            last = identity_inputs[0]
+            for parent in pairs:
                 last = add(
                     "join", last, parent, left_on="entity_final",
                     right_on="entity_final",

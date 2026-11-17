@@ -327,13 +327,20 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
         for sid in source_ids:
             mid = "M" + str(len(tasks)+1)
             fields = goal["source_fields"][sid]
+            # Browse-only observations are globally visible and do not
+            # require a resolved entity. Their entity-to-fact association
+            # is made *later*, in synthesis. Keyed sources still need
+            # the upstream resolved entity before they may be queried.
+            browse = sid in {"metric_a", "metric_b"}
+            dependencies = [] if browse else [entity_mid]
             tasks.append({
-                "macro_id": mid, "role": "investigation",
+                "macro_id": mid,
+                "role": "discovery" if browse else "investigation",
                 "operation": "fetch_typed_evidence",
-                "depends_on": [entity_mid],
-                "input_contract": {
-                    entity_mid: {"entity_final": "str"}
-                },
+                "depends_on": dependencies,
+                "input_contract": (
+                    {} if browse else {entity_mid: {"entity_final": "str"}}
+                ),
                 "output_schema": copy.deepcopy(fields),
                 "source_scope": [sid],
                 "solver_template": "fetch_typed_evidence",
@@ -354,10 +361,10 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
         tasks.append({
             "macro_id": mid, "role": "synthesis",
             "operation": "synthesize_operation_dag",
-            "depends_on": parents,
+            "depends_on": [entity_mid] + parents,
             "input_contract": {
                 dep: copy.deepcopy(earlier[dep]["output_schema"])
-                for dep in parents
+                for dep in [entity_mid] + parents
             },
             "output_schema": {"answer": answer_type}, "source_scope": [],
             "solver_template": "synthesize_operation_dag",

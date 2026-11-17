@@ -54,6 +54,13 @@ def audit_decision_opportunities(spec: dict) -> dict:
         ),
         "media_fact_source_ids": media_fact_ids,
         # Plans are frozen DAGs; they do not encode optional future actions.
+        "independent_media_acquisitions": sum(
+            task["operation"] == "fetch_typed_evidence"
+            and not task["depends_on"]
+            and any(sources[sid]["modality"] in {"image", "audio", "video"}
+                    for sid in task["source_scope"])
+            for task in tasks
+        ),
         "conditional_feedback_dispatch": False,
     }
 
@@ -75,6 +82,9 @@ def summarize_decision_opportunities(scenes: list[dict]) -> dict:
         "mean_parallel_width": round(
             sum(r["max_parallel_width"] for r in rows)/len(rows), 3
         ) if rows else 0.0,
+        "with_independent_media_acquisition": sum(
+            r["independent_media_acquisitions"] > 0 for r in rows
+        ),
         "conditional_feedback_dispatch_scenes": 0,
         "scope": "structural opportunities in trusted frozen Macro DAGs",
     }
