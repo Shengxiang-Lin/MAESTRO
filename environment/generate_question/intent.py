@@ -94,13 +94,7 @@ def intent_contract(spec: dict) -> dict:
         )
     elif pattern == "task_plan":
         plan = spec["macro_plan"]
-        v5 = plan.get("composer_policy") == "goal_conditioned_operation_dag_v5"
-        v6 = plan.get("composer_policy") == "goal_conditioned_output_first_v6"
-        goal_kind = plan.get("goal_spec", {}).get(
-            "source_profile", plan.get("goal_spec", {}).get(
-                "kind", "entity_resolution"
-            )
-        )
+        goal_kind = plan["goal_spec"]["source_profile"]
         constraints = [
             "Combine the independently recorded identifying clues.",
             "Identify the matching dossier before following its relationship records.",
@@ -109,11 +103,7 @@ def intent_contract(spec: dict) -> dict:
                 if goal_kind == "entity_resolution" else
                 "Report ONLY the frozen typed Goal output: "
                 + plan["goal"]["public_label"] + ". "
-                + ("Preserve every typed field and requested computation."
-                   if v5 or v6 else
-                   "Preserve the exact three-field structured answer."
-                   if goal_kind == "structured_answer" else
-                   "Do not request an additional intermediate entity.")
+                + "Preserve every typed field and requested computation."
             ),
             "Write the user request as an ordinary archival investigation; "
             "do not mention generators, simulated worlds, YAGO or provenance.",
@@ -156,17 +146,8 @@ def intent_contract(spec: dict) -> dict:
             "goal_constrained_yago_grounding_v1"
         ):
             goal = plan["goal"]["semantic"]
-            if v6:
-                from .goal_ops_v6 import goal_question
-                final_question = goal_question(plan)
-            elif v5:
-                from .goal_ops_v5 import goal_question
-                final_question = goal_question(plan)
-            elif goal_kind != "entity_resolution":
-                from .typed_goal_v4 import numeric_goal_question
-                final_question = numeric_goal_question(plan)
-            else:
-                final_question = goal["question"]
+            from .goal_plan import goal_question
+            final_question = goal_question(plan)
             constraints.extend([
                 "The precise final user goal must be semantically equivalent "
                 "to: " + final_question,
