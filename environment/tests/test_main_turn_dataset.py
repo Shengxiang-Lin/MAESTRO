@@ -680,6 +680,89 @@ class MainTurnDatasetTests(unittest.TestCase):
                     output_path=folder / "should_not_exist.jsonl",
                 )
 
+    def test_stage3_max_scenes_selects_from_accepted_stage2_not_stage1_prefix(self):
+        """Stage-2 failures do not consume max_scenes or Stage-3 attempts."""
+        scenes = [fixture(i) for i in (33, 34, 35, 36, 37)]
+        # Source order: no reports, complete, partial, complete, complete.
+        # max_scenes=2 must choose positions 1 and 3 (not 0 and 1).
+        reports = (
+            reviewed_rows(scenes[1])
+            + reviewed_rows(scenes[2])[:-1]
+            + reviewed_rows(scenes[3])
+            + reviewed_rows(scenes[4])
+        )
+        with TemporaryDirectory() as td:
+            folder = Path(td)
+            scenes_path = folder / "scenes.jsonl"
+            reports_path = folder / "reports.jsonl"
+            scenes_path.write_text(
+                "".join(json.dumps(sc, ensure_ascii=False) + "\n"
+                        for sc in scenes), encoding="utf-8",
+            )
+            reports_path.write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n"
+                        for row in reports), encoding="utf-8",
+            )
+            out = folder / "stage3"
+            kwargs = dict(
+                scenes_path=scenes_path, reports_path=reports_path,
+                output_dir=out, max_scenes=2, no_progress=True,
+                workers=2, max_attempts=16,
+            )
+            first = generate_turns(**kwargs)
+            self.assertEqual(first["status"], "done", first)
+            self.assertEqual(first["requested_scenes"], 2)
+            self.assertEqual(first["accepted_scenes"], 2)
+            self.assertEqual(first["rejected_scenes"], 0)
+            stats = first["stage2_selection"]
+            self.assertEqual(stats["stage1_scenes"], 5)
+            self.assertEqual(stats["eligible_stage2_scenes"], 3)
+            self.assertEqual(stats["selected_stage3_scenes"], 2)
+            self.assertEqual(stats["no_published_stage2_reports"], 1)
+            self.assertEqual(stats["incomplete_stage2_reports"], 1)
+            self.assertEqual(stats["skipped_without_accepted_stage2"], 2)
+            published = [
+                json.loads(row) for row in
+                (out / "main_turns.jsonl").read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+            self.assertEqual(
+                {row["task_id"] for row in published},
+                {scenes[1]["task_id"], scenes[3]["task_id"]},
+            )
+            self.assertEqual(
+                [json.loads(row)["task_id"] for row in
+                 (out / "episodes.jsonl").read_text().splitlines()],
+                [scenes[1]["task_id"], scenes[3]["task_id"]],
+            )
+            self.assertEqual((out / "failed.jsonl").read_text(), "")
+            resumed = generate_turns(**{**kwargs, "workers": 1})
+            self.assertEqual(resumed["stage2_selection"], stats)
+            self.assertEqual(resumed["main_training_turns"],
+                             first["main_training_turns"])
+            self.assertEqual(resumed["rejected_scenes"], 0)
+
+    def test_stage3_refuses_empty_accepted_stage2_bank(self):
+        scene = fixture(38)
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes, reports = root / "scenes.jsonl", root / "reports.jsonl"
+            scenes.write_text(
+                json.dumps(scene, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            reports.write_text("", encoding="utf-8")
+            out = root / "stage3"
+            with self.assertRaisesRegex(
+                ValueError, "stage3_no_complete_accepted_stage2_scenes",
+            ):
+                generate_turns(
+                    scenes_path=scenes, reports_path=reports,
+                    output_dir=out, no_progress=True,
+                )
+            self.assertFalse(out.exists())
+
     def test_stage3_live_progress_counts_and_resume(self):
         """Scene-level totals and SFT turn counts stay correct on restart."""
         from unittest.mock import patch
