@@ -515,7 +515,24 @@ def _o1_answer_requirements(record: dict) -> list[str]:
 
 
 def _o1_answer_issues(answer: str, contract: dict) -> list[str]:
-    if not isinstance(answer, str) or not 18 <= len(answer.strip()) <= 6500:
+    if not isinstance(answer, str):
+        return ["answer_invalid_length_or_type"]
+    answer_text = answer.strip()
+    rows = contract.get("exact_oracle_answer")
+    # A terminal scalar may itself be the complete natural-language answer.
+    # E.g. "132", "second", "2020-11-19". This exemption is allowed ONLY
+    # for a one-row final answer that matches the immutable Oracle exactly;
+    # intermediate handoffs still require an informative natural sentence.
+    exact_terminal_scalar = (
+        contract.get("macro_is_terminal") is True
+        and isinstance(rows, list) and len(rows) == 1
+        and isinstance(rows[0], dict) and set(rows[0]) == {"answer"}
+        and isinstance(rows[0]["answer"], (str, int, float))
+        and not isinstance(rows[0]["answer"], bool)
+        and answer_text == str(rows[0]["answer"]).strip()
+    )
+    if (not answer_text or len(answer_text) > 6500
+            or (len(answer_text) < 18 and not exact_terminal_scalar)):
         return ["answer_invalid_length_or_type"]
     missing = []
     for literal in contract.get("answer_required_literals", []):
@@ -658,6 +675,8 @@ Return ONLY a JSON object with TWO authored text fields:
 {"answer":"...", "trace_summary":"..."}
 
 ANSWER: directly answer the DELEGATED task. State the useful finding FIRST.
+For a final single-value task, you may return the exact value directly
+(e.g. a number, date, choice or place name); use TRACE_SUMMARY for explanation.
 All distinct entity identifiers, dates, measurements, scalar fields, and
 entity-to-value associations in exact_oracle_answer must be preserved
 verbatim in the answer, including when there are many rows. Use compact
@@ -707,7 +726,9 @@ CODE_OWNED_CRITIC_SYSTEM = CRITIC_SYSTEM + """
 The model authored a natural-language ANSWER (candidate_finish.result)
 and an execution trace_summary. The exact_oracle_answer is immutable
 and the application has already checked all distinct scalar values
-appear in the answer. Critically check each entity/value association,
+appear in the answer. For a final one-value answer, a bare exact number,
+date, choice or entity name is valid if the trace supports it; do not
+reject it solely for being concise. Critically check each entity/value association,
 the meaning and local scope of this task, answer usefulness to Main,
 and the trace's factual evidence basis. The trace is a concise
 Orchestra-o1-style execution recap, not ungrounded success claims,
