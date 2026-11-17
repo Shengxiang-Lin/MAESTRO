@@ -1,15 +1,16 @@
+# Stage-3 Qwen pilot: 10 Scene Clean References, using the same Stage-2 bank.
 # Base orchestration: trusted Main-Agent decisions from reviewed Sub-Agent reports.
 # All paths are relative to the MAESTRO repository root.
 version: 1
 
 input:
   scenes: environment/data/stage1/questions/scenes.jsonl
-  reports: environment/data/stage2/subtasks.jsonl
+  reports: environment/data/pilots/qwen_stage234_10/stage2/subtasks.jsonl
 
 generation:
-  output_dir: environment/data/stage3
-  max_scenes: null    # null means every accepted Scene
-  workers: 8
+  output_dir: environment/data/pilots/qwen_stage234_10/stage3
+  max_scenes: 10  # reuse first 10 accepted Stage-1 Scenes
+  workers: 4
   mode: llm           # llm or template
   freeze_dispatch: true  # Compiler fixes task batches; LLM writes reasoning only
   max_revisions: 2
