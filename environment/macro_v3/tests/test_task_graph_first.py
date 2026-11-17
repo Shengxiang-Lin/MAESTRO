@@ -170,6 +170,5 @@ class MacroGraphFirstTests(unittest.TestCase):
         self.assertEqual(validate_replay(broken_scene)["status"], "invalid")
 
 
-@unittest.skipUnless(RDF_READY, "pyoxigraph required")
 if __name__ == "__main__":
     unittest.main()
