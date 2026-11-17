@@ -628,6 +628,70 @@ class ReportingUnitTests(unittest.TestCase):
             "trace_summary", critic.calls[0]["candidate_finish"]
         )
 
+    def test_stage2_operator_style_report_is_normalized_before_review(self):
+        """Real local-Qwen failure: natural findings mixed with SQL-like verbs."""
+        record = realize_scene(scene(42, "medium"))["macro_tasks"][0]
+
+        class OperatorStyledAuthor:
+            def complete_json(self, system_prompt, user_prompt):
+                contract = json.loads(user_prompt)["frozen_task_and_evidence"]
+                return {
+                    "answer": _mock_o1_draft(contract)["answer"],
+                    "trace_summary": (
+                        "- Scanned the supplied source annotations for recorded clues.\\n"
+                        "- Joined the two candidate lists by their identifiers.\\n"
+                        "- Projected the resulting values into the requested fields.\\n"
+                        "- Removed duplicate rows and returned the matching records."
+                    ),
+                }
+
+        critic = ReportCritic()
+        reviewed, info = author_critic_report(
+            record, question=None, author=OperatorStyledAuthor(),
+            critic=critic, max_revisions=0, result_policy="code_owned",
+        )
+        self.assertIsNotNone(reviewed, info)
+        self.assertEqual(info["status"], "accepted", info)
+        self.assertEqual(info["attempts"], 1)
+        trace = reviewed["trace_summary"]["narrative"]
+        self.assertIn("Reviewed the supplied", trace)
+        self.assertIn("Cross-referenced the two", trace)
+        self.assertIn("Retained the resulting values", trace)
+        self.assertIn("duplicate records", trace)
+        self.assertNotIn("Scanned", trace)
+        self.assertNotIn("Joined", trace)
+        self.assertEqual(reviewed["answer"], record["answer"])
+        self.assertEqual(
+            reviewed["answer_with_provenance"], record["answer_with_provenance"]
+        )
+        self.assertEqual(reviewed["trace_summary"]["steps"],
+                         record["trace_summary"]["steps"])
+        self.assertTrue(info["surface_rewrites"])
+        self.assertEqual(len(critic.calls), 1)
+
+    def test_report_style_rewrite_preserves_claims_and_unsafe_markers(self):
+        from environment.implement_subtask.stage_local_claims import (
+            normalize_report_language,
+        )
+        original = (
+            "Scanned the Project event ledger and joined two workproducts; "
+            "projected eight rows for ENT-04CBFDE8A458 in 2025."
+        )
+        rewritten, changes = normalize_report_language(original)
+        self.assertIn("Reviewed the Project event ledger", rewritten)
+        self.assertIn("cross-referenced two sets of evidence", rewritten)
+        self.assertIn("retained eight records", rewritten)
+        self.assertIn("ENT-04CBFDE8A458", rewritten)
+        self.assertIn("2025", rewritten)
+        self.assertTrue(changes)
+        self.assertEqual(normalize_report_language(rewritten)[0], rewritten)
+
+        unsafe = "Scanned M1_a; checked the frozen oracle relation using GoogleSearchAction."
+        cleaned, _ = normalize_report_language(unsafe)
+        self.assertIn("M1_a", cleaned)
+        self.assertIn("frozen oracle relation", cleaned)
+        self.assertIn("GoogleSearchAction", cleaned)
+
     def test_task_plan_preserves_stage1_observation_descriptions(self):
         source_scene = scene(0, "medium")
         source = source_scene["world"]["sources"]
@@ -807,7 +871,7 @@ class ReportingUnitTests(unittest.TestCase):
 
     def test_config_has_model_roles_and_does_not_break_oracle_mode(self):
         cfg = load_reporting_config(DEFAULT_CONFIG)
-        self.assertEqual(cfg["model"], "qwen3.8-flash")
+        self.assertEqual(cfg["model"], "local-qwen3.5-9b")
         self.assertEqual(cfg["max_revisions"], 2)
         self.assertTrue(str(cfg["source_subtasks"]).endswith("subtasks.jsonl"))
 
