@@ -161,8 +161,5 @@ class HybridWorldTests(unittest.TestCase):
 
 
 @unittest.skipUnless(RDF_READY, "requires RDF loader")
-class HybridFullPipelineTests(unittest.TestCase):
-
-
 if __name__ == "__main__":
     unittest.main()
