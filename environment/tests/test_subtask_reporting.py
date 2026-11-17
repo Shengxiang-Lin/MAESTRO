@@ -706,7 +706,7 @@ class ReportingBatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             subtasks, index = self._teacher_inputs(root, [27, 28])
-            author = ReportAuthor(fail_topic="Fictional Study 28")
+            author = ReportAuthor(fail_topic=scene(28)["question"])
             summary = naturalize_subtasks(
                 source_subtasks=subtasks, source_scene_index=index,
                 output_dir=root / "reviewed", api_base="http://unused/v1",
@@ -878,7 +878,7 @@ class ReportingBatchTests(unittest.TestCase):
                 source_subtasks=oracle, source_scene_index=index,
                 output_dir=prior_dir, api_base="http://mock/v1",
                 model="mock", workers=2, no_progress=True, max_revisions=0,
-                clients=(ReportAuthor(fail_topic="Fictional Study 47"),
+                clients=(ReportAuthor(fail_topic=scene(47)["question"]),
                          ReportCritic()),
             )
             self.assertEqual(prior["status"], "partial")
