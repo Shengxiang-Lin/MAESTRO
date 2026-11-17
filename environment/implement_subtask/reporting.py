@@ -511,8 +511,13 @@ def _o1_answer_issues(answer: str, contract: dict) -> list[str]:
         return ["answer_invalid_length_or_type"]
     missing = []
     for literal in contract.get("answer_required_literals", []):
-        pattern = (r"(?<![A-Za-z0-9_.-])" + re.escape(literal)
-                   + r"(?![A-Za-z0-9_.-])")
+        # A trailing sentence period is punctuation, not part of an
+        # identifier. For numbers only, reject decimal continuations.
+        number = re.fullmatch(r"-?\d+(?:\.\d+)?", literal)
+        left = r"(?<![A-Za-z0-9_.-])" if number else r"(?<![A-Za-z0-9_-])"
+        right = (r"(?![A-Za-z0-9_-]|\.\d)" if number
+                 else r"(?![A-Za-z0-9_-])")
+        pattern = left + re.escape(literal) + right
         if not re.search(pattern, answer, re.I):
             missing.append(literal)
     return (
