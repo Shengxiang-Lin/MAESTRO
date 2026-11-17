@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from orchestra.base_main_agent import BaseMainAgent
 from orchestra.prompts.omnigaia import OmniGAIAMainAgentPrompt
-from environment.generate_question.evidence_tools import o1_tool_definitions
+from environment.generate_question.execution.evidence_tools import o1_tool_definitions
 
 def source_catalog(scene: dict) -> dict[str, dict]:
     entries = scene["public"]["available_source_descriptions"]

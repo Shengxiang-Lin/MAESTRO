@@ -137,7 +137,7 @@ def generate_from_config(path: str | Path = DEFAULT_CONFIG,
     # Resolve overrides with the same root-relative semantics as YAML paths.
     for key in ("scenes_path", "reports_path", "output_dir"):
         options[key] = _path(str(options[key]))
-    from environment.generate_question.backend import OpenAICompatibleBackend
+    from environment.generate_question.authoring.backend import OpenAICompatibleBackend
     from .generate_turns import generate_turns
 
     author = critic = None

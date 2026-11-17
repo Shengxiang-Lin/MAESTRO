@@ -53,7 +53,7 @@ def _signature(scenes: Path, reports: Path, *, max_scenes, sub_model,
         "trajectory_builder.py", "action_author.py",
         "reasoning_fidelity.py", "o1_compat.py", "generate_turns.py",
         "../implement_subtask/public_surface.py",
-        "../generate_question/evidence_tools.py",
+        "../generate_question/execution/evidence_tools.py",
         "../../orchestra/base_main_agent.py",
         "../../orchestra/prompts/omnigaia.py",
         "../../benchmark/omnigaia/tools/google_search.py",
@@ -444,7 +444,7 @@ def generate_turns(
 def main(argv: list[str] | None = None) -> int:
     import argparse
     import os
-    from environment.generate_question.backend import OpenAICompatibleBackend
+    from environment.generate_question.authoring.backend import OpenAICompatibleBackend
 
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--scenes", type=Path, required=True)

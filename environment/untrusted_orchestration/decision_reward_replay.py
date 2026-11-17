@@ -15,7 +15,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
-from environment.generate_question.program_ir import Relation
+from environment.generate_question.execution.program_ir import Relation
 from environment.untrusted_orchestration.event_scheduler import EventScheduler
 from environment.untrusted_orchestration.faults import relation_rows
 from environment.untrusted_orchestration.state_machine import Attempt, ExecutionState

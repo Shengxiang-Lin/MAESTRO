@@ -9,10 +9,10 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
-from environment.generate_question.compiler import run_macro_tasks
-from environment.generate_question.program_ir import evaluate_program, answer_values
-from environment.generate_question.quality import validate_replay
-from environment.generate_question.evidence_tools import simulate_acquisition_trace
+from environment.generate_question.execution.compiler import run_macro_tasks
+from environment.generate_question.execution.program_ir import evaluate_program, answer_values
+from environment.generate_question.auditing.quality import validate_replay
+from environment.generate_question.execution.evidence_tools import simulate_acquisition_trace
 
 
 def _fact_index(world: dict) -> dict[str, dict]:

@@ -20,7 +20,7 @@ from environment.base_orchestration.o1_compat import (
     o1_prompt, o1_history, source_catalog,
 )
 from environment.base_orchestration.trajectory_builder import _strict_reports
-from environment.generate_question.program_ir import Relation
+from environment.generate_question.execution.program_ir import Relation
 from .report_author import naturalize_report
 from .public_language import sanitize_public_report
 from .reasoning_fidelity import reasoning_evidence_issues
