@@ -28,7 +28,7 @@ examples. Nothing in the Main-visible history is truncated or summarized.
 
 For rejected authored task prose, Stage 3 now gives targeted revision
 hints for short/invalid context and generic repeated task instructions,
-using only current-round public sources and fields. The private failure
+using only current-round public sources and fields. The failed-action
 journal records context/instruction lengths and types (not candidate
 text), to distinguish a short context from an overlong one. No guard,
 source permission, frozen dispatch or Critic requirement is relaxed.
