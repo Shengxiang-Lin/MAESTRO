@@ -131,6 +131,5 @@ class KnowledgeV2QualityTests(unittest.TestCase):
         self.assertFalse(report["identification_unique"])
 
 
-@unittest.skipUnless(RDF_READY, "requires RDF loader")
 if __name__ == "__main__":
     unittest.main()
