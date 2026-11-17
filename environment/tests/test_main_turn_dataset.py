@@ -9,9 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from environment.generate_question.spec import make_spec
-from environment.generate_question.question import reference_question
-from environment.generate_question.quality import compile_and_validate
+from environment.tests.current_stage1 import current_scene
 from environment.implement_subtask.realize import realize_scene
 from environment.base_orchestration.trajectory_builder import build_episode
 from environment.base_orchestration.generate_turns import generate_turns
@@ -20,13 +18,7 @@ from environment.base_orchestration.action_author import action_issues
 
 
 def fixture(i=0):
-    spec = make_spec(
-        seed_record={"record_id": "stage3-turn-"+str(i),
-                     "topic": "Premier League", "domain_hint": "sports"},
-        ordinal=i, run_seed=97, difficulty="hard",
-        macro_first_v2_share=100,
-    )
-    return compile_and_validate(spec, reference_question(spec))
+    return current_scene(i)
 
 
 def reviewed_rows(scene):

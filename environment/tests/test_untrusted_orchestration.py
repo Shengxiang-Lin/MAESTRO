@@ -9,9 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from environment.__main__ import main
-from environment.generate_question.spec import make_spec
-from environment.generate_question.question import reference_question
-from environment.generate_question.quality import compile_and_validate
+from environment.tests.current_stage1 import current_scene
 from environment.implement_subtask.realize import realize_scene
 from environment.base_orchestration.trajectory_builder import build_episode
 from environment.untrusted_orchestration.faults import (
@@ -27,19 +25,11 @@ from environment.untrusted_orchestration.config import DEFAULT_CONFIG, load_conf
 from environment.untrusted_orchestration.state_machine import ExecutionState, Attempt
 from environment.untrusted_orchestration.report_author import naturalize_report
 from environment.untrusted_orchestration.config import generate_from_config
-from environment.generate_question.program_ir import Relation
+from environment.generate_question.execution.program_ir import Relation
 
 
 def sample(i=0):
-    spec = make_spec(
-        seed_record={
-            "record_id": "untrusted-" + str(i), "topic": "Pomona, California",
-            "domain_hint": "geography",
-        },
-        ordinal=i, run_seed=97, difficulty="hard",
-        macro_first_v2_share=100,
-    )
-    scene = compile_and_validate(spec, reference_question(spec))
+    scene = current_scene(i)
     reports = [{
         **deepcopy(row),
         "finish_result": {
@@ -51,7 +41,7 @@ def sample(i=0):
     } for row in realize_scene(scene)["macro_tasks"]]
     episode, _, _, status = build_episode(scene, reports)
     if status["status"] != "accepted":
-        raise AssertionError("invalid_clean_fixture")
+        raise AssertionError("invalid_clean_fixture:" + str(status))
     return scene, reports, episode
 
 
