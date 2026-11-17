@@ -357,6 +357,8 @@ def typed_goal_question(plan: dict) -> str:
         "the entity obtained through the documented relationship sequence "
         f"({chain})"
     )
+    if plan["goal_recipe_keys"].count("containedinplace") >= 2:
+        scope += " into its larger administrative area"
     if kind == "aggregation":
         final = (
             "how many distinct dated observation entries from 2025 onward "
