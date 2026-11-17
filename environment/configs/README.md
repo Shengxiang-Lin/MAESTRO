@@ -25,7 +25,7 @@ for this pilot. Each stage writes beneath
 `environment/data/pilots/qwen_stage234_10/`. Stage 4 checks
 `input.clean_episodes` against Stage 3's actual clean references and samples
 only one returned-feedback fork per Scene, with up to 12 atom candidates per
-round. API Author/Critic uses `qwen3.8-flash`.
+round. API Author/Critic uses the locally served `local-qwen3.5-9b`.
 
 The Stage 1 construction and Question review phases are independently
 journaled. Its latest output is a single schema, not a selectable
@@ -41,12 +41,14 @@ its private deterministic Oracle cache is under `stage2/oracle/`.
 During this pilot, Stage 4 checks and reuses the reviewed Stage 3
 `episodes.jsonl` against the frozen Stage 1/2 evidence bank.
 
-Stages 1–4 use DashScope `qwen3.8-flash` for active LLM Author/Critic
-calls. Export `DASHSCOPE_API_KEY` before running; the endpoint is
-`https://dashscope.aliyuncs.com/compatible-mode/v1`. Stage 1 resolves it
-through `config/model_config.yaml`, while Stages 2–4 set the same endpoint
-explicitly. In Stage 3/4, `generation.sub_model` is the Sub-Agent model
-label recorded in the simulated Main history, not another API invocation.
+Stages 1–4 call the already-running local vLLM `local-qwen3.5-9b` over
+`http://127.0.0.1:8807/v1` for active LLM Author/Critic calls.
+No API key is required. Stage 1 deliberately bypasses its API-only model
+registry resolver; Stages 2–4 configure the endpoint explicitly. The vLLM
+server is launched with thinking disabled by default. Stage 1's optional
+Scenario Author/Critic remain disabled (`null`) as before.
+In Stage 3/4, `generation.sub_model` is the Sub-Agent model label recorded
+in the simulated Main history, not another API invocation.
 
 Keep output directories distinct between pilot runs, seeds and modified
 configuration. The maintained entrypoints are the four stage-specific
