@@ -104,8 +104,13 @@ def stage3_author_context(
                 source["title"] + "; path: " + path
             )
         instruction += "\n\n" + "\n".join(source_lines)
+    category = scene.get("problem_spec", {}).get("macro_plan", {}).get(
+        "domain", "general",
+    )
     return (
-        "==== QUESTION AND INITIAL OBSERVATIONS ====\n" +
+        "Task Type: Multi-source investigation\n" +
+        "Category: " + str(category) +
+        "\n\n==== QUESTION AND INITIAL OBSERVATIONS ====\n" +
         instruction +
         "\n\n==== PROGRESS ====\n" +
         f"Attempt {attempt}/{max_attempts}; "
