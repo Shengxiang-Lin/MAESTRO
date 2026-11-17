@@ -105,8 +105,5 @@ class KnowledgeBridgeTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_RDF, "pyoxigraph required for YAGO RDF parsing")
-class KnowledgeCanonicalCliTests(unittest.TestCase):
-
-
 if __name__ == "__main__":
     unittest.main()
