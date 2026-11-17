@@ -62,6 +62,69 @@ class Stage1GeneratorTests(unittest.TestCase):
         self.assertTrue(operation_subgraph_leq(smaller, larger))
         self.assertFalse(operation_subgraph_leq(larger, smaller))
 
+    def test_retired_config_keys_are_rejected(self):
+        from environment.config import load_config, DEFAULT_CONFIG
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        import yaml
+        valid = yaml.safe_load(DEFAULT_CONFIG.read_text())
+        for section, key, value in (
+            ("generation", "task_plan_composer", "legacy"),
+            ("generation", "knowledge_variant", "graph_first"),
+            ("generation", "knowledge_world_mode", "witnessed"),
+            ("input", "mmqa", "legacy.jsonl"),
+        ):
+            with self.subTest(section=section, key=key):
+                bad = copy.deepcopy(valid)
+                bad[section][key] = value
+                with TemporaryDirectory() as temp:
+                    path = Path(temp) / "invalid.yaml"
+                    path.write_text(yaml.safe_dump(bad))
+                    with self.assertRaises(ValueError):
+                        load_config(path)
+
+    def test_canonical_cli_construction_with_real_rdf_fixture(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from environment.config import DEFAULT_CONFIG, load_config, args_from_config
+        from environment.generate_question.stages import construct_scenes
+        from environment.generate_question.question import reference_question
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            rdf = root / "yago-4.6-facts.ttl"
+            rdf.write_text(
+                "@prefix p: <https://example.org/> .\n"
+                "@prefix s: <http://schema.org/> .\n"
+                "p:person s:birthPlace p:town .\n"
+                "p:town s:containedInPlace p:region .\n"
+                "p:region s:containedInPlace p:country .\n"
+            )
+            opts = args_from_config(
+                load_config(DEFAULT_CONFIG),
+                output_dir=root / "generated", target=3,
+                no_progress=True,
+            )
+            opts.knowledge_yago = rdf
+            opts.max_records = 20
+            opts.question_model = None
+            opts.question_api_base = None
+            opts.scenario_model = None
+            opts.scenario_api_base = None
+            result = construct_scenes(opts)
+            self.assertEqual(result["status"], "done", result)
+            self.assertEqual(result["generated"], 3)
+            rows = [
+                json.loads(line)
+                for line in (root / "generated" / "scenes.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all(row["problem_spec"]["macro_plan"][
+                "composer_policy"] == "output_first" for row in rows))
+            self.assertTrue(all(
+                row["gold_answer"] and row["question"] ==
+                reference_question(row["problem_spec"]) for row in rows
+            ))
+
     def test_seeded_measurements_have_no_constant_answer_shortcut(self):
         seen = {}
         binding = {
