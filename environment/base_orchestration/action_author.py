@@ -134,14 +134,21 @@ relationship or evidence to inspect, how the available clue should be
 used, and the requested deliverable. Refer to permitted source IDs
 literally at least once; preserve their public names and modalities.
 Use natural, actionable investigative language, NOT generic phrases
-like 'identify candidates meeting evidence in the user question'.
-Do NOT copy the reference_instructions wholesale. Do not include
+like 'identify candidates meeting evidence in the user question' or
+'combine the returned records by their matching identifiers'. If several
+tasks run in parallel, distinguish EACH by its own permitted source IDs,
+source titles, clue and requested output fields; do not reuse one template
+across all task slots. Do NOT copy the reference_instructions wholesale.
+Do not include
 model, tools or task IDs. Return fields must remain within the locked
 output_fields; later downstream investigation is OUT OF SCOPE.
 
-For each context, write a short, natural handoff describing why this
-task is needed and what earlier results are relevant. Earlier public
-result strings will be attached VERBATIM by the application as a
+For each context, write ONE specific, natural handoff of 25–700
+characters: say why this investigation is needed and which previously
+returned clue makes it possible. Do not leave context blank or write only
+a short label like "Follow up". For the first round, explain the user-
+provided clue or evidence source instead of claiming a prior result.
+Earlier public result strings will be attached VERBATIM by the application as a
 separate evidence suffix when there are prerequisite results. Do not
 reproduce a full result list unnecessarily, but use relevant public
 identifiers accurately in the task_instruction or context.
@@ -489,6 +496,57 @@ def _stage3_task_prose_issues(
         if _GENERATION_META.search(instruction + " " + context):
             issues.append(f"task_{i}_generation_process_leak")
     return sorted(set(issues))
+
+
+def _stage3_task_prose_repair_guidance(
+    failures: list[dict], assignments: list[dict],
+) -> list[str]:
+    """Turn a rejected public-language draft into actionable, scoped feedback.
+
+    Only task indices and CURRENT-ROUND public contracts appear here. No
+    private DAG IDs, future results or verbatim Critic dialogue are exposed.
+    """
+    guidance = []
+    for failure in failures[-2:]:
+        if failure.get("stage") != "stage3_task_prose_guard":
+            continue
+        for issue in failure.get("errors", []):
+            match = re.fullmatch(r"task_(\d+)_(.+)", issue)
+            if not match:
+                continue
+            index = int(match.group(1))
+            kind = match.group(2)
+            if not 0 <= index < len(assignments):
+                continue
+            task = assignments[index]
+            label = f"Task {index + 1}: "
+            if kind == "authored_context_invalid":
+                guidance.append(
+                    label + "Return context as a string of 25–700 "
+                    "characters. Write one sentence explaining the "
+                    "specific clue/source and WHY this task follows; "
+                    "do not paste the full earlier result because the "
+                    "application appends the evidence separately."
+                )
+            elif kind in {"generic_template_repeated",
+                          "instruction_not_naturalized"}:
+                names = ", ".join(
+                    s.get("title", s["source_id"])
+                    for s in task.get("public_source_descriptions", [])
+                )
+                sources = ", ".join(task["source_ids"]) or (
+                    "previously returned evidence"
+                )
+                fields = ", ".join(task["output_fields"])
+                guidance.append(
+                    label + "Rewrite the instruction as a concrete, "
+                    "distinct investigation, not a generic template. "
+                    f"Name current permitted source IDs ({sources}), "
+                    + (f"public source titles ({names}), " if names else "")
+                    + f"and specifically request fields ({fields}). "
+                    "Use only already provided clues, never future facts."
+                )
+    return list(dict.fromkeys(guidance))
 
 
 def _stage3_compile_task_prose(
@@ -901,10 +959,13 @@ def author_delegate_action(
                         "handoff as a failed retrieval.",
                 }
                 request["repair_guidance"] = list(dict.fromkeys(
-                    repairs[code]
-                    for failed in failures[-2:]
-                    for code in failed.get("errors", [])
-                    if code in repairs
+                    [repairs[code]
+                     for failed in failures[-2:]
+                     for code in failed.get("errors", [])
+                     if code in repairs]
+                    + (_stage3_task_prose_repair_guidance(
+                        failures, assignments,
+                    ) if naturalize_assignment_prose else [])
                 ))
         if freeze_assignment_prose and not reasoning_only_stage3:
             request["authoring_scope"] = (
@@ -985,9 +1046,27 @@ def author_delegate_action(
                 candidate, assignments, prompt=validation_prompt,
             )
             if task_prose_errors:
+                authored_tasks = (
+                    candidate.get("tasks", []) if isinstance(candidate, dict)
+                    else []
+                )
                 failures.append({
                     "stage": "stage3_task_prose_guard",
                     "errors": task_prose_errors,
+                    "task_prose_diagnostics": [{
+                        "task_index": i,
+                        "context_type": type(item.get("context")).__name__,
+                        "context_chars": (
+                            len(item["context"].strip())
+                            if isinstance(item.get("context"), str) else None
+                        ),
+                        "instruction_chars": (
+                            len(item["task_instruction"].strip())
+                            if isinstance(item.get("task_instruction"), str)
+                            else None
+                        ),
+                    } for i, item in enumerate(authored_tasks)
+                       if isinstance(item, dict)],
                 })
                 continue
             candidate = _stage3_compile_task_prose(

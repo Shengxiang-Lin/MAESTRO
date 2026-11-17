@@ -12,6 +12,7 @@ from environment.base_orchestration.action_author import (
     _assignment,
     _stage3_task_prose_issues,
     _stage3_compile_task_prose,
+    _stage3_task_prose_repair_guidance, author_delegate_action,
     proposed_template_action,
 )
 from environment.base_orchestration.o1_compat import (
@@ -94,6 +95,88 @@ class PassingCritic:
 
 
 class FrozenTaskProseTests(unittest.TestCase):
+    def test_retry_hints_target_context_length_and_generic_prose(self):
+        scene = current_scene(0)
+        target = next(
+            t for t in scene["macro_graph"]["tasks"]
+            if t["source_ids"] and not t["depends_on"]
+        )
+        assignment = _assignment(target, source_catalog(scene), {})
+        failures = [{
+            "stage": "stage3_task_prose_guard",
+            "errors": [
+                "task_0_authored_context_invalid",
+                "task_0_generic_template_repeated",
+            ],
+        }]
+        guidance = _stage3_task_prose_repair_guidance(
+            failures, [assignment],
+        )
+        self.assertEqual(len(guidance), 2)
+        self.assertTrue(any("25–700" in item for item in guidance))
+        self.assertTrue(any(
+            assignment["source_ids"][0] in item for item in guidance
+        ))
+        self.assertTrue(any(
+            assignment["output_fields"][0] in item for item in guidance
+        ))
+        self.assertFalse(any("work_M" in item for item in guidance))
+
+        class RepairingAuthor:
+            def __init__(self):
+                self.requests = []
+
+            def complete_json(self, system, payload):
+                request = json.loads(payload)
+                self.requests.append(request)
+                if not request.get("repair_guidance"):
+                    return {
+                        "reasoning": (
+                            "The current source investigation can establish "
+                            "the requested evidence using the provided clues."
+                        ),
+                        "tasks": [{
+                            "task_instruction": (
+                                "Identify the candidates meeting the evidence "
+                                "described in the user question for the assigned "
+                                "investigation, without checking later sources."
+                            ),
+                            "context": "Follow up.",
+                        }],
+                    }
+                slot = request["pending_investigations"][0]
+                return {
+                    "reasoning": (
+                        "The current source investigation can establish "
+                        "the requested evidence using the provided clues."
+                    ),
+                    "tasks": author_task_prose([slot]),
+                }
+
+        author = RepairingAuthor()
+        action, status = author_delegate_action(
+            assignments=[assignment], prompt=scene["question"],
+            author=author, critic=PassingCritic(), max_revisions=1,
+            freeze_assignment_prose=True, reasoning_only_stage3=True,
+            naturalize_assignment_prose=True,
+        )
+        self.assertIsNotNone(action, status)
+        self.assertEqual(status["status"], "accepted", status)
+        self.assertEqual(status["attempts"], 2)
+        self.assertEqual(len(author.requests), 2)
+        self.assertTrue(any(
+            "25–700" in text
+            for text in author.requests[1]["repair_guidance"]
+        ))
+        self.assertTrue(any(
+            assignment["source_ids"][0] in text
+            for text in author.requests[1]["repair_guidance"]
+        ))
+        self.assertEqual(action["params"]["tasks"][0]["model"],
+                         assignment["model"])
+        self.assertEqual(action["params"]["tasks"][0]["tools"],
+                         assignment["tools"])
+
     def test_guard_blocks_invented_identifiers_or_missing_sources(self):
         scene = current_scene(0)
         graph = scene["macro_graph"]

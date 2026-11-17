@@ -719,6 +719,69 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertIn("trace_summary_internal_teacher_jargon", problems)
         self.assertIn("trace_summary_claims_unperformed_tool_or_media_action", problems)
 
+    def test_exact_terminal_scalar_answers_do_not_need_filler(self):
+        """Qwen's four valid short terminal answers must pass unchanged."""
+        from environment.implement_subtask.reporting import _o1_answer_issues
+        for value in (132, "Ashbourne County", "second", "2020-11-19"):
+            with self.subTest(value=value):
+                contract = {
+                    "macro_is_terminal": True,
+                    "exact_oracle_answer": [{"answer": value}],
+                    "answer_required_literals": [str(value)],
+                }
+                self.assertEqual(_o1_answer_issues(str(value), contract), [])
+                self.assertEqual(
+                    _o1_answer_issues(str(value), {
+                        **contract, "macro_is_terminal": False,
+                    }),
+                    ["answer_invalid_length_or_type"],
+                )
+                self.assertEqual(
+                    _o1_answer_issues("not the answer", contract),
+                    ["answer_invalid_length_or_type"],
+                )
+                self.assertTrue(_o1_answer_issues(
+                    "A different answer is recorded here.", contract,
+                ))
+        # A short intermediate handoff is NOT a final answer.
+        intermediate = {
+            "macro_is_terminal": True,
+            "exact_oracle_answer": [{"case_id": "Dossier-X"}],
+            "answer_required_literals": ["Dossier-X"],
+        }
+        self.assertIn("answer_invalid_length_or_type",
+                      _o1_answer_issues("Dossier-X", intermediate))
+
+    def test_terminal_short_answer_passes_review_without_oracle_drift(self):
+        records = realize_scene(scene(42, "medium"))["macro_tasks"]
+        terminal = next(
+            record for record in records
+            if record["output_schema"] == ["answer"]
+        )
+        expected = str(terminal["answer"][0]["answer"])
+
+        class ShortAnswerAuthor:
+            def complete_json(self, system_prompt, user_prompt):
+                contract = json.loads(user_prompt)["frozen_task_and_evidence"]
+                return {
+                    "answer": expected,
+                    "trace_summary": _mock_o1_draft(contract)["trace_summary"],
+                }
+
+        critic = ReportCritic()
+        published, status = author_critic_report(
+            terminal, question=None, author=ShortAnswerAuthor(),
+            critic=critic, max_revisions=0, is_terminal=True,
+            result_policy="code_owned",
+        )
+        self.assertEqual(status["status"], "accepted", status)
+        self.assertEqual(status["attempts"], 1)
+        self.assertEqual(published["finish_result"]["result"], expected)
+        self.assertEqual(published["answer"], terminal["answer"])
+        self.assertEqual(published["answer_with_provenance"],
+                         terminal["answer_with_provenance"])
+        self.assertEqual(len(critic.calls), 1)
+
     def test_task_plan_preserves_stage1_observation_descriptions(self):
         source_scene = scene(0, "medium")
         source = source_scene["world"]["sources"]
