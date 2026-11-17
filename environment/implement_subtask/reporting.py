@@ -746,19 +746,21 @@ def author_critic_report(
                 "errors": f.get("errors", []),
                 "reason": f.get("reason"),
                 "repair_hint": (
-                    "Revise the prose to describe only operations actually "
-                    "executed by this Macro; leave ALL exact Oracle answer "
-                    "rows unchanged. Do not apply future-stage filters."
+                    "Revise BOTH natural-language fields against only the "
+                    "executed local evidence, without claiming unperformed "
+                    "media/tools or later-stage eligibility; keep the result "
+                    "rows unchanged."
                     if f.get("stage") == "critic" else None
                 ),
             } for f in failures[-2:]],
             "style": (
                 "Act like a real Sub-Agent returning finish to Main-Agent. "
-                "result = actionable finding; summary = actual work and evidence. "
-                "Describe ONLY this Macro's executed operations and stage-local "
-                "findings. Preserve ALL exact Oracle answer rows including "
-                "candidates that may fail later filters. When repairing, "
-                "correct only prose, not the answer."
+                "For code-owned results, return summary AND trace_narrative: "
+                "a brief finding plus a natural account of Stage-1 source "
+                "titles, observed_content and the checks actually performed. "
+                "Avoid internal operator names, unperformed media/tool calls "
+                "and later-stage eligibility. The result remains frozen. "
+                "On repair, revise only the two prose fields."
             ),
         }
         try:
@@ -778,6 +780,7 @@ def author_critic_report(
                 candidate = {
                     "result": frozen_result,
                     "summary": candidate.get("summary"),
+                    "trace_narrative": candidate.get("trace_narrative"),
                     "status": candidate.get("status", "done"),
                 }
             surface_rewrites = []
@@ -790,7 +793,7 @@ def author_critic_report(
                 }
                 candidate = {
                     key: _public_field_text(value, fields)
-                    if (key in {"result", "summary"}
+                    if (key in {"result", "summary", "trace_narrative"}
                         and isinstance(value, str)
                         and not (key == "result"
                                  and result_policy == "code_owned"
@@ -801,7 +804,7 @@ def author_critic_report(
                 # Surface-only repair of known internal jargon. Preserve
                 # claims, rows and provenance; all subsequent guards and
                 # Critic review still run on the revised prose.
-                for field in ("result", "summary"):
+                for field in ("result", "summary", "trace_narrative"):
                     if (field == "result" and result_policy == "code_owned"
                             and teacher_record.get("result_encoding") ==
                             "typed_evidence_json_v1"):
@@ -833,6 +836,12 @@ def author_critic_report(
                         and isinstance(candidate.get("summary"), str)
                         else None
                     ),
+                    "candidate_trace_narrative": (
+                        candidate["trace_narrative"][:1800]
+                        if isinstance(candidate, dict)
+                        and isinstance(candidate.get("trace_narrative"), str)
+                        else None
+                    ),
                 })
                 continue
             if (result_policy == "code_owned"
@@ -859,6 +868,8 @@ def author_critic_report(
                     "candidate_finish": {
                         "result": normalized_result,
                         "summary": candidate["summary"],
+                        **({"trace_narrative": candidate["trace_narrative"]}
+                           if result_policy == "code_owned" else {}),
                         "status": "done",
                     },
                     "author_result_was_structured": not isinstance(
@@ -902,8 +913,10 @@ def author_critic_report(
                 summary_text = candidate["summary"].strip()
                 row = deepcopy(teacher_record)
                 row["answer_text"] = normalized_result
-                row["trace_summary"]["narrative"] = trace_narrative(
-                    teacher_record["trace_summary"]
+                row["trace_summary"]["narrative"] = (
+                    candidate["trace_narrative"].strip()
+                    if contract.get("requires_natural_trace")
+                    else trace_narrative(teacher_record["trace_summary"])
                 )
                 # Code-owned, source-scoped observations are added AFTER
                 # the LLM's natural-language prose has been independently
@@ -942,6 +955,7 @@ def author_critic_report(
             failures.append({
                 "stage": "critic", "reason": decision.get("reason"),
                 "candidate_summary": candidate.get("summary"),
+                "candidate_trace_narrative": candidate.get("trace_narrative"),
                 "repair_hint": (
                     "Correct stage-local summary/prose only. Preserve the "
                     "entire frozen answer exactly; do not pre-filter or "
