@@ -65,6 +65,7 @@ class CombinedStage2Tests(unittest.TestCase):
             "output_dir": root / "reports",
             "api_base": "http://unused/v1",
             "model": "mock-model",
+            "result_policy": "code_owned",
             "workers": 2,
             "max_revisions": 0,
             "timeout": 60,
@@ -107,6 +108,11 @@ class CombinedStage2Tests(unittest.TestCase):
                 self.assertEqual(before["trace_summary"]["steps"],
                                  after["trace_summary"]["steps"])
                 self.assertEqual(after["finish_result"]["status"], "done")
+                from environment.implement_subtask.reporting import code_owned_result
+                self.assertEqual(after["finish_result"]["result"],
+                                 code_owned_result(before))
+                self.assertEqual(after["report_authoring"]["result_policy"],
+                                 "code_owned")
 
     def test_oracle_rebuilt_after_report_interruption(self):
         from environment.implement_subtask.pipeline import materialize_subtasks

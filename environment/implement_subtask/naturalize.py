@@ -328,11 +328,10 @@ def naturalize_subtasks(
             accepted, feedback = author_critic_report(
                 row, question=question, author=author, critic=critic,
                 max_revisions=max_revisions, is_terminal=is_terminal,
-                result_policy=(
-                    "code_owned" if result_policy == "code_owned"
-                    and row.get("evidence_trust_version")
-                    else "llm_authored"
-                ),
+                # The current Task Plan carries typed evidence rather than
+                # the retired evidence_trust_version marker. Honor the
+                # configured policy directly instead of downgrading it.
+                result_policy=result_policy,
             )
         except (KeyError, TypeError, ValueError) as exc:
             accepted, feedback = None, {
