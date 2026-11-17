@@ -61,6 +61,21 @@ class TypedGoalV4Tests(unittest.TestCase):
             )
             draft = reference_question(spec)
             self.assertEqual(guard_question(draft, spec), [], kind)
+            from environment.generate_question.task_plan_runtime import (
+                compile_macro_solvers, generate_world,
+            )
+            from environment.generate_question.program_ir import (
+                evaluate_program,
+            )
+            program = compile_macro_solvers(spec)
+            evidence = generate_world(spec)
+            execution = evaluate_program(
+                program, sources=evidence["sources"]
+            )
+            self.assertTrue(
+                execution["answer"],
+                (kind, ordinal, execution["trace"]),
+            )
             scene = compile_and_validate(spec, draft)
             self.assertEqual(validate_replay(scene)["status"], "valid", kind)
             self.assertTrue(scene["difficulty_audit"][
