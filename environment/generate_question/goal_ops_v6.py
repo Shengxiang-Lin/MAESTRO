@@ -251,6 +251,20 @@ def validate_operation_graph(goal: dict) -> list[str]:
     return []
 
 
+def operation_subgraph_leq(smaller: dict, larger: dict) -> bool:
+    """Typed partial order on operation DAGs, independent of output format.
+
+    G1 <= G2 iff every typed operation (including its prerequisite edges)
+    in G1 occurs in G2. Distinct output formats may have the same Goal
+    operation equivalence class. This is not an arbitrary total ranking.
+    """
+    if validate_operation_graph(smaller) or validate_operation_graph(larger):
+        return False
+    expanded = {node["id"]: node for node in larger["operations"]}
+    return all(expanded.get(node["id"]) == node
+               for node in smaller["operations"])
+
+
 def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
                       hops: int, goal_keys: tuple[str, ...]) -> dict:
     from .goal_composer import compose_plan, NEEDS_VERSION
