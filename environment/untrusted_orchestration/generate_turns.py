@@ -269,7 +269,7 @@ def _plan_branches(
             no_eligible += 1
     return planned, no_base, no_eligible
 
-def _publish(output: Path, planned: list[dict]) -> dict:
+def _publish(output: Path, planned: list[dict], base: dict[str, dict]) -> dict:
     journals = output / "journal"
     episodes, positive_turns, audits, failures = [], [], [], []
     counters = Counter()
@@ -323,25 +323,6 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         if data["task_id"] != plan["task_id"]:
             raise RuntimeError("untrusted_journal_scene_mismatch")
         status = data["status"]
-        # This private index pairs the reviewed/diagnostic fault branch with
-        # the identical Stage-3 clean world and its no-repair continuation.
-        audit_pair = data.get("private_audit") or {}
-        before_pair = audit_pair.get("counterfactual_unrepaired") or {}
-        reference_pair = audit_pair.get("clean_reference_identity") or {}
-        paired_trajectories.append({
-            "scene_task_id": plan["task_id"],
-            "round_sample_id": plan["sample_id"],
-            "clean_reference_id": reference_pair.get("clean_reference_id"),
-            "fork_round": plan["branch_round"],
-            "fault_kinds_private": [
-                atom["kind"] for atom in
-                plan["scenario_plan"]["fault_atoms"]
-            ],
-            "naive_execution_status": before_pair.get("status"),
-            "naive_answer_correct": before_pair.get("correct"),
-            "robust_publication_status": status,
-            "private_only": True,
-        })
         leaks = [
             {"sample_id": turn.get("sample_id"),
              "issues": review_turn_surface(turn)}
@@ -355,6 +336,27 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                 "round_sample_id": plan["sample_id"],
                 "rejected_turns": leaks,
             })
+        audit_pair = data.get("private_audit") or {}
+        before_pair = audit_pair.get("counterfactual_unrepaired") or {}
+        reference = base.get(plan["task_id"], {}).get("clean_reference_id")
+        recorded = (audit_pair.get("clean_reference_identity") or {}).get(
+            "clean_reference_id"
+        )
+        if recorded is not None and recorded != reference:
+            raise RuntimeError("stage4_paired_clean_reference_drift")
+        paired_trajectories.append({
+            "scene_task_id": plan["task_id"],
+            "round_sample_id": plan["sample_id"],
+            "clean_reference_id": reference,
+            "fork_round": plan["branch_round"],
+            "fault_kinds_private": [
+                atom["kind"] for atom in plan["scenario_plan"]["fault_atoms"]
+            ],
+            "naive_execution_status": before_pair.get("status"),
+            "naive_answer_correct": before_pair.get("correct"),
+            "robust_publication_status": status,
+            "private_only": True,
+        })
         counters[status] += 1
         for mode in {fault.mode for fault in plan["faults"]}:
             mode_outcomes[mode][status] += 1
@@ -1556,7 +1558,7 @@ def generate_turns(
         output / "private" / "candidate_selection.jsonl",
         selection_rows,
     )
-    counts_summary = _publish(output, planned)
+    counts_summary = _publish(output, planned, base)
     summary = {
         # "status" describes whether all requested round units were
         # processed. Training-label acceptance is a separate measurement:
