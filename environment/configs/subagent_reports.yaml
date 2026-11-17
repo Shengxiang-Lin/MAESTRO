@@ -1,3 +1,5 @@
+# Stage-2 Qwen pilot: reuse the first 10 accepted Stage-1 Scenes.
+# Only output locations and subset caps differ from the full run.
 # Materialize trusted evidence traces and naturalize Sub-Agent reports.
 # All paths are relative to the repository root.
 version: 1
@@ -5,8 +7,8 @@ version: 1
 implementation:
   # Default Stage 1 runs Question Author/Critic; only reviewed scenes publish here.
   scenes: environment/data/stage1/questions/scenes.jsonl
-  output_dir: environment/data/stage2/oracle
-  max_records: null
+  output_dir: environment/data/pilots/qwen_stage234_10/stage2/oracle
+  max_records: 10
   evidence_limit: 12
   strict_replay: true
   overwrite: false
@@ -17,10 +19,10 @@ implementation:
 # of a real Sub-Agent's finish(result/status/summary) to Main-Agent.
 # This NEVER changes structured answer or teacher evidence.
 reporting:
-  source_subtasks: environment/data/stage2/oracle/subtasks.jsonl
-  source_scene_index: environment/data/stage2/oracle/scene_index.jsonl
+  source_subtasks: environment/data/pilots/qwen_stage234_10/stage2/oracle/subtasks.jsonl
+  source_scene_index: environment/data/pilots/qwen_stage234_10/stage2/oracle/scene_index.jsonl
   # Reviewed Sub-Agent report bank; stable path across datasets.
-  output_dir: environment/data/stage2
+  output_dir: environment/data/pilots/qwen_stage234_10/stage2
   # DashScope OpenAI-compatible endpoint; same model as Stage 1.
   api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
   model: qwen3.8-flash
@@ -28,13 +30,13 @@ reporting:
   critic_model: qwen3.8-flash
   api_key_env: DASHSCOPE_API_KEY
   critic_api_key_env: DASHSCOPE_API_KEY
-  workers: 8
+  workers: 4
   max_revisions: 2
   # LLM writes only a stage-local Summary; Result is compiled from
   # this Macro's exact delivered WorkProduct. Older scenes retain legacy mode.
   result_policy: code_owned
   flush_every: 1  # save accepted/rejected Macro reviews + checkpoint as they finish
   timeout: 180
-  max_scenes: null
+  max_scenes: 10
   no_progress: false
   overwrite: false

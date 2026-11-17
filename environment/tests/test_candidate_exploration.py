@@ -294,7 +294,7 @@ class CandidateExplorationTests(unittest.TestCase):
         config = load_config()
         self.assertEqual(config["candidate_strategy"], "enumerate")
         self.assertEqual(config["max_fault_atoms"], 1)
-        self.assertEqual(config["max_candidates_per_round"], 24)
+        self.assertEqual(config["max_candidates_per_round"], 12)
         self.assertEqual(config["max_selected_per_round"], 1)
         content = DEFAULT_CONFIG.read_text(encoding="utf-8")
         with TemporaryDirectory() as td:
