@@ -164,14 +164,14 @@ def _select_stage2_accepted_scenes(
     selected: list[dict] = []
     counts = Counter()
     for scene in stage1_scenes:
-        expected = [
-            task_id for wave in scene["macro_graph"]["reference_waves"]
-            for task_id in wave
-        ]
         rows = stage2_reports.get(scene["task_id"], [])
         if not rows:
             counts["no_published_stage2_reports"] += 1
             continue
+        expected = [
+            task_id for wave in scene["macro_graph"]["reference_waves"]
+            for task_id in wave
+        ]
         ids = [row.get("macro_task_id") for row in rows]
         # Do not silently treat malformed/duplicate published reports as a
         # legitimate Stage-2 failure. Duplicates indicate a corrupt bank.
@@ -182,8 +182,11 @@ def _select_stage2_accepted_scenes(
         if len(ids) != len(expected) or set(ids) != set(expected):
             counts["incomplete_stage2_reports"] += 1
             continue
-        if any(row.get("report_authoring", {}).get("status") != "accepted"
-               for row in rows):
+        if any(
+            not isinstance(row.get("report_authoring"), dict)
+            or row["report_authoring"].get("status") != "accepted"
+            for row in rows
+        ):
             counts["unreviewed_stage2_reports"] += 1
             continue
         counts["eligible_stage2_scenes"] += 1
