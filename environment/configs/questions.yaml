@@ -46,6 +46,6 @@ question:
   critic_model: qwen3.8-flash
   api_key_env: DASHSCOPE_API_KEY
   critic_api_key_env: DASHSCOPE_API_KEY
-  workers: 4
+  workers: 10
   max_revisions: 2
   timeout: 180
