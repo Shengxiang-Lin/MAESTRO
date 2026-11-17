@@ -584,6 +584,22 @@ def code_owned_result(record: dict) -> str:
     corrupt downstream Main handoffs.
     """
     rows, fields = record["answer"], record["output_schema"]
+    if record.get("result_encoding") == "typed_evidence_json_v1":
+        # Main must receive the same complete typed rows and provenance that
+        # Stage 4 later parses. The Summary remains natural-language prose.
+        cited = record.get("answer_with_provenance")
+        if (not isinstance(cited, list) or len(cited) != len(rows)
+                or any(item.get("values") != row
+                       for item, row in zip(cited, rows))):
+            raise ValueError("code_owned_provenance_does_not_match_rows")
+        result = json.dumps([{
+            "values": item["values"],
+            "source_fact_refs": list(item["source_fact_refs"]),
+        } for item in cited], ensure_ascii=False, separators=(",", ":"))
+        # Never silently truncate a WorkProduct or drop provenance.
+        if len(result) > 10000:
+            raise ValueError("code_owned_result_exceeds_finish_budget")
+        return result
     if not isinstance(rows, list) or not fields:
         raise ValueError("code_owned_invalid_oracle_relation")
     if any(not isinstance(row, dict) or set(row) != set(fields)
