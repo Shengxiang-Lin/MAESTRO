@@ -457,9 +457,10 @@ def main(argv=None):
                 if steps >= max_steps:
                     break
         if val_loader is not None:
-            score = evaluate(backbone, head, val_loader, device=device,
-                             state_weight=class_weight,
-                             update_loss_weight=args.update_loss_weight)
+            with safe_attention_context(args.attention_backend):
+                score = evaluate(backbone, head, val_loader, device=device,
+                                 state_weight=class_weight,
+                                 update_loss_weight=args.update_loss_weight)
             metrics.append({"epoch": epoch + 1, "step": steps, **score})
             print("[MAESTRO/Stage1] validation: " +
                   json.dumps(metrics[-1], ensure_ascii=False), flush=True)
