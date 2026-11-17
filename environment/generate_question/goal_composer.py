@@ -124,6 +124,12 @@ ENTITY_PRODUCERS = (
 def compose_plan(*, seed: int, ordinal: int, difficulty: str, hops: int,
                  goal_keys: tuple[str, ...] | list[str],
                  policy: str = VERSION) -> dict:
+    if policy == "goal_conditioned_typed_goal_v4":
+        from .typed_goal_v4 import compose_typed_goal_plan
+        return compose_typed_goal_plan(
+            seed=seed, ordinal=ordinal, difficulty=difficulty,
+            hops=hops, goal_keys=tuple(goal_keys),
+        )
     if difficulty not in {"medium", "hard"}:
         raise ValueError("unsupported_composed_difficulty")
     if not 2 <= hops <= 3 or len(goal_keys) != hops:
