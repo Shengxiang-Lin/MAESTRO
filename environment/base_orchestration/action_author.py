@@ -511,7 +511,7 @@ def _stage3_task_prose_repair_guidance(
         if failure.get("stage") != "stage3_task_prose_guard":
             continue
         for issue in failure.get("errors", []):
-            match = re.fullmatch(r"task_(\\d+)_(.+)", issue)
+            match = re.fullmatch(r"task_(\d+)_(.+)", issue)
             if not match:
                 continue
             index = int(match.group(1))
