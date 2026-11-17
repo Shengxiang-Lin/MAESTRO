@@ -25,6 +25,12 @@ reports. No structured evidence, Result, status, FactRef or source value is
 modified. A rejected Episode never leaks its partial turns into public
 training data.
 
-Stage 4 is separate. It does not read Stage-3 generated Episodes; it
-compiles a deterministic trusted prefix from Stage 1/2 before simulating
-untrusted evidence.
+Each accepted Episode also contains a stable `clean_reference_id`, derived
+from the frozen World, Macro DAG and reviewed Stage-2 Finish Results. The
+reference ID does not depend on stylistic Main reasoning.
+
+Stage 4 normally compiles an equivalent deterministic trusted prefix. To
+reuse the exact reviewed Stage-3 trajectory instead, configure
+`input.clean_episodes: environment/data/stage3/episodes.jsonl` in Stage 4.
+The runner validates its returned evidence, action batches and completion
+against an independently compiled clean reference before any fault injection.
