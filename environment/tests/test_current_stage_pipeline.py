@@ -94,5 +94,54 @@ class CurrentStagePipelineTests(unittest.TestCase):
         self.assertEqual(recovered["trajectory"][-1]["action"], "complete")
 
 
+    def test_stage2_current_result_contains_all_rows_and_fact_refs(self):
+        from environment.implement_subtask.reporting import code_owned_result
+        scene = current_scene(4, "medium")
+        rows = realize_scene(scene)["macro_tasks"]
+        self.assertTrue(all(
+            row.get("result_encoding") == "typed_evidence_json_v1"
+            for row in rows
+        ))
+        bounded = next(
+            row for row in rows if len(code_owned_result(row)) < 5000
+        )
+        result = json.loads(code_owned_result(bounded))
+        self.assertEqual(len(result), len(bounded["answer"]))
+        self.assertEqual(
+            [item["values"] for item in result],
+            bounded["answer"],
+        )
+        self.assertEqual(
+            [item["source_fact_refs"] for item in result],
+            [item["source_fact_refs"]
+             for item in bounded["answer_with_provenance"]],
+        )
+
+    def test_clean_reference_is_stable_and_fails_closed_when_tampered(self):
+        from environment.untrusted_orchestration.trusted_prefix import (
+            validate_clean_episode,
+        )
+        scene = current_scene(5, "medium")
+        reports = accepted_reports(scene)
+        expected, _turns, _audit, status = build_episode(
+            scene, reports, freeze_dispatch=True,
+        )
+        self.assertEqual(status["status"], "accepted")
+        self.assertTrue(expected["clean_reference_id"].startswith("clean-"))
+        duplicate, _, _, _ = build_episode(
+            scene, reports, freeze_dispatch=True,
+        )
+        self.assertEqual(
+            expected["clean_reference_id"], duplicate["clean_reference_id"],
+        )
+        validate_clean_episode(expected, duplicate)
+        altered = deepcopy(duplicate)
+        altered["trajectory"][0]["result"]["subtask_results"][0][
+            "finish_result"]["result"] = "untrusted replacement"
+        with self.assertRaisesRegex(ValueError, "clean_report_mismatch"):
+            validate_clean_episode(expected, altered)
+
+
+
 if __name__ == "__main__":
     unittest.main()
