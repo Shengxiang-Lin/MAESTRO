@@ -10,9 +10,7 @@ from unittest.mock import patch
 
 from environment.streaming import StreamingError
 
-from environment.generate_question.spec import make_spec
-from environment.generate_question.question import reference_question
-from environment.generate_question.quality import compile_and_validate
+from environment.tests.current_stage1 import current_scene
 from environment.implement_subtask.config import (
     DEFAULT_CONFIG, load_reporting_config,
 )
@@ -22,15 +20,7 @@ from environment.implement_subtask.reporting import author_critic_report, trace_
 
 
 def scene(i, difficulty="medium"):
-    spec = make_spec(
-        seed_record={
-            "record_id": f"reporting-{i}",
-            "topic": f"Fictional Study {i}",
-            "domain_hint": "science",
-            "source_modalities": ["table", "image", "audio", "text"],
-        }, ordinal=i, run_seed=17, difficulty=difficulty,
-    )
-    result = compile_and_validate(spec, reference_question(spec))
+    result = current_scene(i, difficulty=difficulty)
     result["question_authoring"] = {"status": "accepted"}
     result["question_origin"] = "llm_accepted_frozen_spec"
     return result

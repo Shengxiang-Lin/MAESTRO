@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 
 from environment.generate_question.authoring.scenario_contracts import repair_scenario_fields
-from environment.generate_question.scenario import _narrative_issues
+from environment.generate_question.authoring.scenario import _narrative_issues
 
 
 class ScenarioFieldRepairTests(unittest.TestCase):
