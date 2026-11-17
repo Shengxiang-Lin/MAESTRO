@@ -572,46 +572,34 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(len(critic.calls), 2)
 
 
-    def test_v14_code_owned_batch_mode_uses_only_llm_summary(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            oracle, index = ReportingBatchTests()._teacher_inputs(root, [42])
-            class SummaryOnlyAuthor:
-                def __init__(self):
-                    self.calls = 0
-                def complete_json(self, system_prompt, user_prompt):
-                    self.calls += 1
-                    self.assert_summary_system = ("ONLY" in system_prompt)
-                    return {
-                        "summary": (
-                            "Inspected the currently assigned source or "
-                            "upstream handoff and returned the exactly "
-                            "observed records for this local step."
-                        )
-                    }
-            author = SummaryOnlyAuthor()
-            reports = naturalize_subtasks(
-                source_subtasks=oracle, source_scene_index=index,
-                output_dir=root / "code_owned", api_base="http://mock/v1",
-                model="mock", workers=2, max_revisions=0,
-                result_policy="code_owned", no_progress=True,
-                clients=(author, ReportCritic()),
-            )
-            self.assertEqual(reports["status"], "done")
-            outputs = [
-                json.loads(line) for line in
-                (root / "code_owned/subtasks.jsonl").read_text().splitlines()
-            ]
-            self.assertTrue(outputs)
-            self.assertEqual(len(outputs), reports["attempted_macro_tasks"])
-            self.assertTrue(all(
-                row["report_authoring"]["result_policy"] == "code_owned"
-                for row in outputs if row.get("evidence_trust_version")
-            ))
-            self.assertTrue(all(
-                row["finish_result"]["result"] == code_owned_result(row)
-                for row in outputs if row.get("evidence_trust_version")
-            ))
+    def test_current_task_plan_code_owned_result_and_authored_summary(self):
+        frozen = scene(42, "medium")
+        realized = realize_scene(frozen)
+        # Very large delivered relations must fail closed rather than silently
+        # truncate their fields. Select a bounded current WorkProduct to test
+        # the program-owned-result and model-authored-summary contract.
+        record = next(
+            row for row in realized["macro_tasks"]
+            if len(code_owned_result(row)) < 1200
+        )
+        class SummaryOnlyAuthor:
+            def complete_json(self, system_prompt, user_prompt):
+                assert "ONLY" in system_prompt
+                return {"summary": (
+                    "Reviewed only the assigned source or upstream handoff "
+                    "and reported the observed rows without adding new "
+                    "filters or asserting unperformed downstream checks."
+                )}
+        reviewed, info = author_critic_report(
+            record, question=frozen["question"],
+            author=SummaryOnlyAuthor(), critic=ReportCritic(),
+            max_revisions=0, result_policy="code_owned",
+        )
+        self.assertEqual(info["status"], "accepted", info)
+        self.assertEqual(
+            reviewed["finish_result"]["result"], code_owned_result(record)
+        )
+        self.assertEqual(info["result_policy"], "code_owned")
 
     def test_config_has_model_roles_and_does_not_break_oracle_mode(self):
         cfg = load_reporting_config(DEFAULT_CONFIG)
