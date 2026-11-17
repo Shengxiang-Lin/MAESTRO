@@ -122,8 +122,10 @@ class Stage2TraceTests(unittest.TestCase):
 
     def test_modified_source_scene_is_refused_before_export(self):
         invalid = _scene(13, "easy")
-        invalid["world"]["sources"]["register"]["observations"][0][
-            "values"]["active"] = "tampered"
+        source = next(iter(invalid["world"]["sources"].values()))
+        observation = source["observations"][0]
+        field = next(iter(observation["values"]))
+        observation["values"][field] = "tampered"
         with self.assertRaises(ValueError):
             realize_scene(invalid, strict=True)
 

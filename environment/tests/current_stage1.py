@@ -19,11 +19,22 @@ def _scene(i: int, difficulty: str):
         Edge("https://example.org/town", p+"containedInPlace", "https://example.org/region"),
         Edge("https://example.org/region", p+"containedInPlace", "https://example.org/country"),
     ], input_file="current-stage1-fixture.ttl", scanned=3)
-    spec = make_spec(
-        graph, seed=97, ordinal=i, difficulty=difficulty,
-        min_hops=2, max_hops=3, index=YagoKnowledgeIndex(graph),
-    )
-    return compile_and_validate(spec, reference_question(spec))
+    index = YagoKnowledgeIndex(graph)
+    # A tiny three-edge fixture can have a coincidental reference-word/clue
+    # collision for a handful of ordinals. Select the first fully guarded,
+    # deterministic Task Plan rather than weakening the actual leakage guard.
+    for attempt in range(32):
+        ordinal = i + 1000 * attempt
+        spec = make_spec(
+            graph, seed=17, ordinal=ordinal, difficulty=difficulty,
+            min_hops=2, max_hops=3, index=index,
+        )
+        try:
+            return compile_and_validate(spec, reference_question(spec))
+        except ValueError as exc:
+            if "task_plan_answer_clues_leaked_into_question" not in str(exc):
+                raise
+    raise RuntimeError("unable_to_construct_valid_test_task_plan")
 
 def current_scene(i: int = 0, difficulty: str = "hard") -> dict:
     if difficulty not in {"medium", "hard"}:
