@@ -706,7 +706,20 @@ def mutate_witness(sources: dict, sid: str,
         elif kind == "geographic_distance":
             data["latitude_" + sid[-1]] += 8.0
         else:
-            data[sid] = 0 if sid == "metric_a" else 999999
+            if kind in {"comparison", "structured_answer"}:
+                from .goal_resolution import goal_values
+                world = spec["macro_plan"]["world_binding"]["world_model"][
+                    "goal_measurements"
+                ]
+                target = spec["macro_plan"]["world_binding"]["target_case"]
+                row = world["by_case"][target]
+                winner = goal_values(
+                    "comparison", row["metric_a"], row["metric_b"]
+                )
+                side = "first" if sid == "metric_a" else "second"
+                data[sid] = 0 if winner == side else 999999
+            else:
+                data[sid] = 0 if sid == "metric_a" else 999999
     elif sid == "observation_log":
         data["observation_year"] = 2024
     else:
