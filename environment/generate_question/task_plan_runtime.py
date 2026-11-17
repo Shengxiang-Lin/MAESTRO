@@ -251,14 +251,36 @@ def generate_world(spec: dict) -> dict:
             model["verification_facts"] if composed else
             b["real_fork"]["candidate_forks"]
         ).items()]
+    typed_kind = plan.get("goal_spec", {}).get("kind", "entity_resolution")
     for hop in range(plan["hops"]):
         left = f"entity_{hop}"
-        right = "answer" if hop == plan["hops"]-1 else f"entity_{hop+1}"
+        right = (
+            "entity_final" if hop == plan["hops"]-1
+            and typed_kind != "entity_resolution" else
+            "answer" if hop == plan["hops"]-1 else f"entity_{hop+1}"
+        )
         tables[f"relation_{hop+1}"] = [{
             left: path[hop]["subject"],
             right: path[hop]["object_label"] if right == "answer"
                    else path[hop]["object"],
         } for path in paths.values()]
+    if typed_kind in {"comparison", "aggregation"}:
+        # Independent evidence views of canonical private World facts.
+        # Sources never invent an ad-hoc metric or expose the answer.
+        facts = b["world_model"]["goal_measurements"]
+        if facts["kind"] != typed_kind:
+            raise ValueError("v4_metric_kind_mismatch")
+        if typed_kind == "comparison":
+            for sid in ("metric_a", "metric_b"):
+                tables[sid] = [{
+                    "entity_final": item["entity_final"], sid: item[sid]
+                } for item in facts["by_case"].values()]
+        else:
+            tables["observation_log"] = [
+                copy.deepcopy(row)
+                for item in facts["by_case"].values()
+                for row in item["observations"]
+            ]
     bank = {}
     for role in spec["sources"]:
         sid = role["source_id"]
@@ -272,7 +294,8 @@ def generate_world(spec: dict) -> dict:
             **({"key_field": role["key_field"]}
                if role["access_mode"] == "keyed_lookup" else {}),
             **({"key_cardinality": "many"}
-               if sid == "event_ledger" and keyed_events else {}),
+               if (sid == "event_ledger" and keyed_events)
+               or sid == "observation_log" else {}),
         }
         if sid.startswith("relation_") or sid == "real_fork":
             fictional = paths[target][0]["origin"] == "synthetic"
@@ -541,6 +564,39 @@ def compile_macro_solvers(spec: dict) -> dict:
             terminal = add(
                 "project", last, fields=list(task["output_schema"])
             )
+        elif op in {"lookup_metric_a", "lookup_metric_b",
+                    "fetch_observations"}:
+            sid = task["source_scope"][0]
+            retrieved = add(
+                "lookup_by_key", parents[0], source_id=sid,
+                input_key_field="entity_final",
+                source_key_field="entity_final",
+            )
+            terminal = add(
+                "project", retrieved, fields=list(task["output_schema"])
+            )
+        elif op == "compare_metrics":
+            both = add(
+                "join", parents[0], parents[1],
+                left_on="entity_final", right_on="entity_final",
+            )
+            terminal = add(
+                "derive_comparison", both,
+                left_field="metric_a", right_field="metric_b",
+                output_field="answer",
+            )
+        elif op == "count_qualifying_observations":
+            qualifying = add(
+                "filter_gte", parents[0],
+                field="observation_year", value=2025,
+            )
+            grouped = add(
+                "group_count", qualifying, field="entity_final",
+            )
+            terminal = add(
+                "project", grouped, fields=["count"],
+                rename_fields={"count": "answer"},
+            )
         else:
             raise ValueError("unsupported_task_plan_operation:" + op)
         nodes.extend(local)
@@ -596,6 +652,23 @@ def mutate_witness(sources: dict, sid: str,
         key = [f for f in data if f !=
                f"entity_{int(sid.rsplit('_',1)[-1])-1}"][0]
         data[key] = "urn:maestro:counterfactual:broken-relation"
+    elif sid in {"metric_a", "metric_b"}:
+        from .goal_resolution import goal_values
+        world = spec["macro_plan"]["world_binding"]["world_model"][
+            "goal_measurements"
+        ]
+        target = spec["macro_plan"]["world_binding"]["target_case"]
+        recorded = world["by_case"][target]
+        winner = goal_values(
+            "comparison", recorded["metric_a"], recorded["metric_b"],
+        )
+        data[sid] = (
+            0 if (sid == "metric_a" and winner == "first") or
+                 (sid == "metric_b" and winner == "second")
+            else 999999
+        )
+    elif sid == "observation_log":
+        data["observation_year"] = 2024
     else:
         raise ValueError("unexpected_task_plan_mutation_source:" + sid)
     return updated
