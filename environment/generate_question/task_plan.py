@@ -973,6 +973,16 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         yago_index = index or YagoKnowledgeIndex(kg)
         choices = tuple(row for row in _SEMANTIC_RECIPES
                         if len(row[0]) == hops)
+        if composer == TYPED_GOAL_COMPOSER:
+            from .typed_goal_v4 import selected_kind
+            typed_kind = selected_kind(seed, ordinal)
+            # A literal great-circle distance needs geographic subjects,
+            # not abstract research-field or nationality terms.
+            if typed_kind == "geographic_distance":
+                choices = tuple(row for row in choices
+                                if row[1] == "geographical")
+            if not choices:
+                raise ValueError("typed_goal_no_semantically_compatible_recipe")
         features = motif_features(kg, yago_index, choices)
         goal_rng = random.Random(int(digest(
             seed, ordinal, "goal-conditioned-semantic-goal"
@@ -1040,12 +1050,33 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
         "geographical": "regional survey collection",
     }
     semantic = plan["goal"]["semantic"]
+    scene_variants = {
+        "biographical": (
+            "an oral-history collection with biographical field notes",
+            "a museum biography investigation with independent records",
+        ),
+        "academic": (
+            "an academic research survey with separately curated datasets",
+            "a science documentary archive with technical observation logs",
+        ),
+        "institutional": (
+            "an organizational activity register and external statistics",
+            "a historical corporate registry with supporting documents",
+        ),
+        "geographical": (
+            "a regional journey investigation with recorded site coordinates",
+            "an environmental field survey with geospatial observation notes",
+        ),
+    }
+    scene_setting = (
+        scene_variants[semantic["domain"]][ordinal % 2]
+        if composer == TYPED_GOAL_COMPOSER else
+        "a research archive with personnel files, field records "
+        "and independently maintained reference registers"
+    )
     scenario = {
         "topic": topics[semantic["domain"]],
-        "setting": (
-            "a research archive with personnel files, field records "
-            "and independently maintained reference registers"
-        ),
+        "setting": scene_setting,
         "user_role": "archive researcher",
         "purpose": (
             ("identify the relation-linked entity and obtain the "
