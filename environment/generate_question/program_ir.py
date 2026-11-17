@@ -68,13 +68,20 @@ def validate_program(program: dict) -> list[str]:
             not isinstance(node.get("value"), (float, int))
         ):
             issues.append("filter_gte_missing_numeric_value")
-        if op == "project" and (
-            not isinstance(node.get("fields"), list) or
-            not node["fields"] or
-            any(not isinstance(x, str) for x in node["fields"]) or
-            len(set(node["fields"])) != len(node["fields"])
-        ):
-            issues.append("project_invalid_fields")
+        if op == "project":
+            fields = node.get("fields")
+            if (not isinstance(fields, list) or not fields
+                    or any(not isinstance(x, str) for x in fields)
+                    or len(set(fields)) != len(fields)):
+                issues.append("project_invalid_fields")
+            renamed = node.get("rename_fields", {})
+            if (not isinstance(renamed, dict)
+                    or not isinstance(fields, list)
+                    or any(k not in fields or not isinstance(v, str) or not v
+                           for k, v in renamed.items())
+                    or len(set(renamed.get(k, k) for k in fields))
+                       != len(fields)):
+                issues.append("project_invalid_renames")
         if op == "claim_relation_filter" and (
             node.get("relation") != "contradicts"
             or not all(isinstance(node.get(k), str) and node[k]
@@ -328,10 +335,17 @@ def _apply(node: dict, inputs: list[Relation]) -> Relation:
         src = inputs[0]
         for field in node["fields"]:
             _check(src, field)
-        return Relation(tuple(node["fields"]), tuple({
-            "values": {field: row["values"][field] for field in node["fields"]},
-            "support": row["support"],
-        } for row in src.rows))
+        renamed = node.get("rename_fields", {})
+        return Relation(
+            tuple(renamed.get(field, field) for field in node["fields"]),
+            tuple({
+                "values": {
+                    renamed.get(field, field): row["values"][field]
+                    for field in node["fields"]
+                },
+                "support": row["support"],
+            } for row in src.rows),
+        )
     if op == "unique":
         src, grouped = inputs[0], {}
         for row in src.rows:
