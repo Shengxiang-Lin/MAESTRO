@@ -143,3 +143,52 @@ Stage 4 independently builds its trusted history from Stages 1 and 2.
 
 Historical generator families remain test fixtures; this is the sole
 maintained production Stage-1 configuration profile.
+
+### Opt-in typed Goal v4: patterns abstracted from the 60-question pretest
+
+Run `--config environment/configs/questions_typed_goals_v4.yaml` to
+enable an **opt-in** Stage-1 pilot. The stable
+`questions_task_plan.yaml` continues to use v3 unchanged.
+
+The reference split is the actual repository
+`data/OmniGAIA/splits/pretest_60_ids.txt` (IDs beginning 6, 8, 10,
+20 and ending 354, 355, 358, 359), **not** the older, incompatible
+list beginning 5, 12, 20, 28. We manually reviewed the official
+question/answer formats and grouped each of the 60 by its primary
+Goal. As an exploratory, *mutually-exclusive* description (not an
+official OmniGAIA taxonomy):
+
+| Main outcome of the actual selected 60 | Count |
+|---|---:|
+| Formula, ratio, numerical derivation | 20 |
+| Structured multi-field answer | 16 |
+| Date/temporal derivation | 9 |
+| Entity/attribute retrieval | 7 |
+| Geospatial distance | 5 |
+| Evidence judgment/explanation | 2 |
+| Counting/aggregation | 1 |
+
+The table combines final output format and operation type only to
+describe benchmark coverage. The **implemented** v4 distinguishes the
+primitive computation (difference, ratio, date gap, great-circle
+distance, higher-of-two, group-count) from a separately modeled
+structured answer. It smoothed sampling weights to keep rare Goals
+testable on 50–100 synthetic questions. Cross-source explanatory
+judgment is *not* yet a fully general v4 operation.
+
+V4's relationship resolver is retained to provide a unique typed
+entity key. A non-entity Goal then acquires independently attributed
+synthetic observations keyed by that entity and runs the actual
+arithmetic/date/geographic/aggregate/structured operation in Gold IR.
+The two-source cases introduce real parallel branches and a fusion
+barrier. Scene settings vary with the semantic entity domain. Image,
+video and audio remain **simulated textual observations**.
+
+The underlying benchmark questions, answer values, media and external
+research results are **not included** in synthetic World facts, Author
+prompts, or output labels. Synthetic-vs-real benchmark accuracy is not
+established by passing Replay. See the `goal_kind_distribution` and
+`typed_goal_synthesis_operations` counters in
+`quality_report.json`. Future iterations should enrich media clue
+dependencies and source capabilities after confirming Goal-level
+execution correctness.
