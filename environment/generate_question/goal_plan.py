@@ -291,9 +291,9 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
             seed=seed, ordinal=probe, difficulty=difficulty,
             hops=hops, goal_keys=goal_keys,
         )
-        if (not source_ids or
-            plan["mode"] == "trace" and
-            len(plan["macro_tasks"]) <= max_base):
+        # Budget applies to every feasible evidence route, not just Trace.
+        # Event-qualified investigations must remain available to typed Goals.
+        if len(plan["macro_tasks"]) <= max_base:
             break
     else:
         raise ValueError("goal_no_source_feasible_macro_budget")
