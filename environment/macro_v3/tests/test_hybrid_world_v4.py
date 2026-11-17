@@ -148,8 +148,5 @@ class CausalHybridTests(unittest.TestCase):
 
 
 @unittest.skipUnless(RDF_READY, "requires pyoxigraph")
-class CausalHybridFullPipelineTests(unittest.TestCase):
-
-
 if __name__ == "__main__":
     unittest.main()
