@@ -11,6 +11,30 @@ python -m environment generate-main-turns \
 The default output is `environment/data/stage3/`. For an isolated pilot,
 specify `--max-scenes 10 --output-dir environment/data/pilots/stage3`.
 
+## Compact generation-only Author/Critic context
+
+In `freeze_dispatch: true` mode, Stage 3 sends the prose Author and
+independent Critic a compact, **lossless evidence view** rather than the
+baseline O1 prompt. It retains the entire user question, provided initial
+observations and source catalog (including source handles for legacy Scenes),
+current attempt budget, and the complete cumulative O1-formatted Sub-Agent
+history. Each pending investigation still carries its permitted sources,
+required output fields, and prior-result context, and the Critic still sees
+the round-specific evidence and task-prose contracts.
+
+Only redundant static O1 instructions are omitted: parallel-decomposition
+tutorials, model-pricing tables, full tool descriptions/JSON schemas and output
+examples. Nothing in the Main-visible history is truncated or summarized.
+
+The **training prompt is unchanged**: each turn still stores
+`input.subtask_history`, and `o1_prompt_from_turn` rebuilds the original
+`OmniGAIAMainAgentPrompt` exactly. Validation of proposed prose uses the
+original full O1 prompt for identifier allowlisting. Private review audits
+record `full_o1_prompt_chars` and `author_context_chars` for before/after
+size comparison; these are character counts, not token counts or measured
+speedups. Existing run journals have code signatures and should be
+regenerated in a new output directory after this change.
+
 The deterministic compiler owns the legal Macro batches, dependencies,
 task count and order, model and tool routing. With `freeze_dispatch: true`,
 **the same Qwen Author call** now writes `reasoning` plus natural

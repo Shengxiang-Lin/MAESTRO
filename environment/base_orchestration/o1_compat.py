@@ -65,6 +65,61 @@ def o1_initial_instruction(scene: dict) -> str:
     return question + "\n\n" + "\n".join(lines)
 
 
+
+def stage3_author_context(
+    scene: dict, subtask_history: str, *,
+    attempt: int, max_attempts: int,
+) -> str:
+    """Compact generation-only view; NOT the model's training prompt.
+
+    Reuse the exact initial user-visible instruction and O1 history without
+    truncation, while omitting the baseline's static orchestration tutorial,
+    pricing table, tool JSON schemas and output-format examples. Current
+    dispatch/source/output contracts are supplied separately by Stage 3.
+    """
+    if attempt < 1 or attempt > max_attempts:
+        raise ValueError("stage3_attempt_exceeds_budget")
+    if not isinstance(subtask_history, str):
+        raise TypeError("stage3_subtask_history_must_be_string")
+    instruction = o1_initial_instruction(scene)
+    if "task_input" not in scene["public"]:
+        # Legacy scenes enumerate sources in O1 modal_inputs rather than the
+        # initial instruction. Keep every publicly visible source and URL.
+        sources = source_catalog(scene)
+        source_lines = [
+            "==== AVAILABLE EVIDENCE SOURCES ====",
+        ]
+        for sid, source in sources.items():
+            path = source.get("resource_url") or (
+                "simulated-web-index://" + sid
+                if (scene.get("problem_spec", {}).get(
+                    "evidence_tool_contract_version", ""
+                ).endswith(".v2")
+                    and source["modality_hint"] in {"text", "table"})
+                else "workspace://" + sid
+            )
+            source_lines.append(
+                "- " + sid + " [" + source["modality_hint"] + ", " +
+                source.get("access_mode", "browse") + "]: " +
+                source["title"] + "; path: " + path
+            )
+        instruction += "\n\n" + "\n".join(source_lines)
+    category = scene.get("problem_spec", {}).get("macro_plan", {}).get(
+        "domain", "general",
+    )
+    return (
+        "Task Type: Multi-source investigation\n" +
+        "Category: " + str(category) +
+        "\n\n==== QUESTION ====\n" +
+        instruction +
+        "\n\n==== PROGRESS ====\n" +
+        f"Attempt {attempt}/{max_attempts}; "
+        f"remaining {max_attempts - attempt} attempts." +
+        "\n\n==== SUBTASK HISTORY ====\n" +
+        subtask_history
+    )
+
+
 def o1_history(task_entries: list[dict]) -> str:
     """Call the baseline's real formatter on a minimal history-only view."""
     state = SimpleNamespace(

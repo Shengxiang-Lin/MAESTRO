@@ -787,14 +787,18 @@ def author_delegate_action(
     reasoning_guard=None,
     decision_contract: dict | None = None,
     critic_conflict_objection=None,
+    validation_prompt: str | None = None,
 ) -> tuple[dict | None, dict]:
     # Separate runtime-specific prose instructions from the shared O1
     # deterministic structure/Guard. Existing Base callers are unchanged.
     author_system = author_system or _AUTHOR_SYSTEM
     critic_system = critic_system or _CRITIC_SYSTEM
+    # Stage 3 can author/review against a compact evidence-only prompt while
+    # validating identifier reuse against the original exact O1 prompt.
+    validation_prompt = prompt if validation_prompt is None else validation_prompt
     template = proposed_template_action(assignments)
     if author is None:
-        errors = action_issues(template, assignments, prompt=prompt)
+        errors = action_issues(template, assignments, prompt=validation_prompt)
         if errors:
             raise ValueError("stage3_invalid_template:" + ",".join(errors))
         return template, {"status": "accepted", "mode": "template",
@@ -978,7 +982,7 @@ def author_delegate_action(
         if (freeze_assignment_prose and reasoning_only_stage3
                 and naturalize_assignment_prose):
             task_prose_errors = _stage3_task_prose_issues(
-                candidate, assignments, prompt=prompt,
+                candidate, assignments, prompt=validation_prompt,
             )
             if task_prose_errors:
                 failures.append({
@@ -1046,7 +1050,7 @@ def author_delegate_action(
                     "reasoning": candidate.get("reasoning"),
                     "params": {"tasks": compiled_tasks},
                 }
-        errors = action_issues(candidate, assignments, prompt=prompt)
+        errors = action_issues(candidate, assignments, prompt=validation_prompt)
         if errors:
             failures.append({"stage": "guard", "errors": errors})
             continue
