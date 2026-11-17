@@ -1,158 +1,86 @@
-# Stage 1 — output-first task generation
+# Stage 1: current output-first Task Plan only
 
-Stage 1 has one maintained generator. The input is a bounded YAGO motif
-sample that supplies predicate vocabulary and structural statistics; the
-generated task's World and all media observations are **synthetic**, never
-reused OmniGAIA question/answer/media content.
+`python -m environment generate-questions` is the single supported Stage 1
+generator. It constructs synthetic tasks from bounded YAGO structural motifs:
+**Goal → typed evidence and task dependencies → Macro DAG → fictional World →
+Gold Program and WorkProducts → grounded Question**.
 
-## Workflow
+Input YAGO provides predicate vocabulary and relation witnesses; simulated
+image/audio/video observations are text representations derived from synthetic
+structured values. The generator does **not** read original OmniGAIA media or
+claim to decode real media. The LLM may rewrite Question/Scenario prose only;
+Goal, World, permissions, dependency graph, Gold and answer are frozen.
+
+## Canonical layout
+
+| Path | Responsibility |
+| --- | --- |
+| `pipeline.py` | Generation command, quality aggregation and reporting |
+| `stages.py` | Bounded candidate construction, resumable LLM review and ordered journals |
+| `planning/` | Output-first Goal, evidence/source plan, typed Macro DAG, YAGO index and current spec |
+| `grounding/` | Synthetic clue/source representations and contextual media descriptions |
+| `execution/` | World materialization, typed Program IR, scoped Macro execution and acquisition permissions |
+| `authoring/` | Question/Scenario Author and Critic, prompts, semantics and surface guards, shared API backend |
+| `auditing/` | Strict Replay, source necessity, evidence-grounding checks and scheduling-structure metrics |
+
+The `generate_question/` root deliberately has only three Python files:
+`__init__.py`, `pipeline.py` and `stages.py`. Do not add forwarding modules
+for functions already owned by subpackages.
+
+**Retired:** `macro_first_v2`, `typed_knowledge_v1/v2/v3/v4`,
+`task_graph_first_v1/v2`, `hybrid_world*`, legacy approval constructors,
+and their import-compatibility facades. There is no `legacy_stage1/`
+generator. `spec_issues` rejects retired reasoning patterns. Old scene files
+requiring those retired compilers are no longer supported for Replay; the
+intentionally supported input is the current frozen `task_plan` format.
+
+Some source-facing data structures (typed Program IR, Gold executor, source
+acquisition traces) continue to serve Stage 2–4 and are retained in
+`execution/` with their consumer imports updated. Removing a *generator*
+does not remove the current downstream WorkProduct protocol.
+
+## Default generation
 
 ```bash
+export DASHSCOPE_API_KEY="your-key"
 python -m environment generate-questions \
   --config environment/configs/questions.yaml \
   --output-dir environment/data/stage1
 ```
 
-This command builds a frozen **Goal → evidence acquisition → Macro DAG →
-canonical World → Gold Program → Question** pipeline. Question Author and
-Critic may paraphrase the request, but may not edit the factual World, Goal
-answer schema, evidence sources or Gold.
+The canonical config selects `qwen3.8-flash` for Question Author/Critic
+through `config/model_config.yaml`; Question workers default to **10**.
+Scenario Author/Critic is optional and off by default.
 
-The active Stage-1 code is grouped by function:
+`max_revisions: 2` means at most three candidate drafts per Question.
+Accept/reject decisions do not rewrite the frozen World or Gold. Use a new
+output directory between incompatible model/code settings; a completed
+run cannot be silently resumed under changed signatures.
 
-| Package | Responsibility |
-|---|---|
-| `planning/` | Canonical output-first `goal_plan`, `evidence_plan`, `task_plan` |
-| `grounding/scene_semantics.py` | One cohesive home for domain clue profiles, goal referents, readable simulated-media observations and source titles |
-| `execution/` | `task_plan_runtime` and shared `program_ir` Gold executor |
-| `authoring/question_checks.py` | Consolidated fidelity and frozen-goal semantic checks |
-| `authoring/scenario_contracts.py` | Scenario source-title, field repair and topic contracts |
-| `authoring/surface_quality.py` / `prompt_templates.py` | Question surface guards and LLM prompts |
-| `auditing/quality_metrics.py` | Source-evidence integrity and DAG scheduling-opportunity metrics |
-| `auditing/difficulty_proxy.py` | Historical structural-difficulty diagnostics |
-| `stages.py`, `pipeline.py` | Resumable generation, Question Author/Critic and reports |
+Expected files include:
+- `constructed/scenes.jsonl`: deterministic frozen Scenes with reference Questions
+- `questions/scenes.jsonl`: accepted LLM-reviewed Questions referencing identical World/Gold
+- `quality_report.json`, `summary.json`: acceptance and structural/evidence audits
 
-Root-level `goal_plan.py`, `evidence_plan.py`, `task_plan.py`,
-`task_plan_runtime.py`, and `program_ir.py` are compatibility facades
-for historical Stage-2/3/4 imports; the implementations live only in the
-corresponding packages. Older experimental `hybrid_world*` and
-`task_graph_first*` modules remain for historical snapshot Replay and
-their independently maintained regression suites. Do not use them for new
-Stage-1 question generation.
-
-This cleanup reduces the Stage-1 Python module count from **73 to 66**.
-The active implementation now has one shared grounding helper, one Question
-semantic-contract module, one Scenario contract module and one quality-metrics
-module. These replace 11 formerly separate helpers with 4 cohesive files.
-Version constants and model/World/Macro/Gold contracts are unchanged.
-Existing root-level compatibility facades remain available for the archived
-Stage-1 paths consumed by Stage 2–4. The legacy `macro_planning.py` now
-imports the consolidated contracts directly.
-
-**Not deleted:** old `hybrid_world*`, `task_graph_first*`,
-`knowledge_macro*`, `evidence_planner.py` and similar large historical
-implementations. They still participate in frozen historical Replay or
-the regression suite. Removing them merely to reduce file count would
-silently break existing data and tests. They are not called by the canonical
-100-task output-first generator.
-
-Numeric, date and coordinate values can be acquired from simulated
-image/audio observations rather than only generic tables. Browse-only media
-Macros are now independent of target identification; the final synthesis
-joins their records to the resolved entity. Keyed sources still require an
-upstream key. Each source observation also contains a modality-specific
-`observed_content` rendering and a typed `observation_semantics` marker,
-strictly derived from the original executable values. No real binary media
-decoding is claimed.
-
-Candidate reference reconciliation and independently necessary verification
-remain **two distinct Main-visible Macros**, while the pair of directory
-lookups is a single coherent Sub-Agent investigation. This allows event and
-verification routes with typed Goals inside the 11-Macro budget.
-
-The quality report adds `macro_decision_opportunities` for parallel batches,
-key-dependent handoffs, reusable intermediate results and true evidence
-corroboration (distinct from a Goal comparison operator). These are *structural
-opportunities*, not proof that an LLM made adaptive decisions.
-
-The output structure is sampled **before** operations. Individual semantic
-fields require compatible producers: Lookup; Arithmetic; Temporal
-Difference/Midpoint; Geographic Distance; Count/Aggregate; Compare/Select;
-bounded Verify/Explain. Independent fields are composable. A common
-prerequisite is fetched once, and two Goal graphs may be compared by a
-typed operation subgraph partial order. The current bounded grammar
-requires 2–3 hops for the entity key and at most 11 Macro tasks; this is
-not an unconstrained planner.
-
-## Quality gates
-
-Candidate Scenes must pass the frozen goal/World hash, source schemas,
-typed execution, unique target answer, nonempty alternative candidate
-behavior, Gold Replay, source-level counterfactuals and information
-necessity. All accepted Scenes must pass the Question Guard and LLM
-Author/Critic, if configured. Non-accepted Question attempts stay in
-`failed.jsonl`; acceptance and fallback counts are always separate.
-
-Multi-field Goals share a compatible numeric, temporal or geographic
-measurement family. Entity identity and observation counts can be reused as
-common prerequisites, but unrelated measurement families are not randomly
-bundled into one user request.
-
-Numerical facts (counts, ratios, dates, distances) are **seed-conditioned**
-and vary across questions; the algorithm preserves the same operation and
-source-dependency contract. Quality reports record `answer_value_diversity`
-per semantic field: number of samples, unique values and modal answer share.
-A deterministic warning flags high-frequency numeric shortcut candidates.
-A genuinely binary `higher_source` or `conclusion` field is excluded from
-the numeric-collapse warning.
-
-Expected outputs include `constructed/scenes.jsonl` and, with LLM
-naturalization, `questions/scenes.jsonl`. Stage 2–4 consume only
-accepted frozen Scenes and their Macro/WorkProduct contracts. Never point a
-new generation run at an existing output directory unless intentionally
-overwriting it.
+Stage 2–4 consume only accepted current-Task-Plan Scenes.
 
 ## Validation
 
 ```bash
 python -m unittest discover -s environment/tests -p 'test_*.py'
-python -m unittest environment.tests.test_stage1_generator
-python -m environment quality --config environment/configs/questions.yaml \
-  --scenes environment/data/stage1/questions/scenes.jsonl
-```
-
-Stage 2, trusted orchestration and untrusted orchestration maintain their
-existing public data contracts. Version strings in persisted data are
-**schema identifiers**, not separately selectable generator implementations.
-
-## 100-task pilot, reproducibility and limits
-
-Offline, network-free CI and local smoke benchmark:
-
-```bash
 python -m environment.tests.stage1_pilot \
   --target 100 --output-dir environment/data/stage1_offline_100
 ```
 
-This command uses a deliberately tiny **test RDF motif**; outputs are
-`constructed/scenes.jsonl`, `pilot_summary.json` and
-`quality_report.json`. The GitHub workflow
-`.github/workflows/stage1-pilot-100.yml` also uploads those files as an
-artifact. This validates 100 frozen Question/World/Gold Scenes and strict
-Replay but **does not** run Qwen Author/Critic or establish benchmark
-realism. You can use `--knowledge-yago /path/to/real/YAGO-4.6` to test
-with your local graph (still offline deterministic Question fallback).
+The offline pilot uses a small generated RDF fixture, tests strict Replay
+and Goal/World/source dependency consistency, and makes **no** live LLM calls.
+Live Flash quality, acceptance rate, API costs and latency require a
+separate full run with real YAGO and configured credentials.
 
-For the full Author/Critic experiment use the existing production command
-at the start of this README, with the YAGO corpus and Qwen endpoint
-configured in `environment/configs/questions.yaml`. Use a NEW output
-directory to avoid mixing incompatible frozen Worlds.
+For subsequent stage integration, the current-only fixture and pipeline
+tests exercise Stage 1 → Stage 2 WorkProducts → Stage 3 trusted trajectory →
+Stage 4 untrusted recovery. A passing offline test alone is not evidence of
+agent robustness in the full benchmark.
 
-Review the new `grounded_evidence` and `macro_decision_opportunities`
-fields under `knowledge_world_grounding.single_task_plan`. In particular:
-`with_independent_media_acquisition` is structural source-first work,
-not conditional feedback dispatch; `with_evidence_corroboration`
-means an independently sourced verification gate, not an arithmetic
-`verify` Goal operator. The static trusted Stage-1 DAG does not yet
-encode branching policy decisions based on the *contents* of future
-Sub-Agent messages; those require Stage-3 trajectory integration.
+The `quality_report.json` scheduling metrics describe legal partial-order
+freedom only; they are not claims that Main-Agent learned adaptive policies.
