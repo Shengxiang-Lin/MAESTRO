@@ -299,10 +299,7 @@ def audit_scene(scene: dict, *, strict: bool = True) -> dict:
         source_count, joins, depth = 2, 0, 2
     else:
         source_count, joins, depth = levels[difficulty]
-    budget = (
-        11 if spec.get("macro_plan", {}).get("composer_policy") ==
-        "goal_conditioned_output_first_v6" else 9
-    )
+    budget = 11 if spec.get("reasoning_pattern") == "task_plan" else 9
     if spec.get("version") == VERSION and graph["macro_task_count"] > budget:
         issues.append("macro_task_budget_exceeded")
     if profile["source_count"] < source_count:
