@@ -189,7 +189,10 @@ class CurrentStagePipelineTests(unittest.TestCase):
         })
         self.assertGreater(len(first), 10000)
         self.assertEqual(json.loads(first), rows)
-        self.assertEqual(json.loads(second), rows)
+        self.assertTrue(second.startswith("The handoff contains 220"))
+        for item in rows:
+            self.assertIn(item["values"]["entity_final"], second)
+        self.assertNotIn("source_fact_refs", second)
         from environment.implement_subtask.reporting import _guard
         contract = {
             "result_encoding": "typed_evidence_json_v1",
@@ -289,14 +292,17 @@ class CurrentStagePipelineTests(unittest.TestCase):
             runtime.tasks[tid], attempt, "Read the assigned source.",
             result_encoding=reviewed[tid]["result_encoding"],
         )
-        self.assertEqual(
-            json.loads(render_delivered_result(contract)),
-            relation_rows(attempt.product),
-        )
-        self.assertEqual(
-            json.loads(contract["fact_spine"]["delivery"]["result_text"]),
-            relation_rows(attempt.product),
-        )
+        visible = render_delivered_result(contract)
+        delivered = relation_rows(attempt.product)
+        self.assertEqual(contract["fact_spine"]["delivery"]["result"],
+                         delivered)
+        self.assertEqual(contract["fact_spine"]["delivery"]["result_text"],
+                         visible)
+        for item in delivered:
+            for value in item["values"].values():
+                if value is not None and not isinstance(value, bool):
+                    self.assertIn(str(value), visible)
+        self.assertNotIn("source_fact_refs", visible)
 
     def test_clean_reference_is_stable_and_fails_closed_when_tampered(self):
         from environment.untrusted_orchestration.trusted_prefix import (
