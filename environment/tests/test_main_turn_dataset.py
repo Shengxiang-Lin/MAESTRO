@@ -680,13 +680,122 @@ class MainTurnDatasetTests(unittest.TestCase):
                     output_path=folder / "should_not_exist.jsonl",
                 )
 
+    def test_stage3_max_scenes_selects_from_accepted_stage2_not_stage1_prefix(self):
+        """Stage-2 failures do not consume max_scenes or Stage-3 attempts."""
+        scenes = [fixture(i) for i in (0, 1, 2, 3, 4)]
+        # Source order: no reports, complete, partial, complete, complete.
+        # max_scenes=2 must choose positions 1 and 3 (not 0 and 1).
+        reports = (
+            reviewed_rows(scenes[1])
+            + reviewed_rows(scenes[2])[:-1]
+            + reviewed_rows(scenes[3])
+            + reviewed_rows(scenes[4])
+        )
+        with TemporaryDirectory() as td:
+            folder = Path(td)
+            scenes_path = folder / "scenes.jsonl"
+            reports_path = folder / "reports.jsonl"
+            scenes_path.write_text(
+                "".join(json.dumps(sc, ensure_ascii=False) + "\n"
+                        for sc in scenes), encoding="utf-8",
+            )
+            reports_path.write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n"
+                        for row in reports), encoding="utf-8",
+            )
+            out = folder / "stage3"
+            kwargs = dict(
+                scenes_path=scenes_path, reports_path=reports_path,
+                output_dir=out, max_scenes=2, no_progress=True,
+                workers=2, max_attempts=16,
+            )
+            first = generate_turns(**kwargs)
+            self.assertEqual(first["status"], "done", first)
+            self.assertEqual(first["requested_scenes"], 2)
+            self.assertEqual(first["accepted_scenes"], 2)
+            self.assertEqual(first["rejected_scenes"], 0)
+            stats = first["stage2_selection"]
+            self.assertEqual(stats["stage1_scenes"], 5)
+            self.assertEqual(stats["eligible_stage2_scenes"], 3)
+            self.assertEqual(stats["selected_stage3_scenes"], 2)
+            self.assertEqual(stats["no_published_stage2_reports"], 1)
+            self.assertEqual(stats["incomplete_stage2_reports"], 1)
+            self.assertEqual(stats["skipped_without_accepted_stage2"], 2)
+            published = [
+                json.loads(row) for row in
+                (out / "main_turns.jsonl").read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+            self.assertEqual(
+                {row["task_id"] for row in published},
+                {scenes[1]["task_id"], scenes[3]["task_id"]},
+            )
+            self.assertEqual(
+                [json.loads(row)["task_id"] for row in
+                 (out / "episodes.jsonl").read_text().splitlines()],
+                [scenes[1]["task_id"], scenes[3]["task_id"]],
+            )
+            self.assertEqual((out / "failed.jsonl").read_text(), "")
+            resumed = generate_turns(**{**kwargs, "workers": 1})
+            self.assertEqual(resumed["stage2_selection"], stats)
+            self.assertEqual(resumed["main_training_turns"],
+                             first["main_training_turns"])
+            self.assertEqual(resumed["rejected_scenes"], 0)
+
+    def test_stage3_filters_unreviewed_reports_and_rejects_duplicate_macros(self):
+        from environment.base_orchestration.generate_turns import (
+            _select_stage2_accepted_scenes,
+        )
+        scenes = [fixture(5), fixture(6)]
+        unreviewed = reviewed_rows(scenes[0])
+        unreviewed[0]["report_authoring"]["status"] = "failed"
+        good = reviewed_rows(scenes[1])
+        selected, stats = _select_stage2_accepted_scenes(
+            scenes, {
+                scenes[0]["task_id"]: unreviewed,
+                scenes[1]["task_id"]: good,
+            }, max_scenes=1,
+        )
+        self.assertEqual([x["task_id"] for x in selected],
+                         [scenes[1]["task_id"]])
+        self.assertEqual(stats["unreviewed_stage2_reports"], 1)
+        self.assertEqual(stats["selected_stage3_scenes"], 1)
+        with self.assertRaisesRegex(
+            ValueError, "stage3_duplicate_stage2_macro_report",
+        ):
+            _select_stage2_accepted_scenes(
+                scenes, {scenes[1]["task_id"]: good + [good[0]]},
+                max_scenes=1,
+            )
+
+    def test_stage3_refuses_empty_accepted_stage2_bank(self):
+        scene = fixture(7)
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scenes, reports = root / "scenes.jsonl", root / "reports.jsonl"
+            scenes.write_text(
+                json.dumps(scene, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            reports.write_text("", encoding="utf-8")
+            out = root / "stage3"
+            with self.assertRaisesRegex(
+                ValueError, "stage3_no_complete_accepted_stage2_scenes",
+            ):
+                generate_turns(
+                    scenes_path=scenes, reports_path=reports,
+                    output_dir=out, no_progress=True,
+                )
+            self.assertFalse(out.exists())
+
     def test_stage3_live_progress_counts_and_resume(self):
         """Scene-level totals and SFT turn counts stay correct on restart."""
         from unittest.mock import patch
 
         scenes = [fixture(17), fixture(18)]
-        # First Scene has a complete reviewed Stage-2 bank and is accepted;
-        # second has no reports, so it is correctly rejected.
+        # First Scene has a complete reviewed Stage-2 bank and is selected;
+        # second has no published reports and must be skipped before Stage 3.
         reports = reviewed_rows(scenes[0])
         bars = []
 
@@ -731,25 +840,32 @@ class MainTurnDatasetTests(unittest.TestCase):
 
             self.assertEqual(summary, resumed)
             self.assertEqual(summary["accepted_scenes"], 1)
-            self.assertEqual(summary["rejected_scenes"], 1)
+            self.assertEqual(summary["rejected_scenes"], 0)
+            self.assertEqual(summary["status"], "done")
+            self.assertEqual(summary["stage2_selection"]["stage1_scenes"], 2)
+            self.assertEqual(
+                summary["stage2_selection"]["no_published_stage2_reports"], 1,
+            )
+            self.assertEqual(summary["stage2_selection"]["selected_stage3_scenes"], 1)
             self.assertGreater(summary["main_training_turns"], 1)
             self.assertEqual(len(bars), 2)
             self.assertEqual(bars[0].initial, 0)
-            self.assertEqual(bars[0].total, 2)
-            self.assertEqual(bars[0].completed, 2)
+            self.assertEqual(bars[0].total, 1)
+            self.assertEqual(bars[0].completed, 1)
             self.assertEqual(bars[0].states[0], {
                 "accepted": 0, "rejected": 0,
                 "written": 0, "turns": 0,
             })
             self.assertEqual(bars[0].states[-1], {
-                "accepted": 1, "rejected": 1,
-                "written": 2, "turns": summary["main_training_turns"],
+                "accepted": 1, "rejected": 0,
+                "written": 1, "turns": summary["main_training_turns"],
             })
-            self.assertEqual(bars[1].initial, 2)
+            self.assertEqual(bars[1].initial, 1)
             self.assertEqual(bars[1].states[0], bars[0].states[-1])
             saved = json.loads((root / "out" / "summary.json").read_text())
             self.assertEqual(saved["main_training_turns"], summary["main_training_turns"])
-            self.assertEqual(saved["accepted_scenes"] + saved["rejected_scenes"], 2)
+            self.assertEqual(saved["accepted_scenes"] + saved["rejected_scenes"], 1)
+            self.assertEqual(saved["stage2_selection"], summary["stage2_selection"])
 
     def test_round_journal_resumes_without_reauthoring_completed_round(self):
         """A process crash after round 1 must preserve round-1 O1 labels."""
@@ -1017,7 +1133,7 @@ class MainTurnDatasetTests(unittest.TestCase):
                 (root / "serial" / "main_turns.jsonl").read_bytes(),
             )
 
-    def test_parallel_rejection_never_publishes_partial_scene(self):
+    def test_parallel_selection_skips_stage2_incomplete_scenes(self):
         scenes = [fixture(i) for i in (25, 26, 27)]
         with TemporaryDirectory() as td:
             root = Path(td)
@@ -1042,8 +1158,12 @@ class MainTurnDatasetTests(unittest.TestCase):
             }
             result = generate_turns(**kwargs, workers=3)
             self.assertEqual(result["accepted_scenes"], 2)
-            self.assertEqual(result["rejected_scenes"], 1)
-            self.assertEqual(result["status"], "partial")
+            self.assertEqual(result["rejected_scenes"], 0)
+            self.assertEqual(result["status"], "done")
+            self.assertEqual(result["requested_scenes"], 2)
+            self.assertEqual(
+                result["stage2_selection"]["no_published_stage2_reports"], 1,
+            )
             rows = [
                 json.loads(x) for x in
                 (root / "output" / "main_turns.jsonl").read_text().splitlines()

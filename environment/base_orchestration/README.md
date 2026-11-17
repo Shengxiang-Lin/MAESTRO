@@ -11,6 +11,24 @@ python -m environment generate-main-turns \
 The default output is `environment/data/stage3/`. For an isolated pilot,
 specify `--max-scenes 10 --output-dir environment/data/pilots/stage3`.
 
+Stage 3 selects its input **from complete, published Stage-2 Scene reports**,
+not from the first `max_scenes` Stage-1 rows. The Stage-1 file provides the
+canonical Scene definitions and ordering; the Stage-2 `subtasks.jsonl` bank
+determines which Scenes are eligible. The selector checks that every Macro ID
+is present exactly once and its report was reviewed and accepted, before
+taking up to `max_scenes` eligible Scenes. The normal full replay/source/
+provenance verification still happens in `build_episode`.
+
+Stage-2 rejected/unpublished Scenes are **skipped**, not counted as Stage-3
+rejections or consumed from the Stage-3 scene limit. It is valid for the
+number selected to be less than `max_scenes` when Stage 2 published fewer
+complete Scenes; the run-level summary separates `stage2_selection` counters
+from actual Stage-3 `accepted_scenes` / `rejected_scenes`. If no complete
+Stage-2 Scene is available, Stage 3 raises a clear input error before
+creating output. The manifest binds the full Stage-1 and Stage-2 input
+files, and a previously journaled run still cannot silently change its
+selection when either input file changes.
+
 ## Compact generation-only Author/Critic context
 
 In `freeze_dispatch: true` mode, Stage 3 sends the prose Author and
