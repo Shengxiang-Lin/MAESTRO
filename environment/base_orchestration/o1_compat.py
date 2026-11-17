@@ -67,7 +67,7 @@ def o1_initial_instruction(scene: dict) -> str:
 
 
 def stage3_author_context(
-    scene: dict, task_entries: list[dict], *,
+    scene: dict, subtask_history: str, *,
     attempt: int, max_attempts: int,
 ) -> str:
     """Compact generation-only view; NOT the model's training prompt.
@@ -79,6 +79,8 @@ def stage3_author_context(
     """
     if attempt < 1 or attempt > max_attempts:
         raise ValueError("stage3_attempt_exceeds_budget")
+    if not isinstance(subtask_history, str):
+        raise TypeError("stage3_subtask_history_must_be_string")
     instruction = o1_initial_instruction(scene)
     if "task_input" not in scene["public"]:
         # Legacy scenes enumerate sources in O1 modal_inputs rather than the
@@ -103,7 +105,7 @@ def stage3_author_context(
         f"Attempt {attempt}/{max_attempts}; "
         f"remaining {max_attempts - attempt} attempts." +
         "\n\n==== SUBTASK HISTORY ====\n" +
-        o1_history(task_entries)
+        subtask_history
     )
 
 
