@@ -5,6 +5,9 @@ from copy import deepcopy
 import json
 import unittest
 
+from environment.generate_question.execution.evidence_tools import (
+    legacy_tools_from_task,
+)
 from environment.base_orchestration.action_author import (
     _assignment,
     _stage3_task_prose_issues,
@@ -194,12 +197,17 @@ class FrozenTaskProseTests(unittest.TestCase):
             actions = turn["output"]["params"]["tasks"]
             for task, tid in zip(actions, audit["private_macro_alignment"]):
                 self.assertEqual(task["model"], "model_1")
-                self.assertEqual(
-                    task["tools"], task_map[tid].get("required_tools", []),
-                )
-                self.assertIn("documented observations", task[
-                    "task_instruction"
-                ]) if task_map[tid]["source_ids"] else None
+                expected_tools = task_map[tid].get("required_tools")
+                if expected_tools is None:
+                    expected_tools = legacy_tools_from_task(
+                        task_map[tid], source_catalog(scene),
+                    )
+                self.assertEqual(task["tools"], expected_tools)
+                if task_map[tid]["source_ids"]:
+                    self.assertIn(
+                        "documented observations",
+                        task["task_instruction"],
+                    )
                 if task_map[tid]["depends_on"]:
                     self.assertIn(
                         "Previously returned result:", task["context"]
