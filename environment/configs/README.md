@@ -7,9 +7,9 @@ retired generator variants through flags or configuration keys.
 | Stage | Config | Default output | Input |
 |---|---|---|---|
 | 1 — questions and executable evidence DAG | `questions.yaml` | `environment/data/stage1/` | YAGO motif vocabulary; simulated evidence |
-| 2 — reviewed Sub-Agent reports | `subagent_reports.yaml` | `environment/data/stage2/` | Stage 1 accepted `questions/scenes.jsonl` |
-| 3 — trusted Main dispatch | `main_orchestration.yaml` | `environment/data/stage3/` | Stage 1 Scenes and Stage 2 reports |
-| 4 — untrusted recovery | `untrusted_orchestration.yaml` | `environment/data/stage4/` | Stage 1 Scenes and Stage 2 reports |
+| 2 — reviewed Sub-Agent reports | `subagent_reports.yaml` | `environment/data/pilots/qwen_stage234_10/stage2/` | First 10 accepted Stage 1 Scenes |
+| 3 — trusted Main dispatch | `main_orchestration.yaml` | `environment/data/pilots/qwen_stage234_10/stage3/` | Same 10 Scenes and Stage 2 reports |
+| 4 — untrusted recovery | `untrusted_orchestration.yaml` | `environment/data/pilots/qwen_stage234_10/stage4/` | Stage 1 / Stage 2 and reviewed Stage 3 clean episodes |
 
 ```bash
 python -m environment generate-questions --config environment/configs/questions.yaml
@@ -17,6 +17,15 @@ python -m environment naturalize-subtasks --config environment/configs/subagent_
 python -m environment generate-main-turns --config environment/configs/main_orchestration.yaml
 python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml
 ```
+
+**Current 10-Scene Qwen pilot:** The three maintained Stage 2/3/4 YAML
+files temporarily select the first 10 rows from the existing Stage-1
+`environment/data/stage1/questions/scenes.jsonl`. Do **not** run Stage 1 again
+for this pilot. Each stage writes beneath
+`environment/data/pilots/qwen_stage234_10/`. Stage 4 checks
+`input.clean_episodes` against Stage 3's actual clean references and samples
+only one returned-feedback fork per Scene, with up to 12 atom candidates per
+round. API Author/Critic uses `qwen3.8-flash`.
 
 The Stage 1 construction and Question review phases are independently
 journaled. Its latest output is a single schema, not a selectable
