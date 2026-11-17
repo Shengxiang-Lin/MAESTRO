@@ -12,7 +12,7 @@ generation:
   max_scenes: 10  # reuse first 10 accepted Stage-1 Scenes
   workers: 10
   mode: llm           # llm or template
-  freeze_dispatch: true  # Compiler fixes task batches; LLM writes reasoning only
+  freeze_dispatch: true  # Freeze DAG batches/models/tools; LLM authors reasoning + scoped task prose
   max_revisions: 2
   max_attempts: 16
   sub_model: qwen3.8-flash

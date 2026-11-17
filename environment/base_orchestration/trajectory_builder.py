@@ -25,6 +25,7 @@ from .action_author import (
     _assignment, action_issues, completion_issues,
     author_delegate_action, author_complete_action,
     STAGE3_REASONING_AUTHOR_SYSTEM, STAGE3_REASONING_CRITIC_SYSTEM,
+    STAGE3_TASK_PROSE_AUTHOR_SYSTEM, STAGE3_TASK_PROSE_CRITIC_SYSTEM,
     stage3_reasoning_issues,
 )
 from .reasoning_fidelity import (
@@ -455,12 +456,15 @@ def build_episode(
                 author=author, critic=critic, max_revisions=max_revisions,
                 freeze_assignment_prose=freeze_trusted_dispatch,
                 reasoning_only_stage3=freeze_trusted_dispatch,
+                # Freeze DAG dispatch and O1 tool/model slots, not the
+                # natural-language instruction/context attached to each slot.
+                naturalize_assignment_prose=freeze_trusted_dispatch,
                 author_system=(
-                    STAGE3_REASONING_AUTHOR_SYSTEM
+                    STAGE3_TASK_PROSE_AUTHOR_SYSTEM
                     if freeze_trusted_dispatch else None
                 ),
                 critic_system=(
-                    STAGE3_REASONING_CRITIC_SYSTEM
+                    STAGE3_TASK_PROSE_CRITIC_SYSTEM
                     if freeze_trusted_dispatch else None
                 ),
                 reasoning_guard=(
