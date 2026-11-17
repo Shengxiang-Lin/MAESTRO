@@ -10,7 +10,6 @@ from unittest.mock import patch
 from environment.__main__ import main, parser
 from environment.tests.current_stage1 import current_scene
 from environment.implement_subtask.combined import generate_subagent_reports
-from environment.streaming import StreamingError
 
 
 def _scene(i):
@@ -93,7 +92,7 @@ class CombinedStage2Tests(unittest.TestCase):
             self.assertEqual(result["published_macro_tasks"],
                              result["oracle_macro_tasks"])
             self.assertEqual(result["completed_macro_tasks"], author.calls)
-            self.assertTrue((out / "oracle/manifest.json").is_file())
+            self.assertFalse((out / "oracle/manifest.json").exists())
             oracle = [
                 json.loads(line) for line in
                 (out / "oracle/subtasks.jsonl").read_text().splitlines()
@@ -109,7 +108,8 @@ class CombinedStage2Tests(unittest.TestCase):
                                  after["trace_summary"]["steps"])
                 self.assertEqual(after["finish_result"]["status"], "done")
 
-    def test_finished_oracle_reused_after_report_interruption(self):
+    def test_oracle_rebuilt_after_report_interruption(self):
+        from environment.implement_subtask.pipeline import materialize_subtasks
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source = self._inputs(root, count=1)
@@ -124,18 +124,19 @@ class CombinedStage2Tests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "report interrupted"):
                     generate_subagent_reports(**kwargs)
-            self.assertTrue(
-                (root / "reports/oracle/manifest.json").is_file()
-            )
+            self.assertFalse((root / "reports/oracle/manifest.json").exists())
+            # Re-entry must recompile Oracle, not trust a previous manifest.
             with patch(
                 "environment.implement_subtask.combined.materialize_subtasks",
-                side_effect=AssertionError("should reuse completed Oracle"),
-            ):
+                wraps=materialize_subtasks,
+            ) as materialize:
                 resumed = generate_subagent_reports(**kwargs)
+            self.assertEqual(materialize.call_count, 1)
+            self.assertTrue(materialize.call_args.kwargs["overwrite"])
             self.assertEqual(resumed["status"], "done")
             self.assertEqual(resumed["accepted_scenes"], 1)
 
-    def test_oracle_manifest_invalidates_changed_scene_or_export(self):
+    def test_oracle_rebuilds_when_scene_or_parameters_change(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source = self._inputs(root, count=1)
@@ -144,25 +145,51 @@ class CombinedStage2Tests(unittest.TestCase):
                 "reporting_options": self._options(root),
                 "clients": (Author(), Critic()), "no_progress": True,
             }
-            generate_subagent_reports(**kwargs)
-            with source.open("a", encoding="utf-8") as writer:
-                writer.write(json.dumps(_scene(20)) + "\n")
-            with self.assertRaisesRegex(StreamingError, "does not match"):
-                generate_subagent_reports(**kwargs)
+            # Avoid creating a completed LLM report bank; test Oracle only.
+            with patch(
+                "environment.implement_subtask.combined.naturalize_subtasks",
+                return_value={"status": "done"},
+            ):
+                first = generate_subagent_reports(**kwargs)
+                with source.open("a", encoding="utf-8") as writer:
+                    writer.write(json.dumps(_scene(20)) + "\n")
+                second = generate_subagent_reports(
+                    **kwargs, evidence_limit=3, max_scenes=2,
+                )
+            self.assertEqual(first["oracle_accepted_scenes"], 1)
+            self.assertEqual(second["oracle_accepted_scenes"], 2)
+            oracle = root / "reports/oracle"
+            meta = json.loads((oracle / "summary.json").read_text())
+            self.assertEqual(meta["evidence_atoms_per_step_limit"], 3)
+            self.assertEqual(
+                len((oracle / "scene_index.jsonl").read_text().splitlines()),
+                2,
+            )
 
-    def test_existing_legacy_teacher_not_silently_reused(self):
+    def test_stale_oracle_manifest_and_teacher_are_replaced(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source = self._inputs(root, count=1)
             oracle = root / "reports/oracle"
             oracle.mkdir(parents=True)
             (oracle / "subtasks.jsonl").write_text('{"stale":true}\n')
-            with self.assertRaisesRegex(StreamingError, "without a manifest"):
-                generate_subagent_reports(
-                    scenes_path=source, output_dir=root / "reports",
-                    reporting_options=self._options(root),
-                    clients=(Author(), Critic()), no_progress=True,
-                )
+            (oracle / "manifest.json").write_text(
+                '{"signature":"incompatible-old-version"}'
+            )
+            result = generate_subagent_reports(
+                scenes_path=source, output_dir=root / "reports",
+                reporting_options=self._options(root),
+                clients=(Author(), Critic()), no_progress=True,
+            )
+            self.assertEqual(result["status"], "done")
+            self.assertFalse((oracle / "manifest.json").exists())
+            actual = [
+                json.loads(line)
+                for line in (oracle / "subtasks.jsonl").read_text().splitlines()
+            ]
+            self.assertTrue(actual)
+            self.assertTrue(all("macro_task_id" in item for item in actual))
+            self.assertTrue(all("stale" not in item for item in actual))
 
     def test_cli_scenes_dispatches_combined_and_rejects_double_inputs(self):
         parsed = parser().parse_args([
