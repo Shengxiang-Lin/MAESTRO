@@ -152,7 +152,10 @@ def _intent_reference_question(spec: dict) -> str:
                     (candidate for candidate in safe_leads
                      if _safe_lead(candidate)), lead
                 )
-            if plan.get("composer_policy") == "goal_conditioned_operation_dag_v5":
+            if (plan.get("composer_policy") ==
+                    "goal_conditioned_operation_dag_v5"
+                    and plan["goal_spec"]["source_profile"] !=
+                    "entity_resolution"):
                 from .goal_ops_v5 import goal_question
                 return f"{lead} {goal_question(plan)}"
             if (plan.get("composer_policy") ==
