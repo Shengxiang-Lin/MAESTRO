@@ -1,11 +1,8 @@
-"""Single Task Plan for NEW MAESTRO Stage-1 generation.
+"""Canonical Stage 1 Task Plan, evidence binding and frozen validation.
 
-Decisions: typed information tasks + their relation needs -> actual YAGO
-witnesses and fictional observations. No historical make_spec is called.
-Old typed_knowledge / graph_first versions remain replay-only.
-
-macro_plan.macro_tasks is the *only* authoritative task graph. There is
-no nested legacy Spec, duplicate Relation Sketch, or duplicate DAG.
+An output-first Goal determines the typed evidence to acquire. The Macro
+DAG is the only authoritative orchestration structure; World, Gold and
+Question all depend on its frozen contracts.
 """
 from __future__ import annotations
 
@@ -15,6 +12,7 @@ from collections import Counter
 
 from environment.schema import digest
 from .knowledge_macro import YagoKnowledgeIndex, CUES, predicate_label
+from .goal_plan import COMPOSER as OUTPUT_FIRST_COMPOSER
 
 PATTERN = "task_plan"
 VERSION = "maestro.task_plan.v1"
@@ -31,7 +29,6 @@ SEMANTIC_GOALS = "goal_constrained_yago_grounding_v1"
 SYNTHETIC_WORLD = "maestro.fictional_semantic_world.v1"
 SYNTHETIC_WITNESS = "maestro.task_plan.fictional_witness.v1"
 SYNTHETIC_FORK = "maestro.fictional_fork_grounding.v1"
-from .goal_plan import COMPOSER as OUTPUT_FIRST_COMPOSER
 # Local predicate combinations with interpretable user goals. These are
 # *predicate-signature hypotheses*, NOT RDF-type attestations. The bounded
 # YAGO loader intentionally excludes rdf:type triples.
@@ -99,26 +96,6 @@ def _semantic_goal(path: list, count: int) -> dict:
         ),
         "candidate_count": count,
     }
-
-
-_FICTIONAL_NAMES = (
-    "Alder", "Briar", "Cedar", "Dunmere", "Elden", "Farrow",
-    "Glenwick", "Hawthorn", "Iver", "Juniper", "Kestrel", "Linden",
-)
-_FICTIONAL_FIELDS = (
-    "river ecology", "historical cartography", "computational linguistics",
-    "maritime archaeology", "urban hydrology", "cultural astronomy",
-    "digital paleography", "environmental history", "heritage informatics",
-    "landscape modeling", "comparative philology", "materials conservation",
-)
-_PREDICATE_NAMES = {
-    "birthplace": "birthPlace", "deathplace": "deathPlace",
-    "containedinplace": "containedInPlace", "location": "location",
-    "doctoraladvisor": "doctoralAdvisor", "fieldofwork": "fieldOfWork",
-    "spouse": "spouse", "memberof": "memberOf",
-    "neighbor": "neighbor", "nationality": "nationality",
-    "capital": "capital", "twinnedwith": "twinnedWith",
-}
 
 
 def _fictional_fork(paths: dict, *, source_style: str = "legacy") -> dict:
@@ -602,12 +579,7 @@ def make_spec(kg, *, seed: int, ordinal: int, difficulty: str,
             "an environmental field survey with geospatial observation notes",
         ),
     }
-    scene_setting = (
-        scene_variants[semantic["domain"]][ordinal % 2]
-        if True else
-        "a research archive with personnel files, field records "
-        "and independently maintained reference registers"
-    )
+    scene_setting = scene_variants[semantic["domain"]][ordinal % 2]
     scenario = {
         "topic": topics[semantic["domain"]],
         "setting": scene_setting,
