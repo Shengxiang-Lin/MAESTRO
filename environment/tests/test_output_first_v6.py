@@ -8,6 +8,7 @@ import unittest
 from environment.generate_question.goal_ops_v6 import (
     VERSION, OUTPUT_KINDS, _backward_goal,
     evaluate_goal_value, selected_output, validate_operation_graph,
+    operation_subgraph_leq,
 )
 
 
@@ -69,6 +70,19 @@ class OutputFirstGoalTests(unittest.TestCase):
             set(mixed["source_fields"]["metric_a"]),
             {"entity_final", "date_a", "latitude_a", "longitude_a"},
         )
+        simple = _backward_goal({
+            "kind": "single_number",
+            "fields": {"answer": "int"},
+            "bindings": {"answer": "difference"},
+        })
+        expanded = _backward_goal({
+            "kind": "structured_multi_field",
+            "fields": {"difference": "int", "ratio": "float"},
+            "bindings": {"difference": "difference", "ratio": "ratio"},
+        })
+        self.assertTrue(operation_subgraph_leq(simple, expanded))
+        self.assertFalse(operation_subgraph_leq(expanded, simple))
+        self.assertTrue(operation_subgraph_leq(simple, simple))
         tampered = copy.deepcopy(mixed)
         tampered["operations"].reverse()
         self.assertTrue(validate_operation_graph(tampered))
