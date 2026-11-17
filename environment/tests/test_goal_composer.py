@@ -213,6 +213,143 @@ class GoalComposerTests(unittest.TestCase):
                              scene["macro_graph"]["macro_task_count"])
         self.assertEqual(seen, {"trace", "event", "verify"})
 
+    def test_v3_year_language_and_author_repair(self):
+        import json
+        from environment.generate_question.task_plan import make_spec
+        from environment.generate_question.question import (
+            reference_question, guard_question, naturalize_one,
+        )
+        from environment.macro_v3.yago import Edge, KnowledgeGraph
+
+        kg = KnowledgeGraph(edges=[
+            Edge("https://example.org/p", "http://schema.org/birthPlace",
+                 "https://example.org/c"),
+            Edge("https://example.org/c", "http://schema.org/containedInPlace",
+                 "https://example.org/r"),
+        ], input_file="year-guard-test.ttl", scanned=2)
+        sample = next(
+            spec for ordinal in range(60)
+            if (spec := make_spec(
+                kg, seed=17, ordinal=ordinal, difficulty="medium",
+                world_mode="compose", composer=NEEDS_VERSION,
+            ))["macro_plan"]["condition"] == {
+                "field": "event_year", "op": "filter_gte", "value": 2025,
+            } and spec["macro_plan"]["mode"] == "event"
+        )
+        q = reference_question(sample)
+        self.assertIn("from 2025 onward", q)
+        for phrase in (
+            "in or after 2025", "on or after 2025",
+            "from 2025 onward",
+        ):
+            inclusive = q.replace("from 2025 onward", phrase)
+            self.assertNotIn(
+                "task_plan_exclusive_year_threshold",
+                guard_question(inclusive, sample),
+            )
+        for phrase in ("after 2025", "later than 2025"):
+            exclusive = q.replace("from 2025 onward", phrase)
+            self.assertIn(
+                "task_plan_exclusive_year_threshold",
+                guard_question(exclusive, sample),
+            )
+        extra = q + " The event must also be completed."
+        self.assertIn(
+            "task_plan_unlicensed_status_condition",
+            guard_question(extra, sample),
+        )
+
+        # The Author receives specific corrective context, not just an
+        # opaque error code. Critic is called only for a guard-passing draft.
+        good = (
+            "Use the provided reference card to identify the dossier in "
+            f"the {sample['scenario']['topic']}; among its review "
+            "sessions in or after 2025, answer the following: "
+            + sample["macro_plan"]["goal"]["semantic"]["question"]
+        )
+        class Author:
+            def __init__(self):
+                self.requests = []
+
+            def complete_json(self, system, user):
+                data = json.loads(user)
+                self.requests.append(data)
+                return {"question": extra if len(self.requests) == 1 else good}
+
+        class Critic:
+            def complete_json(self, system, user):
+                return {
+                    "verdict": "pass",
+                    "all_constraints_preserved": True,
+                    "no_unlicensed_facts": True,
+                    "same_answer_scope": True,
+                    "natural": True,
+                }
+
+        author = Author()
+        accepted, meta = naturalize_one(
+            sample, author=author, critic=Critic(), max_revisions=1,
+        )
+        self.assertEqual(meta["status"], "accepted", meta)
+        self.assertEqual(accepted, good)
+        repair = author.requests[1]["contract"]["repair_priority"]
+        self.assertTrue(any(
+            "event STATUS" in hint for hint in repair
+        ), repair)
+
+    def test_v3_lead_collision_and_quality_lookup_metrics(self):
+        from environment.generate_question.task_plan import make_spec
+        from environment.generate_question.question import (
+            reference_question, guard_question,
+        )
+        from environment.generate_question.quality import (
+            compile_and_validate, validate_replay,
+        )
+        from environment.generate_question.pipeline import quality_report
+        from environment.macro_v3.yago import Edge, KnowledgeGraph
+
+        kg = KnowledgeGraph(edges=[
+            Edge("https://example.org/p", "http://schema.org/birthPlace",
+                 "https://example.org/c"),
+            Edge("https://example.org/c", "http://schema.org/containedInPlace",
+                 "https://example.org/r"),
+        ], input_file="collision-test.ttl", scanned=2)
+        # The production pilot's ordinal 26 previously leaked the common
+        # clue word 'catalog' through the boilerplate 'spoken-catalog'.
+        sample = make_spec(
+            kg, seed=17, ordinal=26, difficulty="hard",
+            world_mode="compose", composer=NEEDS_VERSION,
+        )
+        question = reference_question(sample)
+        self.assertEqual(guard_question(question, sample), [])
+        scene = compile_and_validate(sample, question)
+        self.assertEqual(validate_replay(scene)["status"], "valid")
+        nodes = scene["gold_program"]["nodes"]
+        all_lookups = sum(n["op"] == "lookup_by_key" for n in nodes)
+        clue_sources = {
+            sid for task in sample["macro_plan"]["macro_tasks"]
+            if task["operation"] == "match_clues"
+            for sid in task["source_scope"]
+        }
+        clue_lookups = sum(
+            n["op"] == "lookup_by_key"
+            and n["source_id"] in clue_sources
+            for n in nodes
+        )
+        quality = quality_report([scene], no_progress=True)
+        got = quality["evidence_acquisition"]
+        self.assertGreater(all_lookups, 0)
+        self.assertGreater(clue_lookups, 0)
+        self.assertEqual(got["keyed_lookup_count"], all_lookups)
+        self.assertEqual(
+            got["task_plan_keyed_lookup_count"], all_lookups,
+        )
+        self.assertEqual(
+            got["task_plan_clue_keyed_lookup_count"], clue_lookups,
+        )
+        self.assertEqual(got["task_plan_keyed_source_contract_mismatches"], 0)
+        self.assertEqual(got["scenes_with_keyed_clue_chain"], 1)
+
     def test_invalid_goal_and_difficulty_fail_closed(self):
         with self.assertRaises(ValueError):
             compose_plan(seed=1, ordinal=0, difficulty="easy", hops=2,

@@ -122,6 +122,32 @@ def _intent_reference_question(spec: dict) -> str:
                 f"The provided archive-photo and spoken-catalog observations concern a record in the {topic}.",
                 f"The supplied image description and audio observation refer to a record in the {topic}.",
             )[spec["ordinal"] % 4]
+            if plan.get("composer_policy") == "goal_conditioned_evidence_needs_v3":
+                # A frozen clue can accidentally equal an ordinary phrase
+                # in our deterministic lead (e.g. "catalog" in
+                # "spoken-catalog"). Do not weaken the leakage guard; select
+                # a neutral alternative that never quotes a private cue.
+                safe_leads = (
+                    lead,
+                    f"The supplied reference card concerns a record in the {topic}.",
+                    f"The provided observation descriptions refer to a record in the {topic}.",
+                    f"The enclosed reference notes concern a record in the {topic}.",
+                )
+                allowed = topic + " " + goal["question"]
+                def _safe_lead(candidate):
+                    return not any(
+                        re.search(r"\b" + re.escape(str(info["value"])) + r"\b",
+                                  candidate, re.I)
+                        and not re.search(
+                            r"\b" + re.escape(str(info["value"])) + r"\b",
+                            allowed, re.I
+                        )
+                        for info in plan["clues"].values()
+                    )
+                lead = next(
+                    (candidate for candidate in safe_leads
+                     if _safe_lead(candidate)), lead
+                )
             condition = plan["condition"]
             if condition is None:
                 qualifier = ""
@@ -632,7 +658,19 @@ def _unlicensed_task_plan_condition(question: str, plan: dict) -> list[str]:
     errors = []
     if status_terms:
         errors.append("task_plan_unlicensed_status_condition")
-    if re.search(r"\b(?:after|later than)\s+2025\b", q):
+    # "in or after 2025" and "on or after 2025" are INCLUSIVE;
+    # a bare "after 2025" or "later than 2025" is exclusive.
+    # Check the preceding context instead of a substring match.
+    exclusive = any(
+        not re.search(
+            r"\b(?:in|on)\s+(?:or|and)\s+$",
+            q[max(0, match.start() - 20):match.start()],
+        )
+        for match in re.finditer(
+            r"\b(?:after|later than)\s+2025\b", q
+        )
+    )
+    if exclusive:
         errors.append("task_plan_exclusive_year_threshold")
     if re.search(r"\b(?:before|prior to|earlier than)\s+2025\b", q):
         errors.append("task_plan_reversed_year_threshold")
@@ -974,14 +1012,31 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
             } if "semantic_evidence_contract" in instruction else {}),
         }
         if compact_task_plan:
-            goal = spec["macro_plan"]["goal"]["semantic"]
+            plan = spec["macro_plan"]
+            goal = plan["goal"]["semantic"]
             author_contract["semantic_goal_question"] = goal["question"]
-            author_contract["required_event_condition"] = (
-                spec["macro_plan"]["condition"]
-            )
+            author_contract["required_event_condition"] = plan["condition"]
             author_contract["verification_mode"] = (
-                spec["macro_plan"]["mode"] == "verify"
+                plan["mode"] == "verify"
             )
+            if plan.get("composer_policy") == "goal_conditioned_evidence_needs_v3":
+                condition = plan["condition"]
+                if condition and condition["field"] == "event_year":
+                    author_contract["event_condition_scope"] = (
+                        "Select review sessions held IN OR AFTER 2025 "
+                        "(2025 inclusive). No completion, cancellation, or "
+                        "other status criterion is authorized."
+                    )
+                elif condition and condition["field"] == "event_status":
+                    author_contract["event_condition_scope"] = (
+                        "Only completed review sessions qualify. "
+                        "No year restriction is authorized."
+                    )
+                else:
+                    author_contract["event_condition_scope"] = (
+                        "No event eligibility condition is requested. "
+                        "Do not introduce one."
+                    )
         if spec.get("question_semantic_lock_version"):
             from .question_semantic_lock import question_author_requirements
             author_contract["mandatory_question_semantics"] = (
@@ -998,6 +1053,42 @@ def naturalize_one(spec: dict, *, author, critic, max_revisions: int = 2,
                 "must be a subordinate clause, not a second answer.",
                 "Do not copy the deterministic reference question.",
             ]
+            if compact_task_plan and spec["macro_plan"].get(
+                "composer_policy"
+            ) == "goal_conditioned_evidence_needs_v3":
+                condition = spec["macro_plan"]["condition"]
+                if ("task_plan_unlicensed_status_condition" in prior_errors
+                        and condition and
+                        condition["field"] == "event_year"):
+                    author_contract["repair_priority"].insert(
+                        0, "The previous candidate ADDED an unauthorized "
+                        "event STATUS condition (for example 'completed'). "
+                        "Remove every event-status restriction. The ONLY "
+                        "eligibility predicate is event_year >= 2025; "
+                        "write 'in or after 2025' or 'from 2025 onward'."
+                    )
+                if "task_plan_exclusive_year_threshold" in prior_errors:
+                    author_contract["repair_priority"].insert(
+                        0, "Use an INCLUSIVE year condition: 'in or after "
+                        "2025' or 'from 2025 onward'. Do not say only "
+                        "'after 2025' or 'later than 2025'."
+                    )
+                if "task_plan_unlicensed_year_condition" in prior_errors:
+                    author_contract["repair_priority"].insert(
+                        0, "The frozen event condition has NO year "
+                        "restriction. Remove the invented year filter."
+                    )
+                if "task_plan_unlicensed_event_condition" in prior_errors:
+                    author_contract["repair_priority"].insert(
+                        0, "There is NO event eligibility condition. "
+                        "Remove invented year or status filters."
+                    )
+                if "task_plan_reference_material_not_identified" in prior_errors:
+                    author_contract["repair_priority"].insert(
+                        0, "Identify the initial supplied reference card "
+                        "or provided observation descriptions without "
+                        "listing any clue values."
+                    )
             if spec.get("question_semantic_lock_version"):
                 if spec["macro_plan"]["goal_resolution"]["kind"] == "calculation":
                     author_contract["repair_priority"].append(
