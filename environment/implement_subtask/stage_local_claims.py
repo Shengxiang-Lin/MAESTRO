@@ -39,6 +39,12 @@ _UNKNOWN_DISAGREEMENT = re.compile(
     r"|\b(?:disagreement|conflict|discrepancy|difference|"
     r"contradiction)\b[^.!?]{0,80}"
     r"\b(?:not\s+yet|unverified|unchecked|pending|unknown)\b"
+    # A source-disagreement CHECK reported as not completed is not an
+    # established cross-source disagreement.
+    r"|\b(?:source|report)[-\s]+(?:disagreement|conflict|discrepancy)"
+    r"\s+checks?\s+(?:was|were|has\s+been|have\s+been)?\s*"
+    r"(?:not|never)\s+(?:yet\s+)?"
+    r"(?:completed|performed|conducted|established)\b"
     r"|\b(?:yet\s+to|still\s+need(?:s)?\s+to)\s+"
     r"(?:compare|verify|check|establish|confirm)\b",
     re.I,
