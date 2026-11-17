@@ -1,8 +1,7 @@
-"""Interpret the SINGLE frozen Task Plan using the original Stage-1 IR.
+"""Execute canonical Stage 1 Task Plans through the shared Gold IR.
 
-No historical make_spec(), no duplicate DAG/Sketch/World Spec, and no
-independent executor. The same IR is consumed by old Compiler, Quality,
-Replay and Stage-2 Sub-Agent WorkProduct.
+World evidence, Macro outputs and counterfactual audits use the same
+frozen source permissions and typed Goal contracts as Stage 2.
 """
 from __future__ import annotations
 
@@ -268,41 +267,22 @@ def generate_world(spec: dict) -> dict:
                    if right in {"answer", "entity_final"}
                    else path[hop]["object"],
         } for path in paths.values()]
-    if typed_kind != "entity_resolution":
-        # Independent evidence views of canonical private World facts.
-        # No values are derived from a public Question or copied from
-        # any real OmniGAIA evaluation record.
-        facts = b["world_model"]["goal_measurements"]
-        if plan.get("composer_policy") == "goal_conditioned_output_first_v6":
-            for sid, fields in typed_goal["source_fields"].items():
-                if sid == "observation_log":
-                    tables[sid] = [
-                        copy.deepcopy(row)
-                        for record in facts["by_case"].values()
-                        for row in record["observations"]
-                    ]
-                else:
-                    tables[sid] = [
-                        {field: record[field] for field in fields}
-                        for record in facts["by_case"].values()
-                    ]
-        elif facts["kind"] != typed_kind:
-            raise ValueError("v4_metric_kind_mismatch")
-        elif typed_kind == "aggregation":
-            tables["observation_log"] = [
-                copy.deepcopy(row)
-                for item in facts["by_case"].values()
-                for row in item["observations"]
-            ]
-        else:
-            from .typed_goal_v4 import _metric_fields
-            for side in ("a", "b"):
-                sid = "metric_" + side
-                fields = _metric_fields(typed_kind, side)
-                tables[sid] = [{
-                    name: record[name]
-                    for name in fields
-                } for record in facts["by_case"].values()]
+    if typed_goal["capabilities"]:
+        # Each source is a typed, provenance-preserving projection of
+        # one canonical World; none is constructed from Gold answers.
+        measurements = b["world_model"]["goal_measurements"]["by_case"]
+        for sid, fields in typed_goal["source_fields"].items():
+            if sid == "observation_log":
+                tables[sid] = [
+                    copy.deepcopy(row)
+                    for record in measurements.values()
+                    for row in record["observations"]
+                ]
+            else:
+                tables[sid] = [
+                    {name: record[name] for name in fields}
+                    for record in measurements.values()
+                ]
     bank = {}
     for role in spec["sources"]:
         sid = role["source_id"]
@@ -591,8 +571,7 @@ def compile_macro_solvers(spec: dict) -> dict:
             terminal = add(
                 "project", last, fields=list(task["output_schema"])
             )
-        elif op in {"lookup_metric_a", "lookup_metric_b",
-                    "fetch_observations", "fetch_typed_evidence"}:
+        elif op == "fetch_typed_evidence":
             sid = task["source_scope"][0]
             retrieved = add(
                 "lookup_by_key", parents[0], source_id=sid,
@@ -602,58 +581,12 @@ def compile_macro_solvers(spec: dict) -> dict:
             terminal = add(
                 "project", retrieved, fields=list(task["output_schema"])
             )
-        elif op in {
-            "compare_metrics", "derive_numeric_difference",
-            "derive_numeric_ratio", "derive_temporal_gap",
-            "derive_geographic_distance", "compose_structured_answer",
-        }:
-            both = add(
-                "join", parents[0], parents[1],
-                left_on="entity_final", right_on="entity_final",
-            )
-            if op == "compare_metrics":
-                terminal = add(
-                    "derive_comparison", both,
-                    left_field="metric_a", right_field="metric_b",
-                    output_field="answer",
-                )
-            elif op in {"derive_numeric_difference", "derive_numeric_ratio"}:
-                terminal = add(
-                    "derive_arithmetic", both,
-                    left_field="metric_a", right_field="metric_b",
-                    operation=(
-                        "absolute_difference"
-                        if op == "derive_numeric_difference" else "ratio"
-                    ), output_field="answer",
-                    round_digits=2 if op == "derive_numeric_ratio" else 0,
-                )
-            elif op == "derive_temporal_gap":
-                terminal = add(
-                    "derive_date_gap", both,
-                    left_field="date_a", right_field="date_b",
-                    output_field="answer",
-                )
-            elif op == "derive_geographic_distance":
-                terminal = add(
-                    "derive_great_circle", both,
-                    lat_a="latitude_a", lon_a="longitude_a",
-                    lat_b="latitude_b", lon_b="longitude_b",
-                    output_field="answer",
-                )
-            else:
-                terminal = add(
-                    "compose_typed_result", both,
-                    entity_field="entity_final",
-                    left_field="metric_a", right_field="metric_b",
-                    output_field="answer",
-                )
-        elif op == "synthesize_operation_dag" and (
-                plan.get("composer_policy") == "goal_conditioned_output_first_v6"):
-            from .goal_ops_v6 import validate_operation_graph
+        elif op == "synthesize_operation_dag":
+            from .goal_plan import validate_operation_graph
             goal = plan["goal_spec"]
             invalid = validate_operation_graph(goal)
             if invalid:
-                raise ValueError("v6_invalid_goal_dag:" + ",".join(invalid))
+                raise ValueError("goal_invalid_goal_dag:" + ",".join(invalid))
             source_tasks = {
                 plan_task["macro_id"]: plan_task["source_scope"][0]
                 for plan_task in plan["macro_tasks"]
@@ -664,7 +597,7 @@ def compile_macro_solvers(spec: dict) -> dict:
                 for mid, parent in zip(task["depends_on"], parents)
             }
             if set(products) != set(goal["source_fields"]):
-                raise ValueError("v6_source_handoff_mismatch")
+                raise ValueError("goal_source_handoff_mismatch")
             # Aggregate the one-to-many ledger BEFORE joining a pair of
             # scalar sources; otherwise the join would multiply row counts.
             if "observation_log" in products:
@@ -683,7 +616,7 @@ def compile_macro_solvers(spec: dict) -> dict:
                 "metric_a", "metric_b", "observation_log"
             ) if name in products]
             if not pairs:
-                raise ValueError("v6_synthesis_without_evidence")
+                raise ValueError("goal_synthesis_without_evidence")
             last = pairs[0]
             for parent in pairs[1:]:
                 last = add(
@@ -716,7 +649,7 @@ def compile_macro_solvers(spec: dict) -> dict:
                 elif kind == "geographic_distance":
                     input_fields = ["coords_a", "coords_b"]
                 else:
-                    raise ValueError("v6_uncompiled_operation:" + kind)
+                    raise ValueError("goal_uncompiled_operation:" + kind)
                 last = add(
                     "goal_compute", last,
                     goal_operation=copy.deepcopy(goal_op),
@@ -733,79 +666,6 @@ def compile_macro_solvers(spec: dict) -> dict:
                 output_kind=goal["output_spec"]["kind"],
                 field_types=copy.deepcopy(goal["output_spec"]["fields"]),
                 bindings=bindings, output_field="answer",
-            )
-        elif op == "synthesize_operation_dag":
-            from .goal_ops_v5 import validate_operation_graph
-            goal = plan["goal_spec"]
-            problems = validate_operation_graph(goal)
-            if problems:
-                raise ValueError("invalid_v5_goal_graph:" + ",".join(problems))
-            source_profile = goal["source_profile"]
-            if source_profile == "aggregation":
-                if len(parents) != 1:
-                    raise ValueError("v5_count_requires_one_log_parent")
-                filtered = add(
-                    "filter_gte", parents[0],
-                    field="observation_year", value=2025,
-                )
-                last = add("group_count", filtered, field="entity_final")
-                outputs_by_op = {"entity": "entity_final",
-                                 "observations": "observation_id",
-                                 "count": "count"}
-            else:
-                if len(parents) != 2:
-                    raise ValueError("v5_paired_evidence_required")
-                last = add(
-                    "join", parents[0], parents[1],
-                    left_on="entity_final", right_on="entity_final",
-                )
-                left = (
-                    "date_a" if source_profile == "temporal_gap" else
-                    "coords_a" if source_profile == "geographic_distance" else
-                    "metric_a"
-                )
-                right = (
-                    "date_b" if source_profile == "temporal_gap" else
-                    "coords_b" if source_profile == "geographic_distance" else
-                    "metric_b"
-                )
-                outputs_by_op = {
-                    "entity": "entity_final", "a": left, "b": right,
-                }
-                for goal_op in goal["operations"]:
-                    if goal_op["op"] == "lookup":
-                        continue
-                    last = add(
-                        "goal_compute", last,
-                        goal_operation=copy.deepcopy(goal_op),
-                        input_fields=[
-                            outputs_by_op[dep] for dep in goal_op["inputs"]
-                        ],
-                        output_field=goal_op["output"],
-                    )
-                    outputs_by_op[goal_op["id"]] = goal_op["output"]
-            bindings = {
-                key: outputs_by_op[goal_id] for key, goal_id
-                in goal["output_spec"]["bindings"].items()
-            }
-            terminal = add(
-                "goal_format", last,
-                output_kind=goal["output_spec"]["kind"],
-                field_types=copy.deepcopy(goal["output_spec"]["fields"]),
-                bindings=bindings,
-                output_field="answer",
-            )
-        elif op == "count_qualifying_observations":
-            qualifying = add(
-                "filter_gte", parents[0],
-                field="observation_year", value=2025,
-            )
-            grouped = add(
-                "group_count", qualifying, field="entity_final",
-            )
-            terminal = add(
-                "project", grouped, fields=["count"],
-                rename_fields={"count": "answer"},
             )
         else:
             raise ValueError("unsupported_task_plan_operation:" + op)
@@ -864,60 +724,35 @@ def mutate_witness(sources: dict, sid: str,
         data[key] = "urn:maestro:counterfactual:broken-relation"
     elif sid in {"metric_a", "metric_b"}:
         goal = spec["macro_plan"]["goal_spec"]
-        kind = goal.get("source_profile", goal.get("kind"))
-        if spec["macro_plan"].get("composer_policy") == (
-                "goal_conditioned_output_first_v6"):
-            capabilities = goal["capabilities"]
-            if "numeric" in capabilities:
-                from .goal_resolution import goal_values
-                numeric = spec["macro_plan"]["world_binding"][
-                    "world_model"]["goal_measurements"]["by_case"][
-                        spec["macro_plan"]["world_binding"]["target_case"]
-                    ]
-                if any(node["op"] in {"compare_select", "verify"}
-                       for node in goal["operations"]):
-                    winner = goal_values(
-                        "comparison", numeric["metric_a"], numeric["metric_b"],
-                    )
-                    side = "first" if sid == "metric_a" else "second"
-                    # B is also a divisor in mixed ratio+comparison
-                    # Goals: flip the winner WITHOUT introducing a
-                    # mathematically invalid zero denominator.
-                    data[sid] = (
-                        (1 if sid == "metric_b" else 0)
-                        if winner == side else 999999
-                    )
-                else:
-                    data[sid] = 0 if sid == "metric_a" else 999999
-            elif "temporal" in capabilities:
-                data["date_"+sid[-1]] = (
-                    "1900-01-01" if sid == "metric_a" else "2100-01-01"
-                )
-            elif "geographic" in capabilities:
-                data["latitude_"+sid[-1]] += 8.0
-            else:
-                raise ValueError("v6_unnecessary_metric_source")
-        elif kind == "temporal_gap":
-            data["date_" + sid[-1]] = (
-                "1900-01-01" if sid == "metric_a" else "2100-01-01"
-            )
-        elif kind == "geographic_distance":
-            data["latitude_" + sid[-1]] += 8.0
-        else:
-            if kind in {"comparison", "structured_answer"}:
-                from .goal_resolution import goal_values
-                world = spec["macro_plan"]["world_binding"]["world_model"][
-                    "goal_measurements"
-                ]
-                target = spec["macro_plan"]["world_binding"]["target_case"]
-                row = world["by_case"][target]
+        capabilities = goal["capabilities"]
+        if "numeric" in capabilities:
+            from .goal_resolution import goal_values
+            model = spec["macro_plan"]["world_binding"]
+            measurements = model["world_model"]["goal_measurements"][
+                "by_case"][model["target_case"]]
+            if any(node["op"] in {"compare_select", "verify"}
+                   for node in goal["operations"]):
                 winner = goal_values(
-                    "comparison", row["metric_a"], row["metric_b"]
+                    "comparison",
+                    measurements["metric_a"], measurements["metric_b"],
                 )
                 side = "first" if sid == "metric_a" else "second"
-                data[sid] = 0 if winner == side else 999999
+                # A ratio may depend on the same denominator. Keep this
+                # counterfactual finite, while flipping the winner.
+                data[sid] = (
+                    (1 if sid == "metric_b" else 0)
+                    if winner == side else 999999
+                )
             else:
                 data[sid] = 0 if sid == "metric_a" else 999999
+        elif "temporal" in capabilities:
+            data["date_"+sid[-1]] = (
+                "1900-01-01" if sid == "metric_a" else "2100-01-01"
+            )
+        elif "geographic" in capabilities:
+            data["latitude_"+sid[-1]] += 8.0
+        else:
+            raise ValueError("unnecessary_metric_source")
     elif sid == "observation_log":
         data["observation_year"] = 2024
     else:
