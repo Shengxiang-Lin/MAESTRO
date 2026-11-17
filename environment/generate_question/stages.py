@@ -12,9 +12,9 @@ from pathlib import Path
 from tqdm.auto import tqdm
 
 from environment.schema import normalize_label
-from .spec import difficulty_sequence, make_spec
-from .question import naturalize_one, reference_question
-from .quality import compile_and_validate, validate_replay
+from environment.generate_question.planning.spec import difficulty_sequence
+from environment.generate_question.authoring.question import naturalize_one, reference_question
+from environment.generate_question.auditing.quality import compile_and_validate, validate_replay
 from environment.streaming import (
     OrderedJournal, StreamingError, file_digest,
     output_lock, run_ordered, stable_signature,
@@ -82,14 +82,20 @@ def _construction_identity(args) -> str:
         ),
         "generation_code": {
             name: file_digest(
-                Path(__file__).parent / (
-                    "planning" if name in {
-                        "task_plan.py", "goal_plan.py", "evidence_plan.py"
-                    } else "execution" if name in {
-                        "task_plan_runtime.py", "program_ir.py"
-                    } else "authoring" if name == "surface_quality.py"
-                    else ""
-                ) / name
+                Path(__file__).parent / {
+                    "task_plan.py": "planning/task_plan.py",
+                    "goal_plan.py": "planning/goal_plan.py",
+                    "evidence_plan.py": "planning/evidence_plan.py",
+                    "task_plan_runtime.py": "execution/task_plan_runtime.py",
+                    "program_ir.py": "execution/program_ir.py",
+                    "world_motifs.py": "grounding/world_motifs.py",
+                    "knowledge_macro.py": "planning/knowledge_index.py",
+                    "question.py": "authoring/question.py",
+                    "intent.py": "authoring/intent.py",
+                    "surface_quality.py": "authoring/surface_quality.py",
+                    "quality.py": "auditing/quality.py",
+                    "stages.py": "stages.py",
+                }[name]
             )
             for name in (
                 "task_plan.py", "task_plan_runtime.py", "goal_plan.py",
@@ -121,18 +127,16 @@ def _question_signature(args, rows: list[dict]) -> str:
         "critic_temperature": getattr(args, "question_critic_temperature", None),
         "critic_top_p": getattr(args, "question_critic_top_p", None),
         "max_revisions": args.max_revisions,
-        "question_code": file_digest(Path(__file__).with_name("question.py")),
-        "semantic_evidence_code": file_digest(
-            Path(__file__).with_name("semantic_evidence.py")),
+        "question_code": file_digest(Path(__file__).parent / "authoring/question.py"),
         "question_checks_code": file_digest(
             Path(__file__).with_name("authoring") / "question_checks.py"),
-        "intent_code": file_digest(Path(__file__).with_name("intent.py")),
+        "intent_code": file_digest(Path(__file__).parent / "authoring/intent.py"),
         "surface_quality_code": file_digest(
             Path(__file__).with_name("authoring") / "surface_quality.py"),
         "prompt_templates_code": file_digest(
             Path(__file__).with_name("authoring") / "prompt_templates.py"),
         "stage_code": file_digest(Path(__file__)),
-        "backend_code": file_digest(Path(__file__).with_name("backend.py")),
+        "backend_code": file_digest(Path(__file__).parent / "authoring/backend.py"),
     })
 
 
@@ -220,7 +224,7 @@ def construct_scenes(args) -> dict:
     if not getattr(args, "knowledge_yago", None):
         raise ValueError("knowledge_yago_required_for_stage1")
     from environment.macro_v3.yago import load_yago
-    from .knowledge_macro import YagoKnowledgeIndex
+    from environment.generate_question.planning.knowledge_index import YagoKnowledgeIndex
     knowledge_graph = load_yago(
         args.knowledge_yago,
         max_triples=args.knowledge_max_triples,
@@ -262,7 +266,7 @@ def construct_scenes(args) -> dict:
             break
         try:
             ordinal = candidate_ordinal
-            from .task_plan import make_spec
+            from environment.generate_question.planning.task_plan import make_spec
             spec = make_spec(
                 knowledge_graph, seed=args.seed, ordinal=ordinal,
                 difficulty=sequence[len(chosen)],
@@ -293,7 +297,7 @@ def construct_scenes(args) -> dict:
     if bool(scenario_model) != bool(scenario_api_base):
         raise ValueError("provide both --scenario-model and --scenario-api-base")
     if scenario_model:
-        from .scenario import enrich_one
+        from environment.generate_question.authoring.scenario import enrich_one
         if args.scenario_workers < 1:
             raise ValueError("--scenario-workers must be positive")
         clients = _scenario_clients(args)
@@ -310,16 +314,14 @@ def construct_scenes(args) -> dict:
             "critic_model": args.scenario_critic_model,
             "critic_api_base": args.scenario_critic_api_base,
             "max_revisions": args.scenario_max_revisions,
-            "scenario_code": file_digest(Path(__file__).with_name("scenario.py")),
+            "scenario_code": file_digest(Path(__file__).parent / "authoring/scenario.py"),
             "scenario_contracts_code": file_digest(
                 Path(__file__).with_name("authoring") / "scenario_contracts.py"),
-            "semantic_evidence_code": file_digest(
-                Path(__file__).with_name("semantic_evidence.py")),
-            "intent_code": file_digest(Path(__file__).with_name("intent.py")),
+            "intent_code": file_digest(Path(__file__).parent / "authoring/intent.py"),
             "prompt_templates_code": file_digest(
                 Path(__file__).with_name("authoring") / "prompt_templates.py"),
             "stage_code": file_digest(Path(__file__)),
-            "backend_code": file_digest(Path(__file__).with_name("backend.py")),
+            "backend_code": file_digest(Path(__file__).parent / "authoring/backend.py"),
         })
         task_ids = [spec["task_id"] for spec in chosen]
         with output_lock(args.output_dir, "scenario_authoring"):
@@ -481,7 +483,7 @@ def construct_scenes(args) -> dict:
 
 
 def _scenario_clients(args):
-    from .backend import OpenAICompatibleBackend
+    from environment.generate_question.authoring.backend import OpenAICompatibleBackend
     author_key = (os.environ.get(args.scenario_api_key_env)
                   if args.scenario_api_key_env else None)
     critic_key = (os.environ.get(args.scenario_critic_api_key_env)
@@ -502,7 +504,7 @@ def _scenario_clients(args):
 
 
 def _llm_clients(args):
-    from .backend import OpenAICompatibleBackend
+    from environment.generate_question.authoring.backend import OpenAICompatibleBackend
     if not args.question_api_base or not args.question_model:
         raise ValueError("both question endpoint and model are required")
     key = (os.environ.get(args.question_api_key_env)

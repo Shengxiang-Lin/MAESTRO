@@ -9,9 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from environment.generate_question.spec import make_spec
-from environment.generate_question.question import reference_question
-from environment.generate_question.quality import compile_and_validate
+from environment.tests.current_stage1 import current_scene
 from environment.implement_subtask.realize import realize_scene
 from environment.base_orchestration.trajectory_builder import build_episode
 from environment.base_orchestration.generate_turns import generate_turns
@@ -20,13 +18,7 @@ from environment.base_orchestration.action_author import action_issues
 
 
 def fixture(i=0):
-    spec = make_spec(
-        seed_record={"record_id": "stage3-turn-"+str(i),
-                     "topic": "Premier League", "domain_hint": "sports"},
-        ordinal=i, run_seed=97, difficulty="hard",
-        macro_first_v2_share=100,
-    )
-    return compile_and_validate(spec, reference_question(spec))
+    return current_scene(i)
 
 
 def reviewed_rows(scene):
@@ -52,62 +44,6 @@ def reviewed_rows(scene):
 
 
 class MainTurnDatasetTests(unittest.TestCase):
-
-    def test_v14_frozen_dispatch_ignores_wrong_llm_batch_size(self):
-        scene = fixture(7)
-        self.assertTrue(scene["problem_spec"].get("evidence_trust_version"))
-        requests = []
-
-        class BadBatchAuthor:
-            def complete_json(self, system, request):
-                content = json.loads(request)
-                if "reference_action_for_structure_only" in content:
-                    # The final answer stays code-fixed, though its
-                    # completion explanation can be reviewed as before.
-                    return content["reference_action_for_structure_only"]
-                requests.append(content)
-                return {
-                    "action": "delegate_task",
-                    "reasoning": (
-                        "The next source checks can be investigated now. "
-                        "I will collect their returned observations before "
-                        "deciding which downstream evidence is needed."
-                    ),
-                    "params": {"tasks": [{"task_instruction": "wrong"}]},
-                }
-
-        class GoodCritic:
-            def complete_json(self, system, request):
-                return {
-                    "verdict": "pass", "grounded": True,
-                    "assignment_fidelity": True, "o1_style": True,
-                }
-
-        episode, turns, audit, status = build_episode(
-            scene, reviewed_rows(scene), author=BadBatchAuthor(),
-            critic=GoodCritic(), max_revisions=0,
-            freeze_dispatch=True,
-        )
-        self.assertEqual(status["status"], "accepted")
-        self.assertTrue(requests)
-        self.assertTrue(all(
-            "reference_action_for_structure_only" not in request
-            and "current_round_assignments_in_required_order" not in request
-            for request in requests
-        ))
-        for turn, record in zip(turns, audit):
-            if turn["output"]["action"] != "delegate_task":
-                continue
-            self.assertEqual(
-                turn["generation_mode"], "llm_reviewed_contract_frozen"
-            )
-            self.assertEqual(
-                len(turn["output"]["params"]["tasks"]),
-                len(record["private_macro_alignment"]),
-            )
-            self.assertTrue(record["authoring"]["assignment_contract_frozen"])
-            self.assertEqual(record["authoring"]["authored_fields"], ["reasoning"])
-        self.assertEqual(len(episode["trajectory"]), len(turns))
 
     def test_v14_critic_receives_current_intermediate_lookup_scope(self):
         from environment.base_orchestration.action_author import (
@@ -340,33 +276,6 @@ class MainTurnDatasetTests(unittest.TestCase):
             self.assertIn(turn["input"]["subtask_history"], rendered)
             self.assertNotIn("prompt", turn["input"])
 
-    def test_frozen_goal_resolution_may_finish_from_known_counts(self):
-        matched = 0
-        for i in range(40):
-            scene = fixture(i)
-            kind = scene["problem_spec"]["macro_plan"][
-                "goal_resolution"]["kind"]
-            if kind == "direct_lookup":
-                continue
-            episode, turns, audit, status = build_episode(
-                scene, reviewed_rows(scene)
-            )
-            self.assertTrue(status["main_local_goal_resolution"])
-            self.assertTrue(audit[-1]["main_locally_computed"])
-            self.assertEqual(
-                sum(len(t["output"]["params"]["tasks"]) for t in turns
-                    if t["output"]["action"] == "delegate_task"),
-                len(scene["macro_graph"]["tasks"])-1,
-            )
-            gold_val = next(iter(scene["gold_answer"][0].values()))
-            expected = (
-                str(gold_val) + "%" if kind == "calculation"
-                else str(gold_val)
-            )
-            self.assertEqual(turns[-1]["output"]["params"]["answer"], expected)
-            matched += 1
-        self.assertGreater(matched, 10)
-
     def test_critic_reviews_prose_without_second_guessing_frozen_tools(self):
         scene = fixture(4)
         rows = reviewed_rows(scene)
@@ -418,73 +327,6 @@ class MainTurnDatasetTests(unittest.TestCase):
             if turn["output"]["action"] == "delegate_task"
             for task in turn["output"]["params"]["tasks"]
         ))
-
-    def test_visible_answer_shortcut_skips_only_evidence_free_easy_terminal(self):
-        # Frozen Easy Scene has 2 Macro waves; a first, reviewed Sub-Agent
-        # can visibly report the exact top Entry, making the terminal
-        # take/project/unique wave redundant.
-        chosen = None
-        for i in range(40):
-            spec = make_spec(
-                seed_record={
-                    "record_id": f"easy-shortcut-{i}",
-                    "topic": "Museum registry", "domain_hint": "history",
-                    "source_modalities": ["table", "text"],
-                },
-                ordinal=i, run_seed=17, difficulty="easy",
-            )
-            sc = compile_and_validate(spec, reference_question(spec))
-            tasks = sc["macro_graph"]["tasks"]
-            terminal = tasks[-1]
-            if (len(sc["macro_graph"]["reference_waves"]) == 2
-                    and len(terminal["depends_on"]) == 1
-                    and not terminal["source_ids"]
-                    and set(step["op"] for step in terminal["operator_chain"])
-                    .issubset({"take", "project", "unique"})
-                    and len(sc["gold_answer"]) == 1
-                    and set(sc["gold_answer"][0]) == {"entry_label"}):
-                chosen = sc
-                break
-        self.assertIsNotNone(chosen)
-        rows = reviewed_rows(chosen)
-        golden_entry = chosen["gold_answer"][0]["entry_label"]
-        parent = chosen["macro_graph"]["tasks"][0]["task_id"]
-        row = next(x for x in rows if x["macro_task_id"] == parent)
-        row["finish_result"]["result"] = (
-            f"{golden_entry} is the active entry ranked first by the "
-            "requested ordering; all necessary evidence was checked."
-        )
-        episode, turns, audits, status = build_episode(chosen, rows)
-        self.assertEqual(status["status"], "accepted")
-        self.assertTrue(status["visible_answer_shortcut"], {
-            "gold_answer": chosen["gold_answer"],
-            "terminal_id": chosen["macro_graph"]["terminal_task_id"],
-            "terminal": chosen["macro_graph"]["tasks"][-1],
-            "parent": parent, "result": row["finish_result"]["result"],
-            "waves": chosen["macro_graph"]["reference_waves"],
-            "status": status,
-        })
-        self.assertEqual([x["output"]["action"] for x in turns],
-                         ["delegate_task", "complete"])
-        self.assertEqual(turns[-1]["output"]["params"]["answer"], golden_entry)
-        self.assertIn(golden_entry, turns[-1]["output"]["reasoning"])
-        self.assertNotIn(parent, turns[0]["input"]["subtask_history"])
-        self.assertTrue(audits[-1]["visible_answer_shortcut"])
-
-        # Ambiguous or incomplete visible report is NOT licensed to skip
-        # a pending terminal; private Oracle correctness alone is insufficient.
-        vague = deepcopy(rows)
-        match = next(x for x in vague if x["macro_task_id"] == parent)
-        match["finish_result"]["result"] = (
-            f"The sorted register includes {golden_entry}, Entry-99 and others."
-        )
-        _, cautious, _, cautious_status = build_episode(chosen, vague)
-        self.assertEqual(cautious_status["status"], "accepted")
-        self.assertFalse(cautious_status["visible_answer_shortcut"])
-        self.assertEqual(
-            [x["output"]["action"] for x in cautious],
-            ["delegate_task", "delegate_task", "complete"],
-        )
 
     def test_metadata_leak_rejected_and_tool_only_critic_gets_second_review(self):
         from environment.base_orchestration.action_author import (

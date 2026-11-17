@@ -45,7 +45,8 @@ def o1_tool_definitions() -> tuple[dict, ...]:
     AST inspection avoids importing cv2, ffmpeg and optional network SDKs
     merely to build a deterministic offline Stage-1 contract.
     """
-    root = Path(__file__).resolve().parents[2]
+    # This module moved one package deeper; resolve from the repository root.
+    root = Path(__file__).resolve().parents[3]
     tools_root = root / "benchmark" / "omnigaia" / "tools"
     result = []
     for name, file in _O1_ACTION_FILES:

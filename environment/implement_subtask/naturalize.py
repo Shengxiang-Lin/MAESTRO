@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tqdm.auto import tqdm
 
-from environment.generate_question.backend import OpenAICompatibleBackend
+from environment.generate_question.authoring.backend import OpenAICompatibleBackend
 from environment.generate_question.stages import read_jsonl
 from .reporting import author_critic_report
 from .reuse import load_completed_accepted

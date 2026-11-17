@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from environment.generate_question.program_ir import Relation
+from environment.generate_question.execution.program_ir import Relation
 from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.public_language import (
     sanitize_public_prose, sanitize_public_report,

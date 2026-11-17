@@ -9,7 +9,7 @@ from copy import deepcopy
 import json
 import re
 
-from environment.generate_question.surface_quality import SCHEMA_LABELS
+from environment.generate_question.authoring.surface_quality import SCHEMA_LABELS
 from .stage_local_claims import (
     compile_claim_contract, stage_local_claim_issues,
     normalize_report_language,

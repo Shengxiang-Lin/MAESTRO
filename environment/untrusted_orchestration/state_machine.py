@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import json
 import re
 
-from environment.generate_question.program_ir import Relation
+from environment.generate_question.execution.program_ir import Relation
 from .faults import Fault, relation_rows, run_attempt
 from environment.implement_subtask.realize import _fact_index
 

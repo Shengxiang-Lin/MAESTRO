@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Iterable
 
-from environment.generate_question.program_ir import ProgramError
+from environment.generate_question.execution.program_ir import ProgramError
 from .faults import Fault, FaultUnsupported, relation_rows, run_attempt
 
 

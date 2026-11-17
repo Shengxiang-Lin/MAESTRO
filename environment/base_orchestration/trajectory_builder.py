@@ -16,7 +16,7 @@ import json
 import re
 from typing import Any
 
-from environment.generate_question.quality import validate_replay
+from environment.generate_question.auditing.quality import validate_replay
 from environment.implement_subtask.realize import realize_scene
 from environment.implement_subtask.public_surface import reviewed_public_view
 
@@ -151,7 +151,7 @@ def _can_derive_local_answer(scene: dict, delivered: dict,
     )
     if first not in values or second not in values:
         return False
-    from environment.generate_question.goal_resolution import goal_values
+    from environment.generate_question.planning.goal_resolution import goal_values
     actual = goal_values(kind, values[first], values[second])
     field = plan["goal"]["answer_field"]
     return scene["gold_answer"] == [{field: actual}]

@@ -6,109 +6,12 @@ Teacher-World access is possible during execution.
 """
 from __future__ import annotations
 
-from .dag import compile_waves
-from .evidence_tools import tools_from_primitive_steps
-from .program_ir import (
+from environment.generate_question.execution.dag import compile_waves
+from environment.generate_question.execution.evidence_tools import tools_from_primitive_steps
+from environment.generate_question.execution.program_ir import (
     MissingSourceError, ProgramError, Relation, _apply, _scan, _lookup_by_key,
     answer_values, evaluate_program, validate_program,
 )
-
-def compile_macro_tasks(program: dict, execution_trace: list[dict]) -> dict:
-    """Compile the sole supported executable, bounded Macro TaskGraph."""
-    return _compile_compact_tasks(program, execution_trace)
-
-
-def _compile_compact_tasks(program: dict, execution_trace: list[dict]) -> dict:
-    """Fuse ONLY linear unary dependency chains into executable work units.
-
-    Every merged operation still runs and every source scan remains explicitly
-    authorized. Branched DAG joins stay as separate typed handoffs.
-    """
-    errors = validate_program(program)
-    if errors:
-        raise ProgramError("invalid_program:" + ",".join(errors))
-    trace = {row["node_id"]: row for row in execution_trace}
-    uses = {}
-    for node in program["nodes"]:
-        for parent in node["inputs"]:
-            uses[parent] = uses.get(parent, 0) + 1
-    groups, owner = [], {}
-    for node in program["nodes"]:
-        parents = node["inputs"]
-        merge = len(parents) == 1 and uses.get(parents[0], 0) == 1
-        if merge:
-            parent = parents[0]
-            group_idx = owner[parent]
-            group = groups[group_idx]
-            merge = (
-                group[-1]["id"] == parent
-                and len(group) < 3
-                and node["op"] not in {"scan", "lookup_by_key"}
-                and group[-1]["op"] != "lookup_by_key"
-            )
-        if merge:
-            groups[group_idx].append(node)
-        else:
-            group_idx = len(groups)
-            groups.append([node])
-        owner[node["id"]] = group_idx
-
-    tasks = []
-    for group in groups:
-        local = set()
-        external = []
-        for node in group:
-            for parent in node["inputs"]:
-                if parent not in local and parent not in external:
-                    external.append(parent)
-            local.add(node["id"])
-        terminal = group[-1]["id"]
-        sources = [node["source_id"] for node in group
-                   if node["op"] in {"scan", "lookup_by_key"}]
-        # Fusion must never grant a source that an included scan does not use.
-        if len(sources) > 1:
-            raise ProgramError("compact_group_grants_multiple_sources")
-        tasks.append({
-            "task_id": "work_" + terminal,
-            "program_node_id": terminal,
-            "operation": group[0]["op"] if len(group) == 1 else "composite",
-            "operation_args": {
-                k: v for k, v in group[0].items()
-                if k not in {"id", "op", "inputs"}
-            } if len(group) == 1 else {},
-            "operator_chain": [dict(node) for node in group],
-            "external_inputs": external,
-            "depends_on": [
-                "work_" + groups[owner[parent]][-1]["id"]
-                for parent in external
-            ],
-            "source_ids": sources,
-            "input_schema": {
-                "input_" + str(i): list(trace[parent]["schema"])
-                for i, parent in enumerate(external)
-            },
-            "outputs": {"typed_relation": list(trace[terminal]["schema"])},
-            "handoff_type": "SourceScopedRelationWithFactRefs",
-            "dispatchable": True,
-            "execution_policy": "typed_input_chain_no_teacher_world",
-        })
-    waves = compile_waves(tasks)
-    return {
-        "version": "maestro.dependency_macro_graph.v4",
-        "tasks": tasks,
-        "reference_waves": waves,
-        "terminal_task_id": "work_" + groups[owner[program["output"]]][-1]["id"],
-        "macro_task_count": len(tasks),
-        "primitive_operator_count": len(program["nodes"]),
-        "critical_path_depth": _critical_path(tasks),
-        "source_scope_policy": (
-            "scan_or_keyed_lookup_only_explicit_source"
-            if any(node["op"] == "lookup_by_key" for node in program["nodes"])
-            else "only_scans_grant_explicit_source"
-        ),
-        "coarsening": "bounded_linear_chain_fusion_max3",
-    }
-
 
 def _critical_path(tasks: list[dict]) -> int:
     depth = {}
@@ -402,44 +305,10 @@ def compile_frozen_macro_plan(spec: dict, program: dict,
     a declared parent Macro's terminal WorkProduct. Any hidden cross-Macro
     primitive dependency fails closed.
     """
-    if spec.get("reasoning_pattern") == "task_plan":
-        from .task_plan import validate_spec as validate_macro_first_spec
-        from .task_plan_runtime import compile_macro_solvers
-    elif spec.get("reasoning_pattern") == "task_graph_first_v2":
-        from .task_graph_first_v2 import (
-            validate_spec as validate_macro_first_spec,
-            compile_macro_solvers,
-        )
-    elif spec.get("reasoning_pattern") == "task_graph_first_v1":
-        from .task_graph_first import (
-            validate_spec as validate_macro_first_spec,
-            compile_macro_solvers,
-        )
-    elif spec.get("reasoning_pattern") == "typed_knowledge_v4":
-        from .hybrid_world_v4 import (
-            validate_spec as validate_macro_first_spec,
-            compile_macro_solvers,
-        )
-    elif spec.get("reasoning_pattern") == "typed_knowledge_v3":
-        from .hybrid_world import (
-            validate_spec as validate_macro_first_spec,
-            compile_macro_solvers,
-        )
-    elif spec.get("reasoning_pattern") == "typed_knowledge_v2":
-        from .knowledge_macro_v2 import (
-            validate_spec as validate_macro_first_spec,
-            compile_macro_solvers,
-        )
-    elif spec.get("reasoning_pattern") == "typed_knowledge_v1":
-        from .knowledge_macro import (
-            validate_spec as validate_macro_first_spec,
-            compile_macro_solvers,
-        )
-    else:
-        from .macro_planning import (
-            validate_spec as validate_macro_first_spec,
-            compile_macro_solvers,
-        )
+    if spec.get("reasoning_pattern") != "task_plan":
+        raise ProgramError("unsupported_stage1_reasoning_pattern")
+    from environment.generate_question.planning.task_plan import validate_spec as validate_macro_first_spec
+    from environment.generate_question.execution.task_plan_runtime import compile_macro_solvers
     errors = validate_macro_first_spec(spec)
     if errors:
         raise ProgramError("invalid_frozen_macro_plan:" + ",".join(errors))

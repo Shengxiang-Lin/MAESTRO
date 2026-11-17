@@ -14,13 +14,13 @@ from pathlib import Path
 
 from environment.schema import normalize_label
 
-from .stages import (
+from environment.generate_question.stages import (
     construct_scenes, review_questions, read_jsonl,
     _construction_identity, _question_signature,
 )
-from .quality import validate_replay
-from .macro_contract import macro_graph_profile, macro_question_contract
-from .authoring.surface_quality import question_language_warnings
+from environment.generate_question.auditing.quality import validate_replay
+from environment.generate_question.auditing.macro_contract import macro_graph_profile, macro_question_contract
+from environment.generate_question.authoring.surface_quality import question_language_warnings
 
 
 
@@ -135,113 +135,6 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
             if text:
                 exact_questions[text] += 1
             if spec:
-                if spec.get("reasoning_pattern") == "macro_first_v2":
-                    from .semantic_evidence import (
-                        compile_semantic_contract, semantic_text_issues,
-                        semantic_scenario_issues, has_semantic_contract,
-                    )
-                    semantic_evidence_checked += 1
-                    semantic_evidence_enforced += int(has_semantic_contract(spec))
-                    contract = compile_semantic_contract(
-                        spec, retrospective=True,
-                    )
-                    flags = sorted(set(
-                        semantic_text_issues(
-                            scene.get("question", ""), spec, contract,
-                        ) + semantic_scenario_issues(spec, contract)
-                    ))
-                    semantic_evidence_flagged += int(bool(flags))
-                    semantic_evidence_flags.update(flags)
-                    if flags and len(semantic_evidence_examples) < 20:
-                        semantic_evidence_examples.append({
-                            "task_id": scene.get("task_id"),
-                            "flags": flags,
-                            "enforcement_versioned": has_semantic_contract(spec),
-                        })
-                    plan = spec["macro_plan"]
-                    question_semantic_lock_versioned += int(
-                        bool(spec.get("question_semantic_lock_version"))
-                    )
-                    if spec.get("numeric_goal_world_version"):
-                        numeric_goal_versioned += 1
-                        kind = plan["goal_resolution"]["kind"]
-                        field = plan["goal"]["answer_field"]
-                        if (kind in numeric_goal_answer_counts
-                                and len(scene.get("gold_answer", [])) == 1):
-                            value = scene["gold_answer"][0][field]
-                            numeric_goal_answer_counts[kind][str(value)] += 1
-                    if spec.get("operator_grammar_version"):
-                        typed_grammar_scenes += 1
-                        evidence_audit = scene.get(
-                            "difficulty_audit", {}
-                        ).get("macro_first_audit", {}).get(
-                            "operator_grammar_equivalence", {}
-                        )
-                        typed_grammar_equivalence_checked += int(
-                            bool(evidence_audit)
-                        )
-                        typed_grammar_equivalence_passed += int(
-                            evidence_audit.get(
-                                "all_macro_outputs_equivalent", False
-                            ) and evidence_audit.get(
-                                "final_answer_and_provenance_equivalent", False
-                            )
-                        )
-                        for role, group in zip(
-                            plan["macro_tasks"],
-                            scene["gold_program"]["macro_solver_groups"],
-                        ):
-                            variant = role["solver_variant"]
-                            typed_grammar_variants[
-                                role["role"] + "::" + variant
-                            ] += 1
-                            nodes_by_id = {
-                                node["id"]: node
-                                for node in scene["gold_program"]["nodes"]
-                            }
-                            sequence = tuple(
-                                nodes_by_id[node_id]["op"]
-                                for node_id in group["node_ids"]
-                            )
-                            typed_grammar_local_sequences[
-                                role["role"] + "::" + ">".join(sequence)
-                            ] += 1
-                    if spec.get("scene_realism_version"):
-                        macro_v2_realism_scenes += 1
-                        proxy = scene.get("difficulty_audit", {}).get(
-                            "macro_first_audit", {}
-                        ).get("structural_difficulty_profile")
-                        if proxy is not None:
-                            macro_v2_difficulty_profiles[
-                                spec["difficulty_target"]
-                            ].append(proxy)
-                    if spec.get("macro_information_necessity_version"):
-                        macro_v2_output_contracts += 1
-                        necessity = scene.get("difficulty_audit", {}).get(
-                            "macro_first_audit", {}
-                        ).get("candidate_information_necessity")
-                        if necessity:
-                            macro_v2_information_audits.append(necessity)
-                    macro_v2_modes[plan["pattern"]] += 1
-                    macro_v2_resolution_modes[
-                        plan.get("goal_resolution", {}).get(
-                            "kind", "direct_lookup"
-                        )
-                    ] += 1
-                    n_lookups = sum(
-                        node["op"] == "lookup_by_key"
-                        for node in scene["gold_program"]["nodes"]
-                    )
-                    v2_keyed_lookup_total += n_lookups
-                    v2_keyed_lookup_scenes += int(n_lookups > 0)
-                    macro_v2_goals[plan["goal"]["answer_field"]] += 1
-                    for macro in plan["macro_tasks"]:
-                        macro_v2_local_source_counts.append(len(macro["source_scope"]))
-                        macro_v2_evidence_sizes.extend(
-                            macro["evidence_plan"]["source_observation_targets"].values()
-                        )
-                    if plan["pattern"] == "multimodal_event":
-                        macro_v2_media_pairs["video_audio_in_one_macro"] += 1
                 if spec.get("reasoning_pattern") == "macro_first":
                     macro_first_modes[spec["macro_plan"]["pattern"]] += 1
                 if spec.get("reasoning_pattern") == "evidence_graph":
@@ -268,7 +161,7 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                     head.startswith(("which ", "what ", "how ", "could ",
                                      "can ", "please ", "for which "))
                 )
-                from .question import reference_question
+                from environment.generate_question.authoring.question import reference_question
                 expected = reference_question(spec)
                 proximity = SequenceMatcher(
                     None, question_text.casefold(), expected.casefold()
@@ -906,8 +799,8 @@ def quality_report(scenes: list[dict], *, no_progress: bool = False) -> dict:
                 value = answer[name] if isinstance(answer, dict) else answer
                 encoded = json.dumps(value, sort_keys=True, ensure_ascii=False)
                 answer_value_counts.setdefault(semantic, Counter())[encoded] += 1
-        from .auditing.quality_metrics import summarize_decision_opportunities
-        from .auditing.quality_metrics import summarize_grounded_evidence
+        from environment.generate_question.auditing.quality_metrics import summarize_decision_opportunities
+        from environment.generate_question.auditing.quality_metrics import summarize_grounded_evidence
         decision_opportunities = summarize_decision_opportunities(current_scenes)
         grounded_evidence = summarize_grounded_evidence(current_scenes)
         answer_diversity = {

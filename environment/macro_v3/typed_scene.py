@@ -413,7 +413,7 @@ def validate_scene(scene: dict, kg: KnowledgeGraph | None = None) -> dict:
         raise ValueError("typed_scene_frozen_content_changed")
     # Import canonical Stage-1 goal/causality gates. Do NOT duplicate their
     # logic in the experimental Macro composer.
-    from environment.generate_question.typed_macro_quality import audit_typed_scene
+    from environment.macro_v3.typed_macro_quality import audit_typed_scene
     typed_quality = audit_typed_scene(scene, execute)
     return {
         **audit, "source_necessary": True,

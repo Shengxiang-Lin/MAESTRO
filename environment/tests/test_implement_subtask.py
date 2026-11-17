@@ -8,9 +8,7 @@ import unittest
 from pathlib import Path
 
 from environment.__main__ import parser
-from environment.generate_question.spec import make_spec
-from environment.generate_question.question import reference_question
-from environment.generate_question.quality import compile_and_validate
+from environment.tests.current_stage1 import current_scene
 from environment.implement_subtask.config import (
     DEFAULT_CONFIG, load_config,
 )
@@ -19,15 +17,7 @@ from environment.implement_subtask.pipeline import materialize_subtasks
 
 
 def _scene(index: int, difficulty: str = "medium") -> dict:
-    spec = make_spec(
-        seed_record={
-            "record_id": f"stage2-test-{index}",
-            "topic": f"Fictional Study {index}",
-            "domain_hint": "science",
-            "source_modalities": ["table", "image", "audio", "text"],
-        }, ordinal=index, run_seed=17, difficulty=difficulty,
-    )
-    scene = compile_and_validate(spec, reference_question(spec))
+    scene = current_scene(index, difficulty=difficulty)
     scene["question_authoring"] = {"status": "accepted", "attempts": 1}
     scene["question_origin"] = "llm_accepted_frozen_spec"
     return scene
@@ -132,8 +122,10 @@ class Stage2TraceTests(unittest.TestCase):
 
     def test_modified_source_scene_is_refused_before_export(self):
         invalid = _scene(13, "easy")
-        invalid["world"]["sources"]["register"]["observations"][0][
-            "values"]["active"] = "tampered"
+        source = next(iter(invalid["world"]["sources"].values()))
+        observation = source["observations"][0]
+        field = next(iter(observation["values"]))
+        observation["values"][field] = "tampered"
         with self.assertRaises(ValueError):
             realize_scene(invalid, strict=True)
 

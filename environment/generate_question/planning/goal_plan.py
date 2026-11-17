@@ -292,7 +292,7 @@ def operation_subgraph_leq(smaller: dict, larger: dict) -> bool:
 
 def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
                       hops: int, goal_keys: tuple[str, ...]) -> dict:
-    from .evidence_plan import compose_evidence_plan
+    from environment.generate_question.planning.evidence_plan import compose_evidence_plan
     output = sample_output(seed, ordinal)
     goal = _build_operation_dag(output)
     source_ids = list(goal["source_fields"])
@@ -494,8 +494,8 @@ def build_measurements(*, plan: dict, binding: dict,
 
 def evaluate_goal_value(row: dict, goal: dict):
     """Independent reference for final answer, separate from Gold IR."""
-    from ..execution.program_ir import great_circle_km
-    from ..goal_resolution import goal_values
+    from environment.generate_question.execution.program_ir import great_circle_km
+    from environment.generate_question.planning.goal_resolution import goal_values
     values = {"entity": row["entity_final"]}
     for node in goal["operations"]:
         ident, op = node["id"], node["op"]
@@ -584,7 +584,7 @@ def goal_question(plan: dict) -> str:
     Gold still follows every canonical relation. Only the surface avoids
     exposing an internal 'relationship sequence' or instruction program.
     """
-    from ..grounding.scene_semantics import focus_phrase
+    from environment.generate_question.grounding.scene_semantics import focus_phrase
 
     goal = plan["goal_spec"]
     output = goal["output_spec"]

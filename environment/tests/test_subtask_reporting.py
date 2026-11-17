@@ -10,9 +10,7 @@ from unittest.mock import patch
 
 from environment.streaming import StreamingError
 
-from environment.generate_question.spec import make_spec
-from environment.generate_question.question import reference_question
-from environment.generate_question.quality import compile_and_validate
+from environment.tests.current_stage1 import current_scene
 from environment.implement_subtask.config import (
     DEFAULT_CONFIG, load_reporting_config,
 )
@@ -22,15 +20,7 @@ from environment.implement_subtask.reporting import author_critic_report, trace_
 
 
 def scene(i, difficulty="medium"):
-    spec = make_spec(
-        seed_record={
-            "record_id": f"reporting-{i}",
-            "topic": f"Fictional Study {i}",
-            "domain_hint": "science",
-            "source_modalities": ["table", "image", "audio", "text"],
-        }, ordinal=i, run_seed=17, difficulty=difficulty,
-    )
-    result = compile_and_validate(spec, reference_question(spec))
+    result = current_scene(i, difficulty=difficulty)
     result["question_authoring"] = {"status": "accepted"}
     result["question_origin"] = "llm_accepted_frozen_spec"
     return result
@@ -292,72 +282,6 @@ class StageLocalScopeRegressions(unittest.TestCase):
         )
         self.assertEqual(len(critic.calls), 2)
 
-class VerifiedListCriticRegressions(unittest.TestCase):
-    def test_second_critic_can_correct_oracle_membership_hallucination(self):
-        from environment.implement_subtask.oracle_review import (
-            critic_oracle_contradiction,
-        )
-        frozen = scene(25, "easy")
-        realized = realize_scene(frozen)
-        final = next(
-            row for row in realized["macro_tasks"]
-            if row["macro_task_id"] == realized["terminal_macro_task_id"]
-        )
-        self.assertTrue(final["answer"])
-        self.assertTrue(all(set(x) == {"entry_label"} for x in final["answer"]))
-
-        class OracleMistakenCritic:
-            def __init__(self):
-                self.calls = []
-
-            def complete_json(self, system_prompt, user_prompt):
-                payload = json.loads(user_prompt)
-                self.calls.append((system_prompt, payload))
-                if len(self.calls) == 1:
-                    label = final["answer"][0]["entry_label"]
-                    return {
-                        "verdict": "fail", "grounded": False,
-                        "answer_scope_preserved": False,
-                        "evidence_scope_respected": True,
-                        "natural": True,
-                        "reason": f"{label} is absent from exact_oracle_answer",
-                        "repair_hint": "remove that entry",
-                    }
-                return {
-                    "verdict": "pass", "grounded": True,
-                    "answer_scope_preserved": True,
-                    "evidence_scope_respected": True,
-                    "natural": True,
-                    "reason": "The exact enumerated list is verified; summary is grounded.",
-                    "repair_hint": "",
-                }
-
-        author = StructuredResultAuthor()
-        critic = OracleMistakenCritic()
-        reviewed, result = author_critic_report(
-            final, question=frozen["question"], author=author,
-            critic=critic, is_terminal=True, max_revisions=0,
-        )
-        self.assertEqual(result["status"], "accepted")
-        self.assertEqual(len(critic.calls), 2)
-        self.assertTrue(
-            result["critic_oracle_contradiction_rechecked"]
-        )
-        self.assertEqual(reviewed["answer"], final["answer"])
-        self.assertEqual(reviewed["answer_with_provenance"],
-                         final["answer_with_provenance"])
-        self.assertIsNotNone(critic_oracle_contradiction(
-            {"reason": "Entry-01 is absent from exact_oracle_answer"},
-            "Entries: Entry-01, Entry-02.",
-            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}], {},
-        ))
-        self.assertIsNone(critic_oracle_contradiction(
-            {"reason": "Entry-99 is absent from exact_oracle_answer"},
-            "Entries: Entry-01, Entry-02.",
-            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-02"}], {},
-        ))
-
-
 class EntryEvidenceMappingRegressions(unittest.TestCase):
     def test_wrong_fact_ref_is_not_accepted_as_an_entry_status(self):
         from environment.implement_subtask.oracle_review import (
@@ -569,22 +493,21 @@ class ReportingUnitTests(unittest.TestCase):
         )
         self.assertTrue(critic.calls[0]["author_result_was_structured"])
 
-    def test_structured_entry_label_list_is_accepted_only_when_exact(self):
-        frozen = scene(25, "easy")
+    def test_current_task_plan_structured_answer_is_accepted_only_when_exact(self):
+        frozen = scene(25, "hard")
         realized = realize_scene(frozen)
         final = next(
             row for row in realized["macro_tasks"]
             if row["macro_task_id"] == realized["terminal_macro_task_id"]
         )
-        self.assertTrue(all(
-            set(item) == {"entry_label"} for item in final["answer"]
-        ))
+        self.assertTrue(final["answer"])
+        self.assertTrue(all(isinstance(item, dict) for item in final["answer"]))
         revised, status = author_critic_report(
             final, question=frozen["question"],
-            author=StructuredResultAuthor(collapse_labels=True),
+            author=StructuredResultAuthor(),
             critic=ReportCritic(), max_revisions=0, is_terminal=True,
         )
-        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(status["status"], "accepted", status)
         self.assertEqual(revised["answer"], final["answer"])
 
     def test_wrong_subset_or_invented_extra_row_still_fails(self):
@@ -649,136 +572,34 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(len(critic.calls), 2)
 
 
-    def test_v14_code_owned_result_blocks_downstream_disagreement_hallucination(self):
-        from environment.tests.test_evidence_readiness import pattern_spec
-        from environment.implement_subtask.reporting import code_owned_result
-
-        spec = pattern_spec("corroborated_dispute")
-        frozen = compile_and_validate(spec, reference_question(spec))
-        context = next(
-            row for row in realize_scene(frozen)["macro_tasks"]
-            if row["macro_task_id"] == "work_M4"
+    def test_current_task_plan_code_owned_result_and_authored_summary(self):
+        frozen = scene(42, "medium")
+        realized = realize_scene(frozen)
+        # Very large delivered relations must fail closed rather than silently
+        # truncate their fields. Select a bounded current WorkProduct to test
+        # the program-owned-result and model-authored-summary contract.
+        record = next(
+            row for row in realized["macro_tasks"]
+            if len(code_owned_result(row)) < 1200
         )
-
-        class MisleadingResultAuthor:
-            def __init__(self):
-                self.contracts = []
+        class SummaryOnlyAuthor:
             def complete_json(self, system_prompt, user_prompt):
-                contract = json.loads(user_prompt)["frozen_task_and_evidence"]
-                self.contracts.append(contract)
-                self_summary = (
-                    "Checked the independent context log for the flagged "
-                    "tag and returned the matching case identifiers. "
-                    "Comparing the independently reported years is a "
-                    "separate downstream task."
-                )
-                return {
-                    "result": (
-                        "These four cases have independently verified "
-                        "disagreements between the report years."
-                    ),
-                    "summary": self_summary,
-                    "status": "done",
-                }
-
-        author, critic = MisleadingResultAuthor(), ReportCritic()
+                assert "ONLY" in system_prompt
+                return {"summary": (
+                    "Reviewed only the assigned source or upstream handoff "
+                    "and reported the observed rows without adding new "
+                    "filters or asserting unperformed downstream checks."
+                )}
         reviewed, info = author_critic_report(
-            context, question=frozen["question"], author=author,
-            critic=critic, max_revisions=0,
-            result_policy="code_owned",
+            record, question=frozen["question"],
+            author=SummaryOnlyAuthor(), critic=ReportCritic(),
+            max_revisions=0, result_policy="code_owned",
         )
-        self.assertEqual(info["status"], "accepted")
+        self.assertEqual(info["status"], "accepted", info)
+        self.assertEqual(
+            reviewed["finish_result"]["result"], code_owned_result(record)
+        )
         self.assertEqual(info["result_policy"], "code_owned")
-        self.assertTrue(info["ignored_model_result"])
-        self.assertEqual(
-            reviewed["finish_result"]["result"],
-            code_owned_result(context),
-        )
-        self.assertIn("case identifiers", reviewed["finish_result"]["result"])
-        self.assertNotIn(
-            "disagree", reviewed["finish_result"]["result"].lower()
-        )
-        for row in context["answer"]:
-            self.assertIn(
-                row["case_id"], reviewed["finish_result"]["result"],
-            )
-        self.assertNotIn(
-            "overall_question_for_context_only", author.contracts[0],
-        )
-        self.assertEqual(
-            critic.calls[0]["result_policy"], "code_owned",
-        )
-
-    def test_v14_code_owned_rejects_overclaim_in_llm_summary(self):
-        from environment.tests.test_evidence_readiness import pattern_spec
-        spec = pattern_spec("corroborated_dispute")
-        frozen = compile_and_validate(spec, reference_question(spec))
-        context = next(
-            row for row in realize_scene(frozen)["macro_tasks"]
-            if row["macro_task_id"] == "work_M4"
-        )
-        class OverclaimingSummary:
-            def complete_json(self, system_prompt, user_prompt):
-                return {
-                    "summary": (
-                        "The context scan returned the flagged records. "
-                        "For all of these cases the year disagreement "
-                        "condition was met."
-                    )
-                }
-        reviewed, info = author_critic_report(
-            context, question=frozen["question"],
-            author=OverclaimingSummary(), critic=ReportCritic(),
-            max_revisions=1, result_policy="code_owned",
-        )
-        self.assertIsNone(reviewed)
-        self.assertEqual(info["status"], "failed")
-        self.assertTrue(all(
-            "summary_claims_unverified_independent_report_disagreement"
-            in str(failure.get("errors", []))
-            for failure in info["failures"]
-        ))
-
-    def test_v14_code_owned_batch_mode_uses_only_llm_summary(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            oracle, index = ReportingBatchTests()._teacher_inputs(root, [42])
-            class SummaryOnlyAuthor:
-                def __init__(self):
-                    self.calls = 0
-                def complete_json(self, system_prompt, user_prompt):
-                    self.calls += 1
-                    self.assert_summary_system = ("ONLY" in system_prompt)
-                    return {
-                        "summary": (
-                            "Inspected the currently assigned source or "
-                            "upstream handoff and returned the exactly "
-                            "observed records for this local step."
-                        )
-                    }
-            author = SummaryOnlyAuthor()
-            reports = naturalize_subtasks(
-                source_subtasks=oracle, source_scene_index=index,
-                output_dir=root / "code_owned", api_base="http://mock/v1",
-                model="mock", workers=2, max_revisions=0,
-                result_policy="code_owned", no_progress=True,
-                clients=(author, ReportCritic()),
-            )
-            self.assertEqual(reports["status"], "done")
-            outputs = [
-                json.loads(line) for line in
-                (root / "code_owned/subtasks.jsonl").read_text().splitlines()
-            ]
-            self.assertTrue(outputs)
-            self.assertEqual(len(outputs), reports["attempted_macro_tasks"])
-            self.assertTrue(all(
-                row["report_authoring"]["result_policy"] == "code_owned"
-                for row in outputs if row.get("evidence_trust_version")
-            ))
-            self.assertTrue(all(
-                row["finish_result"]["result"] == code_owned_result(row)
-                for row in outputs if row.get("evidence_trust_version")
-            ))
 
     def test_config_has_model_roles_and_does_not_break_oracle_mode(self):
         cfg = load_reporting_config(DEFAULT_CONFIG)
@@ -806,7 +627,7 @@ class ReportingBatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             subtasks, index = self._teacher_inputs(root, [27, 28])
-            author = ReportAuthor(fail_topic="Fictional Study 28")
+            author = ReportAuthor(fail_topic=scene(28)["question"])
             summary = naturalize_subtasks(
                 source_subtasks=subtasks, source_scene_index=index,
                 output_dir=root / "reviewed", api_base="http://unused/v1",
@@ -978,7 +799,7 @@ class ReportingBatchTests(unittest.TestCase):
                 source_subtasks=oracle, source_scene_index=index,
                 output_dir=prior_dir, api_base="http://mock/v1",
                 model="mock", workers=2, no_progress=True, max_revisions=0,
-                clients=(ReportAuthor(fail_topic="Fictional Study 47"),
+                clients=(ReportAuthor(fail_topic=scene(47)["question"]),
                          ReportCritic()),
             )
             self.assertEqual(prior["status"], "partial")

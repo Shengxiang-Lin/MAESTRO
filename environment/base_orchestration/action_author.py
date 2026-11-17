@@ -9,7 +9,7 @@ import json
 import re
 from copy import deepcopy
 
-from environment.generate_question.evidence_tools import (
+from environment.generate_question.execution.evidence_tools import (
     legacy_tools_from_task, registered_o1_tool_names,
     tools_from_primitive_steps,
 )

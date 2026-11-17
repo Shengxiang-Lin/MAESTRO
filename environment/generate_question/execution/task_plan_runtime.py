@@ -9,7 +9,7 @@ import copy
 import random
 
 from environment.schema import digest
-from ..planning.task_plan import PATTERN, VERSION, validate_spec
+from environment.generate_question.planning.task_plan import PATTERN, VERSION, validate_spec
 
 
 def _route_key(pid, entity):
@@ -41,7 +41,7 @@ def _condition_rows(plan):
 
 
 def generate_world(spec: dict) -> dict:
-    from ..world import _rows, WORLD_VERSION
+    from environment.generate_question.execution.world import _rows, WORLD_VERSION
     problems = validate_spec(spec)
     if problems:
         raise ValueError("invalid_task_plan_world:" + ",".join(problems))
@@ -74,7 +74,7 @@ def generate_world(spec: dict) -> dict:
     required = (
         model.get("required_context_relation") if composed else None
     )
-    from ..world_motifs import (
+    from environment.generate_question.grounding.world_motifs import (
         composed_project_id, composed_event_id, KEYED_EVENT_VERSION,
     )
     keyed_events = (
@@ -129,7 +129,7 @@ def generate_world(spec: dict) -> dict:
         # neutral title inside each project; only the required status/year
         # field distinguishes eligibility. Historical frozen task_plan
         # scenes (without this policy) replay their original row names.
-        from ..planning.task_plan import BLIND_EVENTS
+        from environment.generate_question.planning.task_plan import BLIND_EVENTS
         blind = plan.get("evidence_sampling_policy") == BLIND_EVENTS
         semantic = plan["goal"].get("semantic") if (
             plan.get("semantic_grounding_policy") ==
@@ -221,9 +221,9 @@ def generate_world(spec: dict) -> dict:
         if mode == "event":
             tables["event_ref"] = event_refs
     if mode == "verify":
-        from ..real_motif_grounding import validate_frozen_required_fork
+        from environment.generate_question.grounding.real_motif_grounding import validate_frozen_required_fork
         if b["candidate_paths"][b["target_case"]][0]["origin"] == "synthetic":
-            from ..planning.task_plan import _validate_fictional_fork
+            from environment.generate_question.planning.task_plan import _validate_fictional_fork
             failures = _validate_fictional_fork(b["real_fork"], paths)
         else:
             failures = validate_frozen_required_fork(b["real_fork"], paths)
@@ -350,7 +350,7 @@ def generate_world(spec: dict) -> dict:
                     if sid in {"link_a", "link_b"} else
                     "fictional_observation"
                 )
-        from ..grounding.scene_semantics import annotate_source_observations
+        from environment.generate_question.grounding.scene_semantics import annotate_source_observations
         annotate_source_observations(src, role, seed=spec["seed"],
                                      ordinal=spec["ordinal"])
         bank[sid] = src
@@ -662,7 +662,7 @@ def compile_macro_solvers(spec: dict) -> dict:
                 "project", retrieved, fields=list(task["output_schema"])
             )
         elif op == "synthesize_operation_dag":
-            from ..planning.goal_plan import validate_operation_graph
+            from environment.generate_question.planning.goal_plan import validate_operation_graph
             goal = plan["goal_spec"]
             invalid = validate_operation_graph(goal)
             if invalid:
@@ -815,7 +815,7 @@ def mutate_witness(sources: dict, sid: str,
         goal = spec["macro_plan"]["goal_spec"]
         capabilities = goal["capabilities"]
         if "numeric" in capabilities:
-            from ..goal_resolution import goal_values
+            from environment.generate_question.planning.goal_resolution import goal_values
             model = spec["macro_plan"]["world_binding"]
             measurements = model["world_model"]["goal_measurements"][
                 "by_case"][model["target_case"]]
@@ -856,7 +856,7 @@ def audit_information(scene: dict) -> dict:
     Only fields declared as answer-defining are counted; background names
     and descriptive context are not credited.
     """
-    from .program_ir import evaluate_program, answer_values
+    from environment.generate_question.execution.program_ir import evaluate_program, answer_values
     plan = scene["problem_spec"]["macro_plan"]
     program = scene["gold_program"]
     sources = scene["world"]["sources"]
@@ -955,7 +955,7 @@ def audit_information(scene: dict) -> dict:
     branches = {}
     fork_necessary = None
     if plan["mode"] == "verify":
-        from ..planning.task_plan import validate_spec
+        from environment.generate_question.planning.task_plan import validate_spec
         if validate_spec(scene["problem_spec"]):
             raise ValueError("bad_frozen_plan_at_audit")
         b = plan["world_binding"]

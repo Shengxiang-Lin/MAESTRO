@@ -8,24 +8,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from environment.__main__ import main, parser
-from environment.generate_question.spec import make_spec
-from environment.generate_question.question import reference_question
-from environment.generate_question.quality import compile_and_validate
+from environment.tests.current_stage1 import current_scene
 from environment.implement_subtask.combined import generate_subagent_reports
 from environment.streaming import StreamingError
 
 
 def _scene(i):
-    spec = make_spec(
-        seed_record={
-            "record_id": f"combined-{i}",
-            "topic": f"Fictional Archive {i}",
-            "domain_hint": "history",
-            "source_modalities": ["image", "table", "text"],
-        },
-        ordinal=i, run_seed=17, difficulty="medium",
-    )
-    scene = compile_and_validate(spec, reference_question(spec))
+    scene = current_scene(i, difficulty="medium")
     scene["question_authoring"] = {"status": "accepted"}
     return scene
 

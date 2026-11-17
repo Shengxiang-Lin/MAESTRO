@@ -17,7 +17,7 @@ from hashlib import sha256
 from itertools import combinations
 import json
 
-from environment.generate_question.evidence_operators import (
+from environment.untrusted_orchestration.evidence_operators import (
     check_warrant, relate_claims,
 )
 from .visible_claim_extraction import extract_visible_claims
