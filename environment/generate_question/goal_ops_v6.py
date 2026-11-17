@@ -258,7 +258,9 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
     goal = _backward_goal(output)
     source_ids = list(goal["source_fields"])
     # One Macro per distinct evidence source, then a terminal synthesis.
-    max_base = 9 - (len(source_ids)+1 if source_ids else 0)
+    # Cross-domain outputs can require three independent source Macros.
+    # This versioned bound preserves v3/v4/v5's unchanged 9-Macro limit.
+    max_base = 11 - (len(source_ids)+1 if source_ids else 0)
     for attempt in range(140):
         probe = ordinal + 1009*attempt
         plan = compose_plan(
@@ -343,7 +345,7 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
             "dependent typed evidence operation graph"
         ),
     }
-    if len(plan["macro_tasks"]) > 9:
+    if len(plan["macro_tasks"]) > 11:
         raise ValueError("v6_macro_budget_exceeded")
     return plan
 
