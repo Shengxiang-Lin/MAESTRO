@@ -300,6 +300,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
     decision_reward_states = []
     decision_reward_missing = 0
     claim_state_diagnostics = []
+    paired_trajectories = []
     claim_state_statuses = Counter()
     wrong_visibility_rows = []
     wrong_visibility_counts = Counter()
@@ -322,6 +323,25 @@ def _publish(output: Path, planned: list[dict]) -> dict:
         if data["task_id"] != plan["task_id"]:
             raise RuntimeError("untrusted_journal_scene_mismatch")
         status = data["status"]
+        # This private index pairs the reviewed/diagnostic fault branch with
+        # the identical Stage-3 clean world and its no-repair continuation.
+        audit_pair = data.get("private_audit") or {}
+        before_pair = audit_pair.get("counterfactual_unrepaired") or {}
+        reference_pair = audit_pair.get("clean_reference_identity") or {}
+        paired_trajectories.append({
+            "scene_task_id": plan["task_id"],
+            "round_sample_id": plan["sample_id"],
+            "clean_reference_id": reference_pair.get("clean_reference_id"),
+            "fork_round": plan["branch_round"],
+            "fault_kinds_private": [
+                atom["kind"] for atom in
+                plan["scenario_plan"]["fault_atoms"]
+            ],
+            "naive_execution_status": before_pair.get("status"),
+            "naive_answer_correct": before_pair.get("correct"),
+            "robust_publication_status": status,
+            "private_only": True,
+        })
         leaks = [
             {"sample_id": turn.get("sample_id"),
              "issues": review_turn_surface(turn)}
@@ -638,6 +658,10 @@ def _publish(output: Path, planned: list[dict]) -> dict:
                     local_qualified.append(info)
                 else:
                     local_rejections.append(info)
+    _atomic_jsonl(
+        output / "private" / "paired_trajectories.jsonl",
+        paired_trajectories,
+    )
     _atomic_jsonl(output / "episodes.jsonl", episodes)
     _atomic_jsonl(output / "main_turns.jsonl", positive_turns)
     _atomic_jsonl(output / "failed.jsonl", failures)
@@ -683,6 +707,7 @@ def _publish(output: Path, planned: list[dict]) -> dict:
             counters["rejected_validation"]
         ),
         "published_episodes": len(episodes),
+        "paired_trajectory_index_rows": len(paired_trajectories),
         "main_training_turns": len(positive_turns),
         "reviewed_branches": counters["recovered"],
         "reviewed_turns": len(positive_turns),
@@ -825,10 +850,13 @@ def generate_turns(
     author_model: str | None = None, critic_model: str | None = None,
     report_author_model: str | None = None,
     report_critic_model: str | None = None,
+    clean_episodes_path: Path | None = None,
     main_mode: str | None = None,
     report_mode: str | None = None,
 ) -> dict:
     paths = tuple(map(Path, (scenes_path, reports_path)))
+    if clean_episodes_path is not None:
+        paths += (Path(clean_episodes_path),)
     output = Path(output_dir)
     if not all(path.is_file() for path in paths):
         raise FileNotFoundError("stage4_requires_stage1_scenes_and_stage2_reports")
@@ -917,6 +945,10 @@ def generate_turns(
         "report_critic_model": report_critic_model,
         "main_mode": main_mode,
         "report_mode": report_mode,
+        "clean_reference_mode": (
+            "reviewed_stage3" if clean_episodes_path is not None
+            else "deterministic_stage4"
+        ),
     }
     signature = _signature(paths, settings)
     scenes = _jsonl(paths[0])[:max_scenes]
@@ -924,12 +956,20 @@ def generate_turns(
     rows_by_scene = defaultdict(list)
     for row in stage2_rows:
         rows_by_scene[row["scene_task_id"]].append(row)
-    # Stage 4 derives its frozen clean prefix directly from Stage 1+2.
-    # The internal deterministic compiler does NOT invoke a Stage-3 LLM,
-    # and its template actions are not published as positive SFT turns.
+    # The deterministic bootstrap checks every candidate against the
+    # frozen Stage-1/2 inputs. When explicitly supplied, use the actual
+    # reviewed Stage-3 history ONLY after validating identical task waves
+    # and delivered Finish Results.
+    external_clean = None
+    if clean_episodes_path is not None:
+        external_rows = _jsonl(paths[2])
+        external_clean = {row["task_id"]: row for row in external_rows}
+        if len(external_clean) != len(external_rows):
+            raise ValueError("stage4_duplicate_external_clean_reference")
     base, prefix_reviews = compile_trusted_prefixes(
         scenes, stage2_rows, max_rounds=max_rounds,
         sub_model=sub_model, model_alias=model_alias,
+        clean_episodes=external_clean,
     )
     planned, no_base, no_eligible = _plan_branches(
         scenes, base, branches_per_scene=branches_per_scene,
@@ -978,6 +1018,11 @@ def generate_turns(
     _atomic_jsonl(
         output / "private" / "trusted_prefix_checks.jsonl",
         prefix_reviews,
+    )
+    _atomic_jsonl(
+        output / "private" / "clean_references.jsonl",
+        [base[scene["task_id"]] for scene in scenes
+         if scene["task_id"] in base],
     )
     # Explicit, inspectable round index; unsupported feedback rounds are
     # retained instead of disappearing silently from the total.
