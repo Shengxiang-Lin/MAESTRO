@@ -12,7 +12,9 @@ from collections import Counter
 
 from environment.schema import digest
 from environment.generate_question.planning.knowledge_index import YagoKnowledgeIndex, predicate_label
-from environment.generate_question.planning.goal_plan import COMPOSER as OUTPUT_FIRST_COMPOSER
+from environment.generate_question.planning.goal_plan import (
+    COMPOSER as OUTPUT_FIRST_COMPOSER, MAX_MACRO_TASKS,
+)
 
 PATTERN = "task_plan"
 VERSION = "maestro.task_plan.v1"
@@ -885,7 +887,7 @@ def validate_spec(spec: dict) -> list[str]:
                 return ["task_plan_input_contract_mismatch"]
             scopes += task["source_scope"]
             by_id[task["macro_id"]] = task
-        budget = 12
+        budget = MAX_MACRO_TASKS
         if (len(by_id) > budget
                 or plan["terminal_macro_id"] != plan["macro_tasks"][-1]["macro_id"]
                 or plan["macro_tasks"][-1]["output_schema"] != {
