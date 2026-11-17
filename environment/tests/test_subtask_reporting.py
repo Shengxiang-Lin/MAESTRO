@@ -603,7 +603,7 @@ class ReportingUnitTests(unittest.TestCase):
 
     def test_config_has_model_roles_and_does_not_break_oracle_mode(self):
         cfg = load_reporting_config(DEFAULT_CONFIG)
-        self.assertEqual(cfg["model"], "local-qwen3.5-9b")
+        self.assertEqual(cfg["model"], "qwen3.8-flash")
         self.assertEqual(cfg["max_revisions"], 2)
         self.assertTrue(str(cfg["source_subtasks"]).endswith("subtasks.jsonl"))
 
