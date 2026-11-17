@@ -638,9 +638,9 @@ class ReportingUnitTests(unittest.TestCase):
                 return {
                     "answer": _mock_o1_draft(contract)["answer"],
                     "trace_summary": (
-                        "- Scanned the supplied source annotations for recorded clues.\\n"
-                        "- Joined the two candidate lists by their identifiers.\\n"
-                        "- Projected the resulting values into the requested fields.\\n"
+                        "- Scanned the supplied source annotations for recorded clues.\n"
+                        "- Joined the two candidate lists by their identifiers.\n"
+                        "- Projected the resulting values into the requested fields.\n"
                         "- Removed duplicate rows and returned the matching records."
                     ),
                 }
