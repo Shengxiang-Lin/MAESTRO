@@ -277,7 +277,7 @@ def operation_subgraph_leq(smaller: dict, larger: dict) -> bool:
 
 def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
                       hops: int, goal_keys: tuple[str, ...]) -> dict:
-    from .goal_composer import compose_plan, NEEDS_GOAL_SCHEMA
+    from .evidence_plan import compose_evidence_plan
     output = sample_output(seed, ordinal)
     goal = _build_operation_dag(output)
     source_ids = list(goal["source_fields"])
@@ -287,9 +287,9 @@ def compose_goal_plan(*, seed: int, ordinal: int, difficulty: str,
     max_base = 11 - (len(source_ids)+1 if source_ids else 0)
     for attempt in range(140):
         probe = ordinal + 1009*attempt
-        plan = compose_plan(
+        plan = compose_evidence_plan(
             seed=seed, ordinal=probe, difficulty=difficulty,
-            hops=hops, goal_keys=goal_keys, policy=NEEDS_GOAL_SCHEMA,
+            hops=hops, goal_keys=goal_keys,
         )
         if (not source_ids or
             plan["mode"] == "trace" and
