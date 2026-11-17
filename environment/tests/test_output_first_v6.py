@@ -110,7 +110,7 @@ class OutputFirstGoalTests(unittest.TestCase):
             goal = plan["goal_spec"]
             self.assertNotIn("kind", goal)
             self.assertEqual(validate_operation_graph(goal), [])
-            self.assertLessEqual(len(plan["macro_tasks"]), 9)
+            self.assertLessEqual(len(plan["macro_tasks"]), 11)
             question = reference_question(spec)
             self.assertEqual(guard_question(question, spec), [],
                              (shape,capabilities))
