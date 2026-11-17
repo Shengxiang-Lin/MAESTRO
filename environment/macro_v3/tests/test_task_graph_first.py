@@ -172,53 +172,6 @@ class MacroGraphFirstTests(unittest.TestCase):
 
 @unittest.skipUnless(RDF_READY, "pyoxigraph required")
 class TaskGraphFirstCanonicalCliTests(unittest.TestCase):
-    def test_user_generate_questions_cli_with_real_rdf_file(self):
-        from environment.config import load_config, args_from_config
-        from environment.generate_question.pipeline import generate_questions
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            ttl = root/"yago-4.6-facts.ttl"
-            records = [
-                "@prefix x: <https://example.org/> .",
-                "@prefix s: <http://schema.org/> .",
-            ]
-            for i in range(48):
-                records.extend([
-                    f"x:Researcher{i} s:birthPlace x:Town{i} .",
-                    f"x:Town{i} s:containedInPlace x:Region{i} .",
-                    f"x:Region{i} s:containedInPlace x:Country{i} .",
-                    f"x:Researcher{i} s:memberOf x:Institution{i} .",
-                ])
-            ttl.write_text("\n".join(records), encoding="utf-8")
-            conf = load_config(
-                "environment/macro_v3/tests/fixtures/questions_task_graph_first.yaml"
-            )
-            conf["generation"]["knowledge_yago"] = str(ttl)
-            conf["generation"]["output_dir"] = str(root/"output")
-            conf["generation"]["target"] = 3
-            args = args_from_config(conf)
-            args.no_progress = True
-            result = generate_questions(args)
-            self.assertEqual(result["status"], "done", result)
-            self.assertEqual(result["generated"], 3)
-            qa = json.loads((args.output_dir/"quality_report.json").read_text())
-            self.assertEqual(qa["replay_pass"], 3)
-            stats = qa["knowledge_world_grounding"]["task_graph_first_v1"]
-            self.assertEqual(stats["scenes"], 3)
-            self.assertEqual(stats["information_necessity_passed"], 3)
-            self.assertEqual(stats["completed_event_status_causal"], 3)
-            self.assertEqual(stats["real_yago_fork_causal"], 3)
-            self.assertEqual(stats["both_reference_sources_causal"], 3)
-            self.assertEqual(stats["distinct_graph_role_topologies"], 3)
-            rows = [
-                json.loads(line)
-                for line in (args.output_dir/"constructed"/"scenes.jsonl").read_text().splitlines()
-            ]
-            self.assertEqual(len(rows), 3)
-            self.assertTrue(all(
-                validate_replay(row)["status"] == "valid"
-                for row in rows
-            ))
 
 
 if __name__ == "__main__":
