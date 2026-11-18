@@ -889,8 +889,9 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                         " Still unresolved: " +
                         ", ".join(observed["unresolved_fields"]) + "."
                     )
+                # Current 4B Author writes only Summary/Trace: the executor
+                # inserts the full typed Result and FactRefs unchanged.
                 return {
-                    "result": result,
                     "summary": summary,
                     "trace_summary": (
                         "I performed the assigned operations and reported "
