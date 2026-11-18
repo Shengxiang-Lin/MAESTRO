@@ -221,6 +221,23 @@ def _public_field_text(text: str, fields) -> str:
     )
 
 
+_ASSERTED_FILTER_ACTION = re.compile(
+    r"\b(?:filtered|excluded|removed|dropped|"
+    r"screened\s+out|retained\s+only|"
+    r"filtering\s+out|applied\s+(?:an?\s+)?filter)\b",
+    re.I,
+)
+_FILTER_NEGATION_OR_DEFERMENT = re.compile(
+    r"\b(?:without|not|never|no|none|neither|"
+    r"did\s+not|was\s+not|were\s+not|has\s+not|have\s+not|"
+    r"before|prior\s+to|pending|awaiting|rather\s+than|"
+    r"left\s+for|reserved\s+for|deferred\s+to|"
+    r"for\s+(?:later|future|subsequent|downstream))"
+    r"(?:\s+[\w-]+){0,7}\s*$",
+    re.I,
+)
+
+
 def _scan_claims_completed_filter(text: str) -> bool:
     """Only flag *asserted* filtering during a read-only source scan.
 
