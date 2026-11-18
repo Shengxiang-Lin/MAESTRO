@@ -421,6 +421,18 @@ class EventEngineTests(unittest.TestCase):
         # Repeated checks do not schedule fresh invisible verifications.
         observed.scheduling_state()
         self.assertEqual(len(observed.detected_conflicts), 1)
+        self.assertTrue(observed.unresolved_cited_conflicts())
+        # A genuinely replaced, now-agreeing public statement can resolve
+        # that dispute; a private gold verdict alone could not.
+        observed.public_reports["old"]["finish_result"]["result"] = (
+            json.dumps([{
+                "values": {
+                    "case_id": "Case-011", "reported_year_a": 2004,
+                },
+                "source_fact_refs": ["alpha:F001"],
+            }])
+        )
+        self.assertFalse(observed.unresolved_cited_conflicts())
 
         # Private WorkProduct divergence is invisible if the delivered
         # Result and the independent source still agree.
