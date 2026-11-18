@@ -82,6 +82,36 @@ class StratifiedForkTests(unittest.TestCase):
             rounds,
         )
 
+    def test_evidence_aware_sampling_prefers_frozen_verifier_positions(self):
+        rounds = [(i + 2, {"attempt": i + 1}) for i in range(6)]
+        graph = {"reference_waves": [
+            ["A"], ["B"], ["C"], ["D"], ["E"], ["F"],
+        ], "tasks": [
+            {"task_id": tid, "depends_on": [],
+             "source_ids": (["alpha", "beta"] if tid == "E" else ["alpha"]),
+             "macro_role": ("verification" if tid == "B" else "investigation"),
+             "operator_chain": (
+                 [{"op": "join"}] if tid == "E" else []
+             )}
+            for tid in "ABCDEF"
+        ]}
+        scene = {"macro_graph": graph}
+        result = select_feedback_rounds(
+            rounds, limit=2, strategy="evidence_aware", seed=17,
+            scene=scene,
+        )
+        self.assertEqual([row[0] for row in result], [3, 6])
+        self.assertEqual(result, select_feedback_rounds(
+            rounds, limit=2, strategy="evidence_aware", seed=17,
+            scene=scene,
+        ))
+        with self.assertRaisesRegex(
+            ValueError, "evidence_aware_sampling_requires_scene"
+        ):
+            select_feedback_rounds(
+                rounds, limit=2, strategy="evidence_aware", seed=17,
+            )
+
     def test_observability_comes_from_report_snapshots_not_fault_kind(self):
         plan = _trial(0, 2, "wrong_retrieval")
         plan["faults"] = [Fault("A", "wrong")]
