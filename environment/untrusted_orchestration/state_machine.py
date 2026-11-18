@@ -785,6 +785,53 @@ class ExecutionState:
                     })
                     return
 
+    def observable_issues(self) -> list[dict]:
+        """Current decision's report-grounded anomalies, not fault labels.
+
+        The simulator retains these as PRIVATE risk-supervision diagnostics.
+        The Main still receives only the original O1 Sub-Agent history.
+        """
+        issues = []
+        for tid in sorted(self.public_reports):
+            if tid not in self.current:
+                continue
+            status = self.public_status(tid)
+            item = self.current[tid]
+            if status == "missing":
+                kind = "missing_delivery"
+                reason = self.visible_discrepancy(tid)
+            elif status == "partial":
+                kind = "partial_delivery"
+                reason = self.visible_discrepancy(tid)
+            elif item.status == "stale":
+                # A previous public parent report was superseded; the old
+                # derived result is not newly verified by that replacement.
+                kind = "stale_downstream_result"
+                reason = "A previously used upstream report was replaced."
+            elif item.runtime.get("cross_source_recheck_requested"):
+                kind = "cross_source_conflict"
+                reason = item.runtime.get("visible_issue")
+            elif self._visible_report_internal_conflict(tid):
+                kind = "intra_report_conflict"
+                reason = self._visible_report_internal_conflict(tid)
+            elif self._visible_lookup_issue(tid):
+                kind = "lookup_key_disagreement"
+                reason = self._visible_lookup_issue(tid)
+            elif self._visible_passthrough_issue(tid):
+                kind = "derived_identifier_disagreement"
+                reason = self._visible_passthrough_issue(tid)
+            else:
+                # An unexplained discrepancy is not a license to read
+                # the private Attempt or invent an outside verifier.
+                continue
+            if reason:
+                issues.append({
+                    "task_id": tid, "kind": kind, "evidence": reason,
+                    "reported_round": self.public_report_rounds.get(tid),
+                    "delivery_status": status,
+                })
+        return issues
+
     def scheduling_state(self) -> dict:
         self._detect_late_cross_source_conflicts()
         self._detect_explicit_cross_report_disagreements()
