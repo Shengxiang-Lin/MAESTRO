@@ -41,6 +41,11 @@ class Author:
                 f"The assigned evidence returned {len(rows)} records: "
                 f"{details}. Subsequent eligibility has not been checked."
             ),
+            "summary": (
+                "Compared the named observations for the current "
+                f"investigation and returned {len(rows)} matching records. "
+                "Later eligibility remains to be checked."
+            ),
             "trace_summary": (
                 "- Reviewed the named source observations supplied for "
                 "the current delegated inquiry.\n"
@@ -137,6 +142,14 @@ class CombinedStage2Tests(unittest.TestCase):
                 self.assertFalse(after["finish_result"]["result"].startswith("[{"))
                 self.assertEqual(after["report_authoring"]["result_policy"],
                                  "code_owned")
+                self.assertIn(
+                    "matching records",
+                    after["finish_result"]["summary"],
+                )
+                self.assertNotEqual(
+                    after["finish_result"]["summary"],
+                    after["trace_summary"]["narrative"].splitlines()[0].lstrip("- "),
+                )
                 self.assertGreater(
                     len(after["trace_summary"]["narrative"]), 60
                 )

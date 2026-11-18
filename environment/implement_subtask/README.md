@@ -18,7 +18,7 @@ Previously completed LLM report output is not silently overwritten; use a
 fresh output directory or explicitly enable `reporting.overwrite` when
 changing the report inputs after a completed run.
 
-## Current Task Plan: O1-style Answer + Trace Summary
+## Current Task Plan: O1-style Answer, Summary and Trace Summary
 
 For the maintained `task_plan` and `result_encoding:
 typed_evidence_json_v1` Scenes, Stage 2 uses two representations:
@@ -27,14 +27,25 @@ typed_evidence_json_v1` Scenes, Stage 2 uses two representations:
   `trace_summary.steps`, and `answer_text` (the exact typed JSON-string
   serialization). These are immutable and remain available for Replay,
   fact checking, fault construction and regression tests.
-- **Main-visible delivery:** `finish_result.result` is a natural-language
-  **Answer** to the delegated task, `finish_result.summary` is a short
-  execution note derived from the first trace bullet, and
-  `trace_summary.narrative` is the natural execution **Trace Summary**.
-  Stage 3 renders these in its O1-compatible subtask history.
+- **Main-visible delivery:** `finish_result.result` is the natural-language
+  **Answer**, `finish_result.summary` briefly explains what this delegated
+  task examined, found and left unresolved, while
+  `trace_summary.narrative` records the more detailed execution evidence
+  and sequence. Stage 3 renders all three in its original O1 history.
 
-One Qwen Author request returns exactly `{"answer": "...",
-"trace_summary": "..."}`. The Guard requires all distinct identifiers,
+One Qwen Author request now returns exactly `{"answer": "...",
+"summary": "...", "trace_summary": "..."}`; it is still **one API call**.
+This matches the information hierarchy in real Orchestra-o1 traces:
+`finish.summary` is an informative 1–3 sentence handoff, not a generic
+completion message or the first trace bullet. The longer, task-adaptive
+`trace_summary` retains actual supported observations, checks, outcomes
+and limitations. The Guard validates all three prose fields for grounded
+stage-local claims; the independent Critic checks their consistency.
+When applicable, the existing code-owned, source-scoped witnessed digest
+may be appended to `finish.summary` after approval, without altering
+Oracle facts.
+
+The Guard requires all distinct identifiers,
 dates and numeric scalar values from the frozen delivered rows to occur
 verbatim in the Answer (up to 6,500 characters), and rejects invented
 tool/media execution or internal procedural identifiers. The independent
@@ -49,7 +60,7 @@ immutable Oracle value. When the local model returns a JSON number instead
 of a string, the code converts it to canonical text only after verifying
 the same exact one-field Oracle value. Multi-field/multi-row outputs still
 require complete informative answers, and the independent Critic still
-checks the evidence-grounded answer and trace for every Macro.
+checks the evidence-grounded Answer, Summary and Trace for every Macro.
 
 Before the exact-value Guard and independent Critic, the reporter
 normalizes a small whitelist of *surface-only* operator-style wording

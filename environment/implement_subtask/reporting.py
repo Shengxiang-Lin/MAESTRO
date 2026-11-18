@@ -560,15 +560,6 @@ def _o1_answer_issues(answer: str, contract: dict) -> list[str]:
     )
 
 
-def _o1_finish_summary(trace: str, answer: str) -> str:
-    """Use the first evidence-recap bullet as short O1 finish summary."""
-    for line in trace.splitlines():
-        item = line.strip().lstrip("-*• ").strip()
-        if len(item) >= 25:
-            return item[:750]
-    return answer[:750]
-
-
 def _guard(candidate: dict, contract: dict) -> list[str]:
     errors = []
     if not isinstance(candidate, dict):
@@ -680,8 +671,8 @@ CODE_OWNED_AUTHOR_SYSTEM = """You are a specialist Sub-Agent sending
 the completed delegated-task feedback to the Main-Agent. Facts are supplied
 by an immutable offline Oracle; the source observations are simulated.
 
-Return ONLY a JSON object with TWO authored text fields:
-{"answer":"...", "trace_summary":"..."}
+Return ONLY a JSON object with THREE authored text fields:
+{"answer":"...", "summary":"...", "trace_summary":"..."}
 
 ANSWER: directly answer the DELEGATED task. State the useful finding FIRST.
 For ANY one-field task, including intermediate identifier lookups,
@@ -697,9 +688,23 @@ If this is an intermediate task, never claim future eligibility,
 comparisons or checks were completed. The complete evidence/provenance
 rows are held separately by the application.
 
-TRACE_SUMMARY: 3-6 concise dash-prefixed bullet points recounting
-meaningful EXECUTED observations, source materials, supported clues,
-comparisons and returned findings, plus genuine unresolved limitations.
+SUMMARY: 1-3 concise sentences describing THIS delegated task: what
+evidence or observations were examined, what was established or returned,
+and any important unresolved limitation if one actually remains. Include
+the key result (e.g. an identifier, date, count or measured value) where
+it is useful to Main. The summary is a short finish handoff, NOT a
+copy of the first trace bullet, a generic "task complete" sentence,
+or a description of work that belongs to a later task. Base every claim
+on the same current-Macro evidence as ANSWER and TRACE_SUMMARY. Do not
+invent tool actions, external media access or uncertainty.
+
+TRACE_SUMMARY: write a grounded, chronological execution recap in
+concise dash-prefixed bullet points (typically 2-8, as needed by task
+complexity). Simple lookups may need only a few points; multi-source
+investigations should identify the evidence used, comparisons or
+calculations actually carried out, returned findings and any unresolved
+limitations. Include meaningful details rather than repeated success
+claims, invented checks or filler.
 Use descriptive source titles, modalities and observed_content from
 the provided source_context and sampled_evidence_atoms. The source
 observations are SIMULATED: you may describe 'the supplied photograph
@@ -708,7 +713,7 @@ watched video, listened to audio, searched the web, visited pages or
 used a tool. Only state tool execution when tool_executed=true and
 the trace itself confirms it. Do not invent errors, retries or omissions.
 
-Neither field may expose raw SQL/graph operator names, field-schema
+None of these fields may expose raw SQL/graph operator names, field-schema
 labels, Macro/work_M identifiers, FactRefs or 'workproduct', 'row(s)'.
 Describe the observation in ordinary investigation language: "reviewed
 the supplied annotations", "cross-referenced the candidate lists", and
@@ -728,6 +733,7 @@ findings that help Main plan follow-up tasks.
 
 STYLE EXAMPLE ONLY; do not reuse its factual content:
 {"answer":"Three survey dossiers match the two location clues: Dossier-A, Dossier-B and Dossier-C. Later qualification is not yet checked.",
+ "summary":"Compared the supplied location annotations with the survey gazetteer. Three dossiers match both clues: Dossier-A, Dossier-B and Dossier-C; later qualification remains unchecked.",
  "trace_summary":"- Checked supplied photograph annotations for the first location clue.\\n- Compared dossier identifiers against the survey gazetteer records.\\n- Found three identifiers common to both sources.\\n- Returned the matches for further checking."}
 
 Use ONLY the evidence supplied for THIS delegated task. No invented facts,
@@ -735,17 +741,23 @@ numbers, records, source statements, tool actions or final qualifications.
 """
 
 CODE_OWNED_CRITIC_SYSTEM = CRITIC_SYSTEM + """
-The model authored a natural-language ANSWER (candidate_finish.result)
-and an execution trace_summary. The exact_oracle_answer is immutable
+The model authored a natural-language ANSWER (candidate_finish.result),
+a short finish.summary and a detailed execution trace_summary in ONE
+request. The exact_oracle_answer is immutable
 and the application has already checked all distinct scalar values
 appear in the answer. For ANY one-field Macro, including intermediate
 PRJ-/ENT-/EVT- handoffs, the exact identifier, number, date or name alone
 is valid if the trace supports it; do not reject it solely for brevity.
 Critically check each entity/value association,
 the meaning and local scope of this task, answer usefulness to Main,
-and the trace's factual evidence basis. The trace is a concise
-Orchestra-o1-style execution recap, not ungrounded success claims,
-invented problems, real tool/media actions or technical operator logs.
+and the trace's factual evidence basis. The finish.summary must
+accurately state THIS task's principal finding and any real limitations,
+not merely repeat the first trace bullet or imply downstream work was
+already done. The three authored texts must agree, but the summary
+need not enumerate every value from a multi-record answer.
+The trace is an Orchestra-o1-style execution recap, not ungrounded
+success claims, invented problems, real tool/media actions or technical
+operator logs.
 Do not require changing the frozen Oracle rows. Keep the same four axes.
 """
 
@@ -855,7 +867,7 @@ def author_critic_report(
                 "errors": f.get("errors", []),
                 "reason": f.get("reason"),
                 "repair_hint": (
-                    "Revise the natural ANSWER and execution trace_summary "
+                    "Revise the natural ANSWER, finish summary and execution trace_summary "
                     "against only local evidence. Preserve every literal "
                     "entity/value and its correct association. Do not claim "
                     "unperformed actions or downstream eligibility."
@@ -864,8 +876,9 @@ def author_critic_report(
             } for f in failures[-2:]],
             "style": (
                 "Act like a real Sub-Agent returning finish to Main-Agent. "
-                "For typed code-owned outputs, return ANSWER and trace_summary, "
-                "not a programmatic table or machine JSON. Answer with all "
+                "For typed code-owned outputs, return ANSWER, finish "
+                "SUMMARY and trace_summary in the SAME response, not a "
+                "programmatic table or machine JSON. Answer with all "
                 "entities, dates, numbers and their correct associations. "
                 "Give Main an O1-style recap of observed source evidence "
                 "without inventing tool actions or later checks. The full "
@@ -886,6 +899,7 @@ def author_critic_report(
             if isinstance(candidate, dict) and result_policy == "code_owned":
                 if contract.get("requires_o1_answer"):
                     authored_answer = candidate.get("answer")
+                    authored_summary = candidate.get("summary")
                     authored_trace = candidate.get("trace_summary")
                     # Some OpenAI-compatible models JSON-decode a genuine
                     # numeric scalar as int/float rather than as a string.
@@ -900,12 +914,8 @@ def author_critic_report(
                     # Status and immutable Oracle rows are never model-owned.
                     candidate = {
                         "result": authored_answer,
+                        "summary": authored_summary,
                         "trace_summary": authored_trace,
-                        "summary": _o1_finish_summary(
-                            authored_trace, authored_answer
-                        ) if isinstance(authored_trace, str) and isinstance(
-                            authored_answer, str
-                        ) else "",
                         "status": "done",
                     }
                 else:

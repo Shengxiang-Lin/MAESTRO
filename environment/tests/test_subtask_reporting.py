@@ -38,6 +38,11 @@ def _mock_o1_draft(contract):
             f"The assigned investigation returned {len(rows)} records: "
             f"{details}. Further qualification has not been assessed."
         ),
+        "summary": (
+            "Reviewed the supplied evidence and established "
+            f"{len(rows)} returned records for this delegated task. "
+            "Later qualification remains unchecked."
+        ),
         "trace_summary": (
             "- Reviewed the supplied source annotations to identify "
             "the evidence relevant to the delegated task.\n"
@@ -628,6 +633,91 @@ class ReportingUnitTests(unittest.TestCase):
             "trace_summary", critic.calls[0]["candidate_finish"]
         )
 
+    def test_code_owned_finish_summary_is_authored_and_retained_for_main(self):
+        """O1 finish.summary is not the first trace bullet."""
+        from environment.base_orchestration.trajectory_builder import _main_report
+        record = realize_scene(scene(42, "medium"))["macro_tasks"][0]
+        class ThreeFieldAuthor:
+            def complete_json(self, system_prompt, user_prompt):
+                contract = json.loads(user_prompt)["frozen_task_and_evidence"]
+                draft = _mock_o1_draft(contract)
+                draft["summary"] = (
+                    "Compared the supplied observations for this delegated "
+                    "investigation, obtaining "
+                    f"{len(contract['exact_oracle_answer'])} matching records. "
+                    "Later qualification was not performed."
+                )
+                self.draft = draft
+                return draft
+        author, critic = ThreeFieldAuthor(), ReportCritic()
+        reviewed, status = author_critic_report(
+            record, question=None, author=author, critic=critic,
+            max_revisions=0, result_policy="code_owned",
+        )
+        self.assertEqual(status["status"], "accepted", status)
+        finish = reviewed["finish_result"]
+        self.assertEqual(finish["summary"], author.draft["summary"])
+        self.assertNotEqual(
+            finish["summary"],
+            author.draft["trace_summary"].splitlines()[0].lstrip("- "),
+        )
+        self.assertEqual(
+            reviewed["trace_summary"]["narrative"],
+            author.draft["trace_summary"],
+        )
+        self.assertEqual(reviewed["answer"], record["answer"])
+        self.assertEqual(
+            reviewed["answer_with_provenance"],
+            record["answer_with_provenance"],
+        )
+        self.assertEqual(critic.calls[0]["candidate_finish"]["summary"],
+                         finish["summary"])
+        delivered = _main_report(
+            reviewed, {"task_instruction": "Inspect supplied evidence"},
+            0, model_alias="model_1",
+        )
+        self.assertEqual(delivered["finish_result"]["summary"],
+                         finish["summary"])
+        self.assertEqual(delivered["trace_summary"],
+                         author.draft["trace_summary"])
+
+    def test_code_owned_missing_or_fabricated_summary_fails_closed(self):
+        """Summary is required and independently evidence-guarded."""
+        record = realize_scene(scene(42, "medium"))["macro_tasks"][0]
+        class BadSummaryAuthor:
+            def __init__(self, *, fabricated):
+                self.fabricated = fabricated
+
+            def complete_json(self, system_prompt, user_prompt):
+                contract = json.loads(user_prompt)["frozen_task_and_evidence"]
+                draft = _mock_o1_draft(contract)
+                if self.fabricated:
+                    draft["summary"] = (
+                        "Watched the video and searched the internet, "
+                        "then verified the answer with additional sources."
+                    )
+                else:
+                    draft.pop("summary")
+                return draft
+
+        for fabricated, expected_issue in (
+            (False, "summary_invalid_length_or_type"),
+            (True, "summary_claims_unperformed_tool_or_media_action"),
+        ):
+            with self.subTest(fabricated=fabricated):
+                critic = ReportCritic()
+                reviewed, status = author_critic_report(
+                    record, question=None,
+                    author=BadSummaryAuthor(fabricated=fabricated),
+                    critic=critic, max_revisions=0,
+                    result_policy="code_owned",
+                )
+                self.assertIsNone(reviewed)
+                self.assertEqual(status["status"], "failed")
+                self.assertIn(expected_issue,
+                              status["failures"][0]["errors"])
+                self.assertEqual(len(critic.calls), 0)
+
     def test_stage2_operator_style_report_is_normalized_before_review(self):
         """Real local-Qwen failure: natural findings mixed with SQL-like verbs."""
         record = realize_scene(scene(42, "medium"))["macro_tasks"][0]
@@ -637,6 +727,7 @@ class ReportingUnitTests(unittest.TestCase):
                 contract = json.loads(user_prompt)["frozen_task_and_evidence"]
                 return {
                     "answer": _mock_o1_draft(contract)["answer"],
+                    "summary": _mock_o1_draft(contract)["summary"],
                     "trace_summary": (
                         "- Scanned the supplied source annotations for recorded clues.\n"
                         "- Joined the two candidate lists by their identifiers.\n"
@@ -811,6 +902,7 @@ class ReportingUnitTests(unittest.TestCase):
                 contract = json.loads(user_prompt)["frozen_task_and_evidence"]
                 return {
                     "answer": expected,
+                    "summary": _mock_o1_draft(contract)["summary"],
                     "trace_summary": _mock_o1_draft(contract)["trace_summary"],
                 }
 
@@ -842,6 +934,7 @@ class ReportingUnitTests(unittest.TestCase):
                 contract = json.loads(user_prompt)["frozen_task_and_evidence"]
                 return {
                     "answer": expected,
+                    "summary": _mock_o1_draft(contract)["summary"],
                     "trace_summary": _mock_o1_draft(contract)["trace_summary"],
                 }
 
@@ -878,6 +971,7 @@ class ReportingUnitTests(unittest.TestCase):
                 contract = json.loads(user_prompt)["frozen_task_and_evidence"]
                 return {
                     "answer": numeric,
+                    "summary": _mock_o1_draft(contract)["summary"],
                     "trace_summary": _mock_o1_draft(contract)["trace_summary"],
                 }
 
