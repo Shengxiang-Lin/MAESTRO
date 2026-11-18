@@ -581,6 +581,32 @@ class ExecutionState:
         left_name, right_name = step["left_field"], step["right_field"]
         output_field = step["output_field"]
         operation = step["operation"]
+        # The frozen executable operator is an offline contract, not a
+        # private instruction that Main can magically read. Require the
+        # operation AND both input-field roles to be named in the user's
+        # question or in the actual assigned Sub-Agent instruction before
+        # labeling its numerical output inconsistent.
+        public_goal = " ".join(
+            text for text in (
+                self.scene.get("question"),
+                (self.public_reports.get(task_id) or {})
+                .get("task_instruction"),
+            ) if isinstance(text, str)
+        ).casefold().replace("_", " ")
+        def explicit_field(field: str) -> bool:
+            label = field.casefold().replace("_", " ")
+            return bool(re.search(
+                r"(?<!\w)" + re.escape(label) + r"(?!\w)",
+                public_goal,
+            ))
+        formula_words = (
+            ("absolute difference", "difference", "subtract")
+            if operation == "absolute_difference"
+            else ("ratio", "divide", "quotient")
+        )
+        if (not all(explicit_field(f) for f in (left_name, right_name))
+                or not any(word in public_goal for word in formula_words)):
+            return None
         for parent_row, returned in zip(parent_rows, result_rows):
             left, right = parent_row.get(left_name), parent_row.get(right_name)
             observed = returned.get(output_field)

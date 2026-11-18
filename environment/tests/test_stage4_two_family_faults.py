@@ -148,19 +148,35 @@ class IntraReportFaultTests(unittest.TestCase):
                 "source_fact_refs": ["stat:F001"],
             }]), "summary": "The two original values were returned.",
         }}, round_number=1)
-        state.set_public_report("calc", {"finish_result": {
-            "status": "done", "result": json.dumps([{
-                "values": {"difference": 5},
-                "source_fact_refs": ["stat:F001"],
-            }]), "summary": "The requested difference was calculated.",
-        }}, round_number=2)
+        state.set_public_report("calc", {
+            "task_instruction": (
+                "Compute the absolute difference between a and b."
+            ),
+            "finish_result": {
+                "status": "done", "result": json.dumps([{
+                    "values": {"difference": 5},
+                    "source_fact_refs": ["stat:F001"],
+                }]), "summary": "The requested difference was calculated.",
+            },
+        }, round_number=2)
         self.assertIn("imply 4", state.visible_discrepancy("calc"))
         self.assertEqual(
             next(row for row in state.observable_issues()
                  if row["task_id"] == "calc")["kind"],
             "arithmetic_inconsistency",
         )
-        # Private values do not make a Main-visible mismatch.
+        # A hidden arithmetic operator is not an instruction Main
+        # received: without a visible formula, do not teach it to
+        # identify an inconsistency from the private program node.
+        state.public_reports["calc"]["task_instruction"] = (
+            "Summarize the preceding record."
+        )
+        self.assertIsNone(state.visible_discrepancy("calc"))
+        state.public_reports["calc"]["task_instruction"] = (
+            "Compute the absolute difference between a and b."
+        )
+        # A visible formula without actually delivered operands is also
+        # insufficient for an arithmetic contradiction.
         state.public_reports["prior"]["finish_result"]["result"] = (
             "The original observations were reviewed."
         )
