@@ -596,7 +596,7 @@ class ExecutionState:
         def explicit_field(field: str) -> bool:
             label = field.casefold().replace("_", " ")
             return bool(re.search(
-                r"(?<!\\w)" + re.escape(label) + r"(?!\\w)",
+                r"(?<!\w)" + re.escape(label) + r"(?!\w)",
                 public_goal,
             ))
         formula_words = (
