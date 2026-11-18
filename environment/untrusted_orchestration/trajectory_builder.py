@@ -353,6 +353,7 @@ def build_branch(
     scenario_plan: dict | None = None,
     author=None, critic=None, report_author=None, report_critic=None,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
+    max_post_fork_rounds: int | None = None,
     max_parallel_tasks: int = 4, max_revisions: int = 2,
     report_max_revisions: int | None = None,
     main_max_revisions: int | None = None,
@@ -362,6 +363,10 @@ def build_branch(
     """Returns (public episode, accepted *post-branch* turn labels, audit)."""
     if max_rounds < branch_round or max_parallel_tasks < 1:
         raise ValueError("invalid_branch_round_or_budget")
+    if max_post_fork_rounds is not None and (
+        type(max_post_fork_rounds) is not int or max_post_fork_rounds < 1
+    ):
+        raise ValueError("invalid_max_post_fork_rounds")
     if report_max_revisions is None:
         report_max_revisions = max_revisions
     if main_max_revisions is None:
@@ -464,7 +469,15 @@ def build_branch(
             "visible_history": history,
         })
 
-    for round_number in range(branch_round, max_rounds + 1):
+    # A short branch is a *budget*, never permission to manufacture a
+    # completed episode. If it expires, retain the partial execution in
+    # private diagnostics and do not publish positive SFT decisions.
+    replay_end = min(
+        max_rounds,
+        branch_round + max_post_fork_rounds - 1
+        if max_post_fork_rounds is not None else max_rounds,
+    )
+    for round_number in range(branch_round, replay_end + 1):
         if state.total_cost > max_cost:
             stopped = "budget_exhausted"
             break
@@ -695,7 +708,10 @@ def build_branch(
             },
         })
     if stopped is None:
-        stopped = "max_decision_rounds"
+        stopped = (
+            "short_replay_horizon" if replay_end < max_rounds
+            else "max_decision_rounds"
+        )
     if stopped == "recovered" and (
         set(future_atoms) - applied_future_atoms
         or any(x["status"] != "released" for x in scheduler.audit())
