@@ -151,7 +151,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         if type(config[key]) is not int or config[key] < 1:
             raise ValueError("untrusted_invalid_" + key)
     for key in (
-        "seed", "max_retries", "max_revisions",
+        "seed", "max_retries",
         "report_max_revisions", "main_max_revisions",
     ):
         if type(config[key]) is not int or config[key] < 0:
