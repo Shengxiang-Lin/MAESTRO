@@ -55,6 +55,8 @@ def _mock_o1_draft(contract):
 
 
 class ReportAuthor:
+    """Current typed-evidence mock: Answer, Summary, Trace in one request."""
+
     def __init__(self, *, fail_topic=None, forged_tool=False):
         self.calls = []
         self.fail_topic = fail_topic
@@ -63,30 +65,24 @@ class ReportAuthor:
     def complete_json(self, system_prompt, user_prompt):
         contract = json.loads(user_prompt)["frozen_task_and_evidence"]
         self.calls.append(contract)
-        answer_count = len(contract["exact_oracle_answer"])
         if (self.fail_topic is not None
-                and self.fail_topic in contract["overall_question_for_context_only"]):
+                and self.fail_topic in json.dumps(
+                    contract["exact_oracle_answer"], sort_keys=True,
+                )):
             return {
-                "result": "I could not verify the requested records.",
-                "summary": "The required source details could not be located in the assigned evidence.",
-                "status": "partial",
+                "answer": "Unsupported substituted result",
+                "summary": "Reviewed the supplied evidence for the current task.",
+                "trace_summary": (
+                    "- Reviewed the current source annotations.\n"
+                    "- The requested values were not preserved."
+                ),
             }
-        return {
-            "result": (
-                "Checked the assigned source records and identified "
-                f"{answer_count} matching row(s); "
-                + ("no qualifying records were found." if answer_count == 0
-                   else "the exact items are in the handoff.")
-                + (" Used GoogleSearchAction." if self.forged_tool else "")
-            ),
-            "summary": (
-                "Compared the relevant source observations with upstream "
-                "workproducts and applied the recorded criteria. "
-                f"The resulting handoff contains {answer_count} row(s); "
-                "no additional unsupported eligibility condition was assumed."
-            ),
-            "status": "done",
-        }
+        draft = _mock_o1_draft(contract)
+        if self.forged_tool:
+            draft["trace_summary"] += (
+                "\n- Used GoogleSearchAction to retrieve external evidence."
+            )
+        return draft
 
 
 class ReportCritic:
@@ -111,15 +107,15 @@ class ReportCritic:
 
 
 class StructuredResultAuthor:
-    """Mock the exact JSON-array pattern observed in the user's Qwen logs."""
+    """Current Author may emit exact JSON-valued Answer before coercion."""
+
     def __init__(self, *, wrong_subset=False, collapse_labels=False):
         self.calls = []
         self.wrong_subset = wrong_subset
         self.collapse_labels = collapse_labels
 
     def complete_json(self, system_prompt, user_prompt):
-        request = json.loads(user_prompt)
-        contract = request["frozen_task_and_evidence"]
+        contract = json.loads(user_prompt)["frozen_task_and_evidence"]
         self.calls.append(contract)
         rows = deepcopy(contract["exact_oracle_answer"])
         if self.wrong_subset:
@@ -128,15 +124,9 @@ class StructuredResultAuthor:
             set(item) == {"entry_label"} for item in rows
         ):
             rows = [item["entry_label"] for item in rows]
-        return {
-            "result": rows,
-            "summary": (
-                "Checked the assigned source observations against the "
-                "provided upstream workproducts and returned the exact "
-                "matching records without adding unrelated filters."
-            ),
-            "status": "done",
-        }
+        draft = _mock_o1_draft(contract)
+        draft["answer"] = rows
+        return draft
 
 
 class StageLocalScopeRegressions(unittest.TestCase):
