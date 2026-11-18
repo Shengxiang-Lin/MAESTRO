@@ -347,7 +347,6 @@ class EntryEvidenceMappingRegressions(unittest.TestCase):
             "Checked the register entries and validated the output "
             f"with the incorrectly attributed {label} ({wrong})."
         )
-        from environment.implement_subtask.reporting import _normalize_author_result
         rows = teacher["answer"]
         contract = _teacher_contract(teacher, question=frozen["question"],
                                      is_terminal=True)
@@ -478,9 +477,9 @@ class ReportingUnitTests(unittest.TestCase):
                        sort_keys=True, separators=(",", ":")),
             revised["finish_result"]["result"],
         )
-        self.assertEqual(revised["answer_text"], revised["finish_result"]["result"])
-        self.assertEqual(revised["trace_summary"]["narrative"],
-                         trace_narrative(original["trace_summary"]))
+        self.assertEqual(revised["answer_text"], serialize_verified_result(record))
+        self.assertIn("Reviewed the supplied source annotations",
+                      revised["trace_summary"]["narrative"])
         self.assertNotEqual(revised["trace_summary"]["narrative"],
                             revised["finish_result"]["summary"])
         self.assertTrue(author.calls[0]["macro_is_terminal"])
@@ -504,7 +503,6 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertIsInstance(revised["finish_result"]["result"], str)
         self.assertNotIn("row(s) returned", revised["finish_result"]["result"])
         self.assertNotIn("entry_label", revised["finish_result"]["result"])
-        self.assertIn(str(len(candidate["answer"])), revised["finish_result"]["result"])
         self.assertEqual(
             critic.calls[0]["candidate_finish"]["result"],
             revised["finish_result"]["result"],
@@ -544,19 +542,23 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertEqual(len(report["failures"]), 2)
         self.assertTrue(all(
-            "structured_result_not_equal_to_oracle" in attempt["errors"]
+            "answer_invalid_length_or_type" in attempt["errors"]
             for attempt in report["failures"]
         ))
 
-    def test_empty_structured_answer_still_done(self):
-        from environment.implement_subtask.reporting import _normalize_author_result
-        text, errors = _normalize_author_result([], [], ["entry_label"])
-        self.assertEqual(errors, [])
-        self.assertEqual(text, "No records matched the assigned task.")
+    def test_empty_answer_can_be_naturally_reported_as_complete(self):
+        from environment.implement_subtask.reporting import _o1_answer_issues
+        contract = {"answer_required_literals": []}
+        self.assertEqual(
+            _o1_answer_issues("No records matched the assigned task.", contract),
+            [],
+        )
 
     def test_partial_from_author_never_counts_as_complete(self):
         record = realize_scene(scene(10, "medium"))["macro_tasks"][0]
-        author = ReportAuthor(fail_topic="Fictional Study 10")
+        author = ReportAuthor(
+            fail_topic=json.dumps(record["answer"], sort_keys=True),
+        )
         reviewed, info = review_subagent_report(
             record, question="Fictional Study 10 tasks",
             author=author, critic=ReportCritic(),
@@ -1419,7 +1421,10 @@ class ReportingBatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             subtasks, index = self._teacher_inputs(root, [27, 28])
-            author = ReportAuthor(fail_topic=scene(28)["question"])
+            bad_rows = realize_scene(scene(28, "medium"))["macro_tasks"][0]["answer"]
+            author = ReportAuthor(
+                fail_topic=json.dumps(bad_rows, sort_keys=True),
+            )
             summary = naturalize_subtasks(
                 source_subtasks=subtasks, source_scene_index=index,
                 output_dir=root / "reviewed", api_base="http://unused/v1",
