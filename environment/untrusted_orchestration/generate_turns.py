@@ -848,6 +848,8 @@ def generate_turns(
     max_candidates_per_round: int = 24,
     max_distractors_per_fault: int = 2,
     max_selected_per_round: int = 1,
+    selection_strategy: str = "causal_rank",
+    max_diagnostics_per_scene: int = 0,
     max_language_attempts_per_round: int = 1,
     max_revisions: int = 2,
     report_max_revisions: int | None = None,
@@ -914,6 +916,12 @@ def generate_turns(
     ):
         if type(value) is not int or not 1 <= value <= maximum:
             raise ValueError("invalid_" + name)
+    if selection_strategy not in {"causal_rank", "stratified"}:
+        raise ValueError("invalid_candidate_selection_strategy")
+    if type(max_diagnostics_per_scene) is not int or not (
+        0 <= max_diagnostics_per_scene <= 8
+    ):
+        raise ValueError("invalid_max_diagnostics_per_scene")
     if (candidate_strategy == "enumerate"
             and max_language_attempts_per_round < max_selected_per_round):
         raise ValueError("language_budget_smaller_than_selection")
@@ -949,6 +957,8 @@ def generate_turns(
         "max_candidates_per_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
         "max_selected_per_round": max_selected_per_round,
+        "selection_strategy": selection_strategy,
+        "max_diagnostics_per_scene": max_diagnostics_per_scene,
         "max_language_attempts_per_round": max_language_attempts_per_round,
         "multi_target_probability": multi_target_probability,
         "max_rounds": max_rounds, "max_cost": max_cost,
@@ -1362,6 +1372,9 @@ def generate_turns(
             select_recovered_candidates(
                 planned, [saved(stage_a, plan) for plan in planned],
                 max_selected_per_round=max_selected_per_round,
+                strategy=selection_strategy,
+                max_diagnostics_per_scene=max_diagnostics_per_scene,
+                seed=seed,
             )
         )
     else:
@@ -1543,7 +1556,9 @@ def generate_turns(
             index = row["candidate_index"]
             row["selected_for_language_review"] = index in attempted
             row["selection_reason"] = (
-                "language_review_primary" if index in initial_selection
+                "language_review_diagnostic"
+                if index in attempted and row.get("selection_purpose") == "diagnostic"
+                else "language_review_primary" if index in initial_selection
                 else "language_review_backfill_after_rejection"
                 if index in attempted
                 else "not_execution_recovered"
@@ -1594,6 +1609,8 @@ def generate_turns(
         "pipeline": "maestro_untrusted_orchestration",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
+        "selection_strategy": selection_strategy,
+        "max_diagnostics_per_scene": max_diagnostics_per_scene,
         "round_sampling_strategy": round_sampling_strategy,
         "max_post_fork_rounds": max_post_fork_rounds,
         "max_candidates_per_feedback_round": max_candidates_per_round,
