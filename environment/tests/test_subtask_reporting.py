@@ -887,7 +887,7 @@ class ReportingUnitTests(unittest.TestCase):
     def test_multi_source_filters_are_attributed_to_their_sources(self):
         from environment.implement_subtask.reporting import (
             _source_scoped_filter_steps,
-            CODE_OWNED_CRITIC_SYSTEM,
+            SUBAGENT_REPORT_CRITIC_SYSTEM,
         )
         steps = [
             {"operation": "lookup_by_key", "source_id": "M3_a",
@@ -912,7 +912,7 @@ class ReportingUnitTests(unittest.TestCase):
              "condition": "Keep rows whose cue equals 'interview'"},
         ])
         self.assertIn("source_scoped_filter_steps",
-                      CODE_OWNED_CRITIC_SYSTEM)
+                      SUBAGENT_REPORT_CRITIC_SYSTEM)
 
     def test_terminal_short_answer_passes_review_without_oracle_drift(self):
         from environment.generate_question.planning.goal_plan import sample_output
@@ -1174,7 +1174,7 @@ class ReportingUnitTests(unittest.TestCase):
         """Real O1 traces use positive self-assessment without needing a template."""
         from environment.implement_subtask.reporting import (
             _guard, _teacher_contract, _o1_answer_requirements,
-            CODE_OWNED_AUTHOR_SYSTEM, CODE_OWNED_CRITIC_SYSTEM,
+            SUBAGENT_REPORT_AUTHOR_SYSTEM, SUBAGENT_REPORT_CRITIC_SYSTEM,
         )
         record = realize_scene(scene(0, "medium"))["macro_tasks"][0]
         contract = _teacher_contract(record, question=None, is_terminal=False)
@@ -1224,11 +1224,11 @@ class ReportingUnitTests(unittest.TestCase):
             "trace_summary_claims_unperformed_tool_or_media_action",
             _guard(fabricated_trace, contract),
         )
-        self.assertIn("OPTIONAL", CODE_OWNED_AUTHOR_SYSTEM)
+        self.assertIn("OPTIONAL", SUBAGENT_REPORT_AUTHOR_SYSTEM)
         self.assertIn("do not copy a fixed success checklist",
-                      CODE_OWNED_AUTHOR_SYSTEM)
+                      SUBAGENT_REPORT_AUTHOR_SYSTEM)
         self.assertIn("Do not fail a report merely",
-                      CODE_OWNED_CRITIC_SYSTEM)
+                      SUBAGENT_REPORT_CRITIC_SYSTEM)
 
     def test_stage3_receives_o1_answer_and_trace(self):
         from environment.base_orchestration.trajectory_builder import _main_report
