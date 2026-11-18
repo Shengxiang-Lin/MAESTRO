@@ -320,6 +320,7 @@ def build_episode(
     resume_rounds: list[dict] | None = None,
     on_round=None, on_episode_start=None,
     freeze_dispatch: bool = False,
+    allow_delegate_fallback: bool = False,
 ) -> tuple[dict | None, list[dict], list[dict], dict]:
     """Return (public Episode, reviewed-turn turns, PRIVATE alignments, status)."""
     if max_attempts < 2:
@@ -458,7 +459,8 @@ def build_episode(
             )
             status = prior_audit.get("authoring")
             allowed_modes = {expected_mode}
-            if freeze_trusted_dispatch and author is not None:
+            if (freeze_trusted_dispatch and author is not None
+                    and allow_delegate_fallback):
                 allowed_modes.add("contract_frozen_delegate_fallback")
             if (prior_turn.get("generation_mode") not in allowed_modes
                     or not isinstance(status, dict)
@@ -493,6 +495,7 @@ def build_episode(
                     )) if freeze_trusted_dispatch else None
                 ),
                 round_evidence_contract=evidence_contract,
+                allow_delegate_fallback=allow_delegate_fallback,
             )
             if action is None:
                 return None, [], [], {
@@ -624,6 +627,19 @@ def build_episode(
             delivered=delivered, author=author, critic=critic,
             max_revisions=max_revisions,
         )
+    # In the default strict Stage-3 LLM run, any fallback is a FAILED Scene.
+    # Keep previous deterministic Completion fallback available only when
+    # explicitly opting into the legacy permissive fallback policy.
+    # Template-mode clean replay is unaffected (no LLM Author).
+    if (freeze_trusted_dispatch and author is not None
+            and not allow_delegate_fallback
+            and completion_status.get("mode") != "llm_reviewed_completion"):
+        return None, [], [], {
+            "status": "rejected",
+            "cause": "completion_not_llm_reviewed",
+            "round": completion_round,
+            "authoring": completion_status,
+        }
     completion_errors = completion_issues(
         final_action, expected_answer=_answer_text(scene),
         delivered=delivered,
