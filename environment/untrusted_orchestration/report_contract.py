@@ -12,8 +12,8 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 
-from environment.implement_subtask.reporting import (
-    _readable_value, _readable_verified_answer,
+from environment.implement_subtask.public_surface import (
+    readable_value, render_verified_rows,
 )
 from .state_machine import Attempt, relation_rows
 from .report_evidence import observed_handoff_discrepancies
@@ -181,7 +181,7 @@ def render_delivered_result(contract: dict) -> str:
         rows = [item["values"] for item in contract["actual_delivered_rows"]]
         def render(row):
             return ", ".join(
-                f"{str(key).replace('_', ' ')}: {_readable_value(value)}"
+                f"{str(key).replace('_', ' ')}: {readable_value(value)}"
                 for key, value in row.items()
             )
         if not rows:
@@ -206,7 +206,7 @@ def render_delivered_result(contract: dict) -> str:
     rows = [row["values"] for row in contract["actual_delivered_rows"]]
     if len(rows) == 1 and len(rows[0]) <= 5:
         pairs = ", ".join(
-            f"{str(k).replace('_', ' ')}: {_readable_value(v)}"
+            f"{str(k).replace('_', ' ')}: {readable_value(v)}"
             for k, v in rows[0].items()
         )
         result = "The delivered record contains " + pairs + "."
@@ -216,7 +216,7 @@ def render_delivered_result(contract: dict) -> str:
         # multi-record result to an uninformative row count.
         records = [
             ", ".join(
-                f"{str(key).replace('_', ' ')}: {_readable_value(value)}"
+                f"{str(key).replace('_', ' ')}: {readable_value(value)}"
                 for key, value in row.items()
             )
             for row in rows
@@ -227,10 +227,10 @@ def render_delivered_result(contract: dict) -> str:
         )
         result = (
             detailed if len(detailed) <= 1200
-            else _readable_verified_answer(rows)
+            else render_verified_rows(rows)
         )
     else:
-        result = _readable_verified_answer(rows)
+        result = render_verified_rows(rows)
     if contract["delivery_status"] == "partial":
         missing = contract["unresolved_fields"]
         if "remaining_rows" in missing:
