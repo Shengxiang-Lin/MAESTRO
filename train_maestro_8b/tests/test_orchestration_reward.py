@@ -148,6 +148,18 @@ class DeterministicRewardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"unobservable"):
             score_decision(delegate(("source_A","project_id")),private)
 
+    def test_completion_json_values_preserve_types(self):
+        env = state(complete=True)
+        env["expected_completion_answer"] = '[{"ok":true,"count":3}]'
+        self.assertEqual(score_decision({
+            "action": "complete",
+            "params": {"answer": '[ { "count": 3, "ok": true } ]'},
+        }, env)["reward"], 1.0)
+        self.assertEqual(score_decision({
+            "action": "complete",
+            "params": {"answer": '[{"ok":1,"count":3}]'},
+        }, env)["reason"], "incorrect_completion_answer")
+
     def test_indistinguishable_goals_do_not_guess_private_task_id(self):
         x = option("X","project_id","source_A")
         y = option("Y","project_id","source_A")
