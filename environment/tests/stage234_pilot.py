@@ -15,7 +15,7 @@ from pathlib import Path
 
 from environment.tests.current_stage1 import current_scene
 from environment.implement_subtask.realize import realize_scene
-from environment.implement_subtask.reporting import code_owned_result
+from environment.implement_subtask.reporting import serialize_verified_result
 from environment.base_orchestration.trajectory_builder import build_episode
 from environment.untrusted_orchestration.generate_turns import generate_turns
 
@@ -60,7 +60,7 @@ def run_pilot(output_dir: Path, *, count: int = 4,
                 **deepcopy(item),
                 "finish_result": {
                     "status": "done",
-                    "result": code_owned_result(item),
+                    "result": serialize_verified_result(item),
                     "summary": (
                         "Returned the exact evidence for this delegated "
                         "Macro, without making downstream claims."
