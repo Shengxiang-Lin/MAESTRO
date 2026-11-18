@@ -10,6 +10,7 @@ import json
 import re
 
 from environment.generate_question.authoring.surface_quality import SCHEMA_LABELS
+from .public_surface import readable_value
 from .stage_local_claims import (
     compile_claim_contract, stage_local_claim_issues,
     normalize_report_language,
@@ -196,16 +197,6 @@ def _teacher_contract(record: dict, *, question: str | None,
             "final overall question answer."
         ),
     }
-
-
-def _readable_value(value) -> str:
-    if value is True:
-        return "yes"
-    if value is False:
-        return "no"
-    if value is None:
-        return "not specified"
-    return str(value)
 
 
 def _public_field_text(text: str, fields) -> str:
@@ -441,7 +432,7 @@ def _exact_structured_o1_answer(value, contract: dict) -> str | None:
             row = row["answer"]
         return ", ".join(
             f"{SCHEMA_LABELS.get(field, field.replace('_', ' '))}: "
-            f"{_readable_value(data)}"
+            f"{readable_value(data)}"
             for field, data in row.items()
         )
 
