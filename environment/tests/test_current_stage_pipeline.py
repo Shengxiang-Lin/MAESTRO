@@ -184,10 +184,9 @@ class CurrentStagePipelineTests(unittest.TestCase):
         })
         self.assertGreater(len(first), 10000)
         self.assertEqual(json.loads(first), rows)
-        self.assertTrue(second.startswith("The handoff contains 220"))
-        for item in rows:
-            self.assertIn(item["values"]["entity_final"], second)
-        self.assertNotIn("source_fact_refs", second)
+        # Stage-4 must not regress the Stage-2 typed evidence contract.
+        self.assertEqual(second, first)
+        self.assertEqual(json.loads(second), rows)
         from environment.implement_subtask.reporting import _guard
         contract = {
             "result_encoding": "typed_evidence_json_v1",
@@ -297,7 +296,7 @@ class CurrentStagePipelineTests(unittest.TestCase):
             for value in item["values"].values():
                 if value is not None and not isinstance(value, bool):
                     self.assertIn(str(value), visible)
-        self.assertNotIn("source_fact_refs", visible)
+        self.assertEqual(json.loads(visible), delivered)
 
     def test_clean_reference_is_stable_and_fails_closed_when_tampered(self):
         from environment.untrusted_orchestration.trusted_prefix import (
