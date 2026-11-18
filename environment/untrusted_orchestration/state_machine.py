@@ -57,7 +57,6 @@ class ExecutionState:
         self.public_report_rounds: dict[str, int] = {}
         self.cross_source_checks_enabled = False
         self.detected_conflicts: list[dict] = []
-        self.checked_explicit_claim_pairs: set[tuple] = set()
         self.total_cost = 0
         self.invalidations: list[dict] = []
         self.revalidations: list[dict] = []
@@ -799,7 +798,7 @@ class ExecutionState:
         return rows
 
     def _detect_explicit_cross_report_disagreements(self) -> None:
-        """Late, cited, independent claims can justify one targeted recheck.
+        """Contested same-claim reports support bounded sequential rechecks.
 
         No Gold value is consulted, and no side is declared correct.
         Independent sources merely having different candidates or a
@@ -833,20 +832,47 @@ class ExecutionState:
                     # actionable; only ACTUAL prior downstream consumers
                     # may later be invalidated. Neither side is named wrong
                     # from private Gold.
-                    prev = self.current.get(left)
+                    # A first independent recheck can confirm its original
+                    # value rather than resolve the conflict. In that case
+                    # recheck the OTHER cited source on the next decision,
+                    # never the same source indefinitely. This is a bounded,
+                    # Main-visible resolution protocol, not an Oracle choice.
+                    pair = (tuple(sorted((left, right))),
+                            subject, field, scope)
+                    prior = [
+                        event for event in self.detected_conflicts
+                        if event.get("claim_pair_key") == pair
+                    ]
+                    if prior:
+                        last = prior[-1]
+                        checked = last["recheck_task_id"]
+                        checked_attempt = self.current.get(checked)
+                        if (checked_attempt is None or
+                                checked_attempt.version <=
+                                last["recheck_task_version"]):
+                            continue
+                        checked_targets = {
+                            event["recheck_task_id"] for event in prior
+                        }
+                        options = [
+                            tid for tid in (left, right)
+                            if tid not in checked_targets
+                        ]
+                        if not options:
+                            continue
+                        target = options[0]
+                    else:
+                        target = left
+                    prev = self.current.get(target)
                     if prev is None or prev.status not in {"done", "disputed"}:
                         continue
                     consumed = any(
                         child in self.current
                         and self.current[child].status != "stale"
-                        and self.current[child].used_parent_versions.get(left)
+                        and self.current[child].used_parent_versions.get(target)
                             == prev.version
-                        for child in self._dependents(left)
+                        for child in self._dependents(target)
                     )
-                    pair = (left, right, subject, field, scope)
-                    if pair in self.checked_explicit_claim_pairs:
-                        continue
-                    self.checked_explicit_claim_pairs.add(pair)
                     message = (
                         "Two separately cited sources report different "
                         + field.replace("_", " ") + " values for "
@@ -863,8 +889,11 @@ class ExecutionState:
                     prev.runtime["cross_source_recheck_requested"] = True
                     self.detected_conflicts.append({
                         "kind": "explicit_independent_claim_disagreement",
+                        "claim_pair_key": pair,
                         "compared_parent_tasks": [left, right],
-                        "recheck_task_id": left,
+                        "recheck_task_id": target,
+                        "recheck_task_version": prev.version,
+                        "verification_step": len(prior) + 1,
                         "claim": {"subject": subject, "attribute": field,
                                   "valid_scope": scope},
                         "observed_values": [
