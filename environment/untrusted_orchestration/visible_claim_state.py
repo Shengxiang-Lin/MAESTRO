@@ -102,6 +102,12 @@ def _state_for(claims: list[dict]) -> dict:
         "report_sources": sorted(
             x for x in source_values if x != "unspecified"
         ),
+        # Multi-source derived observations retain explicit lineage without
+        # counting all of their roots as separate verifying reports.
+        "cited_source_ids": sorted({
+            sid for claim in claims
+            for sid in claim.get("provenance_source_ids", [])
+        }),
         "internal_disagreement": local_conflict,
         "evidence_count": len(claims),
         "supporting_claim_ids": sorted(c["claim_id"] for c in claims),
@@ -169,13 +175,47 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
                 if isinstance(ref, str) and isinstance(origin, str):
                     origin_by_ref[ref] = origin
 
-    def claim_origin(claim, fallback_source):
+    def claim_lineage(claim, fallback_source):
+        """Only describe provenance EXPLICITLY cited in the visible Result.
+
+        Multiple roots are kept as a dependency set, never promoted to
+        independent corroboration by the derived WorkProduct itself.
+        """
         refs = claim.get("fact_refs", [])
         if refs:
-            origins = {origin_by_ref.get(ref) for ref in refs}
-            # A multi-origin WorkProduct is not one independent observation.
-            return next(iter(origins)) if len(origins) == 1 and None not in origins else None
-        return origin_by_source.get(fallback_source)
+            known = sorted({
+                origin_by_ref[ref] for ref in refs if ref in origin_by_ref
+            })
+            unresolved = sorted({
+                ref for ref in refs if ref not in origin_by_ref
+            })
+            return {
+                "evidence_origin_ids": known,
+                "provenance_source_ids": sorted({
+                    ref.split(":", 1)[0] for ref in refs if ":" in ref
+                }),
+                "unmapped_fact_refs": unresolved,
+                "provenance_basis": "explicit_delivered_fact_refs",
+                "evidence_origin_id": (
+                    known[0] if len(known) == 1 and not unresolved
+                    else None
+                ),
+            }
+        fallback_origin = origin_by_source.get(fallback_source)
+        return {
+            "evidence_origin_ids": (
+                [fallback_origin] if fallback_origin else []
+            ),
+            "provenance_source_ids": (
+                [fallback_source] if fallback_source else []
+            ),
+            "unmapped_fact_refs": [],
+            "provenance_basis": (
+                "declared_task_source" if fallback_origin
+                else "unknown"
+            ),
+            "evidence_origin_id": fallback_origin,
+        }
 
     def claim_source(claim, fallback_source):
         refs = claim.get("fact_refs", [])
@@ -238,7 +278,7 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
                 "report_task_id": tid, "observed_in_round": round_number,
                 "delivery_status": parse["status"],
                 "source_id": claim_source(c, source_id),
-                "evidence_origin_id": claim_origin(c, source_id),
+                **claim_lineage(c, source_id),
                 "revision_seq": versions_by_task[tid],
                 "revision_of": prior_claim(c),
                 "authoritative": False,
@@ -277,6 +317,17 @@ def audit_visible_claim_states(scene: dict, trajectory: list[dict], *,
         active_claims = [
             c for claims in latest_by_task.values() for c in claims
         ]
+        counters["active_claims_with_cited_fact_refs"] += sum(
+            claim["provenance_basis"] == "explicit_delivered_fact_refs"
+            for claim in active_claims
+        )
+        counters["active_multi_origin_claims"] += sum(
+            len(claim["evidence_origin_ids"]) > 1
+            for claim in active_claims
+        )
+        counters["active_claims_with_unmapped_fact_refs"] += sum(
+            bool(claim["unmapped_fact_refs"]) for claim in active_claims
+        )
         for claim in active_claims:
             key = (
                 claim["subject"], claim["attribute"],
