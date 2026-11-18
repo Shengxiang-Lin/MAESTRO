@@ -127,39 +127,27 @@ Return EXACTLY:
 {"reasoning":"...",
  "tasks":[{"task_instruction":"...","context":"..."}]}
 
-For each task_instruction, give an executable investigation request: which
-public source to inspect, the exact clue/identifier/date/relationship from
-the question or ALREADY returned feedback, what evidence to inspect or
-compare, and which permitted values to return. Name each permitted source
-ID literally with its public name. Real O1 delegation often specifies the
-concrete evidence action and the exact evidence desired; do not replace
-that with generic "review the sources" language. When it genuinely helps
-execution, you MAY mention a tool that is ALREADY ASSIGNED to that same
-investigation; do not invent tools, access methods, file paths, search
-results or tool parameters. Tool/model routing remains unchanged.
+For each task_instruction, give an actionable request: which public source
+to inspect, which specific clue/identifier/date/relationship from the
+question or earlier Sub-Agent feedback to use, and which values to return.
+Mention each permitted source ID literally and retain its public name.
 Parallel investigations need distinct source-specific instructions, not
-a shared generic sentence. Do not copy reference instructions verbatim,
-mention private task IDs, or imply a future action already happened.
+a shared generic sentence. Do not copy reference instructions verbatim.
+Do not write tool names, models or internal task identifiers.
 
-For each context, write ONE compact natural handoff (usually one or two
-sentences): explain why this particular investigation matters using the
-user's clues or ALREADY returned findings. Real O1 context gives a short
-situation update, not a second long task instruction. On the first round,
-do not imply a previous Sub-Agent retrieval. Previously returned public
-Result and Summary strings are appended separately after generation, so
-avoid repeating full result lists or stock workflow descriptions.
+For each context, write ONE natural handoff of 25–700 characters: explain
+why the investigation is needed, using available user clues or ALREADY
+returned Sub-Agent results. On the first round, do not imply a previous
+Sub-Agent retrieval. Previously returned result strings are attached
+separately after generation; there is no need to copy them in full.
 Do not invent source content, outcomes, errors, retries or future facts.
 
-For reasoning, speak as the investigator: briefly explain the concrete
-evidence already available, the remaining gap, and why THIS round's
-inquiries follow from it. Prefer specific clue/identifier/relationship
-connections over a lengthy procedural preamble. Avoid repeatedly using
-stock phrases like "the investigation has successfully", "the next
-logical step", or "to proceed"; successful findings may still be
-described naturally when relevant. Do not describe internal construction
-or scheduling machinery, or why software chose a step. An earlier
-successful intermediate lookup is not a failed task. Only claim facts
-visible in the original question and earlier feedback.
+For reasoning, speak as the investigator: explain the evidence currently
+available, why these particular inquiries can proceed now, and what they
+will help establish. Do not describe the internal construction or
+scheduling process, procedural machinery, or why software chose a step.
+An earlier successful intermediate lookup is not a failed task.
+Only claim facts visible in the original question and earlier feedback.
 Return JSON only, with reasoning and tasks, no extra fields.
 """
 
