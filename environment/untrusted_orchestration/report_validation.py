@@ -32,12 +32,12 @@ _UNPERFORMED = re.compile(
     r"i\s+browsed\s+(?:the\s+)?internet)\b", re.I,
 )
 
-def _claim_tokens(value: str) -> set[str]:
+def claim_tokens(value: str) -> set[str]:
     """Normalize thousands separators, not facts or entity identifiers."""
     value = re.sub(r"(?<=\d),(?=\d{3}\b)", "", value)
     return {token.casefold() for token in _TOKEN.findall(value)}
 
-def _explicit_final_value_issues(text: str, contract: dict) -> list[str]:
+def explicit_final_value_issues(text: str, contract: dict) -> list[str]:
     """Distinguish a claimed delivered field value from observed provenance.
 
     Numeric values inside an actually executed filter/lookup condition may
@@ -72,7 +72,7 @@ def _explicit_final_value_issues(text: str, contract: dict) -> list[str]:
     return sorted(set(issues))
 
 
-def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
+def validate_report_draft(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
     if not isinstance(draft, dict):
         return ["invalid_report_json"]
     issues = []
@@ -151,7 +151,7 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
         json.dumps(contract["actual_delivered_rows"], ensure_ascii=False)
         + " " + json.dumps(observed, ensure_ascii=False)
     )
-    result_tokens = _claim_tokens(json.dumps(
+    result_tokens = claim_tokens(json.dumps(
         contract["actual_delivered_rows"], ensure_ascii=False,
     ))
     result_tokens.add(str(contract["total_delivered_rows"]))
@@ -163,14 +163,14 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
         field for step in observed
         for field in step.get("output_schema", [])
     }
-    result_tokens.update(_claim_tokens(
+    result_tokens.update(claim_tokens(
         " ".join(name.replace("_", " ") for name in schema_fields)
     ))
-    allowed_tokens = _claim_tokens(available)
+    allowed_tokens = claim_tokens(available)
     allowed_tokens |= result_tokens | {
         str(len(contract["executed_operations_in_order"])),
     }
-    instruction_tokens = _claim_tokens(
+    instruction_tokens = claim_tokens(
         contract["assigned_task_instruction"]
     )
     # An upstream identity can be used as an explanatory parent/context
@@ -199,11 +199,11 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
         # from masquerading as the delivered output.
         allowed = (allowed_tokens if field == "result"
                    else allowed_tokens | instruction_tokens)
-        if _claim_tokens(text) - allowed:
+        if claim_tokens(text) - allowed:
             issues.append(field + "_unobserved_numeric_or_entity")
         if field == "result":
             issues.extend("result_" + issue for issue in
-                          _explicit_final_value_issues(text, contract))
+                          explicit_final_value_issues(text, contract))
 
     if attempt.status == "partial":
         missing_fields = contract["unresolved_fields"]
@@ -227,6 +227,3 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
             issues.append("missing_claims_completed_acquisition")
     return sorted(set(issues))
 
-# Public names for future callers; preserve private aliases for tests.
-validate_report_draft = _guard
-claim_tokens = _claim_tokens
