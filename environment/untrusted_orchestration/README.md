@@ -72,12 +72,14 @@ A changed private WorkProduct or injected fault name never suffices.
 `not_observed_in_replay` for each candidate, plus the first observed
 decision round and visible anomaly kinds.
 
-For a late cross-report disagreement to request a targeted recheck,
-both claims must literally appear in the delivered Result, name the
-same entity/attribute/scope, cite different **single known independent**
-evidence origins, come from non-dependent tasks, and the earlier report
-must already have been consumed by downstream work. A composite Join
-result citing multiple origins is not a second independent witness.
+A cross-report disagreement can be **simultaneous or delayed**. Both
+claims must literally appear in the delivered Result, name the same
+entity/attribute/scope, cite different **single known independent**
+observation origins AND distinct source IDs, and come from non-dependent
+tasks. The earlier report need not have been consumed: consumption is an
+independently audited condition for subsequent downstream invalidation.
+A composite Join result citing multiple origins is not a second witness.
+Different *candidate sets* from complementary joins are NOT conflicts.
 No hidden clean source value is used to pick a side. If the observed
 evidence is insufficient, the fault remains diagnostic rather than a
 fabricated positive recovery. The 4C Critic also distinguishes sufficient
@@ -87,6 +89,55 @@ Stage-4B exposes one canonical reporting API:
 `report_contract.build_report_contract` and
 `report_validation.validate_report_draft`. Old redundant aliases are
 removed; Stage 1–3 authoring and data contracts remain untouched.
+
+## Maintained two-family taxonomy
+
+**I. Intra-Sub-Agent report issues** are observable from the assigned task,
+its returned evidence and any Main-visible prerequisite values:
+
+- **Delivery:** `no_result`, `report_missing`,
+  `incomplete_retrieval`, `done_but_incomplete`. The latter genuinely
+  withholds a typed field but reports `finish_result.status=done`.
+  Missing fields trigger repair only when the public task instruction
+  identifies the field and an outstanding consumer needs it.
+- **Acquisition/association:** `wrong_retrieval`,
+  `wrong_entity_binding`. `wrong_scope` is an observable subtype
+  of `wrong_retrieval`, **not** a second injector: an explicitly assigned
+  equality/threshold constraint must be present in the Main-visible task
+  instruction and contradicted by a delivered output field.
+- **Reporting:** `fabricated_claim`, `result_summary_conflict`.
+  The former keeps the true executed WorkProduct immutable but delivers
+  a grounded distractor value with its actual FactRef. The latter
+  preserves the real Result and contradicts it in Summary. Neither is
+  silently laundered through a trusted LLM report reviewer.
+- **Computation:** `computation_error` perturbs one actual numeric
+  operator output (`count`, `group_count`, `derive_arithmetic`,
+  `derive_percentage`, `derive_date_gap`, or numeric
+  `goal_compute`), then reruns real downstream primitives. Only the
+  simple source-free, public-input `derive_arithmetic` form currently
+  receives automatic Main-visible inconsistency detection; other
+  perturbations may remain diagnostic, not forced recovery examples.
+
+**II. Inter-Sub-Agent conflicts** are not separate fault injectors:
+an actual wrong/fabricated report plus an independent, already returned
+same-claim report can form a value or relation disagreement. Same-round
+and later-visible disagreements both request rechecking, with actual
+downstream invalidation only if an earlier value was used. If reports
+still disagree after rechecking, the branch is unresolved, even if a
+private Gold answer happened to match. No fabricated second source or
+new Stage-1 operator is added.
+
+In `private/candidate_selection.jsonl`, compare the **private fault
+mechanism** with `observable_issue_family` (`intra_report_issue`,
+`inter_report_conflict`, `not_observed`), `observability` (immediate,
+later, or not witnessed), optional `fault_subtype_private=wrong_scope`,
+and `recovery_effect` (execution unblocked, inconsistency resolved,
+incorrect answer genuinely corrected, downstream recomputed, or not
+recovered). These aggregates are also exported to `summary.json`.
+
+Stage 1–3 remain frozen. Some scenes genuinely have zero same-fact,
+independent cross-report witnesses; Stage 4 records that limitation
+rather than fabricating a contradictory report.
 
 ## Functional pipeline
 
