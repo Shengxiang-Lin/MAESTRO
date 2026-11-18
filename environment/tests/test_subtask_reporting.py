@@ -1134,6 +1134,66 @@ class ReportingUnitTests(unittest.TestCase):
             for issue in _guard(invented, contract)
         ))
 
+    def test_clean_stage2_success_language_is_allowed_but_tool_fiction_is_not(self):
+        """Real O1 traces use positive self-assessment without needing a template."""
+        from environment.implement_subtask.reporting import (
+            _guard, _teacher_contract, _o1_answer_requirements,
+            CODE_OWNED_AUTHOR_SYSTEM, CODE_OWNED_CRITIC_SYSTEM,
+        )
+        record = realize_scene(scene(0, "medium"))["macro_tasks"][0]
+        contract = _teacher_contract(record, question=None, is_terminal=False)
+        contract["requires_o1_answer"] = True
+        contract["answer_required_literals"] = _o1_answer_requirements(record)
+        contract["all_evidence_refs"] = list({
+            ref for step in record["trace_summary"]["steps"]
+            for ref in step["supporting_fact_refs"]
+        } | set(record["trace_summary"]["answer_supporting_fact_refs"]))
+        draft = _mock_o1_draft(contract)
+        positive = {
+            "status": "done",
+            "result": draft["answer"],
+            "summary": (
+                "Successfully reviewed the supplied observations and "
+                "correctly identified the records requested by this task. "
+                "The resulting handoff is ready for subsequent checks."
+            ),
+            "trace_summary": (
+                draft["trace_summary"] + "\n"
+                "- No problems or hallucinations were encountered in "
+                "the evidence-grounded handoff; later qualification "
+                "remains unchecked."
+            ),
+        }
+        self.assertEqual(_guard(positive, contract), [])
+        positive["summary"] = (
+            "The task was completed efficiently using the supplied "
+            "observations and returned the requested matching records "
+            "without assuming later eligibility."
+        )
+        self.assertEqual(_guard(positive, contract), [])
+
+        fabricated = dict(positive, summary=(
+            positive["summary"] +
+            " I additionally used VideoAnalysisAction to verify the entries."
+        ))
+        self.assertIn(
+            "summary_claims_unperformed_tool_or_media_action",
+            _guard(fabricated, contract),
+        )
+        fabricated_trace = dict(positive, trace_summary=(
+            positive["trace_summary"] +
+            "\n- Successfully searched the internet for extra proof."
+        ))
+        self.assertIn(
+            "trace_summary_claims_unperformed_tool_or_media_action",
+            _guard(fabricated_trace, contract),
+        )
+        self.assertIn("OPTIONAL", CODE_OWNED_AUTHOR_SYSTEM)
+        self.assertIn("do not copy a fixed success checklist",
+                      CODE_OWNED_AUTHOR_SYSTEM)
+        self.assertIn("Do not fail a report merely",
+                      CODE_OWNED_CRITIC_SYSTEM)
+
     def test_stage3_receives_o1_answer_and_trace(self):
         from environment.base_orchestration.trajectory_builder import _main_report
         record = realize_scene(scene(0, "medium"))["macro_tasks"][0]

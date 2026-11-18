@@ -45,6 +45,17 @@ When applicable, the existing code-owned, source-scoped witnessed digest
 may be appended to `finish.summary` after approval, without altering
 Oracle facts.
 
+For these **clean, successful** Stage-2 reports, natural O1-style positive
+language is welcome: the Author may describe an observation as successfully
+recovered, an identifier as correctly identified or the task as smoothly
+completed. It may briefly note no apparent issues if supported by the
+current evidence. Such language is **optional and model-authored**, never a
+post-processing template or required stock sentence. The Critic must not
+reject genuine successful wording merely for being affirmative, but the
+existing evidence and tool-use guards still reject fabricated web/media
+access, fake verification steps, unsupported efficiency measurements,
+incorrect source claims and premature downstream success.
+
 The Guard requires all distinct identifiers,
 dates and numeric scalar values from the frozen delivered rows to occur
 verbatim in the Answer (up to 6,500 characters), and rejects invented
