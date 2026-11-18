@@ -120,6 +120,7 @@ class IntraReportFaultTests(unittest.TestCase):
                     "output_field": "difference",
                     "operation": "absolute_difference", "round_digits": 0,
                 }],
+                "program_node_id": "derive",
                 "outputs": {"typed_relation": ["difference"]}}
         state.tasks = {"prior": parent, "calc": calc}
         state.current = {
