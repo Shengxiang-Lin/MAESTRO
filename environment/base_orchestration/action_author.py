@@ -593,6 +593,13 @@ def _stage3_task_prose_repair_guidance(
                     "do not paste the full earlier result because the "
                     "application appends the evidence separately."
                 )
+            elif kind == "internal_orchestration_language":
+                guidance.append(
+                    label + "Remove references to internal scheduling, "
+                    "preassigned tasks or program machinery. Describe "
+                    "only the specific visible evidence and practical "
+                    "investigation to perform."
+                )
             elif kind in {"generic_template_repeated",
                           "instruction_not_naturalized"}:
                 names = ", ".join(
@@ -1022,6 +1029,15 @@ def author_delegate_action(
                     "invented_prior_subagent_failure":
                         "Do not describe a previously completed Sub-Agent "
                         "handoff as a failed retrieval.",
+                    "stage3_internal_orchestration_language":
+                        "Rewrite the reasoning as the Main investigator, "
+                        "using visible source clues and unfinished evidence "
+                        "goals. Do not describe software scheduling, "
+                        "predetermined tasks or internal task graphs.",
+                    "internal_orchestration_language":
+                        "Explain why the next investigation follows from "
+                        "the visible evidence. Do not narrate internal "
+                        "task graphs, locked batches or scheduler decisions.",
                 }
                 request["repair_guidance"] = list(dict.fromkeys(
                     [repairs[code]
