@@ -38,6 +38,11 @@ def _mock_o1_draft(contract):
             f"The assigned investigation returned {len(rows)} records: "
             f"{details}. Further qualification has not been assessed."
         ),
+        "summary": (
+            "Reviewed the supplied evidence and established "
+            f"{len(rows)} returned records for this delegated task. "
+            "Later qualification remains unchecked."
+        ),
         "trace_summary": (
             "- Reviewed the supplied source annotations to identify "
             "the evidence relevant to the delegated task.\n"
@@ -637,6 +642,7 @@ class ReportingUnitTests(unittest.TestCase):
                 contract = json.loads(user_prompt)["frozen_task_and_evidence"]
                 return {
                     "answer": _mock_o1_draft(contract)["answer"],
+                    "summary": _mock_o1_draft(contract)["summary"],
                     "trace_summary": (
                         "- Scanned the supplied source annotations for recorded clues.\n"
                         "- Joined the two candidate lists by their identifiers.\n"
@@ -811,6 +817,7 @@ class ReportingUnitTests(unittest.TestCase):
                 contract = json.loads(user_prompt)["frozen_task_and_evidence"]
                 return {
                     "answer": expected,
+                    "summary": _mock_o1_draft(contract)["summary"],
                     "trace_summary": _mock_o1_draft(contract)["trace_summary"],
                 }
 
@@ -842,6 +849,7 @@ class ReportingUnitTests(unittest.TestCase):
                 contract = json.loads(user_prompt)["frozen_task_and_evidence"]
                 return {
                     "answer": expected,
+                    "summary": _mock_o1_draft(contract)["summary"],
                     "trace_summary": _mock_o1_draft(contract)["trace_summary"],
                 }
 
@@ -878,6 +886,7 @@ class ReportingUnitTests(unittest.TestCase):
                 contract = json.loads(user_prompt)["frozen_task_and_evidence"]
                 return {
                     "answer": numeric,
+                    "summary": _mock_o1_draft(contract)["summary"],
                     "trace_summary": _mock_o1_draft(contract)["trace_summary"],
                 }
 
