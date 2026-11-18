@@ -775,11 +775,18 @@ class ExecutionState:
                     continue
                 refs = claim.get("fact_refs") or []
                 origins = {self.origin_by_ref.get(ref) for ref in refs}
-                if len(origins) != 1 or None in origins:
+                cited_sources = {
+                    ref.split(":", 1)[0] for ref in refs if ":" in ref
+                }
+                # Require one explicit cited source and one observation
+                # origin; a composite result is not a second witness.
+                if (len(origins) != 1 or None in origins
+                        or len(cited_sources) != 1):
                     continue
                 rows.append({
                     **claim, "task_id": tid,
                     "evidence_origin_id": next(iter(origins)),
+                    "provenance_source_id": next(iter(cited_sources)),
                     "observed_round": self.public_report_rounds.get(tid, 0),
                 })
         return rows
@@ -807,6 +814,8 @@ class ExecutionState:
                     if (left == right
                             or earlier["evidence_origin_id"]
                                == later["evidence_origin_id"]
+                            or earlier["provenance_source_id"]
+                               == later["provenance_source_id"]
                             or left in self._dependents(right)
                             or right in self._dependents(left)
                             or (type(earlier["value"]), earlier["value"])
