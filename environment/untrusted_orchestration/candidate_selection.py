@@ -190,16 +190,17 @@ def select_recovered_candidates(
 
     selected = set()
     category_usage = Counter()
+    def tie(row):
+        return sha256((
+            str(seed) + ":" + row["round_sample_id"]
+        ).encode("utf-8")).hexdigest()
+
     # Iterate in stable Scene/round order, independent of worker completion.
     for key in sorted(groups):
         eligible = [
             row for row in groups[key]
             if row["execution_outcome"] == "recovered"
         ]
-        def tie(row):
-            return sha256((
-                str(seed) + ":" + row["round_sample_id"]
-            ).encode("utf-8")).hexdigest()
         if strategy == "stratified":
             eligible.sort(key=lambda row: (
                 category_usage[row["category"]],
@@ -250,6 +251,7 @@ def select_recovered_candidates(
             "unresolved_dependencies": 3,
             "max_decision_rounds": 4,
         }
+        diagnostic_counts = Counter()
         for scene_id in sorted(by_scene):
             choices = sorted(by_scene[scene_id], key=lambda row: (
                 outcome_priority.get(row["execution_outcome"], 9),
@@ -267,10 +269,8 @@ def select_recovered_candidates(
                 seen_behaviors.add(identity)
                 candidate["selection_purpose"] = "diagnostic"
                 diagnostics.add(candidate["candidate_index"])
-                if len([
-                    idx for idx in diagnostics
-                    if rows[idx]["question_id"] == scene_id
-                ]) >= max_diagnostics_per_scene:
+                diagnostic_counts[scene_id] += 1
+                if diagnostic_counts[scene_id] >= max_diagnostics_per_scene:
                     break
 
     chosen = selected | diagnostics
