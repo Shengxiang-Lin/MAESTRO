@@ -1654,6 +1654,16 @@ def generate_turns(
         "complementary_fusion_macro_pairs": sum(
             x["complementary_fusion_pairs"] for x in affordance_rows
         ),
+        "internal_multi_source_macros": sum(
+            x["internal_multi_source_macros"] for x in affordance_rows
+        ),
+        "internal_verification_macros": sum(
+            x["internal_verification_macros"] for x in affordance_rows
+        ),
+        "internal_multi_source_supported_outputs": sum(
+            x["internal_multi_source_supported_outputs"]
+            for x in affordance_rows
+        ),
         "provisional_downstream_late_witness_pairs": sum(
             x["provisional_downstream_before_late_witness_pairs"]
             for x in affordance_rows
