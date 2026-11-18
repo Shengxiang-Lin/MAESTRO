@@ -56,7 +56,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertEqual(config["mode"], "llm")
         self.assertTrue(config["scenes_path"].is_absolute())
         self.assertEqual(config["candidate_strategy"], "enumerate")
-        self.assertEqual(config["max_fault_atoms"], 1)
+        self.assertNotIn("max_fault_atoms", config)
         self.assertNotIn("base_episodes_path", config)
         with patch("environment.__main__.generate_untrusted_from_config",
                    return_value={"status": "partial"}) as runner:
