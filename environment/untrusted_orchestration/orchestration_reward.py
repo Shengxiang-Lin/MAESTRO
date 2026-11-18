@@ -69,9 +69,22 @@ def _legal_optima(options, max_parallel):
 
 
 def _same_completion_answer(answer: str, expected: str) -> bool:
-    """Compare JSON answers structurally, scalar answers exactly."""
+    """Compare typed JSON structurally; do not equate True with 1."""
+    def same(left, right):
+        if type(left) is not type(right):
+            return False
+        if isinstance(left, dict):
+            return left.keys() == right.keys() and all(
+                same(value, right[key]) for key, value in left.items()
+            )
+        if isinstance(left, list):
+            return len(left) == len(right) and all(
+                same(a, b) for a, b in zip(left, right)
+            )
+        return left == right
+
     try:
-        return json.loads(answer) == json.loads(expected)
+        return same(json.loads(answer), json.loads(expected))
     except (ValueError, TypeError):
         return answer.strip() == expected.strip()
 
