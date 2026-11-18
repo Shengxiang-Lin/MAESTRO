@@ -162,7 +162,7 @@ class CurrentStagePipelineTests(unittest.TestCase):
 
 
     def test_many_row_code_owned_delivery_never_truncates(self):
-        from environment.implement_subtask.reporting import code_owned_result
+        from environment.implement_subtask.reporting import serialize_verified_result
         from environment.untrusted_orchestration.report_contract import (
             render_delivered_result,
         )
@@ -177,7 +177,7 @@ class CurrentStagePipelineTests(unittest.TestCase):
             "answer_with_provenance": rows,
             "output_schema": ["entity_final", "observation_year"],
         }
-        first = code_owned_result(record)
+        first = serialize_verified_result(record)
         second = render_delivered_result({
             "result_encoding": "typed_evidence_json_v1",
             "actual_delivered_rows": rows,
@@ -214,7 +214,7 @@ class CurrentStagePipelineTests(unittest.TestCase):
         )
 
     def test_stage2_current_result_contains_all_rows_and_fact_refs(self):
-        from environment.implement_subtask.reporting import code_owned_result
+        from environment.implement_subtask.reporting import serialize_verified_result
         scene = current_scene(4, "medium")
         rows = realize_scene(scene)["macro_tasks"]
         self.assertTrue(all(
@@ -222,9 +222,9 @@ class CurrentStagePipelineTests(unittest.TestCase):
             for row in rows
         ))
         bounded = next(
-            row for row in rows if len(code_owned_result(row)) < 5000
+            row for row in rows if len(serialize_verified_result(row)) < 5000
         )
-        result = json.loads(code_owned_result(bounded))
+        result = json.loads(serialize_verified_result(bounded))
         self.assertEqual(len(result), len(bounded["answer"]))
         self.assertEqual(
             [item["values"] for item in result],
@@ -237,7 +237,7 @@ class CurrentStagePipelineTests(unittest.TestCase):
         )
 
     def test_structured_stage2_reports_feed_validated_clean_stage3(self):
-        from environment.implement_subtask.reporting import code_owned_result
+        from environment.implement_subtask.reporting import serialize_verified_result
         from environment.untrusted_orchestration.trusted_prefix import (
             compile_trusted_prefixes,
         )
@@ -248,7 +248,7 @@ class CurrentStagePipelineTests(unittest.TestCase):
                 **deepcopy(item),
                 "finish_result": {
                     "status": "done",
-                    "result": code_owned_result(item),
+                    "result": serialize_verified_result(item),
                     "summary": "Reported only the source-scoped finding.",
                 },
                 "report_authoring": {"status": "accepted"},
