@@ -320,7 +320,6 @@ def build_episode(
     resume_rounds: list[dict] | None = None,
     on_round=None, on_episode_start=None,
     freeze_dispatch: bool = False,
-    allow_delegate_fallback: bool = False,
 ) -> tuple[dict | None, list[dict], list[dict], dict]:
     """Return (public Episode, reviewed-turn turns, PRIVATE alignments, status)."""
     if max_attempts < 2:
@@ -458,11 +457,7 @@ def build_episode(
                 "llm_reviewed" if author is not None else "template"
             )
             status = prior_audit.get("authoring")
-            allowed_modes = {expected_mode}
-            if (freeze_trusted_dispatch and author is not None
-                    and allow_delegate_fallback):
-                allowed_modes.add("contract_frozen_delegate_fallback")
-            if (prior_turn.get("generation_mode") not in allowed_modes
+            if (prior_turn.get("generation_mode") != expected_mode
                     or not isinstance(status, dict)
                     or status.get("mode") != prior_turn.get("generation_mode")
                     or status.get("status") != "accepted"
@@ -495,7 +490,6 @@ def build_episode(
                     )) if freeze_trusted_dispatch else None
                 ),
                 round_evidence_contract=evidence_contract,
-                allow_delegate_fallback=allow_delegate_fallback,
             )
             if action is None:
                 return None, [], [], {
@@ -627,16 +621,16 @@ def build_episode(
             delivered=delivered, author=author, critic=critic,
             max_revisions=max_revisions,
         )
-    # In the default strict Stage-3 LLM run, any fallback is a FAILED Scene.
-    # Keep previous deterministic Completion fallback available only when
-    # explicitly opting into the legacy permissive fallback policy.
-    # Template-mode clean replay is unaffected (no LLM Author).
-    if (freeze_trusted_dispatch and author is not None
-            and not allow_delegate_fallback
-            and completion_status.get("mode") != "llm_reviewed_completion"):
+    # The language Author never gets a deterministic fallback: exhausted
+    # Completion review rejects the whole Scene without publishing partial
+    # training data. Template-mode clean replay remains deterministic.
+    if author is not None and (
+        final_action is None
+        or completion_status.get("status") != "accepted"
+    ):
         return None, [], [], {
             "status": "rejected",
-            "cause": "completion_not_llm_reviewed",
+            "cause": "completion_action_not_accepted",
             "round": completion_round,
             "authoring": completion_status,
         }
