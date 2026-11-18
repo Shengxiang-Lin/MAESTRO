@@ -532,6 +532,12 @@ def build_branch(
             can_complete=can_complete,
         ))
         if can_complete:
+            # A targeted recheck is not proof that two delivered independent
+            # claims now agree. Otherwise the simulator could promote a
+            # still-publicly-contested branch to positive SFT via Gold.
+            if state.unresolved_cited_conflicts():
+                stopped = "unresolved_visible_claim_conflict"
+                break
             # A fabricated result can be unseen as wrong when Main has
             # no independent evidence. Do not publish a "successful"
             # recovery merely because the PRIVATE executor still holds
