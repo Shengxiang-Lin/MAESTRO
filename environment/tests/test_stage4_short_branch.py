@@ -8,7 +8,7 @@ from environment.untrusted_orchestration.round_sampling import (
     select_feedback_rounds,
 )
 from environment.untrusted_orchestration.candidate_selection import (
-    select_recovered_candidates,
+    select_recovered_candidates, classify_trial,
 )
 from environment.untrusted_orchestration.config import load_config
 from environment.untrusted_orchestration.faults import Fault
@@ -81,6 +81,36 @@ class StratifiedForkTests(unittest.TestCase):
             ),
             rounds,
         )
+
+    def test_observability_comes_from_report_snapshots_not_fault_kind(self):
+        plan = _trial(0, 2, "wrong_retrieval")
+        plan["faults"] = [Fault("A", "wrong")]
+        journal = _journal("incorrect_result_after_actual_propagation")
+        journal["private_audit"]["observable_issue_snapshots"] = [
+            {"decision_round": 2, "issues": [{
+                "task_id": "A", "kind": "lookup_key_disagreement",
+                "evidence": "Explicitly returned keys differ.",
+            }]},
+        ]
+        row = classify_trial(plan, journal)
+        self.assertEqual(row["observability"], "immediately_observable")
+        self.assertEqual(row["first_visible_issue_round"], 2)
+        journal["private_audit"]["observable_issue_snapshots"][0][
+            "issues"] = []
+        journal["private_audit"]["observable_issue_snapshots"].append({
+            "decision_round": 4, "issues": [{
+                "task_id": "A", "kind": "cross_source_conflict",
+                "evidence": "A later cited report disagrees.",
+            }],
+        })
+        row = classify_trial(plan, journal)
+        self.assertEqual(row["observability"], "eventually_observable")
+        self.assertEqual(row["first_visible_issue_round"], 4)
+        journal["private_audit"]["observable_issue_snapshots"][1][
+            "issues"] = []
+        row = classify_trial(plan, journal)
+        self.assertEqual(row["observability"], "not_observed_in_replay")
+        self.assertIsNone(row["first_visible_issue_round"])
 
     def test_balances_recovered_behaviors_across_rounds(self):
         plans = [
