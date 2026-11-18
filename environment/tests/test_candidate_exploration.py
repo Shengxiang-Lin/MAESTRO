@@ -350,7 +350,9 @@ class CandidateExplorationTests(unittest.TestCase):
     def test_config_one_supported_single_fault_path(self):
         config = load_config()
         self.assertEqual(config["candidate_strategy"], "enumerate")
-        self.assertEqual(config["max_fault_atoms"], 1)
+        self.assertNotIn("max_fault_atoms", config)
+        self.assertIn("computation_error", config["atomic_fault_kinds"])
+        self.assertIn("done_but_incomplete", config["atomic_fault_kinds"])
         self.assertEqual(config["max_candidates_per_round"], 12)
         self.assertEqual(config["max_selected_per_round"], 1)
         content = DEFAULT_CONFIG.read_text(encoding="utf-8")
