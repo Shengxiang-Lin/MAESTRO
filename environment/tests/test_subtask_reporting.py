@@ -16,7 +16,7 @@ from environment.implement_subtask.config import (
 )
 from environment.implement_subtask.realize import realize_scene
 from environment.implement_subtask.naturalize import naturalize_subtasks
-from environment.implement_subtask.reporting import author_critic_report, trace_narrative, code_owned_result
+from environment.implement_subtask.reporting import review_subagent_report, trace_narrative, serialize_verified_result
 
 
 def scene(i, difficulty="medium"):
@@ -299,7 +299,7 @@ class StageLocalScopeRegressions(unittest.TestCase):
         record = realize_scene(scene(27, "hard"))["macro_tasks"][0]
         author = ReportAuthor()
         critic = ReportCritic(reject_first=True)
-        revised, review = author_critic_report(
+        revised, review = review_subagent_report(
             record, question="Check Fictional Study 27 records",
             author=author, critic=critic, max_revisions=1,
         )
@@ -465,7 +465,7 @@ class ReportingUnitTests(unittest.TestCase):
         record = realized["macro_tasks"][-1]
         original = deepcopy(record)
         author, critic = ReportAuthor(), ReportCritic()
-        revised, info = author_critic_report(
+        revised, info = review_subagent_report(
             record, question=realized["question"],
             author=author, critic=critic,
             is_terminal=True,
@@ -503,7 +503,7 @@ class ReportingUnitTests(unittest.TestCase):
         candidate = realize_scene(frozen)["macro_tasks"][0]
         author = StructuredResultAuthor()
         critic = ReportCritic()
-        revised, review = author_critic_report(
+        revised, review = review_subagent_report(
             candidate, question=frozen["question"],
             author=author, critic=critic,
             max_revisions=0,
@@ -530,7 +530,7 @@ class ReportingUnitTests(unittest.TestCase):
         )
         self.assertTrue(final["answer"])
         self.assertTrue(all(isinstance(item, dict) for item in final["answer"]))
-        revised, status = author_critic_report(
+        revised, status = review_subagent_report(
             final, question=frozen["question"],
             author=StructuredResultAuthor(),
             critic=ReportCritic(), max_revisions=0, is_terminal=True,
@@ -545,7 +545,7 @@ class ReportingUnitTests(unittest.TestCase):
             row for row in realized["macro_tasks"]
             if row["answer"] and len(row["answer"]) > 1
         )
-        reviewed, report = author_critic_report(
+        reviewed, report = review_subagent_report(
             record, question=frozen["question"],
             author=StructuredResultAuthor(wrong_subset=True),
             critic=ReportCritic(), max_revisions=1,
@@ -567,7 +567,7 @@ class ReportingUnitTests(unittest.TestCase):
     def test_partial_from_author_never_counts_as_complete(self):
         record = realize_scene(scene(10, "medium"))["macro_tasks"][0]
         author = ReportAuthor(fail_topic="Fictional Study 10")
-        reviewed, info = author_critic_report(
+        reviewed, info = review_subagent_report(
             record, question="Fictional Study 10 tasks",
             author=author, critic=ReportCritic(),
             max_revisions=1,
@@ -579,7 +579,7 @@ class ReportingUnitTests(unittest.TestCase):
 
     def test_unperformed_tools_cannot_be_invented(self):
         record = realize_scene(scene(12, "medium"))["macro_tasks"][0]
-        reviewed, info = author_critic_report(
+        reviewed, info = review_subagent_report(
             record, question="Check Fictional Study 12 records",
             author=ReportAuthor(forged_tool=True),
             critic=ReportCritic(), max_revisions=0,
@@ -591,7 +591,7 @@ class ReportingUnitTests(unittest.TestCase):
     def test_independent_critic_uses_targeted_revision(self):
         record = realize_scene(scene(11, "medium"))["macro_tasks"][0]
         author, critic = ReportAuthor(), ReportCritic(reject_first=True)
-        reviewed, info = author_critic_report(
+        reviewed, info = review_subagent_report(
             record, question="Check Fictional Study 11 records",
             author=author, critic=critic, max_revisions=2,
         )
@@ -609,13 +609,13 @@ class ReportingUnitTests(unittest.TestCase):
                 ]
                 return _mock_o1_draft(self.contract)
         author, critic = O1Author(), ReportCritic()
-        reviewed, info = author_critic_report(
+        reviewed, info = review_subagent_report(
             record, question=None, author=author, critic=critic,
-            max_revisions=0, result_policy="code_owned",
+            max_revisions=0,
         )
         self.assertEqual(info["status"], "accepted", info)
         self.assertEqual(info["public_result_format"], "natural_answer")
-        self.assertEqual(reviewed["answer_text"], code_owned_result(record))
+        self.assertEqual(reviewed["answer_text"], serialize_verified_result(record))
         self.assertFalse(reviewed["finish_result"]["result"].startswith("[{"))
         self.assertIn("assigned investigation returned",
                       reviewed["finish_result"]["result"])
@@ -650,9 +650,9 @@ class ReportingUnitTests(unittest.TestCase):
                 self.draft = draft
                 return draft
         author, critic = ThreeFieldAuthor(), ReportCritic()
-        reviewed, status = author_critic_report(
+        reviewed, status = review_subagent_report(
             record, question=None, author=author, critic=critic,
-            max_revisions=0, result_policy="code_owned",
+            max_revisions=0,
         )
         self.assertEqual(status["status"], "accepted", status)
         finish = reviewed["finish_result"]
@@ -706,12 +706,11 @@ class ReportingUnitTests(unittest.TestCase):
         ):
             with self.subTest(fabricated=fabricated):
                 critic = ReportCritic()
-                reviewed, status = author_critic_report(
+                reviewed, status = review_subagent_report(
                     record, question=None,
                     author=BadSummaryAuthor(fabricated=fabricated),
                     critic=critic, max_revisions=0,
-                    result_policy="code_owned",
-                )
+                        )
                 self.assertIsNone(reviewed)
                 self.assertEqual(status["status"], "failed")
                 self.assertIn(expected_issue,
@@ -737,9 +736,9 @@ class ReportingUnitTests(unittest.TestCase):
                 }
 
         critic = ReportCritic()
-        reviewed, info = author_critic_report(
+        reviewed, info = review_subagent_report(
             record, question=None, author=OperatorStyledAuthor(),
-            critic=critic, max_revisions=0, result_policy="code_owned",
+            critic=critic, max_revisions=0,
         )
         self.assertIsNotNone(reviewed, info)
         self.assertEqual(info["status"], "accepted", info)
@@ -971,10 +970,9 @@ class ReportingUnitTests(unittest.TestCase):
                 }
 
         critic = ReportCritic()
-        published, info = author_critic_report(
+        published, info = review_subagent_report(
             record, question=None, author=ExactObjectAuthor(),
             critic=critic, is_terminal=True, max_revisions=0,
-            result_policy="code_owned",
         )
         self.assertEqual(info["status"], "accepted", info)
         self.assertTrue(info["verified_structured_answer_rendered"])
@@ -1094,10 +1092,9 @@ class ReportingUnitTests(unittest.TestCase):
                 }
 
         critic = ReportCritic()
-        published, status = author_critic_report(
+        published, status = review_subagent_report(
             terminal, question=None, author=ShortAnswerAuthor(),
             critic=critic, max_revisions=0, is_terminal=True,
-            result_policy="code_owned",
         )
         self.assertEqual(status["status"], "accepted", status)
         self.assertEqual(status["attempts"], 1)
@@ -1126,10 +1123,9 @@ class ReportingUnitTests(unittest.TestCase):
                 }
 
         critic = ReportCritic()
-        published, info = author_critic_report(
+        published, info = review_subagent_report(
             record, question=None, author=ExactKeyAuthor(),
             critic=critic, max_revisions=0, is_terminal=False,
-            result_policy="code_owned",
         )
         self.assertEqual(info["status"], "accepted", info)
         self.assertEqual(info["attempts"], 1)
@@ -1162,10 +1158,9 @@ class ReportingUnitTests(unittest.TestCase):
                     "trace_summary": _mock_o1_draft(contract)["trace_summary"],
                 }
 
-        reviewed, info = author_critic_report(
+        reviewed, info = review_subagent_report(
             record, question=None, author=NumericAuthor(),
             critic=ReportCritic(), max_revisions=0, is_terminal=True,
-            result_policy="code_owned",
         )
         self.assertEqual(info["status"], "accepted", info)
         self.assertEqual(reviewed["finish_result"]["result"], str(numeric))
@@ -1390,9 +1385,9 @@ class ReportingUnitTests(unittest.TestCase):
                     "frozen_task_and_evidence"
                 ])
         author, critic = GroundedAuthor(), ReportCritic()
-        reviewed, info = author_critic_report(
+        reviewed, info = review_subagent_report(
             record, question=None, author=author, critic=critic,
-            max_revisions=0, result_policy="code_owned",
+            max_revisions=0,
         )
         self.assertEqual(info["status"], "accepted", info)
         delivered = _main_report(
