@@ -174,3 +174,40 @@ reuse the exact reviewed Stage-3 trajectory instead, configure
 `input.clean_episodes: environment/data/stage3/episodes.jsonl` in Stage 4.
 The runner validates its returned evidence, action batches and completion
 against an independently compiled clean reference before any fault injection.
+
+## Complete local task contracts and explicit Delegate fallback
+
+With frozen Stage-3 dispatch, `task_contract.py` projects only the current
+Macro operators into a generation-only contract. It preserves source/key
+bindings, local data flow, filter owners and thresholds, joins, computations
+and output fields. No source rows, future results or executable node IDs are
+projected. Unsupported operators fail closed. The training prompt and Stage-1/2
+inputs remain unchanged.
+
+The Critic checks the full local contract and returns located issues. Repairs
+resolve those locations back to authoritative contract requirements and include
+the previous public-language draft. Unvalidated reviewer instructions cannot
+remove required output fields. Candidate/review records remain in the private
+attempt audit, including attempts that eventually succeed. Lexical condition
+checks are necessary checks, not a proof of general natural-language equivalence.
+Style findings are advisory; factual and scope errors still require revision.
+
+After exhausted prose revisions, a supported complete contract can produce
+`generation_mode=contract_frozen_delegate_fallback`, with `reviewed=false` and
+no LLM-authored fields. It must pass action, evidence-reasoning and condition
+checks. It is a deterministic reference, not an independently reviewed positive
+language label. Checkpoints preserve this designation on resume. Filter such
+turns (and Completion fallbacks) out of strictly LLM-reviewed training samples.
+The summary separately reports delegate modes, reviewed/naturalized turns,
+fully reviewed Scenes, fallback Scenes and clean trajectory completion rate.
+Previously returned evidence is attached only once when the Author copied the
+same handoff verbatim. All logs and artifacts should be regenerated in a new
+output directory because the run manifest includes the new contract compiler.
+
+Capable backends receive a strict JSON schema requiring located Critic issues.
+Legacy reviews can identify an exact quoted candidate claim but cannot supply
+unvalidated repair instructions. For a local join of two previously returned
+complete dossier-ID lists, the contract may contain a deterministic literal
+intersection witness. Only fully recognized list forms are accepted; examples,
+partial narratives and count mismatches produce no witness. This never reads
+private evidence rows or infers a downstream project/entity value.

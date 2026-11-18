@@ -14,6 +14,9 @@ from environment.generate_question.execution.evidence_tools import (
     tools_from_primitive_steps,
 )
 from .generation_meta import GENERATION_PROCESS_RE
+from .task_contract import (compile_task_contract, contract_prose_issues,
+                            critic_repair_guidance, contract_fallback,
+                            public_identifier_join, complete_prose_review)
 
 _AUTHOR_SYSTEM = """Write one realistic Orchestra-o1 Main-Agent decision.
 The action MUST delegate exactly the supplied independent tasks in this round,
@@ -179,6 +182,48 @@ Return the normal JSON verdict and boolean review axes.
 """
 
 
+STAGE3_TASK_PROSE_AUTHOR_SYSTEM += """
+Each investigation includes its COMPLETE local semantic_contract. Follow its
+source-to-key bindings, scoped filters, joins and computations, not a guessed
+plan inferred from the final question. A filter on event_year is NOT a filter
+on date_a/date_b. Keep intermediate lookup values distinct from final output
+fields. Do not claim that an upstream source already returned a later value.
+Keep filter field names (for example event_year or cue) and literal thresholds explicit in task_instruction.
+Write concise instructions, normally 2-5 sentences. Context is a short handoff,
+not a copy of earlier Result or Summary. Those are attached once by code.
+"""
+STAGE3_TASK_PROSE_CRITIC_SYSTEM += """
+The semantic_contract is the authoritative specification of THIS investigation.
+Check ALL local conditions and lookup/join bindings, not just sources/outputs.
+In particular an event_year filter selects the earlier event/entity record;
+it does not require independent metric dates to be in the same year range.
+A retained entity_final field can be the key used to associate observation rows.
+For a failed review also return issues, a list of objects with task_index
+(zero-based, or null for reasoning), field (reasoning/task_instruction/context),
+kind (missing_condition/wrong_condition/wrong_lookup/extra_output/
+unsupported_claim/false_dependency/style), quote (EXACT offending candidate
+text; empty only for an omission), and contract_step (the local step number,
+or null for an unsupported historical assertion). Never ask to alter a required
+output or filter. A task may inspect intermediate fields without returning them.
+Style alone is advisory: fail only for a concrete factual or task-scope error.
+"""
+
+STAGE3_TASK_PROSE_CRITIC_SYSTEM = STAGE3_TASK_PROSE_CRITIC_SYSTEM.replace(
+    '"repair_hint":"specific prose-only change"}',
+    '"repair_hint":"specific prose-only change","issues":[]}'
+)
+STAGE3_TASK_PROSE_CRITIC_SYSTEM += """
+ALWAYS include issues, including an empty array [] on a passing review.
+Keep reason under 320 characters, repair_hint under 240, and at most 3 issues.
+Each quote is an EXACT short substring under 180 characters, without ellipses.
+Do not restate the entire candidate or write a replacement instruction.
+Return a complete object ending with the issues array and closing brace.
+A passing response has this exact shape:
+{"verdict":"pass","grounded":true,"assignment_fidelity":true,"o1_style":true,
+"reason":"brief evidence-based assessment","repair_hint":"","issues":[]}
+"""
+
+
 # A narrow check for a claim of a previous failed tool/Sub-Agent execution
 # in trusted history consisting entirely of completed Sub-Agent reports.
 _PAST_FAILED_ATTEMPT = re.compile(
@@ -261,8 +306,8 @@ def _critic_dispatch_rewrite_request(review: dict) -> bool:
     return bool(re.search(
         r"(?:split (?:the |this )?(?:task|investigation|lookup)|"
         r"separate (?:the |this )?(?:task|investigation) into|"
-        r"(?:add|change|replace|modify|update) .{0,100}"
-        r"(?:output_fields|required_output_fields|output fields)|"
+        r"(?:add|change|replace|modify|update|remove|drop|omit) .{0,100}"
+        r"(?:output_fields|required_output_fields|output fields|fields to return|entity_final)|"
         r"(?:next|another) (?:round|delegation) (?:should|must|to))",
         hint,
     ))
@@ -377,7 +422,8 @@ def _prior_context(
 
 def _assignment(target: dict, catalog: dict[str, dict],
                 delivered: dict[str, dict], *,
-                model_alias: str = "model_1") -> dict:
+                model_alias: str = "model_1",
+                compile_contract: bool = False) -> dict:
     source_ids = list(target["source_ids"])
     output = ", ".join(target["outputs"]["typed_relation"])
     sources = [
@@ -452,7 +498,16 @@ def _assignment(target: dict, catalog: dict[str, dict],
         tools = legacy_tools_from_task(target, catalog)
     if any(name not in registered_o1_tool_names() for name in tools):
         raise ValueError("stage3_unknown_o1_tool_in_assignment")
+    contract = compile_task_contract(target, catalog) if compile_contract else None
+    if contract is not None:
+        if not contract["fallback_supported"]:
+            raise ValueError("stage3_unsupported_local_task_operator")
+        witness = public_identifier_join(target, delivered)
+        if witness is not None:
+            contract["observed_identifier_join"] = witness
+        instruction = contract["reference_instruction"]
     return {
+        **({"semantic_contract": contract} if contract is not None else {}),
         "target_instruction": instruction,
         "context": _prior_context(target, delivered),
         "model": model_alias,
@@ -471,7 +526,7 @@ def _assignment(target: dict, catalog: dict[str, dict],
 
 _STAGE3_IDENTIFIER = re.compile(
     r"\b(?:Case-\d+|Dossier-[A-Za-z0-9]+|PRJ-[A-Za-z0-9]+|"
-    r"Entity-[A-Za-z0-9]+|MK-\d+|RK-\d+|Entry-\d+)\b", re.I,
+    r"(?:Entity|ENT)-[A-Za-z0-9]+|MK-\d+|RK-\d+|Entry-\d+)\b", re.I,
 )
 
 
@@ -553,6 +608,11 @@ def _stage3_task_prose_issues(
         )
     }
     issues = []
+    if isinstance(draft.get("reasoning"), str) and any(
+        token.casefold() not in allowed_identifiers
+        for token in _STAGE3_IDENTIFIER.findall(draft["reasoning"])
+    ):
+        issues.append("stage3_reasoning_invented_visible_identifier")
     if isinstance(draft.get("reasoning"), str) and (
         _STAGE3_ORCHESTRATION_META.search(draft["reasoning"])
     ):
@@ -567,7 +627,7 @@ def _stage3_task_prose_issues(
         context = item["context"]
         if not isinstance(instruction, str) or not 50 <= len(
             instruction.strip()
-        ) <= 1200:
+        ) <= (4000 if expected.get("semantic_contract") else 1200):
             issues.append(f"task_{i}_authored_instruction_invalid")
             continue
         if not isinstance(context, str):
@@ -579,11 +639,16 @@ def _stage3_task_prose_issues(
             # both issues instead of burning two model retries.
             issues.append(f"task_{i}_authored_context_invalid")
         if instruction.strip() == expected["target_instruction"].strip():
-            issues.append(f"task_{i}_instruction_not_naturalized")
+            if not expected.get("semantic_contract"):
+                issues.append(f"task_{i}_instruction_not_naturalized")
         if _stage3_generic_template_only(
             instruction, expected["target_instruction"], prompt,
         ):
-            issues.append(f"task_{i}_generic_template_repeated")
+            if not expected.get("semantic_contract"):
+                issues.append(f"task_{i}_generic_template_repeated")
+        if expected.get("semantic_contract"):
+            issues.extend(f"task_{i}_{code}" for code in contract_prose_issues(
+                instruction, expected["semantic_contract"]))
         if _STAGE3_ORCHESTRATION_META.search(instruction + " " + context):
             issues.append(f"task_{i}_internal_orchestration_language")
         for sid in expected["source_ids"]:
@@ -637,6 +702,12 @@ def _stage3_task_prose_repair_guidance(
                     "do not paste the full earlier result because the "
                     "application appends the evidence separately."
                 )
+            elif kind.startswith("condition_missing:"):
+                step_number = int(kind.split(":", 1)[1])
+                contract = task.get("semantic_contract", {})
+                for step in contract.get("steps", []):
+                    if step["step"] == step_number:
+                        guidance.append(label + "Restore the scoped condition: " + step["instruction"])
             elif kind == "internal_orchestration_language":
                 guidance.append(
                     label + "Remove references to internal scheduling, "
@@ -749,7 +820,9 @@ def _stage3_compile_task_prose(
             # _prior_context has a 3200-character bound; the O1 action
             # contract permits 3500 characters in total.
             available = 3500 - len(evidence) - 2
-            context = context[:available].rstrip() + "\n\n" + evidence
+            # Evidence is appended exactly once, even if the author copied it.
+            context = context.replace(evidence, "").strip()
+            context = (context[:available].rstrip() + "\n\n" if context else "") + evidence
         tasks[i]["task_instruction"] = instruction
         tasks[i]["context"] = context
     return {
@@ -820,7 +893,7 @@ def action_issues(action: dict, assignments: list[dict],
         context = task.get("context")
         model = task.get("model")
         tools = task.get("tools")
-        if not isinstance(instruction, str) or not 35 <= len(instruction) <= 1500:
+        if not isinstance(instruction, str) or not 35 <= len(instruction) <= (4500 if expected.get("semantic_contract") else 1500):
             errors.append(f"task_{i}_invalid_instruction")
         if not isinstance(context, str) or not 10 <= len(context) <= 3500:
             errors.append(f"task_{i}_invalid_context")
@@ -1125,6 +1198,20 @@ def author_delegate_action(
     # Stage 3 can author/review against a compact evidence-only prompt while
     # validating identifier reuse against the original exact O1 prompt.
     validation_prompt = prompt if validation_prompt is None else validation_prompt
+    def review_json(system, payload):
+        return complete_prose_review(critic, system, payload, structured=
+            naturalize_assignment_prose and all(a.get("semantic_contract") for a in assignments))
+
+    def review_passes(review):
+        if (naturalize_assignment_prose and all(a.get("semantic_contract") for a in assignments)
+                and isinstance(review, dict) and review.get("grounded") is True
+                and review.get("assignment_fidelity") is True):
+            if review.get("verdict") == "pass":
+                return True
+            issues = review.get("issues")
+            if issues and all(isinstance(i, dict) and i.get("kind") == "style" for i in issues):
+                return True
+        return _critic_review_passes(review)
     template = proposed_template_action(assignments)
     if author is None:
         errors = action_issues(template, assignments, prompt=validation_prompt)
@@ -1135,6 +1222,8 @@ def author_delegate_action(
     if critic is None:
         raise ValueError("stage3_llm_author_requires_independent_critic")
     failures = []
+    previous_draft = None
+    critic_calls = 0
     conflict_rereviewed = False
     visible_set_relation_rereviewed = False
     dispatch_scope_rereviewed = False
@@ -1153,6 +1242,8 @@ def author_delegate_action(
                 "pending_investigations": [
                     ({
                         "reference_instruction": item["target_instruction"],
+                        **({"semantic_contract": item["semantic_contract"]}
+                           if item.get("semantic_contract") else {}),
                         "prior_visible_context": item["context"],
                         "public_source_descriptions": item.get(
                             "public_source_descriptions", []
@@ -1206,6 +1297,8 @@ def author_delegate_action(
                 ),
             }
             if failures:
+                if naturalize_assignment_prose:
+                    request["previous_draft"] = previous_draft
                 request["revision_issue_types"] = [
                     {"errors": row.get("errors", []),
                      "stage": row.get("stage", "")}
@@ -1229,6 +1322,8 @@ def author_delegate_action(
                     "invented_prior_subagent_failure":
                         "Do not describe a previously completed Sub-Agent "
                         "handoff as a failed retrieval.",
+                    "stage3_reasoning_invented_visible_identifier":
+                        "Copy concrete identifiers exactly from public history, without abbreviations or ellipses. If an ID is unnecessary, describe its role instead.",
                     "stage3_internal_orchestration_language":
                         "Rewrite the reasoning as the Main investigator, "
                         "using visible source clues and unfinished evidence "
@@ -1248,6 +1343,10 @@ def author_delegate_action(
                         failures, assignments, visible_prompt=prompt,
                     ) if naturalize_assignment_prose else [])
                 ))
+                if naturalize_assignment_prose:
+                    request["repair_guidance"].extend(
+                        hint for failed in failures[-2:]
+                        for hint in failed.get("validated_repair_guidance", []))
         if freeze_assignment_prose and not reasoning_only_stage3:
             request["authoring_scope"] = (
                 "Generate natural grounded reasoning ONLY. The assigned "
@@ -1313,6 +1412,7 @@ def author_delegate_action(
         except Exception as exc:
             failures.append({"stage": "author", "reason": str(exc)[:200]})
             continue
+        previous_draft = deepcopy(candidate)
         # V10.4 only: reasoning-only JSON has no action choice to fix;
         # an explicitly authored complete action is still rejected below.
         authored_reasoning = (
@@ -1333,6 +1433,7 @@ def author_delegate_action(
                 )
                 failures.append({
                     "stage": "stage3_task_prose_guard",
+                    "candidate": deepcopy(candidate),
                     "errors": task_prose_errors,
                     "task_prose_diagnostics": [{
                         "task_index": i,
@@ -1447,6 +1548,8 @@ def author_delegate_action(
                             "task_instruction": item["target_instruction"],
                             "context": item["context"],
                             "source_ids": item["source_ids"],
+                            **({"semantic_contract": item["semantic_contract"]}
+                               if item.get("semantic_contract") else {}),
                             "output_fields": item["output_fields"],
                             "needs_upstream": item["needs_upstream"],
                         } for item in assignments],
@@ -1490,7 +1593,8 @@ def author_delegate_action(
                     **({
                         "locked_main_visible_decision_facts": decision_contract,
                     } if decision_contract is not None else {}),
-                    "assignment_contract_validated_by_code": True,
+                    "assignment_structure_validated_by_code": True,
+                    "natural_language_semantics_validated_by_code": False,
                     "review_scope": (
                         "Evaluate factual claims ADDED by the Author and "
                         "their coherence with the code-owned visible facts. "
@@ -1538,12 +1642,15 @@ def author_delegate_action(
                     },
                     "fixed_tool_and_model_fields_checked_by_code": True,
                 }
-            review = critic.complete_json(
+            critic_calls += 1
+            review = review_json(
                 critic_system, json.dumps(review_payload, ensure_ascii=False)
             )
         except Exception as exc:
             failures.append({
                 "stage": "critic_backend", "reason": str(exc)[:200],
+                "candidate": deepcopy(candidate),
+                "diagnostic": getattr(exc, "diagnostic", {}),
             })
             continue
         # Reviewers can miscompute even a trivial set overlap. If a
@@ -1552,7 +1659,7 @@ def author_delegate_action(
         # Never auto-pass or erase a genuine unsupported Author claim.
         if (freeze_assignment_prose and reasoning_only_stage3
                 and round_evidence_contract is not None
-                and not _critic_review_passes(review)
+                and not review_passes(review)
                 and round_evidence_contract["public"].get(
                     "observed_identifier_set_relations"
                 )):
@@ -1567,7 +1674,8 @@ def author_delegate_action(
             )):
                 visible_set_relation_rereviewed = True
                 try:
-                    review = critic.complete_json(
+                    critic_calls += 1
+                    review = review_json(
                         critic_system + (
                             "\nSECOND INDEPENDENT REVIEW: The provided "
                             "observed_identifier_set_relations were "
@@ -1596,11 +1704,12 @@ def author_delegate_action(
         # contract. Never auto-accept: a genuine invented field or false
         # source dependency must still be rejected.
         if (freeze_assignment_prose and naturalize_assignment_prose
-                and not _critic_review_passes(review)
+                and not review_passes(review)
                 and _critic_dispatch_rewrite_request(review)):
             dispatch_scope_rereviewed = True
             try:
-                review = critic.complete_json(
+                critic_calls += 1
+                review = review_json(
                     critic_system + (
                         "\nSECOND INDEPENDENT REVIEW: The exact CURRENT "
                         "task count, grouped source investigations and "
@@ -1629,7 +1738,7 @@ def author_delegate_action(
         # Invalid critiques trigger a second independent review, never
         # automatic acceptance. Existing Stage-3/legacy behavior is unchanged.
         if freeze_assignment_prose and reasoning_goals and (
-            not _critic_review_passes(review)
+            not review_passes(review)
         ):
             critique = (str(review.get("reason", "")) + " " +
                         str(review.get("repair_hint", ""))).casefold()
@@ -1651,7 +1760,8 @@ def author_delegate_action(
             if mistaken_conflict_objection:
                 conflict_rereviewed = True
                 try:
-                    review = critic.complete_json(
+                    critic_calls += 1
+                    review = review_json(
                         critic_system + (
                             "\nSECOND INDEPENDENT REVIEW: The attached "
                             "locked visible-fact contract proves the "
@@ -1672,7 +1782,8 @@ def author_delegate_action(
                     continue
         if not freeze_assignment_prose and _review_only_frozen_tool_objection(review):
             try:
-                review = critic.complete_json(
+                critic_calls += 1
+                review = review_json(
                     critic_system + "\nSECOND REVIEW: ignore all frozen tool "
                     "routing, judge only grounded Task prose.\n",
                     json.dumps(
@@ -1687,7 +1798,7 @@ def author_delegate_action(
                     "reason": str(exc)[:200],
                 })
                 continue
-        if _critic_review_passes(review):
+        if review_passes(review):
             return deepcopy(candidate), {
                 "status": "accepted",
                 "mode": ("llm_reviewed_contract_frozen"
@@ -1698,8 +1809,15 @@ def author_delegate_action(
                     and not naturalize_assignment_prose else
                     ["reasoning", "task_instruction", "context"]
                 ),
-                "naturalized_task_prose": naturalize_assignment_prose,
+                "naturalized_task_prose": naturalize_assignment_prose and all(
+                    task["task_instruction"].strip() != item["target_instruction"].strip()
+                    for task, item in zip(candidate["params"]["tasks"], assignments)),
+                "style_warnings": [f"task_{i}_reference_copy" for i, (task, item) in enumerate(
+                    zip(candidate["params"]["tasks"], assignments))
+                    if task["task_instruction"].strip() == item["target_instruction"].strip()],
                 "attempts": revision + 1, "review": review,
+                "reviewed": True, "failures": failures,
+                "critic_calls": critic_calls,
                 **({
                     "reasoning_fidelity_rejections": [
                         {"errors": list(failed.get("errors", []))}
@@ -1723,9 +1841,31 @@ def author_delegate_action(
                     "critic_conflict_rereviewed": conflict_rereviewed,
                 } if decision_contract is not None else {}),
             }
-        failures.append({"stage": "critic",
-                         "reason": str(review.get("reason", ""))[:250],
-                         "repair_hint": str(review.get("repair_hint", ""))[:250]})
+        failures.append({"stage": "critic", "candidate": deepcopy(candidate),
+                         "review": deepcopy(review),
+                         "reason": str(review.get("reason", "")),
+                         "repair_hint": str(review.get("repair_hint", "")),
+                         "validated_repair_guidance": critic_repair_guidance(
+                             review, candidate, assignments)
+                         if naturalize_assignment_prose else []})
+    if naturalize_assignment_prose:
+        fallback = contract_fallback(assignments, template)
+        if fallback is not None:
+            errors = action_issues(fallback, assignments, prompt=validation_prompt)
+            if reasoning_guard is not None:
+                errors += reasoning_guard(fallback["reasoning"])
+            for i, item in enumerate(assignments):
+                errors += contract_prose_issues(fallback["params"]["tasks"][i]["task_instruction"], item["semantic_contract"])
+            if not errors:
+                return fallback, {
+                    "status": "accepted", "mode": "contract_frozen_delegate_fallback",
+                    "reviewed": False, "assignment_contract_frozen": True,
+                    "naturalized_task_prose": False, "authored_fields": [],
+                    "attempts": max_revisions + 1,
+                    "critic_calls": critic_calls, "failures": failures,
+                    "fallback_contract_version": assignments[0]["semantic_contract"]["version"],
+                }
+            failures.append({"stage": "delegate_fallback_guard", "errors": errors})
     return None, {
         "status": "failed",
         "mode": ("llm_reviewed_contract_frozen"

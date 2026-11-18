@@ -50,7 +50,7 @@ def _signature(scenes: Path, reports: Path, *, max_scenes, sub_model,
                author_model, critic_model, freeze_dispatch) -> dict:
     root = Path(__file__).parent
     tracked = (
-        "trajectory_builder.py", "action_author.py",
+        "trajectory_builder.py", "action_author.py", "task_contract.py",
         "reasoning_fidelity.py", "o1_compat.py", "generate_turns.py",
         "../implement_subtask/public_surface.py",
         "../generate_question/execution/evidence_tools.py",
@@ -451,6 +451,15 @@ def generate_turns(
         bool(row.get("visible_answer_shortcut"))
         for row in private if row.get("action") == "complete"
     )
+    delegate_modes = Counter(row.get("authoring", {}).get("mode", "unknown")
+                             for row in private if row.get("action") == "delegate_task")
+    delegate_attempt_stages = Counter(failed.get("stage", "unknown")
+        for row in private if row.get("action") == "delegate_task"
+        for failed in row.get("authoring", {}).get("failures", []))
+    fallback_scene_ids = {row["task_id"] for row in private
+                         if "fallback" in row.get("authoring", {}).get("mode", "")}
+    nonreviewed_scene_ids = {row["task_id"] for row in private
+        if not row.get("authoring", {}).get("mode", "").startswith("llm_reviewed")}
     summary = {
         "status": "done" if not failures else "partial",
         "pipeline": "maestro_stage3_main_turn_dataset_v1",
@@ -466,6 +475,17 @@ def generate_turns(
         "main_training_turns": len(turns),
         "actions": dict(action_counts),
         "completion_generation_modes": dict(completion_modes),
+        "delegate_generation_modes": dict(delegate_modes),
+        "delegate_attempt_stages": dict(delegate_attempt_stages),
+        "clean_trajectory_completion_rate": len(episodes) / max(1, len(scene_rows)),
+        "llm_reviewed_delegate_rate": sum(v for k, v in delegate_modes.items()
+            if k.startswith("llm_reviewed")) / max(1, sum(delegate_modes.values())),
+        "llm_reviewed_naturalized_delegate_turns": sum(
+            row.get("action") == "delegate_task"
+            and row.get("authoring", {}).get("mode", "").startswith("llm_reviewed")
+            and bool(row.get("authoring", {}).get("naturalized_task_prose")) for row in private),
+        "fully_llm_reviewed_scenes": len(episodes) - len(nonreviewed_scene_ids),
+        "scenes_with_fallback": len(fallback_scene_ids),
         "visible_answer_shortcuts": shortcut_count,
         "reasoning_fidelity_checked_delegate_turns": len(fidelity_rows),
         "reasoning_fidelity_guard_rejections": dict(fidelity_issues),

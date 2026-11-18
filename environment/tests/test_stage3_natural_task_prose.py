@@ -48,6 +48,8 @@ def author_task_prose(assignments):
                 "the matching identifiers to derive the specifically "
                 "requested result without inventing new source material."
             )
+        if item.get("semantic_contract"):
+            task = "Review the documented observations. " + item["reference_instruction"]
         context = (
             "This follows the reported findings from the earlier Sub-Agent "
             "handoff. Use the returned records as evidence, not as a "
@@ -675,7 +677,8 @@ class FrozenTaskProseTests(unittest.TestCase):
             for request in reviewer_calls
         ))
         self.assertTrue(all(
-            request["assignment_contract_validated_by_code"]
+            request["assignment_structure_validated_by_code"]
+            and not request["natural_language_semantics_validated_by_code"]
             for request in reviewer_calls
         ))
 

@@ -406,7 +406,8 @@ def build_episode(
         )
         assignment = [
             _assignment(
-                tasks[tid], catalog, delivered, model_alias=model_alias
+                tasks[tid], catalog, delivered, model_alias=model_alias,
+                compile_contract=freeze_trusted_dispatch
             ) for tid in wave
         ]
         # An overlap witness is legal only for a true two-parent
@@ -456,9 +457,12 @@ def build_episode(
                 "llm_reviewed" if author is not None else "template"
             )
             status = prior_audit.get("authoring")
-            if (prior_turn.get("generation_mode") != expected_mode
+            allowed_modes = {expected_mode}
+            if freeze_trusted_dispatch and author is not None:
+                allowed_modes.add("contract_frozen_delegate_fallback")
+            if (prior_turn.get("generation_mode") not in allowed_modes
                     or not isinstance(status, dict)
-                    or status.get("mode") != expected_mode
+                    or status.get("mode") != prior_turn.get("generation_mode")
                     or status.get("status") != "accepted"
                     or action_issues(action, assignment, prompt=main_prompt)):
                 raise RuntimeError("stage3_checkpoint_action_invalid")
