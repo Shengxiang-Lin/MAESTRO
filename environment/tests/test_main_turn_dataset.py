@@ -285,6 +285,11 @@ class MainTurnDatasetTests(unittest.TestCase):
             def complete_json(self, system, request):
                 payload = json.loads(request)
                 result = deepcopy(payload["reference_action_for_structure_only"])
+                if result["action"] == "complete":
+                    return {"reasoning": (
+                        "The returned findings support the requested answer, "
+                        "so no additional investigation is necessary."
+                    )}
                 for task in result["params"]["tasks"]:
                     # Deliberately omit required source IDs and previous
                     # handoff marker; the deterministic compiler restores
@@ -302,7 +307,8 @@ class MainTurnDatasetTests(unittest.TestCase):
                 payload = json.loads(request)
                 self_is_prose = payload["candidate_prose_only"]
                 self_assignment = payload["assignment_prose_goals_in_required_order"]
-                seen.append((self_is_prose, self_assignment, payload))
+                if "fixed_tool_and_model_fields_checked_by_code" in payload:
+                    seen.append((self_is_prose, self_assignment, payload))
                 return {"verdict": "pass", "grounded": True,
                         "assignment_fidelity": True, "o1_style": True}
 
@@ -311,7 +317,7 @@ class MainTurnDatasetTests(unittest.TestCase):
             scene, rows, author=Author(), critic=critic,
             max_revisions=0,
         )
-        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(status["status"], "accepted", status)
         self.assertTrue(seen)
         self.assertTrue(all(
             "tools" not in task and "model" not in task
