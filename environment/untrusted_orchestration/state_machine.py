@@ -497,6 +497,59 @@ class ExecutionState:
                 )
         return None
 
+    def _visible_arithmetic_issue(self, task_id: str) -> str | None:
+        """Check one source-free derivation against explicitly delivered inputs.
+
+        No private evaluator input, hidden Gold or unreported intermediate
+        output may be used. Skip aggregation/count (unknown completeness)
+        and multi-step chains whose private intermediate values are not
+        reconstructible from Main's received reports.
+        """
+        task = self.tasks[task_id]
+        chain = task.get("operator_chain") or []
+        parents = task.get("depends_on") or []
+        if (task.get("source_ids") or len(parents) != 1
+                or len(chain) != 1
+                or chain[0].get("op") != "derive_arithmetic"
+                or chain[0].get("inputs") != task.get("external_inputs")
+                or parents[0] not in self.public_reports):
+            return None
+        if self.public_status(parents[0]) != "done":
+            return None
+        parent_rows = self._public_result_rows(self.public_reports[parents[0]])
+        result_rows = self._public_result_rows(self.public_reports.get(task_id))
+        if (not parent_rows or not result_rows
+                or len(parent_rows) != len(result_rows)):
+            return None
+        step = chain[0]
+        left_name, right_name = step["left_field"], step["right_field"]
+        output_field = step["output_field"]
+        operation = step["operation"]
+        for parent_row, returned in zip(parent_rows, result_rows):
+            left, right = parent_row.get(left_name), parent_row.get(right_name)
+            observed = returned.get(output_field)
+            if not all(type(v) in (int, float) for v in (
+                left, right, observed
+            )):
+                continue
+            if operation == "absolute_difference":
+                expected = abs(left - right)
+            elif operation == "ratio" and right != 0:
+                expected = round(left / right, step["round_digits"])
+            else:
+                continue
+            if abs(float(expected) - float(observed)) > 1e-9:
+                return (
+                    "The delivered arithmetic result for " + output_field
+                    + " is " + str(observed) + ", but the returned inputs "
+                    + left_name + " = " + str(left) + " and "
+                    + right_name + " = " + str(right)
+                    + " imply " + str(expected)
+                    + " under the requested " + operation.replace("_", " ")
+                    + ". Recompute the derivation using these inputs."
+                )
+        return None
+
     def _visible_report_internal_conflict(self, task_id: str) -> str | None:
         """Compare RESULT with SUMMARY using ONLY the delivered report.
 
@@ -573,6 +626,9 @@ class ExecutionState:
         passthrough_issue = self._visible_passthrough_issue(task_id)
         if passthrough_issue:
             return passthrough_issue
+        arithmetic_issue = self._visible_arithmetic_issue(task_id)
+        if arithmetic_issue:
+            return arithmetic_issue
         if not any(step["op"] == "join" for step in task["operator_chain"]):
             return None
         parents = task["depends_on"]
@@ -829,6 +885,9 @@ class ExecutionState:
             elif self._visible_passthrough_issue(tid):
                 kind = "derived_identifier_disagreement"
                 reason = self._visible_passthrough_issue(tid)
+            elif self._visible_arithmetic_issue(tid):
+                kind = "arithmetic_inconsistency"
+                reason = self._visible_arithmetic_issue(tid)
             else:
                 # An unexplained discrepancy is not a license to read
                 # the private Attempt or invent an outside verifier.
