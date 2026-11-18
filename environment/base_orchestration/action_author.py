@@ -505,7 +505,7 @@ def _assignment(target: dict, catalog: dict[str, dict],
         raise ValueError("stage3_unknown_o1_tool_in_assignment")
     contract = compile_task_contract(target, catalog) if compile_contract else None
     if contract is not None:
-        if not contract["fallback_supported"]:
+        if not contract["operator_supported"]:
             raise ValueError("stage3_unsupported_local_task_operator")
         witness = public_identifier_join(target, delivered)
         if witness is not None:
