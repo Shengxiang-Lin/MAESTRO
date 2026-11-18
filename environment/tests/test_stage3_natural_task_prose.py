@@ -190,15 +190,33 @@ class CriticDispatchBoundaryTests(unittest.TestCase):
         self.assertEqual(status["status"], "failed")
         self.assertEqual(critic.calls, 1)
 
-    def test_o1_style_prompts_keep_explicit_actions_but_do_not_template(self):
-        self.assertIn("concrete evidence action", STAGE3_TASK_PROSE_AUTHOR_SYSTEM)
-        self.assertIn("ALREADY ASSIGNED", STAGE3_TASK_PROSE_AUTHOR_SYSTEM)
-        self.assertIn(
-            "next logical step",
-            " ".join(STAGE3_TASK_PROSE_AUTHOR_SYSTEM.split()),
+    def test_stage3_delegate_prompt_returns_to_stable_o1_scope(self):
+        """Avoid the v3 instruction inflation and primed boilerplate."""
+        prompt = STAGE3_TASK_PROSE_AUTHOR_SYSTEM
+        self.assertIn("an actionable request", prompt)
+        self.assertIn("which specific clue/identifier/date/relationship", prompt)
+        self.assertIn("Mention each permitted source ID literally", prompt)
+        self.assertIn("Parallel investigations need distinct", prompt)
+        self.assertIn("one natural handoff of 25–700 characters", prompt)
+        self.assertIn("Do not write tool names, models or internal task identifiers", prompt)
+        self.assertIn("An earlier successful intermediate lookup is not a failed task", prompt)
+        self.assertNotIn("ALREADY ASSIGNED", prompt)
+        self.assertNotIn("concrete evidence action", prompt)
+        self.assertNotIn("next logical step", prompt)
+        self.assertNotIn("the investigation has successfully", prompt)
+        self.assertNotIn("fixed", prompt.casefold())
+        self.assertNotIn("frozen", prompt.casefold())
+
+    def test_stage3_completion_review_improvements_are_retained(self):
+        """Prompt rollback must NOT roll back P1 or the safe fallback."""
+        from environment.base_orchestration.action_author import (
+            _COMPLETE_CRITIC_SYSTEM, author_complete_action,
         )
-        self.assertNotIn("fixed", STAGE3_TASK_PROSE_AUTHOR_SYSTEM.casefold())
-        self.assertNotIn("frozen", STAGE3_TASK_PROSE_AUTHOR_SYSTEM.casefold())
+        self.assertIn("Main-Agent's AUTHORED", _COMPLETE_CRITIC_SYSTEM)
+        self.assertIn("final answer", _COMPLETE_CRITIC_SYSTEM)
+        self.assertIn("not submitted for your review", _COMPLETE_CRITIC_SYSTEM)
+        self.assertIn("AUTHOR'S NEW REASONING", _COMPLETE_CRITIC_SYSTEM)
+        self.assertTrue(callable(author_complete_action))
 
 
 class FrozenTaskProseTests(unittest.TestCase):
