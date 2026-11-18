@@ -73,7 +73,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         ),
         "max_post_fork_rounds": run.get("max_post_fork_rounds"),
         "seed": run.get("seed", 17),
-        "fault_modes": ["missing", "partial", "wrong"],
         "scenario_mode": "event_driven",
         "candidate_strategy": "enumerate",
         "max_candidates_per_round": run.get(
@@ -100,17 +99,12 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             "report_missing",
             "result_summary_conflict", "fabricated_claim",
         ]),
-        "max_fault_atoms": 1,
-        "delayed_evidence_probability": 0.0,
-        "persistence": "once",
-        "multi_target_probability": 0.0,
         "max_rounds": run.get("max_rounds", 16),
         "max_cost": run.get("max_cost", 80),
         "max_retries": run.get("max_retries", 1),
         "max_parallel_tasks": run.get("max_parallel_tasks", 4),
         "workers": run.get("workers", 4),
         "mode": run.get("mode", "template"),
-        "max_revisions": 2,
         "report_max_revisions": run.get("report_max_revisions", 2),
         "main_max_revisions": run.get("main_max_revisions", 2),
         "sub_model": run.get("sub_model", "qwen3-8b"),
@@ -171,8 +165,8 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             raise ValueError("untrusted_invalid_" + key)
     if config["mode"] not in {"llm", "template"}:
         raise ValueError("untrusted_mode_requires_template_or_llm")
-    # Current Stage-4 config fixes enumerate/event_driven/one-atom/once.
-    # Do not revalidate these code-owned constants as legacy user switches.
+    # Current Stage-4 config fixes enumerate/event_driven; all other
+    # legacy fault knobs inherit the maintained generate_turns defaults.
     from .atomic_faults import ATOM_TO_MODE
     if config["selection_strategy"] not in {
         "causal_rank", "stratified",
