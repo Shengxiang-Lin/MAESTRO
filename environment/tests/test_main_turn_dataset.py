@@ -737,6 +737,20 @@ class MainTurnDatasetTests(unittest.TestCase):
         self.assertEqual(with_quote, reviewed_quote)
         self.assertNotIn("Evidence:", with_quote)
 
+        # A correct quote in a trimmed-away sentence cannot count as
+        # evidence carried by the *published* completion.
+        late_quote = (
+            "The earlier investigation makes a further lookup unnecessary. " +
+            "The reported evidence was checked for the requested value. " * 14 +
+            "The final returned result is 132."
+        )
+        trimmed, kept = _complete_reasoning_prose(
+            late_quote, delivered,
+        )
+        self.assertNotIn("132", kept)
+        self.assertTrue(kept.endswith("."))
+        self.assertTrue(trimmed.endswith('Evidence: "132".'))
+
         # Never publish a prefix ending mid-word or mid-sentence.
         no_boundary, reason = _complete_reasoning_prose(
             "The finding " + "continues " * 140, delivered,
