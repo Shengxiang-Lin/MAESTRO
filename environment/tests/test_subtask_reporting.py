@@ -878,6 +878,182 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(_o1_answer_issues("no", contract),
                          ["answer_missing_required_values:yes"])
 
+    def test_exact_structured_inner_oracle_answers_can_be_rendered(self):
+        """Qwen emitted {'difference':186,...}; Oracle wraps it in 'answer'."""
+        from environment.implement_subtask.reporting import (
+            _exact_structured_o1_answer, _o1_answer_issues,
+        )
+        cases = [
+            {"difference": 186, "higher_source": "first"},
+            {"duration_days": 213, "entity": "Lakehurst Region",
+             "observation_count": 5},
+        ]
+        for answer in cases:
+            with self.subTest(answer=answer):
+                contract = {
+                    "exact_oracle_answer": [{"answer": deepcopy(answer)}],
+                    "answer_required_literals": [
+                        str(v) for v in answer.values()
+                    ],
+                }
+                result = _exact_structured_o1_answer(answer, contract)
+                self.assertIsInstance(result, str)
+                self.assertEqual(_o1_answer_issues(result, contract), [])
+                for field, value in answer.items():
+                    self.assertIn(field.replace("_", " "), result)
+                    self.assertIn(str(value), result)
+                for key in answer:
+                    incorrect = dict(answer, **{key: "wrong"})
+                    self.assertIsNone(
+                        _exact_structured_o1_answer(incorrect, contract)
+                    )
+                    self.assertIsNone(_exact_structured_o1_answer(
+                        {k: v for k, v in answer.items() if k != key},
+                        contract,
+                    ))
+                self.assertIsNone(_exact_structured_o1_answer(
+                    dict(answer, invented_field="unverified"), contract,
+                ))
+        contract = {
+            "exact_oracle_answer": [{"answer": {"difference": 186}}],
+            "answer_required_literals": ["186"],
+        }
+        self.assertIsNone(_exact_structured_o1_answer(
+            {"difference": 186.0}, contract,
+        ))
+        # Directly serialized multi-record Oracle data is also accepted
+        # only if every typed row matches, including repeated rows.
+        rows = [{"case_id": "Dossier-A"}, {"case_id": "Dossier-B"}]
+        list_contract = {
+            "exact_oracle_answer": rows,
+            "answer_required_literals": ["Dossier-A", "Dossier-B"],
+        }
+        self.assertIn("Dossier-B", _exact_structured_o1_answer(
+            list(reversed(rows)), list_contract,
+        ))
+        self.assertIsNone(_exact_structured_o1_answer(
+            [rows[0]], list_contract,
+        ))
+
+    def test_verified_structured_answer_survives_critic_and_publication(self):
+        from environment.generate_question.planning.goal_plan import sample_output
+        ordinal = next(
+            i for i in range(64)
+            if sample_output(17, i)["kind"] == "structured_multi_field"
+        )
+        realized = realize_scene(scene(ordinal, "medium"))
+        record = next(
+            row for row in realized["macro_tasks"]
+            if row["macro_task_id"] == realized["terminal_macro_task_id"]
+        )
+        self.assertEqual(record["output_schema"], ["answer"])
+        raw = record["answer"][0]["answer"]
+        self.assertIsInstance(raw, dict)
+
+        class ExactObjectAuthor:
+            def complete_json(self, system, payload):
+                contract = json.loads(payload)["frozen_task_and_evidence"]
+                return {
+                    "answer": deepcopy(raw),
+                    "summary": _mock_o1_draft(contract)["summary"],
+                    "trace_summary": _mock_o1_draft(contract)["trace_summary"],
+                }
+
+        critic = ReportCritic()
+        published, info = author_critic_report(
+            record, question=None, author=ExactObjectAuthor(),
+            critic=critic, is_terminal=True, max_revisions=0,
+            result_policy="code_owned",
+        )
+        self.assertEqual(info["status"], "accepted", info)
+        self.assertTrue(info["verified_structured_answer_rendered"])
+        self.assertEqual(published["answer"], record["answer"])
+        self.assertEqual(published["answer_with_provenance"],
+                         record["answer_with_provenance"])
+        self.assertIsInstance(published["finish_result"]["result"], str)
+        self.assertEqual(len(critic.calls), 1)
+        self.assertEqual(
+            critic.calls[0]["candidate_finish"]["result"],
+            published["finish_result"]["result"],
+        )
+
+    def test_public_source_ids_not_confused_with_internal_macro_ids(self):
+        from environment.implement_subtask.reporting import (
+            _guard, _teacher_contract, _o1_answer_requirements,
+        )
+        record = realize_scene(scene(0, "medium"))["macro_tasks"][0]
+        contract = _teacher_contract(record, question=None, is_terminal=False)
+        contract["requires_o1_answer"] = True
+        contract["answer_required_literals"] = _o1_answer_requirements(record)
+        contract["all_evidence_refs"] = list({
+            ref for step in record["trace_summary"]["steps"]
+            for ref in step["supporting_fact_refs"]
+        } | set(record["trace_summary"]["answer_supporting_fact_refs"]))
+        contract["available_provenance_sources"] = ["M3_a", "M3_b", "relation_2"]
+        contract["source_context"] = [
+            {"source_id": s, "title": s}
+            for s in contract["available_provenance_sources"]
+        ]
+        draft = _mock_o1_draft(contract)
+        candidate = {
+            "result": draft["answer"],
+            "summary": (
+                "Compared the provided observations from M3_a and M3_b "
+                "to identify the corresponding records in relation_2."
+            ),
+            "trace_summary": draft["trace_summary"],
+            "status": "done",
+        }
+        self.assertNotIn(
+            "summary_technical_execution_jargon", _guard(candidate, contract),
+        )
+        for source_name in ("M3_c", "M3_op01", "relation_99"):
+            with self.subTest(source_name=source_name):
+                wrong = dict(candidate, summary=(
+                    "Checked the previously unlisted source "
+                    + source_name + " for relevant records."
+                ))
+                self.assertIn(
+                    "summary_technical_execution_jargon",
+                    _guard(wrong, contract),
+                )
+        wrong = dict(candidate, summary=(
+            "This Macro used the Oracle to verify all possible records."
+        ))
+        errors = _guard(wrong, contract)
+        self.assertIn("summary_technical_execution_jargon", errors)
+        self.assertIn("summary_internal_teacher_jargon", errors)
+
+    def test_multi_source_filters_are_attributed_to_their_sources(self):
+        from environment.implement_subtask.reporting import (
+            _source_scoped_filter_steps,
+            CODE_OWNED_CRITIC_SYSTEM,
+        )
+        steps = [
+            {"operation": "lookup_by_key", "source_id": "M3_a",
+             "action": "Retrieve a record from M3_a"},
+            {"operation": "filter_eq", "source_id": None,
+             "action": "Keep rows whose cue equals 'departure'"},
+            {"operation": "project", "source_id": None,
+             "action": "Keep case_id"},
+            {"operation": "lookup_by_key", "source_id": "M3_b",
+             "action": "Retrieve a record from M3_b"},
+            {"operation": "filter_eq", "source_id": None,
+             "action": "Keep rows whose cue equals 'interview'"},
+            {"operation": "join", "source_id": None,
+             "action": "Align the two inputs"},
+            {"operation": "filter_eq", "source_id": None,
+             "action": "Keep rows whose cue equals 'unattributed'"},
+        ]
+        self.assertEqual(_source_scoped_filter_steps(steps), [
+            {"step_number": 2, "source_id": "M3_a",
+             "condition": "Keep rows whose cue equals 'departure'"},
+            {"step_number": 5, "source_id": "M3_b",
+             "condition": "Keep rows whose cue equals 'interview'"},
+        ])
+        self.assertIn("source_scoped_filter_steps",
+                      CODE_OWNED_CRITIC_SYSTEM)
+
     def test_terminal_short_answer_passes_review_without_oracle_drift(self):
         from environment.generate_question.planning.goal_plan import sample_output
         # Pick a scalar date rather than an unrelated multi-field Goal.
