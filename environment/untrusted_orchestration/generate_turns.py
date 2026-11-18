@@ -161,7 +161,7 @@ def _plan_branches(
         rounds = select_feedback_rounds(
             rounds, limit=branches_per_scene,
             strategy=round_sampling_strategy,
-            seed=seed + scene_index * 1009,
+            seed=seed + scene_index * 1009, scene=scene,
         )
         if not rounds:
             no_eligible += 1
@@ -898,7 +898,9 @@ def generate_turns(
         type(branches_per_scene) is not int or branches_per_scene < 1
     ):
         raise ValueError("untrusted_invalid_round_debug_cap")
-    if round_sampling_strategy not in {"chronological", "stratified"}:
+    if round_sampling_strategy not in {
+        "chronological", "stratified", "evidence_aware",
+    }:
         raise ValueError("invalid_feedback_round_sampling_strategy")
     if max_post_fork_rounds is not None and (
         type(max_post_fork_rounds) is not int or max_post_fork_rounds < 1
