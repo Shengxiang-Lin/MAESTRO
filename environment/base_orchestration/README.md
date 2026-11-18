@@ -61,6 +61,41 @@ source-specific clues visible in the question/history is not rejected merely
 because an instruction also contains a copied generic clause; the independent
 Critic remains responsible for its semantic specificity.
 
+## Grounding and O1 writing style
+
+A direct comparison against the two supplied real OmniGAIA/O1 trajectories
+(4 Delegate rounds, 11 instructions) showed a useful distinction: real O1
+`task_instruction` text gives concrete evidence actions, query clues and
+requested findings, while `context` is a short situation handoff. The real
+example Main `reasoning` fields were empty; our MAESTRO training target
+intentionally retains evidence-driven reasoning, rather than imitating
+that empty field. Stage-3 prose prompts now prioritize specific current
+evidence and next unresolved needs over repetitive "successfully /
+next logical step" narration. An Author may name an **already assigned**
+tool to clarify a task, but can never change tools, models, source access
+or invent steps; existing O1 history and code-attached prior results stay
+unchanged.
+
+Stage-3 independent review now preserves two distinct boundaries:
+
+- **Delegation:** the Critic checks the AUTHOR's reasoning, instructions and
+  contexts against the code-frozen current-round task and its public
+  evidence. Rejection suggestions to split this round or replace output
+  fields trigger one independent re-review, never automatic acceptance.
+  Genuine invented relations, unsupported source claims, dependencies and
+  unassigned fields are still rejected.
+- **Completion:** the final answer and deterministic evidence quotation
+  are not subject to LLM recomputation. The Critic checks only NEW
+  Author reasoning against previously returned public results, without
+  conflating a 2025+ event-ledger filter with independent metric dates.
+  An apparent demand to recalculate/change the frozen answer triggers a
+  second independent prose-only review. Continued disagreement still
+  produces the explicitly non-reviewed `teacher_grounded_completion_fallback`.
+
+These are prompt/review-scope changes only: no new model role, dispatch
+heuristic, Oracle mutation or relaxation of the complete-Scene publication
+contract.
+
 **Completion quality tiers:** `generation_mode=llm_reviewed_completion`
 means an independently Critic-approved final rationale. When the Author/
 Critic cannot agree, Stage 3 may still publish a complete, code-verified

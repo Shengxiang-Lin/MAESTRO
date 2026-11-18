@@ -127,27 +127,39 @@ Return EXACTLY:
 {"reasoning":"...",
  "tasks":[{"task_instruction":"...","context":"..."}]}
 
-For each task_instruction, give an actionable request: which public source
-to inspect, which specific clue/identifier/date/relationship from the
-question or earlier Sub-Agent feedback to use, and which values to return.
-Mention each permitted source ID literally and retain its public name.
+For each task_instruction, give an executable investigation request: which
+public source to inspect, the exact clue/identifier/date/relationship from
+the question or ALREADY returned feedback, what evidence to inspect or
+compare, and which permitted values to return. Name each permitted source
+ID literally with its public name. Real O1 delegation often specifies the
+concrete evidence action and the exact evidence desired; do not replace
+that with generic "review the sources" language. When it genuinely helps
+execution, you MAY mention a tool that is ALREADY ASSIGNED to that same
+investigation; do not invent tools, access methods, file paths, search
+results or tool parameters. Tool/model routing remains unchanged.
 Parallel investigations need distinct source-specific instructions, not
-a shared generic sentence. Do not copy reference instructions verbatim.
-Do not write tool names, models or internal task identifiers.
+a shared generic sentence. Do not copy reference instructions verbatim,
+mention private task IDs, or imply a future action already happened.
 
-For each context, write ONE natural handoff of 25–700 characters: explain
-why the investigation is needed, using available user clues or ALREADY
-returned Sub-Agent results. On the first round, do not imply a previous
-Sub-Agent retrieval. Previously returned result strings are attached
-separately after generation; there is no need to copy them in full.
+For each context, write ONE compact natural handoff (usually one or two
+sentences): explain why this particular investigation matters using the
+user's clues or ALREADY returned findings. Real O1 context gives a short
+situation update, not a second long task instruction. On the first round,
+do not imply a previous Sub-Agent retrieval. Previously returned public
+Result and Summary strings are appended separately after generation, so
+avoid repeating full result lists or stock workflow descriptions.
 Do not invent source content, outcomes, errors, retries or future facts.
 
-For reasoning, speak as the investigator: explain the evidence currently
-available, why these particular inquiries can proceed now, and what they
-will help establish. Do not describe the internal construction or
-scheduling process, procedural machinery, or why software chose a step.
-An earlier successful intermediate lookup is not a failed task.
-Only claim facts visible in the original question and earlier feedback.
+For reasoning, speak as the investigator: briefly explain the concrete
+evidence already available, the remaining gap, and why THIS round's
+inquiries follow from it. Prefer specific clue/identifier/relationship
+connections over a lengthy procedural preamble. Avoid repeatedly using
+stock phrases like "the investigation has successfully", "the next
+logical step", or "to proceed"; successful findings may still be
+described naturally when relevant. Do not describe internal construction
+or scheduling machinery, or why software chose a step. An earlier
+successful intermediate lookup is not a failed task. Only claim facts
+visible in the original question and earlier feedback.
 Return JSON only, with reasoning and tasks, no extra fields.
 """
 
@@ -167,6 +179,14 @@ evidence fidelity; this is not model-generated hallucination.
 Do not change or criticize frozen dispatch, tools, model or slot order.
 In particular, an intermediate key lookup is valid even if the overall
 question eventually requires later downstream evidence.
+The exact current_round_task_contract and task_prose_constraints are
+immutable: a source may support a chain of several lookups within ONE
+assigned investigation if that is the listed task. Do not demand splitting
+it into new rounds or additional delegated tasks. Do not demand fields from
+the user's FINAL question in a local intermediate Result, or modify this
+round's required_output_fields. If the authored prose improperly asks for
+an unassigned field or prematurely asserts a result, identify THAT
+concrete authored claim and reject it; never "repair" the frozen contract.
 Return the normal JSON verdict and boolean review axes.
 """
 
@@ -238,6 +258,41 @@ _FORBIDDEN = re.compile(
 
 # Shared with the independent Stage-4 publication guard.
 _GENERATION_META = GENERATION_PROCESS_RE
+
+
+def _critic_dispatch_rewrite_request(review: dict) -> bool:
+    """Detect a likely out-of-scope suggestion, never auto-accept prose.
+
+    A second INDEPENDENT review is required because a critique can still
+    point to a genuine unsupported request in the authored instruction.
+    """
+    if not isinstance(review, dict) or review.get("verdict") != "fail":
+        return False
+    hint = (str(review.get("reason", "")) + " " +
+            str(review.get("repair_hint", ""))).casefold()
+    return bool(re.search(
+        r"(?:split (?:the |this )?(?:task|investigation|lookup)|"
+        r"separate (?:the |this )?(?:task|investigation) into|"
+        r"(?:add|change|replace|modify|update) .{0,100}"
+        r"(?:output_fields|required_output_fields|output fields)|"
+        r"(?:next|another) (?:round|delegation) (?:should|must|to))",
+        hint,
+    ))
+
+
+def _critic_completion_answer_objection(review: dict) -> bool:
+    """A reviewer may be debating the frozen answer instead of prose."""
+    if not isinstance(review, dict) or review.get("verdict") != "fail":
+        return False
+    reason = (str(review.get("reason", "")) + " " +
+              str(review.get("repair_hint", ""))).casefold()
+    return bool(re.search(
+        r"(?:final answer|answer (?:is|was)|recalculate|"
+        r"mathematically incorrect|calculation is (?:incorrect|wrong)|"
+        r"replace (?:the )?(?:answer|result)|"
+        r"requires? (?:dates|events) (?:in|after) 2025)",
+        reason,
+    ))
 
 
 def _critic_review_passes(review: dict) -> bool:
@@ -784,11 +839,19 @@ Return JSON: {"reasoning": "one or two evidence-grounded sentences"}.
 """
 
 
-_COMPLETE_CRITIC_SYSTEM = """Review ONLY the final Main-Agent completion
-reasoning for factual support and O1 style. The final answer and all earlier
-public Sub-Agent results have been independently verified. Do NOT review
+_COMPLETE_CRITIC_SYSTEM = """Review ONLY the Main-Agent's AUTHORED
+completion reasoning for factual support and O1 style. The final answer
+is code-frozen and NOT submitted for your review; public Sub-Agent results
+are provided as previously returned evidence. Do not critique, recompute
+or demand changes to the final answer, typed response fields, prior source
+results or arithmetic already determined by the frozen task. A condition
+like "review events in or after 2025" applies to those review events, NOT
+automatically to unrelated metric dates used for a midpoint calculation.
+Evaluate only whether the AUTHOR'S NEW REASONING asserts facts supported
+by the visible history and explains why no further delegation is needed.
+Reject invented observations, wrong source associations, premature claims,
+generator revisions or unsupported causal explanations. Do NOT review
 tools, source-access routes, model choices, or hidden Macro metadata.
-Reject invented evidence, generator revisions or unsupported conclusions.
 Return JSON only: {"verdict":"pass"|"fail","grounded":true|false,
 "assignment_fidelity":true|false,"o1_style":true|false,
 "reason":"brief reason","repair_hint":"concrete prose-only change"}.
@@ -823,6 +886,7 @@ def author_complete_action(*, template: dict, prompt: str,
         "summary": report["finish_result"]["summary"],
     } for report in delivered.values()]
     failures = []
+    answer_scope_rereviewed = False
     for attempt in range(max_revisions + 1):
         request = {
             "current_main_visible_prompt": prompt,
@@ -867,28 +931,65 @@ def author_complete_action(*, template: dict, prompt: str,
             failures.append({"stage": "completion_guard", "errors": errors})
             continue
         try:
+            # Do not make the Critic re-evaluate the deterministic quoted
+            # template (or the frozen answer). It sees ONLY the LLM's newly
+            # authored rationale and already-visible Sub-Agent feedback.
+            review_payload = {
+                "current_main_visible_prompt": prompt,
+                "public_evidence_from_previously_completed_subtasks":
+                    public_evidence,
+                "candidate_prose_only": {
+                    "reasoning": authored,
+                    "tasks": [],
+                },
+                "assignment_prose_goals_in_required_order": [],
+                "fixed_answer_verified_by_code": True,
+                "review_scope": (
+                    "Only judge the authored reasoning above. A separate "
+                    "deterministic evidence quotation is appended to the "
+                    "published rationale for traceability, not for review. "
+                    "Do not challenge the code-frozen answer or demand "
+                    "new source queries or a different calculation."
+                ),
+            }
             review = critic.complete_json(
                 _COMPLETE_CRITIC_SYSTEM,
-                json.dumps({
-                    "current_main_visible_prompt": prompt,
-                    "public_evidence_from_previously_completed_subtasks":
-                        public_evidence,
-                    "candidate_prose_only": {
-                        "reasoning": candidate["reasoning"],
-                        "tasks": [],
-                    },
-                    "assignment_prose_goals_in_required_order": [],
-                    "fixed_answer_verified_by_code": True,
-                }, ensure_ascii=False),
+                json.dumps(review_payload, ensure_ascii=False),
             )
         except Exception as exc:
             failures.append({"stage": "completion_critic_backend",
                              "reason": str(exc)[:200]})
             continue
+        # A reviewer that disputes the frozen final value gets ONE fresh
+        # evaluation of the same authored text, never an automatic pass.
+        if (not _critic_review_passes(review)
+                and _critic_completion_answer_objection(review)):
+            answer_scope_rereviewed = True
+            try:
+                review = critic.complete_json(
+                    _COMPLETE_CRITIC_SYSTEM + (
+                        "\nSECOND INDEPENDENT REVIEW: A previous critique "
+                        "appears to dispute the CODE-FROZEN final answer "
+                        "rather than the authored reasoning. The final "
+                        "answer and deterministic evidence quote are NOT "
+                        "for your evaluation. Point to a SPECIFIC unsupported "
+                        "claim in candidate_prose_only.reasoning if one "
+                        "exists; otherwise PASS. Still reject any actual "
+                        "invented evidence or wrong causal attribution.\n"
+                    ),
+                    json.dumps(review_payload, ensure_ascii=False),
+                )
+            except Exception as exc:
+                failures.append({
+                    "stage": "completion_answer_scope_rereview_backend",
+                    "reason": str(exc)[:200],
+                })
+                continue
         if _critic_review_passes(review):
             return candidate, {
                 "status": "accepted", "mode": "llm_reviewed_completion",
                 "attempts": attempt + 1, "review": review,
+                "completion_answer_scope_rereviewed": answer_scope_rereviewed,
             }
         failures.append({
             "stage": "completion_critic",
@@ -901,6 +1002,7 @@ def author_complete_action(*, template: dict, prompt: str,
         "status": "accepted", "mode": "teacher_grounded_completion_fallback",
         "attempts": max_revisions + 1, "failures": failures,
         "reviewed": False,
+        "completion_answer_scope_rereviewed": answer_scope_rereviewed,
     }
 
 
@@ -938,6 +1040,7 @@ def author_delegate_action(
     failures = []
     conflict_rereviewed = False
     visible_set_relation_rereviewed = False
+    dispatch_scope_rereviewed = False
     for revision in range(max_revisions + 1):
         request = {
             "current_main_visible_prompt": prompt,
@@ -1390,6 +1493,40 @@ def author_delegate_action(
                         "reason": str(exc)[:200],
                     })
                     continue
+        # Some reviewers ask to split a frozen investigation into new
+        # rounds, or to add terminal output fields to an intermediate task.
+        # Re-review the SAME prose against this round's fixed public
+        # contract. Never auto-accept: a genuine invented field or false
+        # source dependency must still be rejected.
+        if (freeze_assignment_prose and naturalize_assignment_prose
+                and not _critic_review_passes(review)
+                and _critic_dispatch_rewrite_request(review)):
+            dispatch_scope_rereviewed = True
+            try:
+                review = critic.complete_json(
+                    critic_system + (
+                        "\nSECOND INDEPENDENT REVIEW: The exact CURRENT "
+                        "task count, grouped source investigations and "
+                        "output_fields in current_round_task_contract "
+                        "are CODE-FROZEN. You CANNOT split this task into "
+                        "another round or demand fields belonging to "
+                        "the final user question. Review ONLY what the "
+                        "Author wrote in candidate_reasoning_only and "
+                        "candidate_task_prose_only. If it invented "
+                        "a source relation, an extra requested field, "
+                        "an already completed check or a dependency, "
+                        "FAIL and quote that specific authored phrase. "
+                        "Otherwise PASS the legitimate intermediate "
+                        "investigation. Do not change the task contract.\n"
+                    ),
+                    json.dumps(review_payload, ensure_ascii=False),
+                )
+            except Exception as exc:
+                failures.append({
+                    "stage": "critic_dispatch_scope_rereview_backend",
+                    "reason": str(exc)[:200],
+                })
+                continue
         # The Critic cannot overturn a code-confirmed *visible* conflict
         # solely by asserting that the two delivered statements agree.
         # Invalid critiques trigger a second independent review, never
@@ -1474,6 +1611,8 @@ def author_delegate_action(
                     ],
                     "visible_set_relation_rereviewed":
                         visible_set_relation_rereviewed,
+                    "critic_dispatch_scope_rereviewed":
+                        dispatch_scope_rereviewed,
                 } if reasoning_only_stage3 else {}),
                 **({
                     "decision_contract_version": decision_contract.get(
@@ -1495,6 +1634,7 @@ def author_delegate_action(
         "mode": ("llm_reviewed_contract_frozen"
                  if freeze_assignment_prose else "llm_reviewed"),
         "attempts": max_revisions + 1, "failures": failures,
+        "critic_dispatch_scope_rereviewed": dispatch_scope_rereviewed,
         **({
             "decision_contract_version": decision_contract.get(
                 "contract_version", "unknown"
