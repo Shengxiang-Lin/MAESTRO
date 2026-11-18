@@ -72,8 +72,8 @@ class CanonicalStagePathsTests(TestCase):
         self.assertEqual(stage4["round_sampling_strategy"], "evidence_aware")
         self.assertEqual(stage4["max_post_fork_rounds"], 8)
         self.assertTrue(main["freeze_dispatch"])
-        self.assertEqual(stage4["max_fault_atoms"], 1)
-        self.assertEqual(stage4["delayed_evidence_probability"], 0.0)
+        self.assertNotIn("max_fault_atoms", stage4)
+        self.assertNotIn("delayed_evidence_probability", stage4)
         self.assertEqual(stage4["mode"], "llm")
 
     def test_stage3_public_cli_routes_to_config_without_old_runner(self):
