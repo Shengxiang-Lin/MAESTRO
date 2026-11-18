@@ -414,7 +414,9 @@ class EventEngineTests(unittest.TestCase):
         simultaneous.public_reports.pop("consumer")
         simultaneous.public_report_rounds = {"old": 2, "late": 2}
         simultaneous._detect_explicit_cross_report_disagreements()
-        self.assertEqual(simultaneous.current["old"].status, "disputed")
+        target = simultaneous.detected_conflicts[-1]["recheck_task_id"]
+        self.assertEqual(simultaneous.current[target].status, "disputed")
+        self.assertIn(target, {"old", "late"})
         self.assertEqual(
             simultaneous.detected_conflicts[-1]["conflict_timing"],
             "simultaneous",
