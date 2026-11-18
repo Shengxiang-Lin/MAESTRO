@@ -328,6 +328,32 @@ class ExecutionState:
         )
 
     @staticmethod
+    def _public_result_rows(report: dict) -> list[dict] | None:
+        """Return rows only when the *delivered Result* explicitly has them.
+
+        Do not reconstruct a cross-task join from private WorkProducts just
+        because some identifiers happen to occur in public free-form prose.
+        """
+        finish = (report or {}).get("finish_result") or {}
+        try:
+            rows = json.loads(finish.get("result", ""))
+        except (TypeError, ValueError):
+            return None
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            return None
+        normalized = []
+        for row in rows:
+            if not isinstance(row, dict):
+                return None
+            values = row.get("values", row)
+            if not isinstance(values, dict):
+                return None
+            normalized.append(values)
+        return normalized
+
+    @staticmethod
     def _public_field_values(report: dict, field: str) -> set[str]:
         """Read a field only from the *delivered* result, never Oracle rows.
 
@@ -510,14 +536,17 @@ class ExecutionState:
         if len(parents) != 2 or not all(p in self.public_reports
                                         for p in parents):
             return None
-        left = self.communicated_product(parents[0])
-        right = self.communicated_product(parents[1])
-        if left is None or right is None:
+        left = self._public_result_rows(self.public_reports[parents[0]])
+        right = self._public_result_rows(self.public_reports[parents[1]])
+        joined = self._public_result_rows(self.public_reports.get(task_id))
+        if left is None or right is None or joined is None:
             return None
         join = next(step for step in task["operator_chain"]
                     if step["op"] == "join")
         key_left, key_right = join["left_on"], join["right_on"]
-        if key_left not in left.columns or key_right not in right.columns:
+        if not left or not right or not all(
+            key_left in row for row in left
+        ) or not all(key_right in row for row in right):
             return None
 
         # Compare the newly returned marker/ID with the *visible* parent
@@ -529,8 +558,8 @@ class ExecutionState:
                           for k in ("result", "summary"))
             for tid in parents
         }
-        left_keys = {r["values"][key_left] for r in left.rows}
-        right_keys = {r["values"][key_right] for r in right.rows}
+        left_keys = {r[key_left] for r in left}
+        right_keys = {r[key_right] for r in right}
         shared = left_keys & right_keys
         result_text = " ".join(
             str(self.public_reports.get(task_id, {})
@@ -539,24 +568,21 @@ class ExecutionState:
         )
         if not shared or not result_text:
             return None
-        visible_product = self.communicated_product(task_id)
-        if visible_product is None:
-            return None
-        for row in visible_product.rows:
+        for row in joined:
             returned_keys = []
-            if key_left in row["values"]:
-                returned_keys.append(row["values"][key_left])
-            elif "marker_code" in row["values"] and "marker_code" in left.columns:
+            if key_left in row:
+                returned_keys.append(row[key_left])
+            elif "marker_code" in row and all("marker_code" in x for x in left):
                 returned_keys.extend(
-                    item["values"][key_left] for item in left.rows
-                    if item["values"]["marker_code"] == row["values"]["marker_code"]
+                    item[key_left] for item in left
+                    if item["marker_code"] == row["marker_code"]
                 )
             if not returned_keys:
                 continue
             for value in returned_keys:
                 if value in shared:
                     continue
-                marker = str(row["values"].get("marker_code", value))
+                marker = str(row.get("marker_code", value))
                 if (marker not in result_text
                         or str(value) not in visible_parent_text[parents[0]]
                         or not any(str(k) in visible_parent_text[parents[1]]
