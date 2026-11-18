@@ -62,7 +62,10 @@ visible evidence. Oracle/Gold is used only to validate the execution
 outcome and remains private.
 
 Stage 4 uses synchronous completed Sub-Agent batches and **one atomic
-fault per branch**. No asynchronous messages or multi-fault combination
+fault per branch**. The pilot samples early/middle/late feedback forks,
+performs paired no-repair/recovery replays, and language-reviews a bounded
+number of genuine failure branches for observable state supervision.
+Only globally recovered branches can become positive Main SFT labels. No asynchronous messages or multi-fault combination
 are generated. Successful recovery is selected by executable replay,
 not by a model asserting that it recovered.
 
