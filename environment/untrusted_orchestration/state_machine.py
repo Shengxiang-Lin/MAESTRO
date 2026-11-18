@@ -407,6 +407,8 @@ class ExecutionState:
         required = set()
         for child in self.tasks.values():
             if (task_id in child["depends_on"]
+                    and {"external_inputs", "input_schema", "operator_chain",
+                         "outputs"} <= set(child)
                     and (child["task_id"] not in self.current
                          or self.current[child["task_id"]].status == "stale")):
                 required.update(self.required_parent_fields(
