@@ -10,7 +10,7 @@ from tqdm.auto import tqdm
 
 from environment.generate_question.authoring.backend import OpenAICompatibleBackend
 from environment.generate_question.stages import read_jsonl
-from .reporting import author_critic_report
+from .reporting import review_subagent_report
 from environment.streaming import (
     OrderedJournal, StreamingError, file_digest, output_lock,
     run_ordered, stable_signature,
@@ -209,7 +209,6 @@ def naturalize_subtasks(
     workers: int = 8, max_revisions: int = 2, timeout: int = 180,
     max_scenes: int | None = None, no_progress: bool = False,
     overwrite: bool = False, flush_every: int = 1,
-    result_policy: str = "llm_authored",
     clients: tuple | None = None,
 ) -> dict:
     """Stream per-Macro reviews, publish complete scenes, and resume safely.
@@ -230,8 +229,6 @@ def naturalize_subtasks(
         raise ValueError("max_revisions must be between 0 and 8")
     if type(flush_every) is not int or flush_every < 1:
         raise ValueError("flush_every must be a positive integer")
-    if result_policy not in {"llm_authored", "code_owned"}:
-        raise ValueError("unknown_subagent_result_policy")
     if max_scenes is not None and (
         type(max_scenes) is not int or max_scenes < 1
     ):
@@ -296,13 +293,9 @@ def naturalize_subtasks(
     def review(entry):
         sid, row, question, is_terminal = entry
         try:
-            accepted, feedback = author_critic_report(
+            accepted, feedback = review_subagent_report(
                 row, question=question, author=author, critic=critic,
                 max_revisions=max_revisions, is_terminal=is_terminal,
-                # The current Task Plan carries typed evidence rather than
-                # the retired evidence_trust_version marker. Honor the
-                # configured policy directly instead of downgrading it.
-                result_policy=result_policy,
             )
         except (KeyError, TypeError, ValueError) as exc:
             accepted, feedback = None, {
@@ -344,7 +337,6 @@ def naturalize_subtasks(
         "critic_model": critic_model or model,
         "critic_endpoint": critic_api_base or api_base,
         "max_revisions": max_revisions, "timeout": timeout,
-        "result_policy": result_policy,
         "prompt_code_hash": file_digest(code_root / "reporting.py"),
         "visible_evidence_code_hash": file_digest(
             code_root / "visible_evidence.py"
