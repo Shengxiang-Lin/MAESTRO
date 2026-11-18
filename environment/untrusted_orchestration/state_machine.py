@@ -416,9 +416,16 @@ class ExecutionState:
                 ))
         if task_id == self.scene["macro_graph"]["terminal_task_id"]:
             required.update(self.tasks[task_id]["outputs"]["typed_relation"])
+        # The private typed output schema cannot by itself prove Main
+        # knew that a field was mandatory. Require the field to be
+        # identifiable in the actual delegated public instruction.
+        instruction = str(
+            self.public_reports[task_id].get("task_instruction") or ""
+        ).casefold().replace("_", " ")
         missing = sorted(
             field for field in required
-            if all(row.get(field) is None for row in result_rows)
+            if field.casefold().replace("_", " ") in instruction
+            and all(row.get(field) is None for row in result_rows)
         )
         if not missing:
             return None
