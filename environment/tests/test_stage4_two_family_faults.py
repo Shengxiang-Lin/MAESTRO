@@ -9,6 +9,9 @@ from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.atomic_faults import AtomicFault
 from environment.untrusted_orchestration.faults import run_attempt, relation_rows
 from environment.untrusted_orchestration.report_author import naturalize_report
+from environment.untrusted_orchestration.visible_claim_extraction import (
+    extract_visible_claims,
+)
 from environment.untrusted_orchestration.state_machine import (
     Attempt, ExecutionState,
 )
@@ -195,6 +198,25 @@ class IntraReportFaultTests(unittest.TestCase):
         report["task_instruction"] = "Find a related record."
         state.set_public_report("scope", report, round_number=2)
         self.assertIsNone(state.visible_discrepancy("scope"))
+
+    def test_different_source_year_fields_are_not_automatically_same_fact(self):
+        def claims(field):
+            report = {"finish_result": {
+                "status": "done",
+                "result": json.dumps([{
+                    "values": {"case_id": "Case-001", field: 2024},
+                    "source_fact_refs": ["report:F001"],
+                }]), "summary": "A year was observed.",
+            }}
+            found, _ = extract_visible_claims(
+                report, output_fields=["case_id", field],
+                source_id="report",
+            )
+            return [x for x in found if x["original_field"] == field][0]
+        self.assertNotEqual(
+            claims("reported_year_a")["attribute"],
+            claims("reported_year_b")["attribute"],
+        )
 
     def test_fabricated_report_retains_cited_distractor_origin(self):
         task = {"task_id": "T", "source_ids": ["ledger"],
