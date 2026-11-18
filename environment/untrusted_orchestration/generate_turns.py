@@ -302,6 +302,9 @@ def _publish(output: Path, planned: list[dict],
     retained_language_exceptions = 0
     local_candidates, local_qualified, local_rejections = [], [], []
     claim_state_supervision = []
+    # Observable evidence labels also exist in genuine non-recovered runs.
+    # They are never positive Main-action supervision.
+    reviewed_observable_states = []
     decision_reward_states = []
     decision_reward_missing = 0
     claim_state_diagnostics = []
@@ -463,6 +466,16 @@ def _publish(output: Path, planned: list[dict],
                 if status != "not_selected_for_language_review":
                     claim_state_diagnostics.append({
                         **state_label, "global_publication_status": status,
+                    })
+                if (status == "recovered" or (
+                    status != "not_selected_for_language_review"
+                    and audit.get("language_review_accepted") is True
+                )):
+                    reviewed_observable_states.append({
+                        **state_label,
+                        "global_outcome_private": status,
+                        "positive_main_action_label": status == "recovered",
+                        "label_scope": "observable_claim_state_only",
                     })
                 if status == "recovered":
                     claim_state_supervision.append(state_label)
@@ -685,6 +698,10 @@ def _publish(output: Path, planned: list[dict],
         output / "private" / "claim_state_diagnostics.jsonl",
         claim_state_diagnostics,
     )
+    _atomic_jsonl(
+        output / "private" / "reviewed_observable_states.jsonl",
+        reviewed_observable_states,
+    )
     _atomic_jsonl(output / "private" / "publication_guard.jsonl",
                   publication_guard_rows)
     _atomic_jsonl(output / "private" / "event_timeline.jsonl",
@@ -818,6 +835,14 @@ def _publish(output: Path, planned: list[dict],
         "subagent_guard_failure_causes": dict(report_guard_failures),
         "subagent_review_failure_stages": dict(report_review_failures),
         "claim_state_supervision_rounds": len(claim_state_supervision),
+        "reviewed_observable_state_rounds": len(reviewed_observable_states),
+        "reviewed_nonrecovered_state_rounds": sum(
+            not row["positive_main_action_label"]
+            for row in reviewed_observable_states
+        ),
+        "reviewed_observable_states": str(
+            output / "private" / "reviewed_observable_states.jsonl"
+        ),
         "claim_state_diagnostic_rounds": len(claim_state_diagnostics),
         "claim_state_status_distribution": dict(claim_state_statuses),
         "claim_state_supervision": str(
