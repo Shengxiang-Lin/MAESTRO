@@ -413,7 +413,8 @@ class EventEngineTests(unittest.TestCase):
         simultaneous.current.pop("consumer")
         simultaneous.public_reports.pop("consumer")
         simultaneous.public_report_rounds = {"old": 2, "late": 2}
-        self.assertIn("old", simultaneous.scheduling_state()["repair"])
+        simultaneous._detect_explicit_cross_report_disagreements()
+        self.assertEqual(simultaneous.current["old"].status, "disputed")
         self.assertEqual(
             simultaneous.detected_conflicts[-1]["conflict_timing"],
             "simultaneous",
