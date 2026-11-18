@@ -11,7 +11,7 @@ def compile_task_contract(target: dict, catalog: dict) -> dict:
     """Project local operators into public task obligations, never executable IDs.
 
     Private source rows, gold answers and future tasks are deliberately not inputs.
-    Unsupported operators fail closed rather than receiving an incomplete fallback.
+    Unsupported operators fail closed rather than producing incomplete instructions.
     """
     local_steps = {s["id"]: i for i, s in enumerate(target["operator_chain"], 1)}
     external_steps = {n: "earlier_returned_group_" + str(i)
@@ -114,7 +114,7 @@ def compile_task_contract(target: dict, catalog: dict) -> dict:
     instruction = intro + ' '.join(clauses) + ' Return only ' + ', '.join(output) + ' with supporting observations.'
     return {'version': VERSION, 'steps': steps, 'filters': filters,
             'source_ids': list(target['source_ids']), 'output_fields': output,
-            'reference_instruction': instruction, 'fallback_supported': supported}
+            'reference_instruction': instruction, 'operator_supported': supported}
 
 
 def contract_prose_issues(instruction: str, contract: dict) -> list[str]:
@@ -183,20 +183,6 @@ def critic_repair_guidance(review: dict, candidate: dict, assignments: list[dict
         guidance.extend(f'Task {i + 1}: preserve exactly {item["target_instruction"]}'
                         for i, item in enumerate(assignments))
     return guidance
-
-
-def contract_fallback(assignments: list[dict], template: dict) -> dict | None:
-    from copy import deepcopy
-    if not all(a.get('semantic_contract', {}).get('fallback_supported') for a in assignments):
-        return None
-    action = deepcopy(template)
-    if len(assignments) > 1:
-        action['reasoning'] = ('The information currently available supports these independent investigations. '
-                               'I will request their evidence together, then assess the returned findings.')
-    else:
-        action['reasoning'] = ('The information currently available supports the next investigation. '
-                               'I will request the specified evidence before drawing further conclusions.')
-    return action
 
 
 def public_identifier_join(target: dict, delivered: dict) -> dict | None:
