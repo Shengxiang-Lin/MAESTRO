@@ -78,8 +78,7 @@ _TOOL_HALLUCINATION = re.compile(
 )
 _FACT_ID = re.compile(r"\b[A-Za-z][A-Za-z0-9_-]*:F[0-9A-Za-z_-]+\b")
 from .oracle_review import (
-    full_entry_list_matches, entry_fact_index, positive_entry_provenance,
-    mismatched_entry_refs, critic_oracle_contradiction,
+    entry_fact_index, positive_entry_provenance, mismatched_entry_refs,
 )
 
 def _canonical(value) -> str:
