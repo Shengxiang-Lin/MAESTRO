@@ -64,7 +64,11 @@ together when relevant.
 
 Your next investigations are listed under work_to_explain. Focus on the
 substantive reason for those investigations and do not claim they have
-already completed. Do not announce a final answer before the needed
+already completed. A source-free synthesis/derivation remains a legitimate
+delegated task even when all external evidence has already arrived. Explain
+that existing observations still need to be combined; do not confuse
+"no further retrieval" with "ready to complete". Do not announce a final
+answer before the needed
 evidence is available, invent an extra result, or describe the process
 used to write or assess your text.
 
@@ -97,6 +101,12 @@ history, not hidden fault origins, Gold, future returns, or invented sources;
 without claiming a missing or partial result was verified;
 (3) does not claim a dependency was satisfied by a not-yet-returned result,
 and does not falsely claim independent tasks are sequentially dependent.
+
+IMPORTANT: A pending derive_from_returned_evidence request may need no
+external web/source retrieval but still needs a real synthesis computation.
+Existing source data being sufficient does NOT mean the planned derivation
+already ran or that Main should Complete now. Judge the authored reasoning
+for grounding, not the frozen delegate-versus-complete choice.
 
 The attached locked Main decision facts, if present, were compiled
 from the actual Main-visible Sub-Agent Result and Summary in the latest
@@ -443,6 +453,7 @@ def build_branch(
     main_reviews = []
     evidence_plan = []
     decision_reward_states = []
+    observable_issue_snapshots = []
     stopped = None
     final_mode = None
     graph = scene["macro_graph"]
@@ -482,6 +493,11 @@ def build_branch(
             stopped = "budget_exhausted"
             break
         scheduling = state.scheduling_state()
+        observable_issue_snapshots.append({
+            "decision_round": round_number,
+            "issues": state.observable_issues(),
+            "private_only": True,
+        })
         repairs = [
             tid for tid in scheduling["repair"]
             if len(state.attempts[tid]) <= max_retries and state.ready(tid)
@@ -516,6 +532,12 @@ def build_branch(
             can_complete=can_complete,
         ))
         if can_complete:
+            # A targeted recheck is not proof that two delivered independent
+            # claims now agree. Otherwise the simulator could promote a
+            # still-publicly-contested branch to positive SFT via Gold.
+            if state.unresolved_cited_conflicts():
+                stopped = "unresolved_visible_claim_conflict"
+                break
             # A fabricated result can be unseen as wrong when Main has
             # no independent evidence. Do not publish a "successful"
             # recovery merely because the PRIVATE executor still holds
@@ -780,6 +802,7 @@ def build_branch(
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
         "visible_claim_state": visible_claim_state,
+        "observable_issue_snapshots": observable_issue_snapshots,
         "event_scenario": scenario_plan,
         "event_timeline": scheduler.audit(),
         "fault_events_applied": applied_fault_events,

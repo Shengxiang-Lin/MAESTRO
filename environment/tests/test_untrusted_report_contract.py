@@ -20,8 +20,7 @@ from environment.untrusted_orchestration.report_evidence import (
     observed_handoff_discrepancies,
 )
 from environment.untrusted_orchestration.report_author import (
-    _observed_contract, _review_denies_witnessed_handoff,
-    naturalize_report,
+    _review_denies_witnessed_handoff, naturalize_report,
 )
 from environment.untrusted_orchestration.report_contract import (
     build_report_contract, render_delivered_result,
@@ -116,7 +115,7 @@ class ReportObservationTests(unittest.TestCase):
                 self.filter, self.project,
             ]},
         )
-        contract = _observed_contract(
+        contract = build_report_contract(
             task, actual, "Read visual candidates."
         )
         self.assertEqual(

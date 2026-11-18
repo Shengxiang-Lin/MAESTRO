@@ -45,6 +45,49 @@ invalid/missing references are rejected rather than silently substituted.
 is included in Main prompts. Fault episodes carry the same reference ID for
 later pairing across Stage 3 and Stage 4.
 
+## Current observable-first recovery semantics
+
+The *sampling unit* is an accepted Stage-3 `(question, Main feedback round)`.
+The injected single-atom fault changes the previous Sub-Agent attempt or
+its delivered report, not the next Main action. Stage 4A then simulates the
+continuation using the frozen Stage-1 Macro operators and sources, including
+actual retries, version replacement, downstream stale results and fresh
+Sub-Agent returns. Accepted complete episodes are split into per-round Main
+training records.
+
+The default `round_sampling_strategy: evidence_aware` still covers
+early/middle/late positions. Within each bucket it gives priority to
+already-existing verification Macro roles, multi-source acquisition and
+Join operations. It does not add evidence, change a DAG edge, or expose
+future reports in a Main prompt. `stratified` remains available as a
+random-position ablation.
+
+Every 4A decision now records an `observable_issue_snapshots` entry in
+its private audit. Missing, partial, internal report conflicts, observable
+key mismatches, late independent same-claim disagreements and stale
+descendants are classified **only from information already delivered**.
+A changed private WorkProduct or injected fault name never suffices.
+`private/candidate_selection.jsonl` consequently reports
+`immediately_observable`, `eventually_observable` or
+`not_observed_in_replay` for each candidate, plus the first observed
+decision round and visible anomaly kinds.
+
+For a late cross-report disagreement to request a targeted recheck,
+both claims must literally appear in the delivered Result, name the
+same entity/attribute/scope, cite different **single known independent**
+evidence origins, come from non-dependent tasks, and the earlier report
+must already have been consumed by downstream work. A composite Join
+result citing multiple origins is not a second independent witness.
+No hidden clean source value is used to pick a side. If the observed
+evidence is insufficient, the fault remains diagnostic rather than a
+fabricated positive recovery. The 4C Critic also distinguishes sufficient
+external sources from a still-pending source-free derivation.
+
+Stage-4B exposes one canonical reporting API:
+`report_contract.build_report_contract` and
+`report_validation.validate_report_draft`. Old redundant aliases are
+removed; Stage 1–3 authoring and data contracts remain untouched.
+
 ## Functional pipeline
 
 1. `trusted_prefix.py`: validate clean, executable historical batches.

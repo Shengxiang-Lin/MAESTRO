@@ -18,18 +18,9 @@ from environment.implement_subtask.stage_local_claims import (
 from .report_contract import (
     build_report_contract, render_delivered_result,
 )
-from .report_validation import (
-    validate_report_draft, claim_tokens, _explicit_final_value_issues,
-)
+from .report_validation import validate_report_draft
 from .public_language import sanitize_public_prose
 from .state_machine import deterministic_report, Attempt
-
-# Private aliases remain available for older environment tests; these do
-# not contain duplicate implementation paths.
-_observed_contract = build_report_contract
-_guard = validate_report_draft
-_claim_tokens = claim_tokens
-
 
 _AUTHOR_SYSTEM = """Naturalize a Sub-Agent's executed evidence into concise
 Orchestra-o1 feedback. You are NOT deciding which facts occurred.

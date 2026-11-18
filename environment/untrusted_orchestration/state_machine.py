@@ -15,6 +15,7 @@ import re
 
 from environment.generate_question.execution.program_ir import Relation
 from .faults import Fault, relation_rows, run_attempt
+from .visible_claim_extraction import extract_visible_claims
 from environment.implement_subtask.realize import _fact_index
 
 
@@ -34,6 +35,16 @@ class ExecutionState:
     def __init__(self, scene: dict, reviewed_reports: dict[str, dict]):
         self.scene = scene
         self.fact_index = _fact_index(scene["world"])
+        # Source origins are *metadata only*: only FactRefs literally cited
+        # in returned Main-visible Result rows may be mapped to these roots.
+        self.origin_by_ref = {
+            ref: observation["evidence_origin_id"]
+            for source in scene["world"]["sources"].values()
+            for observation in source.get("observations", [])
+            if isinstance(observation.get("evidence_origin_id"), str)
+            for ref in observation.get("fact_refs", [])
+            if isinstance(ref, str)
+        }
         self.tasks = {
             task["task_id"]: task for task in scene["macro_graph"]["tasks"]
         }
@@ -46,6 +57,7 @@ class ExecutionState:
         self.public_report_rounds: dict[str, int] = {}
         self.cross_source_checks_enabled = False
         self.detected_conflicts: list[dict] = []
+        self.checked_explicit_claim_pairs: set[tuple] = set()
         self.total_cost = 0
         self.invalidations: list[dict] = []
         self.revalidations: list[dict] = []
@@ -316,6 +328,32 @@ class ExecutionState:
         )
 
     @staticmethod
+    def _public_result_rows(report: dict) -> list[dict] | None:
+        """Return rows only when the *delivered Result* explicitly has them.
+
+        Do not reconstruct a cross-task join from private WorkProducts just
+        because some identifiers happen to occur in public free-form prose.
+        """
+        finish = (report or {}).get("finish_result") or {}
+        try:
+            rows = json.loads(finish.get("result", ""))
+        except (TypeError, ValueError):
+            return None
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            return None
+        normalized = []
+        for row in rows:
+            if not isinstance(row, dict):
+                return None
+            values = row.get("values", row)
+            if not isinstance(values, dict):
+                return None
+            normalized.append(values)
+        return normalized
+
+    @staticmethod
     def _public_field_values(report: dict, field: str) -> set[str]:
         """Read a field only from the *delivered* result, never Oracle rows.
 
@@ -469,7 +507,9 @@ class ExecutionState:
         current = self.current.get(task_id)
         if current is None:
             return None
-        if current.product is None or self.public_status(task_id) == "missing":
+        # An inaccessible *private* WorkProduct is not evidence that
+        # the Main saw a missing Result. Only delivered feedback counts.
+        if self.public_status(task_id) == "missing":
             return (
                 "The returned Sub-Agent message did not contain a usable "
                 "Finish Result for the assigned investigation."
@@ -496,14 +536,17 @@ class ExecutionState:
         if len(parents) != 2 or not all(p in self.public_reports
                                         for p in parents):
             return None
-        left = self.communicated_product(parents[0])
-        right = self.communicated_product(parents[1])
-        if left is None or right is None:
+        left = self._public_result_rows(self.public_reports[parents[0]])
+        right = self._public_result_rows(self.public_reports[parents[1]])
+        joined = self._public_result_rows(self.public_reports.get(task_id))
+        if left is None or right is None or joined is None:
             return None
         join = next(step for step in task["operator_chain"]
                     if step["op"] == "join")
         key_left, key_right = join["left_on"], join["right_on"]
-        if key_left not in left.columns or key_right not in right.columns:
+        if not left or not right or not all(
+            key_left in row for row in left
+        ) or not all(key_right in row for row in right):
             return None
 
         # Compare the newly returned marker/ID with the *visible* parent
@@ -515,8 +558,8 @@ class ExecutionState:
                           for k in ("result", "summary"))
             for tid in parents
         }
-        left_keys = {r["values"][key_left] for r in left.rows}
-        right_keys = {r["values"][key_right] for r in right.rows}
+        left_keys = {r[key_left] for r in left}
+        right_keys = {r[key_right] for r in right}
         shared = left_keys & right_keys
         result_text = " ".join(
             str(self.public_reports.get(task_id, {})
@@ -525,24 +568,21 @@ class ExecutionState:
         )
         if not shared or not result_text:
             return None
-        visible_product = self.communicated_product(task_id)
-        if visible_product is None:
-            return None
-        for row in visible_product.rows:
+        for row in joined:
             returned_keys = []
-            if key_left in row["values"]:
-                returned_keys.append(row["values"][key_left])
-            elif "marker_code" in row["values"] and "marker_code" in left.columns:
+            if key_left in row:
+                returned_keys.append(row[key_left])
+            elif "marker_code" in row and all("marker_code" in x for x in left):
                 returned_keys.extend(
-                    item["values"][key_left] for item in left.rows
-                    if item["values"]["marker_code"] == row["values"]["marker_code"]
+                    item[key_left] for item in left
+                    if item["marker_code"] == row["marker_code"]
                 )
             if not returned_keys:
                 continue
             for value in returned_keys:
                 if value in shared:
                     continue
-                marker = str(row["values"].get("marker_code", value))
+                marker = str(row.get("marker_code", value))
                 if (marker not in result_text
                         or str(value) not in visible_parent_text[parents[0]]
                         or not any(str(k) in visible_parent_text[parents[1]]
@@ -663,8 +703,197 @@ class ExecutionState:
                 "downstream_previously_executed": True,
             })
 
+    def _explicit_report_claims(self) -> list[dict]:
+        """Parse only delivered Result claims with a single known origin.
+
+        Multi-origin Join outputs and unknown provenance are *not*
+        independent witnesses, even if they cite several source records.
+        """
+        rows = []
+        for tid, report in self.public_reports.items():
+            if tid not in self.tasks or self.public_status(tid) != "done":
+                continue
+            task = self.tasks[tid]
+            scopes = task.get("source_ids", [])
+            fallback = scopes[0] if len(scopes) == 1 else None
+            claims, _ = extract_visible_claims(
+                report,
+                output_fields=task.get("outputs", {}).get("typed_relation", []),
+                source_id=fallback,
+            )
+            for claim in claims:
+                if (claim["surface"] != "result"
+                        or not claim["declared_output_field"]
+                        or claim["subject"].startswith("source:")):
+                    continue
+                refs = claim.get("fact_refs") or []
+                origins = {self.origin_by_ref.get(ref) for ref in refs}
+                if len(origins) != 1 or None in origins:
+                    continue
+                rows.append({
+                    **claim, "task_id": tid,
+                    "evidence_origin_id": next(iter(origins)),
+                    "observed_round": self.public_report_rounds.get(tid, 0),
+                })
+        return rows
+
+    def _detect_explicit_cross_report_disagreements(self) -> None:
+        """Late, cited, independent claims can justify one targeted recheck.
+
+        No Gold value is consulted, and no side is declared correct.
+        Independent sources merely having different candidates or a
+        complementary Join are *not* enough to trigger this detector.
+        """
+        if not self.cross_source_checks_enabled:
+            return
+        by_claim = {}
+        for claim in self._explicit_report_claims():
+            key = (claim["subject"], claim["attribute"], claim["valid_scope"])
+            by_claim.setdefault(key, []).append(claim)
+        for (subject, field, scope), items in sorted(by_claim.items()):
+            ordered = sorted(items, key=lambda row: (
+                row["observed_round"], row["task_id"],
+            ))
+            for i, earlier in enumerate(ordered):
+                for later in ordered[i + 1:]:
+                    left, right = earlier["task_id"], later["task_id"]
+                    if (left == right
+                            or earlier["evidence_origin_id"]
+                               == later["evidence_origin_id"]
+                            or left in self._dependents(right)
+                            or right in self._dependents(left)
+                            or (type(earlier["value"]), earlier["value"])
+                               == (type(later["value"]), later["value"])):
+                        continue
+                    # A different later observation only becomes a recovery
+                    # opportunity if the prior claim already drove work.
+                    prev = self.current.get(left)
+                    if prev is None or prev.version != 1:
+                        continue
+                    consumed = any(
+                        child in self.current
+                        and self.current[child].status != "stale"
+                        and self.current[child].used_parent_versions.get(left)
+                            == prev.version
+                        for child in self._dependents(left)
+                    )
+                    if not consumed:
+                        continue
+                    pair = (left, right, subject, field, scope)
+                    if pair in self.checked_explicit_claim_pairs:
+                        continue
+                    self.checked_explicit_claim_pairs.add(pair)
+                    message = (
+                        "Two separately cited sources report different "
+                        + field.replace("_", " ") + " values for "
+                        + subject + ": " + str(earlier["value"])
+                        + " versus " + str(later["value"])
+                        + ". The earlier value was used downstream; "
+                        "recheck it against the returned source record."
+                    )
+                    prev.status = "disputed"
+                    prev.runtime["visible_issue"] = message
+                    prev.runtime["cross_source_recheck_requested"] = True
+                    self.detected_conflicts.append({
+                        "kind": "explicit_independent_claim_disagreement",
+                        "compared_parent_tasks": [left, right],
+                        "recheck_task_id": left,
+                        "claim": {"subject": subject, "attribute": field,
+                                  "valid_scope": scope},
+                        "observed_values": [
+                            earlier["value"], later["value"],
+                        ],
+                        "cited_fact_refs": [
+                            earlier["fact_refs"], later["fact_refs"],
+                        ],
+                        "at_public_round": later["observed_round"],
+                        "downstream_previously_executed": True,
+                    })
+                    return
+
+    def unresolved_cited_conflicts(self) -> bool:
+        """After rechecking, do two PUBLIC independent claims still disagree?
+
+        A re-execution that returns exactly the same value is *not*
+        automatically a resolution. Neither source's hidden Gold is used.
+        """
+        relevant = [
+            row for row in self.detected_conflicts
+            if row.get("kind") == "explicit_independent_claim_disagreement"
+        ]
+        if not relevant:
+            return False
+        claims = self._explicit_report_claims()
+        for event in relevant:
+            left, right = event["compared_parent_tasks"]
+            wanted = event["claim"]
+            matching = {}
+            for claim in claims:
+                if (claim["task_id"] in (left, right)
+                        and all(claim[key] == value
+                                for key, value in (
+                                    ("subject", wanted["subject"]),
+                                    ("attribute", wanted["attribute"]),
+                                    ("valid_scope", wanted["valid_scope"]),
+                                ))):
+                    matching.setdefault(claim["task_id"], set()).add(
+                        (type(claim["value"]).__name__, repr(claim["value"]))
+                    )
+            if (left not in matching or right not in matching
+                    or matching[left] != matching[right]):
+                return True
+        return False
+
+    def observable_issues(self) -> list[dict]:
+        """Current decision's report-grounded anomalies, not fault labels.
+
+        The simulator retains these as PRIVATE risk-supervision diagnostics.
+        The Main still receives only the original O1 Sub-Agent history.
+        """
+        issues = []
+        for tid in sorted(self.public_reports):
+            if tid not in self.current:
+                continue
+            status = self.public_status(tid)
+            item = self.current[tid]
+            if status == "missing":
+                kind = "missing_delivery"
+                reason = self.visible_discrepancy(tid)
+            elif status == "partial":
+                kind = "partial_delivery"
+                reason = self.visible_discrepancy(tid)
+            elif item.status == "stale":
+                # A previous public parent report was superseded; the old
+                # derived result is not newly verified by that replacement.
+                kind = "stale_downstream_result"
+                reason = "A previously used upstream report was replaced."
+            elif item.runtime.get("cross_source_recheck_requested"):
+                kind = "cross_source_conflict"
+                reason = item.runtime.get("visible_issue")
+            elif self._visible_report_internal_conflict(tid):
+                kind = "intra_report_conflict"
+                reason = self._visible_report_internal_conflict(tid)
+            elif self._visible_lookup_issue(tid):
+                kind = "lookup_key_disagreement"
+                reason = self._visible_lookup_issue(tid)
+            elif self._visible_passthrough_issue(tid):
+                kind = "derived_identifier_disagreement"
+                reason = self._visible_passthrough_issue(tid)
+            else:
+                # An unexplained discrepancy is not a license to read
+                # the private Attempt or invent an outside verifier.
+                continue
+            if reason:
+                issues.append({
+                    "task_id": tid, "kind": kind, "evidence": reason,
+                    "reported_round": self.public_report_rounds.get(tid),
+                    "delivery_status": status,
+                })
+        return issues
+
     def scheduling_state(self) -> dict:
         self._detect_late_cross_source_conflicts()
+        self._detect_explicit_cross_report_disagreements()
         disputed = []
         for tid, item in self.current.items():
             discrepancy = self.visible_discrepancy(tid)

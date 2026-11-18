@@ -1194,8 +1194,8 @@ class RoundLocalRecoveryTests(unittest.TestCase):
 
 
     def test_attempt_contract_separates_delivery_from_preview(self):
-        from environment.untrusted_orchestration.report_author import (
-            _observed_contract,
+        from environment.untrusted_orchestration.report_contract import (
+            build_report_contract,
         )
         tasks = {task["task_id"]: task for task in
                  self.scene["macro_graph"]["tasks"]}
@@ -1204,7 +1204,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                       if len(tasks[tid]["outputs"]["typed_relation"]) > 1)
         state = ExecutionState(self.scene, {})
         attempt = state.register(target, fault=Fault(target, "partial"))
-        contract = _observed_contract(
+        contract = build_report_contract(
             tasks[target], attempt, "Inspect the assigned records."
         )
         self.assertEqual(contract["delivery_status"], "partial")
@@ -1261,8 +1261,11 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertIn("not delivered", report["finish_result"]["result"])
 
     def test_result_context_ids_are_grounded_but_invented_ids_still_fail(self):
-        from environment.untrusted_orchestration.report_author import (
-            _observed_contract, _guard, _claim_tokens,
+        from environment.untrusted_orchestration.report_contract import (
+            build_report_contract,
+        )
+        from environment.untrusted_orchestration.report_validation import (
+            validate_report_draft, claim_tokens,
         )
         task = {"task_id": "lookup", "source_ids": ["stat_a"],
                 "depends_on": [], "operator_chain": []}
@@ -1288,7 +1291,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 }],
             },
         )
-        contract = _observed_contract(
+        contract = build_report_contract(
             task, attempt, "Retrieve stat_a for Case-016 using MK-0531."
         )
         draft = {
@@ -1299,14 +1302,14 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 "stat_a record for the current case."
             ),
         }
-        self.assertEqual(_guard(draft, contract, attempt), [])
+        self.assertEqual(validate_report_draft(draft, contract, attempt), [])
         malicious = dict(draft, result="MK-0531 has count 36 for Case-999.")
         self.assertIn("result_unobserved_numeric_or_entity",
-                      _guard(malicious, contract, attempt))
-        self.assertEqual(_claim_tokens("70,000 ms"),
-                         _claim_tokens("70000 ms"))
-        self.assertEqual(_claim_tokens("MK-0531"),
-                         _claim_tokens("mk-0531"))
+                      validate_report_draft(malicious, contract, attempt))
+        self.assertEqual(claim_tokens("70,000 ms"),
+                         claim_tokens("70000 ms"))
+        self.assertEqual(claim_tokens("MK-0531"),
+                         claim_tokens("mk-0531"))
 
     def test_branch_notifies_distinct_agent_progress_events(self):
         tid = self.scene["macro_graph"]["reference_waves"][0][0]
@@ -1681,8 +1684,8 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertEqual(status["mode"], "llm_reviewed_contract_frozen")
 
     def test_stage4b_intermediate_numeric_is_not_final_delivered_value(self):
-        from environment.untrusted_orchestration.report_author import (
-            _explicit_final_value_issues, _guard,
+        from environment.untrusted_orchestration.report_validation import (
+            explicit_final_value_issues, validate_report_draft,
         )
         delivered = [{
             "values": {"marker_code": None, "candidate_id": "Case-008"},
@@ -1705,20 +1708,20 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             "unresolved_fields": ["marker_code"],
         }
         self.assertEqual(
-            _explicit_final_value_issues(
+            explicit_final_value_issues(
                 "The delivered marker code is unavailable, after the "
                 "observed frame threshold of 60000.", contract,
             ), [],
         )
         self.assertIn(
             "claimed_final_field_value_not_delivered",
-            _explicit_final_value_issues(
+            explicit_final_value_issues(
                 "The final marker code: MK-4010.", contract,
             ),
         )
         self.assertIn(
             "claimed_final_field_value_not_delivered",
-            _explicit_final_value_issues(
+            explicit_final_value_issues(
                 "The final candidate id = Case-999.", contract,
             ),
         )
