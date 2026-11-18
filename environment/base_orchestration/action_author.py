@@ -901,11 +901,10 @@ def _complete_reasoning_prose(
     quotes = [quote for quote in quotes if quote]
     if not quotes:
         return None, "completion_lacks_public_evidence"
-    suffix = (
-        "" if any(quote in authored for quote in quotes)
-        else ' Evidence: "' + quotes[-1] + '".'
-    )
-    budget = min(max_authored_chars, 1600 - len(suffix) - 1)
+    citation = ' Evidence: "' + quotes[-1] + '".'
+    # Reserve room for the citation even if the ORIGINAL authored draft
+    # contains the quote: it may be in a sentence trimmed away below.
+    budget = min(max_authored_chars, 1600 - len(citation) - 1)
     if budget < 45:
         return None, "completion_insufficient_reasoning_budget"
     prefix = authored.strip()
@@ -920,6 +919,7 @@ def _complete_reasoning_prose(
         prefix = prefix[:boundaries[-1].end()].strip()
     if prefix and prefix[-1] not in '.!?\\"\u201d\u2019':
         prefix += "."
+    suffix = "" if any(quote in prefix for quote in quotes) else citation
     if len(prefix) + len(suffix) > 1600:
         return None, "completion_reasoning_budget_exceeded"
     return prefix + suffix, prefix
