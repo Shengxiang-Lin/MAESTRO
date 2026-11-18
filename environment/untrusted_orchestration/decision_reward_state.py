@@ -113,11 +113,20 @@ def capture_decision_state(
             "evidence_units": [f"{tid}::{field}" for field in fields],
         })
 
+    # Gold is only permitted in this PRIVATE scorer snapshot. The Main
+    # model never receives it; an arbitrary non-empty completion answer
+    # must not earn full reward.
+    expected_completion = None
+    if can_complete:
+        from environment.base_orchestration.trajectory_builder import _answer_text
+        expected_completion = _answer_text(state.scene)
+
     return {
         "schema": SCHEMA,
         "decision_round": round_number,
         "max_parallel_tasks": max_parallel_tasks,
         "can_complete": bool(can_complete),
+        "expected_completion_answer": expected_completion,
         "event_pending": bool(event_pending),
         "scorable": not unobservable and not privately_held_ready,
         "unobservable_private_repairs": sorted(unobservable),

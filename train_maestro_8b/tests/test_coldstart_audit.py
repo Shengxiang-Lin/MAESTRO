@@ -18,6 +18,7 @@ def row(index, *, valid=True):
         "schema": SCHEMA,
         "scorable": True,
         "can_complete": bool(valid),
+        "expected_completion_answer": "verified answer" if valid else None,
         "max_parallel_tasks": 4,
         "actionable": [],
     }
@@ -81,7 +82,7 @@ class RiskColdStartTests(unittest.TestCase):
         self.assertTrue(all(r["reason"] == "invalid_json" for r in results))
 
     def test_strict_legal_reward_and_premature_completion(self):
-        legal = '{"action":"complete","params":{"answer":"verified"}}'
+        legal = '{"action":"complete","params":{"answer":"verified answer"}}'
         result = score_decision(legal, row(0, valid=True)["decision_state"])
         self.assertTrue(result["valid"])
         self.assertEqual(result["reward"], 1.0)

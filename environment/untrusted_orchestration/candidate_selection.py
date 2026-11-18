@@ -155,14 +155,29 @@ def classify_trial(plan: dict, journal: dict) -> dict:
 def select_recovered_candidates(
     planned: list[dict], journals: list[dict], *,
     max_selected_per_round: int,
+    strategy: str = "causal_rank",
+    max_diagnostics_per_scene: int = 0,
+    seed: int = 17,
 ) -> tuple[set[int], list[dict], dict]:
-    """Rank by ACTUAL causal behavior, not by the name of the fault."""
+    """Select distinct recoveries plus a bounded sample of real failures.
+
+    The optional stratified strategy balances *observed replay behaviors*
+    across feedback rounds. A non-recovered diagnostic can be language
+    reviewed for evidence-state supervision, but is NEVER positive SFT.
+    """
     if type(max_selected_per_round) is not int or not (
         1 <= max_selected_per_round <= 8
     ):
         raise ValueError("invalid_selection_cap")
+    if strategy not in {"causal_rank", "stratified"}:
+        raise ValueError("invalid_candidate_selection_strategy")
+    if type(max_diagnostics_per_scene) is not int or not (
+        0 <= max_diagnostics_per_scene <= 8
+    ):
+        raise ValueError("invalid_diagnostic_selection_cap")
     if len(planned) != len(journals):
         raise ValueError("candidate_selection_journal_alignment_invalid")
+
     rows = [
         classify_trial(plan, journal)
         for plan, journal in zip(planned, journals)
@@ -170,25 +185,38 @@ def select_recovered_candidates(
     groups = defaultdict(list)
     for row in rows:
         groups[(row["question_id"], row["feedback_round"])].append(row)
-    chosen = set()
-    for row in rows:
         row["recovery_rank"] = None
-    for group in groups.values():
+        row["selection_purpose"] = "unselected"
+
+    selected = set()
+    category_usage = Counter()
+    def tie(row):
+        return sha256((
+            str(seed) + ":" + row["round_sample_id"]
+        ).encode("utf-8")).hexdigest()
+
+    # Iterate in stable Scene/round order, independent of worker completion.
+    for key in sorted(groups):
         eligible = [
-            row for row in group
+            row for row in groups[key]
             if row["execution_outcome"] == "recovered"
         ]
-        eligible.sort(key=lambda row: (
-            _PRIORITY.get(row["category"], 99),
-            -row["actual_invalidations"],
-            -row["visible_conflicts"],
-            -row["decision_rounds_post_fork"],
-            row["candidate_index"],
-        ))
-        # V10.3 restores the V10.1 causal rank as the control baseline.
-        # Distinct signatures remain available for language-review backfill.
-        # Reordering by fault name was not supported by V10.2 results;
-        # the planned evidence recovery behavior is the first priority.
+        if strategy == "stratified":
+            eligible.sort(key=lambda row: (
+                category_usage[row["category"]],
+                _PRIORITY.get(row["category"], 99),
+                -row["actual_invalidations"],
+                -row["visible_conflicts"],
+                tie(row),
+            ))
+        else:
+            eligible.sort(key=lambda row: (
+                _PRIORITY.get(row["category"], 99),
+                -row["actual_invalidations"],
+                -row["visible_conflicts"],
+                -row["decision_rounds_post_fork"],
+                row["candidate_index"],
+            ))
         seen = set()
         for candidate in eligible:
             signature = candidate["behavior_signature"]
@@ -197,14 +225,64 @@ def select_recovered_candidates(
             seen.add(signature)
             candidate["recovery_rank"] = len(seen)
             if len(seen) <= max_selected_per_round:
-                chosen.add(candidate["candidate_index"])
+                selected.add(candidate["candidate_index"])
+                candidate["selection_purpose"] = "positive"
+                category_usage[candidate["category"]] += 1
+
+    # Keep some *genuine* non-recovered branches for reliable observable
+    # claim-state diagnostics. They must have a replayed episode; do not
+    # invent failures or turn them into supervised recovery decisions.
+    diagnostics = set()
+    if max_diagnostics_per_scene:
+        by_scene = defaultdict(list)
+        for row in rows:
+            if row["execution_outcome"] == "recovered":
+                continue
+            journal = journals[row["candidate_index"]]
+            if not isinstance(journal.get("episode"), dict):
+                continue
+            if not isinstance(journal.get("private_audit"), dict):
+                continue
+            by_scene[row["question_id"]].append(row)
+        outcome_priority = {
+            "incorrect_result_after_actual_propagation": 0,
+            "unverified_report_claim": 1,
+            "short_replay_horizon": 2,
+            "unresolved_dependencies": 3,
+            "max_decision_rounds": 4,
+        }
+        diagnostic_counts = Counter()
+        for scene_id in sorted(by_scene):
+            choices = sorted(by_scene[scene_id], key=lambda row: (
+                outcome_priority.get(row["execution_outcome"], 9),
+                tie(row),
+            ))
+            seen_behaviors = set()
+            for candidate in choices:
+                identity = (
+                    candidate["execution_outcome"],
+                    candidate["private_fault_family"],
+                    candidate["main_visible_delivery_state"],
+                )
+                if identity in seen_behaviors:
+                    continue
+                seen_behaviors.add(identity)
+                candidate["selection_purpose"] = "diagnostic"
+                diagnostics.add(candidate["candidate_index"])
+                diagnostic_counts[scene_id] += 1
+                if diagnostic_counts[scene_id] >= max_diagnostics_per_scene:
+                    break
+
+    chosen = selected | diagnostics
     for row in rows:
         row["selected_for_language_review"] = (
             row["candidate_index"] in chosen
         )
         row["selection_reason"] = (
-            "causal_recovered_distinct_behavior"
-            if row["selected_for_language_review"]
+            "causally_distinct_recovered_behavior"
+            if row["selection_purpose"] == "positive"
+            else "nonrecovered_observation_diagnostic"
+            if row["selection_purpose"] == "diagnostic"
             else "not_execution_recovered"
             if row["execution_outcome"] != "recovered"
             else "deduplicated_or_lower_priority_within_feedback_round"
@@ -227,6 +305,7 @@ def select_recovered_candidates(
             row["execution_outcome"] == "recovered" for row in rows
         ),
         "candidates_selected_for_language_review": len(chosen),
+        "diagnostics_selected_for_language_review": len(diagnostics),
         "candidates_filtered_before_llm": len(rows) - len(chosen),
         "candidate_behavior_distribution": dict(sorted(counts.items())),
         "private_fault_family_distribution": dict(

@@ -31,6 +31,7 @@ from .trusted_prefix import compile_trusted_prefixes
 from .publication_guard import review_turn_surface
 from .candidate_exploration import expand_all_rounds
 from .candidate_selection import select_recovered_candidates
+from .round_sampling import select_feedback_rounds
 from .evidence_affordances import analyze_scene_evidence_affordances
 
 
@@ -109,6 +110,7 @@ def _plan_branches(
     scenes: list[dict], base: dict[str, dict],
     *, branches_per_scene: int | None = None, seed: int,
     fault_modes: list[str], persistence: str,
+    round_sampling_strategy: str = "chronological",
     multi_target_probability: float,
     max_rounds: int,
     scenario_mode: str = "round_fork",
@@ -116,17 +118,13 @@ def _plan_branches(
     max_fault_atoms: int = 1,
     delayed_evidence_probability: float = 0.0,
 ) -> tuple[list[dict], int, int]:
-    """Expand EVERY accepted Main feedback round into one fault scenario.
+    """Choose trusted feedback forks; retain a true Stage-3 prefix for each.
 
-    The unit is (question, Main decision round), *not* a randomly sampled
-    number of branches per Question. A decision round t receives the latest
-    Sub-Agent batch returned from delegate round t-1. Every such available
-    round is retained in the plan, even when no admissible fault exists;
-    those rounds produce explicit skipped_unsupported journals.
-
-    `branches_per_scene` is an optional *debugging cap* for compatibility
-    with prior callers. None means no cap; the production YAML uses None.
-    The max_rounds budget also limits the global round positions.
+    The unit is (question, Main feedback round t), receiving actual results
+    from delegate round t-1. When capped, the maintained pilot samples across
+    early/middle/late history rather than only from the beginning. All
+    sampled rounds are accounted for, including unsupported or over-budget
+    faults; no future report is copied into the visible prefix.
     """
     if branches_per_scene is not None and (
         type(branches_per_scene) is not int or branches_per_scene < 1
@@ -160,10 +158,11 @@ def _plan_branches(
             # exceeding this run's configured recovery horizon. Such a
             # round is explicitly accounted for as budget-skipped below.
             rounds.append((decision_round, delegate))
-        if branches_per_scene is not None:
-            # A diagnostic cap uses *chronological rounds*, not random
-            # selection. Production never caps coverage at two branches.
-            rounds = rounds[:branches_per_scene]
+        rounds = select_feedback_rounds(
+            rounds, limit=branches_per_scene,
+            strategy=round_sampling_strategy,
+            seed=seed + scene_index * 1009,
+        )
         if not rounds:
             no_eligible += 1
             continue
@@ -299,6 +298,9 @@ def _publish(output: Path, planned: list[dict],
     retained_language_exceptions = 0
     local_candidates, local_qualified, local_rejections = [], [], []
     claim_state_supervision = []
+    # Observable evidence labels also exist in genuine non-recovered runs.
+    # They are never positive Main-action supervision.
+    reviewed_observable_states = []
     decision_reward_states = []
     decision_reward_missing = 0
     claim_state_diagnostics = []
@@ -460,6 +462,16 @@ def _publish(output: Path, planned: list[dict],
                 if status != "not_selected_for_language_review":
                     claim_state_diagnostics.append({
                         **state_label, "global_publication_status": status,
+                    })
+                if (status == "recovered" or (
+                    status != "not_selected_for_language_review"
+                    and audit.get("language_review_accepted") is True
+                )):
+                    reviewed_observable_states.append({
+                        **state_label,
+                        "global_outcome_private": status,
+                        "positive_main_action_label": status == "recovered",
+                        "label_scope": "observable_claim_state_only",
                     })
                 if status == "recovered":
                     claim_state_supervision.append(state_label)
@@ -682,6 +694,10 @@ def _publish(output: Path, planned: list[dict],
         output / "private" / "claim_state_diagnostics.jsonl",
         claim_state_diagnostics,
     )
+    _atomic_jsonl(
+        output / "private" / "reviewed_observable_states.jsonl",
+        reviewed_observable_states,
+    )
     _atomic_jsonl(output / "private" / "publication_guard.jsonl",
                   publication_guard_rows)
     _atomic_jsonl(output / "private" / "event_timeline.jsonl",
@@ -815,6 +831,14 @@ def _publish(output: Path, planned: list[dict],
         "subagent_guard_failure_causes": dict(report_guard_failures),
         "subagent_review_failure_stages": dict(report_review_failures),
         "claim_state_supervision_rounds": len(claim_state_supervision),
+        "reviewed_observable_state_rounds": len(reviewed_observable_states),
+        "reviewed_nonrecovered_state_rounds": sum(
+            not row["positive_main_action_label"]
+            for row in reviewed_observable_states
+        ),
+        "reviewed_observable_states": str(
+            output / "private" / "reviewed_observable_states.jsonl"
+        ),
         "claim_state_diagnostic_rounds": len(claim_state_diagnostics),
         "claim_state_status_distribution": dict(claim_state_statuses),
         "claim_state_supervision": str(
@@ -831,6 +855,8 @@ def _publish(output: Path, planned: list[dict],
 def generate_turns(
     *, scenes_path: Path, reports_path: Path, output_dir: Path,
     max_scenes: int | None = 30, branches_per_scene: int | None = None,
+    round_sampling_strategy: str = "chronological",
+    max_post_fork_rounds: int | None = None,
     seed: int = 17, fault_modes: list[str] | None = None,
     persistence: str = "once", multi_target_probability: float = 0.0,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
@@ -843,6 +869,8 @@ def generate_turns(
     max_candidates_per_round: int = 24,
     max_distractors_per_fault: int = 2,
     max_selected_per_round: int = 1,
+    selection_strategy: str = "causal_rank",
+    max_diagnostics_per_scene: int = 0,
     max_language_attempts_per_round: int = 1,
     max_revisions: int = 2,
     report_max_revisions: int | None = None,
@@ -870,6 +898,12 @@ def generate_turns(
         type(branches_per_scene) is not int or branches_per_scene < 1
     ):
         raise ValueError("untrusted_invalid_round_debug_cap")
+    if round_sampling_strategy not in {"chronological", "stratified"}:
+        raise ValueError("invalid_feedback_round_sampling_strategy")
+    if max_post_fork_rounds is not None and (
+        type(max_post_fork_rounds) is not int or max_post_fork_rounds < 1
+    ):
+        raise ValueError("invalid_max_post_fork_rounds")
     if bool(author) != bool(critic) or bool(report_author) != bool(report_critic):
         raise ValueError("untrusted_author_and_critic_must_be_paired")
     if main_mode is None:
@@ -903,6 +937,12 @@ def generate_turns(
     ):
         if type(value) is not int or not 1 <= value <= maximum:
             raise ValueError("invalid_" + name)
+    if selection_strategy not in {"causal_rank", "stratified"}:
+        raise ValueError("invalid_candidate_selection_strategy")
+    if type(max_diagnostics_per_scene) is not int or not (
+        0 <= max_diagnostics_per_scene <= 8
+    ):
+        raise ValueError("invalid_max_diagnostics_per_scene")
     if (candidate_strategy == "enumerate"
             and max_language_attempts_per_round < max_selected_per_round):
         raise ValueError("language_budget_smaller_than_selection")
@@ -925,7 +965,10 @@ def generate_turns(
         raise ValueError("invalid_delayed_evidence_probability")
     settings = {
         "max_scenes": max_scenes,
-        "branches_per_scene": branches_per_scene, "seed": seed,
+        "branches_per_scene": branches_per_scene,
+        "round_sampling_strategy": round_sampling_strategy,
+        "max_post_fork_rounds": max_post_fork_rounds,
+        "seed": seed,
         "fault_modes": modes, "persistence": persistence,
         "scenario_mode": scenario_mode,
         "atomic_fault_kinds": kinds,
@@ -935,6 +978,8 @@ def generate_turns(
         "max_candidates_per_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
         "max_selected_per_round": max_selected_per_round,
+        "selection_strategy": selection_strategy,
+        "max_diagnostics_per_scene": max_diagnostics_per_scene,
         "max_language_attempts_per_round": max_language_attempts_per_round,
         "multi_target_probability": multi_target_probability,
         "max_rounds": max_rounds, "max_cost": max_cost,
@@ -977,6 +1022,7 @@ def generate_turns(
     )
     planned, no_base, no_eligible = _plan_branches(
         scenes, base, branches_per_scene=branches_per_scene,
+        round_sampling_strategy=round_sampling_strategy,
         seed=seed, fault_modes=modes, persistence=persistence,
         multi_target_probability=multi_target_probability,
         max_rounds=max_rounds,
@@ -1312,6 +1358,7 @@ def generate_turns(
                 branch_round=plan["branch_round"], faults=plan["faults"],
                 scenario_plan=plan["scenario_plan"],
                 max_rounds=max_rounds, max_cost=max_cost,
+                max_post_fork_rounds=max_post_fork_rounds,
                 max_retries=max_retries,
                 max_parallel_tasks=max_parallel_tasks,
                 sub_model=sub_model, model_alias=model_alias,
@@ -1346,6 +1393,9 @@ def generate_turns(
             select_recovered_candidates(
                 planned, [saved(stage_a, plan) for plan in planned],
                 max_selected_per_round=max_selected_per_round,
+                strategy=selection_strategy,
+                max_diagnostics_per_scene=max_diagnostics_per_scene,
+                seed=seed,
             )
         )
     else:
@@ -1527,7 +1577,9 @@ def generate_turns(
             index = row["candidate_index"]
             row["selected_for_language_review"] = index in attempted
             row["selection_reason"] = (
-                "language_review_primary" if index in initial_selection
+                "language_review_diagnostic"
+                if index in attempted and row.get("selection_purpose") == "diagnostic"
+                else "language_review_primary" if index in initial_selection
                 else "language_review_backfill_after_rejection"
                 if index in attempted
                 else "not_execution_recovered"
@@ -1578,6 +1630,10 @@ def generate_turns(
         "pipeline": "maestro_untrusted_orchestration",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
+        "selection_strategy": selection_strategy,
+        "max_diagnostics_per_scene": max_diagnostics_per_scene,
+        "round_sampling_strategy": round_sampling_strategy,
+        "max_post_fork_rounds": max_post_fork_rounds,
         "max_candidates_per_feedback_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
         "max_selected_per_feedback_round": max_selected_per_round,

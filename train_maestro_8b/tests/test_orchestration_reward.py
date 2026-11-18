@@ -129,7 +129,15 @@ class DeterministicRewardTests(unittest.TestCase):
 
     def test_complete_and_private_oracle_fail_closed(self):
         done = {"action":"complete","params":{"answer":"A supported finding"}}
-        self.assertEqual(score_decision(done,state(complete=True))["reward"],1)
+        terminal = state(complete=True)
+        terminal["expected_completion_answer"] = "A supported finding"
+        self.assertEqual(score_decision(done, terminal)["reward"], 1)
+        self.assertEqual(score_decision(
+            {"action": "complete", "params": {"answer": "An invented answer"}},
+            terminal,
+        )["reason"], "incorrect_completion_answer")
+        self.assertEqual(score_decision(done, state(complete=True))["reason"],
+                         "missing_private_completion_reference")
         self.assertEqual(score_decision(done,self.env)["reward"],-1)
         self.assertEqual(
             score_decision({"action":"complete","params":None},
@@ -139,6 +147,18 @@ class DeterministicRewardTests(unittest.TestCase):
         private["scorable"] = False
         with self.assertRaisesRegex(ValueError,"unobservable"):
             score_decision(delegate(("source_A","project_id")),private)
+
+    def test_completion_json_values_preserve_types(self):
+        env = state(complete=True)
+        env["expected_completion_answer"] = '[{"ok":true,"count":3}]'
+        self.assertEqual(score_decision({
+            "action": "complete",
+            "params": {"answer": '[ { "count": 3, "ok": true } ]'},
+        }, env)["reward"], 1.0)
+        self.assertEqual(score_decision({
+            "action": "complete",
+            "params": {"answer": '[{"ok":1,"count":3}]'},
+        }, env)["reason"], "incorrect_completion_answer")
 
     def test_indistinguishable_goals_do_not_guess_private_task_id(self):
         x = option("X","project_id","source_A")
