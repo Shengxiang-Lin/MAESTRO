@@ -31,6 +31,7 @@ from .trusted_prefix import compile_trusted_prefixes
 from .publication_guard import review_turn_surface
 from .candidate_exploration import expand_all_rounds
 from .candidate_selection import select_recovered_candidates
+from .round_sampling import select_feedback_rounds
 from .evidence_affordances import analyze_scene_evidence_affordances
 
 
@@ -109,6 +110,7 @@ def _plan_branches(
     scenes: list[dict], base: dict[str, dict],
     *, branches_per_scene: int | None = None, seed: int,
     fault_modes: list[str], persistence: str,
+    round_sampling_strategy: str = "chronological",
     multi_target_probability: float,
     max_rounds: int,
     scenario_mode: str = "round_fork",
@@ -160,10 +162,11 @@ def _plan_branches(
             # exceeding this run's configured recovery horizon. Such a
             # round is explicitly accounted for as budget-skipped below.
             rounds.append((decision_round, delegate))
-        if branches_per_scene is not None:
-            # A diagnostic cap uses *chronological rounds*, not random
-            # selection. Production never caps coverage at two branches.
-            rounds = rounds[:branches_per_scene]
+        rounds = select_feedback_rounds(
+            rounds, limit=branches_per_scene,
+            strategy=round_sampling_strategy,
+            seed=seed + scene_index * 1009,
+        )
         if not rounds:
             no_eligible += 1
             continue
@@ -831,6 +834,8 @@ def _publish(output: Path, planned: list[dict],
 def generate_turns(
     *, scenes_path: Path, reports_path: Path, output_dir: Path,
     max_scenes: int | None = 30, branches_per_scene: int | None = None,
+    round_sampling_strategy: str = "chronological",
+    max_post_fork_rounds: int | None = None,
     seed: int = 17, fault_modes: list[str] | None = None,
     persistence: str = "once", multi_target_probability: float = 0.0,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
@@ -870,6 +875,12 @@ def generate_turns(
         type(branches_per_scene) is not int or branches_per_scene < 1
     ):
         raise ValueError("untrusted_invalid_round_debug_cap")
+    if round_sampling_strategy not in {"chronological", "stratified"}:
+        raise ValueError("invalid_feedback_round_sampling_strategy")
+    if max_post_fork_rounds is not None and (
+        type(max_post_fork_rounds) is not int or max_post_fork_rounds < 1
+    ):
+        raise ValueError("invalid_max_post_fork_rounds")
     if bool(author) != bool(critic) or bool(report_author) != bool(report_critic):
         raise ValueError("untrusted_author_and_critic_must_be_paired")
     if main_mode is None:
@@ -925,7 +936,10 @@ def generate_turns(
         raise ValueError("invalid_delayed_evidence_probability")
     settings = {
         "max_scenes": max_scenes,
-        "branches_per_scene": branches_per_scene, "seed": seed,
+        "branches_per_scene": branches_per_scene,
+        "round_sampling_strategy": round_sampling_strategy,
+        "max_post_fork_rounds": max_post_fork_rounds,
+        "seed": seed,
         "fault_modes": modes, "persistence": persistence,
         "scenario_mode": scenario_mode,
         "atomic_fault_kinds": kinds,
@@ -977,6 +991,7 @@ def generate_turns(
     )
     planned, no_base, no_eligible = _plan_branches(
         scenes, base, branches_per_scene=branches_per_scene,
+        round_sampling_strategy=round_sampling_strategy,
         seed=seed, fault_modes=modes, persistence=persistence,
         multi_target_probability=multi_target_probability,
         max_rounds=max_rounds,
@@ -1312,6 +1327,7 @@ def generate_turns(
                 branch_round=plan["branch_round"], faults=plan["faults"],
                 scenario_plan=plan["scenario_plan"],
                 max_rounds=max_rounds, max_cost=max_cost,
+                max_post_fork_rounds=max_post_fork_rounds,
                 max_retries=max_retries,
                 max_parallel_tasks=max_parallel_tasks,
                 sub_model=sub_model, model_alias=model_alias,
@@ -1578,6 +1594,8 @@ def generate_turns(
         "pipeline": "maestro_untrusted_orchestration",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
+        "round_sampling_strategy": round_sampling_strategy,
+        "max_post_fork_rounds": max_post_fork_rounds,
         "max_candidates_per_feedback_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
         "max_selected_per_feedback_round": max_selected_per_round,
