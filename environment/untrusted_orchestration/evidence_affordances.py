@@ -20,6 +20,78 @@ _ID_FIELDS = {
 }
 
 
+def _intra_macro_evidence(scene: dict, tasks: dict[str, dict]) -> list[dict]:
+    """Audit frozen Macro-local source usage, without inventing a witness.
+
+    Multiple sources in a JOIN normally supply complementary constraints.
+    This PRIVATE diagnostic is not proof of comparable claims or a reason
+    for Main to verify an unseen fact.
+    """
+    world = scene.get("world", {}).get("sources", {})
+    feedback = {
+        row.get("task_id"): row
+        for row in scene.get("task_feedback", [])
+        if isinstance(row, dict)
+    }
+    rows = []
+    for task in tasks.values():
+        scopes = list(dict.fromkeys(task.get("source_ids", [])))
+        chain = task.get("operator_chain", [])
+        role = task.get("macro_role")
+        if len(scopes) < 2 and role != "verification":
+            continue
+        has_join = any(step.get("op") == "join" for step in chain)
+        observed = feedback.get(task["task_id"], {})
+        supported = []
+        for item in observed.get("workproduct", []):
+            refs = {
+                ref.split(":", 1)[0]
+                for ref in item.get("source_fact_refs", [])
+                if isinstance(ref, str) and ":" in ref
+            }
+            supported.append(refs & set(scopes))
+        cited_sources = sorted(set().union(*supported)) if supported else []
+        roots_by_source = {
+            sid: {
+                obs["evidence_origin_id"]
+                for obs in world.get(sid, {}).get("observations", [])
+                if isinstance(obs, dict)
+                and isinstance(obs.get("evidence_origin_id"), str)
+            } for sid in scopes
+        }
+        known = all(roots_by_source.values())
+        disjoint = known and all(
+            not (roots_by_source[left] & roots_by_source[right])
+            for left, right in combinations(scopes, 2)
+        )
+        rows.append({
+            "macro_task_id": task["task_id"],
+            "macro_role": role,
+            "direct_source_ids": scopes,
+            "acquisition_operations": [
+                step["op"] for step in chain
+                if step.get("op") in {"scan", "lookup_by_key"}
+            ],
+            "uses_join": has_join,
+            "relationship": (
+                "frozen_verification_gate" if role == "verification"
+                else "multi_source_complementary_join" if has_join
+                else "multi_source_acquisition"
+            ),
+            "declared_origin_distinctness": (
+                "distinct_observation_origins" if disjoint
+                else "overlapping_observation_origins" if known
+                else "unknown"
+            ),
+            "executed_cited_sources": cited_sources,
+            "executed_row_has_multiple_direct_sources": any(
+                len(part) >= 2 for part in supported
+            ),
+            "claim_comparison_status": "not_established_by_macro_structure",
+        })
+    return rows
+
+
 def analyze_scene_evidence_affordances(scene: dict) -> dict:
     graph = scene["macro_graph"]
     tasks = {row["task_id"]: row for row in graph["tasks"]}
@@ -102,6 +174,7 @@ def analyze_scene_evidence_affordances(scene: dict) -> dict:
                 "schema_only_not_proven"
             ),
         })
+    internal = _intra_macro_evidence(scene, tasks)
     return {
         "question_id": scene["task_id"],
         "macro_task_count": len(tasks),
@@ -124,10 +197,23 @@ def analyze_scene_evidence_affordances(scene: dict) -> dict:
             r["earlier_claim_consumed_before_later_report"] for r in rows
         ),
         "candidate_relationships": rows,
+        "internal_macro_evidence": internal,
+        "internal_multi_source_macros": sum(
+            len(item["direct_source_ids"]) > 1 for item in internal
+        ),
+        "internal_verification_macros": sum(
+            item["macro_role"] == "verification" for item in internal
+        ),
+        "internal_multi_source_supported_outputs": sum(
+            item["executed_row_has_multiple_direct_sources"]
+            for item in internal
+        ),
         "interpretation": (
             "Potential same-field relation only. Exact entity/metric scope "
             "and independent support are not verified. Shared fields or a "
-            "DAG join do not prove cross-validation. No synthetic evidence "
+            "DAG join do not prove cross-validation. Internal verification "
+            "and multi-source execution are audited separately, without "
+            "asserting comparable claims. No synthetic evidence "
             "or new tool access was created."
         ),
     }
