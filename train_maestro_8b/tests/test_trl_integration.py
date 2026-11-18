@@ -76,6 +76,7 @@ class TRLTrainerTinyQwen3Tests(unittest.TestCase):
             "decision_state": {
                 "schema": SCHEMA, "scorable": True,
                 "can_complete": True,
+                "expected_completion_answer": "verified",
                 "actionable": [], "max_parallel_tasks": 1,
             },
             "reference_action": {
