@@ -57,7 +57,6 @@ class ExecutionState:
         self.public_report_rounds: dict[str, int] = {}
         self.cross_source_checks_enabled = False
         self.detected_conflicts: list[dict] = []
-        self.checked_explicit_claim_pairs: set[tuple] = set()
         self.total_cost = 0
         self.invalidations: list[dict] = []
         self.revalidations: list[dict] = []
@@ -389,6 +388,53 @@ class ExecutionState:
         pattern = patterns.get(field)
         return set(re.findall(pattern, text)) if pattern else set()
 
+    def _visible_done_field_gap(self, task_id: str) -> str | None:
+        """A DONE report can still visibly omit a required typed field.
+
+        Completeness is determined from the *delivered* Result and frozen
+        public field contract; never compare with private clean rows. Only
+        fields actually required by a pending dependent (or terminal goal)
+        create a repair obligation.
+        """
+        if self.public_status(task_id) != "done":
+            return None
+        result_rows = self._public_result_rows(
+            self.public_reports.get(task_id)
+        )
+        if not result_rows:
+            return None
+        required = set()
+        for child in self.tasks.values():
+            if (task_id in child["depends_on"]
+                    and {"external_inputs", "input_schema", "operator_chain",
+                         "program_node_id", "outputs"} <= set(child)
+                    and (child["task_id"] not in self.current
+                         or self.current[child["task_id"]].status == "stale")):
+                required.update(self.required_parent_fields(
+                    child, task_id,
+                ))
+        if task_id == self.scene["macro_graph"]["terminal_task_id"]:
+            required.update(self.tasks[task_id]["outputs"]["typed_relation"])
+        # The private typed output schema cannot by itself prove Main
+        # knew that a field was mandatory. Require the field to be
+        # identifiable in the actual delegated public instruction.
+        instruction = str(
+            self.public_reports[task_id].get("task_instruction") or ""
+        ).casefold().replace("_", " ")
+        missing = sorted(
+            field for field in required
+            if field.casefold().replace("_", " ") in instruction
+            and all(row.get(field) is None for row in result_rows)
+        )
+        if not missing:
+            return None
+        return (
+            "The delivered Finish Result is marked done, but it has no "
+            "usable values for the required fields: "
+            + ", ".join(missing) + ". The missing evidence is needed "
+            "before the next dependent investigation can proceed."
+        )
+
     def _visible_lookup_issue(self, task_id: str) -> str | None:
         task = self.tasks[task_id]
         lookups = [step for step in task["operator_chain"]
@@ -457,6 +503,109 @@ class ExecutionState:
                 )
         return None
 
+    def _visible_scope_issue(self, task_id: str) -> str | None:
+        """Check explicit task-specific filters against a delivered row.
+
+        Scope/edition/year conditions must be recognizable in the ACTUAL
+        Main-facing task instruction. A private operator alone cannot
+        create a claim that Main knew the expected year or source policy.
+        """
+        if self.public_status(task_id) != "done":
+            return None
+        task = self.tasks[task_id]
+        report = self.public_reports.get(task_id, {})
+        instruction = str(report.get("task_instruction") or "").casefold()
+        if not instruction:
+            return None
+        rows = self._public_result_rows(report)
+        if not rows:
+            return None
+        for step in task.get("operator_chain", []):
+            if step.get("op") not in {"filter_eq", "filter_gte"}:
+                continue
+            field, limit = step.get("field"), step.get("value")
+            if (not isinstance(field, str)
+                    or type(limit) not in {str, int, float}
+                    or field.casefold().replace("_", " ") not in
+                       instruction.replace("_", " ")
+                    or str(limit).casefold() not in instruction):
+                continue
+            for row in rows:
+                actual = row.get(field)
+                if actual is None:
+                    continue
+                if step["op"] == "filter_eq":
+                    valid = actual == limit
+                else:
+                    valid = (
+                        type(actual) in (int, float)
+                        and type(limit) in (int, float)
+                        and actual >= limit
+                    )
+                if not valid:
+                    return (
+                        "The delivered record reports "
+                        + field.replace("_", " ") + " = " + str(actual)
+                        + ", although the assigned investigation explicitly "
+                        "requires " + step["op"].replace("_", " ")
+                        + " " + str(limit)
+                        + ". Recheck the returned record's requested scope."
+                    )
+        return None
+
+    def _visible_arithmetic_issue(self, task_id: str) -> str | None:
+        """Check one source-free derivation against explicitly delivered inputs.
+
+        No private evaluator input, hidden Gold or unreported intermediate
+        output may be used. Skip aggregation/count (unknown completeness)
+        and multi-step chains whose private intermediate values are not
+        reconstructible from Main's received reports.
+        """
+        task = self.tasks[task_id]
+        chain = task.get("operator_chain") or []
+        parents = task.get("depends_on") or []
+        if (task.get("source_ids") or len(parents) != 1
+                or len(chain) != 1
+                or chain[0].get("op") != "derive_arithmetic"
+                or chain[0].get("inputs") != task.get("external_inputs")
+                or parents[0] not in self.public_reports):
+            return None
+        if self.public_status(parents[0]) != "done":
+            return None
+        parent_rows = self._public_result_rows(self.public_reports[parents[0]])
+        result_rows = self._public_result_rows(self.public_reports.get(task_id))
+        if (not parent_rows or not result_rows
+                or len(parent_rows) != len(result_rows)):
+            return None
+        step = chain[0]
+        left_name, right_name = step["left_field"], step["right_field"]
+        output_field = step["output_field"]
+        operation = step["operation"]
+        for parent_row, returned in zip(parent_rows, result_rows):
+            left, right = parent_row.get(left_name), parent_row.get(right_name)
+            observed = returned.get(output_field)
+            if not all(type(v) in (int, float) for v in (
+                left, right, observed
+            )):
+                continue
+            if operation == "absolute_difference":
+                expected = abs(left - right)
+            elif operation == "ratio" and right != 0:
+                expected = round(left / right, step["round_digits"])
+            else:
+                continue
+            if abs(float(expected) - float(observed)) > 1e-9:
+                return (
+                    "The delivered arithmetic result for " + output_field
+                    + " is " + str(observed) + ", but the returned inputs "
+                    + left_name + " = " + str(left) + " and "
+                    + right_name + " = " + str(right)
+                    + " imply " + str(expected)
+                    + " under the requested " + operation.replace("_", " ")
+                    + ". Recompute the derivation using these inputs."
+                )
+        return None
+
     def _visible_report_internal_conflict(self, task_id: str) -> str | None:
         """Compare RESULT with SUMMARY using ONLY the delivered report.
 
@@ -521,15 +670,24 @@ class ExecutionState:
                 report.get("summary", "Some required evidence is missing.")
             )
         task = self.tasks[task_id]
+        field_gap = self._visible_done_field_gap(task_id)
+        if field_gap:
+            return field_gap
         report_issue = self._visible_report_internal_conflict(task_id)
         if report_issue:
             return report_issue
+        scope_issue = self._visible_scope_issue(task_id)
+        if scope_issue:
+            return scope_issue
         lookup_issue = self._visible_lookup_issue(task_id)
         if lookup_issue:
             return lookup_issue
         passthrough_issue = self._visible_passthrough_issue(task_id)
         if passthrough_issue:
             return passthrough_issue
+        arithmetic_issue = self._visible_arithmetic_issue(task_id)
+        if arithmetic_issue:
+            return arithmetic_issue
         if not any(step["op"] == "join" for step in task["operator_chain"]):
             return None
         parents = task["depends_on"]
@@ -598,111 +756,6 @@ class ExecutionState:
                 )
         return None
 
-    def _source_lineage(self, task_id: str) -> set[str]:
-        seen, queue, source_ids = set(), [task_id], set()
-        while queue:
-            tid = queue.pop()
-            if tid in seen:
-                continue
-            seen.add(tid)
-            task = self.tasks[tid]
-            source_ids.update(task.get("source_ids", []))
-            queue.extend(task["depends_on"])
-        return source_ids
-
-    def _detect_late_cross_source_conflicts(self) -> None:
-        """A *newly visible* independent report may dispute an old used key.
-
-        The detector reads only delivered report fields and the public DAG
-        schema. It does NOT ask the private clean relation which source
-        was wrong. It targets a previously consumed claim for rechecking,
-        not an oracle-identified corrupted source.
-        """
-        if not self.cross_source_checks_enabled:
-            return
-        for join_task in self.tasks.values():
-            parents = join_task["depends_on"]
-            if len(parents) != 2:
-                continue
-            joins = [
-                step for step in join_task["operator_chain"]
-                if step["op"] == "join"
-            ]
-            if not joins or any(p not in self.public_reports
-                                for p in parents):
-                continue
-            left, right = parents
-            left_sources = self._source_lineage(left)
-            right_sources = self._source_lineage(right)
-            if (not left_sources or not right_sources
-                    or left_sources & right_sources):
-                continue
-            left_key = joins[0]["left_on"]
-            right_key = joins[0]["right_on"]
-            left_values = self._public_field_values(
-                self.public_reports[left], left_key,
-            )
-            right_values = self._public_field_values(
-                self.public_reports[right], right_key,
-            )
-            if (not left_values or not right_values
-                    or left_values & right_values):
-                continue
-            # A delayed conflict concerns a value that was *already
-            # consumed*. Merely observing two disjoint candidate sets
-            # does not justify declaring either source erroneous.
-            used = [
-                tid for tid in parents if (
-                    self.current.get(tid) is not None
-                    and self.current[tid].status == "done"
-                    and any(
-                        child in self.current
-                        and self.current[child].status != "stale"
-                        and self.current[child].used_parent_versions.get(tid)
-                            == self.current[tid].version
-                        for child in self._dependents(tid)
-                    )
-                )
-            ]
-            if not used:
-                continue
-            # Main can reasonably recheck an earlier key that has already
-            # driven downstream work. Selecting a "known wrong" source
-            # from Gold here would be a serious teacher leak.
-            target = min(
-                used, key=lambda tid: (
-                    self.public_report_rounds.get(tid, 0), tid,
-                ),
-            )
-            current = self.current[target]
-            if current.runtime.get("cross_source_recheck_requested"):
-                continue
-            label = left_key.replace("_", " ")
-            issue = (
-                "Two independently returned reports disagree on "
-                + label + ": one lists "
-                + ", ".join(sorted(left_values)[:4])
-                + ", while the other lists "
-                + ", ".join(sorted(right_values)[:4])
-                + ". The earlier key already affected downstream work; "
-                "recheck its entity binding against the cited source."
-            )
-            current.status = "disputed"
-            current.runtime["visible_issue"] = issue
-            current.runtime["cross_source_recheck_requested"] = True
-            self.detected_conflicts.append({
-                "kind": "late_cross_source_key_disagreement",
-                "compared_parent_tasks": list(parents),
-                "recheck_task_id": target,
-                "observed_key_values": {
-                    left: sorted(left_values), right: sorted(right_values),
-                },
-                "at_public_round": max(
-                    self.public_report_rounds.get(p, 0) for p in parents
-                ),
-                "downstream_previously_executed": True,
-            })
-
     def _explicit_report_claims(self) -> list[dict]:
         """Parse only delivered Result claims with a single known origin.
 
@@ -728,17 +781,24 @@ class ExecutionState:
                     continue
                 refs = claim.get("fact_refs") or []
                 origins = {self.origin_by_ref.get(ref) for ref in refs}
-                if len(origins) != 1 or None in origins:
+                cited_sources = {
+                    ref.split(":", 1)[0] for ref in refs if ":" in ref
+                }
+                # Require one explicit cited source and one observation
+                # origin; a composite result is not a second witness.
+                if (len(origins) != 1 or None in origins
+                        or len(cited_sources) != 1):
                     continue
                 rows.append({
                     **claim, "task_id": tid,
                     "evidence_origin_id": next(iter(origins)),
+                    "provenance_source_id": next(iter(cited_sources)),
                     "observed_round": self.public_report_rounds.get(tid, 0),
                 })
         return rows
 
     def _detect_explicit_cross_report_disagreements(self) -> None:
-        """Late, cited, independent claims can justify one targeted recheck.
+        """Contested same-claim reports support bounded sequential rechecks.
 
         No Gold value is consulted, and no side is declared correct.
         Independent sources merely having different candidates or a
@@ -760,44 +820,80 @@ class ExecutionState:
                     if (left == right
                             or earlier["evidence_origin_id"]
                                == later["evidence_origin_id"]
+                            or earlier["provenance_source_id"]
+                               == later["provenance_source_id"]
                             or left in self._dependents(right)
                             or right in self._dependents(left)
                             or (type(earlier["value"]), earlier["value"])
                                == (type(later["value"]), later["value"])):
                         continue
-                    # A different later observation only becomes a recovery
-                    # opportunity if the prior claim already drove work.
-                    prev = self.current.get(left)
-                    if prev is None or prev.version != 1:
+                    # Same-round independent reports are actionable as
+                    # soon as both arrive. Delayed disagreements are also
+                    # actionable; only ACTUAL prior downstream consumers
+                    # may later be invalidated. Neither side is named wrong
+                    # from private Gold.
+                    # A first independent recheck can confirm its original
+                    # value rather than resolve the conflict. In that case
+                    # recheck the OTHER cited source on the next decision,
+                    # never the same source indefinitely. This is a bounded,
+                    # Main-visible resolution protocol, not an Oracle choice.
+                    pair = (tuple(sorted((left, right))),
+                            subject, field, scope)
+                    prior = [
+                        event for event in self.detected_conflicts
+                        if event.get("claim_pair_key") == pair
+                    ]
+                    if prior:
+                        last = prior[-1]
+                        checked = last["recheck_task_id"]
+                        checked_attempt = self.current.get(checked)
+                        if (checked_attempt is None or
+                                checked_attempt.version <=
+                                last["recheck_task_version"]):
+                            continue
+                        checked_targets = {
+                            event["recheck_task_id"] for event in prior
+                        }
+                        options = [
+                            tid for tid in (left, right)
+                            if tid not in checked_targets
+                        ]
+                        if not options:
+                            continue
+                        target = options[0]
+                    else:
+                        target = left
+                    prev = self.current.get(target)
+                    if prev is None or prev.status not in {"done", "disputed"}:
                         continue
                     consumed = any(
                         child in self.current
                         and self.current[child].status != "stale"
-                        and self.current[child].used_parent_versions.get(left)
+                        and self.current[child].used_parent_versions.get(target)
                             == prev.version
-                        for child in self._dependents(left)
+                        for child in self._dependents(target)
                     )
-                    if not consumed:
-                        continue
-                    pair = (left, right, subject, field, scope)
-                    if pair in self.checked_explicit_claim_pairs:
-                        continue
-                    self.checked_explicit_claim_pairs.add(pair)
                     message = (
                         "Two separately cited sources report different "
                         + field.replace("_", " ") + " values for "
                         + subject + ": " + str(earlier["value"])
                         + " versus " + str(later["value"])
-                        + ". The earlier value was used downstream; "
-                        "recheck it against the returned source record."
+                        + (". The earlier value was already used "
+                           "downstream; recheck its cited source record."
+                           if consumed else
+                           ". Reconcile these cited reports before using "
+                           "either conflicting claim downstream.")
                     )
                     prev.status = "disputed"
                     prev.runtime["visible_issue"] = message
                     prev.runtime["cross_source_recheck_requested"] = True
                     self.detected_conflicts.append({
                         "kind": "explicit_independent_claim_disagreement",
+                        "claim_pair_key": pair,
                         "compared_parent_tasks": [left, right],
-                        "recheck_task_id": left,
+                        "recheck_task_id": target,
+                        "recheck_task_version": prev.version,
+                        "verification_step": len(prior) + 1,
                         "claim": {"subject": subject, "attribute": field,
                                   "valid_scope": scope},
                         "observed_values": [
@@ -807,7 +903,12 @@ class ExecutionState:
                             earlier["fact_refs"], later["fact_refs"],
                         ],
                         "at_public_round": later["observed_round"],
-                        "downstream_previously_executed": True,
+                        "conflict_timing": (
+                            "simultaneous" if
+                            earlier["observed_round"] ==
+                            later["observed_round"] else "delayed"
+                        ),
+                        "downstream_previously_executed": consumed,
                     })
                     return
 
@@ -870,15 +971,24 @@ class ExecutionState:
             elif item.runtime.get("cross_source_recheck_requested"):
                 kind = "cross_source_conflict"
                 reason = item.runtime.get("visible_issue")
+            elif self._visible_done_field_gap(tid):
+                kind = "done_but_incomplete"
+                reason = self._visible_done_field_gap(tid)
             elif self._visible_report_internal_conflict(tid):
                 kind = "intra_report_conflict"
                 reason = self._visible_report_internal_conflict(tid)
+            elif self._visible_scope_issue(tid):
+                kind = "scope_constraint_mismatch"
+                reason = self._visible_scope_issue(tid)
             elif self._visible_lookup_issue(tid):
                 kind = "lookup_key_disagreement"
                 reason = self._visible_lookup_issue(tid)
             elif self._visible_passthrough_issue(tid):
                 kind = "derived_identifier_disagreement"
                 reason = self._visible_passthrough_issue(tid)
+            elif self._visible_arithmetic_issue(tid):
+                kind = "arithmetic_inconsistency"
+                reason = self._visible_arithmetic_issue(tid)
             else:
                 # An unexplained discrepancy is not a license to read
                 # the private Attempt or invent an outside verifier.
@@ -892,7 +1002,6 @@ class ExecutionState:
         return issues
 
     def scheduling_state(self) -> dict:
-        self._detect_late_cross_source_conflicts()
         self._detect_explicit_cross_report_disagreements()
         disputed = []
         for tid, item in self.current.items():

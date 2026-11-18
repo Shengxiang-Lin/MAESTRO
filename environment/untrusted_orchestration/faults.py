@@ -43,10 +43,10 @@ class Fault:
             raise ValueError("unsupported_fault_persistence")
         types = {
             "missing": {"no_result"},
-            "partial": {"incomplete_retrieval"},
+            "partial": {"incomplete_retrieval", "done_but_incomplete"},
             "wrong": {
                 "wrong_retrieval", "wrong_entity_binding",
-                "legacy_wrong_evidence",
+                "computation_error", "legacy_wrong_evidence",
             },
             "report": {
                 "report_missing", "fabricated_claim",
@@ -166,6 +166,49 @@ def _wrong_row(
     return mutated, {
         "primitive": step["id"], "kind": "selected_real_distractor",
         "source_fact_refs": list(refs),
+    }
+
+
+def _wrong_computation(
+    step: dict, clean: Relation, *, variant_index: int = 0,
+) -> tuple[Relation, dict] | None:
+    """Corrupt ONE arithmetic output, not a source fact or upstream input.
+
+    The same immutable input Relations are used for every other operator.
+    Supported arithmetic nodes must produce an explicit scalar number;
+    structured/date/text outputs are deliberately not guessed.
+    """
+    if step["op"] not in {
+        "count", "group_count", "derive_percentage",
+        "derive_arithmetic", "derive_date_gap", "goal_compute",
+    } or not clean.rows or variant_index > 1:
+        return None
+    candidate_fields = [
+        step.get("output_field"), "count", "answer", "result",
+    ]
+    candidate_fields.extend(clean.columns)
+    field = next((
+        key for key in dict.fromkeys(candidate_fields)
+        if key in clean.columns
+        and all(type(row["values"].get(key)) in {int, float}
+                for row in clean.rows)
+    ), None)
+    if field is None:
+        return None
+    delta = 1 if variant_index == 0 else -1
+    rows = [{
+        "values": {**row["values"], field: row["values"][field] + delta},
+        "support": tuple(row["support"]),
+    } for row in clean.rows]
+    mutated = Relation(clean.columns, tuple(rows))
+    return mutated, {
+        "primitive": step["id"], "kind": "miscomputed_numeric_output",
+        "calculation_operation": step["op"],
+        "calculation_field": field,
+        "calculation_delta": delta,
+        "source_fact_refs": sorted({
+            ref for row in clean.rows for ref in row["support"]
+        }),
     }
 
 
@@ -397,6 +440,12 @@ def run_attempt(
             available = list(correct.columns)
             missing = ["remaining_rows"]
             delivery_kind = "row_set_truncated"
+        if fault.atom_kind == "done_but_incomplete":
+            # A truncated row set with no public count contract is not
+            # observably incomplete. Keep the deceptively DONE variant
+            # limited to a typed missing field visible in the Result.
+            if delivery_kind != "field_not_delivered":
+                raise FaultUnsupported("done_incomplete_requires_visible_field_gap")
         # The final operation's report-facing observation is the actually
         # delivered relation. Do not show the hidden pre-delivery values.
         observed = trace(clean_steps[:-1])
@@ -406,6 +455,10 @@ def run_attempt(
         ))
         return delivered, {
             "status": "partial", "primitive": task["program_node_id"],
+            **({
+                "report_fault_kind": "done_but_incomplete",
+                "reported_status": "done",
+            } if fault.atom_kind == "done_but_incomplete" else {}),
             "delivery_fault_kind": delivery_kind,
             "rows_complete": delivery_kind == "field_not_delivered",
             "missing_fields": missing, "available_fields": available,
@@ -415,7 +468,15 @@ def run_attempt(
             }),
         }
 
-    if fault.atom_kind == "wrong_entity_binding":
+    if fault.atom_kind == "computation_error":
+        ordered = [
+            (step, relation) for step, relation in clean_steps
+            if step["op"] in {
+                "count", "group_count", "derive_percentage",
+                "derive_arithmetic", "derive_date_gap", "goal_compute",
+            }
+        ]
+    elif fault.atom_kind == "wrong_entity_binding":
         ordered = [
             (step, relation) for step, relation in clean_steps
             if step["op"] == "join"
@@ -435,13 +496,18 @@ def run_attempt(
         ]
     chosen = None
     for step, relation in ordered:
-        altered = (_wrong_join(
-            step, prefix, relation,
-            variant_index=fault.variant_index,
-        ) if step["op"] == "join" else _wrong_row(
-            step, relation, prefix, sources,
-            variant_index=fault.variant_index,
-        ))
+        altered = (
+            _wrong_computation(
+                step, relation, variant_index=fault.variant_index,
+            ) if fault.atom_kind == "computation_error"
+            else _wrong_join(
+                step, prefix, relation, variant_index=fault.variant_index,
+            ) if step["op"] == "join"
+            else _wrong_row(
+                step, relation, prefix, sources,
+                variant_index=fault.variant_index,
+            )
+        )
         if altered is not None:
             chosen = step, altered[0], altered[1]
             break

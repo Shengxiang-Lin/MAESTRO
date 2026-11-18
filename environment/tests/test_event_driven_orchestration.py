@@ -223,92 +223,38 @@ class EventEngineTests(unittest.TestCase):
             scenario["evidence_events"][0]["task_id"], "C"
         )
 
-    def test_late_conflict_uses_public_reports_and_consumed_version(self):
+    def test_disjoint_join_keys_are_not_cross_report_fact_conflicts(self):
+        """Complementary candidate sets do not assert the same Claim."""
         state = ExecutionState(self.scene, {})
         state.tasks = {
-            "old": {
-                "task_id": "old", "depends_on": [],
-                "source_ids": ["image"],
-                "operator_chain": [],
+            "image": {
+                "task_id": "image", "depends_on": [],
+                "source_ids": ["image"], "operator_chain": [],
+                "outputs": {"typed_relation": ["marker_code"]},
             },
-            "independent": {
-                "task_id": "independent", "depends_on": [],
-                "source_ids": ["subtitle"],
-                "operator_chain": [],
-            },
-            "lookup": {
-                "task_id": "lookup", "depends_on": ["old"],
-                "operator_chain": [],
-            },
-            "join": {
-                "task_id": "join",
-                "depends_on": ["old", "independent"],
-                "operator_chain": [{
-                    "op": "join", "left_on": "marker_code",
-                    "right_on": "marker_code",
-                }],
+            "subtitle": {
+                "task_id": "subtitle", "depends_on": [],
+                "source_ids": ["subtitle"], "operator_chain": [],
+                "outputs": {"typed_relation": ["marker_code"]},
             },
         }
-        state.current = {
-            "old": Attempt(
-                "old", 1, "done",
-                Relation(("marker_code",), ({
-                    "values": {"marker_code": "MK-6243"},
-                    "support": ("image:F002",),
-                },)),
-                ("marker_code",), {}, {},
-            ),
-            "independent": Attempt(
-                "independent", 1, "done",
-                Relation(("marker_code",), ({
-                    "values": {"marker_code": "MK-0531"},
-                    "support": ("subtitle:F001",),
-                },)),
-                ("marker_code",), {}, {},
-            ),
-            "lookup": Attempt(
-                "lookup", 1, "done",
-                Relation(("record_key_1",), ({
-                    "values": {"record_key_1": "KEY1-012"},
-                    "support": ("index:F012",),
-                },)),
-                ("record_key_1",), {"old": 1}, {},
-            ),
-        }
-        state.set_public_report(
-            "old", {"finish_result": {
-                "status": "done",
-                "result": json.dumps([{"marker_code": "MK-6243"}]),
+        for tid, value in (("image", "MK-6243"), ("subtitle", "MK-0531")):
+            state.current[tid] = Attempt(
+                tid, 1, "done", Relation(("marker_code",), ({
+                    "values": {"marker_code": value},
+                    "support": (tid + ":F001",),
+                },)), ("marker_code",), {}, {},
+            )
+            state.set_public_report(tid, {"finish_result": {
+                "status": "done", "result": json.dumps([{
+                    "values": {"marker_code": value},
+                    "source_fact_refs": [tid + ":F001"],
+                }]),
                 "summary": "One candidate key was returned.",
-            }}, round_number=1,
-        )
-        state.set_public_report(
-            "independent", {"finish_result": {
-                "status": "done",
-                "result": json.dumps([{"marker_code": "MK-0531"}]),
-                "summary": "A second independent key was returned.",
-            }}, round_number=4,
-        )
+            }}, round_number=1 if tid == "image" else 4)
         state.cross_source_checks_enabled = True
-        state._detect_late_cross_source_conflicts()
-        self.assertEqual(state.current["old"].status, "disputed")
-        self.assertIn(
-            "MK-6243", state.current["old"].runtime["visible_issue"],
-        )
-        self.assertTrue(state.detected_conflicts)
-        state._detect_late_cross_source_conflicts()
-        self.assertEqual(len(state.detected_conflicts), 1)
-        # A conflict with no earlier downstream consumer is a reason
-        # to compare evidence, NOT automatically to name a wrong source.
-        state2 = ExecutionState(self.scene, {})
-        state2.tasks = state.tasks
-        state2.current = {
-            k: v for k, v in state.current.items() if k != "lookup"
-        }
-        state2.public_reports = dict(state.public_reports)
-        state2.cross_source_checks_enabled = True
-        state2._detect_late_cross_source_conflicts()
-        self.assertFalse(state2.detected_conflicts)
+        state._detect_explicit_cross_report_disagreements()
+        self.assertEqual(state.detected_conflicts, [])
 
     def test_cited_late_disagreement_requires_independent_public_claims(self):
         scene = deepcopy(self.scene)
@@ -329,7 +275,7 @@ class EventEngineTests(unittest.TestCase):
                     "source_ids": ["alpha"],
                     "operator_chain": [],
                     "outputs": {"typed_relation": [
-                        "case_id", "reported_year_a",
+                        "case_id", "reported_year",
                     ]},
                 },
                 "late": {
@@ -337,7 +283,7 @@ class EventEngineTests(unittest.TestCase):
                     "source_ids": ["beta"],
                     "operator_chain": [],
                     "outputs": {"typed_relation": [
-                        "case_id", "reported_year_b",
+                        "case_id", "reported_year",
                     ]},
                 },
                 "consumer": {
@@ -349,23 +295,23 @@ class EventEngineTests(unittest.TestCase):
             state.current = {
                 "old": Attempt(
                     "old", 1, "done",
-                    Relation(("case_id", "reported_year_a"), ({
+                    Relation(("case_id", "reported_year"), ({
                         "values": {
-                            "case_id": "Case-011", "reported_year_a": 2003,
+                            "case_id": "Case-011", "reported_year": 2003,
                         },
                         "support": ("alpha:F001",),
                     },)),
-                    ("case_id", "reported_year_a"), {}, {},
+                    ("case_id", "reported_year"), {}, {},
                 ),
                 "late": Attempt(
                     "late", 1, "done",
-                    Relation(("case_id", "reported_year_b"), ({
+                    Relation(("case_id", "reported_year"), ({
                         "values": {
-                            "case_id": "Case-011", "reported_year_b": late_year,
+                            "case_id": "Case-011", "reported_year": late_year,
                         },
                         "support": ("beta:F001",),
                     },)),
-                    ("case_id", "reported_year_b"), {}, {},
+                    ("case_id", "reported_year"), {}, {},
                 ),
                 "consumer": Attempt(
                     "consumer", 1, "done",
@@ -381,7 +327,7 @@ class EventEngineTests(unittest.TestCase):
                     "status": "done",
                     "result": json.dumps([{
                         "values": {
-                            "case_id": "Case-011", "reported_year_a": 2003,
+                            "case_id": "Case-011", "reported_year": 2003,
                         },
                         "source_fact_refs": ["alpha:F001"],
                     }]), "summary": "Recorded the first event year.",
@@ -391,7 +337,7 @@ class EventEngineTests(unittest.TestCase):
                     "result": json.dumps([{
                         "values": {
                             "case_id": "Case-011",
-                            "reported_year_b": late_year,
+                            "reported_year": late_year,
                         },
                         "source_fact_refs": (
                             late_refs if late_refs is not None
@@ -437,7 +383,7 @@ class EventEngineTests(unittest.TestCase):
         observed.public_reports["old"]["finish_result"]["result"] = (
             json.dumps([{
                 "values": {
-                    "case_id": "Case-011", "reported_year_a": 2004,
+                    "case_id": "Case-011", "reported_year": 2004,
                 },
                 "source_fact_refs": ["alpha:F001"],
             }])
@@ -448,9 +394,9 @@ class EventEngineTests(unittest.TestCase):
         # Result and the independent source still agree.
         hidden = fixture(late_year=2003)
         hidden.current["old"].product = Relation(
-            ("case_id", "reported_year_a"), ({
+            ("case_id", "reported_year"), ({
                 "values": {
-                    "case_id": "Case-011", "reported_year_a": 1999,
+                    "case_id": "Case-011", "reported_year": 1999,
                 }, "support": ("alpha:F001",),
             },),
         )
@@ -462,6 +408,47 @@ class EventEngineTests(unittest.TestCase):
         mixed = fixture(late_refs=["alpha:F001", "beta:F001"])
         self.assertFalse(mixed.scheduling_state()["repair"])
         self.assertEqual(mixed.detected_conflicts, [])
+
+        simultaneous = fixture()
+        simultaneous.current.pop("consumer")
+        simultaneous.public_reports.pop("consumer")
+        simultaneous.public_report_rounds = {"old": 2, "late": 2}
+        simultaneous._detect_explicit_cross_report_disagreements()
+        target = simultaneous.detected_conflicts[-1]["recheck_task_id"]
+        self.assertEqual(simultaneous.current[target].status, "disputed")
+        self.assertIn(target, {"old", "late"})
+        self.assertEqual(
+            simultaneous.detected_conflicts[-1]["conflict_timing"],
+            "simultaneous",
+        )
+        self.assertFalse(
+            simultaneous.detected_conflicts[-1][
+                "downstream_previously_executed"
+            ]
+        )
+        # First recheck confirms its own previous value rather than
+        # resolving the dispute: independently recheck the other source.
+        first = simultaneous.detected_conflicts[-1]["recheck_task_id"]
+        second = "late" if first == "old" else "old"
+        simultaneous.current[first].version += 1
+        simultaneous.current[first].status = "done"
+        simultaneous.current[first].runtime = {}
+        simultaneous.public_report_rounds[first] = 5
+        simultaneous._detect_explicit_cross_report_disagreements()
+        self.assertEqual(len(simultaneous.detected_conflicts), 2)
+        self.assertEqual(
+            simultaneous.detected_conflicts[-1]["recheck_task_id"],
+            second,
+        )
+        self.assertEqual(
+            simultaneous.detected_conflicts[-1]["verification_step"], 2,
+        )
+        self.assertTrue(simultaneous.unresolved_cited_conflicts())
+        simultaneous.current[second].version += 1
+        simultaneous.current[second].status = "done"
+        simultaneous.current[second].runtime = {}
+        simultaneous._detect_explicit_cross_report_disagreements()
+        self.assertEqual(len(simultaneous.detected_conflicts), 2)
 
     def test_frozen_publication_rejects_critic_process_leak(self):
         with TemporaryDirectory() as td:
