@@ -24,8 +24,10 @@ files temporarily select the first 10 rows from the existing Stage-1
 for this pilot. Each stage writes beneath
 `environment/data/pilots/qwen_stage234_10/`. Stage 4 checks
 `input.clean_episodes` against Stage 3's actual clean references and samples
-only one returned-feedback fork per Scene, with up to 12 atom candidates per
-round. API Author/Critic uses the locally served `local-qwen3.5-9b`.
+up to three stratified feedback forks per Scene (early/middle/late),
+with up to 12 executable one-atom candidates per fork. Recovery is bounded
+to eight post-fork decision rounds; genuine non-recovered branches may be
+reviewed for evidence-state supervision but never become positive SFT. API Author/Critic uses the locally served `local-qwen3.5-9b`.
 
 The Stage 1 construction and Question review phases are independently
 journaled. Its latest output is a single schema, not a selectable
