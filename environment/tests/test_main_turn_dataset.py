@@ -286,15 +286,12 @@ class MainTurnDatasetTests(unittest.TestCase):
                 payload = json.loads(request)
                 result = deepcopy(payload["reference_action_for_structure_only"])
                 for task in result["params"]["tasks"]:
-                    # Deliberately omit required source IDs and previous
-                    # handoff marker; the deterministic compiler restores
-                    # the already-visible public evidence context.
-                    task["task_instruction"] = (
-                        "Review the assigned evidence carefully, identify "
-                        "the applicable records, and report the verified "
-                        "intermediate result with concrete supporting details."
+                    # The test checks that Critic only receives prose,
+                    # while the Author preserves legally required source
+                    # handles and prior history.
+                    task["task_instruction"] += (
+                        " Report the available evidence for this source."
                     )
-                    task["context"] = "Use already available prior findings."
                 return result
 
         class Critic:
