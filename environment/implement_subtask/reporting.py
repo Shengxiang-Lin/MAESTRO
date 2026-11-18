@@ -872,8 +872,9 @@ def author_critic_report(
             } for f in failures[-2:]],
             "style": (
                 "Act like a real Sub-Agent returning finish to Main-Agent. "
-                "For typed code-owned outputs, return ANSWER and trace_summary, "
-                "not a programmatic table or machine JSON. Answer with all "
+                "For typed code-owned outputs, return ANSWER, finish "
+                "SUMMARY and trace_summary in the SAME response, not a "
+                "programmatic table or machine JSON. Answer with all "
                 "entities, dates, numbers and their correct associations. "
                 "Give Main an O1-style recap of observed source evidence "
                 "without inventing tool actions or later checks. The full "
