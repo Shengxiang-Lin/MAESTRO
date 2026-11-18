@@ -47,8 +47,7 @@ def _write_jsonl(path: Path, data: list[dict]) -> None:
 
 def _signature(scenes: Path, reports: Path, *, max_scenes, sub_model,
                model_alias, max_attempts, max_revisions, mode,
-               author_model, critic_model, freeze_dispatch,
-               allow_delegate_fallback=False) -> dict:
+               author_model, critic_model, freeze_dispatch) -> dict:
     root = Path(__file__).parent
     tracked = (
         "trajectory_builder.py", "action_author.py", "task_contract.py",
@@ -74,7 +73,6 @@ def _signature(scenes: Path, reports: Path, *, max_scenes, sub_model,
         "max_attempts": max_attempts,
         "max_revisions": max_revisions,
         "freeze_dispatch": freeze_dispatch,
-        "allow_delegate_fallback": allow_delegate_fallback,
         "mode": mode,
         "author_model": author_model,
         "critic_model": critic_model,
@@ -215,7 +213,6 @@ def generate_turns(
     overwrite: bool = False, no_progress: bool = False,
     verbose_progress: bool = False, workers: int = 4,
     freeze_dispatch: bool = False,
-    allow_delegate_fallback: bool = False,
 ) -> dict:
     scenes_path, reports_path = Path(scenes_path), Path(reports_path)
     output_dir = Path(output_dir)
@@ -231,8 +228,6 @@ def generate_turns(
         raise ValueError("stage3_requires_both_author_and_critic")
     if type(freeze_dispatch) is not bool:
         raise ValueError("stage3_freeze_dispatch_must_be_boolean")
-    if type(allow_delegate_fallback) is not bool:
-        raise ValueError("stage3_allow_delegate_fallback_must_be_boolean")
     if type(workers) is not int or not 1 <= workers <= 64:
         raise ValueError("stage3_workers_must_be_between_1_and_64")
     mode = "llm_reviewed" if author is not None else "template"
@@ -256,7 +251,6 @@ def generate_turns(
         max_attempts=max_attempts, max_revisions=max_revisions, mode=mode,
         author_model=author_model, critic_model=critic_model,
         freeze_dispatch=freeze_dispatch,
-        allow_delegate_fallback=allow_delegate_fallback,
     )
     if output_dir.exists() and overwrite:
         if output_dir.resolve() in {
@@ -328,8 +322,7 @@ def generate_turns(
                     resume_rounds=saved_rounds, on_round=on_round,
                     on_episode_start=on_episode_start,
                     freeze_dispatch=freeze_dispatch,
-                    allow_delegate_fallback=allow_delegate_fallback,
-                )
+                            )
             except (ValueError, KeyError, TypeError) as exc:
                 episode, turns, alignments = None, [], []
                 status = {
@@ -463,8 +456,6 @@ def generate_turns(
     delegate_attempt_stages = Counter(failed.get("stage", "unknown")
         for row in private if row.get("action") == "delegate_task"
         for failed in row.get("authoring", {}).get("failures", []))
-    fallback_scene_ids = {row["task_id"] for row in private
-                         if "fallback" in row.get("authoring", {}).get("mode", "")}
     nonreviewed_scene_ids = {row["task_id"] for row in private
         if not row.get("authoring", {}).get("mode", "").startswith("llm_reviewed")}
     summary = {
@@ -472,7 +463,6 @@ def generate_turns(
         "pipeline": "maestro_stage3_main_turn_dataset_v1",
         "mode": mode,
         "workers": workers,
-        "allow_delegate_fallback": allow_delegate_fallback,
         "requested_scenes": len(scene_rows),
         "stage2_selection": selection,
         "accepted_scenes": len(episodes),
@@ -493,7 +483,6 @@ def generate_turns(
             and row.get("authoring", {}).get("mode", "").startswith("llm_reviewed")
             and bool(row.get("authoring", {}).get("naturalized_task_prose")) for row in private),
         "fully_llm_reviewed_scenes": len(episodes) - len(nonreviewed_scene_ids),
-        "scenes_with_fallback": len(fallback_scene_ids),
         "visible_answer_shortcuts": shortcut_count,
         "reasoning_fidelity_checked_delegate_turns": len(fidelity_rows),
         "reasoning_fidelity_guard_rejections": dict(fidelity_issues),
@@ -555,8 +544,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model-alias", default="model_1")
     p.add_argument("--freeze-dispatch", action="store_true",
                    help="V1.4: program-owned parallel batch; author Main reasoning only")
-    p.add_argument("--allow-delegate-fallback", action="store_true",
-                   help="Legacy opt-in: accept deterministic Delegate and Completion fallbacks")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--no-progress", action="store_true",
                    help="Disable progress bars")
