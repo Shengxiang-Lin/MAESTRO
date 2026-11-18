@@ -18,69 +18,6 @@ from .stage_local_claims import (
 PRESENTATION = "o1_answer_and_trace_v4"
 
 
-AUTHOR_SYSTEM = """You are writing the FINAL message that a real specialized
-Sub-Agent would return to its Main-Agent after completing a delegated task.
-
-Follow the actual multi-agent finish convention:
-  {"result": "...", "summary": "...", "status": "done"}
-
-"result": put the actionable finding first in a short sentence. For a large
-handoff, say what the records contain and give the most useful grounded detail.
-Full verified records are carried separately. Avoid row dumps, raw field names
-and generic "rows returned" language.
-"summary": describe the local work and the supporting observation in 1–2
-natural sentences. Distinguish findings established here from findings received
-upstream. If this stage only projects fields or removes duplicates, say what
-you did with the upstream result and avoid implying a fresh eligibility check.
-Use source roles and display labels. Refer to earlier results by their role
-(e.g. the mapped entries), without printing work_* identifiers, operator names,
-or names of raw fields. Keep the report useful for a colleague
-taking the next step.
-
-Your input is a deterministic, FICTIONAL observation and execution record,
-not actual image/video/audio perception. You may say 'checked the supplied
-video annotation' or 'compared the source records' but NEVER claim to have
-watched video, transcribed audio, searched the internet, read a real website,
-or used a tool not actually present in the supplied operator trace.
-No invented names, dates, numeric observations, facts, URLs, quotes, motives,
-sources, or eligibility rules. Do not add 'approved' when it only says matched.
-Use only source_fact_refs from the given available evidence and upstream context.
-If no rows meet conditions, this is a valid completed result: say so, with
-status done, not partial. If the reported relation is a handoff, say what the
-handoff contains instead of falsely claiming it answers the overall question.
-
-CRITICAL STAGE BOUNDARY:
-Each Macro is only ONE stage of a multi-step DAG. The overall_question is
-background, NOT a list of filters you already executed. Read the actual
-observed_operator_steps. For a scan-only Macro, report the unfiltered source
-rows; for a join-only Macro, report joined candidates. Do NOT claim that
-every joined entry is active/approved/above threshold or meets final
-eligibility requirements unless the supplied steps actually established it.
-A join does NOT itself check active, measured_value, time windows, approval
-or clearance. Some candidate rows can have active=false or value=0.
-Later Macro Tasks perform those filters. NEVER alter, omit or pre-filter the
-EXACT Oracle output rows, even when they fail the overall question's later
-criteria. If this stage runs a keyed lookup, use the EXACT input key field and
-values in observed_operator_steps.lookup_keys. Do not claim that the archive
-was queried using an earlier-stage marker when the actual archive query
-used an accession identifier.
-If a reviewer objects to a premature claim, correct ONLY the prose
-summary, never the result rows.
-
-Prefer a concise grounded string for result. Exact structured answer rows
-remain accepted if provided, but the runtime carries them independently of the
-prose. Preserve every exact row in the structured form and use the summary for
-a short explanation.
-Output ONLY JSON with keys result, summary, status; status must be done.
-
-Examples of valid finish messages:
-{"result":"Entry-02 is the only entry within its assigned session window.",
- "summary":"I compared the recorded event steps with the session boundaries. Entry-02 occurred at step 68, inside its session's 63–88 interval.","status":"done"}
-{"result":"Entry-02 remains after removing duplicates.",
- "summary":"I deduplicated the entry labels received from the earlier stage. The returned list has one distinct entry.","status":"done"}
-"""
-
-
 CRITIC_SYSTEM = """You are an INDEPENDENT factual and stylistic reviewer
 for a Sub-Agent's final message to Main-Agent. The candidate is NOT a
 new solver; its facts MUST be entailed by the frozen oracle outputs and
@@ -144,15 +81,6 @@ from .oracle_review import (
     full_entry_list_matches, entry_fact_index, positive_entry_provenance,
     mismatched_entry_refs, critic_oracle_contradiction,
 )
-
-VERIFIED_ENTRY_CRITIC_SYSTEM = CRITIC_SYSTEM + """
-THE COMPLETE ENTRY LIST IS DETERMINISTICALLY VERIFIED AGAINST ORACLE.
-Do not dispute enumeration membership or reassign FactRefs. The full
-Entry/FactRef/active index is authoritative, not truncated sample atoms.
-Review only naturalness, stage-local source claims and unsupported prose.
-Reject genuinely ungrounded prose. Return the normal four boolean axes.
-"""
-
 
 def _canonical(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True,
@@ -291,109 +219,6 @@ def _public_field_text(text: str, fields) -> str:
             match[0].lower(), match[0].lower().replace("_", " ")
         ), text, flags=re.I,
     )
-
-
-def _readable_verified_answer(rows: list[dict]) -> str:
-    """Summarize an exact relation. The full verified rows travel separately."""
-    if not rows:
-        return "No records matched the assigned task."
-    if len(rows) == 1 and set(rows[0]) == {"count"}:
-        return f"The count is {_readable_value(rows[0]['count'])}."
-    if all(set(row) == {"entry_label"} for row in rows):
-        return "Entries: " + ", ".join(_readable_value(row["entry_label"]) for row in rows) + "."
-    if all(set(row) == {"category_name", "count"} for row in rows):
-        return "Counts by category: " + ", ".join(
-            f"{row['category_name']} ({row['count']})" for row in rows
-        ) + "."
-    count = len(rows)
-    unit = "record" if count == 1 else "records"
-    labels = list(dict.fromkeys(str(row["entry_label"]) for row in rows if "entry_label" in row))
-    if labels and len(labels) <= 3:
-        return f"The handoff contains {count} {unit} for " + ", ".join(labels) + "."
-    if labels:
-        return f"The handoff contains {count} {unit}, including " + ", ".join(labels[:3]) + "."
-    return f"The handoff contains {count} {unit} from the assigned task."
-
-
-_PAST_ACTION = {
-    "Read": "Read", "Keep": "Kept", "Align": "Aligned", "Check": "Checked",
-    "Order": "Ordered", "Select": "Selected", "Remove": "Removed",
-    "Count": "Counted", "Attach": "Attached",
-}
-
-
-def trace_narrative(trace: dict) -> str:
-    """Describe the actual operator events independently of finish prose."""
-    events = []
-    for step in trace["steps"]:
-        action = step["action"]
-        first, _, rest = action.partition(" ")
-        action = (
-            _PAST_ACTION[first] + " " + rest if first in _PAST_ACTION
-            else "Executed " + step["operation"].replace("_", " ")
-        )
-        fields = set(step["output_schema"]) | set(SCHEMA_LABELS)
-        action = _public_field_text(action, fields)
-        action = action.replace("row(s)", "records")
-        action = action.replace("Checked that", "Checked whether")
-        action = action.replace("Kept only the output field(s): ", "Kept only ")
-        join = re.fullmatch(r"Aligned the two input workproducts by (.+) = (.+)", action)
-        if join:
-            left, right = join.groups()
-            action = (f"Aligned the inputs by their shared {left}" if left == right
-                      else f"Matched {left} in the first input to {right} in the second")
-        count = step["output_row_count"]
-        unit = "record" if count == 1 else "records"
-        events.append(f"{action}. This produced {count} {unit}.")
-    return " ".join(events)
-
-
-def _normalize_author_result(value, exact_rows: list[dict],
-                             output_schema: list[str]) -> tuple[str | None, list[str]]:
-    """Accept the natural real-world variation of Sub-Agent result payloads.
-
-    The model can write prose OR provide exact structured records. Any
-    structured payload MUST be an exact multiset match to the frozen Oracle.
-    A filtered subset, reordered field meaning, or fabricated rows FAIL.
-    """
-    if isinstance(value, str):
-        if not 1 <= len(value.strip()) <= 1600:
-            return None, ["result_invalid_length_or_type"]
-        return value.strip(), []
-    if isinstance(value, dict):
-        proposed = [value]
-    elif isinstance(value, list):
-        proposed = value
-    elif (type(value) in {int, float, bool}
-          and output_schema == ["count"]):
-        proposed = [{"count": value}]
-    else:
-        return None, ["result_invalid_type"]
-    if (len(output_schema) == 1 and proposed
-            and all(not isinstance(row, dict) for row in proposed)):
-        proposed = [{output_schema[0]: row} for row in proposed]
-    if not all(isinstance(row, dict) for row in proposed):
-        return None, ["structured_result_invalid_rows"]
-    if sorted(map(_canonical, proposed)) != sorted(map(_canonical, exact_rows)):
-        return None, ["structured_result_not_equal_to_oracle"]
-    return _readable_verified_answer(exact_rows), []
-
-
-_ASSERTED_FILTER_ACTION = re.compile(
-    r"\b(?:filtered|excluded|removed|dropped|"
-    r"screened\s+out|retained\s+only|"
-    r"filtering\s+out|applied\s+(?:an?\s+)?filter)\b",
-    re.I,
-)
-_FILTER_NEGATION_OR_DEFERMENT = re.compile(
-    r"\b(?:without|not|never|no|none|neither|"
-    r"did\s+not|was\s+not|were\s+not|has\s+not|have\s+not|"
-    r"before|prior\s+to|pending|awaiting|rather\s+than|"
-    r"left\s+for|reserved\s+for|deferred\s+to|"
-    r"for\s+(?:later|future|subsequent|downstream))"
-    r"(?:\s+[\w-]+){0,7}\s*$",
-    re.I,
-)
 
 
 def _scan_claims_completed_filter(text: str) -> bool:
@@ -761,7 +586,7 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
 
 
 
-CODE_OWNED_AUTHOR_SYSTEM = """You are a specialist Sub-Agent sending
+REPORT_AUTHOR_SYSTEM = """You are a specialist Sub-Agent sending
 the completed delegated-task feedback to the Main-Agent. Use the provided
 verified task-local evidence; the source observations are simulated.
 
@@ -849,7 +674,7 @@ Use ONLY the evidence supplied for THIS delegated task. No invented facts,
 numbers, records, source statements, tool actions or final qualifications.
 """
 
-CODE_OWNED_CRITIC_SYSTEM = CRITIC_SYSTEM + """
+REPORT_CRITIC_SYSTEM = CRITIC_SYSTEM + """
 The model authored a natural-language ANSWER (candidate_finish.result),
 a short finish.summary and a detailed execution trace_summary in ONE
 request. The exact_oracle_answer is immutable
@@ -1028,7 +853,7 @@ def author_critic_report(
         }
         try:
             candidate = author.complete_json(
-                CODE_OWNED_AUTHOR_SYSTEM if result_policy == "code_owned"
+                REPORT_AUTHOR_SYSTEM if result_policy == "code_owned"
                 else AUTHOR_SYSTEM,
                 json.dumps(request, ensure_ascii=False),
             )
@@ -1162,7 +987,7 @@ def author_critic_report(
                     normalized_result, contract["exact_oracle_answer"],
                 )
             decision = critic.complete_json(
-                CODE_OWNED_CRITIC_SYSTEM if result_policy == "code_owned"
+                REPORT_CRITIC_SYSTEM if result_policy == "code_owned"
                 else (VERIFIED_ENTRY_CRITIC_SYSTEM if verified_entry_list
                       else CRITIC_SYSTEM), json.dumps({
                     "frozen_task_and_evidence": contract,
