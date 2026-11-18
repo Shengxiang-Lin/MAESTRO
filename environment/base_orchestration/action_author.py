@@ -968,14 +968,14 @@ def author_complete_action(*, template: dict, prompt: str,
             try:
                 review = critic.complete_json(
                     _COMPLETE_CRITIC_SYSTEM + (
-                        "\\nSECOND INDEPENDENT REVIEW: A previous critique "
+                        "\nSECOND INDEPENDENT REVIEW: A previous critique "
                         "appears to dispute the CODE-FROZEN final answer "
                         "rather than the authored reasoning. The final "
                         "answer and deterministic evidence quote are NOT "
                         "for your evaluation. Point to a SPECIFIC unsupported "
                         "claim in candidate_prose_only.reasoning if one "
                         "exists; otherwise PASS. Still reject any actual "
-                        "invented evidence or wrong causal attribution.\\n"
+                        "invented evidence or wrong causal attribution.\n"
                     ),
                     json.dumps(review_payload, ensure_ascii=False),
                 )
