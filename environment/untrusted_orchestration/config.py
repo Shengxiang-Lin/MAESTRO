@@ -170,19 +170,9 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             raise ValueError("untrusted_invalid_" + key)
     if config["mode"] not in {"llm", "template"}:
         raise ValueError("untrusted_mode_requires_template_or_llm")
-    if config["persistence"] not in {"once", "same_path"}:
-        raise ValueError("untrusted_persistence_invalid")
-    modes = config["fault_modes"]
-    if (not isinstance(modes, list) or not modes
-            or len(set(modes)) != len(modes)
-            or not set(modes) <= {"missing", "partial", "wrong"}):
-        raise ValueError("untrusted_invalid_fault_modes")
+    # Current Stage-4 config fixes enumerate/event_driven/one-atom/once.
+    # Do not revalidate these code-owned constants as legacy user switches.
     from .atomic_faults import ATOM_TO_MODE
-    strategy = config["candidate_strategy"]
-    if strategy not in {"sample_one", "enumerate"}:
-        raise ValueError("untrusted_invalid_candidate_strategy")
-    if strategy == "enumerate" and config["scenario_mode"] != "event_driven":
-        raise ValueError("untrusted_enumeration_requires_event_driven")
     if config["selection_strategy"] not in {
         "causal_rank", "stratified",
     }:
@@ -199,29 +189,15 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         value = config[field]
         if type(value) is not int or not minimum <= value <= maximum:
             raise ValueError("untrusted_invalid_" + field)
-    if config["candidate_strategy"] == "enumerate" and (
-        config["max_language_attempts_per_round"] <
-        config["max_selected_per_round"]
-    ):
+    if (config["max_language_attempts_per_round"] <
+            config["max_selected_per_round"]):
         raise ValueError("untrusted_language_budget_smaller_than_selection")
-    if config["scenario_mode"] not in {"round_fork", "event_driven"}:
-        raise ValueError("untrusted_invalid_scenario_mode")
     kinds = config["atomic_fault_kinds"]
     if (not isinstance(kinds, list) or not kinds
             or any(not isinstance(k, str) for k in kinds)
             or len(set(kinds)) != len(kinds)
             or not set(kinds) <= set(ATOM_TO_MODE)):
         raise ValueError("untrusted_invalid_atomic_fault_kinds")
-    if (type(config["max_fault_atoms"]) is not int
-            or not 1 <= config["max_fault_atoms"] <= 2):
-        raise ValueError("untrusted_invalid_max_fault_atoms")
-    delay_probability = config["delayed_evidence_probability"]
-    if (type(delay_probability) not in (int, float)
-            or not 0 <= delay_probability <= 1):
-        raise ValueError("untrusted_invalid_delayed_evidence_probability")
-    p = config["multi_target_probability"]
-    if type(p) not in (int, float) or not 0 <= p <= 1:
-        raise ValueError("untrusted_invalid_multi_target_probability")
     if config["workers"] > 64 or config["max_rounds"] > 64:
         raise ValueError("untrusted_worker_or_round_limit")
     for key in ("sub_model", "model_alias"):
