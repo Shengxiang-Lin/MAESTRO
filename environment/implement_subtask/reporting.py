@@ -485,50 +485,25 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
         return ["report_not_object"]
     if candidate.get("status") != "done":
         errors.append("status_not_done_for_complete_oracle")
-    if contract.get("requires_o1_answer"):
-        result_text = candidate.get("result")
-        result_errors = _o1_answer_issues(result_text, contract)
-    elif contract.get("result_encoding") == "typed_evidence_json_v1":
-        result_text = candidate.get("result")
-        result_errors = (
-            [] if result_text == contract.get("code_owned_expected_result")
-            else ["code_owned_typed_result_changed"]
-        )
-    else:
-        result_text, result_errors = _normalize_author_result(
-            candidate.get("result"), contract["exact_oracle_answer"],
-            contract["terminal_output_schema_of_this_macro"],
-        )
-    errors.extend(result_errors)
+    result_text = candidate.get("result")
+    errors.extend(_o1_answer_issues(result_text, contract))
     summary = candidate.get("summary")
     if (not isinstance(summary, str)
             or not 25 <= len(summary.strip()) <= 750):
         errors.append("summary_invalid_length_or_type")
-    narrative = (candidate.get("trace_summary")
-                 if contract.get("requires_o1_answer")
-                 else candidate.get("trace_narrative"))
-    if contract.get("requires_o1_answer"):
-        if (not isinstance(narrative, str)
-                or not 75 <= len(narrative.strip()) <= 2800):
-            errors.append("trace_summary_invalid_length_or_type")
-    elif contract.get("requires_natural_trace"):
-        if (not isinstance(narrative, str)
-                or not 60 <= len(narrative.strip()) <= 1800):
-            errors.append("trace_narrative_invalid_length_or_type")
+    narrative = candidate.get("trace_summary")
+    if (not isinstance(narrative, str)
+            or not 75 <= len(narrative.strip()) <= 2800):
+        errors.append("trace_summary_invalid_length_or_type")
     for field, value in (
         ("result", result_text), ("summary", summary),
-        *((("trace_summary", narrative),) if
-          contract.get("requires_o1_answer") else
-          ((("trace_narrative", narrative),) if
-           contract.get("requires_natural_trace") else ())),
+        ("trace_summary", narrative),
     ):
         if not isinstance(value, str):
             continue
         if re.search(r"\bwork_[a-z0-9_]+\b", value, re.I):
             errors.append(field + "_internal_macro_identifier")
-        if (contract.get("requires_natural_trace")
-                or contract.get("requires_o1_answer")):
-            if re.search(
+        if re.search(
                 r"\b(?:macro(?:s|\s+task)?|workproducts?|"
                 # 'project' alone names a real source/domain entity, e.g.
                 # 'Project event ledger' and 'project identifier'. Ban only
@@ -538,7 +513,7 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
                 r"m\d+_op\d+)\b",
                 value, re.I,
             ):
-                errors.append(field + "_technical_execution_jargon")
+            errors.append(field + "_technical_execution_jargon")
         # Distinguish public source handles (e.g. M3_a, relation_2)
         # from invented or private identifiers (e.g. M3_op01). Only IDs
         # explicitly carried by this Macro's visible evidence sources pass.
