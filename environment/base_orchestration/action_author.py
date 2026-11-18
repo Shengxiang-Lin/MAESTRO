@@ -273,7 +273,7 @@ def _critic_dispatch_rewrite_request(review: dict) -> bool:
     return bool(re.search(
         r"(?:split (?:the |this )?(?:task|investigation|lookup)|"
         r"separate (?:the |this )?(?:task|investigation) into|"
-        r"(?:add|change|replace|modify|update) [^.\\n]{0,100}"
+        r"(?:add|change|replace|modify|update) .{0,100}"
         r"(?:output_fields|required_output_fields|output fields)|"
         r"(?:next|another) (?:round|delegation) (?:should|must|to))",
         hint,
@@ -1493,6 +1493,40 @@ def author_delegate_action(
                         "reason": str(exc)[:200],
                     })
                     continue
+        # Some reviewers ask to split a frozen investigation into new
+        # rounds, or to add terminal output fields to an intermediate task.
+        # Re-review the SAME prose against this round's fixed public
+        # contract. Never auto-accept: a genuine invented field or false
+        # source dependency must still be rejected.
+        if (freeze_assignment_prose and naturalize_assignment_prose
+                and not _critic_review_passes(review)
+                and _critic_dispatch_rewrite_request(review)):
+            dispatch_scope_rereviewed = True
+            try:
+                review = critic.complete_json(
+                    critic_system + (
+                        "\nSECOND INDEPENDENT REVIEW: The exact CURRENT "
+                        "task count, grouped source investigations and "
+                        "output_fields in current_round_task_contract "
+                        "are CODE-FROZEN. You CANNOT split this task into "
+                        "another round or demand fields belonging to "
+                        "the final user question. Review ONLY what the "
+                        "Author wrote in candidate_reasoning_only and "
+                        "candidate_task_prose_only. If it invented "
+                        "a source relation, an extra requested field, "
+                        "an already completed check or a dependency, "
+                        "FAIL and quote that specific authored phrase. "
+                        "Otherwise PASS the legitimate intermediate "
+                        "investigation. Do not change the task contract.\n"
+                    ),
+                    json.dumps(review_payload, ensure_ascii=False),
+                )
+            except Exception as exc:
+                failures.append({
+                    "stage": "critic_dispatch_scope_rereview_backend",
+                    "reason": str(exc)[:200],
+                })
+                continue
         # The Critic cannot overturn a code-confirmed *visible* conflict
         # solely by asserting that the two delivered statements agree.
         # Invalid critiques trigger a second independent review, never
@@ -1577,6 +1611,8 @@ def author_delegate_action(
                     ],
                     "visible_set_relation_rereviewed":
                         visible_set_relation_rereviewed,
+                    "critic_dispatch_scope_rereviewed":
+                        dispatch_scope_rereviewed,
                 } if reasoning_only_stage3 else {}),
                 **({
                     "decision_contract_version": decision_contract.get(
@@ -1598,6 +1634,7 @@ def author_delegate_action(
         "mode": ("llm_reviewed_contract_frozen"
                  if freeze_assignment_prose else "llm_reviewed"),
         "attempts": max_revisions + 1, "failures": failures,
+        "critic_dispatch_scope_rereviewed": dispatch_scope_rereviewed,
         **({
             "decision_contract_version": decision_contract.get(
                 "contract_version", "unknown"
