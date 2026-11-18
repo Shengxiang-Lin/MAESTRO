@@ -15,7 +15,7 @@ from environment.generate_question.execution.evidence_tools import (
 )
 from .generation_meta import GENERATION_PROCESS_RE
 from .task_contract import (compile_task_contract, contract_prose_issues,
-                            critic_repair_guidance, contract_fallback,
+                            critic_repair_guidance,
                             public_identifier_join, complete_prose_review)
 
 _AUTHOR_SYSTEM = """Write one realistic Orchestra-o1 Main-Agent decision.
@@ -1176,8 +1176,8 @@ def author_complete_action(*, template: dict, prompt: str,
             "repair_hint": str(review.get("repair_hint", ""))[:250]
                            if isinstance(review, dict) else "",
         })
-    return deepcopy(template), {
-        "status": "accepted", "mode": "teacher_grounded_completion_fallback",
+    return None, {
+        "status": "failed", "mode": "llm_reviewed_completion",
         "attempts": max_revisions + 1, "failures": failures,
         "reviewed": False,
         "completion_answer_scope_rereviewed": answer_scope_rereviewed,
@@ -1198,7 +1198,6 @@ def author_delegate_action(
     decision_contract: dict | None = None,
     critic_conflict_objection=None,
     validation_prompt: str | None = None,
-    allow_delegate_fallback: bool = False,
 ) -> tuple[dict | None, dict]:
     # Separate runtime-specific prose instructions from the shared O1
     # deterministic structure/Guard. Existing Base callers are unchanged.
@@ -1857,24 +1856,6 @@ def author_delegate_action(
                          "validated_repair_guidance": critic_repair_guidance(
                              review, candidate, assignments)
                          if naturalize_assignment_prose else []})
-    if naturalize_assignment_prose and allow_delegate_fallback:
-        fallback = contract_fallback(assignments, template)
-        if fallback is not None:
-            errors = action_issues(fallback, assignments, prompt=validation_prompt)
-            if reasoning_guard is not None:
-                errors += reasoning_guard(fallback["reasoning"])
-            for i, item in enumerate(assignments):
-                errors += contract_prose_issues(fallback["params"]["tasks"][i]["task_instruction"], item["semantic_contract"])
-            if not errors:
-                return fallback, {
-                    "status": "accepted", "mode": "contract_frozen_delegate_fallback",
-                    "reviewed": False, "assignment_contract_frozen": True,
-                    "naturalized_task_prose": False, "authored_fields": [],
-                    "attempts": max_revisions + 1,
-                    "critic_calls": critic_calls, "failures": failures,
-                    "fallback_contract_version": assignments[0]["semantic_contract"]["version"],
-                }
-            failures.append({"stage": "delegate_fallback_guard", "errors": errors})
     return None, {
         "status": "failed",
         "mode": ("llm_reviewed_contract_frozen"
