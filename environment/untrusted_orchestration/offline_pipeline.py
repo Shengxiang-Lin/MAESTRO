@@ -151,9 +151,41 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
     return episode, audit
 
 
+def _public_done_null_fields(public_history: str) -> set[str]:
+    """Read missing typed fields ONLY from the already delivered history."""
+    try:
+        batches = json.loads(public_history)
+    except (ValueError, TypeError):
+        return set()
+    if not isinstance(batches, list):
+        return set()
+    missing = set()
+    for batch in batches:
+        for report in batch.get("subtask_results", []):
+            finish = report.get("finish_result") if isinstance(report, dict) else None
+            if not isinstance(finish, dict) or finish.get("status") != "done":
+                continue
+            try:
+                rows = json.loads(finish.get("result", ""))
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(rows, list) or not rows:
+                continue
+            records = [
+                row.get("values", row) for row in rows
+                if isinstance(row, dict)
+            ]
+            if records and all(isinstance(row, dict) for row in records):
+                for field in set().union(*(set(row) for row in records)):
+                    if all(row.get(field) is None for row in records):
+                        missing.add(field)
+    return missing
+
+
 def _visibility_issues(requests: list[dict], public_history: str) -> list[str]:
     """Fail closed if the planner relied on an identifier not in reports."""
     visible = public_history.casefold()
+    delivered_null_fields = _public_done_null_fields(public_history)
     missing = []
     for request in requests:
         for identifier in request.get("known_identifiers", []):
@@ -162,11 +194,12 @@ def _visibility_issues(requests: list[dict], public_history: str) -> list[str]:
         if request["operation"] in {
             "retry_missing_evidence", "complete_partial_evidence",
         }:
-            if not any(x in visible for x in (
+            if (not any(x in visible for x in (
                 "missing", "partial", "no result", "unresolved",
                 "not delivered", "incomplete", "did not return",
                 "did not produce",
-            )):
+            )) and not set(request.get("target_fields") or [])
+                            & delivered_null_fields):
                 missing.append(request["request_id"] + ":missing_status")
         if request["operation"] == "verify_conflicting_evidence":
             # The discrepancy label cannot be emitted just because the
