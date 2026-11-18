@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -308,6 +309,135 @@ class EventEngineTests(unittest.TestCase):
         state2.cross_source_checks_enabled = True
         state2._detect_late_cross_source_conflicts()
         self.assertFalse(state2.detected_conflicts)
+
+    def test_cited_late_disagreement_requires_independent_public_claims(self):
+        scene = deepcopy(self.scene)
+        scene["world"]["sources"].update({
+            sid: {"observations": [{
+                "fact_refs": [sid + ":F001"],
+                "evidence_origin_id": "independent-root-" + sid,
+            }]} for sid in ("alpha", "beta")
+        })
+
+        def fixture(late_year=2004, late_refs=None):
+            state = ExecutionState(scene, {})
+            state.tasks = {
+                "old": {
+                    "task_id": "old", "depends_on": [],
+                    "source_ids": ["alpha"],
+                    "operator_chain": [],
+                    "outputs": {"typed_relation": [
+                        "case_id", "reported_year_a",
+                    ]},
+                },
+                "late": {
+                    "task_id": "late", "depends_on": [],
+                    "source_ids": ["beta"],
+                    "operator_chain": [],
+                    "outputs": {"typed_relation": [
+                        "case_id", "reported_year_b",
+                    ]},
+                },
+                "consumer": {
+                    "task_id": "consumer", "depends_on": ["old"],
+                    "source_ids": [], "operator_chain": [],
+                    "outputs": {"typed_relation": ["case_id"]},
+                },
+            }
+            state.current = {
+                "old": Attempt(
+                    "old", 1, "done",
+                    Relation(("case_id", "reported_year_a"), ({
+                        "values": {
+                            "case_id": "Case-011", "reported_year_a": 2003,
+                        },
+                        "support": ("alpha:F001",),
+                    },)),
+                    ("case_id", "reported_year_a"), {}, {},
+                ),
+                "late": Attempt(
+                    "late", 1, "done",
+                    Relation(("case_id", "reported_year_b"), ({
+                        "values": {
+                            "case_id": "Case-011", "reported_year_b": late_year,
+                        },
+                        "support": ("beta:F001",),
+                    },)),
+                    ("case_id", "reported_year_b"), {}, {},
+                ),
+                "consumer": Attempt(
+                    "consumer", 1, "done",
+                    Relation(("case_id",), ({
+                        "values": {"case_id": "Case-011"},
+                        "support": ("alpha:F001",),
+                    },)),
+                    ("case_id",), {"old": 1}, {},
+                ),
+            }
+            state.public_reports = {
+                "old": {"finish_result": {
+                    "status": "done",
+                    "result": json.dumps([{
+                        "values": {
+                            "case_id": "Case-011", "reported_year_a": 2003,
+                        },
+                        "source_fact_refs": ["alpha:F001"],
+                    }]), "summary": "Recorded the first event year.",
+                }},
+                "late": {"finish_result": {
+                    "status": "done",
+                    "result": json.dumps([{
+                        "values": {
+                            "case_id": "Case-011",
+                            "reported_year_b": late_year,
+                        },
+                        "source_fact_refs": (
+                            late_refs if late_refs is not None
+                            else ["beta:F001"]
+                        ),
+                    }]), "summary": "Recorded the later event year.",
+                }},
+            }
+            state.public_report_rounds = {"old": 1, "late": 4}
+            state.cross_source_checks_enabled = True
+            return state
+
+        observed = fixture()
+        decisions = observed.scheduling_state()
+        self.assertIn("old", decisions["repair"])
+        self.assertEqual(
+            observed.detected_conflicts[-1]["kind"],
+            "explicit_independent_claim_disagreement",
+        )
+        self.assertEqual(
+            observed.observable_issues()[0]["kind"],
+            "cross_source_conflict",
+        )
+        self.assertIn(
+            "Case-011", observed.detected_conflicts[-1]["claim"]["subject"],
+        )
+        # Repeated checks do not schedule fresh invisible verifications.
+        observed.scheduling_state()
+        self.assertEqual(len(observed.detected_conflicts), 1)
+
+        # Private WorkProduct divergence is invisible if the delivered
+        # Result and the independent source still agree.
+        hidden = fixture(late_year=2003)
+        hidden.current["old"].product = Relation(
+            ("case_id", "reported_year_a"), ({
+                "values": {
+                    "case_id": "Case-011", "reported_year_a": 1999,
+                }, "support": ("alpha:F001",),
+            },),
+        )
+        self.assertFalse(hidden.scheduling_state()["repair"])
+        self.assertEqual(hidden.observable_issues(), [])
+
+        # A derived/multi-origin return cannot act as a second
+        # independent observation even if it cites a second source.
+        mixed = fixture(late_refs=["alpha:F001", "beta:F001"])
+        self.assertFalse(mixed.scheduling_state()["repair"])
+        self.assertEqual(mixed.detected_conflicts, [])
 
     def test_frozen_publication_rejects_critic_process_leak(self):
         with TemporaryDirectory() as td:
