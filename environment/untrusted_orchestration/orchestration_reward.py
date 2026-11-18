@@ -70,6 +70,14 @@ def _legal_optima(options, max_parallel):
     return coverage, priority, parallel
 
 
+def _same_completion_answer(answer: str, expected: str) -> bool:
+    """Compare JSON answers structurally, scalar answers exactly."""
+    try:
+        return json.loads(answer) == json.loads(expected)
+    except (ValueError, TypeError):
+        return answer.strip() == expected.strip()
+
+
 def score_decision(candidate, state) -> dict:
     """Return quantitative component scores and diagnostic failure reason.
 
@@ -103,6 +111,11 @@ def score_decision(candidate, state) -> dict:
             return invalid("missing_completion_answer")
         if not state.get("can_complete", False):
             return invalid("premature_completion")
+        expected = state.get("expected_completion_answer")
+        if not isinstance(expected, str) or not expected.strip():
+            return invalid("missing_private_completion_reference")
+        if not _same_completion_answer(answer, expected):
+            return invalid("incorrect_completion_answer")
         return {
             "reward": 1.0, "valid": True, "reason": None,
             "coverage": 1.0, "priority": 1.0,
