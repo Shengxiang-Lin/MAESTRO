@@ -762,8 +762,8 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
 
 
 CODE_OWNED_AUTHOR_SYSTEM = """You are a specialist Sub-Agent sending
-the completed delegated-task feedback to the Main-Agent. Facts are supplied
-by an immutable offline Oracle; the source observations are simulated.
+the completed delegated-task feedback to the Main-Agent. Use the provided
+verified task-local evidence; the source observations are simulated.
 
 Return ONLY a JSON object with THREE authored text fields:
 {"answer":"...", "summary":"...", "trace_summary":"..."}
@@ -777,7 +777,9 @@ the answer longer.
 All distinct entity identifiers, dates, measurements, scalar fields, and
 entity-to-value associations in exact_oracle_answer must be preserved
 verbatim in the answer, including when there are many rows. Use compact
-readable lists, not machine JSON, and include the number of matched rows.
+readable lists rather than machine JSON, and include the number of matched
+records when applicable. If you need to compare filters from multiple
+sources, associate each condition with the specific source it came from.
 If this is an intermediate task, never claim future eligibility,
 comparisons or checks were completed. The complete evidence/provenance
 rows are held separately by the application.
@@ -972,10 +974,17 @@ def author_critic_report(
         )
     author_contract = deepcopy(contract)
     if result_policy == "code_owned":
-        # The overall question often mentions downstream conditions that
-        # are not established in the current source-only Macro.
+        # Avoid prompting the Author to copy internal labels ("Oracle",
+        # "Macro", private work IDs) into its public finish prose.
         author_contract.pop("overall_question_for_context_only", None)
         author_contract.pop("code_owned_expected_result", None)
+        author_contract.pop("macro_task_id", None)
+        author_contract.pop("note", None)
+        author_contract["stage_scope_note"] = (
+            "Report only checks completed for THIS delegated task. "
+            "Intermediate lookups and comparisons do not establish later "
+            "eligibility or source agreement unless explicitly checked."
+        )
     failures = []
     for revision in range(max_revisions + 1):
         request = {
@@ -985,11 +994,25 @@ def author_critic_report(
                 "errors": f.get("errors", []),
                 "reason": f.get("reason"),
                 "repair_hint": (
-                    "Revise the natural ANSWER, finish summary and execution trace_summary "
-                    "against only local evidence. Preserve every literal "
-                    "entity/value and its correct association. Do not claim "
-                    "unperformed actions or downstream eligibility."
-                    if f.get("stage") == "critic" else None
+                    "Revise the natural ANSWER, finish summary and execution "
+                    "trace against only local evidence. Preserve all "
+                    "entity/value associations and actual source-specific "
+                    "filters. Do not imply downstream checks."
+                    if f.get("stage") == "critic" else
+                    "Replace internal generator words such as 'Macro' and "
+                    "'Oracle' with natural descriptions of the current task "
+                    "and its visible evidence. Public source IDs are allowed "
+                    "when listed in source_context; never invent source IDs."
+                    if f.get("stage") == "guard"
+                    and any("technical_execution_jargon" in issue
+                            or "internal_teacher_jargon" in issue
+                            for issue in f.get("errors", [])) else
+                    "Give ANSWER as a natural text string including every "
+                    "required value and its field association. Structured "
+                    "objects are accepted only on an exact Oracle match."
+                    if f.get("stage") == "guard"
+                    and "answer_invalid_length_or_type" in f.get("errors", [])
+                    else None
                 ),
             } for f in failures[-2:]],
             "style": (
