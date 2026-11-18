@@ -139,8 +139,9 @@ class CombinedStage2Tests(unittest.TestCase):
                      _o1_answer_requirements(before)},
                 ), [])
                 self.assertFalse(after["finish_result"]["result"].startswith("[{"))
-                self.assertEqual(after["report_authoring"]["result_policy"],
-                                 "code_owned")
+                self.assertEqual(after["report_authoring"]["status"], "accepted")
+                self.assertEqual(after["report_authoring"]["public_result_format"],
+                                 "natural_answer")
                 self.assertIn(
                     "matching records",
                     after["finish_result"]["summary"],
