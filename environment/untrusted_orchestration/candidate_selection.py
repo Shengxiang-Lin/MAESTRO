@@ -78,6 +78,34 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         for request in entry.get("evidence_requests", [])
     ]
     operations = Counter(row.get("operation", "unknown") for row in requests)
+    # A fault's private kind is not an observation available to Main.
+    # Label detectability only from 4A snapshots of already returned
+    # Sub-Agent reports at each decision, never from the hidden Gold.
+    snapshots = audit.get("observable_issue_snapshots") or []
+    fork_round = plan["branch_round"]
+    fault_targets = {
+        fault.task_id for fault in plan.get("faults", [])
+    }
+    detected = [
+        (snap["decision_round"], issue)
+        for snap in snapshots
+        for issue in snap.get("issues", [])
+        if (issue.get("task_id") in fault_targets
+            or issue.get("kind") == "cross_source_conflict")
+    ]
+    immediate = any(rnd == fork_round for rnd, _ in detected)
+    later = any(rnd > fork_round for rnd, _ in detected)
+    observability = (
+        "immediately_observable" if immediate
+        else "eventually_observable" if later
+        else "not_observed_in_replay"
+    )
+    first_visible_issue_round = (
+        min(rnd for rnd, _ in detected) if detected else None
+    )
+    visible_issue_types = sorted({
+        issue["kind"] for _, issue in detected
+    })
     kinds = [
         a["kind"] for a in plan["scenario_plan"]["fault_atoms"]
     ]
@@ -139,6 +167,9 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         "category": category,
         "behavior_signature": signature,
         "fault_events_applied": len(applied),
+        "observability": observability,
+        "first_visible_issue_round": first_visible_issue_round,
+        "visible_issue_types": visible_issue_types,
         "visible_conflicts": len(conflicts),
         "actual_invalidations": len(invalidations),
         "revalidations": len(revalidations),
@@ -299,6 +330,9 @@ def select_recovered_candidates(
     visible_states = Counter(
         row["main_visible_delivery_state"] for row in rows
     )
+    observability_distribution = Counter(
+        row["observability"] for row in rows
+    )
     stats = {
         "candidates_simulated": len(rows),
         "candidates_execution_recovered": sum(
@@ -314,6 +348,13 @@ def select_recovered_candidates(
         "main_visible_delivery_state_distribution": dict(
             sorted(visible_states.items())
         ),
+        "observability_distribution": dict(
+            sorted(observability_distribution.items())
+        ),
+        "selected_observability_distribution": dict(sorted(Counter(
+            row["observability"] for row in rows
+            if row["selected_for_language_review"]
+        ).items())),
         "selected_behavior_distribution": dict(sorted(
             chosen_counts.items()
         )),
