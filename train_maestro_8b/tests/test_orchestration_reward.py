@@ -129,7 +129,15 @@ class DeterministicRewardTests(unittest.TestCase):
 
     def test_complete_and_private_oracle_fail_closed(self):
         done = {"action":"complete","params":{"answer":"A supported finding"}}
-        self.assertEqual(score_decision(done,state(complete=True))["reward"],1)
+        terminal = state(complete=True)
+        terminal["expected_completion_answer"] = "A supported finding"
+        self.assertEqual(score_decision(done, terminal)["reward"], 1)
+        self.assertEqual(score_decision(
+            {"action": "complete", "params": {"answer": "An invented answer"}},
+            terminal,
+        )["reason"], "incorrect_completion_answer")
+        self.assertEqual(score_decision(done, state(complete=True))["reason"],
+                         "missing_private_completion_reference")
         self.assertEqual(score_decision(done,self.env)["reward"],-1)
         self.assertEqual(
             score_decision({"action":"complete","params":None},
