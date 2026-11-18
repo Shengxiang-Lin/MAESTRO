@@ -214,7 +214,7 @@ class CriticDispatchBoundaryTests(unittest.TestCase):
         )
         self.assertIn("Main-Agent's AUTHORED", _COMPLETE_CRITIC_SYSTEM)
         self.assertIn("final answer", _COMPLETE_CRITIC_SYSTEM)
-        self.assertIn("not submitted for your review", _COMPLETE_CRITIC_SYSTEM)
+        self.assertIn("NOT submitted for your review", _COMPLETE_CRITIC_SYSTEM)
         self.assertIn("AUTHOR'S NEW REASONING", _COMPLETE_CRITIC_SYSTEM)
         self.assertTrue(callable(author_complete_action))
 
