@@ -71,7 +71,7 @@ class IntraReportFaultTests(unittest.TestCase):
         )
         report, meta = naturalize_report(
             task, attempt, instruction="Return the case metric.",
-            model_alias="model_1",
+            model_alias="model_1", reviewed=None,
         )
         self.assertEqual(meta["status"], "accepted")
         self.assertEqual(report["finish_result"]["status"], "done")
@@ -215,7 +215,7 @@ class IntraReportFaultTests(unittest.TestCase):
         )
         report, _ = naturalize_report(
             task, attempt, instruction="Return the case metric.",
-            model_alias="model_1",
+            model_alias="model_1", reviewed=None,
         )
         delivered = json.loads(report["finish_result"]["result"])
         self.assertEqual(delivered[0]["values"]["metric"], 15)
