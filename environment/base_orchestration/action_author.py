@@ -116,53 +116,39 @@ three axes.
 """
 
 STAGE3_TASK_PROSE_AUTHOR_SYSTEM = """You are an Orchestra-o1 Main-Agent
-writing the next real-looking decision and its delegated task instructions.
+writing the next investigation decision and its Sub-Agent instructions.
 
-The dispatch is ALREADY FIXED by a dependency-safe task graph. You CANNOT
-add, remove, reorder, merge, split, retry or substitute task slots; you also
-CANNOT choose models, tools, source permissions or output schemas.
-Within these fixed slots, write useful, concrete Sub-Agent assignments.
+The upcoming investigations are listed in the provided order. Write
+exactly one task_instruction and context per listed investigation.
+Preserve the task count, order, allowed sources, output fields and models;
+do not add, skip or substitute tasks or select new tools.
 
 Return EXACTLY:
 {"reasoning":"...",
  "tasks":[{"task_instruction":"...","context":"..."}]}
 
-Write precisely one tasks entry for each pending investigation, in order.
-For each task_instruction, explain the specific investigation: the
-relevant provided source(s), the precise entity/date/measurement/
-relationship or evidence to inspect, how the available clue should be
-used, and the requested deliverable. Refer to permitted source IDs
-literally at least once; preserve their public names and modalities.
-Use natural, actionable investigative language, NOT generic phrases
-like 'identify candidates meeting evidence in the user question' or
-'combine the returned records by their matching identifiers'. If several
-tasks run in parallel, distinguish EACH by its own permitted source IDs,
-source titles, clue and requested output fields; do not reuse one template
-across all task slots. Do NOT copy the reference_instructions wholesale.
-Do not include
-model, tools or task IDs. Return fields must remain within the locked
-output_fields; later downstream investigation is OUT OF SCOPE.
+For each task_instruction, give an actionable request: which public source
+to inspect, which specific clue/identifier/date/relationship from the
+question or earlier Sub-Agent feedback to use, and which values to return.
+Mention each permitted source ID literally and retain its public name.
+Parallel investigations need distinct source-specific instructions, not
+a shared generic sentence. Do not copy reference instructions verbatim.
+Do not write tool names, models or internal task identifiers.
 
-For each context, write ONE specific, natural handoff of 25–700
-characters: say why this investigation is needed and which previously
-returned clue makes it possible. Do not leave context blank or write only
-a short label like "Follow up". For the first round, explain the user-
-provided clue or evidence source instead of claiming a prior result.
-Earlier public result strings will be attached VERBATIM by the application as a
-separate evidence suffix when there are prerequisite results. Do not
-reproduce a full result list unnecessarily, but use relevant public
-identifiers accurately in the task_instruction or context.
-When no earlier Sub-Agent has returned, do NOT imply prior attempts.
-Do not invent observations, tool failures, retries, missing evidence,
-verification, sources, URLs, IDs, numbers or future results.
+For each context, write ONE natural handoff of 25–700 characters: explain
+why the investigation is needed, using available user clues or ALREADY
+returned Sub-Agent results. On the first round, do not imply a previous
+Sub-Agent retrieval. Previously returned result strings are attached
+separately after generation; there is no need to copy them in full.
+Do not invent source content, outcomes, errors, retries or future facts.
 
-Reasoning explains WHY this exact fixed batch can run now and what
-it will establish for the user. Prior successful intermediate lookups
-are not failures. Parallelism/ordering is fixed, NOT yours to optimize.
-The provided source titles, schemas and reference instructions are
-CURRENT-ROUND information, never results of a future task.
-Only claim facts already visible in the original O1 question/history.
-Use JSON only, with reasoning and tasks, no extra fields.
+For reasoning, speak as the investigator: explain the evidence currently
+available, why these particular inquiries can proceed now, and what they
+will help establish. Do not describe the internal construction or
+scheduling process, procedural machinery, or why software chose a step.
+An earlier successful intermediate lookup is not a failed task.
+Only claim facts visible in the original question and earlier feedback.
+Return JSON only, with reasoning and tasks, no extra fields.
 """
 
 STAGE3_TASK_PROSE_CRITIC_SYSTEM = _CRITIC_SYSTEM + """
@@ -904,7 +890,7 @@ def author_delegate_action(
                     for item in assignments
                 ],
                 "output_format": (
-                    {"reasoning": "explain the next fixed batch",
+                    {"reasoning": "explain the evidence for the next investigations",
                      "tasks": [{
                          "task_instruction": "specific investigative request",
                          "context": "natural handoff and known clues",
@@ -930,8 +916,8 @@ def author_delegate_action(
                     "key must still be resolved. No invented past failures, "
                     "completed checks, or hidden future results. "
                     + ("Write reasoning and one task_instruction/context "
-                       "pair per frozen slot; keep allowed source identities "
-                       "and output fields unchanged."
+                       "pair per listed investigation; keep permitted "
+                       "source identities and output fields unchanged."
                        if naturalize_assignment_prose else
                        "Return only the reasoning field.")
                 ),
