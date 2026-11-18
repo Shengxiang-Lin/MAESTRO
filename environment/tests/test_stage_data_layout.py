@@ -64,7 +64,9 @@ class CanonicalStagePathsTests(TestCase):
         # Check the handoff capacity, not a stale pilot-specific count.
         self.assertEqual(reports["max_scenes"], subtask["max_records"])
         self.assertGreaterEqual(reports["max_scenes"], main["max_scenes"])
-        self.assertEqual(main["max_scenes"], 10)
+        # Stage 3 may build a larger reviewed bank than the Stage-4 pilot.
+        # Avoid coupling this handoff test to an outdated Stage-3 quota.
+        self.assertGreaterEqual(main["max_scenes"], stage4["max_scenes"])
         self.assertEqual(stage4["max_scenes"], 10)
         self.assertEqual(stage4["branches_per_scene"], 3)
         self.assertEqual(stage4["round_sampling_strategy"], "stratified")
