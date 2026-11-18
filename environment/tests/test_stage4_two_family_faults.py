@@ -104,6 +104,97 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertIsNone(state.visible_discrepancy("T"))
         self.assertEqual(state.observable_issues(), [])
 
+    def test_arithmetic_conflict_needs_visible_input_values(self):
+        state = ExecutionState(self.scene, {})
+        parent = {"task_id": "prior", "source_ids": ["stat"],
+                  "depends_on": [], "operator_chain": [],
+                  "outputs": {"typed_relation": ["a", "b"]}}
+        calc = {"task_id": "calc", "depends_on": ["prior"],
+                "source_ids": [],
+                "input_schema": {"input_0": ["a", "b"]},
+                "external_inputs": ["prior_node"],
+                "operator_chain": [{
+                    "id": "derive", "op": "derive_arithmetic",
+                    "inputs": ["prior_node"],
+                    "left_field": "a", "right_field": "b",
+                    "output_field": "difference",
+                    "operation": "absolute_difference", "round_digits": 0,
+                }],
+                "outputs": {"typed_relation": ["difference"]}}
+        state.tasks = {"prior": parent, "calc": calc}
+        state.current = {
+            "prior": Attempt(
+                "prior", 1, "done",
+                Relation(("a", "b"), ({
+                    "values": {"a": 10, "b": 6},
+                    "support": ("stat:F001",),
+                },)), ("a", "b"), {}, {},
+            ),
+            "calc": Attempt(
+                "calc", 1, "done",
+                Relation(("difference",), ({
+                    "values": {"difference": 5},
+                    "support": ("stat:F001",),
+                },)), ("difference",), {"prior": 1}, {},
+            ),
+        }
+        state.set_public_report("prior", {"finish_result": {
+            "status": "done", "result": json.dumps([{
+                "values": {"a": 10, "b": 6},
+                "source_fact_refs": ["stat:F001"],
+            }]), "summary": "The two original values were returned.",
+        }}, round_number=1)
+        state.set_public_report("calc", {"finish_result": {
+            "status": "done", "result": json.dumps([{
+                "values": {"difference": 5},
+                "source_fact_refs": ["stat:F001"],
+            }]), "summary": "The requested difference was calculated.",
+        }}, round_number=2)
+        self.assertIn("imply 4", state.visible_discrepancy("calc"))
+        self.assertEqual(
+            next(row for row in state.observable_issues()
+                 if row["task_id"] == "calc")["kind"],
+            "arithmetic_inconsistency",
+        )
+        # Private values do not make a Main-visible mismatch.
+        state.public_reports["prior"]["finish_result"]["result"] = (
+            "The original observations were reviewed."
+        )
+        self.assertIsNone(state.visible_discrepancy("calc"))
+
+    def test_wrong_scope_only_if_filter_is_in_public_instruction(self):
+        state = ExecutionState(self.scene, {})
+        task = {
+            "task_id": "scope", "depends_on": [],
+            "source_ids": ["ledger"],
+            "operator_chain": [{
+                "op": "filter_eq", "field": "year", "value": 2024,
+            }], "outputs": {"typed_relation": ["case_id", "year"]},
+        }
+        state.tasks = {"scope": task}
+        state.current["scope"] = Attempt(
+            "scope", 1, "done",
+            Relation(("case_id", "year"), ({
+                "values": {"case_id": "Case-002", "year": 2024},
+                "support": ("ledger:F002",),
+            },)), ("case_id", "year"), {}, {},
+        )
+        report = {"task_instruction": "Find the 2024 year record.",
+                  "finish_result": {
+                      "status": "done",
+                      "result": json.dumps([{
+                          "values": {"case_id": "Case-002", "year": 2023},
+                          "source_fact_refs": ["ledger:F001"],
+                      }]), "summary": "Found a matching record.",
+                  }}
+        state.set_public_report("scope", report, round_number=2)
+        self.assertIn("requested scope", state.visible_discrepancy("scope"))
+        self.assertEqual(state.observable_issues()[0]["kind"],
+                         "scope_constraint_mismatch")
+        report["task_instruction"] = "Find a related record."
+        state.set_public_report("scope", report, round_number=2)
+        self.assertIsNone(state.visible_discrepancy("scope"))
+
     def test_fabricated_report_retains_cited_distractor_origin(self):
         task = {"task_id": "T", "source_ids": ["ledger"],
                 "operator_chain": [], "depends_on": [],
