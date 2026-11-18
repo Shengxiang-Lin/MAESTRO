@@ -55,38 +55,22 @@ def _mock_o1_draft(contract):
 
 
 class ReportAuthor:
-    def __init__(self, *, fail_topic=None, forged_tool=False):
+    """Current Task-Plan mock: Author owns only public answer and narrative."""
+    def __init__(self, *, fail_signature=None, forged_tool=False):
         self.calls = []
-        self.fail_topic = fail_topic
+        self.fail_signature = fail_signature
         self.forged_tool = forged_tool
 
     def complete_json(self, system_prompt, user_prompt):
         contract = json.loads(user_prompt)["frozen_task_and_evidence"]
         self.calls.append(contract)
-        answer_count = len(contract["exact_oracle_answer"])
-        if (self.fail_topic is not None
-                and self.fail_topic in contract["overall_question_for_context_only"]):
-            return {
-                "result": "I could not verify the requested records.",
-                "summary": "The required source details could not be located in the assigned evidence.",
-                "status": "partial",
-            }
-        return {
-            "result": (
-                "Checked the assigned source records and identified "
-                f"{answer_count} matching row(s); "
-                + ("no qualifying records were found." if answer_count == 0
-                   else "the exact items are in the handoff.")
-                + (" Used GoogleSearchAction." if self.forged_tool else "")
-            ),
-            "summary": (
-                "Compared the relevant source observations with upstream "
-                "workproducts and applied the recorded criteria. "
-                f"The resulting handoff contains {answer_count} row(s); "
-                "no additional unsupported eligibility condition was assumed."
-            ),
-            "status": "done",
-        }
+        signature = json.dumps(contract["exact_oracle_answer"], sort_keys=True)
+        if self.fail_signature == signature:
+            return {"answer": "", "summary": "", "trace_summary": ""}
+        result = _mock_o1_draft(contract)
+        if self.forged_tool:
+            result["trace_summary"] += " Used GoogleSearchAction."
+        return result
 
 
 class ReportCritic:
@@ -1283,7 +1267,12 @@ class ReportingBatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             subtasks, index = self._teacher_inputs(root, [27, 28])
-            author = ReportAuthor(fail_topic=scene(28)["question"])
+            target_task = next(
+                json.loads(line) for line in subtasks.read_text().splitlines()
+                if json.loads(line)["scene_task_id"] == scene(28)["task_id"]
+            )
+            fail_signature = json.dumps(target_task["answer"], sort_keys=True)
+            author = ReportAuthor(fail_signature=fail_signature)
             summary = naturalize_subtasks(
                 source_subtasks=subtasks, source_scene_index=index,
                 output_dir=root / "reviewed", api_base="http://unused/v1",
