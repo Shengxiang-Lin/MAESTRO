@@ -13,6 +13,7 @@ from environment.base_orchestration.action_author import (
     _stage3_task_prose_issues,
     _stage3_compile_task_prose,
     _stage3_task_prose_repair_guidance, author_delegate_action,
+    stage3_reasoning_issues, STAGE3_TASK_PROSE_AUTHOR_SYSTEM,
     proposed_template_action,
 )
 from environment.base_orchestration.o1_compat import (
@@ -95,6 +96,139 @@ class PassingCritic:
 
 
 class FrozenTaskProseTests(unittest.TestCase):
+    def test_rejects_internal_scheduler_language_not_grounded_domain_terms(self):
+        """Actual 8/10 pilot leaked 'fixed task graph' into published reasoning."""
+        observed = (
+            "This batch executes the first parallel layer of the fixed "
+            "dependency graph to retrieve case identifiers.",
+            "The current fixed slot requires looking up the confirmed "
+            "project key from the index.",
+            "The fixed task graph requires a final synthesis step.",
+            "The next fixed step is to examine the record ledger.",
+            "The three frozen investigation slots can run together.",
+        )
+        for reason in observed:
+            with self.subTest(reason=reason):
+                self.assertIn(
+                    "internal_orchestration_language",
+                    stage3_reasoning_issues(reason, {}),
+                )
+        self.assertEqual(stage3_reasoning_issues(
+            "The fixed deadline is 2025-01-01, so I will inspect the "
+            "register to verify the dates.", {},
+        ), [])
+        self.assertEqual(stage3_reasoning_issues(
+            "The observation points to a geographic dependency; I will "
+            "check the regional register.", {},
+        ), [])
+        # The Stage-3 Author should no longer be primed by the terms
+        # that caused the repeated public reasoning leak.
+        self.assertNotIn("fixed", STAGE3_TASK_PROSE_AUTHOR_SYSTEM.casefold())
+        self.assertNotIn("frozen", STAGE3_TASK_PROSE_AUTHOR_SYSTEM.casefold())
+
+    def test_specific_task_with_generic_clause_is_not_a_false_rejection(self):
+        """A copied clause is an issue only without additional real clues."""
+        scene = current_scene(0)
+        task = next(
+            t for t in scene["macro_graph"]["tasks"]
+            if t["source_ids"] and not t["depends_on"]
+        )
+        assignment = _assignment(task, source_catalog(scene), {})
+        sources = ", ".join(assignment["source_ids"])
+        output_field = assignment["output_fields"][0]
+        base = (
+            "Examine " + sources + ". Identify the candidates meeting "
+            "the evidence described in the user question. "
+        )
+        context = (
+            "The initial question supplies a valley landmark and a "
+            "shoreline annotation; use these as the matching clues."
+        )
+        plain = {
+            "reasoning": "I will check the available source observations.",
+            "tasks": [{
+                "task_instruction": (
+                    base + "Return the requested " + output_field +
+                    " from the assigned records."
+                ),
+                "context": context,
+            }],
+        }
+        prompt = (
+            scene["question"] + " The valley landmark and shoreline "
+            "annotation are visible to the investigator."
+        )
+        errors = _stage3_task_prose_issues(
+            plain, [assignment], prompt=prompt,
+        )
+        self.assertIn("task_0_generic_template_repeated", errors)
+        grounded = deepcopy(plain)
+        grounded["tasks"][0]["task_instruction"] = (
+            base + "Cross-reference the valley landmark with the shoreline "
+            "annotation to identify the matching " + output_field + "."
+        )
+        errors = _stage3_task_prose_issues(
+            grounded, [assignment], prompt=prompt,
+        )
+        self.assertNotIn("task_0_generic_template_repeated", errors)
+        self.assertNotIn("task_0_source_scope_missing:" +
+                         assignment["source_ids"][0], errors)
+
+    def test_meta_reasoning_retries_without_leaking_internal_dispatch(self):
+        scene = current_scene(0)
+        target = next(
+            t for t in scene["macro_graph"]["tasks"]
+            if t["source_ids"] and not t["depends_on"]
+        )
+        assignment = _assignment(target, source_catalog(scene), {})
+
+        class MetaThenGroundedAuthor:
+            def __init__(self):
+                self.requests = []
+
+            def complete_json(self, system, payload):
+                request = json.loads(payload)
+                self.requests.append(request)
+                return {
+                    "reasoning": (
+                        "The current fixed slot requires a lookup in the "
+                        "available source records."
+                        if not request.get("repair_guidance") else
+                        "The named sources contain the observations needed "
+                        "to identify the relevant case before checking "
+                        "its linked records."
+                    ),
+                    "tasks": author_task_prose(
+                        request["pending_investigations"]
+                    ),
+                }
+
+        author, critic = MetaThenGroundedAuthor(), PassingCritic()
+        action, status = author_delegate_action(
+            assignments=[assignment], prompt=scene["question"],
+            author=author, critic=critic, max_revisions=1,
+            freeze_assignment_prose=True, reasoning_only_stage3=True,
+            naturalize_assignment_prose=True,
+            reasoning_guard=lambda value: stage3_reasoning_issues(value, {}),
+            author_system=STAGE3_TASK_PROSE_AUTHOR_SYSTEM,
+        )
+        self.assertEqual(status["status"], "accepted", status)
+        self.assertEqual(status["attempts"], 2)
+        self.assertEqual(len(author.requests), 2)
+        self.assertEqual(len(critic.requests), 1)
+        self.assertEqual(
+            stage3_reasoning_issues(action["reasoning"], {}), [],
+        )
+        self.assertTrue(any(
+            "visible source clues" in guidance
+            for guidance in author.requests[1]["repair_guidance"]
+        ))
+        template = proposed_template_action([assignment])
+        self.assertEqual(action["params"]["tasks"][0]["model"],
+                         template["params"]["tasks"][0]["model"])
+        self.assertEqual(action["params"]["tasks"][0]["tools"],
+                         template["params"]["tasks"][0]["tools"])
+
     def test_retry_hints_target_context_length_and_generic_prose(self):
         scene = current_scene(0)
         target = next(

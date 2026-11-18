@@ -51,6 +51,27 @@ journal records context/instruction lengths and types (not candidate
 text), to distinguish a short context from an overlong one. No guard,
 source permission, frozen dispatch or Critic requirement is relaxed.
 
+The Stage-3 Author now reasons as an investigator rather than describing
+private scheduling machinery. A generation-time Guard rejects phrases such as
+"fixed dependency graph", "current fixed slot", and "fixed task graph";
+the rejection yields an evidence-grounded rewrite hint on the next attempt.
+Ordinary task-domain phrases like "fixed deadline" remain valid. Pure
+reference-instruction boilerplate is still rejected, but adding genuine
+source-specific clues visible in the question/history is not rejected merely
+because an instruction also contains a copied generic clause; the independent
+Critic remains responsible for its semantic specificity.
+
+**Completion quality tiers:** `generation_mode=llm_reviewed_completion`
+means an independently Critic-approved final rationale. When the Author/
+Critic cannot agree, Stage 3 may still publish a complete, code-verified
+clean reference as `generation_mode=teacher_grounded_completion_fallback`.
+Those fallback turns are explicitly **not LLM-reviewed positive training
+labels**. Keep them for trusted replay and Stage-4 clean/fault pairing, but
+exclude them when selecting strictly LLM-reviewed SFT/GRPO examples, e.g.
+filter `main_turns.jsonl` on `generation_mode`. Completion fallback
+failures and the non-reviewed designation remain in the private audit; the
+`summary.json` reports completion modes separately.
+
 The **training prompt is unchanged**: each turn still stores
 `input.subtask_history`, and `o1_prompt_from_turn` rebuilds the original
 `OmniGAIAMainAgentPrompt` exactly. Validation of proposed prose uses the

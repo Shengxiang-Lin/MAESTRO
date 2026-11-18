@@ -116,53 +116,39 @@ three axes.
 """
 
 STAGE3_TASK_PROSE_AUTHOR_SYSTEM = """You are an Orchestra-o1 Main-Agent
-writing the next real-looking decision and its delegated task instructions.
+writing the next investigation decision and its Sub-Agent instructions.
 
-The dispatch is ALREADY FIXED by a dependency-safe task graph. You CANNOT
-add, remove, reorder, merge, split, retry or substitute task slots; you also
-CANNOT choose models, tools, source permissions or output schemas.
-Within these fixed slots, write useful, concrete Sub-Agent assignments.
+The upcoming investigations are listed in the provided order. Write
+exactly one task_instruction and context per listed investigation.
+Preserve the task count, order, allowed sources, output fields and models;
+do not add, skip or substitute tasks or select new tools.
 
 Return EXACTLY:
 {"reasoning":"...",
  "tasks":[{"task_instruction":"...","context":"..."}]}
 
-Write precisely one tasks entry for each pending investigation, in order.
-For each task_instruction, explain the specific investigation: the
-relevant provided source(s), the precise entity/date/measurement/
-relationship or evidence to inspect, how the available clue should be
-used, and the requested deliverable. Refer to permitted source IDs
-literally at least once; preserve their public names and modalities.
-Use natural, actionable investigative language, NOT generic phrases
-like 'identify candidates meeting evidence in the user question' or
-'combine the returned records by their matching identifiers'. If several
-tasks run in parallel, distinguish EACH by its own permitted source IDs,
-source titles, clue and requested output fields; do not reuse one template
-across all task slots. Do NOT copy the reference_instructions wholesale.
-Do not include
-model, tools or task IDs. Return fields must remain within the locked
-output_fields; later downstream investigation is OUT OF SCOPE.
+For each task_instruction, give an actionable request: which public source
+to inspect, which specific clue/identifier/date/relationship from the
+question or earlier Sub-Agent feedback to use, and which values to return.
+Mention each permitted source ID literally and retain its public name.
+Parallel investigations need distinct source-specific instructions, not
+a shared generic sentence. Do not copy reference instructions verbatim.
+Do not write tool names, models or internal task identifiers.
 
-For each context, write ONE specific, natural handoff of 25–700
-characters: say why this investigation is needed and which previously
-returned clue makes it possible. Do not leave context blank or write only
-a short label like "Follow up". For the first round, explain the user-
-provided clue or evidence source instead of claiming a prior result.
-Earlier public result strings will be attached VERBATIM by the application as a
-separate evidence suffix when there are prerequisite results. Do not
-reproduce a full result list unnecessarily, but use relevant public
-identifiers accurately in the task_instruction or context.
-When no earlier Sub-Agent has returned, do NOT imply prior attempts.
-Do not invent observations, tool failures, retries, missing evidence,
-verification, sources, URLs, IDs, numbers or future results.
+For each context, write ONE natural handoff of 25–700 characters: explain
+why the investigation is needed, using available user clues or ALREADY
+returned Sub-Agent results. On the first round, do not imply a previous
+Sub-Agent retrieval. Previously returned result strings are attached
+separately after generation; there is no need to copy them in full.
+Do not invent source content, outcomes, errors, retries or future facts.
 
-Reasoning explains WHY this exact fixed batch can run now and what
-it will establish for the user. Prior successful intermediate lookups
-are not failures. Parallelism/ordering is fixed, NOT yours to optimize.
-The provided source titles, schemas and reference instructions are
-CURRENT-ROUND information, never results of a future task.
-Only claim facts already visible in the original O1 question/history.
-Use JSON only, with reasoning and tasks, no extra fields.
+For reasoning, speak as the investigator: explain the evidence currently
+available, why these particular inquiries can proceed now, and what they
+will help establish. Do not describe the internal construction or
+scheduling process, procedural machinery, or why software chose a step.
+An earlier successful intermediate lookup is not a failed task.
+Only claim facts visible in the original question and earlier feedback.
+Return JSON only, with reasoning and tasks, no extra fields.
 """
 
 STAGE3_TASK_PROSE_CRITIC_SYSTEM = _CRITIC_SYSTEM + """
@@ -204,25 +190,43 @@ _PAST_FAILED_ATTEMPT = re.compile(
 )
 
 
+# These are implementation terms, not Main-visible reasons for a decision.
+# Keep the pattern narrow: "fixed deadline", "dependency" and genuine graph
+# evidence in a user question are valid domain concepts.
+_STAGE3_ORCHESTRATION_META = re.compile(
+    r"\b(?:fixed|frozen|locked|pre[- ]?assigned|pre[- ]?determined)\s+"
+    r"(?:(?:task|dependency|macro|investigation|execution)\s+){0,2}"
+    r"(?:graph|batch|slots?|dispatch|schedule|workflow|plan|steps?)\b"
+    r"|\b(?:current|next|assigned)\s+(?:fixed\s+)?(?:task\s+)?slot\b"
+    r"|\b(?:the\s+)?(?:task|dependency)\s+graph\s+"
+    r"(?:requires|mandates|dictates|specifies)\b"
+    r"|\b(?:teacher[- ]owned|code[- ]owned)\s+"
+    r"(?:tasks?|steps?|plans?|batch|dispatch)\b",
+    re.I,
+)
+
+
 def stage3_reasoning_issues(reasoning: str, delivered: dict) -> list[str]:
-    """Validate only unsupported claims refutable from public report status."""
+    """Check Main-visible decisions, not the private generation machinery."""
     if not isinstance(reasoning, str):
         return ["invalid_main_reasoning"]
+    issues = []
     if re.search(
         r"\b(?:reference_action_for_structure_only|"
         r"current_round_assignments_in_required_order)\b",
         reasoning, re.I,
     ):
-        return ["internal_reference_action_leak"]
-    if not _PAST_FAILED_ATTEMPT.search(reasoning):
-        return []
-    statuses = [
-        record.get("finish_result", {}).get("status")
-        for record in delivered.values()
-    ]
-    if not statuses or all(status == "done" for status in statuses):
-        return ["invented_prior_subagent_failure"]
-    return []
+        issues.append("internal_reference_action_leak")
+    if _STAGE3_ORCHESTRATION_META.search(reasoning):
+        issues.append("internal_orchestration_language")
+    if _PAST_FAILED_ATTEMPT.search(reasoning):
+        statuses = [
+            record.get("finish_result", {}).get("status")
+            for record in delivered.values()
+        ]
+        if not statuses or all(status == "done" for status in statuses):
+            issues.append("invented_prior_subagent_failure")
+    return issues
 
 
 _FORBIDDEN = re.compile(
@@ -428,6 +432,60 @@ _STAGE3_IDENTIFIER = re.compile(
 )
 
 
+_STAGE3_GENERIC_CLAUSE = re.compile(
+    r"\b(?:identify the candidates meeting the evidence described "
+    r"in the user question|combine the returned records by their "
+    r"matching identifiers)\b",
+    re.I,
+)
+# These words convey a task format, not a distinguishing clue. A specific
+# quoted landmark, known ID, date or entity from the visible history must
+# provide additional information beyond the provided reference instruction.
+_STAGE3_TEMPLATE_FILLER = frozenset({
+    "also", "another", "available", "based", "candidate", "candidates",
+    "check", "checking", "clues", "combine", "confirm", "current",
+    "described", "document", "documents", "evidence", "examine",
+    "extract", "field", "fields", "find", "following", "given",
+    "identify", "identifiers", "investigate", "investigation", "key",
+    "keys", "later", "lookup", "matching", "mentioned", "names",
+    "needed", "observations", "original", "previous", "provided",
+    "question", "record", "records", "relevant", "report", "requested",
+    "result", "results", "return", "review", "search", "source",
+    "sources", "specific", "step", "task", "tasks", "target",
+    "using", "values", "verify", "which", "without",
+})
+
+
+def _stage3_generic_template_only(
+    instruction: str, reference: str, visible_prompt: str,
+) -> bool:
+    """Flag a copied generic clause only if it adds no visible real clue.
+
+    The old substring ban rejected an otherwise concrete instruction simply
+    because it also contained a stock phrase from the Stage-1 reference.
+    Source IDs, source titles, output fields and boilerplate alone cannot
+    make such a phrase substantive: those were already in the reference.
+    The independent Critic still evaluates the entire natural assignment.
+    """
+    if not _STAGE3_GENERIC_CLAUSE.search(instruction):
+        return False
+    if instruction.strip().casefold() == reference.strip().casefold():
+        return True
+    base_terms = set(re.findall(r"\b[\w-]+\b", reference.casefold()))
+    visible_terms = set(re.findall(r"\b[\w-]+\b", visible_prompt.casefold()))
+    remaining = _STAGE3_GENERIC_CLAUSE.sub(" ", instruction).casefold()
+    grounded_specifics = {
+        term for term in re.findall(r"\b[\w-]+\b", remaining)
+        if len(term) >= 4
+        and term not in base_terms
+        and term not in _STAGE3_TEMPLATE_FILLER
+        and term in visible_terms
+    }
+    # Two distinct novel grounded terms avoids treating "Use M1_a and
+    # return case_id" plus a copied boilerplate sentence as real prose.
+    return len(grounded_specifics) < 2
+
+
 def _stage3_task_prose_issues(
     draft: dict, assignments: list[dict], *, prompt: str,
 ) -> list[str]:
@@ -452,6 +510,10 @@ def _stage3_task_prose_issues(
         )
     }
     issues = []
+    if isinstance(draft.get("reasoning"), str) and (
+        _STAGE3_ORCHESTRATION_META.search(draft["reasoning"])
+    ):
+        issues.append("stage3_internal_orchestration_language")
     for i, (item, expected) in enumerate(zip(tasks, assignments)):
         if not isinstance(item, dict) or set(item) != {
             "task_instruction", "context",
@@ -475,12 +537,12 @@ def _stage3_task_prose_issues(
             issues.append(f"task_{i}_authored_context_invalid")
         if instruction.strip() == expected["target_instruction"].strip():
             issues.append(f"task_{i}_instruction_not_naturalized")
-        if re.search(
-            r"\b(?:identify the candidates meeting the evidence described "
-            r"in the user question|combine the returned records by their "
-            r"matching identifiers)\b", instruction, re.I,
+        if _stage3_generic_template_only(
+            instruction, expected["target_instruction"], prompt,
         ):
             issues.append(f"task_{i}_generic_template_repeated")
+        if _STAGE3_ORCHESTRATION_META.search(instruction + " " + context):
+            issues.append(f"task_{i}_internal_orchestration_language")
         for sid in expected["source_ids"]:
             if not re.search(
                 r"(?<![\w])" + re.escape(sid) + r"(?![\w])",
@@ -530,6 +592,13 @@ def _stage3_task_prose_repair_guidance(
                     "specific clue/source and WHY this task follows; "
                     "do not paste the full earlier result because the "
                     "application appends the evidence separately."
+                )
+            elif kind == "internal_orchestration_language":
+                guidance.append(
+                    label + "Remove references to internal scheduling, "
+                    "preassigned tasks or program machinery. Describe "
+                    "only the specific visible evidence and practical "
+                    "investigation to perform."
                 )
             elif kind in {"generic_template_repeated",
                           "instruction_not_naturalized"}:
@@ -904,7 +973,7 @@ def author_delegate_action(
                     for item in assignments
                 ],
                 "output_format": (
-                    {"reasoning": "explain the next fixed batch",
+                    {"reasoning": "explain the evidence for the next investigations",
                      "tasks": [{
                          "task_instruction": "specific investigative request",
                          "context": "natural handoff and known clues",
@@ -930,8 +999,8 @@ def author_delegate_action(
                     "key must still be resolved. No invented past failures, "
                     "completed checks, or hidden future results. "
                     + ("Write reasoning and one task_instruction/context "
-                       "pair per frozen slot; keep allowed source identities "
-                       "and output fields unchanged."
+                       "pair per listed investigation; keep permitted "
+                       "source identities and output fields unchanged."
                        if naturalize_assignment_prose else
                        "Return only the reasoning field.")
                 ),
@@ -960,6 +1029,15 @@ def author_delegate_action(
                     "invented_prior_subagent_failure":
                         "Do not describe a previously completed Sub-Agent "
                         "handoff as a failed retrieval.",
+                    "stage3_internal_orchestration_language":
+                        "Rewrite the reasoning as the Main investigator, "
+                        "using visible source clues and unfinished evidence "
+                        "goals. Do not describe software scheduling, "
+                        "predetermined tasks or internal task graphs.",
+                    "internal_orchestration_language":
+                        "Explain why the next investigation follows from "
+                        "the visible evidence. Do not narrate internal "
+                        "task graphs, locked batches or scheduler decisions.",
                 }
                 request["repair_guidance"] = list(dict.fromkeys(
                     [repairs[code]
