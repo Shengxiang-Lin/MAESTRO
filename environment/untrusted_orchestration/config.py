@@ -134,14 +134,14 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         "report_api_key_env": report_model.get("api_key_env", "OPENAI_API_KEY"),
     }
     # None means every accepted Main feedback round in every Question.
-    # The optional integer cap is diagnostic/backwards-compatible only.
+    # An omitted limit selects all accepted feedback rounds.
     if config["branches_per_scene"] is not None and (
         type(config["branches_per_scene"]) is not int
         or config["branches_per_scene"] < 1
     ):
         raise ValueError("untrusted_invalid_round_debug_cap")
     if config["round_sampling_strategy"] not in {
-        "chronological", "stratified",
+        "chronological", "stratified", "evidence_aware",
     }:
         raise ValueError("untrusted_invalid_round_sampling_strategy")
     if config["max_post_fork_rounds"] is not None and (
