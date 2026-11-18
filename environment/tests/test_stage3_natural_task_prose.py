@@ -197,7 +197,7 @@ class CriticDispatchBoundaryTests(unittest.TestCase):
         self.assertIn("which specific clue/identifier/date/relationship", prompt)
         self.assertIn("Mention each permitted source ID literally", prompt)
         self.assertIn("Parallel investigations need distinct", prompt)
-        self.assertIn("one natural handoff of 25–700 characters", prompt)
+        self.assertIn("ONE natural handoff of 25–700 characters", prompt)
         self.assertIn("Do not write tool names, models or internal task identifiers", prompt)
         self.assertIn("An earlier successful intermediate lookup is not a failed task", prompt)
         self.assertNotIn("ALREADY ASSIGNED", prompt)
