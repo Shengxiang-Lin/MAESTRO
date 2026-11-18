@@ -811,6 +811,39 @@ class ExecutionState:
                     })
                     return
 
+    def unresolved_cited_conflicts(self) -> bool:
+        """After rechecking, do two PUBLIC independent claims still disagree?
+
+        A re-execution that returns exactly the same value is *not*
+        automatically a resolution. Neither source's hidden Gold is used.
+        """
+        relevant = [
+            row for row in self.detected_conflicts
+            if row.get("kind") == "explicit_independent_claim_disagreement"
+        ]
+        if not relevant:
+            return False
+        claims = self._explicit_report_claims()
+        for event in relevant:
+            left, right = event["compared_parent_tasks"]
+            wanted = event["claim"]
+            matching = {}
+            for claim in claims:
+                if (claim["task_id"] in (left, right)
+                        and all(claim[key] == value
+                                for key, value in (
+                                    ("subject", wanted["subject"]),
+                                    ("attribute", wanted["attribute"]),
+                                    ("valid_scope", wanted["valid_scope"]),
+                                ))):
+                    matching.setdefault(claim["task_id"], set()).add(
+                        (type(claim["value"]).__name__, repr(claim["value"]))
+                    )
+            if (left not in matching or right not in matching
+                    or matching[left] != matching[right]):
+                return True
+        return False
+
     def observable_issues(self) -> list[dict]:
         """Current decision's report-grounded anomalies, not fault labels.
 
