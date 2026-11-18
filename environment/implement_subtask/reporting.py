@@ -703,8 +703,18 @@ concise dash-prefixed bullet points (typically 2-8, as needed by task
 complexity). Simple lookups may need only a few points; multi-source
 investigations should identify the evidence used, comparisons or
 calculations actually carried out, returned findings and any unresolved
-limitations. Include meaningful details rather than repeated success
-claims, invented checks or filler.
+limitations. A clean, successfully completed investigation can naturally
+describe progress in affirmative language (for example, that a clue was
+successfully recovered, a value was correctly identified, or the requested
+handoff was completed smoothly). A brief, proportionate self-assessment
+that no problem or apparent inconsistency was encountered is acceptable
+when the supplied evidence and trace support it. Such language is OPTIONAL:
+vary wording freely; do not copy a fixed success checklist, repeat the
+same boilerplate in every bullet, or add success claims solely for length.
+Never claim to have run a hallucination detector, audited all possible
+sources, used unprovided tools, measured efficiency or verified downstream
+tasks. Do not claim a trouble-free outcome when the current evidence
+shows genuine gaps or unresolved contradictions.
 Use descriptive source titles, modalities and observed_content from
 the provided source_context and sampled_evidence_atoms. The source
 observations are SIMULATED: you may describe 'the supplied photograph
@@ -728,8 +738,9 @@ Keep evidence at its actual grain: an observation count grouped by an
 entity/location is not necessarily a count belonging to an upstream
 dossier. Do not reattribute measured results to a dossier, project or
 other entity unless the supplied observation explicitly links them.
-Avoid repetitive procedure narration. Prefer concise investigation
-findings that help Main plan follow-up tasks.
+Avoid mechanical repetition. Natural expressions of successful progress
+and completion are welcome when supported by THIS Macro's observations;
+prefer specific findings useful for Main's next decision over stock praise.
 
 STYLE EXAMPLE ONLY; do not reuse its factual content:
 {"answer":"Three survey dossiers match the two location clues: Dossier-A, Dossier-B and Dossier-C. Later qualification is not yet checked.",
@@ -755,8 +766,14 @@ accurately state THIS task's principal finding and any real limitations,
 not merely repeat the first trace bullet or imply downstream work was
 already done. The three authored texts must agree, but the summary
 need not enumerate every value from a multi-record answer.
-The trace is an Orchestra-o1-style execution recap, not ungrounded
-success claims, invented problems, real tool/media actions or technical
+For a clean, verified Macro, positive outcome descriptions and modest
+self-assessment are normal O1-style narration. Do not fail a report merely
+because it uses affirmative words such as "successfully", "correctly"
+or reports no apparent issues. Reject such statements only when they
+contradict actual observations, invent an extra validation or tool run,
+claim unsupported efficiency metrics, conceal known limitations or
+prematurely assert downstream success. The trace is an Orchestra-o1-style
+execution recap, not fabricated tool/media actions or technical
 operator logs.
 Do not require changing the frozen Oracle rows. Keep the same four axes.
 """
