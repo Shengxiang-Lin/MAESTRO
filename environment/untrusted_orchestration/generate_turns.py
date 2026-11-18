@@ -118,17 +118,13 @@ def _plan_branches(
     max_fault_atoms: int = 1,
     delayed_evidence_probability: float = 0.0,
 ) -> tuple[list[dict], int, int]:
-    """Expand EVERY accepted Main feedback round into one fault scenario.
+    """Choose trusted feedback forks; retain a true Stage-3 prefix for each.
 
-    The unit is (question, Main decision round), *not* a randomly sampled
-    number of branches per Question. A decision round t receives the latest
-    Sub-Agent batch returned from delegate round t-1. Every such available
-    round is retained in the plan, even when no admissible fault exists;
-    those rounds produce explicit skipped_unsupported journals.
-
-    `branches_per_scene` is an optional *debugging cap* for compatibility
-    with prior callers. None means no cap; the production YAML uses None.
-    The max_rounds budget also limits the global round positions.
+    The unit is (question, Main feedback round t), receiving actual results
+    from delegate round t-1. When capped, the maintained pilot samples across
+    early/middle/late history rather than only from the beginning. All
+    sampled rounds are accounted for, including unsupported or over-budget
+    faults; no future report is copied into the visible prefix.
     """
     if branches_per_scene is not None and (
         type(branches_per_scene) is not int or branches_per_scene < 1
