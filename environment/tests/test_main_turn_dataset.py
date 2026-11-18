@@ -276,47 +276,41 @@ class MainTurnDatasetTests(unittest.TestCase):
             self.assertIn(turn["input"]["subtask_history"], rendered)
             self.assertNotIn("prompt", turn["input"])
 
-    def test_critic_reviews_prose_without_second_guessing_frozen_tools(self):
+    def test_critic_reviews_authored_prose_without_frozen_tool_fields(self):
+        """The maintained frozen mode passes prose, never tool/model choices."""
+        from environment.tests.test_stage3_natural_task_prose import (
+            TaskProseAuthor,
+        )
         scene = fixture(4)
         rows = reviewed_rows(scene)
         seen = []
 
-        class Author:
-            def complete_json(self, system, request):
-                payload = json.loads(request)
-                result = deepcopy(payload["reference_action_for_structure_only"])
-                for task in result["params"]["tasks"]:
-                    # The test checks that Critic only receives prose,
-                    # while the Author preserves legally required source
-                    # handles and prior history.
-                    task["task_instruction"] += (
-                        " Report the available evidence for this source."
-                    )
-                return result
-
         class Critic:
             def complete_json(self, system, request):
                 payload = json.loads(request)
-                self_is_prose = payload["candidate_prose_only"]
-                self_assignment = payload["assignment_prose_goals_in_required_order"]
-                seen.append((self_is_prose, self_assignment, payload))
-                return {"verdict": "pass", "grounded": True,
-                        "assignment_fidelity": True, "o1_style": True}
+                if "candidate_task_prose_only" in payload:
+                    seen.append(payload)
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
 
-        critic = Critic()
         episode, turns, _, status = build_episode(
-            scene, rows, author=Author(), critic=critic,
-            max_revisions=0,
+            scene, rows, author=TaskProseAuthor(), critic=Critic(),
+            freeze_dispatch=True, max_revisions=0,
         )
-        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(status["status"], "accepted", status)
+        self.assertTrue(episode)
         self.assertTrue(seen)
         self.assertTrue(all(
             "tools" not in task and "model" not in task
-            for prose, _, _ in seen for task in prose["tasks"]
+            for payload in seen
+            for task in payload["candidate_task_prose_only"]
         ))
         self.assertTrue(all(
-            item["fixed_tool_and_model_fields_checked_by_code"]
-            for _, _, item in seen
+            payload["assignment_structure_validated_by_code"]
+            and payload["natural_language_semantics_validated_by_code"] is False
+            for payload in seen
         ))
         self.assertTrue(any(
             "Previously returned result:" in task["context"]
