@@ -159,6 +159,36 @@ def _canonical(value) -> str:
                       separators=(",", ":"))
 
 
+def _source_scoped_filter_steps(steps: list[dict]) -> list[dict]:
+    """Attribute a local filter to the most recent direct evidence source.
+
+    Source identifiers live on source-reading operations. Subsequent
+    filter/project operations usually have source_id=None, so a Critic
+    looking only at the LAST filter can misattribute earlier filters.
+    Join/aggregation breaks the single-source scope; never guess a source
+    for those downstream operations.
+    """
+    active_source = None
+    scoped = []
+    for i, step in enumerate(steps, 1):
+        operation = step["operation"]
+        if step.get("source_id") is not None:
+            active_source = step["source_id"]
+        elif operation in {
+            "join", "unique", "count_aggregate", "compare_select",
+            "derive_comparison", "derive_percentage", "goal_compute",
+            "goal_format",
+        }:
+            active_source = None
+        if active_source is not None and operation.startswith("filter_"):
+            scoped.append({
+                "step_number": i,
+                "source_id": active_source,
+                "condition": step["action"],
+            })
+    return scoped
+
+
 def _teacher_contract(record: dict, *, question: str | None,
                       is_terminal: bool) -> dict:
     trace = record["trace_summary"]
@@ -202,6 +232,9 @@ def _teacher_contract(record: dict, *, question: str | None,
         "executed_operations_in_this_macro": [
             step["operation"] for step in steps
         ],
+        # Review-only disambiguation: each checked condition is tied to
+        # the source that was actually read, not the last filter in a list.
+        "source_scoped_filter_steps": _source_scoped_filter_steps(steps),
         "stage_scope_note": (
             "Only these operators were executed in this Macro. "
             "An intermediate join/scan does not imply later eligibility "
@@ -534,6 +567,50 @@ def _exact_single_field_scalar_text(value, contract: dict) -> str | None:
     return exact if exact and str(value).strip() == exact else None
 
 
+def _exact_structured_o1_answer(value, contract: dict) -> str | None:
+    """Render an EXACT typed Oracle match as the O1 finish(result) string.
+
+    Current task-plan terminal goals often have a single outer 'answer'
+    field whose value is a multi-field dict. Qwen may emit that inner dict
+    instead of the requested prose. Never silently repair a merely
+    similar/subset dict, wrong value/type or invented extra field.
+    """
+    rows = contract.get("exact_oracle_answer")
+    if not isinstance(rows, list) or not all(
+        isinstance(row, dict) for row in rows
+    ):
+        return None
+    proposed = None
+    if type(value) is dict:
+        if (len(rows) == 1 and set(rows[0]) == {"answer"}
+                and type(rows[0]["answer"]) is dict
+                and _canonical(value) == _canonical(rows[0]["answer"])):
+            proposed = [rows[0]]
+        else:
+            proposed = [value]
+    elif type(value) is list and all(type(row) is dict for row in value):
+        proposed = value
+    else:
+        return None
+    if sorted(map(_canonical, proposed)) != sorted(map(_canonical, rows)):
+        return None
+
+    def format_row(row):
+        if set(row) == {"answer"} and type(row["answer"]) is dict:
+            row = row["answer"]
+        return ", ".join(
+            f"{SCHEMA_LABELS.get(field, field.replace('_', ' '))}: "
+            f"{_readable_value(data)}"
+            for field, data in row.items()
+        )
+
+    text = "; ".join(format_row(row) for row in proposed)
+    if (not text or len(text) > 6500
+            or _o1_answer_issues(text, contract)):
+        return None
+    return text
+
+
 def _o1_answer_issues(answer: str, contract: dict) -> list[str]:
     if not isinstance(answer, str):
         return ["answer_invalid_length_or_type"]
@@ -616,9 +693,26 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
                 # verb/adjective operator forms, not the domain noun.
                 r"scan(?:ned)?|project(?:ed|ion)|join(?:ed)?|uniqued|"
                 r"lookup_by_key|filter_eq|filter_gte|row\(s\)|"
-                r"m\d+_[a-z]\w*|m\d+_op\d+|relation_\d+)\b",
+                r"m\d+_op\d+)\b",
                 value, re.I,
             ):
+                errors.append(field + "_technical_execution_jargon")
+        # Distinguish public source handles (e.g. M3_a, relation_2)
+        # from invented or private identifiers (e.g. M3_op01). Only IDs
+        # explicitly carried by this Macro's visible evidence sources pass.
+        visible_source_ids = (
+            set(contract.get("available_provenance_sources", []))
+            & {
+                source.get("source_id")
+                for source in contract.get("source_context", [])
+                if isinstance(source, dict)
+            }
+        )
+        for source_token in re.findall(
+            r"\b(?:M\d+_[a-z]\w*|relation_\d+)\b", value, re.I,
+        ):
+            if (re.fullmatch(r"M\d+_op\d+", source_token, re.I)
+                    or source_token not in visible_source_ids):
                 errors.append(field + "_technical_execution_jargon")
         if _TOOL_HALLUCINATION.search(value):
             errors.append(field + "_claims_unperformed_tool_or_media_action")
@@ -728,8 +822,10 @@ labels, Macro/work_M identifiers, FactRefs or 'workproduct', 'row(s)'.
 Describe the observation in ordinary investigation language: "reviewed
 the supplied annotations", "cross-referenced the candidate lists", and
 "retained the requested values". Do NOT narrate SQL-style actions as
-"scanned", "joined", "projected", "rows" or "workproducts". Use public source
-titles rather than internal source keys such as M1_a, and never claim
+"scanned", "joined", "projected", "rows" or "workproducts". Prefer public source titles over cryptic identifiers; when multiple
+visible sources need disambiguation, you may reference a source ID that
+appears in authorized source_context (such as M3_a versus M3_b), but
+never invent source IDs or expose private operator IDs. Never claim
 validation against an Oracle, private ground truth or an output schema.
 Natural source titles such as "Project event ledger" and phrases such as
 "project identifier" ARE legitimate domain names, not SQL projection.
@@ -775,6 +871,11 @@ claim unsupported efficiency metrics, conceal known limitations or
 prematurely assert downstream success. The trace is an Orchestra-o1-style
 execution recap, not fabricated tool/media actions or technical
 operator logs.
+Source-specific review: the immutable source_scoped_filter_steps attaches
+each direct source's filtering condition to its actual source ID. Read
+ALL such steps, including earlier ones, before judging a cue/filter claim.
+A later filter on source B does NOT invalidate an earlier filter on
+source A; identify the exact conflicting source and step if rejecting.
 Do not require changing the frozen Oracle rows. Keep the same four axes.
 """
 
@@ -928,6 +1029,17 @@ def author_critic_report(
                         )
                         if exact is not None:
                             authored_answer = exact
+                    # Convert only an exact structured Oracle answer, never
+                    # an approximate match. A failed conversion stays
+                    # non-string and is rejected by the regular Guard.
+                    structured_answer_coerced = False
+                    if type(authored_answer) in {dict, list}:
+                        normalized = _exact_structured_o1_answer(
+                            authored_answer, contract,
+                        )
+                        if normalized is not None:
+                            authored_answer = normalized
+                            structured_answer_coerced = True
                     # Status and immutable Oracle rows are never model-owned.
                     candidate = {
                         "result": authored_answer,
@@ -1119,6 +1231,10 @@ def author_critic_report(
                     ),
                     "oracle_result_immutable": True,
                     "ignored_model_result": ignored_model_result,
+                    "verified_structured_answer_rendered": (
+                        structured_answer_coerced
+                        if contract.get("requires_o1_answer") else False
+                    ),
                     "attempts": revision + 1,
                     "surface_rewrites": surface_rewrites,
                     "review": decision,
