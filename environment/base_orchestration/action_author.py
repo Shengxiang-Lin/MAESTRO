@@ -432,6 +432,60 @@ _STAGE3_IDENTIFIER = re.compile(
 )
 
 
+_STAGE3_GENERIC_CLAUSE = re.compile(
+    r"\b(?:identify the candidates meeting the evidence described "
+    r"in the user question|combine the returned records by their "
+    r"matching identifiers)\b",
+    re.I,
+)
+# These words convey a task format, not a distinguishing clue. A specific
+# quoted landmark, known ID, date or entity from the visible history must
+# provide additional information beyond the provided reference instruction.
+_STAGE3_TEMPLATE_FILLER = frozenset({
+    "also", "another", "available", "based", "candidate", "candidates",
+    "check", "checking", "clues", "combine", "confirm", "current",
+    "described", "document", "documents", "evidence", "examine",
+    "extract", "field", "fields", "find", "following", "given",
+    "identify", "identifiers", "investigate", "investigation", "key",
+    "keys", "later", "lookup", "matching", "mentioned", "names",
+    "needed", "observations", "original", "previous", "provided",
+    "question", "record", "records", "relevant", "report", "requested",
+    "result", "results", "return", "review", "search", "source",
+    "sources", "specific", "step", "task", "tasks", "target",
+    "using", "values", "verify", "which", "without",
+})
+
+
+def _stage3_generic_template_only(
+    instruction: str, reference: str, visible_prompt: str,
+) -> bool:
+    """Flag a copied generic clause only if it adds no visible real clue.
+
+    The old substring ban rejected an otherwise concrete instruction simply
+    because it also contained a stock phrase from the Stage-1 reference.
+    Source IDs, source titles, output fields and boilerplate alone cannot
+    make such a phrase substantive: those were already in the reference.
+    The independent Critic still evaluates the entire natural assignment.
+    """
+    if not _STAGE3_GENERIC_CLAUSE.search(instruction):
+        return False
+    if instruction.strip().casefold() == reference.strip().casefold():
+        return True
+    base_terms = set(re.findall(r"\b[\w-]+\b", reference.casefold()))
+    visible_terms = set(re.findall(r"\b[\w-]+\b", visible_prompt.casefold()))
+    remaining = _STAGE3_GENERIC_CLAUSE.sub(" ", instruction).casefold()
+    grounded_specifics = {
+        term for term in re.findall(r"\b[\w-]+\b", remaining)
+        if len(term) >= 4
+        and term not in base_terms
+        and term not in _STAGE3_TEMPLATE_FILLER
+        and term in visible_terms
+    }
+    # Two distinct novel grounded terms avoids treating "Use M1_a and
+    # return case_id" plus a copied boilerplate sentence as real prose.
+    return len(grounded_specifics) < 2
+
+
 def _stage3_task_prose_issues(
     draft: dict, assignments: list[dict], *, prompt: str,
 ) -> list[str]:
@@ -456,6 +510,10 @@ def _stage3_task_prose_issues(
         )
     }
     issues = []
+    if isinstance(draft.get("reasoning"), str) and (
+        _STAGE3_ORCHESTRATION_META.search(draft["reasoning"])
+    ):
+        issues.append("stage3_internal_orchestration_language")
     for i, (item, expected) in enumerate(zip(tasks, assignments)):
         if not isinstance(item, dict) or set(item) != {
             "task_instruction", "context",
@@ -479,12 +537,12 @@ def _stage3_task_prose_issues(
             issues.append(f"task_{i}_authored_context_invalid")
         if instruction.strip() == expected["target_instruction"].strip():
             issues.append(f"task_{i}_instruction_not_naturalized")
-        if re.search(
-            r"\b(?:identify the candidates meeting the evidence described "
-            r"in the user question|combine the returned records by their "
-            r"matching identifiers)\b", instruction, re.I,
+        if _stage3_generic_template_only(
+            instruction, expected["target_instruction"], prompt,
         ):
             issues.append(f"task_{i}_generic_template_repeated")
+        if _STAGE3_ORCHESTRATION_META.search(instruction + " " + context):
+            issues.append(f"task_{i}_internal_orchestration_language")
         for sid in expected["source_ids"]:
             if not re.search(
                 r"(?<![\w])" + re.escape(sid) + r"(?![\w])",
