@@ -86,7 +86,6 @@ class CombinedStage2Tests(unittest.TestCase):
             "output_dir": root / "reports",
             "api_base": "http://unused/v1",
             "model": "mock-model",
-            "result_policy": "code_owned",
             "workers": 2,
             "max_revisions": 0,
             "timeout": 60,
@@ -140,8 +139,6 @@ class CombinedStage2Tests(unittest.TestCase):
                      _o1_answer_requirements(before)},
                 ), [])
                 self.assertFalse(after["finish_result"]["result"].startswith("[{"))
-                self.assertEqual(after["report_authoring"]["result_policy"],
-                                 "code_owned")
                 self.assertIn(
                     "matching records",
                     after["finish_result"]["summary"],
