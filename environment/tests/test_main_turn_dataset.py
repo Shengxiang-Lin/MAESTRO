@@ -661,6 +661,128 @@ class MainTurnDatasetTests(unittest.TestCase):
                          "teacher_grounded_completion_fallback")
         self.assertEqual(evidence_critic.calls, 1)
 
+    def test_completion_publishes_complete_sentences_and_minimal_evidence(self):
+        from environment.base_orchestration.action_author import (
+            author_complete_action, completion_issues,
+            _complete_reasoning_prose,
+        )
+        delivered = {"last": {"finish_result": {
+            "result": "132",
+            "summary": "The returned distance is 132.",
+        }}}
+        template = {
+            "action": "complete",
+            "reasoning": (
+                'The returned finding states: "132". '
+                "The completed investigation has supplied the requested "
+                "finding with its supporting evidence. "
+                "No additional Sub-Agent delegation is needed to answer."
+            ),
+            "params": {"answer": "132"},
+        }
+        # Previously authored[:420] often ended halfway through a word.
+        authored = (
+            "The returned observations establish the requested distance "
+            "without any pending source queries. " +
+            "The source association was checked against the previously "
+            "returned report and needs no additional delegation. " * 13
+        )
+        self.assertGreater(len(authored), 900)
+
+        class CompletionAuthor:
+            def complete_json(self, system, payload):
+                return {"reasoning": authored}
+
+        class CaptureCritic:
+            def __init__(self):
+                self.payload = None
+
+            def complete_json(self, system, payload):
+                self.payload = json.loads(payload)
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        critic = CaptureCritic()
+        complete, status = author_complete_action(
+            template=template, prompt="Return the supported distance.",
+            delivered=delivered, author=CompletionAuthor(),
+            critic=critic, max_revisions=0,
+        )
+        self.assertEqual(status["mode"], "llm_reviewed_completion")
+        self.assertEqual(complete["params"], {"answer": "132"})
+        reasoning = complete["reasoning"]
+        self.assertIn('Evidence: "132".', reasoning)
+        self.assertEqual(reasoning.count('Evidence: "132".'), 1)
+        self.assertNotIn(
+            "The completed investigation has supplied the requested",
+            reasoning,
+        )
+        self.assertNotIn("The returned finding states:", reasoning)
+        self.assertEqual(completion_issues(
+            complete, expected_answer="132", delivered=delivered,
+        ), [])
+        reviewed = critic.payload["candidate_prose_only"]["reasoning"]
+        self.assertTrue(reviewed.endswith("."))
+        self.assertEqual(reasoning, reviewed + ' Evidence: "132".')
+        self.assertLessEqual(len(reviewed), 900)
+        self.assertLessEqual(len(reasoning), 1600)
+        self.assertNotIn("Evidence:", reviewed)
+
+        with_quote, reviewed_quote = _complete_reasoning_prose(
+            "The public returned result was 132 and settles the request.",
+            delivered,
+        )
+        self.assertEqual(with_quote, reviewed_quote)
+        self.assertNotIn("Evidence:", with_quote)
+
+        # Never publish a prefix ending mid-word or mid-sentence.
+        no_boundary, reason = _complete_reasoning_prose(
+            "The finding " + "continues " * 140, delivered,
+        )
+        self.assertIsNone(no_boundary)
+        self.assertEqual(
+            reason, "completion_no_sentence_boundary_within_budget",
+        )
+
+    def test_completion_sentence_boundary_failure_keeps_unreviewed_fallback(self):
+        from environment.base_orchestration.action_author import (
+            author_complete_action,
+        )
+        delivered = {"last": {"finish_result": {
+            "result": "132", "summary": "The count is 132.",
+        }}}
+        template = {
+            "action": "complete",
+            "reasoning": (
+                'The returned finding states: "132". '
+                "The returned evidence is sufficient for the requested "
+                "number, so no additional delegation is necessary."
+            ),
+            "params": {"answer": "132"},
+        }
+        class LongUnfinishedAuthor:
+            def complete_json(self, system, payload):
+                return {"reasoning": "The result " + "continues " * 160}
+        class UnusedCritic:
+            def complete_json(self, system, payload):
+                raise AssertionError("Unfinished prose must not reach Critic")
+        output, status = author_complete_action(
+            template=template, prompt="Return the requested number.",
+            delivered=delivered, author=LongUnfinishedAuthor(),
+            critic=UnusedCritic(), max_revisions=0,
+        )
+        self.assertEqual(output, template)
+        self.assertEqual(
+            status["mode"], "teacher_grounded_completion_fallback",
+        )
+        self.assertFalse(status["reviewed"])
+        self.assertIn(
+            "completion_no_sentence_boundary_within_budget",
+            status["failures"][0]["errors"],
+        )
+
     def test_all_completions_use_their_own_visible_evidence(self):
         reasons = set()
         for i in (0, 1, 2, 3, 4):
