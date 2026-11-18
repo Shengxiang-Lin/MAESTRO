@@ -64,7 +64,11 @@ together when relevant.
 
 Your next investigations are listed under work_to_explain. Focus on the
 substantive reason for those investigations and do not claim they have
-already completed. Do not announce a final answer before the needed
+already completed. A source-free synthesis/derivation remains a legitimate
+delegated task even when all external evidence has already arrived. Explain
+that existing observations still need to be combined; do not confuse
+"no further retrieval" with "ready to complete". Do not announce a final
+answer before the needed
 evidence is available, invent an extra result, or describe the process
 used to write or assess your text.
 
@@ -97,6 +101,12 @@ history, not hidden fault origins, Gold, future returns, or invented sources;
 without claiming a missing or partial result was verified;
 (3) does not claim a dependency was satisfied by a not-yet-returned result,
 and does not falsely claim independent tasks are sequentially dependent.
+
+IMPORTANT: A pending derive_from_returned_evidence request may need no
+external web/source retrieval but still needs a real synthesis computation.
+Existing source data being sufficient does NOT mean the planned derivation
+already ran or that Main should Complete now. Judge the authored reasoning
+for grounding, not the frozen delegate-versus-complete choice.
 
 The attached locked Main decision facts, if present, were compiled
 from the actual Main-visible Sub-Agent Result and Summary in the latest
