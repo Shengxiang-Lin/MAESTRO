@@ -67,10 +67,31 @@ class TaskContractTests(unittest.TestCase):
         self.assertIn('candidate', status['failures'][0])
         self.assertEqual(status['critic_calls'], 2)
 
-    def test_rejected_prose_gets_explicit_unreviewed_complete_fallback(self):
-        action, status = author_delegate_action(assignments=[assignment()], prompt='Find the eligible event for project PRJ-ABC123.',
-            author=Author(bad=True), critic=Critic(), max_revisions=0, freeze_assignment_prose=True,
-            reasoning_only_stage3=True, naturalize_assignment_prose=True)
+    def test_rejected_prose_fails_by_default_without_delegate_fallback(self):
+        action, status = author_delegate_action(
+            assignments=[assignment()],
+            prompt='Find the eligible event for project PRJ-ABC123.',
+            author=Author(bad=True), critic=Critic(), max_revisions=0,
+            freeze_assignment_prose=True, reasoning_only_stage3=True,
+            naturalize_assignment_prose=True,
+        )
+        self.assertIsNone(action)
+        self.assertEqual(status['status'], 'failed')
+        self.assertEqual(status['mode'], 'llm_reviewed_contract_frozen')
+        self.assertTrue(status['failures'])
+        self.assertFalse(any(
+            failure.get('stage') == 'delegate_fallback_guard'
+            for failure in status['failures']
+        ))
+
+    def test_legacy_delegate_fallback_is_explicit_opt_in_only(self):
+        action, status = author_delegate_action(
+            assignments=[assignment()],
+            prompt='Find the eligible event for project PRJ-ABC123.',
+            author=Author(bad=True), critic=Critic(), max_revisions=0,
+            freeze_assignment_prose=True, reasoning_only_stage3=True,
+            naturalize_assignment_prose=True, allow_delegate_fallback=True,
+        )
         self.assertEqual(status['mode'], 'contract_frozen_delegate_fallback')
         self.assertFalse(status['reviewed'])
         self.assertIn('event_year at least 2025', action['params']['tasks'][0]['task_instruction'])
@@ -99,12 +120,74 @@ class TaskContractTests(unittest.TestCase):
             def complete_json(self, system, payload): return {}
         scene = current_scene(0); rows = reviewed_rows(scene); saved = []
         first = build_episode(scene, rows, author=InvalidAuthor(), critic=Critic(),
-            freeze_dispatch=True, max_revisions=0, on_round=saved.append)
+            freeze_dispatch=True, allow_delegate_fallback=True,
+            max_revisions=0, on_round=saved.append)
         self.assertEqual(first[3]['status'], 'accepted')
         self.assertTrue(any(x['turn']['generation_mode'] == 'contract_frozen_delegate_fallback' for x in saved))
         second = build_episode(scene, rows, author=InvalidAuthor(), critic=Critic(),
-            freeze_dispatch=True, max_revisions=0, resume_rounds=saved)
+            freeze_dispatch=True, allow_delegate_fallback=True,
+            max_revisions=0, resume_rounds=saved)
         self.assertEqual(first[:3], second[:3])
+
+    def test_no_fallback_rejects_scene_and_publishes_no_partial_turns(self):
+        from environment.tests.current_stage1 import current_scene
+        from environment.tests.test_main_turn_dataset import reviewed_rows
+        from environment.base_orchestration.trajectory_builder import build_episode
+
+        class InvalidAuthor:
+            def complete_json(self, system, payload):
+                return {}
+
+        scene = current_scene(0)
+        saved = []
+        episode, turns, audit, status = build_episode(
+            scene, reviewed_rows(scene),
+            author=InvalidAuthor(), critic=Critic(), freeze_dispatch=True,
+            max_revisions=0, on_round=saved.append,
+        )
+        self.assertIsNone(episode)
+        self.assertEqual(turns, [])
+        self.assertEqual(audit, [])
+        self.assertEqual(saved, [])
+        self.assertEqual(status['status'], 'rejected')
+        self.assertEqual(status['cause'], 'main_action_not_accepted')
+        self.assertEqual(status['authoring']['mode'], 'llm_reviewed_contract_frozen')
+
+    def test_completion_fallback_counts_as_failed_scene_in_strict_mode(self):
+        from environment.tests.current_stage1 import current_scene
+        from environment.tests.test_main_turn_dataset import reviewed_rows
+        from environment.tests.test_stage3_natural_task_prose import (
+            TaskProseAuthor, PassingCritic,
+        )
+        from environment.base_orchestration.trajectory_builder import build_episode
+
+        class InvalidCompletionAuthor(TaskProseAuthor):
+            def complete_json(self, system, payload):
+                if 'pending_investigations' not in json.loads(payload):
+                    return {}
+                return super().complete_json(system, payload)
+
+        scene = current_scene(0)
+        saved = []
+        episode, turns, audit, status = build_episode(
+            scene, reviewed_rows(scene),
+            author=InvalidCompletionAuthor(), critic=PassingCritic(),
+            freeze_dispatch=True, max_revisions=0, on_round=saved.append,
+        )
+        self.assertIsNone(episode)
+        self.assertEqual(turns, [])
+        self.assertEqual(audit, [])
+        self.assertEqual(status['status'], 'rejected')
+        self.assertEqual(status['cause'], 'completion_not_llm_reviewed')
+        self.assertEqual(
+            status['authoring']['mode'],
+            'teacher_grounded_completion_fallback',
+        )
+        self.assertTrue(saved)  # prior successful rounds remain checkpointed
+        self.assertTrue(all(
+            row['turn']['output']['action'] == 'delegate_task'
+            for row in saved
+        ))
 
     def test_public_overlap_uses_only_complete_returned_lists(self):
         from environment.base_orchestration.task_contract import public_identifier_join
