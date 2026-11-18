@@ -111,21 +111,20 @@ long, deterministic generic completion conclusion to every reviewed
 sample. The Critic sees exactly the retained authored sentences,
 not the added citation; the final `completion_issues` Guard validates
 the published text and code-frozen answer as before. If no complete
-sentence fits the safe budget, the Author may retry and the existing
-explicitly non-reviewed fallback remains available. No new model role,
+sentence fits the safe budget, the Author may retry; exhausted retries
+now reject the strict Stage-3 Scene rather than publishing a fallback.
+No new model role,
 dispatch heuristic, Oracle mutation or relaxation of the complete-Scene
 publication contract.
 
-**Completion quality tiers:** `generation_mode=llm_reviewed_completion`
-means an independently Critic-approved final rationale. When the Author/
-Critic cannot agree, Stage 3 may still publish a complete, code-verified
-clean reference as `generation_mode=teacher_grounded_completion_fallback`.
-Those fallback turns are explicitly **not LLM-reviewed positive training
-labels**. Keep them for trusted replay and Stage-4 clean/fault pairing, but
-exclude them when selecting strictly LLM-reviewed SFT/GRPO examples, e.g.
-filter `main_turns.jsonl` on `generation_mode`. Completion fallback
-failures and the non-reviewed designation remain in the private audit; the
-`summary.json` reports completion modes separately.
+**Strict Completion policy:** `llm_reviewed_completion` is an
+independently Critic-approved final rationale. By default, exhausted
+Author/Critic retries that would yield
+`teacher_grounded_completion_fallback` cause the entire Scene to fail.
+Only explicit legacy `allow_delegate_fallback: true` enables publishing
+that non-reviewed Completion mode. All strict successes therefore have
+LLM-reviewed Delegate and Completion rounds without post-export filtering.
+Completion refusal details remain in `failed.jsonl`/the Scene journal.
 
 The **training prompt is unchanged**: each turn still stores
 `input.subtask_history`, and `o1_prompt_from_turn` rebuilds the original
