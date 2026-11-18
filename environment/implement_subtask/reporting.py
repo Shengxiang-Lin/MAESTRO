@@ -18,69 +18,6 @@ from .stage_local_claims import (
 PRESENTATION = "o1_answer_and_trace_v4"
 
 
-AUTHOR_SYSTEM = """You are writing the FINAL message that a real specialized
-Sub-Agent would return to its Main-Agent after completing a delegated task.
-
-Follow the actual multi-agent finish convention:
-  {"result": "...", "summary": "...", "status": "done"}
-
-"result": put the actionable finding first in a short sentence. For a large
-handoff, say what the records contain and give the most useful grounded detail.
-Full verified records are carried separately. Avoid row dumps, raw field names
-and generic "rows returned" language.
-"summary": describe the local work and the supporting observation in 1–2
-natural sentences. Distinguish findings established here from findings received
-upstream. If this stage only projects fields or removes duplicates, say what
-you did with the upstream result and avoid implying a fresh eligibility check.
-Use source roles and display labels. Refer to earlier results by their role
-(e.g. the mapped entries), without printing work_* identifiers, operator names,
-or names of raw fields. Keep the report useful for a colleague
-taking the next step.
-
-Your input is a deterministic, FICTIONAL observation and execution record,
-not actual image/video/audio perception. You may say 'checked the supplied
-video annotation' or 'compared the source records' but NEVER claim to have
-watched video, transcribed audio, searched the internet, read a real website,
-or used a tool not actually present in the supplied operator trace.
-No invented names, dates, numeric observations, facts, URLs, quotes, motives,
-sources, or eligibility rules. Do not add 'approved' when it only says matched.
-Use only source_fact_refs from the given available evidence and upstream context.
-If no rows meet conditions, this is a valid completed result: say so, with
-status done, not partial. If the reported relation is a handoff, say what the
-handoff contains instead of falsely claiming it answers the overall question.
-
-CRITICAL STAGE BOUNDARY:
-Each Macro is only ONE stage of a multi-step DAG. The overall_question is
-background, NOT a list of filters you already executed. Read the actual
-observed_operator_steps. For a scan-only Macro, report the unfiltered source
-rows; for a join-only Macro, report joined candidates. Do NOT claim that
-every joined entry is active/approved/above threshold or meets final
-eligibility requirements unless the supplied steps actually established it.
-A join does NOT itself check active, measured_value, time windows, approval
-or clearance. Some candidate rows can have active=false or value=0.
-Later Macro Tasks perform those filters. NEVER alter, omit or pre-filter the
-EXACT Oracle output rows, even when they fail the overall question's later
-criteria. If this stage runs a keyed lookup, use the EXACT input key field and
-values in observed_operator_steps.lookup_keys. Do not claim that the archive
-was queried using an earlier-stage marker when the actual archive query
-used an accession identifier.
-If a reviewer objects to a premature claim, correct ONLY the prose
-summary, never the result rows.
-
-Prefer a concise grounded string for result. Exact structured answer rows
-remain accepted if provided, but the runtime carries them independently of the
-prose. Preserve every exact row in the structured form and use the summary for
-a short explanation.
-Output ONLY JSON with keys result, summary, status; status must be done.
-
-Examples of valid finish messages:
-{"result":"Entry-02 is the only entry within its assigned session window.",
- "summary":"I compared the recorded event steps with the session boundaries. Entry-02 occurred at step 68, inside its session's 63–88 interval.","status":"done"}
-{"result":"Entry-02 remains after removing duplicates.",
- "summary":"I deduplicated the entry labels received from the earlier stage. The returned list has one distinct entry.","status":"done"}
-"""
-
-
 CRITIC_SYSTEM = """You are an INDEPENDENT factual and stylistic reviewer
 for a Sub-Agent's final message to Main-Agent. The candidate is NOT a
 new solver; its facts MUST be entailed by the frozen oracle outputs and
@@ -141,18 +78,8 @@ _TOOL_HALLUCINATION = re.compile(
 )
 _FACT_ID = re.compile(r"\b[A-Za-z][A-Za-z0-9_-]*:F[0-9A-Za-z_-]+\b")
 from .oracle_review import (
-    full_entry_list_matches, entry_fact_index, positive_entry_provenance,
-    mismatched_entry_refs, critic_oracle_contradiction,
+    entry_fact_index, positive_entry_provenance, mismatched_entry_refs,
 )
-
-VERIFIED_ENTRY_CRITIC_SYSTEM = CRITIC_SYSTEM + """
-THE COMPLETE ENTRY LIST IS DETERMINISTICALLY VERIFIED AGAINST ORACLE.
-Do not dispute enumeration membership or reassign FactRefs. The full
-Entry/FactRef/active index is authoritative, not truncated sample atoms.
-Review only naturalness, stage-local source claims and unsupported prose.
-Reject genuinely ungrounded prose. Return the normal four boolean axes.
-"""
-
 
 def _canonical(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True,
@@ -761,7 +688,7 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
 
 
 
-CODE_OWNED_AUTHOR_SYSTEM = """You are a specialist Sub-Agent sending
+SUBAGENT_REPORT_AUTHOR_SYSTEM = """You are a specialist Sub-Agent sending
 the completed delegated-task feedback to the Main-Agent. Use the provided
 verified task-local evidence; the source observations are simulated.
 
@@ -849,7 +776,7 @@ Use ONLY the evidence supplied for THIS delegated task. No invented facts,
 numbers, records, source statements, tool actions or final qualifications.
 """
 
-CODE_OWNED_CRITIC_SYSTEM = CRITIC_SYSTEM + """
+SUBAGENT_REPORT_CRITIC_SYSTEM = CRITIC_SYSTEM + """
 The model authored a natural-language ANSWER (candidate_finish.result),
 a short finish.summary and a detailed execution trace_summary in ONE
 request. The exact_oracle_answer is immutable
@@ -1016,7 +943,7 @@ def author_critic_report(
         }
         try:
             candidate = author.complete_json(
-                CODE_OWNED_AUTHOR_SYSTEM,
+                SUBAGENT_REPORT_AUTHOR_SYSTEM,
                 json.dumps(request, ensure_ascii=False),
             )
             ignored_model_result = isinstance(candidate, dict) and "result" in candidate
@@ -1092,7 +1019,7 @@ def author_critic_report(
             # Never normalize or truncate the full frozen evidence JSON.
             normalized_result = candidate["result"]
             decision = critic.complete_json(
-                CODE_OWNED_CRITIC_SYSTEM,
+                SUBAGENT_REPORT_CRITIC_SYSTEM,
                 json.dumps({
                     "frozen_task_and_evidence": contract,
                     "candidate_finish": {
