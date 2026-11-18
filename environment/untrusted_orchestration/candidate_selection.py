@@ -91,7 +91,11 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         for snap in snapshots
         for issue in snap.get("issues", [])
         if (issue.get("task_id") in fault_targets
-            or issue.get("kind") == "cross_source_conflict")
+            or issue.get("kind") == "cross_source_conflict"
+            or (snap["decision_round"] > fork_round and (
+                issue.get("reported_round", 0) >= fork_round
+                or issue.get("kind") == "stale_downstream_result"
+            )))
     ]
     immediate = any(rnd == fork_round for rnd, _ in detected)
     later = any(rnd > fork_round for rnd, _ in detected)
