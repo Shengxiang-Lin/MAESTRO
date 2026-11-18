@@ -119,19 +119,17 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         else "not_observed"
     )
     unrepaired = audit.get("counterfactual_unrepaired") or {}
-    if outcome := audit.get("execution_outcome") or journal.get("status"):
-        if outcome == "recovered":
-            if (unrepaired.get("status") == "completed"
-                    and unrepaired.get("correct") is False):
-                recovery_effect = "incorrect_result_corrected"
-            elif invalidations:
-                recovery_effect = "downstream_recomputed"
-            elif unrepaired.get("status") != "completed":
-                recovery_effect = "execution_failure_recovered"
-            else:
-                recovery_effect = "evidence_inconsistency_resolved"
+    replay_outcome = audit.get("execution_outcome") or journal.get("status")
+    if replay_outcome == "recovered":
+        if (unrepaired.get("status") == "completed"
+                and unrepaired.get("correct") is False):
+            recovery_effect = "incorrect_result_corrected"
+        elif invalidations:
+            recovery_effect = "downstream_recomputed"
+        elif unrepaired.get("status") != "completed":
+            recovery_effect = "execution_failure_recovered"
         else:
-            recovery_effect = "not_recovered"
+            recovery_effect = "evidence_inconsistency_resolved"
     else:
         recovery_effect = "not_recovered"
     kinds = [
