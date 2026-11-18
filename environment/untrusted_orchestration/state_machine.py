@@ -15,6 +15,7 @@ import re
 
 from environment.generate_question.execution.program_ir import Relation
 from .faults import Fault, relation_rows, run_attempt
+from .visible_claim_extraction import extract_visible_claims
 from environment.implement_subtask.realize import _fact_index
 
 
@@ -34,6 +35,16 @@ class ExecutionState:
     def __init__(self, scene: dict, reviewed_reports: dict[str, dict]):
         self.scene = scene
         self.fact_index = _fact_index(scene["world"])
+        # Source origins are *metadata only*: only FactRefs literally cited
+        # in returned Main-visible Result rows may be mapped to these roots.
+        self.origin_by_ref = {
+            ref: observation["evidence_origin_id"]
+            for source in scene["world"]["sources"].values()
+            for observation in source.get("observations", [])
+            if isinstance(observation.get("evidence_origin_id"), str)
+            for ref in observation.get("fact_refs", [])
+            if isinstance(ref, str)
+        }
         self.tasks = {
             task["task_id"]: task for task in scene["macro_graph"]["tasks"]
         }
@@ -46,6 +57,7 @@ class ExecutionState:
         self.public_report_rounds: dict[str, int] = {}
         self.cross_source_checks_enabled = False
         self.detected_conflicts: list[dict] = []
+        self.checked_explicit_claim_pairs: set[tuple] = set()
         self.total_cost = 0
         self.invalidations: list[dict] = []
         self.revalidations: list[dict] = []
@@ -469,7 +481,9 @@ class ExecutionState:
         current = self.current.get(task_id)
         if current is None:
             return None
-        if current.product is None or self.public_status(task_id) == "missing":
+        # An inaccessible *private* WorkProduct is not evidence that
+        # the Main saw a missing Result. Only delivered feedback counts.
+        if self.public_status(task_id) == "missing":
             return (
                 "The returned Sub-Agent message did not contain a usable "
                 "Finish Result for the assigned investigation."
@@ -663,8 +677,117 @@ class ExecutionState:
                 "downstream_previously_executed": True,
             })
 
+    def _explicit_report_claims(self) -> list[dict]:
+        """Parse only delivered Result claims with a single known origin.
+
+        Multi-origin Join outputs and unknown provenance are *not*
+        independent witnesses, even if they cite several source records.
+        """
+        rows = []
+        for tid, report in self.public_reports.items():
+            if tid not in self.tasks or self.public_status(tid) != "done":
+                continue
+            task = self.tasks[tid]
+            scopes = task.get("source_ids", [])
+            fallback = scopes[0] if len(scopes) == 1 else None
+            claims, _ = extract_visible_claims(
+                report,
+                output_fields=task.get("outputs", {}).get("typed_relation", []),
+                source_id=fallback,
+            )
+            for claim in claims:
+                if (claim["surface"] != "result"
+                        or not claim["declared_output_field"]
+                        or claim["subject"].startswith("source:")):
+                    continue
+                refs = claim.get("fact_refs") or []
+                origins = {self.origin_by_ref.get(ref) for ref in refs}
+                if len(origins) != 1 or None in origins:
+                    continue
+                rows.append({
+                    **claim, "task_id": tid,
+                    "evidence_origin_id": next(iter(origins)),
+                    "observed_round": self.public_report_rounds.get(tid, 0),
+                })
+        return rows
+
+    def _detect_explicit_cross_report_disagreements(self) -> None:
+        """Late, cited, independent claims can justify one targeted recheck.
+
+        No Gold value is consulted, and no side is declared correct.
+        Independent sources merely having different candidates or a
+        complementary Join are *not* enough to trigger this detector.
+        """
+        if not self.cross_source_checks_enabled:
+            return
+        by_claim = {}
+        for claim in self._explicit_report_claims():
+            key = (claim["subject"], claim["attribute"], claim["valid_scope"])
+            by_claim.setdefault(key, []).append(claim)
+        for (subject, field, scope), items in sorted(by_claim.items()):
+            ordered = sorted(items, key=lambda row: (
+                row["observed_round"], row["task_id"],
+            ))
+            for i, earlier in enumerate(ordered):
+                for later in ordered[i + 1:]:
+                    left, right = earlier["task_id"], later["task_id"]
+                    if (left == right
+                            or earlier["evidence_origin_id"]
+                               == later["evidence_origin_id"]
+                            or left in self._dependents(right)
+                            or right in self._dependents(left)
+                            or (type(earlier["value"]), earlier["value"])
+                               == (type(later["value"]), later["value"])):
+                        continue
+                    # A different later observation only becomes a recovery
+                    # opportunity if the prior claim already drove work.
+                    prev = self.current.get(left)
+                    if prev is None or prev.version != 1:
+                        continue
+                    consumed = any(
+                        child in self.current
+                        and self.current[child].status != "stale"
+                        and self.current[child].used_parent_versions.get(left)
+                            == prev.version
+                        for child in self._dependents(left)
+                    )
+                    if not consumed:
+                        continue
+                    pair = (left, right, subject, field, scope)
+                    if pair in self.checked_explicit_claim_pairs:
+                        continue
+                    self.checked_explicit_claim_pairs.add(pair)
+                    message = (
+                        "Two separately cited sources report different "
+                        + field.replace("_", " ") + " values for "
+                        + subject + ": " + str(earlier["value"])
+                        + " versus " + str(later["value"])
+                        + ". The earlier value was used downstream; "
+                        "recheck it against the returned source record."
+                    )
+                    prev.status = "disputed"
+                    prev.runtime["visible_issue"] = message
+                    prev.runtime["cross_source_recheck_requested"] = True
+                    self.detected_conflicts.append({
+                        "kind": "explicit_independent_claim_disagreement",
+                        "compared_parent_tasks": [left, right],
+                        "recheck_task_id": left,
+                        "claim": {"subject": subject, "attribute": field,
+                                  "valid_scope": scope},
+                        "observed_values": [
+                            earlier["value"], later["value"],
+                        ],
+                        "cited_fact_refs": [
+                            earlier["fact_refs"], later["fact_refs"],
+                        ],
+                        "at_public_round": later["observed_round"],
+                        "downstream_previously_executed": True,
+                    })
+                    return
+
     def scheduling_state(self) -> dict:
         self._detect_late_cross_source_conflicts()
+        self._detect_explicit_cross_report_disagreements()
         disputed = []
         for tid, item in self.current.items():
             discrepancy = self.visible_discrepancy(tid)
