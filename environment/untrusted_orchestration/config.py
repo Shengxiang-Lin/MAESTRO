@@ -11,7 +11,8 @@ DEFAULT_CONFIG = ROOT / "environment" / "configs" / "untrusted_orchestration.yam
 _REQUIRED = {
     "input": {"scenes", "reports", "clean_episodes"},
     "generation": {
-        "output_dir", "max_scenes", "branches_per_scene", "seed",
+        "output_dir", "max_scenes", "branches_per_scene",
+        "round_sampling_strategy", "max_post_fork_rounds", "seed",
         "max_rounds", "max_cost", "max_retries", "max_parallel_tasks",
         "workers", "mode", "report_max_revisions", "main_max_revisions",
         "sub_model", "model_alias", "overwrite", "no_progress",
@@ -66,6 +67,10 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         "output_dir": _path(run.get("output_dir")),
         "max_scenes": run.get("max_scenes"),
         "branches_per_scene": run.get("branches_per_scene"),
+        "round_sampling_strategy": run.get(
+            "round_sampling_strategy", "chronological"
+        ),
+        "max_post_fork_rounds": run.get("max_post_fork_rounds"),
         "seed": run.get("seed", 17),
         "fault_modes": ["missing", "partial", "wrong"],
         "scenario_mode": "event_driven",
@@ -128,6 +133,15 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         or config["branches_per_scene"] < 1
     ):
         raise ValueError("untrusted_invalid_round_debug_cap")
+    if config["round_sampling_strategy"] not in {
+        "chronological", "stratified",
+    }:
+        raise ValueError("untrusted_invalid_round_sampling_strategy")
+    if config["max_post_fork_rounds"] is not None and (
+        type(config["max_post_fork_rounds"]) is not int
+        or config["max_post_fork_rounds"] < 1
+    ):
+        raise ValueError("untrusted_invalid_max_post_fork_rounds")
     for key in ("max_rounds", "max_cost",
                 "max_parallel_tasks", "workers", "author_max_tokens",
                 "critic_max_tokens", "report_author_max_tokens",
