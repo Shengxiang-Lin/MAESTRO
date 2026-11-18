@@ -111,21 +111,20 @@ long, deterministic generic completion conclusion to every reviewed
 sample. The Critic sees exactly the retained authored sentences,
 not the added citation; the final `completion_issues` Guard validates
 the published text and code-frozen answer as before. If no complete
-sentence fits the safe budget, the Author may retry and the existing
-explicitly non-reviewed fallback remains available. No new model role,
+sentence fits the safe budget, the Author may retry; exhausted retries
+now reject the strict Stage-3 Scene rather than publishing a fallback.
+No new model role,
 dispatch heuristic, Oracle mutation or relaxation of the complete-Scene
 publication contract.
 
-**Completion quality tiers:** `generation_mode=llm_reviewed_completion`
-means an independently Critic-approved final rationale. When the Author/
-Critic cannot agree, Stage 3 may still publish a complete, code-verified
-clean reference as `generation_mode=teacher_grounded_completion_fallback`.
-Those fallback turns are explicitly **not LLM-reviewed positive training
-labels**. Keep them for trusted replay and Stage-4 clean/fault pairing, but
-exclude them when selecting strictly LLM-reviewed SFT/GRPO examples, e.g.
-filter `main_turns.jsonl` on `generation_mode`. Completion fallback
-failures and the non-reviewed designation remain in the private audit; the
-`summary.json` reports completion modes separately.
+**Strict Completion policy:** `llm_reviewed_completion` is an
+independently Critic-approved final rationale. By default, exhausted
+Author/Critic retries that would yield
+`teacher_grounded_completion_fallback` cause the entire Scene to fail.
+Only explicit legacy `allow_delegate_fallback: true` enables publishing
+that non-reviewed Completion mode. All strict successes therefore have
+LLM-reviewed Delegate and Completion rounds without post-export filtering.
+Completion refusal details remain in `failed.jsonl`/the Scene journal.
 
 The **training prompt is unchanged**: each turn still stores
 `input.subtask_history`, and `o1_prompt_from_turn` rebuilds the original
@@ -175,7 +174,7 @@ reuse the exact reviewed Stage-3 trajectory instead, configure
 The runner validates its returned evidence, action batches and completion
 against an independently compiled clean reference before any fault injection.
 
-## Complete local task contracts and explicit Delegate fallback
+## Complete local task contracts and strict no-fallback Stage 3
 
 With frozen Stage-3 dispatch, `task_contract.py` projects only the current
 Macro operators into a generation-only contract. It preserves source/key
@@ -192,17 +191,30 @@ attempt audit, including attempts that eventually succeed. Lexical condition
 checks are necessary checks, not a proof of general natural-language equivalence.
 Style findings are advisory; factual and scope errors still require revision.
 
-After exhausted prose revisions, a supported complete contract can produce
-`generation_mode=contract_frozen_delegate_fallback`, with `reviewed=false` and
-no LLM-authored fields. It must pass action, evidence-reasoning and condition
-checks. It is a deterministic reference, not an independently reviewed positive
-language label. Checkpoints preserve this designation on resume. Filter such
-turns (and Completion fallbacks) out of strictly LLM-reviewed training samples.
-The summary separately reports delegate modes, reviewed/naturalized turns,
-fully reviewed Scenes, fallback Scenes and clean trajectory completion rate.
-Previously returned evidence is attached only once when the Author copied the
-same handoff verbatim. All logs and artifacts should be regenerated in a new
-output directory because the run manifest includes the new contract compiler.
+**Default: no fallback.** Set `generation.allow_delegate_fallback: false`
+(the maintained config default) to treat any exhausted Delegate Author/Critic
+revision as a **failed Scene**. The generator does not construct or publish a
+`contract_frozen_delegate_fallback` turn in this mode. A Completion that
+exhausts its revisions and would have returned
+`teacher_grounded_completion_fallback` is also **counted as a failed Scene**,
+so the displayed accepted-Scene rate directly measures fully LLM-reviewed
+trusted trajectories. The last failed round and its Author/Critic diagnostics
+remain in the private failure journal; no incomplete Scene is included in
+`episodes.jsonl` or `main_turns.jsonl`. Previously completed rounds remain
+checkpointed and are not published when the Scene fails. This is one success
+rate and one standard public dataset; no extra export categories are needed.
+
+The **single explicit legacy opt-in** `generation.allow_delegate_fallback: true`
+(or CLI `--allow-delegate-fallback`) restores the older behavior in which
+supported contracts can produce `contract_frozen_delegate_fallback` and
+Completion may use `teacher_grounded_completion_fallback`, both labeled
+unreviewed. Its accepted count is not a strict LLM-reviewed rate; do not
+compare it directly to the new strict default. Run manifest signatures
+include the fallback policy and tracked code, so rerun into a new output
+directory instead of resuming an older fallback-enabled journal.
+
+Previously returned evidence is attached only once when the Author copied
+the same handoff verbatim.
 
 Capable backends receive a strict JSON schema requiring located Critic issues.
 Legacy reviews can identify an exact quoted candidate claim but cannot supply

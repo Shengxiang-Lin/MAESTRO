@@ -13,6 +13,7 @@ generation:
   workers: 10
   mode: llm           # llm or template
   freeze_dispatch: true  # Freeze DAG batches/models/tools; LLM authors reasoning + scoped task prose
+  allow_delegate_fallback: false  # Strict: any Delegate or Completion fallback rejects the Scene
   max_revisions: 2
   max_attempts: 10
   sub_model: local-qwen3.5-9b

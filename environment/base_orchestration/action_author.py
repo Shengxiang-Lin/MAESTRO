@@ -1198,6 +1198,7 @@ def author_delegate_action(
     decision_contract: dict | None = None,
     critic_conflict_objection=None,
     validation_prompt: str | None = None,
+    allow_delegate_fallback: bool = False,
 ) -> tuple[dict | None, dict]:
     # Separate runtime-specific prose instructions from the shared O1
     # deterministic structure/Guard. Existing Base callers are unchanged.
@@ -1856,7 +1857,7 @@ def author_delegate_action(
                          "validated_repair_guidance": critic_repair_guidance(
                              review, candidate, assignments)
                          if naturalize_assignment_prose else []})
-    if naturalize_assignment_prose:
+    if naturalize_assignment_prose and allow_delegate_fallback:
         fallback = contract_fallback(assignments, template)
         if fallback is not None:
             errors = action_issues(fallback, assignments, prompt=validation_prompt)
