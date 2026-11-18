@@ -69,7 +69,7 @@ class CanonicalStagePathsTests(TestCase):
         self.assertGreaterEqual(main["max_scenes"], stage4["max_scenes"])
         self.assertEqual(stage4["max_scenes"], 10)
         self.assertEqual(stage4["branches_per_scene"], 3)
-        self.assertEqual(stage4["round_sampling_strategy"], "stratified")
+        self.assertEqual(stage4["round_sampling_strategy"], "evidence_aware")
         self.assertEqual(stage4["max_post_fork_rounds"], 8)
         self.assertTrue(main["freeze_dispatch"])
         self.assertEqual(stage4["max_fault_atoms"], 1)
