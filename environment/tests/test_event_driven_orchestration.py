@@ -426,6 +426,29 @@ class EventEngineTests(unittest.TestCase):
                 "downstream_previously_executed"
             ]
         )
+        # First recheck confirms its own previous value rather than
+        # resolving the dispute: independently recheck the other source.
+        first = simultaneous.detected_conflicts[-1]["recheck_task_id"]
+        second = "late" if first == "old" else "old"
+        simultaneous.current[first].version += 1
+        simultaneous.current[first].status = "done"
+        simultaneous.current[first].runtime = {}
+        simultaneous.public_report_rounds[first] = 5
+        simultaneous._detect_explicit_cross_report_disagreements()
+        self.assertEqual(len(simultaneous.detected_conflicts), 2)
+        self.assertEqual(
+            simultaneous.detected_conflicts[-1]["recheck_task_id"],
+            second,
+        )
+        self.assertEqual(
+            simultaneous.detected_conflicts[-1]["verification_step"], 2,
+        )
+        self.assertTrue(simultaneous.unresolved_cited_conflicts())
+        simultaneous.current[second].version += 1
+        simultaneous.current[second].status = "done"
+        simultaneous.current[second].runtime = {}
+        simultaneous._detect_explicit_cross_report_disagreements()
+        self.assertEqual(len(simultaneous.detected_conflicts), 2)
 
     def test_frozen_publication_rejects_critic_process_leak(self):
         with TemporaryDirectory() as td:
