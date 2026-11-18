@@ -15,7 +15,7 @@ generation:
   output_dir: environment/data/pilots/qwen_stage234_10/stage4
   max_scenes: 10
   branches_per_scene: 3  # spread forks across early/middle/late feedback
-  round_sampling_strategy: stratified
+  round_sampling_strategy: evidence_aware
   max_post_fork_rounds: 8  # unresolved if horizon expires; no fake completion
   seed: 17
   # Enumerate executable one-atom variants with provenance-grounded distractors.
