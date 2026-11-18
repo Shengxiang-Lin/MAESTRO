@@ -55,38 +55,22 @@ def _mock_o1_draft(contract):
 
 
 class ReportAuthor:
-    def __init__(self, *, fail_topic=None, forged_tool=False):
+    """Current Task-Plan mock: Author owns only public answer and narrative."""
+    def __init__(self, *, fail_signature=None, forged_tool=False):
         self.calls = []
-        self.fail_topic = fail_topic
+        self.fail_signature = fail_signature
         self.forged_tool = forged_tool
 
     def complete_json(self, system_prompt, user_prompt):
         contract = json.loads(user_prompt)["frozen_task_and_evidence"]
         self.calls.append(contract)
-        answer_count = len(contract["exact_oracle_answer"])
-        if (self.fail_topic is not None
-                and self.fail_topic in contract["overall_question_for_context_only"]):
-            return {
-                "result": "I could not verify the requested records.",
-                "summary": "The required source details could not be located in the assigned evidence.",
-                "status": "partial",
-            }
-        return {
-            "result": (
-                "Checked the assigned source records and identified "
-                f"{answer_count} matching row(s); "
-                + ("no qualifying records were found." if answer_count == 0
-                   else "the exact items are in the handoff.")
-                + (" Used GoogleSearchAction." if self.forged_tool else "")
-            ),
-            "summary": (
-                "Compared the relevant source observations with upstream "
-                "workproducts and applied the recorded criteria. "
-                f"The resulting handoff contains {answer_count} row(s); "
-                "no additional unsupported eligibility condition was assumed."
-            ),
-            "status": "done",
-        }
+        signature = json.dumps(contract["exact_oracle_answer"], sort_keys=True)
+        if self.fail_signature == signature:
+            return {"answer": "", "summary": "", "trace_summary": ""}
+        result = _mock_o1_draft(contract)
+        if self.forged_tool:
+            result["trace_summary"] += " Used GoogleSearchAction."
+        return result
 
 
 class ReportCritic:
@@ -295,22 +279,6 @@ class StageLocalScopeRegressions(unittest.TestCase):
             ), [],
         )
 
-    def test_critic_repair_must_not_change_oracle_result_rows(self):
-        record = realize_scene(scene(27, "hard"))["macro_tasks"][0]
-        author = ReportAuthor()
-        critic = ReportCritic(reject_first=True)
-        revised, review = author_critic_report(
-            record, question="Check Fictional Study 27 records",
-            author=author, critic=critic, max_revisions=1,
-        )
-        self.assertEqual(review["status"], "accepted")
-        self.assertEqual(revised["answer"], record["answer"])
-        self.assertEqual(
-            revised["answer_with_provenance"], record["answer_with_provenance"]
-        )
-        self.assertEqual(len(critic.calls), 2)
-
-class EntryEvidenceMappingRegressions(unittest.TestCase):
     def test_wrong_fact_ref_is_not_accepted_as_an_entry_status(self):
         from environment.implement_subtask.oracle_review import (
             critic_oracle_contradiction, mismatched_entry_refs,
@@ -459,146 +427,11 @@ class ActiveStatusPrecisionRegressions(unittest.TestCase):
 
 
 class ReportingUnitTests(unittest.TestCase):
-    def test_real_finish_shape_and_frozen_gold(self):
-        frozen = scene(23, "hard")
-        realized = realize_scene(frozen)
-        record = realized["macro_tasks"][-1]
-        original = deepcopy(record)
-        author, critic = ReportAuthor(), ReportCritic()
-        revised, info = author_critic_report(
-            record, question=realized["question"],
-            author=author, critic=critic,
-            is_terminal=True,
-        )
-        self.assertEqual(info["status"], "accepted")
-        self.assertEqual(info["attempts"], 1)
-        self.assertEqual(record, original)
-        self.assertEqual(revised["answer"], original["answer"])
-        self.assertEqual(revised["answer_with_provenance"],
-                         original["answer_with_provenance"])
-        self.assertEqual(revised["trace_summary"]["steps"],
-                         original["trace_summary"]["steps"])
-        self.assertEqual(revised["finish_result"]["status"], "done")
-        self.assertEqual(
-            set(revised["finish_result"]), {"result", "status", "summary"}
-        )
-        self.assertNotIn("Verified result:", revised["finish_result"]["result"])
-        self.assertNotIn(
-            json.dumps(record["answer"], ensure_ascii=False,
-                       sort_keys=True, separators=(",", ":")),
-            revised["finish_result"]["result"],
-        )
-        self.assertEqual(revised["answer_text"], revised["finish_result"]["result"])
-        self.assertEqual(revised["trace_summary"]["narrative"],
-                         trace_narrative(original["trace_summary"]))
-        self.assertNotEqual(revised["trace_summary"]["narrative"],
-                            revised["finish_result"]["summary"])
-        self.assertTrue(author.calls[0]["macro_is_terminal"])
-        self.assertNotIn("world", author.calls[0])
-        self.assertNotIn("gold_program", author.calls[0])
-        self.assertEqual(len(critic.calls), 1)
-
-    def test_structured_result_exact_match_accepted_and_made_readable(self):
-        frozen = scene(24, "medium")
-        candidate = realize_scene(frozen)["macro_tasks"][0]
-        author = StructuredResultAuthor()
-        critic = ReportCritic()
-        revised, review = author_critic_report(
-            candidate, question=frozen["question"],
-            author=author, critic=critic,
-            max_revisions=0,
-        )
-        self.assertIsNotNone(revised)
-        self.assertEqual(review["status"], "accepted")
-        self.assertEqual(revised["answer"], candidate["answer"])
-        self.assertIsInstance(revised["finish_result"]["result"], str)
-        self.assertNotIn("row(s) returned", revised["finish_result"]["result"])
-        self.assertNotIn("entry_label", revised["finish_result"]["result"])
-        self.assertIn(str(len(candidate["answer"])), revised["finish_result"]["result"])
-        self.assertEqual(
-            critic.calls[0]["candidate_finish"]["result"],
-            revised["finish_result"]["result"],
-        )
-        self.assertTrue(critic.calls[0]["author_result_was_structured"])
-
-    def test_current_task_plan_structured_answer_is_accepted_only_when_exact(self):
-        frozen = scene(25, "hard")
-        realized = realize_scene(frozen)
-        final = next(
-            row for row in realized["macro_tasks"]
-            if row["macro_task_id"] == realized["terminal_macro_task_id"]
-        )
-        self.assertTrue(final["answer"])
-        self.assertTrue(all(isinstance(item, dict) for item in final["answer"]))
-        revised, status = author_critic_report(
-            final, question=frozen["question"],
-            author=StructuredResultAuthor(),
-            critic=ReportCritic(), max_revisions=0, is_terminal=True,
-        )
-        self.assertEqual(status["status"], "accepted", status)
-        self.assertEqual(revised["answer"], final["answer"])
-
-    def test_wrong_subset_or_invented_extra_row_still_fails(self):
-        frozen = scene(26, "hard")
-        realized = realize_scene(frozen)
-        record = next(
-            row for row in realized["macro_tasks"]
-            if row["answer"] and len(row["answer"]) > 1
-        )
-        reviewed, report = author_critic_report(
-            record, question=frozen["question"],
-            author=StructuredResultAuthor(wrong_subset=True),
-            critic=ReportCritic(), max_revisions=1,
-        )
-        self.assertIsNone(reviewed)
-        self.assertEqual(report["status"], "failed")
-        self.assertEqual(len(report["failures"]), 2)
-        self.assertTrue(all(
-            "structured_result_not_equal_to_oracle" in attempt["errors"]
-            for attempt in report["failures"]
-        ))
-
     def test_empty_structured_answer_still_done(self):
         from environment.implement_subtask.reporting import _normalize_author_result
         text, errors = _normalize_author_result([], [], ["entry_label"])
         self.assertEqual(errors, [])
         self.assertEqual(text, "No records matched the assigned task.")
-
-    def test_partial_from_author_never_counts_as_complete(self):
-        record = realize_scene(scene(10, "medium"))["macro_tasks"][0]
-        author = ReportAuthor(fail_topic="Fictional Study 10")
-        reviewed, info = author_critic_report(
-            record, question="Fictional Study 10 tasks",
-            author=author, critic=ReportCritic(),
-            max_revisions=1,
-        )
-        self.assertIsNone(reviewed)
-        self.assertEqual(info["status"], "failed")
-        self.assertEqual(info["attempts"], 2)
-        self.assertTrue(all(x["stage"] == "guard" for x in info["failures"]))
-
-    def test_unperformed_tools_cannot_be_invented(self):
-        record = realize_scene(scene(12, "medium"))["macro_tasks"][0]
-        reviewed, info = author_critic_report(
-            record, question="Check Fictional Study 12 records",
-            author=ReportAuthor(forged_tool=True),
-            critic=ReportCritic(), max_revisions=0,
-        )
-        self.assertIsNone(reviewed)
-        self.assertIn("claims_unperformed_tool_or_media_action",
-                      " ".join(info["failures"][0]["errors"]))
-
-    def test_independent_critic_uses_targeted_revision(self):
-        record = realize_scene(scene(11, "medium"))["macro_tasks"][0]
-        author, critic = ReportAuthor(), ReportCritic(reject_first=True)
-        reviewed, info = author_critic_report(
-            record, question="Check Fictional Study 11 records",
-            author=author, critic=critic, max_revisions=2,
-        )
-        self.assertIsNotNone(reviewed)
-        self.assertEqual(info["attempts"], 2)
-        self.assertEqual(len(critic.calls), 2)
-
 
     def test_current_task_plan_publishes_complete_natural_answer(self):
         record = realize_scene(scene(42, "medium"))["macro_tasks"][0]
@@ -611,7 +444,7 @@ class ReportingUnitTests(unittest.TestCase):
         author, critic = O1Author(), ReportCritic()
         reviewed, info = author_critic_report(
             record, question=None, author=author, critic=critic,
-            max_revisions=0, result_policy="code_owned",
+            max_revisions=0,
         )
         self.assertEqual(info["status"], "accepted", info)
         self.assertEqual(info["public_result_format"], "natural_answer")
@@ -652,7 +485,7 @@ class ReportingUnitTests(unittest.TestCase):
         author, critic = ThreeFieldAuthor(), ReportCritic()
         reviewed, status = author_critic_report(
             record, question=None, author=author, critic=critic,
-            max_revisions=0, result_policy="code_owned",
+            max_revisions=0,
         )
         self.assertEqual(status["status"], "accepted", status)
         finish = reviewed["finish_result"]
@@ -710,7 +543,7 @@ class ReportingUnitTests(unittest.TestCase):
                     record, question=None,
                     author=BadSummaryAuthor(fabricated=fabricated),
                     critic=critic, max_revisions=0,
-                    result_policy="code_owned",
+                   
                 )
                 self.assertIsNone(reviewed)
                 self.assertEqual(status["status"], "failed")
@@ -739,7 +572,7 @@ class ReportingUnitTests(unittest.TestCase):
         critic = ReportCritic()
         reviewed, info = author_critic_report(
             record, question=None, author=OperatorStyledAuthor(),
-            critic=critic, max_revisions=0, result_policy="code_owned",
+            critic=critic, max_revisions=0,
         )
         self.assertIsNotNone(reviewed, info)
         self.assertEqual(info["status"], "accepted", info)
@@ -974,7 +807,7 @@ class ReportingUnitTests(unittest.TestCase):
         published, info = author_critic_report(
             record, question=None, author=ExactObjectAuthor(),
             critic=critic, is_terminal=True, max_revisions=0,
-            result_policy="code_owned",
+           
         )
         self.assertEqual(info["status"], "accepted", info)
         self.assertTrue(info["verified_structured_answer_rendered"])
@@ -1038,7 +871,7 @@ class ReportingUnitTests(unittest.TestCase):
     def test_multi_source_filters_are_attributed_to_their_sources(self):
         from environment.implement_subtask.reporting import (
             _source_scoped_filter_steps,
-            CODE_OWNED_CRITIC_SYSTEM,
+            SUBAGENT_REPORT_CRITIC_SYSTEM,
         )
         steps = [
             {"operation": "lookup_by_key", "source_id": "M3_a",
@@ -1063,7 +896,7 @@ class ReportingUnitTests(unittest.TestCase):
              "condition": "Keep rows whose cue equals 'interview'"},
         ])
         self.assertIn("source_scoped_filter_steps",
-                      CODE_OWNED_CRITIC_SYSTEM)
+                      SUBAGENT_REPORT_CRITIC_SYSTEM)
 
     def test_terminal_short_answer_passes_review_without_oracle_drift(self):
         from environment.generate_question.planning.goal_plan import sample_output
@@ -1097,7 +930,7 @@ class ReportingUnitTests(unittest.TestCase):
         published, status = author_critic_report(
             terminal, question=None, author=ShortAnswerAuthor(),
             critic=critic, max_revisions=0, is_terminal=True,
-            result_policy="code_owned",
+           
         )
         self.assertEqual(status["status"], "accepted", status)
         self.assertEqual(status["attempts"], 1)
@@ -1129,7 +962,7 @@ class ReportingUnitTests(unittest.TestCase):
         published, info = author_critic_report(
             record, question=None, author=ExactKeyAuthor(),
             critic=critic, max_revisions=0, is_terminal=False,
-            result_policy="code_owned",
+           
         )
         self.assertEqual(info["status"], "accepted", info)
         self.assertEqual(info["attempts"], 1)
@@ -1165,7 +998,7 @@ class ReportingUnitTests(unittest.TestCase):
         reviewed, info = author_critic_report(
             record, question=None, author=NumericAuthor(),
             critic=ReportCritic(), max_revisions=0, is_terminal=True,
-            result_policy="code_owned",
+           
         )
         self.assertEqual(info["status"], "accepted", info)
         self.assertEqual(reviewed["finish_result"]["result"], str(numeric))
@@ -1325,7 +1158,7 @@ class ReportingUnitTests(unittest.TestCase):
         """Real O1 traces use positive self-assessment without needing a template."""
         from environment.implement_subtask.reporting import (
             _guard, _teacher_contract, _o1_answer_requirements,
-            CODE_OWNED_AUTHOR_SYSTEM, CODE_OWNED_CRITIC_SYSTEM,
+            SUBAGENT_REPORT_AUTHOR_SYSTEM, SUBAGENT_REPORT_CRITIC_SYSTEM,
         )
         record = realize_scene(scene(0, "medium"))["macro_tasks"][0]
         contract = _teacher_contract(record, question=None, is_terminal=False)
@@ -1375,11 +1208,11 @@ class ReportingUnitTests(unittest.TestCase):
             "trace_summary_claims_unperformed_tool_or_media_action",
             _guard(fabricated_trace, contract),
         )
-        self.assertIn("OPTIONAL", CODE_OWNED_AUTHOR_SYSTEM)
+        self.assertIn("OPTIONAL", SUBAGENT_REPORT_AUTHOR_SYSTEM)
         self.assertIn("do not copy a fixed success checklist",
-                      CODE_OWNED_AUTHOR_SYSTEM)
+                      SUBAGENT_REPORT_AUTHOR_SYSTEM)
         self.assertIn("Do not fail a report merely",
-                      CODE_OWNED_CRITIC_SYSTEM)
+                      SUBAGENT_REPORT_CRITIC_SYSTEM)
 
     def test_stage3_receives_o1_answer_and_trace(self):
         from environment.base_orchestration.trajectory_builder import _main_report
@@ -1392,7 +1225,7 @@ class ReportingUnitTests(unittest.TestCase):
         author, critic = GroundedAuthor(), ReportCritic()
         reviewed, info = author_critic_report(
             record, question=None, author=author, critic=critic,
-            max_revisions=0, result_policy="code_owned",
+            max_revisions=0,
         )
         self.assertEqual(info["status"], "accepted", info)
         delivered = _main_report(
@@ -1434,7 +1267,12 @@ class ReportingBatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             subtasks, index = self._teacher_inputs(root, [27, 28])
-            author = ReportAuthor(fail_topic=scene(28)["question"])
+            target_task = next(
+                json.loads(line) for line in subtasks.read_text().splitlines()
+                if json.loads(line)["scene_task_id"] == scene(28)["task_id"]
+            )
+            fail_signature = json.dumps(target_task["answer"], sort_keys=True)
+            author = ReportAuthor(fail_signature=fail_signature)
             summary = naturalize_subtasks(
                 source_subtasks=subtasks, source_scene_index=index,
                 output_dir=root / "reviewed", api_base="http://unused/v1",

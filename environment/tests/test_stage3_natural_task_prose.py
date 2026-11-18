@@ -210,7 +210,7 @@ class CriticDispatchBoundaryTests(unittest.TestCase):
         self.assertNotIn("frozen", prompt.casefold())
 
     def test_stage3_completion_review_improvements_are_retained(self):
-        """Prompt rollback must NOT roll back P1 or the safe fallback."""
+        """Prompt rollback must NOT roll back P1 or Completion review."""
         from environment.base_orchestration.action_author import (
             _COMPLETE_CRITIC_SYSTEM, author_complete_action,
         )

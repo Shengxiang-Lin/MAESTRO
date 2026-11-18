@@ -18,69 +18,6 @@ from .stage_local_claims import (
 PRESENTATION = "o1_answer_and_trace_v4"
 
 
-AUTHOR_SYSTEM = """You are writing the FINAL message that a real specialized
-Sub-Agent would return to its Main-Agent after completing a delegated task.
-
-Follow the actual multi-agent finish convention:
-  {"result": "...", "summary": "...", "status": "done"}
-
-"result": put the actionable finding first in a short sentence. For a large
-handoff, say what the records contain and give the most useful grounded detail.
-Full verified records are carried separately. Avoid row dumps, raw field names
-and generic "rows returned" language.
-"summary": describe the local work and the supporting observation in 1–2
-natural sentences. Distinguish findings established here from findings received
-upstream. If this stage only projects fields or removes duplicates, say what
-you did with the upstream result and avoid implying a fresh eligibility check.
-Use source roles and display labels. Refer to earlier results by their role
-(e.g. the mapped entries), without printing work_* identifiers, operator names,
-or names of raw fields. Keep the report useful for a colleague
-taking the next step.
-
-Your input is a deterministic, FICTIONAL observation and execution record,
-not actual image/video/audio perception. You may say 'checked the supplied
-video annotation' or 'compared the source records' but NEVER claim to have
-watched video, transcribed audio, searched the internet, read a real website,
-or used a tool not actually present in the supplied operator trace.
-No invented names, dates, numeric observations, facts, URLs, quotes, motives,
-sources, or eligibility rules. Do not add 'approved' when it only says matched.
-Use only source_fact_refs from the given available evidence and upstream context.
-If no rows meet conditions, this is a valid completed result: say so, with
-status done, not partial. If the reported relation is a handoff, say what the
-handoff contains instead of falsely claiming it answers the overall question.
-
-CRITICAL STAGE BOUNDARY:
-Each Macro is only ONE stage of a multi-step DAG. The overall_question is
-background, NOT a list of filters you already executed. Read the actual
-observed_operator_steps. For a scan-only Macro, report the unfiltered source
-rows; for a join-only Macro, report joined candidates. Do NOT claim that
-every joined entry is active/approved/above threshold or meets final
-eligibility requirements unless the supplied steps actually established it.
-A join does NOT itself check active, measured_value, time windows, approval
-or clearance. Some candidate rows can have active=false or value=0.
-Later Macro Tasks perform those filters. NEVER alter, omit or pre-filter the
-EXACT Oracle output rows, even when they fail the overall question's later
-criteria. If this stage runs a keyed lookup, use the EXACT input key field and
-values in observed_operator_steps.lookup_keys. Do not claim that the archive
-was queried using an earlier-stage marker when the actual archive query
-used an accession identifier.
-If a reviewer objects to a premature claim, correct ONLY the prose
-summary, never the result rows.
-
-Prefer a concise grounded string for result. Exact structured answer rows
-remain accepted if provided, but the runtime carries them independently of the
-prose. Preserve every exact row in the structured form and use the summary for
-a short explanation.
-Output ONLY JSON with keys result, summary, status; status must be done.
-
-Examples of valid finish messages:
-{"result":"Entry-02 is the only entry within its assigned session window.",
- "summary":"I compared the recorded event steps with the session boundaries. Entry-02 occurred at step 68, inside its session's 63–88 interval.","status":"done"}
-{"result":"Entry-02 remains after removing duplicates.",
- "summary":"I deduplicated the entry labels received from the earlier stage. The returned list has one distinct entry.","status":"done"}
-"""
-
-
 CRITIC_SYSTEM = """You are an INDEPENDENT factual and stylistic reviewer
 for a Sub-Agent's final message to Main-Agent. The candidate is NOT a
 new solver; its facts MUST be entailed by the frozen oracle outputs and
@@ -141,18 +78,8 @@ _TOOL_HALLUCINATION = re.compile(
 )
 _FACT_ID = re.compile(r"\b[A-Za-z][A-Za-z0-9_-]*:F[0-9A-Za-z_-]+\b")
 from .oracle_review import (
-    full_entry_list_matches, entry_fact_index, positive_entry_provenance,
-    mismatched_entry_refs, critic_oracle_contradiction,
+    entry_fact_index, positive_entry_provenance, mismatched_entry_refs,
 )
-
-VERIFIED_ENTRY_CRITIC_SYSTEM = CRITIC_SYSTEM + """
-THE COMPLETE ENTRY LIST IS DETERMINISTICALLY VERIFIED AGAINST ORACLE.
-Do not dispute enumeration membership or reassign FactRefs. The full
-Entry/FactRef/active index is authoritative, not truncated sample atoms.
-Review only naturalness, stage-local source claims and unsupported prose.
-Reject genuinely ungrounded prose. Return the normal four boolean axes.
-"""
-
 
 def _canonical(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True,
@@ -761,7 +688,7 @@ def _guard(candidate: dict, contract: dict) -> list[str]:
 
 
 
-CODE_OWNED_AUTHOR_SYSTEM = """You are a specialist Sub-Agent sending
+SUBAGENT_REPORT_AUTHOR_SYSTEM = """You are a specialist Sub-Agent sending
 the completed delegated-task feedback to the Main-Agent. Use the provided
 verified task-local evidence; the source observations are simulated.
 
@@ -849,7 +776,7 @@ Use ONLY the evidence supplied for THIS delegated task. No invented facts,
 numbers, records, source statements, tool actions or final qualifications.
 """
 
-CODE_OWNED_CRITIC_SYSTEM = CRITIC_SYSTEM + """
+SUBAGENT_REPORT_CRITIC_SYSTEM = CRITIC_SYSTEM + """
 The model authored a natural-language ANSWER (candidate_finish.result),
 a short finish.summary and a detailed execution trace_summary in ONE
 request. The exact_oracle_answer is immutable
@@ -941,50 +868,38 @@ def author_critic_report(
     teacher_record: dict, *, question: str | None,
     author, critic, max_revisions: int = 2,
     is_terminal: bool = False,
-    result_policy: str = "llm_authored",
 ) -> tuple[dict | None, dict]:
-    """Generate, check and repair a Main-facing finish result.
+    """Review one current Task-Plan Sub-Agent handoff against immutable evidence.
 
-    Failure is FAILURE, never a deterministic report silently counted as
-    accepted. The oracle output and source trace are never LLM-edited.
+    The Author writes an answer, summary and trace narrative; only code owns
+    typed evidence, provenance and completion status. A rejected report fails.
     """
     if type(max_revisions) is not int or not 0 <= max_revisions <= 8:
         raise ValueError("max_revisions must be 0..8")
-    if result_policy not in {"llm_authored", "code_owned"}:
-        raise ValueError("invalid_report_result_policy")
+    if teacher_record.get("result_encoding") != "typed_evidence_json_v1":
+        raise ValueError("stage2_requires_current_typed_task_plan_evidence")
     contract = _teacher_contract(
-        teacher_record, question=question, is_terminal=is_terminal
+        teacher_record, question=question, is_terminal=is_terminal,
     )
     contract["all_evidence_refs"] = sorted({
         ref for step in teacher_record["trace_summary"]["steps"]
         for ref in step["supporting_fact_refs"]
     } | set(teacher_record["trace_summary"]["answer_supporting_fact_refs"]))
-    frozen_result = (
-        code_owned_result(teacher_record)
-        if result_policy == "code_owned" else None
-    )
-    if result_policy == "code_owned" and (
-        teacher_record.get("result_encoding") == "typed_evidence_json_v1"
-    ):
-        contract["result_encoding"] = "typed_evidence_json_v1"
-        contract["code_owned_expected_result"] = frozen_result
-        contract["requires_o1_answer"] = True
-        contract["answer_required_literals"] = _o1_answer_requirements(
-            teacher_record
-        )
+    frozen_result = code_owned_result(teacher_record)
+    contract["result_encoding"] = "typed_evidence_json_v1"
+    contract["code_owned_expected_result"] = frozen_result
+    contract["requires_o1_answer"] = True
+    contract["answer_required_literals"] = _o1_answer_requirements(teacher_record)
     author_contract = deepcopy(contract)
-    if result_policy == "code_owned":
-        # Avoid prompting the Author to copy internal labels ("Oracle",
-        # "Macro", private work IDs) into its public finish prose.
-        author_contract.pop("overall_question_for_context_only", None)
-        author_contract.pop("code_owned_expected_result", None)
-        author_contract.pop("macro_task_id", None)
-        author_contract.pop("note", None)
-        author_contract["stage_scope_note"] = (
-            "Report only checks completed for THIS delegated task. "
-            "Intermediate lookups and comparisons do not establish later "
-            "eligibility or source agreement unless explicitly checked."
-        )
+    # Internal Oracle and graph metadata must never be echoed to Main.
+    for field in ("overall_question_for_context_only",
+                  "code_owned_expected_result", "macro_task_id", "note"):
+        author_contract.pop(field, None)
+    author_contract["stage_scope_note"] = (
+        "Report only checks completed for THIS delegated task. "
+        "Intermediate lookups and comparisons do not establish later "
+        "eligibility or source agreement unless explicitly checked."
+    )
     failures = []
     for revision in range(max_revisions + 1):
         request = {
@@ -1028,96 +943,51 @@ def author_critic_report(
         }
         try:
             candidate = author.complete_json(
-                CODE_OWNED_AUTHOR_SYSTEM if result_policy == "code_owned"
-                else AUTHOR_SYSTEM,
+                SUBAGENT_REPORT_AUTHOR_SYSTEM,
                 json.dumps(request, ensure_ascii=False),
             )
-            ignored_model_result = bool(
-                isinstance(candidate, dict)
-                and result_policy == "code_owned"
-                and "result" in candidate
-            )
-            if isinstance(candidate, dict) and result_policy == "code_owned":
-                if contract.get("requires_o1_answer"):
-                    authored_answer = candidate.get("answer")
-                    authored_summary = candidate.get("summary")
-                    authored_trace = candidate.get("trace_summary")
-                    # Some OpenAI-compatible models JSON-decode a genuine
-                    # numeric scalar as int/float rather than as a string.
-                    # Convert ONLY if it equals the sole frozen Oracle value;
-                    # unrelated numbers still fail the existing Guard.
-                    if type(authored_answer) in {int, float}:
-                        exact = _exact_single_field_scalar_text(
-                            authored_answer, contract,
-                        )
-                        if exact is not None:
-                            authored_answer = exact
-                    # Convert only an exact structured Oracle answer, never
-                    # an approximate match. A failed conversion stays
-                    # non-string and is rejected by the regular Guard.
-                    structured_answer_coerced = False
-                    if type(authored_answer) in {dict, list}:
-                        normalized = _exact_structured_o1_answer(
-                            authored_answer, contract,
-                        )
-                        if normalized is not None:
-                            authored_answer = normalized
-                            structured_answer_coerced = True
-                    # Status and immutable Oracle rows are never model-owned.
-                    candidate = {
-                        "result": authored_answer,
-                        "summary": authored_summary,
-                        "trace_summary": authored_trace,
-                        "status": "done",
-                    }
-                else:
-                    candidate = {
-                        "result": frozen_result,
-                        "summary": candidate.get("summary"),
-                        "trace_narrative": candidate.get("trace_narrative"),
-                        "status": "done",
-                    }
+            ignored_model_result = isinstance(candidate, dict) and "result" in candidate
+            structured_answer_coerced = False
+            if isinstance(candidate, dict):
+                authored_answer = candidate.get("answer")
+                if type(authored_answer) in {int, float}:
+                    exact = _exact_single_field_scalar_text(
+                        authored_answer, contract,
+                    )
+                    if exact is not None:
+                        authored_answer = exact
+                if type(authored_answer) in {dict, list}:
+                    normalized = _exact_structured_o1_answer(
+                        authored_answer, contract,
+                    )
+                    if normalized is not None:
+                        authored_answer = normalized
+                        structured_answer_coerced = True
+                candidate = {
+                    "result": authored_answer,
+                    "summary": candidate.get("summary"),
+                    "trace_summary": candidate.get("trace_summary"),
+                    "status": "done",
+                }
             surface_rewrites = []
             if isinstance(candidate, dict):
                 fields = {
                     field for step in teacher_record["trace_summary"]["steps"]
                     for field in step["output_schema"]
                 } | set(SCHEMA_LABELS) | {
-                    step["operation"] for step in teacher_record["trace_summary"]["steps"]
+                    step["operation"]
+                    for step in teacher_record["trace_summary"]["steps"]
                 }
-                candidate = {
-                    key: _public_field_text(value, fields)
-                    if (key in {"result", "summary", "trace_narrative",
-                                "trace_summary"}
-                        and isinstance(value, str)
-                        and not (key == "result"
-                                 and result_policy == "code_owned"
-                                 and teacher_record.get("result_encoding") ==
-                                 "typed_evidence_json_v1"
-                                 and not contract.get("requires_o1_answer"))) else value
-                    for key, value in candidate.items()
-                }
-                # Surface-only repair of known internal jargon and common
-                # operator-style verbs. Preserve claims, values and provenance:
-                # the unchanged Guard and independent Critic still review
-                # the revised prose, and no Oracle rows are modified.
-                for field in ("result", "summary", "trace_narrative",
-                              "trace_summary"):
-                    if (field == "result" and result_policy == "code_owned"
-                            and teacher_record.get("result_encoding") ==
-                            "typed_evidence_json_v1"
-                            and not contract.get("requires_o1_answer")):
-                        # Never rewrite machine-readable JSON keys or refs.
+                for field in ("result", "summary", "trace_summary"):
+                    value = candidate.get(field)
+                    if not isinstance(value, str):
                         continue
-                    if isinstance(candidate.get(field), str):
-                        revised, replacements = normalize_report_language(
-                            candidate[field]
-                        )
-                        candidate[field] = revised
-                        surface_rewrites.extend(
-                            {"field": field, "pattern": x}
-                            for x in replacements
-                        )
+                    value = _public_field_text(value, fields)
+                    revised, replacements = normalize_report_language(value)
+                    candidate[field] = revised
+                    surface_rewrites.extend(
+                        {"field": field, "pattern": item} for item in replacements
+                    )
             problems = _guard(candidate, contract)
             if problems:
                 failures.append({
@@ -1145,89 +1015,36 @@ def author_critic_report(
                     ),
                 })
                 continue
-            if (result_policy == "code_owned"
-                    and contract.get("result_encoding") ==
-                    "typed_evidence_json_v1"):
-                # The Guard already checked byte-exact program-owned JSON.
-                # Never run the legacy <=1600-character prose normalizer:
-                # it returns None for long structured evidence reports.
-                normalized_result = candidate["result"]
-                verified_entry_list = False
-            else:
-                normalized_result, _ = _normalize_author_result(
-                    candidate["result"], contract["exact_oracle_answer"],
-                    contract["terminal_output_schema_of_this_macro"],
-                )
-                verified_entry_list = full_entry_list_matches(
-                    normalized_result, contract["exact_oracle_answer"],
-                )
+            # The typed answer is independently checked by the Guard.
+            # Never normalize or truncate the full frozen evidence JSON.
+            normalized_result = candidate["result"]
             decision = critic.complete_json(
-                CODE_OWNED_CRITIC_SYSTEM if result_policy == "code_owned"
-                else (VERIFIED_ENTRY_CRITIC_SYSTEM if verified_entry_list
-                      else CRITIC_SYSTEM), json.dumps({
+                SUBAGENT_REPORT_CRITIC_SYSTEM,
+                json.dumps({
                     "frozen_task_and_evidence": contract,
                     "candidate_finish": {
                         "result": normalized_result,
                         "summary": candidate["summary"],
-                        **({"trace_summary": candidate["trace_summary"]}
-                           if contract.get("requires_o1_answer") else
-                           ({"trace_narrative": candidate["trace_narrative"]}
-                            if result_policy == "code_owned" else {})),
+                        "trace_summary": candidate["trace_summary"],
                         "status": "done",
                     },
                     "author_result_was_structured": not isinstance(
-                        candidate["result"], str
+                        candidate["result"], str,
                     ),
-                    "result_policy": result_policy,
-                }, ensure_ascii=False)
+                }, ensure_ascii=False),
             )
             axes = (
                 "grounded", "answer_scope_preserved",
                 "evidence_scope_respected", "natural",
             )
-            corrected_false_negative = False
-            false_claim = (
-                critic_oracle_contradiction(
-                    decision, normalized_result,
-                    contract["exact_oracle_answer"],
-                    contract["entry_fact_index"],
-                    contract["positive_entry_provenance"],
-                ) if verified_entry_list and decision.get("verdict") != "pass"
-                else None
-            )
-            if false_claim:
-                # A known factual error in critic reasoning merits one narrow
-                # independent re-review. It never auto-accepts the report.
-                decision = critic.complete_json(
-                    VERIFIED_ENTRY_CRITIC_SYSTEM, json.dumps({
-                        "frozen_task_and_evidence": contract,
-                        "result_was_deterministically_verified": True,
-                        "verified_full_result": normalized_result,
-                        "candidate_summary_for_review": candidate["summary"],
-                        "verified_critic_error": false_claim,
-                    }, ensure_ascii=False)
-                )
-                corrected_false_negative = (
-                    decision.get("verdict") == "pass"
-                    and all(decision.get(axis) is True for axis in axes)
-                )
             if (decision.get("verdict") == "pass"
                     and all(decision.get(axis) is True for axis in axes)):
                 summary_text = candidate["summary"].strip()
                 row = deepcopy(teacher_record)
                 # This internal text remains a byte-exact structured Oracle
                 # rendering for offline verification; it is NOT given to Main.
-                row["answer_text"] = (
-                    frozen_result if contract.get("requires_o1_answer")
-                    else normalized_result
-                )
-                row["trace_summary"]["narrative"] = (
-                    candidate["trace_summary"].strip()
-                    if contract.get("requires_o1_answer")
-                    else (candidate["trace_narrative"].strip()
-                          if contract.get("requires_natural_trace")
-                          else trace_narrative(teacher_record["trace_summary"]))
-                )
+                row["answer_text"] = frozen_result
+                row["trace_summary"]["narrative"] = candidate["trace_summary"].strip()
                 # Code-owned, source-scoped observations are added AFTER
                 # the LLM's natural-language prose has been independently
                 # reviewed. They are taken from THIS Macro's delivered answer
@@ -1247,22 +1064,13 @@ def author_critic_report(
                 }
                 row["report_authoring"] = {
                     "status": "accepted",
-                    "result_policy": result_policy,
-                    "public_result_format": (
-                        "natural_answer" if contract.get("requires_o1_answer")
-                        else "legacy"
-                    ),
+                    "public_result_format": "natural_answer",
                     "oracle_result_immutable": True,
                     "ignored_model_result": ignored_model_result,
-                    "verified_structured_answer_rendered": (
-                        structured_answer_coerced
-                        if contract.get("requires_o1_answer") else False
-                    ),
+                    "verified_structured_answer_rendered": structured_answer_coerced,
                     "attempts": revision + 1,
                     "surface_rewrites": surface_rewrites,
                     "review": decision,
-                    "critic_oracle_contradiction_rechecked":
-                        corrected_false_negative,
                     "exact_answer_immutable": True,
                     "presentation": PRESENTATION,
                     "grounding_note": (
@@ -1274,9 +1082,7 @@ def author_critic_report(
             failures.append({
                 "stage": "critic", "reason": decision.get("reason"),
                 "candidate_summary": candidate.get("summary"),
-                "candidate_trace_summary": candidate.get(
-                    "trace_summary", candidate.get("trace_narrative")
-                ),
+                "candidate_trace_summary": candidate.get("trace_summary"),
                 "repair_hint": (
                     "Correct the natural answer and trace_summary, preserving "
                     "all original identifiers and their values, without "

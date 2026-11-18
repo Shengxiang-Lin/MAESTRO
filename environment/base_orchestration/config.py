@@ -20,7 +20,6 @@ _FIELDS = {
         "output_dir", "max_scenes", "workers", "mode", "max_revisions",
         "max_attempts", "sub_model", "model_alias", "overwrite",
         "no_progress", "verbose_progress", "freeze_dispatch",
-        "allow_delegate_fallback",
     },
     "model": {
         "author_api_base", "author_model", "critic_api_base",
@@ -76,7 +75,6 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
         "no_progress": options.get("no_progress", False),
         "verbose_progress": options.get("verbose_progress", False),
         "freeze_dispatch": options.get("freeze_dispatch", False),
-        "allow_delegate_fallback": options.get("allow_delegate_fallback", False),
         "author_api_base": models.get("author_api_base"),
         "author_model": models.get("author_model"),
         "critic_api_base": models.get("critic_api_base"),
@@ -102,7 +100,7 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
             or config["max_scenes"] < 1)):
         raise ValueError("trajectory_invalid_max_scenes")
     for key in ("overwrite", "no_progress", "verbose_progress",
-                "freeze_dispatch", "allow_delegate_fallback"):
+                "freeze_dispatch"):
         if type(config[key]) is not bool:
             raise ValueError("trajectory_invalid_boolean_" + key)
     for key in ("sub_model", "model_alias"):
@@ -176,5 +174,4 @@ def generate_from_config(path: str | Path = DEFAULT_CONFIG,
         no_progress=options["no_progress"],
         verbose_progress=options["verbose_progress"],
         freeze_dispatch=options["freeze_dispatch"],
-        allow_delegate_fallback=options["allow_delegate_fallback"],
     )

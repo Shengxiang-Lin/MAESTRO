@@ -285,6 +285,11 @@ class MainTurnDatasetTests(unittest.TestCase):
             def complete_json(self, system, request):
                 payload = json.loads(request)
                 result = deepcopy(payload["reference_action_for_structure_only"])
+                if result["action"] == "complete":
+                    return {"reasoning": (
+                        "The returned findings support the requested answer, "
+                        "so no additional investigation is necessary."
+                    )}
                 for task in result["params"]["tasks"]:
                     # Deliberately omit required source IDs and previous
                     # handoff marker; the deterministic compiler restores
@@ -302,7 +307,8 @@ class MainTurnDatasetTests(unittest.TestCase):
                 payload = json.loads(request)
                 self_is_prose = payload["candidate_prose_only"]
                 self_assignment = payload["assignment_prose_goals_in_required_order"]
-                seen.append((self_is_prose, self_assignment, payload))
+                if "fixed_tool_and_model_fields_checked_by_code" in payload:
+                    seen.append((self_is_prose, self_assignment, payload))
                 return {"verdict": "pass", "grounded": True,
                         "assignment_fidelity": True, "o1_style": True}
 
@@ -311,7 +317,7 @@ class MainTurnDatasetTests(unittest.TestCase):
             scene, rows, author=Author(), critic=critic,
             max_revisions=0,
         )
-        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(status["status"], "accepted", status)
         self.assertTrue(seen)
         self.assertTrue(all(
             "tools" not in task and "model" not in task
@@ -490,7 +496,6 @@ class MainTurnDatasetTests(unittest.TestCase):
         self.assertTrue(all(
             t["generation_mode"] in {
                 "llm_reviewed", "llm_reviewed_completion",
-                "teacher_grounded_completion_fallback",
                 "teacher_verified_completion",
             } for t in turns
         ))
@@ -540,19 +545,16 @@ class MainTurnDatasetTests(unittest.TestCase):
                             "I invented future evidence."}
                 return template
 
-        _, turns, audit, status = build_episode(
+        episode, turns, audit, status = build_episode(
             scene, rows, author=BadFinalAuthor(), critic=GoodCritic(),
             max_revisions=1,
         )
-        self.assertEqual(status["status"], "accepted")
-        self.assertEqual(
-            turns[-1]["generation_mode"],
-            "teacher_grounded_completion_fallback",
-        )
-        self.assertFalse(audit[-1]["authoring"]["reviewed"])
-        self.assertNotIn("previous draft",
-                         turns[-1]["output"]["reasoning"])
-        self.assertTrue(audit[-1]["authoring"]["failures"])
+        self.assertIsNone(episode)
+        self.assertEqual(turns, [])
+        self.assertEqual(audit, [])
+        self.assertEqual(status["status"], "rejected")
+        self.assertEqual(status["cause"], "completion_not_llm_reviewed")
+        self.assertEqual(status["authoring"]["status"], "failed")
 
     def test_completion_critic_reviews_only_new_prose_not_frozen_answer(self):
         from environment.base_orchestration.action_author import (
@@ -628,15 +630,14 @@ class MainTurnDatasetTests(unittest.TestCase):
                       critic.requests[1][0])
 
         stubborn = FrozenAnswerCritic(allow_second=False)
-        fallback, info = author_complete_action(
+        rejected, info = author_complete_action(
             template=template, prompt="Find the supported midpoint date.",
             delivered=delivered, author=CompletingAuthor(),
             critic=stubborn, max_revisions=0,
         )
-        self.assertEqual(info["mode"],
-                         "teacher_grounded_completion_fallback")
-        self.assertFalse(info["reviewed"])
-        self.assertEqual(fallback, template)
+        self.assertEqual(info["mode"], "llm_reviewed_completion")
+        self.assertEqual(info["status"], "failed")
+        self.assertIsNone(rejected)
         self.assertEqual(len(stubborn.requests), 2)
 
         class EvidenceErrorCritic:
@@ -657,8 +658,8 @@ class MainTurnDatasetTests(unittest.TestCase):
             delivered=delivered, author=CompletingAuthor(),
             critic=evidence_critic, max_revisions=0,
         )
-        self.assertEqual(info["mode"],
-                         "teacher_grounded_completion_fallback")
+        self.assertEqual(info["mode"], "llm_reviewed_completion")
+        self.assertEqual(info["status"], "failed")
         self.assertEqual(evidence_critic.calls, 1)
 
     def test_completion_publishes_complete_sentences_and_minimal_evidence(self):
@@ -760,7 +761,7 @@ class MainTurnDatasetTests(unittest.TestCase):
             reason, "completion_no_sentence_boundary_within_budget",
         )
 
-    def test_completion_sentence_boundary_failure_keeps_unreviewed_fallback(self):
+    def test_completion_sentence_boundary_failure_rejects_unreviewed_prose(self):
         from environment.base_orchestration.action_author import (
             author_complete_action,
         )
@@ -787,10 +788,9 @@ class MainTurnDatasetTests(unittest.TestCase):
             delivered=delivered, author=LongUnfinishedAuthor(),
             critic=UnusedCritic(), max_revisions=0,
         )
-        self.assertEqual(output, template)
-        self.assertEqual(
-            status["mode"], "teacher_grounded_completion_fallback",
-        )
+        self.assertIsNone(output)
+        self.assertEqual(status["mode"], "llm_reviewed_completion")
+        self.assertEqual(status["status"], "failed")
         self.assertFalse(status["reviewed"])
         self.assertIn(
             "completion_no_sentence_boundary_within_budget",

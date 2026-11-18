@@ -119,7 +119,7 @@ simulated observations and only limitations established by that work.
 
 ## Report generation and resumability
 
-`reporting.result_policy: code_owned` keeps status and exact typed
+The single maintained reporting path keeps status and exact typed
 evidence owned by the application; it no longer means that the Main-visible
 Answer is a raw JSON WorkProduct. Non-typed legacy report modes are
 left as compatibility paths. An interrupted Author/Critic journal may
