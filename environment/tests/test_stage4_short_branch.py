@@ -159,7 +159,7 @@ class StratifiedForkTests(unittest.TestCase):
 
     def test_canonical_pilot_enables_short_stratified_replay(self):
         cfg = load_config()
-        self.assertEqual(cfg["round_sampling_strategy"], "stratified")
+        self.assertEqual(cfg["round_sampling_strategy"], "evidence_aware")
         self.assertEqual(cfg["branches_per_scene"], 3)
         self.assertEqual(cfg["max_post_fork_rounds"], 8)
         self.assertEqual(cfg["max_diagnostics_per_scene"], 1)
