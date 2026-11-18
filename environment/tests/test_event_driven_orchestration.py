@@ -314,6 +314,8 @@ class EventEngineTests(unittest.TestCase):
         scene = deepcopy(self.scene)
         scene["world"]["sources"].update({
             sid: {"observations": [{
+                "observation_id": sid + ".OBS001",
+                "values": {"case_id": "Case-011"},
                 "fact_refs": [sid + ":F001"],
                 "evidence_origin_id": "independent-root-" + sid,
             }]} for sid in ("alpha", "beta")
