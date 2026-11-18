@@ -167,6 +167,12 @@ def classify_trial(plan: dict, journal: dict) -> dict:
             plan["faults"][0].task_id if plan["faults"] else None
         ),
         "variant_index": plan.get("candidate_variant_index"),
+        "fault_subtype_private": (
+            "wrong_scope" if (
+                kinds and kinds[0] == "wrong_retrieval"
+                and "scope_constraint_mismatch" in visible_issue_types
+            ) else None
+        ),
         "execution_outcome": (
             audit.get("execution_outcome") or outcome
         ),
