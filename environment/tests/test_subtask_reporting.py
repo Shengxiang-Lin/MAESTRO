@@ -16,7 +16,7 @@ from environment.implement_subtask.config import (
 )
 from environment.implement_subtask.realize import realize_scene
 from environment.implement_subtask.naturalize import naturalize_subtasks
-from environment.implement_subtask.reporting import review_subagent_report, trace_narrative, serialize_verified_result
+from environment.implement_subtask.reporting import review_subagent_report, serialize_verified_result
 
 
 def scene(i, difficulty="medium"):
