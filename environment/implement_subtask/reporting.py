@@ -698,9 +698,13 @@ or a description of work that belongs to a later task. Base every claim
 on the same current-Macro evidence as ANSWER and TRACE_SUMMARY. Do not
 invent tool actions, external media access or uncertainty.
 
-TRACE_SUMMARY: normally 3-6 concise dash-prefixed bullet points recounting
-meaningful EXECUTED observations, source materials, supported clues,
-comparisons and returned findings, plus genuine unresolved limitations.
+TRACE_SUMMARY: write a grounded, chronological execution recap in
+concise dash-prefixed bullet points (typically 2-8, as needed by task
+complexity). Simple lookups may need only a few points; multi-source
+investigations should identify the evidence used, comparisons or
+calculations actually carried out, returned findings and any unresolved
+limitations. Include meaningful details rather than repeated success
+claims, invented checks or filler.
 Use descriptive source titles, modalities and observed_content from
 the provided source_context and sampled_evidence_atoms. The source
 observations are SIMULATED: you may describe 'the supplied photograph
