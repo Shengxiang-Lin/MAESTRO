@@ -86,7 +86,6 @@ class CombinedStage2Tests(unittest.TestCase):
             "output_dir": root / "reports",
             "api_base": "http://unused/v1",
             "model": "mock-model",
-            "result_policy": "code_owned",
             "workers": 2,
             "max_revisions": 0,
             "timeout": 60,
