@@ -166,7 +166,7 @@ class CombinedStage2Tests(unittest.TestCase):
                 "clients": (Author(), Critic()), "no_progress": True,
             }
             with patch(
-                "environment.implement_subtask.combined.naturalize_subtasks",
+                "environment.implement_subtask.combined.review_subagent_reports",
                 side_effect=RuntimeError("report interrupted"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "report interrupted"):
@@ -194,7 +194,7 @@ class CombinedStage2Tests(unittest.TestCase):
             }
             # Avoid creating a completed LLM report bank; test Oracle only.
             with patch(
-                "environment.implement_subtask.combined.naturalize_subtasks",
+                "environment.implement_subtask.combined.review_subagent_reports",
                 return_value={"status": "done"},
             ):
                 first = generate_subagent_reports(**kwargs)
