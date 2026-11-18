@@ -574,7 +574,6 @@ def main(argv: list[str] | None = None) -> int:
         overwrite=args.overwrite, no_progress=args.no_progress,
         verbose_progress=args.verbose_progress, workers=args.workers,
         freeze_dispatch=args.freeze_dispatch,
-        allow_delegate_fallback=args.allow_delegate_fallback,
     )
     print(f"Base orchestration: {summary['status']} | details: "
           f"{args.output_dir}/summary.json")
