@@ -130,10 +130,10 @@ class CombinedStage2Tests(unittest.TestCase):
                                  after["trace_summary"]["steps"])
                 self.assertEqual(after["finish_result"]["status"], "done")
                 from environment.implement_subtask.reporting import (
-                    code_owned_result, _o1_answer_issues,
+                    serialize_verified_result, _o1_answer_issues,
                     _o1_answer_requirements,
                 )
-                self.assertEqual(after["answer_text"], code_owned_result(before))
+                self.assertEqual(after["answer_text"], serialize_verified_result(before))
                 self.assertEqual(_o1_answer_issues(
                     after["finish_result"]["result"],
                     {"answer_required_literals":
