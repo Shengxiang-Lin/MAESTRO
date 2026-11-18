@@ -22,7 +22,9 @@ from .faults import Fault, FaultUnsupported, relation_rows, run_attempt
 ATOM_SPECS = {
     "no_result": ("acquisition", "missing"),
     "incomplete_retrieval": ("acquisition", "partial"),
+    "done_but_incomplete": ("delivery", "partial"),
     "wrong_retrieval": ("processing", "wrong"),
+    "computation_error": ("processing", "wrong"),
     "wrong_entity_binding": ("processing", "wrong"),
     "report_missing": ("report", "report"),
     "fabricated_claim": ("report", "report"),
@@ -136,13 +138,14 @@ def probe_atoms(scene: dict, kinds: Iterable[str]) -> dict[str, list[str]]:
                 except (FaultUnsupported, ProgramError, ValueError,
                         TypeError, KeyError, IndexError, ZeroDivisionError):
                     continue
-                if kind in {"no_result", "incomplete_retrieval"}:
+                if kind in {"no_result", "incomplete_retrieval",
+                            "done_but_incomplete"}:
                     if (kind == "no_result" and altered is not None
-                            or kind == "incomplete_retrieval"
+                            or kind != "no_result"
                             and metadata.get("status") != "partial"):
                         continue
                 elif kind in {"wrong_retrieval", "wrong_entity_binding",
-                              "legacy_wrong_evidence"}:
+                              "computation_error", "legacy_wrong_evidence"}:
                     if (altered is None
                             or relation_rows(altered) ==
                             relation_rows(clean[tid])):
