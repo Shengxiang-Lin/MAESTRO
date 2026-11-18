@@ -806,9 +806,20 @@ class ReportingUnitTests(unittest.TestCase):
             "status": "done",
         }
         problems = _guard(bad, contract)
-        self.assertIn("trace_summary_technical_execution_jargon", problems)
+        # M1_a is a genuine current-Scene evidence source, not a private
+        # execution node. Its presence alone must not trigger the old
+        # blanket technical-jargon false positive.
+        self.assertNotIn("trace_summary_technical_execution_jargon", problems)
         self.assertIn("trace_summary_internal_teacher_jargon", problems)
         self.assertIn("trace_summary_claims_unperformed_tool_or_media_action", problems)
+        unlisted = deepcopy(bad)
+        unlisted["trace_summary"] += (
+            "\n- Queried M99_unknown, which is not in this source catalog."
+        )
+        self.assertIn(
+            "trace_summary_technical_execution_jargon",
+            _guard(unlisted, contract),
+        )
 
     def test_exact_one_field_scalar_answers_do_not_need_filler(self):
         """Accept exact short intermediate IDs and final scalar answers."""
