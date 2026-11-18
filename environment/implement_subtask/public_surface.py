@@ -68,3 +68,38 @@ def reviewed_public_view(record: dict) -> dict:
     if isinstance(trace, dict) and isinstance(trace.get("narrative"), str):
         trace["narrative"] = clean_public_prose(trace["narrative"])
     return public
+
+
+# Shared readable displays for trusted Stage-2 and actual Stage-4 deliveries.
+def readable_value(value) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    if value is None:
+        return "not specified"
+    return str(value)
+
+
+def render_verified_rows(rows: list[dict]) -> str:
+    """Summarize an exact relation. The full verified rows travel separately."""
+    if not rows:
+        return "No records matched the assigned task."
+    if len(rows) == 1 and set(rows[0]) == {"count"}:
+        return f"The count is {readable_value(rows[0]['count'])}."
+    if all(set(row) == {"entry_label"} for row in rows):
+        return "Entries: " + ", ".join(readable_value(row["entry_label"]) for row in rows) + "."
+    if all(set(row) == {"category_name", "count"} for row in rows):
+        return "Counts by category: " + ", ".join(
+            f"{row['category_name']} ({row['count']})" for row in rows
+        ) + "."
+    count = len(rows)
+    unit = "record" if count == 1 else "records"
+    labels = list(dict.fromkeys(str(row["entry_label"]) for row in rows if "entry_label" in row))
+    if labels and len(labels) <= 3:
+        return f"The handoff contains {count} {unit} for " + ", ".join(labels) + "."
+    if labels:
+        return f"The handoff contains {count} {unit}, including " + ", ".join(labels[:3]) + "."
+    return f"The handoff contains {count} {unit} from the assigned task."
+
+
