@@ -685,6 +685,7 @@ def _stage3_task_prose_repair_guidance(
                         "refer to the known clue or evidence source instead."
                     )
             elif kind.startswith("source_scope_missing:"):
+                missing_id = kind.split(":", 1)[1]
                 sources = ", ".join(task["source_ids"])
                 titles = ", ".join(
                     s["source_id"] + " (" + s.get("title", "") + ")"
@@ -692,9 +693,10 @@ def _stage3_task_prose_repair_guidance(
                     if s.get("source_id") in task["source_ids"]
                 )
                 guidance.append(
-                    label + "The task instruction or context omits a "
-                    "required public source handle. Include these EXACT "
-                    "current-task source IDs: " + sources + ". " +
+                    label + "The task instruction or context omits "
+                    "the required public source handle " + missing_id +
+                    ". Include these EXACT current-task source IDs: " +
+                    sources + ". " +
                     ("Source titles: " + titles + ". " if titles else "") +
                     "Do not substitute an unrelated or future source."
                 )
