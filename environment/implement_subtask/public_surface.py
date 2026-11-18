@@ -138,7 +138,7 @@ def normalize_delivered_result(value, exact_rows: list[dict],
         proposed = [{output_schema[0]: row} for row in proposed]
     if not all(isinstance(row, dict) for row in proposed):
         return None, ["structured_result_invalid_rows"]
-    if sorted(map(_canonical, proposed)) != sorted(map(_canonical, exact_rows)):
+    if sorted(map(_canonical_value, proposed)) != sorted(map(_canonical_value, exact_rows)):
         return None, ["structured_result_not_equal_to_oracle"]
     return render_verified_rows(exact_rows), []
 
