@@ -336,6 +336,4 @@ def build_report_contract(
 
 
 
-# Stable aliases for existing Stage-4 fixtures; only one implementation.
-_observed_contract = build_report_contract
 
