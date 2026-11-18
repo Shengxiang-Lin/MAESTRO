@@ -103,3 +103,43 @@ def render_verified_rows(rows: list[dict]) -> str:
     return f"The handoff contains {count} {unit} from the assigned task."
 
 
+
+def _canonical_value(value) -> str:
+    """Stable typed equality for Stage-4 delivered relations."""
+    import json
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+
+
+def normalize_delivered_result(value, exact_rows: list[dict],
+                             output_schema: list[str]) -> tuple[str | None, list[str]]:
+    """Accept the natural real-world variation of Sub-Agent result payloads.
+
+    The model can write prose OR provide exact structured records. Any
+    structured payload MUST be an exact multiset match to the frozen Oracle.
+    A filtered subset, reordered field meaning, or fabricated rows FAIL.
+    """
+    if isinstance(value, str):
+        if not 1 <= len(value.strip()) <= 1600:
+            return None, ["result_invalid_length_or_type"]
+        return value.strip(), []
+    if isinstance(value, dict):
+        proposed = [value]
+    elif isinstance(value, list):
+        proposed = value
+    elif (type(value) in {int, float, bool}
+          and output_schema == ["count"]):
+        proposed = [{"count": value}]
+    else:
+        return None, ["result_invalid_type"]
+    if (len(output_schema) == 1 and proposed
+            and all(not isinstance(row, dict) for row in proposed)):
+        proposed = [{output_schema[0]: row} for row in proposed]
+    if not all(isinstance(row, dict) for row in proposed):
+        return None, ["structured_result_invalid_rows"]
+    if sorted(map(_canonical, proposed)) != sorted(map(_canonical, exact_rows)):
+        return None, ["structured_result_not_equal_to_oracle"]
+    return render_verified_rows(exact_rows), []
+
+
