@@ -44,9 +44,15 @@ Only redundant static O1 instructions are omitted: parallel-decomposition
 tutorials, model-pricing tables, full tool descriptions/JSON schemas and output
 examples. Nothing in the Main-visible history is truncated or summarized.
 
-For rejected authored task prose, Stage 3 now gives targeted revision
-hints for short/invalid context and generic repeated task instructions,
-using only current-round public sources and fields. The failed-action
+For rejected authored task prose, Stage 3 gives targeted revision
+hints for invalid context, generic repeated task instructions,
+`invented_visible_identifier`, and `source_scope_missing`. Identifier
+hints show literal IDs from the current Main-visible question/history
+and current public task context (local matches first); source hints give
+the exact permitted source handles and their public titles. They do
+not reveal private Oracle values, guess the correct identifier, or
+silently repair an unsupported claim. The original strict Guard still
+rejects ungrounded IDs and missing source handles. The failed-action
 journal records context/instruction lengths and types (not candidate
 text), to distinguish a short context from an overlong one. No guard,
 source permission, frozen dispatch or Critic requirement is relaxed.
@@ -96,12 +102,19 @@ Stage-3 independent review now preserves two distinct boundaries:
   second independent prose-only review. Continued disagreement still
   produces the explicitly non-reviewed `teacher_grounded_completion_fallback`.
 
-The Delegate Prompt has been returned to its stable wording; the
-independent Critic scope and optional out-of-scope re-review introduced
-in PR #250 are retained. The Completion Critic still checks **only newly
-authored reasoning**, leaving the code-frozen answer and appended evidence
-quote outside review. No new model role, dispatch heuristic, Oracle
-mutation or relaxation of the complete-Scene publication contract.
+The Delegate Prompt remains in its stable wording; independent
+Critic scope and optional out-of-scope re-review are unchanged.
+`llm_reviewed_completion` now retains the Author's whole sentences,
+never cuts a word off at character 420, and appends only a short verbatim
+Sub-Agent Result citation when one is missing. It does **not** append the
+long, deterministic generic completion conclusion to every reviewed
+sample. The Critic sees exactly the retained authored sentences,
+not the added citation; the final `completion_issues` Guard validates
+the published text and code-frozen answer as before. If no complete
+sentence fits the safe budget, the Author may retry and the existing
+explicitly non-reviewed fallback remains available. No new model role,
+dispatch heuristic, Oracle mutation or relaxation of the complete-Scene
+publication contract.
 
 **Completion quality tiers:** `generation_mode=llm_reviewed_completion`
 means an independently Critic-approved final rationale. When the Author/

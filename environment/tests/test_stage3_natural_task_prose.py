@@ -298,6 +298,80 @@ class FrozenTaskProseTests(unittest.TestCase):
         self.assertNotIn("task_0_source_scope_missing:" +
                          assignment["source_ids"][0], errors)
 
+    def test_identifier_and_missing_source_hints_are_public_and_scoped(self):
+        from environment.base_orchestration.action_author import (
+            _stage3_task_prose_repair_guidance,
+        )
+        assignments = [{
+            "target_instruction": (
+                "Check relation_2 and relation_3 for the identifier "
+                "PRJ-7B3A7218631A and return entity_final."
+            ),
+            "context": (
+                "Previously returned result: Dossier-4d3d133040 is "
+                "linked to PRJ-7B3A7218631A."
+            ),
+            "source_ids": ["relation_2", "relation_3"],
+            "output_fields": ["entity_final"],
+            "public_source_descriptions": [
+                {"source_id": "relation_2", "title": "Relationship catalog"},
+                {"source_id": "relation_3", "title": "Entity index"},
+            ],
+        }]
+        failures = [{
+            "stage": "stage3_task_prose_guard",
+            "errors": [
+                "task_0_invented_visible_identifier",
+                "task_0_source_scope_missing:relation_2",
+                "task_0_source_scope_missing:relation_3",
+            ],
+        }]
+        guidance = _stage3_task_prose_repair_guidance(
+            failures, assignments,
+            visible_prompt=(
+                "Question: Resolve the entity. Visible previous report "
+                "identifies Dossier-4d3d133040 and PRJ-7B3A7218631A."
+            ),
+        )
+        self.assertEqual(len(guidance), 3)
+        full = " ".join(guidance)
+        self.assertIn("PRJ-7B3A7218631A", full)
+        self.assertIn("Dossier-4d3d133040", full)
+        self.assertIn("relation_2", full)
+        self.assertIn("relation_3", full)
+        self.assertIn("Relationship catalog", full)
+        self.assertIn("do not guess or synthesize", full)
+        self.assertNotIn("PRJ-UNSEEN-PRIVATE", full)
+        self.assertNotIn("work_M", full)
+        self.assertEqual(
+            _stage3_task_prose_repair_guidance(
+                [{"stage": "critic", "errors": [
+                    "task_0_invented_visible_identifier",
+                ]}], assignments, visible_prompt="Question...",
+            ),
+            [],
+        )
+
+    def test_identifier_repair_with_no_visible_id_does_not_guess(self):
+        from environment.base_orchestration.action_author import (
+            _stage3_task_prose_repair_guidance,
+        )
+        assignment = {
+            "target_instruction": "Inspect the public field notes for a clue.",
+            "context": "No prior Sub-Agent results are available.",
+            "source_ids": ["field_notes"],
+            "output_fields": ["case_id"],
+            "public_source_descriptions": [],
+        }
+        hints = _stage3_task_prose_repair_guidance(
+            [{"stage": "stage3_task_prose_guard",
+              "errors": ["task_0_invented_visible_identifier"]}],
+            [assignment], visible_prompt="Find the field-note clue.",
+        )
+        self.assertEqual(len(hints), 1)
+        self.assertIn("No matching concrete identifier is visible", hints[0])
+        self.assertIn("Remove any invented ID", hints[0])
+
     def test_meta_reasoning_retries_without_leaking_internal_dispatch(self):
         scene = current_scene(0)
         target = next(

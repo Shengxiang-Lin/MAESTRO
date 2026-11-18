@@ -607,7 +607,8 @@ def _stage3_task_prose_issues(
 
 
 def _stage3_task_prose_repair_guidance(
-    failures: list[dict], assignments: list[dict],
+    failures: list[dict], assignments: list[dict], *,
+    visible_prompt: str = "",
 ) -> list[str]:
     """Turn a rejected public-language draft into actionable, scoped feedback.
 
@@ -642,6 +643,62 @@ def _stage3_task_prose_repair_guidance(
                     "preassigned tasks or program machinery. Describe "
                     "only the specific visible evidence and practical "
                     "investigation to perform."
+                )
+            elif kind == "invented_visible_identifier":
+                # The original Guard already defines visibility from
+                # the public Main prompt and this round's task contracts.
+                # Repair guidance uses that SAME surface, never private
+                # Oracle rows or future Sub-Agent answers. Rank literals
+                # present in THIS task's context first.
+                local_text = (task["target_instruction"] + "\n" +
+                              task["context"])
+                visible_text = visible_prompt + "\n" + "\n".join(
+                    item["target_instruction"] + "\n" + item["context"]
+                    for item in assignments
+                )
+                visible = {
+                    token.casefold(): token for token
+                    in _STAGE3_IDENTIFIER.findall(visible_text)
+                }
+                examples = list(dict.fromkeys(
+                    token for token in (
+                        _STAGE3_IDENTIFIER.findall(local_text) +
+                        _STAGE3_IDENTIFIER.findall(visible_prompt)
+                    ) if token.casefold() in visible
+                ))
+                if examples:
+                    guidance.append(
+                        label + "An entity/reference ID in your draft does "
+                        "not occur in the current public question or "
+                        "returned Sub-Agent history. Copy IDs character "
+                        "for character; do not guess or synthesize them. "
+                        "Visible identifiers to check against (not an "
+                        "assertion that they are interchangeable): " +
+                        ", ".join(examples[:16]) + ". Only use an ID "
+                        "when its relation to THIS source/task is supported."
+                    )
+                else:
+                    guidance.append(
+                        label + "No matching concrete identifier is "
+                        "visible in the current public question or prior "
+                        "Sub-Agent feedback. Remove any invented ID and "
+                        "refer to the known clue or evidence source instead."
+                    )
+            elif kind.startswith("source_scope_missing:"):
+                missing_id = kind.split(":", 1)[1]
+                sources = ", ".join(task["source_ids"])
+                titles = ", ".join(
+                    s["source_id"] + " (" + s.get("title", "") + ")"
+                    for s in task.get("public_source_descriptions", [])
+                    if s.get("source_id") in task["source_ids"]
+                )
+                guidance.append(
+                    label + "The task instruction or context omits "
+                    "the required public source handle " + missing_id +
+                    ". Include these EXACT current-task source IDs: " +
+                    sources + ". " +
+                    ("Source titles: " + titles + ". " if titles else "") +
+                    "Do not substitute an unrelated or future source."
                 )
             elif kind in {"generic_template_repeated",
                           "instruction_not_naturalized"}:
@@ -827,6 +884,47 @@ Return JSON: {"reasoning": "one or two evidence-grounded sentences"}.
 """
 
 
+def _complete_reasoning_prose(
+    authored: str, delivered: dict, *, max_authored_chars: int = 900,
+) -> tuple[str | None, str | None]:
+    """Append a short *public* evidence quote, never a generic conclusion.
+
+    Keep the Author's complete sentences (no slicing in the middle of a
+    word or sentence). If even the first sentence exceeds the safe budget,
+    reject and let the existing Author revision/fallback path handle it.
+    The Critic receives precisely the authored prefix we will publish.
+    """
+    quotes = [
+        row["finish_result"]["result"].strip().replace("\n", " ")[:360].rstrip()
+        for row in delivered.values()
+    ]
+    quotes = [quote for quote in quotes if quote]
+    if not quotes:
+        return None, "completion_lacks_public_evidence"
+    citation = ' Evidence: "' + quotes[-1] + '".'
+    # Reserve room for the citation even if the ORIGINAL authored draft
+    # contains the quote: it may be in a sentence trimmed away below.
+    budget = min(max_authored_chars, 1600 - len(citation) - 1)
+    if budget < 45:
+        return None, "completion_insufficient_reasoning_budget"
+    prefix = authored.strip()
+    if len(prefix) > budget:
+        # Only truncate after a completed sentence. Never silently
+        # publish half of the final word or an unfinished clause.
+        boundaries = list(re.finditer(
+            r'[.!?][\\"\u201d\u2019]?(?=\s|$)', prefix[:budget]
+        ))
+        if not boundaries:
+            return None, "completion_no_sentence_boundary_within_budget"
+        prefix = prefix[:boundaries[-1].end()].strip()
+    if prefix and prefix[-1] not in '.!?\\"\u201d\u2019':
+        prefix += "."
+    suffix = "" if any(quote in prefix for quote in quotes) else citation
+    if len(prefix) + len(suffix) > 1600:
+        return None, "completion_reasoning_budget_exceeded"
+    return prefix + suffix, prefix
+
+
 _COMPLETE_CRITIC_SYSTEM = """Review ONLY the Main-Agent's AUTHORED
 completion reasoning for factual support and O1 style. The final answer
 is code-frozen and NOT submitted for your review; public Sub-Agent results
@@ -902,12 +1000,22 @@ def author_complete_action(*, template: dict, prompt: str,
             failures.append({"stage": "completion_guard",
                              "errors": ["generation_process_leak"]})
             continue
-        # Always attach the exact prior public result quotation so that a
-        # paraphrase alone cannot invent completion evidence.
+        # Preserve natural complete sentences; append only an exact
+        # public evidence quote if the Author did not already include one.
+        # The longer deterministic template remains available for explicit
+        # NON-reviewed fallback, never as routine reviewed prose.
         if authored == template["reasoning"]:
-            full_reason = authored
+            full_reason, reviewed_authored = authored, authored
         else:
-            full_reason = authored[:420].rstrip() + " " + template["reasoning"]
+            full_reason, reviewed_authored = _complete_reasoning_prose(
+                authored, delivered,
+            )
+            if full_reason is None:
+                failures.append({
+                    "stage": "completion_guard",
+                    "errors": [reviewed_authored],
+                })
+                continue
         candidate = {
             "action": "complete", "reasoning": full_reason,
             "params": {"answer": correct_answer},
@@ -927,15 +1035,16 @@ def author_complete_action(*, template: dict, prompt: str,
                 "public_evidence_from_previously_completed_subtasks":
                     public_evidence,
                 "candidate_prose_only": {
-                    "reasoning": authored,
+                    "reasoning": reviewed_authored,
                     "tasks": [],
                 },
                 "assignment_prose_goals_in_required_order": [],
                 "fixed_answer_verified_by_code": True,
                 "review_scope": (
-                    "Only judge the authored reasoning above. A separate "
-                    "deterministic evidence quotation is appended to the "
-                    "published rationale for traceability, not for review. "
+                    "Only judge the authored reasoning above. A short "
+                    "verbatim prior-result citation may be appended to "
+                    "the published rationale for traceability, not for "
+                    "review. "
                     "Do not challenge the code-frozen answer or demand "
                     "new source queries or a different calculation."
                 ),
@@ -1136,7 +1245,7 @@ def author_delegate_action(
                      for code in failed.get("errors", [])
                      if code in repairs]
                     + (_stage3_task_prose_repair_guidance(
-                        failures, assignments,
+                        failures, assignments, visible_prompt=prompt,
                     ) if naturalize_assignment_prose else [])
                 ))
         if freeze_assignment_prose and not reasoning_only_stage3:
