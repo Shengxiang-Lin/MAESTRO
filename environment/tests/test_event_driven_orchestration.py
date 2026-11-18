@@ -399,8 +399,18 @@ class EventEngineTests(unittest.TestCase):
                         ),
                     }]), "summary": "Recorded the later event year.",
                 }},
+                "consumer": {"finish_result": {
+                    "status": "done",
+                    "result": json.dumps([{
+                        "values": {"case_id": "Case-011"},
+                        "source_fact_refs": ["alpha:F001"],
+                    }]),
+                    "summary": "Consumed the earlier source report.",
+                }},
             }
-            state.public_report_rounds = {"old": 1, "late": 4}
+            state.public_report_rounds = {
+                "old": 1, "consumer": 2, "late": 4,
+            }
             state.cross_source_checks_enabled = True
             return state
 
