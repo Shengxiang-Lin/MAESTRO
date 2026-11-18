@@ -497,6 +497,56 @@ class ExecutionState:
                 )
         return None
 
+    def _visible_scope_issue(self, task_id: str) -> str | None:
+        """Check explicit task-specific filters against a delivered row.
+
+        Scope/edition/year conditions must be recognizable in the ACTUAL
+        Main-facing task instruction. A private operator alone cannot
+        create a claim that Main knew the expected year or source policy.
+        """
+        if self.public_status(task_id) != "done":
+            return None
+        task = self.tasks[task_id]
+        report = self.public_reports.get(task_id, {})
+        instruction = str(report.get("task_instruction") or "").casefold()
+        if not instruction:
+            return None
+        rows = self._public_result_rows(report)
+        if not rows:
+            return None
+        for step in task.get("operator_chain", []):
+            if step.get("op") not in {"filter_eq", "filter_gte"}:
+                continue
+            field, limit = step.get("field"), step.get("value")
+            if (not isinstance(field, str)
+                    or type(limit) not in {str, int, float}
+                    or field.casefold().replace("_", " ") not in
+                       instruction.replace("_", " ")
+                    or str(limit).casefold() not in instruction):
+                continue
+            for row in rows:
+                actual = row.get(field)
+                if actual is None:
+                    continue
+                if step["op"] == "filter_eq":
+                    valid = actual == limit
+                else:
+                    valid = (
+                        type(actual) in (int, float)
+                        and type(limit) in (int, float)
+                        and actual >= limit
+                    )
+                if not valid:
+                    return (
+                        "The delivered record reports "
+                        + field.replace("_", " ") + " = " + str(actual)
+                        + ", although the assigned investigation explicitly "
+                        "requires " + step["op"].replace("_", " ")
+                        + " " + str(limit)
+                        + ". Recheck the returned record's requested scope."
+                    )
+        return None
+
     def _visible_arithmetic_issue(self, task_id: str) -> str | None:
         """Check one source-free derivation against explicitly delivered inputs.
 
@@ -620,6 +670,9 @@ class ExecutionState:
         report_issue = self._visible_report_internal_conflict(task_id)
         if report_issue:
             return report_issue
+        scope_issue = self._visible_scope_issue(task_id)
+        if scope_issue:
+            return scope_issue
         lookup_issue = self._visible_lookup_issue(task_id)
         if lookup_issue:
             return lookup_issue
@@ -879,6 +932,9 @@ class ExecutionState:
             elif self._visible_report_internal_conflict(tid):
                 kind = "intra_report_conflict"
                 reason = self._visible_report_internal_conflict(tid)
+            elif self._visible_scope_issue(tid):
+                kind = "scope_constraint_mismatch"
+                reason = self._visible_scope_issue(tid)
             elif self._visible_lookup_issue(tid):
                 kind = "lookup_key_disagreement"
                 reason = self._visible_lookup_issue(tid)
