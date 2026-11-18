@@ -30,7 +30,9 @@ _FAULT_FAMILIES = {
     "no_result": "missing",
     "report_missing": "missing",
     "incomplete_retrieval": "partial",
+    "done_but_incomplete": "partial",
     "wrong_retrieval": "unreliable",
+    "computation_error": "unreliable",
     "wrong_entity_binding": "unreliable",
     "legacy_wrong_evidence": "unreliable",
     "fabricated_claim": "unreliable",
@@ -124,10 +126,10 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         category = "recovered_with_revalidation"
     elif any(kind in {
         "wrong_retrieval", "wrong_entity_binding",
-        "legacy_wrong_evidence", "fabricated_claim",
+        "computation_error", "legacy_wrong_evidence", "fabricated_claim",
     } for kind in kinds):
         category = "recovered_unreliable_evidence"
-    elif "incomplete_retrieval" in kinds:
+    elif "incomplete_retrieval" in kinds or "done_but_incomplete" in kinds:
         category = "recovered_partial_evidence"
     elif "no_result" in kinds or "report_missing" in kinds:
         category = "recovered_missing_evidence"
