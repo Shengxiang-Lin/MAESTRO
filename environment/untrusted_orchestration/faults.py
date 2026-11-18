@@ -43,10 +43,10 @@ class Fault:
             raise ValueError("unsupported_fault_persistence")
         types = {
             "missing": {"no_result"},
-            "partial": {"incomplete_retrieval"},
+            "partial": {"incomplete_retrieval", "done_but_incomplete"},
             "wrong": {
                 "wrong_retrieval", "wrong_entity_binding",
-                "legacy_wrong_evidence",
+                "computation_error", "legacy_wrong_evidence",
             },
             "report": {
                 "report_missing", "fabricated_claim",
