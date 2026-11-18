@@ -952,8 +952,9 @@ def generate_turns(
     if scenario_mode not in {"round_fork", "event_driven"}:
         raise ValueError("invalid_scenario_mode")
     kinds = list(atomic_fault_kinds or [
-        "no_result", "incomplete_retrieval", "wrong_retrieval",
-        "wrong_entity_binding", "report_missing",
+        "no_result", "incomplete_retrieval", "done_but_incomplete",
+        "wrong_retrieval", "wrong_entity_binding", "computation_error",
+        "report_missing",
         "result_summary_conflict", "fabricated_claim",
     ])
     if (not kinds or any(kind not in ATOM_TO_MODE for kind in kinds)
