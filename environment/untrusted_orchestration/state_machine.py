@@ -389,6 +389,44 @@ class ExecutionState:
         pattern = patterns.get(field)
         return set(re.findall(pattern, text)) if pattern else set()
 
+    def _visible_done_field_gap(self, task_id: str) -> str | None:
+        """A DONE report can still visibly omit a required typed field.
+
+        Completeness is determined from the *delivered* Result and frozen
+        public field contract; never compare with private clean rows. Only
+        fields actually required by a pending dependent (or terminal goal)
+        create a repair obligation.
+        """
+        if self.public_status(task_id) != "done":
+            return None
+        result_rows = self._public_result_rows(
+            self.public_reports.get(task_id)
+        )
+        if not result_rows:
+            return None
+        required = set()
+        for child in self.tasks.values():
+            if (task_id in child["depends_on"]
+                    and (child["task_id"] not in self.current
+                         or self.current[child["task_id"]].status == "stale")):
+                required.update(self.required_parent_fields(
+                    child, task_id,
+                ))
+        if task_id == self.scene["macro_graph"]["terminal_task_id"]:
+            required.update(self.tasks[task_id]["outputs"]["typed_relation"])
+        missing = sorted(
+            field for field in required
+            if all(row.get(field) is None for row in result_rows)
+        )
+        if not missing:
+            return None
+        return (
+            "The delivered Finish Result is marked done, but it has no "
+            "usable values for the required fields: "
+            + ", ".join(missing) + ". The missing evidence is needed "
+            "before the next dependent investigation can proceed."
+        )
+
     def _visible_lookup_issue(self, task_id: str) -> str | None:
         task = self.tasks[task_id]
         lookups = [step for step in task["operator_chain"]
@@ -521,6 +559,9 @@ class ExecutionState:
                 report.get("summary", "Some required evidence is missing.")
             )
         task = self.tasks[task_id]
+        field_gap = self._visible_done_field_gap(task_id)
+        if field_gap:
+            return field_gap
         report_issue = self._visible_report_internal_conflict(task_id)
         if report_issue:
             return report_issue
@@ -870,6 +911,9 @@ class ExecutionState:
             elif item.runtime.get("cross_source_recheck_requested"):
                 kind = "cross_source_conflict"
                 reason = item.runtime.get("visible_issue")
+            elif self._visible_done_field_gap(tid):
+                kind = "done_but_incomplete"
+                reason = self._visible_done_field_gap(tid)
             elif self._visible_report_internal_conflict(tid):
                 kind = "intra_report_conflict"
                 reason = self._visible_report_internal_conflict(tid)
