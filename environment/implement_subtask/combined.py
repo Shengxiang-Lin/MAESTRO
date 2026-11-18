@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 
 from .pipeline import materialize_subtasks
-from .naturalize import naturalize_subtasks
+from .naturalize import review_subagent_reports
 
 def _atomic_json(path: Path, payload: dict) -> None:
     temp = path.with_suffix(path.suffix + ".tmp")
@@ -106,7 +106,7 @@ def generate_subagent_reports(
     })
     if clients is not None:
         naturalize_options["clients"] = clients
-    reviewed = naturalize_subtasks(**naturalize_options)
+    reviewed = review_subagent_reports(**naturalize_options)
     return {
         **reviewed,
         "pipeline": "maestro_stage2_oracle_and_subagent_reports_v1",
