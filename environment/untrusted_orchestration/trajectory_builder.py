@@ -443,6 +443,7 @@ def build_branch(
     main_reviews = []
     evidence_plan = []
     decision_reward_states = []
+    observable_issue_snapshots = []
     stopped = None
     final_mode = None
     graph = scene["macro_graph"]
@@ -482,6 +483,11 @@ def build_branch(
             stopped = "budget_exhausted"
             break
         scheduling = state.scheduling_state()
+        observable_issue_snapshots.append({
+            "decision_round": round_number,
+            "issues": state.observable_issues(),
+            "private_only": True,
+        })
         repairs = [
             tid for tid in scheduling["repair"]
             if len(state.attempts[tid]) <= max_retries and state.ready(tid)
@@ -780,6 +786,7 @@ def build_branch(
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
         "visible_claim_state": visible_claim_state,
+        "observable_issue_snapshots": observable_issue_snapshots,
         "event_scenario": scenario_plan,
         "event_timeline": scheduler.audit(),
         "fault_events_applied": applied_fault_events,
