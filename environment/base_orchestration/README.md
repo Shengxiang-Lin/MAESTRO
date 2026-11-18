@@ -69,12 +69,16 @@ A direct comparison against the two supplied real OmniGAIA/O1 trajectories
 requested findings, while `context` is a short situation handoff. The real
 example Main `reasoning` fields were empty; our MAESTRO training target
 intentionally retains evidence-driven reasoning, rather than imitating
-that empty field. Stage-3 prose prompts now prioritize specific current
-evidence and next unresolved needs over repetitive "successfully /
-next logical step" narration. An Author may name an **already assigned**
-tool to clarify a task, but can never change tools, models, source access
-or invent steps; existing O1 history and code-attached prior results stay
-unchanged.
+that empty field. The **stable, concise Delegate Author prompt** requests
+actionable investigations grounded in visible source IDs, named clues and
+required return values; it deliberately avoids long prescriptive lists of
+extra actions/tools and repeated example success phrases. This restores
+the Author language used before PR #250 after a paired local-Qwen 48-scene
+pilot regressed from 42/48 to 31/48 complete Scenes and from 4 to 20
+generic-template Guard errors. The first local run is evidence of a
+regression, not proof of a prompt-only causal effect. The hard tool/model
+scope, frozen dispatch, Stage-3 Guard, O1 history and code-attached prior
+results remain unchanged.
 
 Stage-3 independent review now preserves two distinct boundaries:
 
@@ -92,9 +96,12 @@ Stage-3 independent review now preserves two distinct boundaries:
   second independent prose-only review. Continued disagreement still
   produces the explicitly non-reviewed `teacher_grounded_completion_fallback`.
 
-These are prompt/review-scope changes only: no new model role, dispatch
-heuristic, Oracle mutation or relaxation of the complete-Scene publication
-contract.
+The Delegate Prompt has been returned to its stable wording; the
+independent Critic scope and optional out-of-scope re-review introduced
+in PR #250 are retained. The Completion Critic still checks **only newly
+authored reasoning**, leaving the code-frozen answer and appended evidence
+quote outside review. No new model role, dispatch heuristic, Oracle
+mutation or relaxation of the complete-Scene publication contract.
 
 **Completion quality tiers:** `generation_mode=llm_reviewed_completion`
 means an independently Critic-approved final rationale. When the Author/
