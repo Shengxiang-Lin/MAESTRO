@@ -38,7 +38,6 @@ class TrajectoryConfigurationTests(TestCase):
             "/subtasks.jsonl"
         ))
         self.assertEqual(cfg["mode"], "llm")
-        self.assertIs(cfg["allow_delegate_fallback"], False)
         self.assertEqual(
             cfg["workers"],
             yaml.safe_load(DEFAULT_CONFIG.read_text())["generation"]["workers"],
@@ -75,26 +74,15 @@ class TrajectoryConfigurationTests(TestCase):
         )
         self.assertEqual(kwargs["max_revisions"], 2)
         self.assertEqual(kwargs["max_attempts"], 10)
-        self.assertIs(kwargs["allow_delegate_fallback"], False)
         self.assertEqual(kwargs["author_model"], "local-qwen3.5-9b")
         self.assertEqual(kwargs["critic_model"], "local-qwen3.5-9b")
         self.assertTrue(kwargs["scenes_path"].is_absolute())
 
-    def test_explicit_opt_in_is_passed_only_when_requested(self):
-        with patch(
-            "environment.generate_question.authoring.backend.OpenAICompatibleBackend"
-        ), patch(
-            "environment.base_orchestration.generate_turns.generate_turns",
-            return_value={"status": "done"},
-        ) as runner:
+    def test_removed_fallback_option_is_not_accepted(self):
+        with self.assertRaisesRegex(ValueError, "trajectory_unknown_override"):
             generate_from_config(allow_delegate_fallback=True)
-        self.assertTrue(runner.call_args.kwargs["allow_delegate_fallback"])
-        args = parser().parse_args([
-            "generate-main-turns", "--allow-delegate-fallback",
-        ])
-        self.assertTrue(args.allow_delegate_fallback)
-        default = parser().parse_args(["generate-main-turns"])
-        self.assertIsNone(default.allow_delegate_fallback)
+        with self.assertRaises(SystemExit):
+            parser().parse_args(["generate-main-turns", "--allow-delegate-fallback"])
 
     def test_local_model_cost_is_zero_without_pricing_warning(self):
         from base.engine.async_llm import (
@@ -151,7 +139,6 @@ class TrajectoryConfigurationTests(TestCase):
         self.assertIsNone(runner.call_args.kwargs["author"])
         self.assertIsNone(runner.call_args.kwargs["critic"])
         self.assertEqual(runner.call_args.kwargs["max_scenes"], 4)
-        self.assertIs(runner.call_args.kwargs["allow_delegate_fallback"], False)
 
     def test_invalid_unknown_or_mismatched_settings_fail(self):
         template = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
@@ -165,7 +152,7 @@ class TrajectoryConfigurationTests(TestCase):
             invalid = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
             invalid["generation"]["allow_delegate_fallback"] = "false"
             target.write_text(yaml.safe_dump(invalid), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "invalid_boolean_allow_delegate_fallback"):
+            with self.assertRaisesRegex(ValueError, "unknown_generation"):
                 load_config(target)
             invalid = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
             invalid["generation"]["workers"] = 0
