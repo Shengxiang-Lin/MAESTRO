@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import json
 import re
-from environment.implement_subtask.reporting import (
-    _normalize_author_result, _stage_scope_issues,
-)
+from environment.implement_subtask.public_surface import normalize_delivered_result
+from environment.implement_subtask.reporting import _stage_scope_issues
 from .state_machine import Attempt, relation_rows
 
 
@@ -88,7 +87,7 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
         if result is not None:
             issues.append("missing_result_must_be_null")
     else:
-        normalized, errors = _normalize_author_result(
+        normalized, errors = normalize_delivered_result(
             result, exact_rows, list(attempt.product.columns),
         )
         issues.extend("result_" + e for e in errors)
