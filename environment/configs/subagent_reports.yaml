@@ -8,7 +8,7 @@ implementation:
   # Default Stage 1 runs Question Author/Critic; only reviewed scenes publish here.
   scenes: environment/data/stage1/questions/scenes.jsonl
   output_dir: environment/data/pilots/qwen_stage234_10/stage2/oracle
-  max_records: 500
+  max_records: 50
   evidence_limit: 12
   strict_replay: true
   overwrite: false
@@ -37,6 +37,6 @@ reporting:
   result_policy: code_owned
   flush_every: 1  # save accepted/rejected Macro reviews + checkpoint as they finish
   timeout: 180
-  max_scenes: 500
+  max_scenes: 50
   no_progress: false
   overwrite: false
