@@ -112,6 +112,28 @@ def classify_trial(plan: dict, journal: dict) -> dict:
     visible_issue_types = sorted({
         issue["kind"] for _, issue in detected
     })
+    observable_family = (
+        "inter_report_conflict"
+        if "cross_source_conflict" in visible_issue_types
+        else "intra_report_issue" if visible_issue_types
+        else "not_observed"
+    )
+    unrepaired = audit.get("counterfactual_unrepaired") or {}
+    if outcome := audit.get("execution_outcome") or journal.get("status"):
+        if outcome == "recovered":
+            if (unrepaired.get("status") == "completed"
+                    and unrepaired.get("correct") is False):
+                recovery_effect = "incorrect_result_corrected"
+            elif invalidations:
+                recovery_effect = "downstream_recomputed"
+            elif unrepaired.get("status") != "completed":
+                recovery_effect = "execution_failure_recovered"
+            else:
+                recovery_effect = "evidence_inconsistency_resolved"
+        else:
+            recovery_effect = "not_recovered"
+    else:
+        recovery_effect = "not_recovered"
     kinds = [
         a["kind"] for a in plan["scenario_plan"]["fault_atoms"]
     ]
@@ -180,6 +202,8 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         "behavior_signature": signature,
         "fault_events_applied": len(applied),
         "observability": observability,
+        "observable_issue_family": observable_family,
+        "recovery_effect": recovery_effect,
         "first_visible_issue_round": first_visible_issue_round,
         "visible_issue_types": visible_issue_types,
         "visible_conflicts": len(conflicts),
@@ -345,6 +369,12 @@ def select_recovered_candidates(
     observability_distribution = Counter(
         row["observability"] for row in rows
     )
+    issue_family_distribution = Counter(
+        row["observable_issue_family"] for row in rows
+    )
+    recovery_effect_distribution = Counter(
+        row["recovery_effect"] for row in rows
+    )
     stats = {
         "candidates_simulated": len(rows),
         "candidates_execution_recovered": sum(
@@ -362,6 +392,12 @@ def select_recovered_candidates(
         ),
         "observability_distribution": dict(
             sorted(observability_distribution.items())
+        ),
+        "observable_issue_family_distribution": dict(
+            sorted(issue_family_distribution.items())
+        ),
+        "recovery_effect_distribution": dict(
+            sorted(recovery_effect_distribution.items())
         ),
         "selected_observability_distribution": dict(sorted(Counter(
             row["observability"] for row in rows
