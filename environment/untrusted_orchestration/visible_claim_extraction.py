@@ -30,9 +30,6 @@ _CASE_LIST = re.compile(
     r"(?P<ids>(?:(?:Case-\d+|Dossier-[A-Za-z0-9]+)"
     r"(?:,\s*(?:Case-\d+|Dossier-[A-Za-z0-9]+))*))\.$", re.I,
 )
-_REPORTED_YEAR = {"reported_year_a", "reported_year_b"}
-
-
 _NATURAL_RECORDS = re.compile(
     r"^(?:The current task returned (?P<count>\d+) record\(s\)|"
     r"The handoff contains (?P<delivered>\d+) delivered records): "
@@ -125,12 +122,6 @@ def _typed_scalar(value):
     )
 
 
-def _normalize_attribute(field: str) -> tuple[str, str]:
-    if field in _REPORTED_YEAR:
-        return "reported_event_year", "same_reported_event"
-    return field, "same_record"
-
-
 def _parse_scalar(text: str):
     lower = text.lower()
     if lower in ("true", "false"):
@@ -165,10 +156,12 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
                 or not isinstance(field, str) or not field
                 or not _typed_scalar(value)):
             return
-        attr, scope = _normalize_attribute(field)
+        # Different schema fields are NOT automatically the same fact:
+        # reported_year_a and reported_year_b may refer to distinct events.
+        # An inter-report conflict requires an explicit shared property.
         claims.append({
-            "subject": subject, "attribute": attr,
-            "original_field": field, "valid_scope": scope,
+            "subject": subject, "attribute": field,
+            "original_field": field, "valid_scope": "same_record",
             "value": value, "surface": surface,
             "source_id": source_id,
             "fact_refs": list(refs or []),
