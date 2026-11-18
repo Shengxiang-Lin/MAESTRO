@@ -15,7 +15,7 @@ from environment.implement_subtask.config import (
     DEFAULT_CONFIG, load_reporting_config,
 )
 from environment.implement_subtask.realize import realize_scene
-from environment.implement_subtask.naturalize import naturalize_subtasks
+from environment.implement_subtask.naturalize import review_subagent_reports
 from environment.implement_subtask.reporting import review_subagent_report, serialize_verified_result
 
 
@@ -1425,7 +1425,7 @@ class ReportingBatchTests(unittest.TestCase):
             author = ReportAuthor(
                 fail_topic=json.dumps(bad_rows, sort_keys=True),
             )
-            summary = naturalize_subtasks(
+            summary = review_subagent_reports(
                 source_subtasks=subtasks, source_scene_index=index,
                 output_dir=root / "reviewed", api_base="http://unused/v1",
                 model="mock", workers=3, max_revisions=0,
@@ -1461,7 +1461,7 @@ class ReportingBatchTests(unittest.TestCase):
                 row["status"] == "failed" for row in all_reviews
             ))
             with self.assertRaises(FileExistsError):
-                naturalize_subtasks(
+                review_subagent_reports(
                     source_subtasks=subtasks, source_scene_index=index,
                     output_dir=root / "reviewed",
                     api_base="http://unused/v1", model="mock",
@@ -1483,7 +1483,7 @@ class ReportingBatchTests(unittest.TestCase):
                             self.saw_prior_audit = bool(audit.read_text().strip())
                     return result
             author = ObservingAuthor()
-            completed = naturalize_subtasks(
+            completed = review_subagent_reports(
                 source_subtasks=oracle, source_scene_index=index,
                 output_dir=output, api_base="http://mock/v1",
                 model="mock", clients=(author, ReportCritic()),
@@ -1533,7 +1533,7 @@ class ReportingBatchTests(unittest.TestCase):
                 side_effect=truncate_after_scene,
             ):
                 with self.assertRaises(Interrupted):
-                    naturalize_subtasks(
+                    review_subagent_reports(
                         source_subtasks=oracle, source_scene_index=index,
                         output_dir=output, api_base="http://mock/v1",
                         model="mock", clients=(ReportAuthor(), ReportCritic()),
@@ -1557,7 +1557,7 @@ class ReportingBatchTests(unittest.TestCase):
                 "running",
             )
             with self.assertRaises(StreamingError):
-                naturalize_subtasks(
+                review_subagent_reports(
                     source_subtasks=oracle, source_scene_index=index,
                     output_dir=output, api_base="http://mock/v1",
                     model="other", clients=(ReportAuthor(), ReportCritic()),
@@ -1565,7 +1565,7 @@ class ReportingBatchTests(unittest.TestCase):
                     overwrite=False,
                 )
             resumed_author = ReportAuthor()
-            final = naturalize_subtasks(
+            final = review_subagent_reports(
                 source_subtasks=oracle, source_scene_index=index,
                 output_dir=output, api_base="http://mock/v1",
                 model="mock", clients=(resumed_author, ReportCritic()),
@@ -1580,7 +1580,7 @@ class ReportingBatchTests(unittest.TestCase):
                 final["published_macro_tasks"],
             )
             with self.assertRaises(FileExistsError):
-                naturalize_subtasks(
+                review_subagent_reports(
                     source_subtasks=oracle, source_scene_index=index,
                     output_dir=output, api_base="http://mock/v1",
                     model="mock", clients=(ReportAuthor(), ReportCritic()),
@@ -1591,7 +1591,7 @@ class ReportingBatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source, idx = self._teacher_inputs(root, [30])
-            summary = naturalize_subtasks(
+            summary = review_subagent_reports(
                 source_subtasks=source, source_scene_index=idx,
                 output_dir=root / "natural", api_base="http://unused/v1",
                 model="mock", clients=(ReportAuthor(), ReportCritic()),
