@@ -28,7 +28,9 @@ generation:
   atomic_fault_kinds:
     - no_result
     - incomplete_retrieval
+    - done_but_incomplete
     - wrong_retrieval
+    - computation_error
     - wrong_entity_binding
     - report_missing
     - result_summary_conflict
