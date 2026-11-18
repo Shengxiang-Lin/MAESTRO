@@ -201,7 +201,7 @@ class _ScenePublisher:
                 file.close()
 
 
-def naturalize_subtasks(
+def review_subagent_reports(
     *, source_subtasks: Path, source_scene_index: Path, output_dir: Path,
     api_base: str, model: str,
     critic_api_base: str | None = None, critic_model: str | None = None,
