@@ -621,9 +621,9 @@ class MainTurnDatasetTests(unittest.TestCase):
         reviewed_text = critic.requests[0][1][
             "candidate_prose_only"
         ]["reasoning"]
-        self.assertNotIn("The returned finding states:", reviewed_text)
-        self.assertIn("The returned finding states:",
-                      result["reasoning"])
+        self.assertNotIn("Evidence:", reviewed_text)
+        self.assertIn('Evidence: "2018-12-29".', result["reasoning"])
+        self.assertNotIn("The returned finding states:", result["reasoning"])
         self.assertIn("SECOND INDEPENDENT REVIEW",
                       critic.requests[1][0])
 
