@@ -95,6 +95,109 @@ class PassingCritic:
         }
 
 
+class CriticDispatchBoundaryTests(unittest.TestCase):
+    """Do not let a Critic redesign a code-frozen Stage-3 investigation."""
+
+    @staticmethod
+    def _assignment_and_prompt():
+        scene = current_scene(0)
+        target = next(
+            item for item in scene["macro_graph"]["tasks"]
+            if item["source_ids"] and not item["depends_on"]
+        )
+        return _assignment(target, source_catalog(scene), {}), scene["question"]
+
+    def test_out_of_scope_split_gets_second_review_not_auto_accept(self):
+        assignment, prompt = self._assignment_and_prompt()
+        class InitiallyOutOfScopeCritic:
+            def __init__(self, second_pass=True):
+                self.requests = []
+                self.second_pass = second_pass
+
+            def complete_json(self, system, payload):
+                self.requests.append((system, json.loads(payload)))
+                if len(self.requests) == 1 or not self.second_pass:
+                    return {
+                        "verdict": "fail", "grounded": False,
+                        "assignment_fidelity": False, "o1_style": True,
+                        "reason": "Split the task into two independent rounds.",
+                        "repair_hint": "Split the task; the current lookup "
+                                       "cannot be done in one task.",
+                    }
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        critic = InitiallyOutOfScopeCritic()
+        action, status = author_delegate_action(
+            assignments=[assignment], prompt=prompt,
+            author=TaskProseAuthor(), critic=critic,
+            freeze_assignment_prose=True,
+            reasoning_only_stage3=True,
+            naturalize_assignment_prose=True, max_revisions=0,
+            author_system=STAGE3_TASK_PROSE_AUTHOR_SYSTEM,
+        )
+        self.assertEqual(status["status"], "accepted", status)
+        self.assertTrue(status["critic_dispatch_scope_rereviewed"])
+        self.assertEqual(len(critic.requests), 2)
+        self.assertEqual(len(action["params"]["tasks"]), 1)
+        self.assertEqual(action["params"]["tasks"][0]["model"],
+                         assignment["model"])
+        self.assertEqual(action["params"]["tasks"][0]["tools"],
+                         assignment["tools"])
+        self.assertEqual(
+            critic.requests[1][1]["current_round_task_contract"][0][
+                "output_fields"
+            ], assignment["output_fields"],
+        )
+
+        stubborn = InitiallyOutOfScopeCritic(second_pass=False)
+        rejected, status = author_delegate_action(
+            assignments=[assignment], prompt=prompt,
+            author=TaskProseAuthor(), critic=stubborn,
+            freeze_assignment_prose=True,
+            reasoning_only_stage3=True,
+            naturalize_assignment_prose=True, max_revisions=0,
+        )
+        self.assertIsNone(rejected)
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(len(stubborn.requests), 2)
+
+    def test_legitimate_factual_error_has_no_out_of_scope_rereview(self):
+        assignment, prompt = self._assignment_and_prompt()
+        class EvidenceCritic:
+            def __init__(self):
+                self.calls = 0
+
+            def complete_json(self, system, payload):
+                self.calls += 1
+                return {
+                    "verdict": "fail", "grounded": False,
+                    "assignment_fidelity": False, "o1_style": True,
+                    "reason": "The authored prose claims a nationality "
+                              "was identified from only a reference key.",
+                    "repair_hint": "Remove the unsupported nationality claim.",
+                }
+        critic = EvidenceCritic()
+        action, status = author_delegate_action(
+            assignments=[assignment], prompt=prompt,
+            author=TaskProseAuthor(), critic=critic,
+            freeze_assignment_prose=True, reasoning_only_stage3=True,
+            naturalize_assignment_prose=True, max_revisions=0,
+        )
+        self.assertIsNone(action)
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(critic.calls, 1)
+
+    def test_o1_style_prompts_keep_explicit_actions_but_do_not_template(self):
+        self.assertIn("concrete evidence action", STAGE3_TASK_PROSE_AUTHOR_SYSTEM)
+        self.assertIn("ALREADY ASSIGNED", STAGE3_TASK_PROSE_AUTHOR_SYSTEM)
+        self.assertIn("next logical step", STAGE3_TASK_PROSE_AUTHOR_SYSTEM)
+        self.assertNotIn("fixed", STAGE3_TASK_PROSE_AUTHOR_SYSTEM.casefold())
+        self.assertNotIn("frozen", STAGE3_TASK_PROSE_AUTHOR_SYSTEM.casefold())
+
+
 class FrozenTaskProseTests(unittest.TestCase):
     def test_rejects_internal_scheduler_language_not_grounded_domain_terms(self):
         """Actual 8/10 pilot leaked 'fixed task graph' into published reasoning."""
