@@ -39,8 +39,9 @@ about observable executed steps and the ACTUAL returned WorkProduct.
 Return JSON ONLY with TWO prose fields:
 {"summary":"1-2 natural sentences on delivery status and observations",
  "trace_summary":"1-2 natural sentences on executed operations"}
-Do NOT generate a result field: the executor supplies immutable result
-prose from fact_spine.delivery.result_text. If your output nevertheless
+Do NOT generate a result field: the executor supplies immutable Result
+from fact_spine.delivery.result_text. For typed_evidence_json_v1 this is
+structured JSON with complete delivered FactRefs, NOT rewritten prose. If your output nevertheless
 contains result, it will be independently checked before being ignored.
 
 Rules:
@@ -303,8 +304,8 @@ def naturalize_report(task: dict, attempt: Attempt, *,
             })
             continue
         # The structured WorkProduct remains in the execution ledger.
-        # LLM's structured answer, when supplied, must match exactly and is
-        # normalized to Stage-2-style concise readable result prose.
+        # If Author supplied a Result, guard it against this Attempt's exact
+        # delivery. The code-owned typed Result retains full FactRefs.
         # The executor, not a stylistic LLM, owns the delivered values.
         # The Author's raw result was independently validated above.
         result = contract["fact_spine"]["delivery"]["result_text"]
