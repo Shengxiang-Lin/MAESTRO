@@ -554,6 +554,113 @@ class MainTurnDatasetTests(unittest.TestCase):
                          turns[-1]["output"]["reasoning"])
         self.assertTrue(audit[-1]["authoring"]["failures"])
 
+    def test_completion_critic_reviews_only_new_prose_not_frozen_answer(self):
+        from environment.base_orchestration.action_author import (
+            author_complete_action,
+        )
+        delivered = {
+            "metric_date": {
+                "finish_result": {
+                    "result": "2018-12-29",
+                    "summary": (
+                        "The reported midpoint between the two recorded "
+                        "metric dates is 2018-12-29."
+                    ),
+                },
+            },
+        }
+        template = {
+            "action": "complete",
+            "reasoning": (
+                'The returned finding states: "2018-12-29". '
+                "The requested date is available from the previously "
+                "returned evidence, so no further delegation is needed."
+            ),
+            "params": {"answer": "2018-12-29"},
+        }
+
+        class CompletingAuthor:
+            def complete_json(self, system, request):
+                return {"reasoning": (
+                    "The available public record establishes the requested "
+                    "date and no more source lookups are required."
+                )}
+
+        class FrozenAnswerCritic:
+            def __init__(self, allow_second):
+                self.requests = []
+                self.allow_second = allow_second
+
+            def complete_json(self, system, request):
+                self.requests.append((system, json.loads(request)))
+                if len(self.requests) == 1 or not self.allow_second:
+                    return {
+                        "verdict": "fail", "grounded": False,
+                        "assignment_fidelity": False, "o1_style": True,
+                        "reason": (
+                            "The final answer 2018-12-29 is mathematically "
+                            "incorrect; recalculate the midpoint."
+                        ),
+                        "repair_hint": "Replace the answer with a new date.",
+                    }
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "assignment_fidelity": True, "o1_style": True,
+                }
+
+        critic = FrozenAnswerCritic(allow_second=True)
+        result, status = author_complete_action(
+            template=template, prompt="Find the supported midpoint date.",
+            delivered=delivered, author=CompletingAuthor(),
+            critic=critic, max_revisions=0,
+        )
+        self.assertEqual(status["mode"], "llm_reviewed_completion")
+        self.assertTrue(status["completion_answer_scope_rereviewed"])
+        self.assertEqual(result["params"]["answer"], "2018-12-29")
+        self.assertEqual(len(critic.requests), 2)
+        reviewed_text = critic.requests[0][1][
+            "candidate_prose_only"
+        ]["reasoning"]
+        self.assertNotIn("The returned finding states:", reviewed_text)
+        self.assertIn("The returned finding states:",
+                      result["reasoning"])
+        self.assertIn("SECOND INDEPENDENT REVIEW",
+                      critic.requests[1][0])
+
+        stubborn = FrozenAnswerCritic(allow_second=False)
+        fallback, info = author_complete_action(
+            template=template, prompt="Find the supported midpoint date.",
+            delivered=delivered, author=CompletingAuthor(),
+            critic=stubborn, max_revisions=0,
+        )
+        self.assertEqual(info["mode"],
+                         "teacher_grounded_completion_fallback")
+        self.assertFalse(info["reviewed"])
+        self.assertEqual(fallback, template)
+        self.assertEqual(len(stubborn.requests), 2)
+
+        class EvidenceErrorCritic:
+            def __init__(self):
+                self.calls = 0
+
+            def complete_json(self, system, request):
+                self.calls += 1
+                return {
+                    "verdict": "fail", "grounded": False,
+                    "assignment_fidelity": False, "o1_style": True,
+                    "reason": "Authored reasoning invents a separate source.",
+                    "repair_hint": "Remove the unsupported evidence claim.",
+                }
+        evidence_critic = EvidenceErrorCritic()
+        _, info = author_complete_action(
+            template=template, prompt="Find the supported midpoint date.",
+            delivered=delivered, author=CompletingAuthor(),
+            critic=evidence_critic, max_revisions=0,
+        )
+        self.assertEqual(info["mode"],
+                         "teacher_grounded_completion_fallback")
+        self.assertEqual(evidence_critic.calls, 1)
+
     def test_all_completions_use_their_own_visible_evidence(self):
         reasons = set()
         for i in (0, 1, 2, 3, 4):
