@@ -69,9 +69,24 @@ return its exact single-row, single-field scalar directly (e.g.
 than 18 characters; this narrow exception requires an exact match to the
 immutable Oracle value. When the local model returns a JSON number instead
 of a string, the code converts it to canonical text only after verifying
-the same exact one-field Oracle value. Multi-field/multi-row outputs still
-require complete informative answers, and the independent Critic still
-checks the evidence-grounded Answer, Summary and Trace for every Macro.
+the same exact one-field Oracle value. A structured multi-field object
+is rendered as natural-language Answer text **only if** every key, value
+and type matches the complete current Oracle answer. This includes plans
+whose Oracle wraps a typed payload in a single `answer` field: when the
+Author supplies the exact inner object, it can safely be converted to
+a readable field/value sentence. Partial, modified or extra-field objects
+still fail the Guard, and the result remains independently Critic-reviewed.
+A private `verified_structured_answer_rendered` flag records conversion.
+
+For multi-source investigations, the immutable execution trace supplies
+`source_scoped_filter_steps` to the Critic: source-local filtering steps
+are paired to their actual source reads. A later filter on source B does not
+invalidate an earlier, different filter on source A. The reporter allows
+visible source identifiers such as `M3_a` and `relation_2` **only when
+listed in the current Macro's visible evidence-source catalog**.
+Invented IDs, private operator IDs, `Macro` or `Oracle` leakage and
+unperformed actions still fail. Revision hints explain how to remove
+internal wording without concealing authentic source distinctions.
 
 Before the exact-value Guard and independent Critic, the reporter
 normalizes a small whitelist of *surface-only* operator-style wording
