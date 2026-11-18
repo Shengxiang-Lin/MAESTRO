@@ -190,25 +190,43 @@ _PAST_FAILED_ATTEMPT = re.compile(
 )
 
 
+# These are implementation terms, not Main-visible reasons for a decision.
+# Keep the pattern narrow: "fixed deadline", "dependency" and genuine graph
+# evidence in a user question are valid domain concepts.
+_STAGE3_ORCHESTRATION_META = re.compile(
+    r"\b(?:fixed|frozen|locked|pre[- ]?assigned|pre[- ]?determined)\s+"
+    r"(?:(?:task|dependency|macro|investigation|execution)\s+){0,2}"
+    r"(?:graph|batch|slots?|dispatch|schedule|workflow|plan|steps?)\b"
+    r"|\b(?:current|next|assigned)\s+(?:fixed\s+)?(?:task\s+)?slot\b"
+    r"|\b(?:the\s+)?(?:task|dependency)\s+graph\s+"
+    r"(?:requires|mandates|dictates|specifies)\b"
+    r"|\b(?:teacher[- ]owned|code[- ]owned)\s+"
+    r"(?:tasks?|steps?|plans?|batch|dispatch)\b",
+    re.I,
+)
+
+
 def stage3_reasoning_issues(reasoning: str, delivered: dict) -> list[str]:
-    """Validate only unsupported claims refutable from public report status."""
+    """Check Main-visible decisions, not the private generation machinery."""
     if not isinstance(reasoning, str):
         return ["invalid_main_reasoning"]
+    issues = []
     if re.search(
         r"\b(?:reference_action_for_structure_only|"
         r"current_round_assignments_in_required_order)\b",
         reasoning, re.I,
     ):
-        return ["internal_reference_action_leak"]
-    if not _PAST_FAILED_ATTEMPT.search(reasoning):
-        return []
-    statuses = [
-        record.get("finish_result", {}).get("status")
-        for record in delivered.values()
-    ]
-    if not statuses or all(status == "done" for status in statuses):
-        return ["invented_prior_subagent_failure"]
-    return []
+        issues.append("internal_reference_action_leak")
+    if _STAGE3_ORCHESTRATION_META.search(reasoning):
+        issues.append("internal_orchestration_language")
+    if _PAST_FAILED_ATTEMPT.search(reasoning):
+        statuses = [
+            record.get("finish_result", {}).get("status")
+            for record in delivered.values()
+        ]
+        if not statuses or all(status == "done" for status in statuses):
+            issues.append("invented_prior_subagent_failure")
+    return issues
 
 
 _FORBIDDEN = re.compile(
