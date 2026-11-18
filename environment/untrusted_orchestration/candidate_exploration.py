@@ -24,7 +24,7 @@ from .scenario_generator import make_scenario
 
 
 _VARIANT_KINDS = {
-    "wrong_retrieval", "wrong_entity_binding",
+    "wrong_retrieval", "wrong_entity_binding", "computation_error",
     "fabricated_claim", "result_summary_conflict",
     "legacy_wrong_evidence",
 }
@@ -64,13 +64,16 @@ def _candidate_is_real(scene: dict, task: dict, kind: str, variant: int,
     except (FaultUnsupported, ProgramError, ValueError, TypeError,
             KeyError, IndexError, ZeroDivisionError):
         return False
-    if kind in {"no_result", "incomplete_retrieval"}:
+    if kind in {"no_result", "incomplete_retrieval",
+                "done_but_incomplete"}:
         return (
             mutated is None if kind == "no_result"
             else runtime.get("status") == "partial"
+            and (kind != "done_but_incomplete"
+                 or runtime.get("reported_status") == "done")
         )
     if kind in {"wrong_retrieval", "wrong_entity_binding",
-                "legacy_wrong_evidence"}:
+                "computation_error", "legacy_wrong_evidence"}:
         return (
             mutated is not None
             and relation_rows(mutated) != relation_rows(
