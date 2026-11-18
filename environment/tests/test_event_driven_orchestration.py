@@ -275,7 +275,7 @@ class EventEngineTests(unittest.TestCase):
                     "source_ids": ["alpha"],
                     "operator_chain": [],
                     "outputs": {"typed_relation": [
-                        "case_id", "reported_year_a",
+                        "case_id", "reported_year",
                     ]},
                 },
                 "late": {
@@ -283,7 +283,7 @@ class EventEngineTests(unittest.TestCase):
                     "source_ids": ["beta"],
                     "operator_chain": [],
                     "outputs": {"typed_relation": [
-                        "case_id", "reported_year_b",
+                        "case_id", "reported_year",
                     ]},
                 },
                 "consumer": {
@@ -295,23 +295,23 @@ class EventEngineTests(unittest.TestCase):
             state.current = {
                 "old": Attempt(
                     "old", 1, "done",
-                    Relation(("case_id", "reported_year_a"), ({
+                    Relation(("case_id", "reported_year"), ({
                         "values": {
-                            "case_id": "Case-011", "reported_year_a": 2003,
+                            "case_id": "Case-011", "reported_year": 2003,
                         },
                         "support": ("alpha:F001",),
                     },)),
-                    ("case_id", "reported_year_a"), {}, {},
+                    ("case_id", "reported_year"), {}, {},
                 ),
                 "late": Attempt(
                     "late", 1, "done",
-                    Relation(("case_id", "reported_year_b"), ({
+                    Relation(("case_id", "reported_year"), ({
                         "values": {
-                            "case_id": "Case-011", "reported_year_b": late_year,
+                            "case_id": "Case-011", "reported_year": late_year,
                         },
                         "support": ("beta:F001",),
                     },)),
-                    ("case_id", "reported_year_b"), {}, {},
+                    ("case_id", "reported_year"), {}, {},
                 ),
                 "consumer": Attempt(
                     "consumer", 1, "done",
@@ -327,7 +327,7 @@ class EventEngineTests(unittest.TestCase):
                     "status": "done",
                     "result": json.dumps([{
                         "values": {
-                            "case_id": "Case-011", "reported_year_a": 2003,
+                            "case_id": "Case-011", "reported_year": 2003,
                         },
                         "source_fact_refs": ["alpha:F001"],
                     }]), "summary": "Recorded the first event year.",
@@ -337,7 +337,7 @@ class EventEngineTests(unittest.TestCase):
                     "result": json.dumps([{
                         "values": {
                             "case_id": "Case-011",
-                            "reported_year_b": late_year,
+                            "reported_year": late_year,
                         },
                         "source_fact_refs": (
                             late_refs if late_refs is not None
@@ -383,7 +383,7 @@ class EventEngineTests(unittest.TestCase):
         observed.public_reports["old"]["finish_result"]["result"] = (
             json.dumps([{
                 "values": {
-                    "case_id": "Case-011", "reported_year_a": 2004,
+                    "case_id": "Case-011", "reported_year": 2004,
                 },
                 "source_fact_refs": ["alpha:F001"],
             }])
@@ -394,9 +394,9 @@ class EventEngineTests(unittest.TestCase):
         # Result and the independent source still agree.
         hidden = fixture(late_year=2003)
         hidden.current["old"].product = Relation(
-            ("case_id", "reported_year_a"), ({
+            ("case_id", "reported_year"), ({
                 "values": {
-                    "case_id": "Case-011", "reported_year_a": 1999,
+                    "case_id": "Case-011", "reported_year": 1999,
                 }, "support": ("alpha:F001",),
             },),
         )
