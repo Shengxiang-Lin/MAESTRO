@@ -18,6 +18,7 @@ _REQUIRED = {
         "sub_model", "model_alias", "overwrite", "no_progress",
         "atomic_fault_kinds", "max_candidates_per_round",
         "max_distractors_per_fault", "max_selected_per_round",
+        "selection_strategy", "max_diagnostics_per_scene",
         "max_language_attempts_per_round",
     },
     "model": {
@@ -83,6 +84,12 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         ),
         "max_selected_per_round": run.get(
             "max_selected_per_round", 1
+        ),
+        "selection_strategy": run.get(
+            "selection_strategy", "causal_rank"
+        ),
+        "max_diagnostics_per_scene": run.get(
+            "max_diagnostics_per_scene", 0
         ),
         "max_language_attempts_per_round": run.get(
             "max_language_attempts_per_round", 1
@@ -176,6 +183,13 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         raise ValueError("untrusted_invalid_candidate_strategy")
     if strategy == "enumerate" and config["scenario_mode"] != "event_driven":
         raise ValueError("untrusted_enumeration_requires_event_driven")
+    if config["selection_strategy"] not in {
+        "causal_rank", "stratified",
+    }:
+        raise ValueError("untrusted_invalid_selection_strategy")
+    if (type(config["max_diagnostics_per_scene"]) is not int
+            or not 0 <= config["max_diagnostics_per_scene"] <= 8):
+        raise ValueError("untrusted_invalid_max_diagnostics_per_scene")
     for field, minimum, maximum in (
         ("max_candidates_per_round", 1, 128),
         ("max_distractors_per_fault", 1, 10),
