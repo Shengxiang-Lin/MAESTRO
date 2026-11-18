@@ -144,3 +144,20 @@ class TaskContractTests(unittest.TestCase):
                             'context': 'Use the identified project to retrieve eligible events.'}]}
         issues = _stage3_task_prose_issues(draft, [a], prompt='The returned project is PRJ-ABC123.')
         self.assertIn('stage3_reasoning_invented_visible_identifier', issues)
+
+    def test_handoff_shortening_never_creates_partial_identifiers(self):
+        from environment.base_orchestration.action_author import _short, _STAGE3_IDENTIFIER
+        text = 'Already returned identifier PRJ-ABCDEFGHIJKLMNO and supporting observations.'
+        clipped = _short(text, 38)
+        self.assertTrue(set(_STAGE3_IDENTIFIER.findall(clipped)) <= set(_STAGE3_IDENTIFIER.findall(text)))
+        self.assertLessEqual(len(clipped), 38)
+
+    def test_shortened_context_cannot_authorize_an_unseen_identifier(self):
+        from environment.base_orchestration.action_author import _stage3_task_prose_issues
+        a = assignment(); a['context'] = 'Previously returned result: PRJ-ABC...'
+        draft = {'reasoning': 'Use project PRJ-ABC to request the eligible event records.',
+                 'tasks': [{'task_instruction': a['target_instruction'],
+                            'context': 'Use project PRJ-ABC to retrieve eligible events.'}]}
+        issues = _stage3_task_prose_issues(draft, [a], prompt='The returned project is PRJ-ABC123.')
+        self.assertIn('stage3_reasoning_invented_visible_identifier', issues)
+        self.assertIn('task_0_invented_visible_identifier', issues)

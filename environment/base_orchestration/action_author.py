@@ -397,7 +397,12 @@ def _tool_neutral_review_payload(prompt: str, assignments: list[dict],
 
 def _short(value, limit=500) -> str:
     text = str(value).strip().replace("\n", " ")
-    return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
+    if len(text) <= limit:
+        return text
+    prefix = text[:max(0, limit - 3)]
+    # Never manufacture an ID prefix by clipping through a token.
+    pieces = prefix.rsplit(None, 1)
+    return (pieces[0].rstrip() if len(pieces) == 2 else "") + "..."
 
 
 def _prior_context(
@@ -607,6 +612,9 @@ def _stage3_task_prose_issues(
             )
         )
     }
+    if all(item.get("semantic_contract") for item in assignments):
+        # Public O1 history is authoritative, not shortened handoff copies.
+        allowed_identifiers = {token.casefold() for token in _STAGE3_IDENTIFIER.findall(prompt)}
     issues = []
     if isinstance(draft.get("reasoning"), str) and any(
         token.casefold() not in allowed_identifiers
