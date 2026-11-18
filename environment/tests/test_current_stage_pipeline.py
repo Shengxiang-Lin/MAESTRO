@@ -189,29 +189,21 @@ class CurrentStagePipelineTests(unittest.TestCase):
             self.assertIn(item["values"]["entity_final"], second)
         self.assertNotIn("source_fact_refs", second)
         from environment.implement_subtask.reporting import _guard
+        # The complete frozen Oracle is safely serialized without
+        # truncation. Main-visible language is a different, reviewed
+        # representation with its own length and evidence constraints.
         contract = {
-            "result_encoding": "typed_evidence_json_v1",
-            "code_owned_expected_result": first,
-            "exact_oracle_answer": record["answer"],
-            "terminal_output_schema_of_this_macro": record["output_schema"],
-            "all_evidence_refs": [
-                ref for row in rows for ref in row["source_fact_refs"]
+            "answer_required_literals": [
+                row["values"]["entity_final"] for row in rows
             ],
-            "observed_operator_steps": [],
-            "executed_operations_in_this_macro": [],
-            "macro_is_terminal": False,
-            "upstream_handoffs": [],
+            "exact_oracle_answer": record["answer"],
         }
-        candidate = {
-            "status": "done", "result": first,
-            "summary": "Returned the complete set of documented observations.",
-        }
-        self.assertEqual(_guard(candidate, contract), [])
-        altered = dict(candidate, result=first[:-1])
+        from environment.implement_subtask.reporting import _o1_answer_issues
         self.assertIn(
-            "code_owned_typed_result_changed",
-            _guard(altered, contract),
+            "answer_invalid_length_or_type",
+            _o1_answer_issues(first, contract),
         )
+        self.assertEqual(json.loads(first), rows)
 
     def test_stage2_current_result_contains_all_rows_and_fact_refs(self):
         from environment.implement_subtask.reporting import serialize_verified_result
