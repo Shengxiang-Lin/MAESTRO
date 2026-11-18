@@ -95,8 +95,9 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             "max_language_attempts_per_round", 1
         ),
         "atomic_fault_kinds": run.get("atomic_fault_kinds", [
-            "no_result", "incomplete_retrieval", "wrong_retrieval",
-            "wrong_entity_binding", "report_missing",
+            "no_result", "incomplete_retrieval", "done_but_incomplete",
+            "wrong_retrieval", "wrong_entity_binding", "computation_error",
+            "report_missing",
             "result_summary_conflict", "fabricated_claim",
         ]),
         "max_fault_atoms": 1,
