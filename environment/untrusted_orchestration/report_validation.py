@@ -12,6 +12,7 @@ from environment.implement_subtask.reporting import (
     _normalize_author_result, _stage_scope_issues,
 )
 from .state_machine import Attempt, relation_rows
+from .report_contract import render_delivered_result
 
 
 _TOKEN = re.compile(
@@ -84,9 +85,21 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
     result = draft.get("result")
     exact_rows = [row["values"] for row in relation_rows(attempt.product)]
     normalized = None
+    typed_delivery = (
+        contract.get("result_encoding") == "typed_evidence_json_v1"
+        and not missing
+    )
     if missing:
         if result is not None:
             issues.append("missing_result_must_be_null")
+    elif typed_delivery:
+        # Executor-owned, exact provenance-bearing JSON may exceed the
+        # old prose length cap. Do not silently truncate or reconstruct it.
+        expected = render_delivered_result(contract)
+        if isinstance(result, str) and result == expected:
+            normalized = result
+        else:
+            issues.append("result_not_exact_delivered_evidence")
     else:
         normalized, errors = _normalize_author_result(
             result, exact_rows, list(attempt.product.columns),
@@ -99,7 +112,8 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
     if not isinstance(trace, str) or not 20 <= len(trace.strip()) <= 1000:
         issues.append("invalid_trace_summary")
     prose = " ".join(
-        v for v in (normalized, summary, trace) if isinstance(v, str)
+        v for v in ((None if typed_delivery else normalized), summary, trace)
+        if isinstance(v, str)
     )
     if _PRIVATE.search(prose):
         issues.append("internal_generation_or_teacher_leak")
@@ -119,8 +133,8 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
             contract["available_provenance_sources"],
     }
     for field, text in (
-        ("result", normalized), ("summary", summary),
-        ("trace_summary", trace),
+        ("result", None if typed_delivery else normalized),
+        ("summary", summary), ("trace_summary", trace),
     ):
         if isinstance(text, str):
             issues.extend(
@@ -171,8 +185,8 @@ def _guard(draft: dict, contract: dict, attempt: Attempt) -> list[str]:
         & {x.casefold() for x in _ENTITY.findall(available)}
     )
     for field, text in (
-        ("result", normalized), ("summary", summary),
-        ("trace_summary", trace),
+        ("result", None if typed_delivery else normalized),
+        ("summary", summary), ("trace_summary", trace),
     ):
         if not isinstance(text, str):
             continue

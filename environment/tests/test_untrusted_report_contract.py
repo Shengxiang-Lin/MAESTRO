@@ -515,7 +515,7 @@ class StructuredFactSpineTests(unittest.TestCase):
         self.assertIn("Case-012", result)
         self.assertIn("incomplete delivered row set", result)
 
-    def test_typed_fault_report_delivers_full_natural_answer_to_main(self):
+    def test_typed_fault_report_delivers_exact_cited_rows_to_main(self):
         from environment.untrusted_orchestration.visible_claim_extraction import (
             extract_visible_claims,
         )
@@ -530,12 +530,7 @@ class StructuredFactSpineTests(unittest.TestCase):
             "delivery_status": "done", "unresolved_fields": [],
         }
         result = render_delivered_result(contract)
-        self.assertTrue(result.startswith("The handoff contains 2"))
-        self.assertIn("Case-004", result)
-        self.assertIn("2003", result)
-        self.assertIn("Case-005", result)
-        self.assertIn("2004", result)
-        self.assertNotIn("source_fact_refs", result)
+        self.assertEqual(json.loads(result), contract["actual_delivered_rows"])
         claims, status = extract_visible_claims(
             {"finish_result": {
                 "result": result, "summary": "Returned two recorded years.",
@@ -545,12 +540,68 @@ class StructuredFactSpineTests(unittest.TestCase):
             source_id="report_b",
         )
         self.assertTrue(status["parsed"], status)
-        self.assertIn("code_owned_record_prose", status["parse_mode"])
+        self.assertIn("structured_result", status["parse_mode"])
         self.assertTrue(any(
-            claim["subject"] == "Case-004" and claim["value"] == 2003
+            claim["subject"] == "Case-004"
+            and claim["value"] == 2003
+            and claim["fact_refs"] == ["report_b:F001"]
             for claim in claims
         ))
-        self.assertTrue(all(not claim["fact_refs"] for claim in claims))
+
+    def test_typed_partial_result_remains_json_with_null_and_all_refs(self):
+        task, attempt = self.partial_attempt()
+        contract = build_report_contract(
+            task, attempt, "Read year.",
+            result_encoding="typed_evidence_json_v1",
+        )
+        result = render_delivered_result(contract)
+        self.assertEqual(json.loads(result), [{
+            "values": {"case_id": "Case-004", "reported_year_b": None},
+            "source_fact_refs": ["register:F001"],
+        }])
+        self.assertIn("partial", contract["fact_spine"][
+            "mandatory_summary_clauses"][0].lower())
+        self.assertNotIn("2003", result)
+
+    def test_long_typed_result_is_not_rejected_by_prose_length_limit(self):
+        from environment.untrusted_orchestration.report_validation import (
+            validate_report_draft,
+        )
+        task = {
+            "task_id": "long", "source_ids": ["register"],
+            "depends_on": [], "operator_chain": [],
+        }
+        records = tuple({
+            "values": {"case_id": f"Case-{i:04d}", "metric_a": i},
+            "support": (f"register:F{i:04d}",),
+        } for i in range(180))
+        attempt = Attempt(
+            task_id="long", version=1, status="done",
+            product=Relation(("case_id", "metric_a"), records),
+            available_fields=("case_id", "metric_a"),
+            used_parent_versions={}, runtime={},
+        )
+        contract = build_report_contract(
+            task, attempt, "Collect the registered measurements.",
+            result_encoding="typed_evidence_json_v1",
+        )
+        result = render_delivered_result(contract)
+        self.assertGreater(len(result), 6500)
+        draft = {
+            "result": result,
+            "summary": "The assigned source returned all the listed measurements.",
+            "trace_summary": (
+                "The current task completed and delivered its recorded "
+                "measurements, with no claim of independent verification."
+            ),
+        }
+        self.assertEqual(validate_report_draft(draft, contract, attempt), [])
+        self.assertIn("result_not_exact_delivered_evidence",
+            validate_report_draft(
+                {**draft, "result": result.replace("Case-0000", "Case-9999")},
+                contract, attempt,
+            ),
+        )
 
     def test_natural_stage2_ids_do_not_infer_hidden_or_negated_claims(self):
         from environment.untrusted_orchestration.visible_claim_extraction import (

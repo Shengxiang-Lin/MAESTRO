@@ -174,35 +174,22 @@ def _fact_spine(contract: dict) -> dict:
 def render_delivered_result(contract: dict) -> str:
     """Render only actually delivered rows, preserving citations when typed."""
     if contract.get("result_encoding") == "typed_evidence_json_v1":
-        # Match Stage-2's Main-visible natural-language Answer style.
-        # Never use the hidden clean relation: render ONLY actual delivered
-        # values, including deliberately wrong/partial attempt outputs.
-        # The complete typed delivery remains in the private fact_spine.
-        rows = [item["values"] for item in contract["actual_delivered_rows"]]
-        def render(row):
-            return ", ".join(
-                f"{str(key).replace('_', ' ')}: {_readable_value(value)}"
-                for key, value in row.items()
-            )
-        if not rows:
-            result = "No records were delivered by this attempt."
-        elif len(rows) == 1:
-            result = "The delivered record contains " + render(rows[0]) + "."
-        else:
-            result = (
-                f"The handoff contains {len(rows)} delivered records: "
-                + "; ".join(render(row) for row in rows) + "."
-            )
-        if contract.get("delivery_status") == "partial":
-            missing = contract.get("unresolved_fields", [])
-            if "remaining_rows" in missing:
-                result += " This is an incomplete delivered row set."
-            elif missing:
-                result += (
-                    " The following values were not delivered: "
-                    + ", ".join(x.replace("_", " ") for x in missing) + "."
-                )
-        return result
+        # Preserve Stage-2's exact, fully cited Main-visible Result encoding.
+        # These rows belong to THIS executed delivery, not the clean Oracle.
+        # Missing/partial fields remain null or absent; explain a partial
+        # handoff in Summary rather than appending non-JSON text to Result.
+        rows = contract["actual_delivered_rows"]
+        if any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("values"), dict)
+            or not isinstance(item.get("source_fact_refs"), list)
+            for item in rows
+        ):
+            raise ValueError("typed_delivery_missing_provenance")
+        return json.dumps([{
+            "values": item["values"],
+            "source_fact_refs": list(item["source_fact_refs"]),
+        } for item in rows], ensure_ascii=False, separators=(",", ":"))
     rows = [row["values"] for row in contract["actual_delivered_rows"]]
     if len(rows) == 1 and len(rows[0]) <= 5:
         pairs = ", ".join(

@@ -67,6 +67,27 @@ later pairing across Stage 3 and Stage 4.
 7. `publication_guard.py`: fail closed on private/internal wording
    leaks and publish only globally recovered reviewed positives.
 
+## Stage-2 evidence contract reuse (Stage-4 only)
+
+For frozen `task_plan` scenes with `result_encoding: typed_evidence_json_v1`,
+Stage 4B now serializes the **actual current Attempt** to Stage-2-compatible
+`[{"values": ..., "source_fact_refs": [...]}]` JSON. The immutable Result
+is not LLM paraphrase, and it is not truncated or reconstructed from the
+clean Oracle. On partial delivery, missing fields remain `null` and missing
+rows stay missing; Summary/Trace describe incomplete delivery. Report-only
+faults still bypass trusted naturalization and are never automatically fixed.
+Long code-owned typed Results are checked by exact equality rather than the
+short natural-prose result length guard; Author-written claims remain guarded.
+
+`private/scene_evidence_affordances.jsonl` separately reports Macro-local
+multi-source operations, frozen verification gates, cited source coverage,
+and declared observation origins. A multi-source JOIN is **not** automatically
+classified as independent corroboration. Visible Claim labels additionally
+retain all explicitly cited origin/source IDs for a composite WorkProduct,
+without counting a derived observation as several independent confirmations.
+These are read-only private diagnostics: they do not change 4A scheduling,
+Main prompts, the Stage-1 World, Stage-2 reports, or Stage-3 trusted episodes.
+
 ## Files and training semantics
 
 - `episodes.jsonl` / `main_turns.jsonl`: only recovered, fully

@@ -369,6 +369,49 @@ class GeneralVisibleClaimStateTests(unittest.TestCase):
         self.assertEqual(found[0]["attribute"], "project_id")
         self.assertEqual(found[0]["value"], "PRJ-001")
 
+    def test_composed_claim_preserves_multi_source_lineage_without_warrant(self):
+        world = scene(known_origins=False)
+        world["macro_graph"]["tasks"] = [{
+            "task_id": "joined", "depends_on": [],
+            "source_ids": ["alpha", "beta"],
+            "outputs": {"typed_relation": ["case_id", "completed_count"]},
+        }]
+        for sid, origin in (("alpha", "publisher:A"),
+                            ("beta", "publisher:B")):
+            world["world"]["sources"][sid]["observations"] = [{
+                "fact_refs": [sid + ":F001"],
+                "evidence_origin_id": origin,
+            }]
+        returned = {
+            "finish_result": {
+                "status": "done",
+                "result": json.dumps([{
+                    "values": {
+                        "case_id": "Case-011", "completed_count": 4,
+                    },
+                    "source_fact_refs": ["alpha:F001", "beta:F001"],
+                }]),
+                "summary": "The combined result cites both source records.",
+            },
+        }
+        data = audit_visible_claim_states(world, [{
+            "attempt": 1, "action": "delegate_task",
+            "result": {"subtask_results": [returned]},
+        }], task_ids_by_round={1: ["joined"]})
+        label = match_state(data["rounds"][0])
+        claim = data["rounds"][0]["claim_nodes"][0]
+        self.assertEqual(claim["evidence_origin_ids"],
+                         ["publisher:A", "publisher:B"])
+        self.assertEqual(claim["provenance_source_ids"],
+                         ["alpha", "beta"])
+        self.assertIsNone(claim["evidence_origin_id"])
+        self.assertEqual(label["status"], "unverified")
+        self.assertEqual(label["independent_origins"], 0)
+        self.assertEqual(label["cited_source_ids"], ["alpha", "beta"])
+        self.assertEqual(
+            data["summary"]["active_multi_origin_claims"], 1,
+        )
+
     def test_round_alignment_failure_is_detected(self):
         world = scene()
         with self.assertRaisesRegex(

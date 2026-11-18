@@ -290,6 +290,63 @@ class CandidateExplorationTests(unittest.TestCase):
             ["verification_status"], "schema_only_not_proven",
         )
 
+    def test_macro_internal_join_and_verification_are_not_same_claim_proof(self):
+        scene = {
+            "task_id": "Q-existing-verifier",
+            "world": {"sources": {
+                "left": {"observations": [{
+                    "evidence_origin_id": "publisher:A",
+                    "fact_refs": ["left:F001"],
+                }]},
+                "right": {"observations": [{
+                    "evidence_origin_id": "publisher:B",
+                    "fact_refs": ["right:F001"],
+                }]},
+            }},
+            "task_feedback": [{
+                "task_id": "work_M1",
+                "workproduct": [{
+                    "values": {"entity_0": "ENT-10"},
+                    "source_fact_refs": ["left:F001", "right:F001"],
+                }],
+            }],
+            "macro_graph": {
+                "reference_waves": [["work_M1"]],
+                "tasks": [{
+                    "task_id": "work_M1",
+                    "macro_role": "verification",
+                    "depends_on": [],
+                    "source_ids": ["left", "right"],
+                    "outputs": {"typed_relation": ["entity_0"]},
+                    "operator_chain": [
+                        {"op": "scan", "source_id": "left"},
+                        {"op": "scan", "source_id": "right"},
+                        {"op": "join", "left_on": "entity_0",
+                         "right_on": "entity_0"},
+                    ],
+                }],
+            },
+        }
+        profile = analyze_scene_evidence_affordances(scene)
+        self.assertEqual(profile["potential_cross_check_pairs"], 0)
+        self.assertEqual(profile["internal_multi_source_macros"], 1)
+        self.assertEqual(profile["internal_verification_macros"], 1)
+        self.assertEqual(
+            profile["internal_multi_source_supported_outputs"], 1,
+        )
+        internal = profile["internal_macro_evidence"][0]
+        self.assertEqual(
+            internal["declared_origin_distinctness"],
+            "distinct_observation_origins",
+        )
+        self.assertEqual(
+            internal["claim_comparison_status"],
+            "not_established_by_macro_structure",
+        )
+        self.assertEqual(
+            internal["executed_cited_sources"], ["left", "right"],
+        )
+
     def test_config_one_supported_single_fault_path(self):
         config = load_config()
         self.assertEqual(config["candidate_strategy"], "enumerate")
