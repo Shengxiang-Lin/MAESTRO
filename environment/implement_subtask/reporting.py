@@ -724,60 +724,31 @@ Do not require changing the frozen Oracle rows. Keep the same four axes.
 """
 
 
-def code_owned_result(record: dict) -> str:
-    """Render all delivered Macro rows as neutral, stage-local observations.
+def serialize_verified_result(record: dict) -> str:
+    """Serialize immutable typed evidence for private replay and provenance.
 
-    Never replace a context candidate with a claimed year disagreement.
-    Fail rather than truncate an oversized relation: hiding rows would
-    corrupt downstream Main handoffs.
+    This exact JSON is never substituted for the model's natural Answer to
+    Main. Truncating any row would corrupt Stage-3/4 evidence handoffs.
     """
-    rows, fields = record["answer"], record["output_schema"]
-    if record.get("result_encoding") == "typed_evidence_json_v1":
-        # Main must receive the same complete typed rows and provenance that
-        # Stage 4 later parses. The Summary remains natural-language prose.
-        cited = record.get("answer_with_provenance")
-        if (not isinstance(cited, list) or len(cited) != len(rows)
-                or any(item.get("values") != row
-                       for item, row in zip(cited, rows))):
-            raise ValueError("code_owned_provenance_does_not_match_rows")
-        result = json.dumps([{
+    if record.get("result_encoding") != "typed_evidence_json_v1":
+        raise ValueError("stage2_requires_current_typed_evidence")
+    rows = record["answer"]
+    provenance = record.get("answer_with_provenance")
+    if (not isinstance(rows, list)
+            or not isinstance(provenance, list)
+            or len(rows) != len(provenance)
+            or any(not isinstance(item, dict)
+                   or item.get("values") != row
+                   for item, row in zip(provenance, rows))):
+        raise ValueError("verified_result_provenance_mismatch")
+    return json.dumps([
+        {
             "values": item["values"],
             "source_fact_refs": list(item["source_fact_refs"]),
-        } for item in cited], ensure_ascii=False, separators=(",", ":"))
-        # Keep full typed evidence even for one-to-many observation logs.
-        # Size is a separate prompt-budget concern, not a license to drop rows.
-        return result
-    if not isinstance(rows, list) or not fields:
-        raise ValueError("code_owned_invalid_oracle_relation")
-    if any(not isinstance(row, dict) or set(row) != set(fields)
-           for row in rows):
-        raise ValueError("code_owned_oracle_schema_mismatch")
-    if not rows:
-        return "No records matched the assigned task."
-    if fields == ["case_id"]:
-        text = (
-            f"The current task returned {len(rows)} case identifiers: "
-            + ", ".join(str(row["case_id"]) for row in rows) + "."
-        )
-    elif fields == ["entry_label"]:
-        text = "Entries returned by this task: " + ", ".join(
-            str(row["entry_label"]) for row in rows
-        ) + "."
-    else:
-        def label(field: str) -> str:
-            return SCHEMA_LABELS.get(field, field.replace("_", " "))
-        def render(row: dict) -> str:
-            return ", ".join(
-                f"{label(field)}: {_readable_value(row[field])}"
-                for field in fields
-            )
-        text = (
-            f"The current task returned {len(rows)} record(s): "
-            + "; ".join(render(row) for row in rows) + "."
-        )
-    if len(text) > 1600:
-        raise ValueError("code_owned_result_exceeds_finish_budget")
-    return text
+        }
+        for item in provenance
+    ], ensure_ascii=False, separators=(",", ":"))
+
 
 def review_subagent_report(
     teacher_record: dict, *, question: str | None,
@@ -819,7 +790,7 @@ def review_subagent_report(
         "Intermediate lookups do not establish later eligibility or "
         "cross-source agreement unless explicitly verified."
     )
-    frozen_text = code_owned_result(teacher_record)
+    frozen_text = serialize_verified_result(teacher_record)
     fields = {
         field for step in teacher_record["trace_summary"]["steps"]
         for field in step["output_schema"]
