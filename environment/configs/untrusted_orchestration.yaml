@@ -1,4 +1,4 @@
-# Stage-4 Qwen pilot: 10 Scenes, one fault-feedback fork per Scene.
+# Stage-4 pilot: short, causally replayed single-fault branches.
 # MAESTRO trusted evidence -> untrusted Main decision training.
 # Pilot: first 10 Stage-1 Scenes + reviewed Stage-2 reports and Stage-3 clean episodes.
 # Stage 4 checks and reuses the actual Stage-3 Clean Reference.
@@ -14,12 +14,16 @@ input:
 generation:
   output_dir: environment/data/pilots/qwen_stage234_10/stage4
   max_scenes: 10
-  branches_per_scene: 1  # one feedback fork per Scene for this pilot
+  branches_per_scene: 3  # spread forks across early/middle/late feedback
+  round_sampling_strategy: stratified
+  max_post_fork_rounds: 8  # unresolved if horizon expires; no fake completion
   seed: 17
   # Enumerate executable one-atom variants with provenance-grounded distractors.
   max_candidates_per_round: 12
   max_distractors_per_fault: 1
   max_selected_per_round: 1
+  selection_strategy: stratified
+  max_diagnostics_per_scene: 1  # reviewed evidence-only negatives; never positive SFT
   max_language_attempts_per_round: 2
   atomic_fault_kinds:
     - no_result
