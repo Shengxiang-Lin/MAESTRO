@@ -78,10 +78,6 @@ def parser() -> argparse.ArgumentParser:
     trusted.add_argument("--max-scenes", type=int)
     trusted.add_argument("--workers", type=int)
     trusted.add_argument("--mode", choices=("template", "llm"))
-    trusted.add_argument(
-        "--allow-delegate-fallback", action="store_true", default=None,
-        help="Opt into legacy Delegate/Completion fallback (default off)",
-    )
     trusted.add_argument("--no-progress", action="store_true")
     untrusted = sub.add_parser(
         "generate-untrusted-turns",
@@ -132,7 +128,6 @@ def main(argv: list[str] | None = None) -> int:
             ("scenes", "scenes_path"), ("reports", "reports_path"),
             ("output_dir", "output_dir"), ("max_scenes", "max_scenes"),
             ("workers", "workers"), ("mode", "mode"),
-            ("allow_delegate_fallback", "allow_delegate_fallback"),
         ):
             value = getattr(cli, cli_name)
             if value is not None:
