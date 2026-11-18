@@ -34,7 +34,6 @@ reporting:
   max_revisions: 2
   # LLM writes only a stage-local Summary; Result is compiled from
   # this Macro's exact delivered WorkProduct. Older scenes retain legacy mode.
-  result_policy: code_owned
   flush_every: 1  # save accepted/rejected Macro reviews + checkpoint as they finish
   timeout: 180
   max_scenes: 50
