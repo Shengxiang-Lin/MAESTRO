@@ -193,7 +193,10 @@ class CriticDispatchBoundaryTests(unittest.TestCase):
     def test_o1_style_prompts_keep_explicit_actions_but_do_not_template(self):
         self.assertIn("concrete evidence action", STAGE3_TASK_PROSE_AUTHOR_SYSTEM)
         self.assertIn("ALREADY ASSIGNED", STAGE3_TASK_PROSE_AUTHOR_SYSTEM)
-        self.assertIn("next logical step", STAGE3_TASK_PROSE_AUTHOR_SYSTEM)
+        self.assertIn(
+            "next logical step",
+            " ".join(STAGE3_TASK_PROSE_AUTHOR_SYSTEM.split()),
+        )
         self.assertNotIn("fixed", STAGE3_TASK_PROSE_AUTHOR_SYSTEM.casefold())
         self.assertNotIn("frozen", STAGE3_TASK_PROSE_AUTHOR_SYSTEM.casefold())
 
