@@ -203,10 +203,7 @@ class PublicWorkEvidenceTests(unittest.TestCase):
                     self.assertTrue(
                         "calculation" in summary or "count" in summary,
                         f"Targeted computation {tid} has no observable "
-                        f"work evidence; operations="
-                        f"{[x['op'] for x in scene['macro_graph']['tasks'] "
-                        f"if x['task_id'] == tid for x in x['operator_chain']]} "
-                        f"summary={summary[:250]}",
+                        f"work evidence; summary={summary[:250]}",
                     )
                     if audit["execution_outcome"] == "recovered":
                         self.assertTrue(turns)
