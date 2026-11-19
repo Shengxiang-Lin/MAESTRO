@@ -212,6 +212,15 @@ def classify_trial(plan: dict, journal: dict) -> dict:
     return {
         "round_sample_id": plan["sample_id"],
         "candidate_index": plan["index"],
+        "private_fault_primitive_kind": (
+            ((audit.get("faults") or [{}])[0].get("execution") or {})
+            .get("kind")
+        ),
+        "private_computation_operation": (
+            ((audit.get("faults") or [{}])[0].get("execution") or {})
+            .get("calculation_operation")
+        ),
+        "observed_issue_types": visible_issue_types,
         "question_id": plan["task_id"],
         "feedback_round": plan["branch_round"],
         "atom_kind": kinds[0] if kinds else None,
@@ -487,6 +496,26 @@ def select_recovered_candidates(
     )
     stats = {
         "target_main_turns": target_main_turns,
+        "fault_kind_execution_outcomes": {
+            kind: dict(sorted(Counter(
+                row["execution_outcome"] for row in rows
+                if row["atom_kind"] == kind
+            ).items()))
+            for kind in sorted({row["atom_kind"] for row in rows
+                                if row["atom_kind"]})
+        },
+        "fault_kind_observability": {
+            kind: dict(sorted(Counter(
+                row["observability"] for row in rows
+                if row["atom_kind"] == kind
+            ).items()))
+            for kind in sorted({row["atom_kind"] for row in rows
+                                if row["atom_kind"]})
+        },
+        "computation_fault_operators": dict(sorted(Counter(
+            row["private_computation_operation"] or "unknown"
+            for row in rows if row["atom_kind"] == "computation_error"
+        ).items())),
         "estimated_selected_main_turns": sum(
             rows[index]["decision_rounds_post_fork"] for index in selected
         ),
