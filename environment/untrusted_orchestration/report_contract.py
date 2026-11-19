@@ -173,6 +173,9 @@ def _fact_spine(contract: dict) -> dict:
 
 def render_delivered_result(contract: dict) -> str:
     """Render only actually delivered rows, preserving citations when typed."""
+    if contract.get("result_encoding") == "cited_record_prose_v1":
+        from .result_text import render_records
+        return render_records(contract["actual_delivered_rows"])
     if contract.get("result_encoding") == "typed_evidence_json_v1":
         # Preserve Stage-2's exact, fully cited Main-visible Result encoding.
         # These rows belong to THIS executed delivery, not the clean Oracle.

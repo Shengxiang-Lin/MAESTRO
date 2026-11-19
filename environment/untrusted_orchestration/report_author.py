@@ -32,7 +32,8 @@ Return JSON ONLY with TWO prose fields:
  "trace_summary":"1-2 natural sentences on executed operations"}
 Do NOT generate a result field: the executor supplies immutable Result
 from fact_spine.delivery.result_text. For typed_evidence_json_v1 this is
-structured JSON with complete delivered FactRefs, NOT rewritten prose. If your output nevertheless
+structured JSON with complete delivered FactRefs. For cited_record_prose_v1
+the Result consists of source-cited record sentences preserving every delivered value. If your output nevertheless
 contains result, it will be independently checked before being ignored.
 
 Rules:
@@ -218,7 +219,12 @@ def naturalize_report(task: dict, attempt: Attempt, *,
         raise ValueError("subagent_naturalization_requires_critic")
     contract = build_report_contract(
         task, attempt, instruction,
-        result_encoding=(reviewed or {}).get("result_encoding"),
+        result_encoding=(
+            "cited_record_prose_v1"
+            if ((reviewed or {}).get("result_encoding") == "typed_evidence_json_v1"
+                or task.get("verification_target_task_id"))
+            else (reviewed or {}).get("result_encoding")
+        ),
     )
     failures = []
     witness_review_attempted = False

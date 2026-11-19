@@ -86,8 +86,9 @@ def validate_report_draft(draft: dict, contract: dict, attempt: Attempt) -> list
     exact_rows = [row["values"] for row in relation_rows(attempt.product)]
     normalized = None
     typed_delivery = (
-        contract.get("result_encoding") == "typed_evidence_json_v1"
-        and not missing
+        contract.get("result_encoding") in {
+            "typed_evidence_json_v1", "cited_record_prose_v1",
+        } and not missing
     )
     if missing:
         if result is not None:

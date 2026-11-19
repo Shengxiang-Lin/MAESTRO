@@ -30,7 +30,8 @@ def _field_values(text: str, field: str) -> set[str]:
     if not isinstance(text, str):
         return set()
     try:
-        rows = json.loads(text)
+        from .result_text import delivered_records
+        rows = delivered_records(text)
         if isinstance(rows, dict):
             rows = [rows]
         if isinstance(rows, list) and rows and all(

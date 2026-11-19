@@ -172,7 +172,8 @@ def _public_done_null_fields(entries: list[dict]) -> set[str]:
             if not isinstance(finish, dict) or finish.get("status") != "done":
                 continue
             try:
-                rows = json.loads(finish.get("result", ""))
+                from .result_text import delivered_records
+                rows = delivered_records(finish.get("result", ""))
             except (ValueError, TypeError):
                 continue
             if not isinstance(rows, list) or not rows:
@@ -398,11 +399,22 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                 decision_contract = build_main_decision_contract(
                     entries, visible_goals, number_of_tasks=len(assignments),
                 )
+                author_system = _MAIN_DECISION_AUTHOR_SYSTEM
+                if any(goal["operation"] == "derive_from_returned_evidence"
+                       for goal in visible_goals):
+                    author_system += (
+                        "\nThis round performs a pending derivation. Describe how "
+                        "the identified entity will be matched against the returned "
+                        "records and how the requested comparison or calculation "
+                        "will be performed. Keep the explanation focused on that "
+                        "pending work. Do not assert that all prerequisites are "
+                        "verified or retell older event-validation steps."
+                    )
                 action, status = author_delegate_action(
                     assignments=assignments, prompt=prompt,
                     author=author, critic=critic,
                     max_revisions=max_revisions,
-                    author_system=_MAIN_DECISION_AUTHOR_SYSTEM,
+                    author_system=author_system,
                     critic_system=_MAIN_REASONING_CRITIC_SYSTEM,
                     freeze_assignment_prose=True,
                     reasoning_goals=visible_goals,

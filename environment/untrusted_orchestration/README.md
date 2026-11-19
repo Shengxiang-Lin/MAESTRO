@@ -118,32 +118,29 @@ its returned evidence and any Main-visible prerequisite values:
   receives automatic Main-visible inconsistency detection; other
   perturbations may remain diagnostic, not forced recovery examples.
 
-**Latest-batch targeted cross-report witnesses.** After an eligible
-single-source Wrong/Fabricated attempt has been returned in feedback batch
-\(t-1\), Stage 4 can append ONE executable comparison investigation to that
-same latest batch, with a matching added Main delegation. It copies neither
-private Gold into Main prompts nor a fabricated FactRef: a branch-local
-synthetic comparison source contains one separately identified observation
-derived from the *frozen clean execution* of the same attribute. The older
-Stage-3 batches are unchanged. The extra source and Macro exist only in this
-Stage-4 branch and are rehydrated consistently for 4B/4C. Its provenance
-is explicitly tagged `stage4_synthetic_comparison_source` and
-`empirically_independent=false`: distinct simulated evidence roots are **not**
-a claim of real-world independent empirical verification. A candidate is
-skipped unless both delivered reports have the same literal entity/attribute,
-different values, explicit FactRefs and a valid known source origin. The
-original Macro may now reference several sources, but the *specific faulty
-delivered claim* must cite exactly one known origin from one of the Macro's
-authorized sources. Multi-origin composite claims remain ineligible: a
-composite JOIN must never be misrepresented as one independent fact. Neither
-an extra source nor a false conflict is forced for unsupported cases.
+**Latest-batch source re-observation.** For a Wrong/Fabricated candidate,
+Stage 4 may add one execution of the same frozen query to the latest feedback
+batch, with a matching Main delegation. It copies the original source scope,
+operators, upstream context and tool routing. It reads existing observations;
+no new source or comparison value is constructed from the clean execution.
 
-Every targeted candidate records `latest_batch_witness_probe` privately.
-The summary exports `latest_batch_witness_probe_distribution` and
-`latest_batch_witness_ineligible_reasons`, including capacity limits,
-unparseable Result surfaces, missing subject/attribute pairs, missing
-single-origin provenance and absent differing comparable values. A 0-witness
-pilot can therefore distinguish structural ineligibility from a wiring bug.
+The two reports share their source. Their agreement does not count as independent
+corroboration. A complete public row-set disagreement, including an entity binding
+difference, triggers a targeted reconciliation of the original task. Only delivered
+records are compared. Multi-source provenance is preserved without being called a
+single independent origin. The normal independent-claim checks continue to require
+distinct provenance.
+
+The private audit includes `latest_batch_clean_reference`, a paired clean batch
+with identical assignments and all other reports held fixed. Capacity limits remain
+enforced. For first batches already containing four tasks, a pilot can use
+`max_parallel_tasks: 5` when the environment permits five simultaneous tasks.
+Every generated repeat still requires an actual dispatch and executed attempt.
+
+Every targeted candidate records `latest_batch_witness_probe`. Summary counters
+retain their existing names, including `latest_batch_witness_generated` and
+`latest_batch_witness_conflicts_detected`; here they count repeated-source
+observations and visible disagreements, not independent-source confirmation.
 
 4C now checks `done_but_incomplete` against the structured, flattened
 O1 reports, not against `json.loads()` of the formatted history prose;
@@ -209,14 +206,16 @@ rather than fabricating a contradictory report.
 ## Stage-2 evidence contract reuse (Stage-4 only)
 
 For frozen `task_plan` scenes with `result_encoding: typed_evidence_json_v1`,
-Stage 4B now serializes the **actual current Attempt** to Stage-2-compatible
-`[{"values": ..., "source_fact_refs": [...]}]` JSON. The immutable Result
-is not LLM paraphrase, and it is not truncated or reconstructed from the
-clean Oracle. On partial delivery, missing fields remain `null` and missing
-rows stay missing; Summary/Trace describe incomplete delivery. Report-only
-faults still bypass trusted naturalization and are never automatically fixed.
-Long code-owned typed Results are checked by exact equality rather than the
-short natural-prose result length guard; Author-written claims remain guarded.
+new Stage-4 reports render delivered records as cited text using
+`cited_record_prose_v1`. Every value, null and FactRef is preserved, including
+nested final answers. Result is code-owned; the LLM writes Summary and Trace.
+Historical clean Stage-3 reports are reused verbatim.
+
+The same public-text parser supplies claim extraction, missing-field checks,
+conflict detection and 4C visibility checks. Legacy JSON deliveries remain readable.
+Validation compares the complete rendered delivery with the executed Attempt;
+it never fills missing fields from the clean answer. Report-only faults mutate
+their communicated values before rendering and remain privately identified.
 
 `private/scene_evidence_affordances.jsonl` separately reports Macro-local
 multi-source operations, frozen verification gates, cited source coverage,

@@ -74,6 +74,15 @@ answer before the needed
 evidence is available, invent an extra result, or describe the process
 used to write or assess your text.
 
+Use two to four sentences focused on this round's missing fields or visible
+discrepancy. Name concrete returned findings and the next requested output.
+For a final derivation, explain which already delivered inputs will be combined.
+Describe an earlier filter or verification as completed only when that operation
+is explicitly described in a returned report. A citation or returned entity
+identifier alone does not establish that a particular event condition was checked.
+Use the perspective of the investigator. Omit implementation vocabulary such as
+work_M identifiers, synthetic, simulator, Oracle, Gold, teacher, and Critic.
+
 Return JSON containing only:
 {"reasoning": "a natural explanation of the next investigation"}
 """
@@ -119,6 +128,12 @@ cross-source conflict where the visible history provides only complementary
 measurements. If the inputs have arrived but a comparison, join or synthesis
 has not yet run, it is correct to delegate that pending computation; do not
 reject a grounded description of available inputs as a premature conclusion.
+
+A value explicitly present in an earlier multi-row Result remains a returned
+observation. A pending matching or aggregation task may select those records;
+it does not require a new external retrieval merely because no prior task
+returned the selected row in isolation. Distinguish this available observation
+from an independently verified conclusion.
 
 The attached locked Main decision facts, if present, were compiled
 from the actual Main-visible Sub-Agent Result and Summary in the latest
@@ -413,6 +428,7 @@ def build_branch(
     # feedback remain unchanged. Both the new dispatch and its real attempt
     # are recorded, so no Sub-Agent report appears without a Main task.
     private_witness_patch = None
+    paired_clean_feedback = None
     witness_probe = {"status": "not_applicable", "reason": "not_targeted"}
     if (scenario_plan is not None
             and scenario_plan.get("mode") == "event_driven"
@@ -443,26 +459,28 @@ def build_branch(
             scene = patch_scene(scene, private_witness_patch)
             state.scene = scene
             state.fact_index = _fact_index(scene["world"])
-            ref = private_witness_patch["source_id"] + ":F001"
-            state.origin_by_ref[ref] = (
-                private_witness_patch["source"]["observations"][0][
-                    "evidence_origin_id"]
-            )
+            if private_witness_patch.get("source") is not None:
+                ref = private_witness_patch["source_id"] + ":F001"
+                state.origin_by_ref[ref] = (
+                    private_witness_patch["source"]["observations"][0][
+                        "evidence_origin_id"]
+                )
             witness_id = private_witness_patch["task_id"]
             witness_task = private_witness_patch["task"]
             state.tasks[witness_id] = witness_task
             state.attempts[witness_id] = []
             attempt = state.register(witness_id)
-            claim = private_witness_patch["claim"]
-            source_id = private_witness_patch["source_id"]
+            paired_slot = scene["macro_graph"]["reference_waves"][
+                branch_round - 2
+            ].index(faults[0].task_id)
+            paired_assignment = trajectory[-1]["params"]["tasks"][paired_slot]
             instruction = (
-                "Independently examine the available comparison register "
-                + source_id + ". Return " + claim["subject_field"]
-                + " and " + claim["attribute"]
-                + " with source-backed observations. This is a parallel "
-                  "check of the requested evidence, not a recheck of a "
-                  "yet-unreceived Sub-Agent result."
+                paired_assignment["task_instruction"]
+                + " Perform a separate reading of the same cited materials "
+                  "and return the complete matching records with citations."
             )
+            if private_witness_patch.get("source") is not None:
+                instruction = "Examine " + private_witness_patch["source_id"] + "."
             public_report = deterministic_report(
                 witness_task, attempt,
                 instruction=instruction, model_alias=model_alias,
@@ -480,16 +498,19 @@ def build_branch(
             latest_action = trajectory[-1]
             latest_action["params"]["tasks"].append({
                 "task_instruction": instruction,
-                "context": (
-                    "The independent comparison register is an authorized "
-                    "workspace source. Collect a second observation in "
-                    "parallel to the other assigned investigations."
-                ),
-                "model": model_alias, "tools": ["GoogleSearchAction"],
+                "context": paired_assignment["context"],
+                "model": model_alias,
+                "tools": list(paired_assignment["tools"]),
             })
             latest_action["result"]["subtask_results"].append(public_report)
             latest_action["result"]["total_subtasks"] += 1
             latest_action["result"]["total_steps"] += public_report["steps_taken"]
+            # The paired clean batch differs in exactly one returned report.
+            paired_clean_feedback = deepcopy(latest_action)
+            paired_clean_feedback["result"]["subtask_results"][paired_slot] = (
+                deepcopy(base_episode["trajectory"][branch_round - 2][
+                    "result"]["subtask_results"][paired_slot])
+            )
     before = counterfactual_continuation(
         state, start_wave_index=branch_round - 1,
     )
@@ -903,6 +924,7 @@ def build_branch(
         "clean_reference_identity": clean_identity,
         "faults": injected,
         "latest_batch_witness_patch": private_witness_patch,
+        "latest_batch_clean_reference": paired_clean_feedback,
         "latest_batch_witness_probe": witness_probe,
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),

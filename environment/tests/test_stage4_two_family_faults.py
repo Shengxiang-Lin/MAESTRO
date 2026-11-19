@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import unittest
 
+from environment.untrusted_orchestration.result_text import delivered_records
+
 from environment.generate_question.execution.program_ir import Relation
 from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.atomic_faults import AtomicFault
@@ -78,7 +80,7 @@ class IntraReportFaultTests(unittest.TestCase):
         )
         self.assertEqual(meta["status"], "accepted")
         self.assertEqual(report["finish_result"]["status"], "done")
-        returned = json.loads(report["finish_result"]["result"])
+        returned = delivered_records(report["finish_result"]["result"])
         self.assertIsNone(returned[0]["values"]["metric"])
         self.assertEqual(returned[0]["source_fact_refs"], ["real:F001"])
 
@@ -100,7 +102,7 @@ class IntraReportFaultTests(unittest.TestCase):
 
         # The private missing field must NOT create a Main-visible
         # discrepancy when the delivered report has the full value.
-        safe = json.loads(report["finish_result"]["result"])
+        safe = delivered_records(report["finish_result"]["result"])
         safe[0]["values"]["metric"] = 12
         report["finish_result"]["result"] = json.dumps(safe)
         state.set_public_report("T", report, round_number=2)
@@ -256,7 +258,7 @@ class IntraReportFaultTests(unittest.TestCase):
             task, attempt, instruction="Return the case metric.",
             model_alias="model_1", reviewed=None,
         )
-        delivered = json.loads(report["finish_result"]["result"])
+        delivered = delivered_records(report["finish_result"]["result"])
         self.assertEqual(delivered[0]["values"]["metric"], 15)
         self.assertEqual(delivered[0]["source_fact_refs"],
                          ["ledger:F002"])
@@ -321,7 +323,7 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(conflicts[0]["summary_value"], "dossier-002")
         self.assertEqual(conflicts[0]["result_value"], "dossier-001")
 
-    def test_latest_batch_synthetic_witness_is_real_and_prior_scene_unchanged(self):
+    def test_latest_batch_repeats_existing_sources_and_prior_scene_unchanged(self):
         from copy import deepcopy
         from environment.untrusted_orchestration.latest_batch_witness import (
             propose_witness_patch, patch_scene,
@@ -400,43 +402,29 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertIsNotNone(patch)
         self.assertEqual(diagnostic["status"], "generated")
         self.assertEqual(diagnostic["macro_source_count"], 2)
-        # Composite FactRefs are NOT independent single-origin claims.
-        mixed = deepcopy(public)
-        mixed["finish_result"]["result"] = json.dumps([{
-            "values": {"case_id": "Case-011", "metric": 55},
-            "source_fact_refs": [
-                "local_primary:F002", "local_secondary:F001",
-            ],
-        }])
-        state.set_public_report("target", mixed, round_number=1)
-        skipped = {}
-        self.assertIsNone(propose_witness_patch(
-            state, "target", branch_round=2, diagnostic=skipped,
-        ))
-        self.assertEqual(
-            skipped["reason"], "no_single_origin_direct_source_claim",
-        )
-        state.set_public_report("target", public, round_number=1)
-        self.assertEqual(patch["claim"]["attribute"], "metric")
-        self.assertEqual(patch["claim"]["faulty_delivered_value"], 55)
-        self.assertEqual(patch["claim"]["clean_observation_value"], 87)
+        # Multiple source references remain eligible for a same-query repeat,
+        # and never establish a new independent origin.
+        self.assertNotIn("source", patch)
+        self.assertEqual(patch["task"]["source_ids"], task["source_ids"])
+        self.assertEqual(patch["task"]["operator_chain"], task["operator_chain"])
+
         self.assertFalse(patch["empirically_independent"])
         patched = patch_scene(scene, patch)
-        self.assertNotIn(patch["source_id"], scene["world"]["sources"])
+        self.assertEqual(scene["world"], patched["world"])
         self.assertNotIn(patch["task_id"], {
             x["task_id"] for x in scene["macro_graph"]["tasks"]
         })
-        self.assertIn(patch["source_id"], patched["world"]["sources"])
         witness, _ = run_attempt(
             patch["task"], parents=[],
-            sources={patch["source_id"]: patch["source"]},
+            sources={sid: scene["world"]["sources"][sid]
+                     for sid in task["source_ids"]},
         )
         self.assertEqual(relation_rows(witness)[0]["values"], {
             "case_id": "Case-011", "metric": 87,
         })
         self.assertEqual(
             relation_rows(witness)[0]["source_fact_refs"],
-            [patch["source_id"] + ":F001"],
+            ["local_primary:F001"],
         )
 
         # Once both reports have been delivered in the latest batch,
@@ -446,9 +434,6 @@ class IntraReportFaultTests(unittest.TestCase):
         state.fact_index = _fact_index(patched["world"])
         state.tasks[patch["task_id"]] = patch["task"]
         state.attempts[patch["task_id"]] = []
-        state.origin_by_ref[patch["source_id"] + ":F001"] = (
-            patch["source"]["observations"][0]["evidence_origin_id"]
-        )
         new_attempt = state.register(patch["task_id"])
         new_report = deterministic_report(
             patch["task"], new_attempt,
@@ -465,6 +450,39 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(
             state.detected_conflicts[0]["recheck_task_id"], "target"
         )
+
+        # With clean matching reports the same paired query creates no issue.
+        corrected = deepcopy(new_report)
+        state.current["target"].status = "done"
+        state.set_public_report("target", corrected, round_number=2)
+        before = len(state.detected_conflicts)
+        state._detect_explicit_cross_report_disagreements()
+        self.assertEqual(len(state.detected_conflicts), before)
+        self.assertFalse(state.unresolved_cited_conflicts())
+
+        # Reports based on different parent versions cannot verify each other.
+        state.set_public_report("target", public, round_number=3)
+        state.current["target"].used_parent_versions = {"parent": 2}
+        state.current[patch["task_id"]].used_parent_versions = {"parent": 1}
+        state._detect_explicit_cross_report_disagreements()
+        self.assertEqual(len(state.detected_conflicts), before)
+
+    def test_cited_prose_preserves_nested_and_null_values(self):
+        from environment.untrusted_orchestration.result_text import (
+            render_records, parse_records,
+        )
+        rows = [{
+            "values": {
+                "entity_final": 'A place; with "quoted" text',
+                "metric": None,
+                "answer": {"distance": 1.25, "date": "2025-01-01"},
+            },
+            "source_fact_refs": ["metric_a:F001", "relation_1:F002"],
+        }]
+        text = render_records(rows)
+        self.assertEqual(parse_records(text), rows)
+        self.assertIsNone(parse_records(text + " Extra unsupported finding."))
+        self.assertEqual(parse_records(render_records([])), [])
 
     def test_cross_field_values_do_not_prove_same_claim_disagreement(self):
         from environment.untrusted_orchestration.main_decision_contract import (

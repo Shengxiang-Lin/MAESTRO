@@ -12,6 +12,7 @@ from copy import deepcopy
 import json
 
 from .faults import relation_rows
+from .result_text import render_records, delivered_records
 
 
 def render_report_fault(base: dict, attempt) -> tuple[dict, dict]:
@@ -48,6 +49,9 @@ def render_report_fault(base: dict, attempt) -> tuple[dict, dict]:
         finish = report.get("finish_result")
         if not isinstance(finish, dict):
             raise ValueError("done_incomplete_requires_delivered_result")
+        rows = delivered_records(finish.get("result", ""))
+        if rows is not None:
+            finish["result"] = render_records(rows)
         finish["status"] = "done"
         finish["summary"] = (
             "The investigation finished and the returned record was "
@@ -74,7 +78,7 @@ def render_report_fault(base: dict, attempt) -> tuple[dict, dict]:
         rows[0]["source_fact_refs"] = list(payload["source_fact_refs"])
         report["finish_result"] = {
             "status": "done",
-            "result": json.dumps(rows, ensure_ascii=False),
+            "result": render_records(rows),
             "summary": (
                 "The requested record was returned with "
                 + field.replace("_", " ") + " = " + str(replacement)
@@ -84,7 +88,7 @@ def render_report_fault(base: dict, attempt) -> tuple[dict, dict]:
     else:
         report["finish_result"] = {
             "status": "done",
-            "result": json.dumps(rows, ensure_ascii=False),
+            "result": render_records(rows),
             "summary": (
                 "The summary records " + field.replace("_", " ")
                 + " = " + str(replacement) + " for the returned record."

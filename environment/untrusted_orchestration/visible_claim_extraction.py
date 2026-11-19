@@ -169,10 +169,8 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
         })
 
     if isinstance(result, str):
-        try:
-            parsed = json.loads(result)
-        except (TypeError, ValueError):
-            parsed = None
+        from .result_text import delivered_records
+        parsed = delivered_records(result)
         if isinstance(parsed, list):
             modes.add("structured_result")
             for item in parsed:

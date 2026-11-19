@@ -334,12 +334,8 @@ class ExecutionState:
         because some identifiers happen to occur in public free-form prose.
         """
         finish = (report or {}).get("finish_result") or {}
-        try:
-            rows = json.loads(finish.get("result", ""))
-        except (TypeError, ValueError):
-            return None
-        if isinstance(rows, dict):
-            rows = [rows]
+        from .result_text import delivered_records
+        rows = delivered_records(finish.get("result", ""))
         if not isinstance(rows, list):
             return None
         normalized = []
@@ -363,7 +359,8 @@ class ExecutionState:
         finish = (report or {}).get("finish_result") or {}
         body = str(finish.get("result", ""))
         try:
-            parsed = json.loads(body)
+            from .result_text import delivered_records
+            parsed = delivered_records(body)
         except (TypeError, ValueError):
             parsed = None
         if isinstance(parsed, dict):
@@ -642,7 +639,8 @@ class ExecutionState:
             "finish_result"
         ) or {}
         try:
-            rows = json.loads(finish.get("result"))
+            from .result_text import delivered_records
+            rows = delivered_records(finish.get("result", ""))
         except (TypeError, ValueError):
             return None
         if isinstance(rows, dict):
@@ -823,6 +821,67 @@ class ExecutionState:
                 })
         return rows
 
+    def _repeat_observation_conflicts(self) -> list[tuple[str, str, list, list]]:
+        """Compare complete public deliveries for the identical frozen query."""
+        pairs = []
+        for tid, task in self.tasks.items():
+            target = task.get("verification_target_task_id")
+            if (not target or target not in self.tasks
+                    or self.public_status(tid) != "done"
+                    or self.public_status(target) != "done"):
+                continue
+            observed = self.current.get(tid)
+            original = self.current.get(target)
+            if (observed is None or original is None
+                    or observed.status not in {"done", "disputed"}
+                    or original.status not in {"done", "disputed"}
+                    or observed.used_parent_versions != original.used_parent_versions):
+                continue
+            left = self._public_result_rows(self.public_reports[target])
+            right = self._public_result_rows(self.public_reports[tid])
+            if left is None or right is None:
+                continue
+            canonical = lambda rows: sorted(
+                {json.dumps(row, sort_keys=True, ensure_ascii=False)
+                 for row in rows}
+            )
+            if canonical(left) != canonical(right):
+                pairs.append((target, tid, left, right))
+        return pairs
+
+    def _detect_repeat_observation_conflicts(self) -> None:
+        for target, witness, left, right in self._repeat_observation_conflicts():
+            current = self.current[target]
+            if current.status != "done":
+                continue
+            current.status = "disputed"
+            current.runtime["visible_issue"] = (
+                "Two reports for the same source query returned different records: "
+                + json.dumps(left, ensure_ascii=False) + " versus "
+                + json.dumps(right, ensure_ascii=False)
+                + ". Reconcile the conflicting field or identity against the "
+                  "cited materials; the reports share a source."
+            )
+            current.runtime["cross_source_recheck_requested"] = True
+            self.detected_conflicts.append({
+                "kind": "same_query_report_disagreement",
+                "compared_parent_tasks": [target, witness],
+                "recheck_task_id": target,
+                "at_public_round": max(
+                    self.public_report_rounds.get(target, 0),
+                    self.public_report_rounds.get(witness, 0),
+                ),
+                "empirically_independent": False,
+                "conflict_timing": (
+                    "simultaneous" if self.public_report_rounds.get(target)
+                    == self.public_report_rounds.get(witness) else "delayed"
+                ),
+                "downstream_previously_executed": any(
+                    target in child.used_parent_versions
+                    for child in self.current.values()
+                ),
+            })
+
     def _detect_explicit_cross_report_disagreements(self) -> None:
         """Contested same-claim reports support bounded sequential rechecks.
 
@@ -832,6 +891,7 @@ class ExecutionState:
         """
         if not self.cross_source_checks_enabled:
             return
+        self._detect_repeat_observation_conflicts()
         by_claim = {}
         for claim in self._explicit_report_claims():
             key = (claim["subject"], claim["attribute"], claim["valid_scope"])
@@ -944,6 +1004,8 @@ class ExecutionState:
         A re-execution that returns exactly the same value is *not*
         automatically a resolution. Neither source's hidden Gold is used.
         """
+        if self._repeat_observation_conflicts():
+            return True
         relevant = [
             row for row in self.detected_conflicts
             if row.get("kind") == "explicit_independent_claim_disagreement"
@@ -1115,11 +1177,8 @@ def deterministic_report(
         narrative = "The assigned evidence acquisition did not return an inspectable deliverable."
         mode = "executed_missing"
     else:
-        result = json.dumps(
-            [{"values": row["values"], "source_fact_refs":
-              row["source_fact_refs"]} for row in actual_rows],
-            ensure_ascii=False,
-        )
+        from .result_text import render_records
+        result = render_records(actual_rows)
         available = ", ".join(attempt.available_fields) or "(none)"
         unresolved = ", ".join(attempt.runtime.get("missing_fields", []))
         summary = (
