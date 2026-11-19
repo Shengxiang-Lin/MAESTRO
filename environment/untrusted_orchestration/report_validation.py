@@ -44,10 +44,10 @@ _MONTHS = {
     ), start=1)
 }
 _CALENDAR_DATE = re.compile(
-    r"\\b(" + "|".join(_MONTHS) + r")\\s+(\\d{1,2})"
-    r"(?:,?\\s+(\\d{4}))?\\b", re.I,
+    r"\b(" + "|".join(_MONTHS) + r")\s+(\d{1,2})"
+    r"(?:,?\s+(\d{4}))?\b", re.I,
 )
-_ISO_DATE = re.compile(r"(?<!\\d)(\\d{4})-(\\d{2})-(\\d{2})(?!\\d)")
+_ISO_DATE = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
 
 
 def grounded_calendar_text(text: str, observed_text: str) -> str:
