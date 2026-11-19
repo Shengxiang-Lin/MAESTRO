@@ -19,7 +19,7 @@ _REQUIRED = {
         "atomic_fault_kinds", "max_candidates_per_round",
         "max_distractors_per_fault", "max_selected_per_round",
         "selection_strategy", "max_diagnostics_per_scene",
-        "max_language_attempts_per_round",
+        "max_language_attempts_per_round", "resume_after_audit_fix",
     },
     "model": {
         "author_api_base", "author_model", "critic_api_base",
@@ -111,6 +111,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         "model_alias": run.get("model_alias", "model_1"),
         "overwrite": run.get("overwrite", False),
         "no_progress": run.get("no_progress", False),
+        "resume_after_audit_fix": run.get("resume_after_audit_fix", False),
         "author_api_base": model.get("author_api_base"),
         "author_model": model.get("author_model"),
         "critic_api_base": model.get("critic_api_base"),
@@ -160,7 +161,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         type(config["max_scenes"]) is not int or config["max_scenes"] < 1
     ):
         raise ValueError("untrusted_invalid_max_scenes")
-    for key in ("overwrite", "no_progress"):
+    for key in ("overwrite", "no_progress", "resume_after_audit_fix"):
         if type(config[key]) is not bool:
             raise ValueError("untrusted_invalid_" + key)
     if config["mode"] not in {"llm", "template"}:
