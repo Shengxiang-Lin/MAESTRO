@@ -60,25 +60,27 @@ def _reported_scalar_really_changes(
     public = str(result or "") + " " + str(summary or "")
     for clean in clean_rows:
         values = clean["values"]
-        subjects = [
+        # Match the EXACT subject-field precedence used by the public
+        # claim parser. Treating a secondary entity label as the subject
+        # could misclassify a wrong case_id as a same-entity disagreement.
+        subject_field = next((
             key for key in SUBJECT_FIELDS
             if isinstance(values.get(key), str) and values[key].strip()
-        ]
-        for field in subjects:
-            if str(values[field]) not in public:
+        ), None)
+        if subject_field is None or str(values[subject_field]) not in public:
+            continue
+        for faulty in faulty_rows:
+            other = faulty["values"]
+            if other.get(subject_field) != values[subject_field]:
                 continue
-            for faulty in faulty_rows:
-                other = faulty["values"]
-                if other.get(field) != values[field]:
-                    continue
-                for changed in sorted(set(values) & set(other) - {field}):
-                    expected, got = values[changed], other[changed]
-                    if (type(expected) in {str, int, float, bool}
-                            and type(got) is type(expected)
-                            and expected != got and str(expected) in public
-                            and clean.get("source_fact_refs")
-                            and faulty.get("source_fact_refs")):
-                        return True
+            for changed in sorted(set(values) & set(other) - {subject_field}):
+                expected, got = values[changed], other[changed]
+                if (type(expected) in {str, int, float, bool}
+                        and type(got) is type(expected)
+                        and expected != got and str(expected) in public
+                        and clean.get("source_fact_refs")
+                        and faulty.get("source_fact_refs")):
+                    return True
     return False
 
 
