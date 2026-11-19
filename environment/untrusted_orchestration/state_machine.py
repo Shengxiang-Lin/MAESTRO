@@ -334,7 +334,7 @@ class ExecutionState:
         because some identifiers happen to occur in public free-form prose.
         """
         finish = (report or {}).get("finish_result") or {}
-        from .result_text import delivered_records
+        from .reporting.result_text import delivered_records
         rows = delivered_records(finish.get("result", ""))
         if not isinstance(rows, list):
             return None
@@ -359,7 +359,7 @@ class ExecutionState:
         finish = (report or {}).get("finish_result") or {}
         body = str(finish.get("result", ""))
         try:
-            from .result_text import delivered_records
+            from .reporting.result_text import delivered_records
             parsed = delivered_records(body)
         except (TypeError, ValueError):
             parsed = None
@@ -639,7 +639,7 @@ class ExecutionState:
             "finish_result"
         ) or {}
         try:
-            from .result_text import delivered_records
+            from .reporting.result_text import delivered_records
             rows = delivered_records(finish.get("result", ""))
         except (TypeError, ValueError):
             return None
@@ -1223,7 +1223,7 @@ def deterministic_report(
         narrative = "The assigned evidence acquisition did not return an inspectable deliverable."
         mode = "executed_missing"
     else:
-        from .result_text import render_records
+        from .reporting.result_text import render_records
         result = render_records(actual_rows)
         available = ", ".join(attempt.available_fields) or "(none)"
         unresolved = ", ".join(attempt.runtime.get("missing_fields", []))
