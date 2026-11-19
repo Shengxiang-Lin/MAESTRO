@@ -382,45 +382,24 @@ def select_recovered_candidates(
         queues = {kind: deque(items) for kind, items in candidates.items()}
         chosen = set()
         spent = Counter()
-        used_effects = Counter()
-        used_policies = Counter()
-        used_scenes = Counter()
         remaining = target_main_turns
         while remaining > 0:
             feasible = []
             for kind, queue in queues.items():
-                # Whole Episodes only: try other already-executed candidates
-                # when the top one does not fit the remaining turn budget.
-                choices = [
-                    row for row in queue
-                    if 0 < row["decision_rounds_post_fork"] <= remaining
-                ]
-                if not choices:
-                    continue
-                pick = min(choices, key=lambda row: (
-                    used_effects[(kind, row["recovery_effect"])],
-                    used_policies[(kind, row["policy_signature"])],
-                    used_scenes[row["question_id"]],
-                    -row["actual_invalidations"],
-                    tie(row),
-                ))
-                feasible.append((kind, pick))
+                # Skip large Episodes only when the remaining capacity
+                # cannot fit them. They remain private 4A alternatives.
+                while queue and queue[0]["decision_rounds_post_fork"] > remaining:
+                    queue.popleft()
+                if queue:
+                    feasible.append(kind)
             if not feasible:
                 break
-            kind, pick = min(feasible, key=lambda pair: (
-                spent[pair[0]],
-                -available_by_kind[pair[0]] == 0,
-                pair[0],
-            ))
-            queues[kind].remove(pick)
-            index = pick["candidate_index"]
-            chosen.add(index)
+            kind = min(feasible, key=lambda name: (spent[name], name))
+            pick = queues[kind].popleft()
+            chosen.add(pick["candidate_index"])
             turns = pick["decision_rounds_post_fork"]
             remaining -= turns
             spent[kind] += turns
-            used_effects[(kind, pick["recovery_effect"])] += 1
-            used_policies[(kind, pick["policy_signature"])] += 1
-            used_scenes[pick["question_id"]] += 1
         for index in selected - chosen:
             rows[index]["selection_purpose"] = "budget_reserve"
         selected = chosen
