@@ -62,7 +62,23 @@ def _original_fact(scene: dict, *, before_round: int):
                 # Prefer a real contrast within one already-authorized
                 # source, not an arbitrary hallucinated wrong value.
                 for sid in task["source_ids"]:
-                    for obs in sources[sid].get("observations", []):
+                    if not any(
+                        isinstance(ref, str) and ref.startswith(sid + ":")
+                        for ref in row.get("source_fact_refs", [])
+                    ):
+                        continue
+                    # The selected Stage-1 source must actually contain
+                    # the clean claim: a Join's output field cannot be
+                    # attributed to an unrelated complementary source.
+                    observations = sources[sid].get("observations", [])
+                    if not any(
+                        obs.get("values", {}).get(subject_field) == (
+                            values[subject_field]
+                        ) and obs.get("values", {}).get(field) == true_value
+                        for obs in observations
+                    ):
+                        continue
+                    for obs in observations:
                         wrong_value = obs.get("values", {}).get(field)
                         if (type(wrong_value) is type(true_value)
                                 and wrong_value != true_value):
@@ -278,4 +294,8 @@ def extend_clean_prefix(base_episode: dict, extension: dict) -> dict:
         selected["result"]["subtask_results"]
     )
     selected["result"]["all_done"] = True
+    selected["result"]["total_steps"] = sum(
+        item["steps_taken"]
+        for item in selected["result"]["subtask_results"]
+    )
     return episode
