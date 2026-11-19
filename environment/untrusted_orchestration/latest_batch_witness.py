@@ -73,8 +73,10 @@ def propose_witness_patch(state, target: str, *, branch_round: int,
             ref.split(":", 1)[0] for ref in refs
             if isinstance(ref, str) and ":" in ref
         } if isinstance(refs, list) else set()
-        origins = {state.origin_by_ref.get(ref) for ref in refs}
-        if isinstance(refs, list) else set()
+        origins = (
+            {state.origin_by_ref.get(ref) for ref in refs}
+            if isinstance(refs, list) else set()
+        )
         if (not refs or len(cited_sources) != 1 or len(origins) != 1
                 or None in origins or len(cited_sources & set(task["source_ids"])) != 1):
             reason = "no_single_origin_direct_source_claim"
