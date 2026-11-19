@@ -119,7 +119,7 @@ def _cross_report_visible_disagreements(
                     or ""
                 )
                 name = re.search(
-                    r"\\b(?:inspect|examine)\\s+([A-Za-z0-9_]+)\\b",
+                    r"\b(?:inspect|examine)\s+([A-Za-z0-9_]+)\b",
                     instruction, re.I,
                 )
                 if name:
