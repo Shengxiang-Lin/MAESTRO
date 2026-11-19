@@ -649,6 +649,83 @@ class IntraReportFaultTests(unittest.TestCase):
         state.set_public_report("target", fixed, round_number=3)
         self.assertFalse(state.unresolved_cited_conflicts())
 
+    def test_history_survey_matches_explicit_project_field_rename(self):
+        from copy import deepcopy
+        from environment.untrusted_orchestration.state_machine import (
+            deterministic_report,
+        )
+        from environment.untrusted_orchestration.scenario.prior_observation import (
+            propose_prior_observation, latest_scope_statement, comparison_rows,
+        )
+        scene = deepcopy(self.scene)
+        scene["world"]["sources"]["renamed_source"] = {
+            "schema": ["case_id", "source_metric"],
+            "access_mode": "browse", "access_policy": {"mode": "browse"},
+            "modality": "text", "title": "Source register",
+            "observations": [
+                {"observation_id": "renamed_source.OBS001",
+                 "values": {"case_id": "Case-011", "source_metric": 87},
+                 "fact_refs": ["renamed_source:F001"],
+                 "evidence_origin_id": "root01",
+                 "observed_content": "Case-011 source metric 87."},
+                {"observation_id": "renamed_source.OBS002",
+                 "values": {"case_id": "Case-012", "source_metric": 55},
+                 "fact_refs": ["renamed_source:F002"],
+                 "evidence_origin_id": "root02",
+                 "observed_content": "Case-012 source metric 55."},
+            ],
+        }
+        task = {
+            "task_id": "latest", "depends_on": [],
+            "source_ids": ["renamed_source"], "external_inputs": [],
+            "input_schema": {},
+            "operator_chain": [
+                {"id": "read", "op": "scan", "inputs": [],
+                 "source_id": "renamed_source"},
+                {"id": "select", "op": "filter_eq", "inputs": ["read"],
+                 "field": "case_id", "value": "Case-011"},
+                {"id": "finish", "op": "project", "inputs": ["select"],
+                 "fields": ["source_metric"],
+                 "rename_fields": {"source_metric": "metric"}},
+            ],
+            "program_node_id": "finish",
+            "outputs": {"typed_relation": ["metric"]},
+        }
+        state = ExecutionState(scene, {})
+        state.tasks = {"latest": task}
+        state.attempts = {"latest": []}
+        clean = state.register("latest")
+        report = deterministic_report(
+            task, clean, instruction="Check Case-011.", model_alias="model_1",
+        )
+        report["finish_result"]["result"] = json.dumps([{
+            "values": {"metric": 55},
+            "source_fact_refs": ["renamed_source:F002"],
+        }])
+        state.set_public_report("latest", report, round_number=2)
+        patch, diagnostic = propose_prior_observation(
+            state, "latest", branch_round=3,
+            max_parallel_tasks=len(scene["macro_graph"]["reference_waves"][0]) + 1,
+        )
+        self.assertIsNotNone(patch, diagnostic)
+        self.assertEqual(patch["field"], "metric")
+        self.assertEqual(patch["source_field"], "source_metric")
+        self.assertNotIn("Case-011", patch["instruction"])
+        report["trace_summary"] += " " + latest_scope_statement(patch)
+        state.set_public_report("latest", report, round_number=2)
+        state.tasks[patch["task_id"]] = patch["task"]
+        state.attempts[patch["task_id"]] = []
+        prior = state.register(patch["task_id"])
+        earlier = deterministic_report(
+            patch["task"], prior,
+            instruction=patch["instruction"], model_alias="model_1",
+        )
+        state.set_public_report(patch["task_id"], earlier, round_number=1)
+        disagreements = comparison_rows(state)
+        self.assertEqual(len(disagreements), 1)
+        self.assertEqual(disagreements[0]["earlier_value"], 87)
+        self.assertEqual(disagreements[0]["latest_value"], 55)
+
     def test_cited_prose_preserves_nested_and_null_values(self):
         from environment.untrusted_orchestration.reporting.result_text import (
             render_records, parse_records,
