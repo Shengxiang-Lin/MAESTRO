@@ -214,6 +214,10 @@ def _resume_v10_audit_fix(
                 or old.get("main_decision_round") != plan["branch_round"]
                 or old.get("scenario_blueprint") !=
                     plan["scenario_plan"]["blueprint"]
+                or old.get("candidate_variant_index") !=
+                    plan.get("candidate_variant_index")
+                or old.get("latest_subagent_task_ids") !=
+                    plan["incoming_task_ids"]
                 or old.get("atomic_fault_kinds") != [
                     item["kind"]
                     for item in plan["scenario_plan"]["fault_atoms"]
@@ -235,6 +239,10 @@ def _resume_v10_audit_fix(
         if audit and (
             event.get("scenario_id") != plan["sample_id"]
             or event.get("blueprint") != plan["scenario_plan"]["blueprint"]
+            or event.get("fault_atoms") !=
+                plan["scenario_plan"]["fault_atoms"]
+            or event.get("evidence_events") !=
+                plan["scenario_plan"]["evidence_events"]
         ):
             raise ValueError("stage4_resume_journal_scenario_mismatch")
         if plan["scenario_plan"]["blueprint"] == (
