@@ -1116,6 +1116,7 @@ def generate_turns(
     max_candidates_per_round: int | None = None,
     max_distractors_per_fault: int | None = None,
     max_selected_per_round: int | None = None,
+    target_main_turns: int | None = None,
     selection_strategy: str = "causal_rank",
     max_diagnostics_per_scene: int = 0,
     max_language_attempts_per_round: int | None = None,
@@ -1191,7 +1192,7 @@ def generate_turns(
             type(value) is not int or not 1 <= value <= maximum
         ):
             raise ValueError("invalid_" + name)
-    if selection_strategy not in {"causal_rank", "stratified"}:
+    if selection_strategy not in {"causal_rank", "stratified", "global_balanced"}:
         raise ValueError("invalid_candidate_selection_strategy")
     if type(max_diagnostics_per_scene) is not int or not (
         0 <= max_diagnostics_per_scene <= 8
@@ -1202,6 +1203,10 @@ def generate_turns(
             and max_selected_per_round is not None
             and max_language_attempts_per_round < max_selected_per_round):
         raise ValueError("language_budget_smaller_than_selection")
+    if target_main_turns is not None and (
+        type(target_main_turns) is not int or target_main_turns < 1
+    ):
+        raise ValueError("invalid_global_main_turn_budget")
     modes = list(fault_modes or ["missing", "partial", "wrong"])
     if scenario_mode not in {"round_fork", "event_driven"}:
         raise ValueError("invalid_scenario_mode")
@@ -1235,6 +1240,7 @@ def generate_turns(
         "max_candidates_per_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
         "max_selected_per_round": max_selected_per_round,
+        "target_main_turns": target_main_turns,
         "selection_strategy": selection_strategy,
         "max_diagnostics_per_scene": max_diagnostics_per_scene,
         "max_language_attempts_per_round": max_language_attempts_per_round,
@@ -1407,6 +1413,44 @@ def generate_turns(
 
     def write(directory: Path, plan: dict, data: dict) -> None:
         _atomic_json(directory / f"{plan['index']:06d}.json", data)
+
+    def checkpoint_directory(directory: Path, plan: dict) -> Path:
+        return directory / f"{plan['index']:06d}.rounds"
+
+    def load_checkpoints(directory: Path, plan: dict,
+                         phase: str) -> list[dict]:
+        folder = checkpoint_directory(directory, plan)
+        if not folder.exists():
+            return []
+        if not folder.is_dir():
+            raise RuntimeError("stage4_checkpoint_path_not_directory")
+        checkpoints = []
+        for ordinal, file in enumerate(sorted(folder.glob("round-*.json")), 1):
+            if file.name != f"round-{ordinal:04d}.json":
+                raise RuntimeError("stage4_checkpoint_noncontiguous_sequence")
+            item = json.loads(file.read_text(encoding="utf-8"))
+            if (item.get("ordinal") != ordinal
+                    or item.get("round_sample_id") != plan["sample_id"]
+                    or item.get("phase") != phase):
+                raise RuntimeError("stage4_checkpoint_candidate_mismatch")
+            checkpoints.append(item)
+        return checkpoints
+
+    def save_checkpoint(directory: Path, plan: dict,
+                        phase: str, checkpoint: dict) -> None:
+        folder = checkpoint_directory(directory, plan)
+        ordinal = checkpoint["ordinal"]
+        file = folder / f"round-{ordinal:04d}.json"
+        if file.exists():
+            raise RuntimeError("stage4_checkpoint_would_overwrite")
+        if ordinal > 1 and not (
+            folder / f"round-{ordinal-1:04d}.json"
+        ).exists():
+            raise RuntimeError("stage4_checkpoint_noncontiguous_write")
+        _atomic_json(file, {
+            **checkpoint, "round_sample_id": plan["sample_id"],
+            "phase": phase,
+        })
 
     def as_failure(scene: dict, exc: Exception, *,
                    source: dict | None = None,
@@ -1681,6 +1725,7 @@ def generate_turns(
             select_recovered_candidates(
                 planned, [saved(stage_a, plan) for plan in planned],
                 max_selected_per_round=max_selected_per_round,
+                target_main_turns=target_main_turns,
                 strategy=selection_strategy,
                 max_diagnostics_per_scene=max_diagnostics_per_scene,
                 seed=seed,
@@ -1736,11 +1781,16 @@ def generate_turns(
             write(stage_b, plan, source)
             return
         try:
+            existing = load_checkpoints(stage_b, plan, "stage4b")
             episode, audit = author_branch_reports(
                 scene, rows_by_scene[scene["task_id"]],
                 source["episode"], source["private_audit"],
                 author=report_author, critic=report_critic,
                 max_revisions=report_max_revisions,
+                resume_reports=existing,
+                on_report_checkpoint=lambda row: save_checkpoint(
+                    stage_b, plan, "stage4b", row,
+                ),
                 on_report=lambda status: tick(status),
             )
             data = {
@@ -1759,12 +1809,16 @@ def generate_turns(
             write(journal, plan, source)
             return
         try:
+            existing = load_checkpoints(journal, plan, "stage4c")
             episode, turns, audit = author_branch_main(
                 scene, source["episode"], source["private_audit"],
                 author=author, critic=critic,
                 max_revisions=main_max_revisions,
                 max_rounds=max_rounds, sub_model=sub_model,
-                model_alias=model_alias,
+                model_alias=model_alias, resume_actions=existing,
+                on_main_checkpoint=lambda row: save_checkpoint(
+                    journal, plan, "stage4c", row,
+                ),
                 on_main=lambda status: tick(status),
             )
             data = {
