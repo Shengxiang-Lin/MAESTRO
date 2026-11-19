@@ -268,6 +268,48 @@ def _plan_branches(
             no_eligible += 1
     return planned, no_base, no_eligible
 
+def _published_result_formats(episodes: list[dict]) -> dict:
+    """Audit O1 Result surface by phase, without rewriting clean evidence.
+
+    Stage 2 clean Answer prose and Stage 4 provenance-bearing typed Results
+    currently differ. Expose the shift before using these rows for training;
+    changing trusted Stage-3 prefix presentation would break exact pairing.
+    """
+    counts: dict[str, Counter] = defaultdict(Counter)
+    for episode in episodes:
+        fault_round = episode.get("branch_round")
+        for step in episode.get("trajectory", []):
+            if step.get("action") != "delegate_task":
+                continue
+            number = step.get("attempt")
+            if not isinstance(number, int) or not isinstance(fault_round, int):
+                continue
+            phase = ("clean_prefix" if number < fault_round - 1 else
+                     "faulted_latest_batch" if number == fault_round - 1 else
+                     "recovery_continuation")
+            for report in (step.get("result") or {}).get("subtask_results", []):
+                finish = report.get("finish_result") or report
+                value = finish.get("result") if isinstance(finish, dict) else None
+                if not isinstance(value, str) or not value.strip():
+                    label = "missing"
+                else:
+                    try:
+                        decoded = json.loads(value)
+                    except (ValueError, TypeError):
+                        decoded = None
+                    label = (
+                        "typed_evidence_json" if isinstance(decoded, list)
+                        and all(isinstance(item, dict)
+                                and isinstance(item.get("values"), dict)
+                                and isinstance(item.get("source_fact_refs"), list)
+                                for item in decoded)
+                        else "natural_language"
+                    )
+                counts[phase][label] += 1
+    return {phase: dict(sorted(values.items()))
+            for phase, values in sorted(counts.items())}
+
+
 def _publish(output: Path, planned: list[dict],
              base: dict[str, dict] | None = None) -> dict:
     base = base or {}
@@ -727,6 +769,7 @@ def _publish(output: Path, planned: list[dict],
             counters["rejected_validation"]
         ),
         "published_episodes": len(episodes),
+        "published_result_format_by_phase": _published_result_formats(episodes),
         "paired_trajectory_index_rows": len(paired_trajectories),
         "main_training_turns": len(positive_turns),
         "reviewed_branches": counters["recovered"],
