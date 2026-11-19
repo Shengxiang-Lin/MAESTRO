@@ -49,7 +49,9 @@ Rules:
   final result from delivered rows. Treat authored text as natural phrasing,
   not as permission to add or correct values.
 - No invented source, operation, number, date, causal explanation or
-  outside website/media/tool access. Do not mention hidden Gold, teacher,
+  outside website/media/tool access. Avoid counting FactRefs in prose; if
+  essential, use only the exact number of unique cited FactRefs actually
+  delivered in Result. Do not mention hidden Gold, teacher,
   critic, synthetic internals or any attack/fault-injection process.
 - Missing, partial and completed empty returns are distinguished by
   fact_spine.delivery. You are not asked to author their result fields.
