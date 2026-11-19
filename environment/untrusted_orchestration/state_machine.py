@@ -418,7 +418,7 @@ class ExecutionState:
         # label to appear literally in a Main-assigned instruction.
         missing = sorted(
             field for field in required
-            if all(row.get(field) is None for row in result_rows)
+            if all(field in row and row[field] is None for row in result_rows)
         )
         report = self.public_reports[task_id]
         evidence_text = " ".join(str(x) for x in (
@@ -427,9 +427,8 @@ class ExecutionState:
         )).casefold()
         admitted = any(phrase in evidence_text for phrase in (
             "could not extract", "could not retrieve",
-            "not delivered", "not available in the delivered",
-            "remains incomplete", "still unresolved",
-            "unable to verify", "not obtained",
+            "remains incomplete", "unable to verify",
+            "could not verify", "failed to extract",
         ))
         if not missing and not admitted:
             return None
