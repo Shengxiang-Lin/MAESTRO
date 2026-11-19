@@ -131,6 +131,11 @@ def expose_executed_prior_record(
             fields = set(state.tasks[tid]["outputs"]["typed_relation"])
             matches = False
             for actual in rows:
+                refs = actual.get("source_fact_refs") or []
+                if refs:
+                    roots = {state.origin_by_ref.get(ref) for ref in refs}
+                    if len(roots) != 1 or None in roots:
+                        continue
                 values = actual["values"]
                 subject = next((key for key in SUBJECT_FIELDS
                                 if isinstance(values.get(key), str)
