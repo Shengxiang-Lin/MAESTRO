@@ -347,19 +347,25 @@ def run_attempt(
         ref.split(":", 1)[0]
         for parent in parents for row in parent.rows for ref in row["support"]
     }
-    def trace(steps):
-        return [
-            _observed_step(
+    def trace(steps, work_products):
+        from ..reporting.public_work import observed_work_checks
+        visible = []
+        for step, product in steps:
+            observed = _observed_step(
                 step, product, evidence_index=evidence_index,
                 source_ids=source_ids,
             )
-            for step, product in steps
-        ]
+            inputs = [work_products[pid] for pid in step["inputs"]]
+            checks = observed_work_checks(step, inputs, product)
+            if checks:
+                observed["public_work_checks"] = checks
+            visible.append(observed)
+        return visible
 
     if fault is None:
         return correct, {
             "status": "done", "available_fields": list(correct.columns),
-            "primitive": None, "observed_operator_steps": trace(clean_steps),
+            "primitive": None, "observed_operator_steps": trace(clean_steps, prefix),
             "source_fact_refs": sorted({
                 ref for row in correct.rows for ref in row["support"]
             }),
@@ -390,7 +396,7 @@ def run_attempt(
         return correct, {
             "status": "done", "available_fields": list(correct.columns),
             "primitive": None,
-            "observed_operator_steps": trace(clean_steps),
+            "observed_operator_steps": trace(clean_steps, prefix),
             "source_fact_refs": sorted({
                 ref for row in correct.rows for ref in row["support"]
             }),
@@ -408,7 +414,7 @@ def run_attempt(
             if step["op"] in {"scan", "lookup_by_key"}
         ), 0)
         failed = clean_steps[index][0]
-        observed = trace(clean_steps[:index])
+        observed = trace(clean_steps[:index], prefix)
         observed.append({
             "node_id": failed["id"], "operation": failed["op"],
             "input_nodes": list(failed["inputs"]),
@@ -454,7 +460,7 @@ def run_attempt(
                 raise FaultUnsupported("done_incomplete_requires_visible_field_gap")
         # The final operation's report-facing observation is the actually
         # delivered relation. Do not show the hidden pre-delivery values.
-        observed = trace(clean_steps[:-1])
+        observed = trace(clean_steps[:-1], prefix)
         observed.append(_observed_step(
             clean_steps[-1][0], delivered, evidence_index=evidence_index,
             source_ids=source_ids,
@@ -536,7 +542,7 @@ def run_attempt(
     return final, {
         "status": "done", "available_fields": list(final.columns),
         "primitive": target["id"],
-        "observed_operator_steps": trace(actual_steps),
+        "observed_operator_steps": trace(actual_steps, products),
         "source_fact_refs": sorted({
             ref for row in final.rows for ref in row["support"]
         }),
