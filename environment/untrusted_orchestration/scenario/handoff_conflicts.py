@@ -110,15 +110,13 @@ def discover_handoffs(scene: dict, round_plan: dict, products: dict,
     return found
 
 
-def fault_breaks_handoff(scene: dict, plan: dict, fault) -> bool:
+def fault_breaks_handoff(scene: dict, plan: dict, fault, products: dict) -> bool:
     """Offline preflight only: does the actual injected result break the key?"""
     tasks = {task["task_id"]: task for task in scene["macro_graph"]["tasks"]}
     tid = plan["latest_task"]
     task = tasks[tid]
     if fault.atom_kind not in FAULTS:
         return False
-    from .candidate_exploration import _clean_products
-    products = _clean_products(scene)
     field = plan["key_field"]
     older = relation_rows(products[plan["older_task"]])
     expected = {row["values"].get(field) for row in older}
