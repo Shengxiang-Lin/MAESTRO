@@ -131,8 +131,19 @@ is explicitly tagged `stage4_synthetic_comparison_source` and
 `empirically_independent=false`: distinct simulated evidence roots are **not**
 a claim of real-world independent empirical verification. A candidate is
 skipped unless both delivered reports have the same literal entity/attribute,
-different values, explicit FactRefs and a valid known source origin. Neither
+different values, explicit FactRefs and a valid known source origin. The
+original Macro may now reference several sources, but the *specific faulty
+delivered claim* must cite exactly one known origin from one of the Macro's
+authorized sources. Multi-origin composite claims remain ineligible: a
+composite JOIN must never be misrepresented as one independent fact. Neither
 an extra source nor a false conflict is forced for unsupported cases.
+
+Every targeted candidate records `latest_batch_witness_probe` privately.
+The summary exports `latest_batch_witness_probe_distribution` and
+`latest_batch_witness_ineligible_reasons`, including capacity limits,
+unparseable Result surfaces, missing subject/attribute pairs, missing
+single-origin provenance and absent differing comparable values. A 0-witness
+pilot can therefore distinguish structural ineligibility from a wiring bug.
 
 4C now checks `done_but_incomplete` against the structured, flattened
 O1 reports, not against `json.loads()` of the formatted history prose;
@@ -140,6 +151,17 @@ the Result/Summary conflict contract recognizes Dossier/ENT/PRJ IDs.
 Track `latest_batch_witness_generated`,
 `latest_batch_witness_conflicts_detected` and
 `latest_batch_witness_recovered` in private selection statistics.
+The 4C Critic is explicitly instructed that different attributes of the
+same entity do not constitute rival same-claim observations, and that a
+source-free comparison still needs a delegated derivation step.
+
+`summary.json` also reports `published_result_format_by_phase` for
+`clean_prefix`, `faulted_latest_batch` and `recovery_continuation`.
+This is an intentional audit of potential O1 text/typed-JSON shortcuts,
+**not** a claim that the surfaces are already normalized. Rewriting frozen
+Stage-3 clean reports or private fact provenance to hide that drift would
+invalidate clean/fault pairing; any future training-time normalization must
+preserve Main-visible source evidence and be evaluated separately.
 
 **II. Inter-Sub-Agent conflicts** are not separate fault injectors:
 an actual wrong/fabricated report plus an independent, already returned
