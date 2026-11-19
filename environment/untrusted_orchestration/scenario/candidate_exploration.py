@@ -22,6 +22,7 @@ from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFaul
 from environment.untrusted_orchestration.runtime.faults import FaultUnsupported, relation_rows, run_attempt
 from .scenario_generator import make_scenario
 from .handoff_conflicts import discover_handoffs, fault_breaks_handoff
+from .same_source_recheck import discover_same_source_rechecks
 
 
 _VARIANT_KINDS = {
@@ -118,6 +119,7 @@ def enumerate_round_candidates(
     delayed_evidence_probability: float = 0.0,
     seed: int = 17,
     base_episode: dict | None = None,
+    max_parallel_tasks: int = 4,
 ) -> list[dict]:
     """Return preflight-valid one-fault scenarios for one feedback round.
 
@@ -142,9 +144,18 @@ def enumerate_round_candidates(
                     scene, tasks[tid], kind, variant, products
                 ):
                     eligible.append((tid, kind, variant))
-    # A single unsupported placeholder preserves per-round coverage
-    # and a truthful denominator in the Stage-4A audit.
-    if not eligible:
+    # Method B: if a prior source-backed observation is already visible,
+    # a later Main may legitimately delegate another observation of that
+    # same source. Its result can disagree after a real one-atom fault.
+    # The extra report MUST have an accompanying Main assignment.
+    rechecks = discover_same_source_rechecks(
+        scene, round_plan, products, base_episode=base_episode,
+        atomic_fault_kinds=atomic_fault_kinds,
+        max_parallel_tasks=max_parallel_tasks,
+    )
+    # Preserve per-round coverage only if neither existing-task faults
+    # (method A) nor real later recheck dispatches (method B) are possible.
+    if not eligible and not rechecks:
         skipped = deepcopy(round_plan)
         skipped["faults"] = []
         skipped["fault_mode"] = None
@@ -193,8 +204,8 @@ def enumerate_round_candidates(
         item["sample_id"] = (
             round_plan["sample_id"] + f"-candidate-{slot:03d}"
         )
-        item["candidate_count_total"] = len(ordered)
-        item["candidate_count_pruned"] = len(ordered) - len(sampled)
+        item["candidate_count_total"] = len(ordered) + len(rechecks)
+        item["candidate_count_pruned"] = 0
         item["candidate_variant_index"] = variant
         item["skip_reason"] = None
         item["fault_mode"] = kind
@@ -216,6 +227,37 @@ def enumerate_round_candidates(
                 (tid, kind, variant)
             ]
         result.append(item)
+
+    extra = (rechecks if max_candidates is None
+             else rechecks[:max(0, max_candidates - len(result))])
+    for patch in extra:
+        slot = len(result) + 1
+        item = deepcopy(round_plan)
+        item["sample_id"] += f"-candidate-{slot:03d}"
+        item["candidate_count_total"] = len(ordered) + len(rechecks)
+        item["candidate_variant_index"] = patch["fault_variant"]
+        item["skip_reason"] = None
+        item["fault_mode"] = patch["fault_kind"]
+        item["incoming_task_ids"] = [
+            *item["incoming_task_ids"], patch["new_task"]["task_id"]
+        ]
+        item["faults"] = [AtomicFault(
+            patch["fault_kind"], patch["new_task"]["task_id"],
+            origin_round=item["branch_round"] - 1,
+            seed=local_seed + slot,
+            variant_index=patch["fault_variant"],
+        ).as_legacy_fault()]
+        item["scenario_plan"] = make_scenario(
+            scene, item, mode="event_driven",
+            max_fault_atoms=max_fault_atoms,
+            delayed_evidence_probability=0.0,
+        )
+        item["scenario_plan"]["same_source_recheck_plan"] = patch
+        result.append(item)
+    total = len(ordered) + len(rechecks)
+    for item in result:
+        item["candidate_count_total"] = total
+        item["candidate_count_pruned"] = total - len(result)
     return result
 
 
@@ -228,6 +270,7 @@ def expand_all_rounds(
     delayed_evidence_probability: float,
     seed: int,
     base: dict[str, dict] | None = None,
+    max_parallel_tasks: int = 4,
 ) -> list[dict]:
     """Expand each historical feedback round into eligible independent trials."""
     expanded = []
@@ -241,6 +284,7 @@ def expand_all_rounds(
             delayed_evidence_probability=delayed_evidence_probability,
             seed=seed,
             base_episode=(base or {}).get(scene["task_id"]),
+            max_parallel_tasks=max_parallel_tasks,
         )
         for child in children:
             child["index"] = len(expanded)
