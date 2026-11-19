@@ -112,7 +112,7 @@ def _stable_candidate_order(
 def enumerate_round_candidates(
     scene: dict, round_plan: dict, *,
     atomic_fault_kinds: list[str],
-    max_candidates: int,
+    max_candidates: int | None,
     max_distractors: int,
     max_fault_atoms: int = 1,
     delayed_evidence_probability: float = 0.0,
@@ -124,7 +124,7 @@ def enumerate_round_candidates(
     The caller attaches stable *global* indices after all Scene/round
     candidates have been created. No language model is used here.
     """
-    if max_candidates < 1 or max_distractors < 1:
+    if (max_candidates is not None and max_candidates < 1) or max_distractors < 1:
         raise ValueError("candidate_exploration_limit_invalid")
     if any(kind not in ATOM_TO_MODE for kind in atomic_fault_kinds):
         raise ValueError("unsupported_candidate_kind")
@@ -186,7 +186,7 @@ def enumerate_round_candidates(
     prioritized = ([first_history] if first_history else []) + [
         row for row in ordered if row != first_history
     ]
-    sampled = prioritized[:max_candidates]
+    sampled = prioritized if max_candidates is None else prioritized[:max_candidates]
     result = []
     for slot, (tid, kind, variant) in enumerate(sampled, 1):
         item = deepcopy(round_plan)
@@ -194,7 +194,7 @@ def enumerate_round_candidates(
             round_plan["sample_id"] + f"-candidate-{slot:03d}"
         )
         item["candidate_count_total"] = len(ordered)
-        item["candidate_count_pruned"] = max(0, len(ordered) - max_candidates)
+        item["candidate_count_pruned"] = len(ordered) - len(sampled)
         item["candidate_variant_index"] = variant
         item["skip_reason"] = None
         item["fault_mode"] = kind
@@ -222,7 +222,7 @@ def enumerate_round_candidates(
 def expand_all_rounds(
     scenes: list[dict], round_plans: list[dict], *,
     atomic_fault_kinds: list[str],
-    max_candidates_per_round: int,
+    max_candidates_per_round: int | None,
     max_distractors_per_fault: int,
     max_fault_atoms: int,
     delayed_evidence_probability: float,
