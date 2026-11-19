@@ -78,6 +78,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "visible_claim_extraction.py",
         "main_decision_contract.py",
         "report_contract.py", "report_evidence.py", "result_text.py",
+        "scenario/history_conflicts.py",
         "report_validation.py", "public_language.py",
         "publication_guard.py",
         "state_machine.py", "report_author.py",
@@ -297,14 +298,17 @@ def _published_result_formats(episodes: list[dict]) -> dict:
                         decoded = json.loads(value)
                     except (ValueError, TypeError):
                         decoded = None
-                    label = (
-                        "typed_evidence_json" if isinstance(decoded, list)
-                        and all(isinstance(item, dict)
-                                and isinstance(item.get("values"), dict)
-                                and isinstance(item.get("source_fact_refs"), list)
-                                for item in decoded)
-                        else "natural_language"
-                    )
+                    from .result_text import parse_records
+                    if parse_records(value) is not None:
+                        label = "cited_record_prose_v1"
+                    elif (isinstance(decoded, list)
+                          and all(isinstance(item, dict)
+                                  and isinstance(item.get("values"), dict)
+                                  and isinstance(item.get("source_fact_refs"), list)
+                                  for item in decoded)):
+                        label = "typed_evidence_json"
+                    else:
+                        label = "legacy_prose"
                 counts[phase][label] += 1
     return {phase: dict(sorted(values.items()))
             for phase, values in sorted(counts.items())}
