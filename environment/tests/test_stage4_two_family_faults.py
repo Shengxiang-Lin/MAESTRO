@@ -622,6 +622,9 @@ class IntraReportFaultTests(unittest.TestCase):
                                        instruction=patch["instruction"],
                                        model_alias="model_1")
         state.set_public_report(patch["task_id"], earlier, round_number=1)
+        # Private task linkage without an explicit latest source scope is
+        # insufficient to establish a Main-visible contradiction.
+        self.assertEqual(comparison_rows(state), [])
         from environment.untrusted_orchestration.scenario.prior_observation import (
             latest_scope_statement,
         )
@@ -642,11 +645,24 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(state.detected_conflicts[-1]["recheck_task_id"],
                          "target")
         self.assertTrue(state.unresolved_cited_conflicts())
+        first_retry = state.register("target")
+        repeated = deterministic_report(
+            task, first_retry, instruction="Recheck the metric.",
+            model_alias="model_1",
+        )
+        repeated["finish_result"]["result"] = json.dumps([{
+            "values": {"metric": 55},
+            "source_fact_refs": ["hist_source:F002"],
+        }])
+        state.set_public_report("target", repeated, round_number=3)
+        # Dropping the scope sentence while preserving the wrong value
+        # cannot resolve a previously observed dispute.
+        self.assertTrue(state.unresolved_cited_conflicts())
         fresh = state.register("target")
         fixed = deterministic_report(task, fresh,
                                      instruction="Recheck the metric.",
                                      model_alias="model_1")
-        state.set_public_report("target", fixed, round_number=3)
+        state.set_public_report("target", fixed, round_number=4)
         self.assertFalse(state.unresolved_cited_conflicts())
 
     def test_history_survey_matches_explicit_project_field_rename(self):
