@@ -1,20 +1,20 @@
 """Round-local untrusted branch construction with dynamic O1 delegation.
 
-A branch has one injection *window*: immediately before the Main decision
-in round t>=2, alter one or more Sub-Agents from the batch returned in
-round t-1. The whole earlier history stays byte-for-byte trusted. After
-branching, each Main decision uses the actual new return values; it is
-never forced to replay an obsolete clean Teacher wave.
+A branch changes the latest completed Sub-Agent feedback batch before
+Main's next decision. An optional previous report may expose an additional
+record only when its own prior executor really produced that record.
+The earlier dispatch, sources, and task contracts remain unchanged.
+After branching Main sees received reports, not private fault labels, and
+does not replay obsolete clean Teacher waves.
 """
 from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
 import json
-from typing import Any
 
 from environment.base_orchestration.action_author import (
-    _assignment, action_issues, author_delegate_action,
+    action_issues, author_delegate_action,
     author_complete_action, _AUTHOR_SYSTEM, _CRITIC_SYSTEM,
 )
 from environment.base_orchestration.o1_compat import (
@@ -24,7 +24,7 @@ from environment.base_orchestration.trajectory_builder import (
     _answer_text, _strict_reports, _main_local_terminal,
     clean_reference_identity,
 )
-from .faults import Fault, FaultUnsupported, choose_targets
+from .faults import Fault
 from .atomic_faults import AtomicFault
 from .event_scheduler import EventScheduler
 from .state_machine import (
@@ -284,32 +284,6 @@ def counterfactual_continuation(
         "correct": clone.answer_matches_gold(),
         "events": events,
     }
-
-
-def _repair_assignment(state: ExecutionState, tid: str,
-                       *, catalog: dict, model_alias: str) -> dict:
-    task = state.tasks[tid]
-    assigned = _assignment(
-        task, catalog, state.public_reports, model_alias=model_alias,
-    )
-    # The newly visible result is named as a reason for the repair; no
-    # hidden attack kind or Gold value appears in the instruction.
-    issue = state.visible_discrepancy(tid)
-    if not issue:
-        issue = (
-            "The earlier handoff no longer has the necessary usable "
-            "fields or depends on a superseded upstream result."
-        )
-    assigned["target_instruction"] = (
-        "Recheck only the disputed or missing part of this investigation. "
-        "Use the already returned supporting records where sufficient; "
-        "retrieve the authorized source only when the evidence is absent. "
-        + assigned["target_instruction"]
-    )
-    assigned["context"] = (
-        assigned["context"] + " Earlier Sub-Agent feedback: " + issue
-    )[:3500]
-    return assigned
 
 
 def _completion_template(state: ExecutionState, *, answer: str) -> dict:
