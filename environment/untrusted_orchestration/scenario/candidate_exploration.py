@@ -1,10 +1,10 @@
 """Zero-LLM enumeration of genuine Stage-4 atomic fault candidates.
 
 The original Macro DAG is an executable *baseline*, not a verifier graph.
-For every eligible trusted feedback round, try each actual returned
-Sub-Agent task, supported atomic mechanism, and (optionally) several
-different genuine distractors. Each candidate must pass a real executor
-preflight on the frozen Scene. No random text or new World facts.
+All accepted feedback rounds are eligible. Existing returned-task faults
+and source-authorized repeated queries are preflighted on real WorkProducts.
+Delayed scenarios corrupt an earlier attempt only if an actual descendant
+was dispatched before a late clean query. No new World facts.
 
 This is deliberately limited to ONE initial fault per candidate; a
 multi-fault search is not required to obtain complex recovery trajectories.
