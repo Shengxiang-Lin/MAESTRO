@@ -1032,7 +1032,9 @@ class ExecutionState:
             if event.get("kind") != "cross_round_report_disagreement":
                 continue
             old, recent = event["compared_parent_tasks"]
-            if event.get("comparison_kind") == "earlier_source_lookup":
+            if event.get("comparison_kind") in {
+                "earlier_source_lookup", "earlier_source_survey",
+            }:
                 if (old, recent, event["claim"]["attribute"]) in remaining_prior:
                     return True
                 continue
