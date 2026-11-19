@@ -9,16 +9,16 @@ from tempfile import TemporaryDirectory
 
 from environment.tests.test_untrusted_orchestration import sample
 from environment.generate_question.execution.program_ir import Relation
-from environment.untrusted_orchestration.atomic_faults import (
+from environment.untrusted_orchestration.runtime.atomic_faults import (
     AtomicFault, probe_atoms,
 )
-from environment.untrusted_orchestration.event_scheduler import (
+from environment.untrusted_orchestration.runtime.event_scheduler import (
     EvidenceEvent, EventScheduler,
 )
 from environment.untrusted_orchestration.scenario.scenario_generator import (
     make_scenario, delayed_event_candidate,
 )
-from environment.untrusted_orchestration.faults import Fault, relation_rows
+from environment.untrusted_orchestration.runtime.faults import Fault, relation_rows
 from environment.untrusted_orchestration.reporting.report_author import naturalize_report
 from environment.untrusted_orchestration.state_machine import (
     ExecutionState, Attempt,
@@ -27,7 +27,7 @@ from environment.untrusted_orchestration.trajectory_builder import build_branch
 from environment.untrusted_orchestration.generate_turns import (
     generate_turns, _plan_branches, _publish,
 )
-from environment.untrusted_orchestration.publication_guard import (
+from environment.untrusted_orchestration.inspection.publication_guard import (
     review_turn_surface,
 )
 

@@ -3,16 +3,16 @@ from __future__ import annotations
 
 import unittest
 
-from environment.untrusted_orchestration.main_decision_contract import (
+from environment.untrusted_orchestration.orchestration.main_decision_contract import (
     build_main_decision_contract, critic_denies_confirmed_conflict,
 )
-from environment.untrusted_orchestration.visible_history import (
+from environment.untrusted_orchestration.inspection.visible_history import (
     public_field_activity, visible_history_reasoning_issues,
 )
-from environment.untrusted_orchestration.publication_guard import (
+from environment.untrusted_orchestration.inspection.publication_guard import (
     review_turn_surface,
 )
-from environment.untrusted_orchestration.reasoning_fidelity import (
+from environment.untrusted_orchestration.orchestration.reasoning_fidelity import (
     reasoning_evidence_issues,
 )
 

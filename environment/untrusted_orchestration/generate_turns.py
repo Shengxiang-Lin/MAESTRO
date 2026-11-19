@@ -20,19 +20,19 @@ from threading import Lock
 
 from tqdm.auto import tqdm
 
-from .faults import (
+from environment.untrusted_orchestration.runtime.faults import (
     Fault, FaultUnsupported, choose_targets, probe_eligible_fault_modes,
 )
-from .atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
+from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
 from .scenario.scenario_generator import make_scenario
 from .trajectory_builder import build_branch
 from .offline_pipeline import author_branch_reports, author_branch_main
 from .trusted_prefix import compile_trusted_prefixes
-from .publication_guard import review_turn_surface
+from environment.untrusted_orchestration.inspection.publication_guard import review_turn_surface
 from .scenario.candidate_exploration import expand_all_rounds
 from .scenario.candidate_selection import select_recovered_candidates
 from .scenario.round_sampling import select_feedback_rounds
-from .evidence_affordances import analyze_scene_evidence_affordances
+from environment.untrusted_orchestration.inspection.evidence_affordances import analyze_scene_evidence_affordances
 
 
 def _jsonl(path: Path) -> list[dict]:
@@ -70,25 +70,30 @@ def _hash_file(path: Path) -> str:
 def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
     directory = Path(__file__).resolve().parent
     code_files = (
-        "faults.py", "atomic_faults.py", "reporting/report_faults.py",
-        "event_scheduler.py",
+        "runtime/faults.py", "runtime/atomic_faults.py", "reporting/report_faults.py",
+        "runtime/event_scheduler.py",
         "scenario/scenario_generator.py", "scenario/round_sampling.py",
         "scenario/candidate_exploration.py",
         "scenario/candidate_selection.py",
-        "evidence_affordances.py", "reasoning_fidelity.py",
-        "visible_history.py", "visible_claim_state.py",
-        "visible_claim_extraction.py",
-        "main_decision_contract.py",
+        "inspection/evidence_affordances.py", "orchestration/reasoning_fidelity.py",
+        "inspection/visible_history.py", "inspection/visible_claim_state.py",
+        "inspection/visible_claim_extraction.py",
+        "orchestration/main_decision_contract.py",
         "reporting/report_contract.py", "reporting/report_evidence.py", "reporting/result_text.py",
         "scenario/history_conflicts.py",
         "scenario/prior_observation.py",
+        "scenario/handoff_conflicts.py",
+        "orchestration/action_binding.py",
+        "runtime/evidence_planning.py",
+        "rewards/decision_reward_state.py",
+        "rewards/orchestration_reward.py",
         "reporting/report_validation.py", "reporting/public_language.py",
-        "publication_guard.py",
+        "inspection/publication_guard.py",
         "state_machine.py", "reporting/report_author.py",
         "trusted_prefix.py",
         "trajectory_builder.py", "generate_turns.py",
-        "evidence_planning.py", "offline_pipeline.py",
-        "evidence_operators.py",
+        "offline_pipeline.py",
+        "runtime/evidence_operators.py",
         "../generate_question/execution/compiler.py",
         "../generate_question/execution/program_ir.py",
         "../base_orchestration/o1_compat.py",
@@ -1094,7 +1099,7 @@ def generate_turns(
             max_distractors_per_fault=max_distractors_per_fault,
             max_fault_atoms=max_fault_atoms,
             delayed_evidence_probability=delayed_evidence_probability,
-            seed=seed,
+            seed=seed, base=base,
         )
     if overwrite and output.exists():
         shutil.rmtree(output)

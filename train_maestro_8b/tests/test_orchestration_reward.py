@@ -4,10 +4,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from environment.untrusted_orchestration.decision_reward_state import (
+from environment.untrusted_orchestration.rewards.decision_reward_state import (
     SCHEMA, capture_decision_state,
 )
-from environment.untrusted_orchestration.orchestration_reward import (
+from environment.untrusted_orchestration.rewards.orchestration_reward import (
     orchestration_reward, score_decision,
 )
 
@@ -178,7 +178,7 @@ class DeterministicRewardTests(unittest.TestCase):
     def test_logged_attempt_replay_matches_live_stage4_snapshots(self):
         # Real deterministic Stage4 branch, without any LLM calls.
         from environment.tests.test_untrusted_orchestration import sample
-        from environment.untrusted_orchestration.faults import Fault
+        from environment.untrusted_orchestration.runtime.faults import Fault
         from environment.untrusted_orchestration.trajectory_builder import build_branch
         from train_maestro_8b.data.backfill_rewards import replay_reward_states
 
@@ -227,10 +227,10 @@ class DeterministicRewardTests(unittest.TestCase):
         def fake_assignment(_,tid,*,catalog,model_alias,request):
             return {"model":model_alias,"tools":["GoogleSearchAction"]}
         with patch(
-            "environment.untrusted_orchestration.decision_reward_state.evidence_request",
+            "environment.untrusted_orchestration.rewards.decision_reward_state.evidence_request",
             side_effect=fake_req
         ), patch(
-            "environment.untrusted_orchestration.decision_reward_state.evidence_assignment",
+            "environment.untrusted_orchestration.rewards.decision_reward_state.evidence_assignment",
             side_effect=fake_assignment
         ):
             reward_state = capture_decision_state(
@@ -246,10 +246,10 @@ class DeterministicRewardTests(unittest.TestCase):
         hidden_state = FakeState()
         hidden_state.current["A"].product = None
         with patch(
-            "environment.untrusted_orchestration.decision_reward_state.evidence_request",
+            "environment.untrusted_orchestration.rewards.decision_reward_state.evidence_request",
             side_effect=fake_req
         ), patch(
-            "environment.untrusted_orchestration.decision_reward_state.evidence_assignment",
+            "environment.untrusted_orchestration.rewards.decision_reward_state.evidence_assignment",
             side_effect=fake_assignment
         ):
             masked = capture_decision_state(

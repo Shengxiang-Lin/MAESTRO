@@ -1,7 +1,7 @@
 """Hard environment legality gate plus optional semantic quality reward."""
 from __future__ import annotations
 
-from environment.untrusted_orchestration.orchestration_reward import score_decision
+from environment.untrusted_orchestration.rewards.orchestration_reward import score_decision
 
 
 class HybridReward:

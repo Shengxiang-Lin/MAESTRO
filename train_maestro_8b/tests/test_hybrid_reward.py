@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from environment.untrusted_orchestration.decision_reward_state import SCHEMA
+from environment.untrusted_orchestration.rewards.decision_reward_state import SCHEMA
 from train_maestro_8b.policy.hybrid_reward import HybridReward
 from train_maestro_8b.policy.semantic_judge import (
     DIMENSIONS, SemanticJudge, parse_semantic_response,

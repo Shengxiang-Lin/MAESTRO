@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from environment.untrusted_orchestration.visible_claim_state import (
+from environment.untrusted_orchestration.inspection.visible_claim_state import (
     audit_visible_claim_states,
 )
 from environment.implement_subtask.visible_evidence import visible_year_claims
@@ -269,7 +269,7 @@ class GeneralVisibleClaimStateTests(unittest.TestCase):
         )
 
     def test_explicit_field_claim_in_result_prose_is_visible(self):
-        from environment.untrusted_orchestration.visible_claim_extraction import (
+        from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
             extract_visible_claims,
         )
         claims, parse = extract_visible_claims({
@@ -287,7 +287,7 @@ class GeneralVisibleClaimStateTests(unittest.TestCase):
         self.assertEqual(claims[0]["value"], 4)
 
     def test_source_only_metric_is_retained_without_entity_invention(self):
-        from environment.untrusted_orchestration.visible_claim_extraction import (
+        from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
             extract_visible_claims,
         )
         claims, parse = extract_visible_claims({
@@ -304,7 +304,7 @@ class GeneralVisibleClaimStateTests(unittest.TestCase):
         self.assertEqual(claims[0]["value"], 7)
 
     def test_current_dossier_identifier_has_observation_provenance(self):
-        from environment.untrusted_orchestration.visible_claim_extraction import (
+        from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
             extract_visible_claims,
         )
         world = scene(known_origins=False)
@@ -354,7 +354,7 @@ class GeneralVisibleClaimStateTests(unittest.TestCase):
         self.assertEqual(current["independent_origins"], 2)
 
     def test_natural_code_owned_result_remains_parseable(self):
-        from environment.untrusted_orchestration.visible_claim_extraction import (
+        from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
             extract_visible_claims,
         )
         found, diagnostics = extract_visible_claims({

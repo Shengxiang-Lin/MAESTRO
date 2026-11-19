@@ -182,7 +182,7 @@ def make_trainer_class():
             actions = []
             rewards = []
             metadata = []
-            from environment.untrusted_orchestration.orchestration_reward import score_decision
+            from environment.untrusted_orchestration.rewards.orchestration_reward import score_decision
             with torch.no_grad():
                 candidates = self.engine.sample_group(
                     prefix, count=self.num_generations, max_new_tokens=self.max_new_tokens,
@@ -274,7 +274,7 @@ def make_trainer_class():
                             "Reference SFT fallback is incompatible with a "
                             "custom reward plugin; use zero_adv_strategy=skip"
                         )
-                    from environment.untrusted_orchestration.orchestration_reward import (
+                    from environment.untrusted_orchestration.rewards.orchestration_reward import (
                         score_decision,
                     )
                     reference = row.get("reference_action")

@@ -10,8 +10,8 @@ from __future__ import annotations
 from environment.base_orchestration.generation_meta import (
     GENERATION_PROCESS_RE,
 )
-from .reporting.public_language import internal_labels_in_text
-from .visible_history import visible_history_reasoning_issues
+from environment.untrusted_orchestration.reporting.public_language import internal_labels_in_text
+from environment.untrusted_orchestration.inspection.visible_history import visible_history_reasoning_issues
 
 
 # Kept as an alias for existing callers; canonical rules live in one module.

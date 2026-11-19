@@ -43,7 +43,7 @@ def export(risk_dir, main_turns, output_dir, decision_states=None):
             str(private_path) + ": rerun Stage4 with the deterministic "
             "decision-reward snapshot writer; old journals lack this state"
         )
-    from environment.untrusted_orchestration.decision_reward_state import SCHEMA
+    from environment.untrusted_orchestration.rewards.decision_reward_state import SCHEMA
     private = {}
     for entry in iter_jsonl(private_path):
         key = (entry["task_id"], entry["round_sample_id"], entry["decision_round"])

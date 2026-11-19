@@ -7,13 +7,13 @@ import unittest
 from environment.base_orchestration.action_author import (
     author_delegate_action, proposed_template_action,
 )
-from environment.untrusted_orchestration.main_decision_contract import (
+from environment.untrusted_orchestration.orchestration.main_decision_contract import (
     build_main_decision_contract, critic_denies_confirmed_conflict,
 )
-from environment.untrusted_orchestration.reasoning_fidelity import (
+from environment.untrusted_orchestration.orchestration.reasoning_fidelity import (
     reasoning_evidence_issues,
 )
-from environment.untrusted_orchestration.publication_guard import (
+from environment.untrusted_orchestration.inspection.publication_guard import (
     review_turn_surface,
 )
 from environment.untrusted_orchestration.trajectory_builder import _history_batch

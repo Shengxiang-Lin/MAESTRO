@@ -14,7 +14,7 @@ from environment.generate_question.auditing.quality import validate_replay
 from environment.implement_subtask.realize import realize_scene
 from environment.base_orchestration.trajectory_builder import build_episode
 from environment.untrusted_orchestration.trajectory_builder import build_branch
-from environment.untrusted_orchestration.faults import Fault
+from environment.untrusted_orchestration.runtime.faults import Fault
 
 
 def accepted_reports(scene):
@@ -275,7 +275,7 @@ class CurrentStagePipelineTests(unittest.TestCase):
         from environment.untrusted_orchestration.reporting.report_contract import (
             build_report_contract, render_delivered_result,
         )
-        from environment.untrusted_orchestration.faults import relation_rows
+        from environment.untrusted_orchestration.runtime.faults import relation_rows
         scene = current_scene(7, "medium")
         rows = accepted_reports(scene)
         reviewed = {r["macro_task_id"]: r for r in rows}

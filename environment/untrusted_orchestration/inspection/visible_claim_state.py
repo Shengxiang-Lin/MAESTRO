@@ -17,10 +17,10 @@ from hashlib import sha256
 from itertools import combinations
 import json
 
-from environment.untrusted_orchestration.evidence_operators import (
+from environment.untrusted_orchestration.runtime.evidence_operators import (
     check_warrant, relate_claims,
 )
-from .visible_claim_extraction import extract_visible_claims
+from environment.untrusted_orchestration.inspection.visible_claim_extraction import extract_visible_claims
 
 SCHEMA = "claim_source_dependency"
 SCHEMA_VERSION = 1

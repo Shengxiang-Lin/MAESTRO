@@ -131,11 +131,22 @@ Main-observable issue families only:
    is true, and same-source reports are never counted as independent
    corroboration. Main can recheck, repair or continue independent work.
 
-When a prior report lacks an explicit comparable record, Stage 4
-first checks for a row in an earlier task's already executed WorkProduct.
-If that is unsupported, it can instead schedule one **bounded
+**History-first keyed handoffs** are now planned before selecting the
+fault. An earlier Sub-Agent must have actually delivered a cited, unique
+key; a later Sub-Agent must execute a genuine authorized `lookup_by_key`
+whose output preserves that very field. Stage 4A then preferentially
+chooses a *real executable* fault that makes the latest delivered value
+disagree with the already-public input. The old report is reformatted
+only when it literally contained that key, so a Main-visible comparison
+requires no future lookup, full source scan, or hidden Gold.
+
+When that candidate is unavailable, Stage 4 still checks for a row
+in an earlier task's already executed WorkProduct. If that is unsupported,
+it can instead schedule one **bounded
 source survey in an existing earlier batch**, provided that batch has a
-legal spare slot. The survey returns all existing key/value pairs (up to
+legal spare slot **and the source permits browsing**. Keyed-only
+stores may never be scanned in a prior wave without an already available
+authorized upstream key. The survey returns all existing key/value pairs (up to
 24 source rows), with original FactRefs; it does **not** select a future
 answer or lookup key in the earlier Main dispatch. When the newest report
 arrives, its actual executed lookup key is stated explicitly in public
@@ -202,23 +213,26 @@ a source or claiming unsupported verification.
    `scenario/candidate_selection.py`: explore
    **one atomic fault per candidate**, replay recovery and select
    causally distinct branches before expensive language review.
-3. `scenario/history_conflicts.py`, `scenario/prior_observation.py`,
-   `state_machine.py`, `evidence_planning.py`: compare historical claims,
+3. `scenario/handoff_conflicts.py`, `scenario/history_conflicts.py`,
+   `scenario/prior_observation.py`, `state_machine.py`,
+   `runtime/evidence_planning.py`: compare historical claims,
    create supported prior-source observations, version WorkProducts,
    track invalidations/retries, generate permitted evidence requests.
 4. `reporting/report_contract.py`, `reporting/report_author.py`:
    render actual attempt
    deliveries and review Sub-Agent language, without restoring hidden
    clean values.
-5. `visible_claim_extraction.py`, `visible_claim_state.py`: compute
+5. `inspection/visible_claim_extraction.py`,
+   `inspection/visible_claim_state.py`: compute
    **Claim–Source–Dependency** snapshots from only explicitly returned
    public report text. Source origins come from structural provenance,
    never from guessed agreement. Retries replace old claims. Unparseable
    text and unknown origins remain unverified.
-6. `main_decision_contract.py`, `offline_pipeline.py`: naturalize
+6. `orchestration/main_decision_contract.py`,
+   `offline_pipeline.py`: naturalize
    the selected legal Main next action against only the current
    public evidence; Oracle/Gold remains private.
-7. `publication_guard.py`: fail closed on private/internal wording
+7. `inspection/publication_guard.py`: fail closed on private/internal wording
    leaks and publish only globally recovered reviewed positives.
 
 ## Stage-2 evidence contract reuse (Stage-4 only)
@@ -280,7 +294,7 @@ a clean Oracle value.
 ## Deterministic per-round orchestration reward
 
 The Stage-2 scorer in
-`environment/untrusted_orchestration/orchestration_reward.py`
+`environment/untrusted_orchestration/rewards/orchestration_reward.py`
 uses action binding, evidence coverage, priority, legal parallel utilization
 and focused field requests. It does **not** compare with Teacher natural
 language or run a future-outcome simulator. Broken dependency, duplicate,
@@ -318,7 +332,7 @@ python -m environment generate-untrusted-turns \\
   --config environment/configs/untrusted_orchestration.yaml \\
   --max-scenes 10 --branches-per-scene 3 --workers 4 \\
   --mode llm \\
-  --output-dir environment/data/stage4_history_v4_10
+  --output-dir environment/data/stage4_history_v6_10
 ```
 
 `candidates_simulated` counts inexpensive preflight trials, while
@@ -336,3 +350,19 @@ delivered Result really cites 14 **unique** nonempty FactRefs. The guard
 normalizes only that exact, explicitly labeled count phrase; an unsupported
 count or unrelated number remains invalid. Date wording remains anchored
 to actual observed ISO dates. Neither rule loosens general factual checks.
+
+## Source-tree layout (current)
+
+The root package keeps only primary CLI/pipeline entrypoints
+(`generate_turns.py`, `config.py`, `trajectory_builder.py`,
+`offline_pipeline.py`, `state_machine.py`, `trusted_prefix.py`,
+`decision_reward_replay.py`). Implementation modules live in:
+- `scenario/`: source-history-first candidate generation and selection
+- `runtime/`: source-constrained fault execution and evidence planning
+- `reporting/`: Sub-Agent report content, fidelity and report-level faults
+- `orchestration/`: Main action binding, contracts and language fidelity
+- `inspection/`: only Main-visible claim extraction, history and safeguards
+- `rewards/`: deterministic per-round reward contracts
+
+Old top-level file paths are deleted, not maintained as compatibility wrappers.
+Calls from the training pipeline and tests use the new canonical module paths.

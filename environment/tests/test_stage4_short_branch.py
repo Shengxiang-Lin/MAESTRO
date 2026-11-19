@@ -11,7 +11,7 @@ from environment.untrusted_orchestration.scenario.candidate_selection import (
     select_recovered_candidates, classify_trial,
 )
 from environment.untrusted_orchestration.config import load_config
-from environment.untrusted_orchestration.faults import Fault
+from environment.untrusted_orchestration.runtime.faults import Fault
 from environment.untrusted_orchestration.trajectory_builder import build_branch
 from environment.tests.test_untrusted_orchestration import sample
 

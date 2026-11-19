@@ -41,7 +41,7 @@ class TRLTrainerTinyQwen3Tests(unittest.TestCase):
         from peft import LoraConfig, TaskType, get_peft_model
         from trl import GRPOConfig
 
-        from environment.untrusted_orchestration.decision_reward_state import SCHEMA
+        from environment.untrusted_orchestration.rewards.decision_reward_state import SCHEMA
         from train_maestro_8b.risk.model import WindowRiskHead
         from train_maestro_8b.policy.model import RiskAwarePolicy
         from train_maestro_8b.policy.trainer import (

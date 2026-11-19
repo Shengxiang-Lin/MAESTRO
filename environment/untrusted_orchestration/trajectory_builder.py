@@ -24,15 +24,16 @@ from environment.base_orchestration.trajectory_builder import (
     _answer_text, _strict_reports, _main_local_terminal,
     clean_reference_identity,
 )
-from .faults import Fault
-from .atomic_faults import AtomicFault
-from .event_scheduler import EventScheduler
+from environment.untrusted_orchestration.runtime.faults import Fault
+from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault
+from environment.untrusted_orchestration.runtime.event_scheduler import EventScheduler
 from .state_machine import (
     ExecutionState, deterministic_report, public_history_item,
 )
 from .reporting.report_author import naturalize_report
-from .evidence_planning import schedule_evidence_requests
+from environment.untrusted_orchestration.runtime.evidence_planning import schedule_evidence_requests
 from .scenario.history_conflicts import expose_executed_prior_record
+from .scenario.handoff_conflicts import expose_prior_handoff
 from .scenario.prior_observation import (
     propose_prior_observation, patch_scene as patch_prior_observation_scene,
     latest_scope_statement,
@@ -405,7 +406,16 @@ def build_branch(
     # earlier task, not a new synthetic verifier or an added Main dispatch.
     # Preserve the same augmented prior evidence for a paired clean variant.
     history_anchor = {"status": "not_applicable", "reason": "not_targeted"}
-    if (scenario_plan is not None
+    # A source-legal, earlier *public* keyed input was chosen before the
+    # atomic fault. Preserve that real prior WorkProduct and only make its
+    # already stated field explicit; no new source access is introduced.
+    handoff_plan = (scenario_plan or {}).get("history_first_plan")
+    if handoff_plan is not None:
+        history_anchor = expose_prior_handoff(
+            state, task_entries, trajectory, handoff_plan,
+        )
+    if (history_anchor["status"] != "generated"
+            and scenario_plan is not None
             and scenario_plan.get("mode") == "event_driven"
             and len(faults) == 1
             and faults[0].atom_kind in {
@@ -417,7 +427,7 @@ def build_branch(
             latest_task_ids={faults[0].task_id},
         )
     prior_observation_patch = None
-    if (history_anchor["status"] != "exposed"
+    if (history_anchor["status"] not in {"exposed", "generated"}
             and scenario_plan is not None
             and scenario_plan.get("mode") == "event_driven"
             and len(faults) == 1
@@ -636,7 +646,7 @@ def build_branch(
         )
         # Record the FULL decision choice set before the Author or any new
         # Sub-Agent observations. The record is private training metadata.
-        from .decision_reward_state import capture_decision_state
+        from environment.untrusted_orchestration.rewards.decision_reward_state import capture_decision_state
         decision_reward_states.append(capture_decision_state(
             state, round_number=round_number, repairs=repairs,
             ready=ready, blocked=scheduling["blocked"],
@@ -880,7 +890,7 @@ def build_branch(
     # Teacher-side state is computed from the ACTUAL public report text in
     # each returned batch, including injected faults and retry replacements.
     # It is never passed to Main (which still sees only O1 formatted history).
-    from .visible_claim_state import audit_visible_claim_states
+    from environment.untrusted_orchestration.inspection.visible_claim_state import audit_visible_claim_states
     decision_bindings = {
         d["round"]: d["task_ids"] for d in decisions
         if d.get("decision_kind") == "delegate"

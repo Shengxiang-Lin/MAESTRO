@@ -12,7 +12,7 @@ from environment.__main__ import main
 from environment.tests.current_stage1 import current_scene
 from environment.implement_subtask.realize import realize_scene
 from environment.base_orchestration.trajectory_builder import build_episode
-from environment.untrusted_orchestration.faults import (
+from environment.untrusted_orchestration.runtime.faults import (
     Fault, FaultUnsupported, probe_eligible_fault_modes,
 )
 from environment.untrusted_orchestration.trajectory_builder import (
@@ -1078,7 +1078,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
 
     def test_actual_attempt_trace_matches_post_fault_relation(self):
         """The report-facing trace must come from executed, changed rows."""
-        from environment.untrusted_orchestration.faults import relation_rows
+        from environment.untrusted_orchestration.runtime.faults import relation_rows
         first = self.scene["macro_graph"]["reference_waves"][0]
         tasks = {t["task_id"]: t for t in
                  self.scene["macro_graph"]["tasks"]}
@@ -1727,7 +1727,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         )
 
     def test_evidence_request_retargets_missing_and_partial_fields(self):
-        from environment.untrusted_orchestration.evidence_planning import (
+        from environment.untrusted_orchestration.runtime.evidence_planning import (
             evidence_request,
         )
         task = next(

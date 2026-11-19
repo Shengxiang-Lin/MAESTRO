@@ -16,7 +16,7 @@ from environment.untrusted_orchestration.scenario.candidate_exploration import (
 from environment.untrusted_orchestration.scenario.candidate_selection import (
     select_recovered_candidates, classify_trial,
 )
-from environment.untrusted_orchestration.evidence_affordances import (
+from environment.untrusted_orchestration.inspection.evidence_affordances import (
     analyze_scene_evidence_affordances,
 )
 from environment.untrusted_orchestration.generate_turns import (

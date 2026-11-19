@@ -5,9 +5,9 @@ from tempfile import TemporaryDirectory
 import json
 import unittest
 
-from environment.untrusted_orchestration.decision_reward_state import SCHEMA
+from environment.untrusted_orchestration.rewards.decision_reward_state import SCHEMA
 from train_maestro_8b.data.audit_rollouts import summarize_rollouts
-from environment.untrusted_orchestration.orchestration_reward import score_decision
+from environment.untrusted_orchestration.rewards.orchestration_reward import score_decision
 from train_maestro_8b.policy.train import (
     select_warmup_records, parse_args, validate_args,
 )

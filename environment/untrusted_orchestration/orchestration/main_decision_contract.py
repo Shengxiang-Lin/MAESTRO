@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import re
 
-from .visible_history import public_field_activity
+from environment.untrusted_orchestration.inspection.visible_history import public_field_activity
 
 _FIELD = re.compile(r"disagree\s+about\s+([A-Za-z][A-Za-z0-9 _-]{0,75})\s*:", re.I)
 _VALUE = (r"(?:Case-\d+|Entry-\d+|Dossier-[A-Za-z0-9]+|"
@@ -30,7 +30,7 @@ def _field_values(text: str, field: str) -> set[str]:
     if not isinstance(text, str):
         return set()
     try:
-        from .reporting.result_text import delivered_records
+        from environment.untrusted_orchestration.reporting.result_text import delivered_records
         rows = delivered_records(text)
         if isinstance(rows, dict):
             rows = [rows]

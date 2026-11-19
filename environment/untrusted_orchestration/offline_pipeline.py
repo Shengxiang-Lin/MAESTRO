@@ -24,13 +24,13 @@ from environment.generate_question.execution.program_ir import Relation
 from .reporting.report_author import naturalize_report
 from .scenario.prior_observation import patch_scene as patch_prior_observation_scene
 from .reporting.public_language import sanitize_public_report
-from .reasoning_fidelity import reasoning_evidence_issues
-from .visible_history import visible_history_reasoning_issues
-from .main_decision_contract import (
+from environment.untrusted_orchestration.orchestration.reasoning_fidelity import reasoning_evidence_issues
+from environment.untrusted_orchestration.inspection.visible_history import visible_history_reasoning_issues
+from environment.untrusted_orchestration.orchestration.main_decision_contract import (
     build_main_decision_contract, critic_denies_confirmed_conflict,
 )
 from .state_machine import Attempt
-from .visible_claim_state import audit_visible_claim_states
+from environment.untrusted_orchestration.inspection.visible_claim_state import audit_visible_claim_states
 from .trajectory_builder import (
     _MAIN_DECISION_AUTHOR_SYSTEM, _MAIN_REASONING_CRITIC_SYSTEM, _history_batch,
     _as_public,
@@ -164,7 +164,7 @@ def _public_done_null_fields(entries: list[dict]) -> set[str]:
     status/result/summary; the O1 prompt formatter does not produce JSON.
     This check uses exactly the report values already delivered to Main.
     """
-    from .main_decision_contract import _visible_finish
+    from environment.untrusted_orchestration.orchestration.main_decision_contract import _visible_finish
     missing = set()
     for batch in entries:
         for report in batch.get("subtask_results", []):
@@ -215,7 +215,7 @@ def _visibility_issues(
                             & delivered_null_fields):
                 missing.append(request["request_id"] + ":missing_status")
         if request["operation"] == "verify_conflicting_evidence":
-            from .evidence_planning import _IDENT
+            from environment.untrusted_orchestration.runtime.evidence_planning import _IDENT
             for identifier in _IDENT.findall(
                 request["main_visible_justification"]
             ):

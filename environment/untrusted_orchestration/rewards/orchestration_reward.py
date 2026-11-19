@@ -18,8 +18,8 @@ from __future__ import annotations
 from itertools import combinations
 import json
 
-from .action_binding import bind_tasks
-from .decision_reward_state import SCHEMA
+from environment.untrusted_orchestration.orchestration.action_binding import bind_tasks
+from environment.untrusted_orchestration.rewards.decision_reward_state import SCHEMA
 
 
 def _parse_action(candidate):

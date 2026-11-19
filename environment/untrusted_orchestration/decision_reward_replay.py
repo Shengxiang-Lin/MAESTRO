@@ -16,13 +16,13 @@ import json
 from pathlib import Path
 
 from environment.generate_question.execution.program_ir import Relation
-from environment.untrusted_orchestration.event_scheduler import EventScheduler
-from environment.untrusted_orchestration.faults import relation_rows
+from environment.untrusted_orchestration.runtime.event_scheduler import EventScheduler
+from environment.untrusted_orchestration.runtime.faults import relation_rows
 from environment.untrusted_orchestration.state_machine import Attempt, ExecutionState
 from environment.untrusted_orchestration.trajectory_builder import (
     _main_local_terminal, source_catalog,
 )
-from environment.untrusted_orchestration.decision_reward_state import (
+from environment.untrusted_orchestration.rewards.decision_reward_state import (
     capture_decision_state,
 )
 

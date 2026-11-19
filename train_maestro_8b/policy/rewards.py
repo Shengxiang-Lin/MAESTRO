@@ -64,7 +64,7 @@ def teacher_proxy_reward(candidate, record):
 
 def resolve_reward(spec=None):
     if spec is None:
-        from environment.untrusted_orchestration.orchestration_reward import (
+        from environment.untrusted_orchestration.rewards.orchestration_reward import (
             orchestration_reward,
         )
         return orchestration_reward

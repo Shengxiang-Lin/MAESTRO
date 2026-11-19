@@ -9,9 +9,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import TYPE_CHECKING
 
-from ..faults import relation_rows
+from environment.untrusted_orchestration.runtime.faults import relation_rows
 from ..reporting.result_text import render_records
-from ..visible_claim_extraction import extract_visible_claims, SUBJECT_FIELDS
+from environment.untrusted_orchestration.inspection.visible_claim_extraction import extract_visible_claims, SUBJECT_FIELDS
 
 if TYPE_CHECKING:
     from ..state_machine import ExecutionState

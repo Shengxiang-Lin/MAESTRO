@@ -9,7 +9,7 @@ authored or its Sub-Agent results become available.
 """
 from __future__ import annotations
 
-from .evidence_planning import evidence_assignment, evidence_request
+from environment.untrusted_orchestration.runtime.evidence_planning import evidence_assignment, evidence_request
 
 SCHEMA = "maestro.decision_reward_state.v1"
 

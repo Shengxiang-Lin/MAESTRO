@@ -13,7 +13,7 @@ from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.reporting.public_language import (
     sanitize_public_prose, sanitize_public_report,
 )
-from environment.untrusted_orchestration.publication_guard import (
+from environment.untrusted_orchestration.inspection.publication_guard import (
     review_turn_surface,
 )
 from environment.untrusted_orchestration.reporting.report_evidence import (
@@ -515,7 +515,7 @@ class StructuredFactSpineTests(unittest.TestCase):
         self.assertIn("incomplete delivered row set", result)
 
     def test_typed_fault_report_delivers_exact_cited_rows_to_main(self):
-        from environment.untrusted_orchestration.visible_claim_extraction import (
+        from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
             extract_visible_claims,
         )
         contract = {
@@ -603,7 +603,7 @@ class StructuredFactSpineTests(unittest.TestCase):
         )
 
     def test_natural_stage2_ids_do_not_infer_hidden_or_negated_claims(self):
-        from environment.untrusted_orchestration.visible_claim_extraction import (
+        from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
             extract_visible_claims,
         )
         def extract(result):
