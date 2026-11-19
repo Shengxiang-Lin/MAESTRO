@@ -272,6 +272,7 @@ def select_recovered_candidates(
     max_selected_per_round: int | None,
     strategy: str = "causal_rank",
     max_diagnostics_per_scene: int = 0,
+    target_main_turns: int | None = None,
     seed: int = 17,
 ) -> tuple[set[int], list[dict], dict]:
     """Select distinct recoveries plus a bounded sample of real failures.
@@ -285,12 +286,16 @@ def select_recovered_candidates(
         or not 1 <= max_selected_per_round <= 8
     ):
         raise ValueError("invalid_selection_cap")
-    if strategy not in {"causal_rank", "stratified"}:
+    if strategy not in {"causal_rank", "stratified", "global_balanced"}:
         raise ValueError("invalid_candidate_selection_strategy")
     if type(max_diagnostics_per_scene) is not int or not (
         0 <= max_diagnostics_per_scene <= 8
     ):
         raise ValueError("invalid_diagnostic_selection_cap")
+    if target_main_turns is not None and (
+        type(target_main_turns) is not int or target_main_turns < 1
+    ):
+        raise ValueError("invalid_global_main_turn_budget")
     if len(planned) != len(journals):
         raise ValueError("candidate_selection_journal_alignment_invalid")
 
@@ -317,7 +322,7 @@ def select_recovered_candidates(
             row for row in groups[key]
             if row["execution_outcome"] == "recovered"
         ]
-        if strategy == "stratified":
+        if strategy in {"stratified", "global_balanced"}:
             eligible.sort(key=lambda row: (
                 # Scarce, successfully recovered historical disagreements
                 # outrank routine missing/partial report recoveries.
@@ -350,6 +355,75 @@ def select_recovered_candidates(
                 selected.add(candidate["candidate_index"])
                 candidate["selection_purpose"] = "positive"
                 category_usage[candidate["category"]] += 1
+
+    # The global budget counts complete, recoverable MAIN decision turns,
+    # not 4A trial count or number of Episodes. Each Episode stays intact.
+    # Simulated failures never become positive recovery SFT data. Scarce
+    # source-backed kinds get priority instead of hallucinated balancing.
+    available_by_kind = Counter(
+        rows[i]["atom_kind"] for i in selected
+    )
+    if target_main_turns is not None:
+        from collections import deque
+        candidates = defaultdict(list)
+        for i in selected:
+            candidates[rows[i]["atom_kind"]].append(rows[i])
+        # Prefer rare recovery EFFECTS and policies within each kind.
+        for kind, choices in candidates.items():
+            effects = Counter(row["recovery_effect"] for row in choices)
+            policies = Counter(row["policy_signature"] for row in choices)
+            choices.sort(key=lambda row: (
+                effects[row["recovery_effect"]],
+                policies[row["policy_signature"]],
+                -row["actual_invalidations"],
+                -len(row["history_conflict_round_gaps"]),
+                tie(row),
+            ))
+        queues = {kind: deque(items) for kind, items in candidates.items()}
+        chosen = set()
+        spent = Counter()
+        used_effects = Counter()
+        used_policies = Counter()
+        used_scenes = Counter()
+        remaining = target_main_turns
+        while remaining > 0:
+            feasible = []
+            for kind, queue in queues.items():
+                # Whole Episodes only: try other already-executed candidates
+                # when the top one does not fit the remaining turn budget.
+                choices = [
+                    row for row in queue
+                    if 0 < row["decision_rounds_post_fork"] <= remaining
+                ]
+                if not choices:
+                    continue
+                pick = min(choices, key=lambda row: (
+                    used_effects[(kind, row["recovery_effect"])],
+                    used_policies[(kind, row["policy_signature"])],
+                    used_scenes[row["question_id"]],
+                    -row["actual_invalidations"],
+                    tie(row),
+                ))
+                feasible.append((kind, pick))
+            if not feasible:
+                break
+            kind, pick = min(feasible, key=lambda pair: (
+                spent[pair[0]],
+                -available_by_kind[pair[0]] == 0,
+                pair[0],
+            ))
+            queues[kind].remove(pick)
+            index = pick["candidate_index"]
+            chosen.add(index)
+            turns = pick["decision_rounds_post_fork"]
+            remaining -= turns
+            spent[kind] += turns
+            used_effects[(kind, pick["recovery_effect"])] += 1
+            used_policies[(kind, pick["policy_signature"])] += 1
+            used_scenes[pick["question_id"]] += 1
+        for index in selected - chosen:
+            rows[index]["selection_purpose"] = "budget_reserve"
+        selected = chosen
 
     # Keep some *genuine* non-recovered branches for reliable observable
     # claim-state diagnostics. They must have a replayed episode; do not
@@ -405,6 +479,8 @@ def select_recovered_candidates(
             if row["selection_purpose"] == "positive"
             else "nonrecovered_observation_diagnostic"
             if row["selection_purpose"] == "diagnostic"
+            else "global_turn_budget_reserve"
+            if row["selection_purpose"] == "budget_reserve"
             else "not_execution_recovered"
             if row["execution_outcome"] != "recovered"
             else "deduplicated_or_lower_priority_within_feedback_round"
@@ -431,6 +507,16 @@ def select_recovered_candidates(
         row["recovery_effect"] for row in rows
     )
     stats = {
+        "target_main_turns": target_main_turns,
+        "estimated_selected_main_turns": sum(
+            rows[index]["decision_rounds_post_fork"] for index in selected
+        ),
+        "available_recovered_by_fault_kind": dict(
+            sorted(available_by_kind.items())
+        ),
+        "selected_recovered_by_fault_kind": dict(sorted(Counter(
+            rows[index]["atom_kind"] for index in selected
+        ).items())),
         "historical_anchor_status_distribution": dict(sorted(Counter(
             row["historical_anchor_status"] for row in rows
             if row["historical_anchor_status"] not in (None, "not_applicable")
