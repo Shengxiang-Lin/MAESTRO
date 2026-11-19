@@ -33,6 +33,9 @@ from .state_machine import (
 from .report_author import naturalize_report
 from .evidence_planning import schedule_evidence_requests
 from .scenario.history_conflicts import expose_executed_prior_record
+from .scenario.prior_observation import (
+    propose_prior_observation, patch_scene as patch_prior_observation_scene,
+)
 
 
 _MAIN_AUTHOR_SYSTEM = _AUTHOR_SYSTEM + """
@@ -412,8 +415,69 @@ def build_branch(
             state, task_entries, trajectory,
             latest_task_ids={faults[0].task_id},
         )
+    prior_observation_patch = None
+    if (history_anchor["status"] != "exposed"
+            and scenario_plan is not None
+            and scenario_plan.get("mode") == "event_driven"
+            and len(faults) == 1
+            and faults[0].atom_kind in {
+                "wrong_retrieval", "wrong_entity_binding",
+                "fabricated_claim", "computation_error",
+            }):
+        prior_observation_patch, prior_diag = propose_prior_observation(
+            state, faults[0].task_id, branch_round=branch_round,
+            max_parallel_tasks=max_parallel_tasks,
+        )
+        if prior_observation_patch is not None:
+            previous_scene = scene
+            scene = patch_prior_observation_scene(scene, prior_observation_patch)
+            state.scene = scene
+            tid = prior_observation_patch["task_id"]
+            state.tasks[tid] = prior_observation_patch["task"]
+            state.attempts[tid] = []
+            attempt = state.register(tid)
+            index = prior_observation_patch["prior_wave_index"]
+            prior_action = trajectory[index]
+            prior_entry = task_entries[index]
+            slot = len(prior_action["result"]["subtask_results"])
+            current_wave = previous_scene["macro_graph"]["reference_waves"][
+                branch_round - 2
+            ]
+            current_slot = current_wave.index(faults[0].task_id)
+            original_assignment = trajectory[-1]["params"]["tasks"][current_slot]
+            instruction = prior_observation_patch["instruction"]
+            report = deterministic_report(
+                state.tasks[tid], attempt,
+                instruction=instruction, model_alias=model_alias,
+            )
+            report["subtask_index"] = slot
+            state.set_public_report(tid, report, round_number=index + 1)
+            prior_action["params"]["tasks"].append({
+                "task_instruction": instruction,
+                "context": (
+                    "A prior source-backed investigation for the same "
+                    "question. Return only the selected source record."
+                ),
+                "model": model_alias,
+                "tools": list(original_assignment["tools"]),
+            })
+            prior_action["result"]["subtask_results"].append(report)
+            prior_action["result"]["total_subtasks"] += 1
+            prior_action["result"]["total_steps"] += report["steps_taken"]
+            prior_action["result"]["all_done"] = all(
+                (item.get("finish_result") or {}).get("status") == "done"
+                for item in prior_action["result"]["subtask_results"]
+            )
+            prior_entry["subtask_results"].append(
+                public_history_item(report, slot)
+            )
+            prior_entry["total_steps"] += report["steps_taken"]
+            history_anchor = prior_diag
+        else:
+            history_anchor = prior_diag
+
     paired_clean_history = None
-    if history_anchor["status"] == "exposed":
+    if history_anchor["status"] in {"exposed", "generated"}:
         paired_clean_history = deepcopy(trajectory)
         # Only the current fault differs between the clean/error variants;
         # their earlier source-backed history remains identical.
@@ -828,6 +892,7 @@ def build_branch(
         "clean_reference_identity": clean_identity,
         "faults": injected,
         "history_conflict_anchor": history_anchor,
+        "prior_observation_patch": prior_observation_patch,
         "paired_clean_history": paired_clean_history,
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
