@@ -567,7 +567,7 @@ class IntraReportFaultTests(unittest.TestCase):
         patch, probe = propose_prior_observation(
             state, "target", branch_round=3, max_parallel_tasks=5,
         )
-        self.assertIsNotNone(patch)
+        self.assertIsNotNone(patch, probe)
         self.assertEqual(probe["status"], "generated")
         self.assertEqual(patch["prior_wave_index"], 0)
         patched = patch_scene(scene, patch)
