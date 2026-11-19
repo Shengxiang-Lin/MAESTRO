@@ -151,18 +151,20 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
     return episode, audit
 
 
-def _public_done_null_fields(public_history: str) -> set[str]:
-    """Read missing typed fields ONLY from the already delivered history."""
-    try:
-        batches = json.loads(public_history)
-    except (ValueError, TypeError):
-        return set()
-    if not isinstance(batches, list):
-        return set()
+def _public_done_null_fields(entries: list[dict]) -> set[str]:
+    """Inspect the real O1 *structured* history, not its formatted prose.
+
+    _history_batch/public_history_item flattens finish_result into top-level
+    status/result/summary; the O1 prompt formatter does not produce JSON.
+    This check uses exactly the report values already delivered to Main.
+    """
+    from .main_decision_contract import _visible_finish
     missing = set()
-    for batch in batches:
+    for batch in entries:
         for report in batch.get("subtask_results", []):
-            finish = report.get("finish_result") if isinstance(report, dict) else None
+            if not isinstance(report, dict):
+                continue
+            finish = _visible_finish(report)
             if not isinstance(finish, dict) or finish.get("status") != "done":
                 continue
             try:
@@ -172,20 +174,24 @@ def _public_done_null_fields(public_history: str) -> set[str]:
             if not isinstance(rows, list) or not rows:
                 continue
             records = [
-                row.get("values", row) for row in rows
-                if isinstance(row, dict)
+                item.get("values", item) for item in rows
+                if isinstance(item, dict)
             ]
-            if records and all(isinstance(row, dict) for row in records):
-                for field in set().union(*(set(row) for row in records)):
-                    if all(row.get(field) is None for row in records):
-                        missing.add(field)
+            if not records or not all(isinstance(row, dict)
+                                      for row in records):
+                continue
+            for field in set().union(*(set(row) for row in records)):
+                if all(row.get(field) is None for row in records):
+                    missing.add(field)
     return missing
 
 
-def _visibility_issues(requests: list[dict], public_history: str) -> list[str]:
-    """Fail closed if the planner relied on an identifier not in reports."""
+def _visibility_issues(
+    requests: list[dict], entries: list[dict], public_history: str,
+) -> list[str]:
+    """Validate evidence needs against Main's actually received history."""
     visible = public_history.casefold()
-    delivered_null_fields = _public_done_null_fields(public_history)
+    delivered_null_fields = _public_done_null_fields(entries)
     missing = []
     for request in requests:
         for identifier in request.get("known_identifiers", []):
@@ -202,9 +208,6 @@ def _visibility_issues(requests: list[dict], public_history: str) -> list[str]:
                             & delivered_null_fields):
                 missing.append(request["request_id"] + ":missing_status")
         if request["operation"] == "verify_conflicting_evidence":
-            # The discrepancy label cannot be emitted just because the
-            # private simulator noticed different rows. All concrete
-            # identifiers used to justify VERIFY must still be visible.
             from .evidence_planning import _IDENT
             for identifier in _IDENT.findall(
                 request["main_visible_justification"]
@@ -336,7 +339,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
             if step["action"] == "delegate_task":
                 plan = plans[round_number]
                 history = json.dumps(entries, ensure_ascii=False)
-                issues = _visibility_issues(plan["evidence_requests"], history)
+                issues = _visibility_issues(plan["evidence_requests"], entries, history)
                 if issues:
                     failure = "stage4c_evidence_not_main_visible:" + ",".join(issues)
                     break
