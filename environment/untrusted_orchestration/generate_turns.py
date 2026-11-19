@@ -8,7 +8,7 @@ retroactively rewritten; all events are replayed in causal order.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from hashlib import sha256
 from pathlib import Path
@@ -26,6 +26,9 @@ from environment.untrusted_orchestration.runtime.faults import (
 from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
 from .scenario.scenario_generator import make_scenario
 from .trajectory_builder import build_branch
+from environment.base_orchestration.trajectory_builder import (
+    _strict_reports, clean_reference_identity,
+)
 from .offline_pipeline import author_branch_reports, author_branch_main
 from .trusted_prefix import compile_trusted_prefixes
 from environment.untrusted_orchestration.inspection.publication_guard import review_turn_surface
@@ -57,6 +60,60 @@ def _atomic_jsonl(path: Path, rows: list[dict]) -> None:
         for row in rows:
             stream.write(json.dumps(row, ensure_ascii=False) + "\n")
     os.replace(temporary, path)
+
+
+
+# Stage 4A is CPU-bound; threads do not parallelize Python replay under
+# the GIL. Worker processes receive stable, prevalidated scene contracts
+# ONCE via initializer, then only small candidate plans per invocation.
+_EVIDENCE_CONTEXT: dict | None = None
+
+
+def _init_evidence_worker(context: dict) -> None:
+    global _EVIDENCE_CONTEXT
+    _EVIDENCE_CONTEXT = context
+
+
+def _execute_evidence_candidate(plan: dict) -> str:
+    """4A-only worker: write one resumable journal and return its status."""
+    if _EVIDENCE_CONTEXT is None:
+        raise RuntimeError("stage4_evidence_worker_not_initialized")
+    ctx = _EVIDENCE_CONTEXT
+    scene = ctx["scenes"][plan["scene_index"]]
+    result = {
+        "task_id": scene["task_id"],
+        "round_sample_id": plan["sample_id"],
+        "fork_round": plan["branch_round"],
+        "episode": None,
+        "turns": [],
+        "private_audit": None,
+    }
+    if plan["skip_reason"]:
+        result.update(status="skipped_unsupported", error=plan["skip_reason"])
+    else:
+        try:
+            episode, _, audit = build_branch(
+                scene, ctx["reports"][scene["task_id"]],
+                ctx["base"][scene["task_id"]],
+                branch_round=plan["branch_round"], faults=plan["faults"],
+                scenario_plan=plan["scenario_plan"],
+                validated_reference=ctx["validated"][scene["task_id"]],
+                **ctx["build_options"],
+            )
+            result.update(
+                status=audit["execution_outcome"],
+                episode=episode, private_audit=audit,
+            )
+        except (FaultUnsupported, ValueError, KeyError, TypeError) as exc:
+            result.update(
+                status=("skipped_unsupported" if isinstance(
+                    exc, FaultUnsupported) else "rejected_validation"),
+                error=str(exc)[:300],
+            )
+    _atomic_json(
+        Path(ctx["journal_dir"]) / f"{plan['index']:06d}.json", result,
+    )
+    return result["status"]
 
 
 def _hash_file(path: Path) -> str:
@@ -114,6 +171,101 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         },
         "settings": settings,
     }
+
+
+
+def _resume_v10_audit_fix(
+    output: Path, previous: dict, expected: dict,
+    planned: list[dict],
+) -> dict:
+    """Explicit compatibility migration for the interrupted v10 4A run.
+
+    Only simulator orchestration and the missing causal-audit import may
+    differ. Validate exact inputs/settings/candidate ledger and every
+    existing journal before replacing the signed manifest. Delayed
+    journals are ALWAYS discarded and recomputed after the fix.
+    """
+    if previous.get("version") != expected.get("version"):
+        raise ValueError("stage4_resume_previous_engine_version_mismatch")
+    if (previous.get("input_sha256") != expected.get("input_sha256")
+            or previous.get("settings") != expected.get("settings")):
+        raise ValueError("stage4_resume_input_or_generation_settings_changed")
+    old_hashes = previous.get("source_code_sha256") or {}
+    new_hashes = expected.get("source_code_sha256") or {}
+    if set(old_hashes) != set(new_hashes):
+        raise ValueError("stage4_resume_code_manifest_shape_changed")
+    modified = sorted(key for key in old_hashes
+                      if old_hashes[key] != new_hashes[key])
+    allowed = {"trajectory_builder.py", "generate_turns.py", "config.py"}
+    if not modified or not set(modified) <= allowed:
+        raise ValueError("stage4_resume_unsupported_code_changes:" +
+                         ",".join(modified))
+    # Do not mix incompatible 4B/4C outputs with a new simulation
+    # version. In the reported v10 crash, both phases had not started.
+    for name in ("stage4b/journal", "journal"):
+        if any((output / name).glob("*.json")):
+            raise ValueError("stage4_resume_language_journals_already_present")
+    old_rounds = _jsonl(output / "round_index.jsonl")
+    if len(old_rounds) != len(planned):
+        raise ValueError("stage4_resume_candidate_count_changed")
+    for plan, old in zip(planned, old_rounds):
+        if (old.get("round_sample_id") != plan["sample_id"]
+                or old.get("question_id") != plan["task_id"]
+                or old.get("main_decision_round") != plan["branch_round"]
+                or old.get("scenario_blueprint") !=
+                    plan["scenario_plan"]["blueprint"]
+                or old.get("candidate_variant_index") !=
+                    plan.get("candidate_variant_index")
+                or old.get("latest_subagent_task_ids") !=
+                    plan["incoming_task_ids"]
+                or old.get("atomic_fault_kinds") != [
+                    item["kind"]
+                    for item in plan["scenario_plan"]["fault_atoms"]
+                ]):
+            raise ValueError("stage4_resume_candidate_identity_changed")
+    journal = output / "stage4a" / "journal"
+    stale, checked = [], 0
+    for file in sorted(journal.glob("*.json")):
+        if not file.stem.isdigit() or int(file.stem) >= len(planned):
+            raise ValueError("stage4_resume_unexpected_journal:" + file.name)
+        plan = planned[int(file.stem)]
+        row = json.loads(file.read_text(encoding="utf-8"))
+        if (row.get("task_id") != plan["task_id"]
+                or row.get("round_sample_id") != plan["sample_id"]
+                or row.get("fork_round") != plan["branch_round"]):
+            raise ValueError("stage4_resume_journal_identity_mismatch")
+        audit = row.get("private_audit") or {}
+        event = audit.get("event_scenario") or {}
+        if audit and (
+            event.get("scenario_id") != plan["sample_id"]
+            or event.get("blueprint") != plan["scenario_plan"]["blueprint"]
+            or event.get("fault_atoms") !=
+                plan["scenario_plan"]["fault_atoms"]
+            or event.get("evidence_events") !=
+                plan["scenario_plan"]["evidence_events"]
+        ):
+            raise ValueError("stage4_resume_journal_scenario_mismatch")
+        if plan["scenario_plan"]["blueprint"] == (
+            "delayed_consumed_error_recovery"
+        ):
+            stale.append(file)
+        else:
+            checked += 1
+    # All validation completed. Preserve original signed provenance.
+    _atomic_json(output / "manifest.before_v10_audit_fix.json", previous)
+    report = {
+        "operation": "explicit_v10_4a_audit_fix_resume",
+        "prior_modified_code_paths": modified,
+        "input_and_settings_match": True,
+        "candidate_ledger_matches": True,
+        "reused_nondelayed_journals": checked,
+        "discarded_delayed_journals": len(stale),
+    }
+    _atomic_json(output / "private" / "v10_resume_audit.json", report)
+    for file in stale:
+        file.unlink()
+    _atomic_json(output / "manifest.json", expected)
+    return report
 
 
 def _plan_branches(
@@ -980,6 +1132,7 @@ def generate_turns(
     clean_episodes_path: Path | None = None,
     main_mode: str | None = None,
     report_mode: str | None = None,
+    resume_after_audit_fix: bool = False,
 ) -> dict:
     paths = tuple(map(Path, (scenes_path, reports_path)))
     if clean_episodes_path is not None:
@@ -989,6 +1142,8 @@ def generate_turns(
         raise FileNotFoundError("stage4_requires_stage1_scenes_and_stage2_reports")
     if type(workers) is not int or not 1 <= workers <= 64:
         raise ValueError("untrusted_workers_invalid")
+    if type(resume_after_audit_fix) is not bool or (resume_after_audit_fix and overwrite):
+        raise ValueError("stage4_resume_after_fix_must_not_overwrite")
     if branches_per_scene is not None and (
         type(branches_per_scene) is not int or branches_per_scene < 1
     ):
@@ -1151,8 +1306,14 @@ def generate_turns(
     output.mkdir(parents=True, exist_ok=True)
     manifest = output / "manifest.json"
     if manifest.is_file():
-        if json.loads(manifest.read_text(encoding="utf-8")) != signature:
-            raise ValueError("untrusted_resume_input_or_code_signature_mismatch")
+        previous = json.loads(manifest.read_text(encoding="utf-8"))
+        if previous != signature:
+            if not resume_after_audit_fix:
+                raise ValueError(
+                    "untrusted_resume_input_or_code_signature_mismatch"
+                    " (pass --resume-after-audit-fix only for interrupted v10 4A)"
+                )
+            _resume_v10_audit_fix(output, previous, signature, planned)
     elif any(output.iterdir()):
         raise ValueError("untrusted_existing_output_without_manifest")
     else:
@@ -1386,10 +1547,12 @@ def generate_turns(
                     refresh()
                     bar.update(1)
 
-            def commit_round(plan: dict) -> None:
-                # callback_worker has *already* written the round journal.
-                # Keep progress and durable persistence counters distinct.
-                current = saved(directory, plan)
+            def commit_round(plan: dict, *, process_status: str | None = None) -> None:
+                # 4A processes return a committed status; avoid rereading
+                # large private audit JSON just to update a progress bar.
+                current = ({"status": process_status}
+                           if process_status is not None
+                           else saved(directory, plan))
                 if current is None:
                     raise RuntimeError("stage4_worker_did_not_write_journal")
                 with lock:
@@ -1422,15 +1585,49 @@ def generate_turns(
                 commit_round(plan)
 
             refresh()
-            with ThreadPoolExecutor(
-                max_workers=workers,
-                thread_name_prefix="stage4-" + phase[:2],
-            ) as pool:
-                futures = [
-                    pool.submit(run_one, plan) for plan in pending
-                ]
-                for future in as_completed(futures):
-                    future.result()
+            if stage == "simulation":
+                # Bound workers to actual available CPU quota (Py3.13
+                # process_cpu_count is cgroup-aware). Many more *threads*
+                # did not help because 4A replay is Python-CPU-bound.
+                cpu_count = getattr(
+                    os, "process_cpu_count", os.cpu_count
+                )() or 1
+                process_count = min(workers, cpu_count, max(1, len(pending)))
+                if pending:
+                    with ProcessPoolExecutor(
+                        max_workers=process_count,
+                        initializer=_init_evidence_worker,
+                        initargs=(evidence_context,),
+                    ) as pool:
+                        futures = {
+                            pool.submit(_execute_evidence_candidate, plan): plan
+                            for plan in pending
+                        }
+                        try:
+                            for future in as_completed(futures):
+                                commit_round(
+                                    futures[future],
+                                    process_status=future.result(),
+                                )
+                                tick()
+                        except BaseException:
+                            # Fail fast if an unexpected programming error
+                            # reaches the coordinator. Journals already
+                            # atomically written remain resumable; cancel
+                            # tasks still queued rather than replaying them.
+                            for future in futures:
+                                future.cancel()
+                            raise
+            else:
+                with ThreadPoolExecutor(
+                    max_workers=workers,
+                    thread_name_prefix="stage4-" + phase[:2],
+                ) as pool:
+                    futures = [
+                        pool.submit(run_one, plan) for plan in pending
+                    ]
+                    for future in as_completed(futures):
+                        future.result()
             # Main progress includes explicitly skipped downstream
             # actions, so its denominator stays at the 4A plan count.
             # Report counts can vary after a failed sample; allow that
@@ -1441,51 +1638,39 @@ def generate_turns(
                 refresh()
                 bar.refresh()
 
-    def simulate(plan: dict, tick) -> None:
-        scene = scenes[plan["scene_index"]]
-        if plan["skip_reason"]:
-            write(stage_a, plan, {
-                "task_id": scene["task_id"],
-                "round_sample_id": plan["sample_id"],
-                "fork_round": plan["branch_round"],
-                "status": "skipped_unsupported",
-                "error": plan["skip_reason"],
-                "episode": None, "turns": [], "private_audit": None,
-            })
-            tick()
-            return
-        try:
-            episode, _, audit = build_branch(
-                scene, rows_by_scene[scene["task_id"]],
-                base[scene["task_id"]],
-                branch_round=plan["branch_round"], faults=plan["faults"],
-                scenario_plan=plan["scenario_plan"],
-                max_rounds=max_rounds, max_cost=max_cost,
-                max_post_fork_rounds=max_post_fork_rounds,
-                max_retries=max_retries,
-                max_parallel_tasks=max_parallel_tasks,
-                sub_model=sub_model, model_alias=model_alias,
-                # Stage 4A must never call the language models.
-                author=None, critic=None, report_author=None,
-                report_critic=None,
-            )
-            data = {
-                "task_id": scene["task_id"],
-                "round_sample_id": plan["sample_id"],
-                "fork_round": plan["branch_round"],
-                "status": audit["execution_outcome"],
-                "episode": episode, "turns": [],
-                "private_audit": audit,
-            }
-        except (FaultUnsupported, ValueError, KeyError, TypeError) as exc:
-            data = as_failure(scene, exc)
-        write(stage_a, plan, data)
-        tick()
-
+    # Strict Stage-2 scene validation used to run once PER candidate.
+    # It is invariant under atomic report faults and is now computed once
+    # for each accepted scene. Stage 4B/4C remain unchanged.
+    validated_references = {}
+    for scene in scenes:
+        tid = scene["task_id"]
+        if tid not in base:
+            continue
+        reviewed = _strict_reports(scene, rows_by_scene[tid])
+        validated_references[tid] = (
+            reviewed, clean_reference_identity(scene, reviewed),
+        )
+    evidence_context = {
+        "scenes": scenes,
+        "reports": dict(rows_by_scene),
+        "base": base,
+        "validated": validated_references,
+        "journal_dir": str(stage_a),
+        "build_options": {
+            "max_rounds": max_rounds,
+            "max_cost": max_cost,
+            "max_post_fork_rounds": max_post_fork_rounds,
+            "max_retries": max_retries,
+            "max_parallel_tasks": max_parallel_tasks,
+            "sub_model": sub_model, "model_alias": model_alias,
+            "author": None, "critic": None,
+            "report_author": None, "report_critic": None,
+        },
+    }
     run_parallel(
         "Evidence simulation", stage_a, "round",
         len(planned), sum(saved(stage_a, p) is not None for p in planned),
-        simulate, stage="simulation",
+        None, stage="simulation",
     )
 
     # The 4A search is intentionally wider than the expensive 4B/4C

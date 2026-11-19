@@ -736,6 +736,14 @@ class HistoryFirstHandoffTests(unittest.TestCase):
             _replay_observed_prefix,
         )
         scene, parent, child = _scene()
+        # A full Main orchestration requires the public source catalog
+        # to match the modified private source contracts in this fixture.
+        scene["public"]["available_source_descriptions"] = [{
+            "source_id": sid,
+            "title": "Permitted simulated evidence: " + sid,
+            "modality_hint": "table",
+            "access_mode": source["access_policy"]["mode"],
+        } for sid, source in scene["world"]["sources"].items()]
         source = scene["world"]["sources"]["parent_src"]
         source["observations"].append({
             "values": {"case_id": "Case-002", "entity_final": "Dunhaven District"},
@@ -846,6 +854,49 @@ class HistoryFirstHandoffTests(unittest.TestCase):
                 "values"]["observation_year"], 2025,
         )
         self.assertEqual(history[0]["subtask_results"][0]["status"], "done")
+        # This must exercise the COMPLETE generator, not just state-machine
+        # primitives. The v10 NameError occurred only in build_branch's
+        # final delayed_causal_audit after the earlier replay had finished.
+        from environment.untrusted_orchestration.trajectory_builder import (
+            build_branch,
+        )
+        chosen = next(
+            candidate for candidate in delayed_candidates
+            if candidate["faults"][0].task_id == "parent"
+            and candidate["scenario_plan"][
+                "same_source_recheck_plan"]["consumers_before_discovery"]
+                == ["child"]
+        )
+        reviewed = {}
+        for wave_index, wave in enumerate(
+            scene["macro_graph"]["reference_waves"]
+        ):
+            for slot, tid in enumerate(wave):
+                reviewed[tid] = {
+                    "answer_with_provenance": relation_rows(
+                        clean_state.current[tid].product
+                    ),
+                    "finish_result": deepcopy(
+                        results[wave_index]["result"][
+                            "subtask_results"][slot]["finish_result"]
+                    ),
+                    "report_authoring": {"status": "accepted"},
+                }
+        _episode, _turns, branch_audit = build_branch(
+            scene, [], base,
+            branch_round=4, faults=chosen["faults"],
+            scenario_plan=chosen["scenario_plan"],
+            validated_reference=(
+                reviewed, {"clean_reference_id": "test-delayed-fixture"},
+            ),
+            max_rounds=10, max_post_fork_rounds=6,
+            max_cost=120, max_retries=2,
+        )
+        self.assertIsNotNone(branch_audit["delayed_causal_audit"])
+        self.assertIn(
+            "child", branch_audit["delayed_causal_audit"][
+                "pre_discovery_consumers"],
+        )
         # A plan that still uses the clean-only name after the early fault
         # is *not* an acceptable delayed training history.
         leaked_base = deepcopy(augmented_base)
