@@ -373,6 +373,8 @@ def _publish(output: Path, planned: list[dict],
     recovered_after_actual_invalidation = 0
     published_with_downstream_invalidation = 0
     published_with_invalidation_and_visible_conflict = 0
+    published_recovered_historical_conflicts = 0
+    published_history_gap_distribution = Counter()
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -437,6 +439,25 @@ def _publish(output: Path, planned: list[dict],
                 raise RuntimeError(
                     "untrusted_recovered_branch_missing_public_episode"
                 )
+            history_events = [
+                event for event in (
+                    (data["private_audit"].get("runtime") or {})
+                    .get("detected_conflicts") or []
+                )
+                if event.get("kind") == "cross_round_report_disagreement"
+                or (event.get("kind") == "explicit_independent_claim_disagreement"
+                    and event.get("conflict_timing") == "delayed")
+            ]
+            if history_events:
+                published_recovered_historical_conflicts += 1
+                gaps = {
+                    event["latest_round"] - event["older_round"]
+                    for event in history_events
+                    if type(event.get("older_round")) is int
+                    and type(event.get("latest_round")) is int
+                    and 0 < event["older_round"] < event["latest_round"]
+                }
+                published_history_gap_distribution.update(gaps)
             public_episode = deepcopy(data["episode"])
             # Truth labels belong in private audit, never public reviewed-turn.
             public_episode.pop("outcome", None)
@@ -840,6 +861,10 @@ def _publish(output: Path, planned: list[dict],
             published_with_downstream_invalidation,
         "published_with_invalidation_and_visible_conflict":
             published_with_invalidation_and_visible_conflict,
+        "published_recovered_historical_conflicts":
+            published_recovered_historical_conflicts,
+        "published_historical_conflict_round_gap_distribution":
+            dict(sorted(published_history_gap_distribution.items())),
         "event_timeline_diagnostics": str(
             output / "private" / "event_timeline.jsonl"
         ),

@@ -153,6 +153,109 @@ class CandidateExplorationTests(unittest.TestCase):
         self.assertEqual(stats["candidates_simulated"], 3)
         self.assertEqual(stats["candidates_filtered_before_llm"], 2)
 
+
+    def test_selects_distinct_historical_conflicts_before_routine_retries(self):
+        """N can conflict with N-1, N-3 and the first feedback round."""
+        plans = [{
+            "index": i,
+            "sample_id": f"Q-history-{i}",
+            "task_id": "Q",
+            "branch_round": 7,
+            "faults": [],
+            "scenario_plan": {"fault_atoms": [{
+                "kind": "wrong_retrieval" if i in (1, 2, 3)
+                else "incomplete_retrieval"
+            }]},
+        } for i in range(5)]
+
+        def trial(old_round=None, *, outcome="recovered"):
+            conflicts = [] if old_round is None else [{
+                "kind": "cross_round_report_disagreement",
+                "older_round": old_round,
+                "latest_round": 6,
+                "compared_parent_tasks": ["old", "new"],
+            }]
+            return {
+                "status": outcome,
+                "episode": {"trajectory": [
+                    {"attempt": 7, "action": "delegate_task"},
+                ]},
+                "private_audit": {
+                    "execution_outcome": outcome,
+                    "runtime": {"detected_conflicts": conflicts},
+                    "evidence_plan": [{"evidence_requests": [{
+                        "operation": "verify_conflicting_evidence"
+                        if old_round is not None else "retry_missing_evidence",
+                        "target_fields": ["marker_code"],
+                        "authorized_source_ids": ["record"],
+                    }]}],
+                },
+            }
+
+        journals = [trial(), trial(1), trial(3), trial(5), trial()]
+        selected, rows, stats = select_recovered_candidates(
+            plans, journals, max_selected_per_round=3,
+            strategy="stratified",
+        )
+        self.assertEqual(selected, {1, 2, 3})
+        self.assertEqual(rows[1]["history_conflict_older_rounds"], [1])
+        self.assertEqual(rows[2]["history_conflict_round_gaps"], [3])
+        self.assertEqual(rows[3]["history_conflict_round_gaps"], [1])
+        self.assertEqual(stats["selected_recovered_historical_conflicts"], 3)
+        self.assertEqual(
+            stats["historical_conflict_older_round_distribution"],
+            {1: 1, 3: 1, 5: 1},
+        )
+        self.assertEqual(
+            stats["selected_historical_conflict_round_gap_distribution"],
+            {1: 1, 3: 1, 5: 1},
+        )
+        # The history priority also applies at capacity one; increasing the
+        # cap is optional, never a prerequisite for historical coverage.
+        one, _, _ = select_recovered_candidates(
+            plans, journals, max_selected_per_round=1,
+            strategy="stratified",
+        )
+        self.assertEqual(len(one), 1)
+        self.assertTrue(one <= {1, 2, 3})
+
+    def test_nonrecovered_history_conflict_is_diagnostic_only(self):
+        plans = [{
+            "index": i, "sample_id": f"Q-history-negative-{i}",
+            "task_id": "Q", "branch_round": 4, "faults": [],
+            "scenario_plan": {"fault_atoms": [{
+                "kind": "wrong_retrieval" if i else "incomplete_retrieval"
+            }]},
+        } for i in range(2)]
+
+        def journal(status, conflict):
+            return {
+                "status": status,
+                "episode": {"trajectory": [
+                    {"attempt": 4, "action": "delegate_task"}
+                ]},
+                "private_audit": {
+                    "execution_outcome": status,
+                    "runtime": {"detected_conflicts": ([{
+                        "kind": "cross_round_report_disagreement",
+                        "older_round": 1, "latest_round": 3,
+                    }] if conflict else [])},
+                    "evidence_plan": [],
+                },
+            }
+
+        chosen, rows, _ = select_recovered_candidates(
+            plans, [
+                journal("recovered", False),
+                journal("incorrect_result_after_actual_propagation", True),
+            ], max_selected_per_round=3, strategy="stratified",
+            max_diagnostics_per_scene=1,
+        )
+        self.assertIn(0, chosen)
+        self.assertEqual(rows[0]["selection_purpose"], "positive")
+        self.assertEqual(rows[1]["selection_purpose"], "diagnostic")
+        self.assertNotEqual(rows[1]["selection_purpose"], "positive")
+
     def test_template_end_to_end_enumeration_selects_before_reports(self):
         with TemporaryDirectory() as td:
             root = Path(td)
@@ -354,7 +457,7 @@ class CandidateExplorationTests(unittest.TestCase):
         self.assertIn("computation_error", config["atomic_fault_kinds"])
         self.assertIn("done_but_incomplete", config["atomic_fault_kinds"])
         self.assertEqual(config["max_candidates_per_round"], 12)
-        self.assertEqual(config["max_selected_per_round"], 1)
+        self.assertEqual(config["max_selected_per_round"], 3)
         content = DEFAULT_CONFIG.read_text(encoding="utf-8")
         with TemporaryDirectory() as td:
             f = Path(td) / "config.yaml"
@@ -368,7 +471,7 @@ class CandidateExplorationTests(unittest.TestCase):
             ):
                 load_config(f)
             f.write_text(content.replace(
-                "max_selected_per_round: 1",
+                "max_selected_per_round: 3",
                 "max_selected_per_round: 0"
             ))
             with self.assertRaisesRegex(

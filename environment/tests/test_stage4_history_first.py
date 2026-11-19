@@ -280,6 +280,98 @@ class HistoryFirstHandoffTests(unittest.TestCase):
                 summary.get("historical_anchor_reason_distribution", {}),
             )
 
+
+    def test_handoff_discovery_is_not_limited_to_adjacent_waves(self):
+        """A keyed handoff in wave 1 is usable after any intervening waves."""
+        for intervening in (0, 1, 3):
+            with self.subTest(intervening=intervening):
+                scene, parent, child = _scene()
+                filler_tasks = []
+                for index in range(intervening):
+                    filler = deepcopy(parent)
+                    filler["task_id"] = f"unrelated_{index}"
+                    filler_tasks.append(filler)
+                scene["macro_graph"]["tasks"] = [
+                    parent, *filler_tasks, child,
+                ]
+                scene["macro_graph"]["reference_waves"] = [
+                    ["parent"],
+                    *[[filler["task_id"]] for filler in filler_tasks],
+                    ["child"],
+                ]
+                plan = _round_plan(scene)
+                plan["branch_round"] = 3 + intervening
+                prefix = [
+                    {"attempt": index + 1, "action": "delegate_task",
+                     "result": {"subtask_results": [{
+                         "finish_result": {
+                             "status": "done",
+                             "result": "Lakehurst District",
+                         },
+                     }]}}
+                    for index in range(intervening + 1)
+                ]
+                paths = discover_handoffs(
+                    scene, plan, _clean_products(scene),
+                    base_episode={"trajectory": prefix},
+                )
+                self.assertEqual(paths["child"]["older_task"], "parent")
+                self.assertEqual(paths["child"]["parent_wave"], 1)
+
+    def test_latest_report_can_disagree_with_multiple_older_waves(self):
+        """Recording one conflict must not suppress other historical pairs."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        state = SimpleNamespace(
+            current={"latest": SimpleNamespace(
+                status="done", version=1, runtime={},
+            )},
+            detected_conflicts=[],
+            public_status=lambda _task_id: "done",
+        )
+        earlier_rounds = (1, 3, 5)
+        conflicts = [{
+            "older_task": f"older_{round_number}",
+            "latest_task": "latest",
+            "subject": "Case-001",
+            "attribute": "marker_code",
+            "earlier_value": f"CODE-{round_number}",
+            "latest_value": "WRONG",
+            "older_round": round_number,
+            "latest_round": 6,
+            "older_fact_refs": [f"source_{round_number}:F001"],
+            "latest_fact_refs": ["latest_source:F002"],
+        } for round_number in earlier_rounds]
+        with (
+            patch("environment.untrusted_orchestration.scenario.history_conflicts.latest_history_disagreements",
+                  return_value=conflicts),
+            patch("environment.untrusted_orchestration.scenario.handoff_conflicts.handoff_disagreements",
+                  return_value=[]),
+            patch("environment.untrusted_orchestration.scenario.prior_observation.comparison_rows",
+                  return_value=[]),
+        ):
+            ExecutionState._detect_history_report_conflicts(state)
+            recorded = [
+                event for event in state.detected_conflicts
+                if event["kind"] == "cross_round_report_disagreement"
+            ]
+            self.assertEqual(
+                {event["older_round"] for event in recorded},
+                set(earlier_rounds),
+            )
+            self.assertEqual(len(recorded), 3)
+            self.assertEqual(state.current["latest"].status, "disputed")
+            self.assertTrue(
+                state.current["latest"].runtime[
+                    "history_conflict_recheck_requested"
+                ],
+            )
+            # Re-observation without a newer report version must not
+            # endlessly append the same three historical conflicts.
+            ExecutionState._detect_history_report_conflicts(state)
+            self.assertEqual(len(state.detected_conflicts), 3)
+
     def test_absent_parent_visible_key_is_not_a_candidate(self):
         scene, _, _ = _scene()
         base = {"trajectory": [{

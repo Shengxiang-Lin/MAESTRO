@@ -75,6 +75,25 @@ def classify_trial(plan: dict, journal: dict) -> dict:
     invalidations = runtime.get("invalidations") or []
     revalidations = runtime.get("revalidations") or []
     conflicts = runtime.get("detected_conflicts") or []
+    # Historical conflicts include ordinary prior-vs-latest reports and
+    # independently cited reports that arrived in different feedback waves.
+    # Keep the actual public report rounds; do not infer history from the
+    # private fault label or from a fixed N-1 window.
+    history_events = [
+        event for event in conflicts
+        if event.get("kind") == "cross_round_report_disagreement"
+        or (event.get("kind") == "explicit_independent_claim_disagreement"
+            and event.get("conflict_timing") == "delayed")
+    ]
+    history_round_pairs = sorted({
+        (event["older_round"], event["latest_round"])
+        for event in history_events
+        if type(event.get("older_round")) is int
+        and type(event.get("latest_round")) is int
+        and 0 < event["older_round"] < event["latest_round"]
+    })
+    older_rounds = sorted({old for old, _ in history_round_pairs})
+    round_gaps = sorted({new - old for old, new in history_round_pairs})
     requests = [
         request for entry in audit.get("evidence_plan", [])
         for request in entry.get("evidence_requests", [])
@@ -171,7 +190,8 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         for request in requests
     ]
     signature = sha256(json.dumps(
-        {"category": category, "requests": behavior},
+        {"category": category, "requests": behavior,
+         "history_round_pairs": history_round_pairs},
         sort_keys=True, ensure_ascii=False,
     ).encode("utf-8")).hexdigest()[:16]
     return {
@@ -210,10 +230,9 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         "historical_anchor_reason": (
             (audit.get("history_conflict_anchor") or {}).get("reason")
         ),
-        "history_conflicts_detected": sum(
-            event.get("kind") == "cross_round_report_disagreement"
-            for event in conflicts
-        ),
+        "history_conflicts_detected": len(history_events),
+        "history_conflict_older_rounds": older_rounds,
+        "history_conflict_round_gaps": round_gaps,
         "recovery_effect": recovery_effect,
         "first_visible_issue_round": first_visible_issue_round,
         "visible_issue_types": visible_issue_types,
@@ -281,6 +300,10 @@ def select_recovered_candidates(
         ]
         if strategy == "stratified":
             eligible.sort(key=lambda row: (
+                # Scarce, successfully recovered historical disagreements
+                # outrank routine missing/partial report recoveries.
+                -bool(row["history_conflicts_detected"]),
+                -len(row["history_conflict_older_rounds"]),
                 category_usage[row["category"]],
                 _PRIORITY.get(row["category"], 99),
                 -row["actual_invalidations"],
@@ -289,6 +312,8 @@ def select_recovered_candidates(
             ))
         else:
             eligible.sort(key=lambda row: (
+                -bool(row["history_conflicts_detected"]),
+                -len(row["history_conflict_older_rounds"]),
                 _PRIORITY.get(row["category"], 99),
                 -row["actual_invalidations"],
                 -row["visible_conflicts"],
@@ -398,6 +423,23 @@ def select_recovered_candidates(
         "cross_round_report_conflicts_detected": sum(
             row["history_conflicts_detected"] for row in rows
         ),
+        "historical_conflict_older_round_distribution": dict(sorted(
+            Counter(old for row in rows
+                    for old in row["history_conflict_older_rounds"]).items()
+        )),
+        "historical_conflict_round_gap_distribution": dict(sorted(
+            Counter(gap for row in rows
+                    for gap in row["history_conflict_round_gaps"]).items()
+        )),
+        "selected_recovered_historical_conflicts": sum(
+            row["selection_purpose"] == "positive"
+            and row["history_conflicts_detected"] > 0 for row in rows
+        ),
+        "selected_historical_conflict_round_gap_distribution": dict(sorted(
+            Counter(gap for row in rows
+                    if row["selection_purpose"] == "positive"
+                    for gap in row["history_conflict_round_gaps"]).items()
+        )),
         "candidates_simulated": len(rows),
         "candidates_execution_recovered": sum(
             row["execution_outcome"] == "recovered" for row in rows
