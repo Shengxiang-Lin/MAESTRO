@@ -399,6 +399,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
              "fields": ["case_id", "entity_final"]},
         ]
         parent["outputs"] = {"typed_relation": ["case_id", "entity_final"]}
+        child["input_schema"] = {"input_0": ["case_id", "entity_final"]}
         from environment.untrusted_orchestration.scenario.candidate_exploration import (
             _clean_products,
         )
