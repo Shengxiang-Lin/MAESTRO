@@ -11,22 +11,22 @@ import json
 import re
 
 
-_NUMBER = r"-?(?:0|[1-9]\\d*)(?:\\.\\d+)?"
-_VALUE = r'(?:"(?:\\\\.|[^"\\\\])*"|' + _NUMBER + r")"
+_NUMBER = r"-?(?:0|[1-9]\d*)(?:\.\d+)?"
+_VALUE = r'(?:"(?:\\.|[^"\\])*"|' + _NUMBER + r")"
 _ASSOCIATION = re.compile(
     r"For the record association, I paired key (" + _VALUE
     + r") from the first input with key (" + _VALUE
-    + r") from the second input\\."
+    + r") from the second input\."
 )
 _ARITHMETIC = re.compile(
     r"For the (absolute difference|ratio|percentage|date gap) calculation, "
     r"I used (" + _VALUE + r") and (" + _VALUE
-    + r"), rounded to (\\d+) decimal places, and reported ("
-    + _VALUE + r")\\."
+    + r"), rounded to (\d+) decimal places, and reported ("
+    + _VALUE + r")\."
 )
 _COUNT = re.compile(
-    r"For the (row|group) count, I examined (\\d+) records "
-    r"and reported (" + _VALUE + r")\\."
+    r"For the (row|group) count, I examined (\d+) records "
+    r"and reported (" + _VALUE + r")\."
 )
 
 
