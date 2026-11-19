@@ -83,6 +83,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "scenario/history_conflicts.py",
         "scenario/prior_observation.py",
         "scenario/handoff_conflicts.py",
+        "scenario/same_source_recheck.py",
         "orchestration/action_binding.py",
         "runtime/evidence_planning.py",
         "rewards/decision_reward_state.py",
@@ -1129,6 +1130,7 @@ def generate_turns(
             max_fault_atoms=max_fault_atoms,
             delayed_evidence_probability=delayed_evidence_probability,
             seed=seed, base=base,
+            max_parallel_tasks=max_parallel_tasks,
         )
     if overwrite and output.exists():
         shutil.rmtree(output)
