@@ -725,6 +725,114 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         )
         self.assertEqual(len(state.attempts["child"]), 2)
 
+    def test_poisoned_prefix_replays_real_descendant_and_rejects_clean_leak(self):
+        """The intermediate Stage-3 dispatch may be reused only while its
+        source values are grounded in the ACTUAL earlier public history.
+        """
+        from environment.untrusted_orchestration.scenario.same_source_recheck import (
+            _clone_source_query, patch_clean_episode, patch_scene,
+        )
+        from environment.untrusted_orchestration.trajectory_builder import (
+            _clean_prefix,
+        )
+        scene, parent, child = _scene()
+        source = scene["world"]["sources"]["parent_src"]
+        source["observations"].append({
+            "values": {"case_id": "Case-002", "entity_final": "Dunhaven District"},
+            "fact_refs": ["parent_src:F002"],
+            "observation_id": "parent_src.OBS002",
+            "evidence_origin_id": "synthetic:parent002",
+        })
+        parent["operator_chain"].insert(1, {
+            "id": "parent_filter", "op": "filter_eq",
+            "inputs": ["parent_scan"], "field": "case_id",
+            "value": "Case-001",
+        })
+        parent["operator_chain"][-1]["inputs"] = ["parent_filter"]
+        filler = _clone_source_query(parent, 99)
+        witness = _clone_source_query(parent, 4)
+        scene["macro_graph"]["tasks"].append(filler)
+        scene["macro_graph"]["reference_waves"] = [
+            ["parent"], ["child"], [filler["task_id"]],
+        ]
+        clean_state = ExecutionState(scene, {})
+        results = []
+        for index, wave in enumerate(scene["macro_graph"]["reference_waves"]):
+            batch = []
+            for task_id in wave:
+                task = clean_state.tasks[task_id]
+                attempt = clean_state.register(task_id)
+                batch.append(deterministic_report(
+                    task, attempt,
+                    instruction="Inspect the requested source.",
+                    model_alias="model_1",
+                ))
+            results.append({
+                "attempt": index + 1,
+                "action": "delegate_task",
+                "reasoning": "Collect authorized evidence.",
+                "params": {"tasks": [{
+                    "task_instruction": "Inspect the requested source.",
+                    "context": "Use the authorized source.",
+                    "model": "model_1", "tools": ["Inspect"],
+                } for _ in wave]},
+                "result": {
+                    "subtask_results": batch,
+                    "total_subtasks": len(batch),
+                    "total_steps": sum(x["steps_taken"] for x in batch),
+                    "all_done": True,
+                },
+            })
+        base = {"task_id": scene["task_id"], "trajectory": results}
+        patch = {
+            "new_task": witness,
+            "older_task_id": "parent", "older_wave_index": 0,
+            "new_wave_index": 2, "feeds_future_tasks": [],
+            "consumers_before_discovery": ["child"],
+            "construction": "delayed_consumed_error_recovery",
+        }
+        augmented_base = patch_clean_episode(
+            base, scene, patch, max_parallel_tasks=4,
+        )
+        augmented_scene = patch_scene(scene, patch)
+        review_rows = []
+        fault = AtomicFault(
+            "wrong_retrieval", "parent", 1,
+        ).as_legacy_fault()
+        state, history, prefix, log = _clean_prefix(
+            augmented_scene, {}, augmented_base,
+            branch_round=4, faults=[fault],
+            fault_origin_wave_index=0,
+            prefix_report_reviews=review_rows,
+        )
+        self.assertEqual(len(log), 1)
+        self.assertEqual({r["task_id"] for r in review_rows},
+                         {"parent", "child", witness["task_id"]})
+        bad_child = relation_rows(state.current["child"].product)
+        self.assertEqual(bad_child[0]["values"]["observation_year"], 2024)
+        self.assertIn(
+            "2024", str(prefix[1]["result"]["subtask_results"][0][
+                "finish_result"]["result"]),
+        )
+        self.assertEqual(
+            relation_rows(clean_state.current["child"].product)[0][
+                "values"]["observation_year"], 2025,
+        )
+        self.assertEqual(history[0]["subtask_results"][0]["status"], "done")
+        # A plan that still uses the clean-only name after the early fault
+        # is *not* an acceptable delayed training history.
+        leaked_base = deepcopy(augmented_base)
+        leaked_base["trajectory"][1]["params"]["tasks"][0][
+            "task_instruction"] = "Inspect Lakehurst District by name."
+        with self.assertRaisesRegex(
+            ValueError, "delayed_prefix_dispatch_references_unseen_clean_value",
+        ):
+            _clean_prefix(
+                augmented_scene, {}, leaked_base,
+                branch_round=4, faults=[fault],
+                fault_origin_wave_index=0,
+            )
+
     def test_delayed_fault_candidate_keeps_old_dependency_edges(self):
         """Fault only the old task; a clean new witness is genuinely delegated."""
         from environment.untrusted_orchestration.scenario.same_source_recheck import (
