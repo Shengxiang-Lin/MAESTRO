@@ -180,18 +180,29 @@ def render_samples(scene: dict, episode: dict, states: dict, max_attempts: int):
 
 
 def export(scenes_path, episodes_path, states_path, output_dir,
-           max_attempts=16, val_fraction=0.1, seed=17):
+           max_attempts=16, val_fraction=0.1, seed=17,
+           split_map=None):
     if not 0 <= val_fraction < 1:
         raise ValueError("val_fraction must be in [0,1)")
     scene_map = {s["task_id"]: s for s in iter_jsonl(scenes_path)}
     state_map = index_states(states_path)
+    fixed = None
+    if split_map is not None:
+        from environment.data_export.splits import VERSION
+        data = json.loads(Path(split_map).read_text(encoding="utf-8"))
+        if data.get("schema") != VERSION or not isinstance(
+            data.get("scene_to_split"), dict
+        ):
+            raise ValueError("invalid_canonical_split_map")
+        fixed = data["scene_to_split"]
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     counts = Counter()
     seen = set()
     seen_prompts = {}
     with (out / "train.jsonl").open("w", encoding="utf-8") as train, \
-         (out / "val.jsonl").open("w", encoding="utf-8") as val:
+         (out / "val.jsonl").open("w", encoding="utf-8") as val, \
+         (out / "test.jsonl").open("w", encoding="utf-8") as test:
         for ep in iter_jsonl(episodes_path):
             scene_id, fork = ep["task_id"], ep["branch_round"]
             scenario_id = ep.get("round_sample_id")
@@ -219,8 +230,16 @@ def export(scenes_path, episodes_path, states_path, output_dir,
             seen.add(key)
             if scene_id not in scene_map or key not in state_map:
                 raise ValueError("missing scene or exact candidate supervision")
-            bucket = int(sha256(f"{seed}:{scene_id}".encode()).hexdigest()[:12], 16) / 16**12
-            writer = val if bucket < val_fraction else train
+            if fixed is not None:
+                if scene_id not in fixed:
+                    raise ValueError("risk_scene_missing_canonical_split")
+                assigned = fixed[scene_id]
+                if assigned not in {"train", "val", "test"}:
+                    raise ValueError("invalid_canonical_risk_split")
+                writer = {"train": train, "val": val, "test": test}[assigned]
+            else:
+                bucket = int(sha256(f"{seed}:{scene_id}".encode()).hexdigest()[:12], 16) / 16**12
+                writer = val if bucket < val_fraction else train
             for row in render_samples(scene_map[scene_id], ep, state_map[key], max_attempts):
                 signature = sha256(row["prompt"].encode("utf-8")).hexdigest()
                 supervision = [(r["start"], r["end"], r["risk"], r["mask"])
@@ -233,7 +252,8 @@ def export(scenes_path, episodes_path, states_path, output_dir,
                 seen_prompts[signature] = supervision
                 writer.write(json.dumps(row, ensure_ascii=False) + "\n")
                 counts["total"] += 1
-                counts["val" if writer is val else "train"] += 1
+                counts["test" if writer is test else
+                       "val" if writer is val else "train"] += 1
                 for r in row["reports"]:
                     counts["report_" + r["label_reason"]] += 1
                     if r["mask"]:
@@ -253,9 +273,12 @@ def main():
     p.add_argument("--max_attempts", type=int, default=16)
     p.add_argument("--val_fraction", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=17)
+    p.add_argument("--split-map", type=Path, default=None,
+                   help="Canonical environment/data_export/splits.json")
     a = p.parse_args()
     print(json.dumps(export(a.scenes, a.episodes, a.states, a.output_dir,
-                            a.max_attempts, a.val_fraction, a.seed), indent=2))
+                            a.max_attempts, a.val_fraction, a.seed,
+                            split_map=a.split_map), indent=2))
 
 
 if __name__ == "__main__":
