@@ -104,6 +104,63 @@ class CandidateExplorationTests(unittest.TestCase):
             limited[0]["candidate_count_pruned"], 0
         )
 
+    def test_all_feedback_rounds_and_all_fault_candidates_have_no_caps(self):
+        from environment.untrusted_orchestration.scenario.round_sampling import (
+            select_feedback_rounds,
+        )
+        all_rounds = [(r, {"action": "delegate_task"}) for r in range(2, 12)]
+        self.assertEqual(
+            select_feedback_rounds(
+                all_rounds, limit=None, strategy="chronological", seed=17
+            ), all_rounds,
+        )
+        original = self._rounds()[0]
+        full = enumerate_round_candidates(
+            self.scene, original, atomic_fault_kinds=KINDS,
+            max_candidates=None, max_distractors=2, seed=17,
+        )
+        capped = enumerate_round_candidates(
+            self.scene, original, atomic_fault_kinds=KINDS,
+            max_candidates=2, max_distractors=2, seed=17,
+        )
+        self.assertGreaterEqual(len(full), len(capped))
+        self.assertEqual(full[0]["candidate_count_pruned"], 0)
+        self.assertEqual(len({p["sample_id"] for p in full}), len(full))
+
+    def test_no_selection_limit_retains_every_distinct_recovery(self):
+        plans = [{
+            "index": i, "sample_id": f"no-cap-{i}",
+            "task_id": "q", "branch_round": 3, "faults": [],
+            "scenario_plan": {"fault_atoms": [{
+                "kind": ("no_result" if i == 0
+                         else "incomplete_retrieval" if i == 1
+                         else "wrong_retrieval"),
+            }]},
+        } for i in range(3)]
+        journals = [{
+            "status": "recovered",
+            "episode": {"trajectory": [
+                {"attempt": 3, "action": "delegate_task"}
+            ]},
+            "private_audit": {
+                "execution_outcome": "recovered",
+                "runtime": {},
+                "evidence_plan": [{"evidence_requests": [{
+                    "operation": f"recovery_{i}",
+                    "target_fields": ["value"],
+                    "authorized_source_ids": ["source"],
+                }]}],
+            },
+        } for i in range(3)]
+        selected, rows, stats = select_recovered_candidates(
+            plans, journals, max_selected_per_round=None,
+        )
+        self.assertEqual(selected, {0, 1, 2})
+        self.assertEqual(stats["candidates_selected_for_language_review"], 3)
+        self.assertTrue(all(
+            row["selection_purpose"] == "positive" for row in rows
+        ))
+
     def test_selection_prefers_actual_recovered_invalidation(self):
         plans = [{
             "index": i,
@@ -456,8 +513,10 @@ class CandidateExplorationTests(unittest.TestCase):
         self.assertNotIn("max_fault_atoms", config)
         self.assertIn("computation_error", config["atomic_fault_kinds"])
         self.assertIn("done_but_incomplete", config["atomic_fault_kinds"])
-        self.assertEqual(config["max_candidates_per_round"], 12)
-        self.assertEqual(config["max_selected_per_round"], 3)
+        self.assertIsNone(config["branches_per_scene"])
+        self.assertIsNone(config["max_candidates_per_round"])
+        self.assertIsNone(config["max_selected_per_round"])
+        self.assertIsNone(config["max_language_attempts_per_round"])
         content = DEFAULT_CONFIG.read_text(encoding="utf-8")
         with TemporaryDirectory() as td:
             f = Path(td) / "config.yaml"
@@ -471,7 +530,7 @@ class CandidateExplorationTests(unittest.TestCase):
             ):
                 load_config(f)
             f.write_text(content.replace(
-                "max_selected_per_round: 3",
+                "max_selected_per_round: null",
                 "max_selected_per_round: 0"
             ))
             with self.assertRaisesRegex(

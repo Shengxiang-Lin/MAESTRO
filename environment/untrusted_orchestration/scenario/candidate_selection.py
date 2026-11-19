@@ -251,7 +251,7 @@ def classify_trial(plan: dict, journal: dict) -> dict:
 
 def select_recovered_candidates(
     planned: list[dict], journals: list[dict], *,
-    max_selected_per_round: int,
+    max_selected_per_round: int | None,
     strategy: str = "causal_rank",
     max_diagnostics_per_scene: int = 0,
     seed: int = 17,
@@ -262,8 +262,9 @@ def select_recovered_candidates(
     across feedback rounds. A non-recovered diagnostic can be language
     reviewed for evidence-state supervision, but is NEVER positive SFT.
     """
-    if type(max_selected_per_round) is not int or not (
-        1 <= max_selected_per_round <= 8
+    if max_selected_per_round is not None and (
+        type(max_selected_per_round) is not int
+        or not 1 <= max_selected_per_round <= 8
     ):
         raise ValueError("invalid_selection_cap")
     if strategy not in {"causal_rank", "stratified"}:
@@ -327,7 +328,7 @@ def select_recovered_candidates(
                 continue
             seen.add(signature)
             candidate["recovery_rank"] = len(seen)
-            if len(seen) <= max_selected_per_round:
+            if max_selected_per_round is None or len(seen) <= max_selected_per_round:
                 selected.add(candidate["candidate_index"])
                 candidate["selection_purpose"] = "positive"
                 category_usage[candidate["category"]] += 1
