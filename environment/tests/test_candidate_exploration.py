@@ -513,7 +513,6 @@ class CandidateExplorationTests(unittest.TestCase):
         self.assertNotIn("max_fault_atoms", config)
         self.assertIn("computation_error", config["atomic_fault_kinds"])
         self.assertIn("done_but_incomplete", config["atomic_fault_kinds"])
-        self.assertEqual(config["max_candidates_per_round"], 12)
         self.assertIsNone(config["branches_per_scene"])
         self.assertIsNone(config["max_candidates_per_round"])
         self.assertIsNone(config["max_selected_per_round"])
