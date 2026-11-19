@@ -13,7 +13,10 @@ from copy import deepcopy
 from hashlib import sha256
 
 from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault
-from environment.untrusted_orchestration.runtime.faults import relation_rows, run_attempt
+from environment.untrusted_orchestration.runtime.faults import (
+    FaultUnsupported, relation_rows, run_attempt,
+)
+from environment.generate_question.execution.program_ir import ProgramError
 from environment.untrusted_orchestration.inspection.visible_claim_extraction import SUBJECT_FIELDS
 
 
@@ -134,7 +137,7 @@ def discover_same_source_rechecks(
                 repeated, _ = run_attempt(
                     clone, parents=parents, sources=sources,
                 )
-            except (KeyError, TypeError, ValueError):
+            except (FaultUnsupported, ProgramError, KeyError, TypeError, ValueError):
                 continue
             if relation_rows(repeated) != clean_rows:
                 continue
@@ -160,7 +163,7 @@ def discover_same_source_rechecks(
                             clone, parents=parents, sources=sources,
                             fault=fault.as_legacy_fault(),
                         )
-                    except (KeyError, ValueError, TypeError):
+                    except (FaultUnsupported, ProgramError, KeyError, ValueError, TypeError):
                         continue
                     changed = runtime.get("communicated_rows")
                     if changed is None:
