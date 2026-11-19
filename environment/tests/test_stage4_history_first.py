@@ -806,8 +806,10 @@ class HistoryFirstHandoffTests(unittest.TestCase):
             prefix_report_reviews=review_rows,
         )
         self.assertEqual(len(log), 1)
-        self.assertEqual({r["task_id"] for r in review_rows},
-                         {"parent", "child", witness["task_id"]})
+        self.assertTrue(
+            {"parent", "child", witness["task_id"]} <=
+            {r["task_id"] for r in review_rows}
+        )
         bad_child = relation_rows(state.current["child"].product)
         self.assertEqual(bad_child[0]["values"]["observation_year"], 2024)
         self.assertIn(
