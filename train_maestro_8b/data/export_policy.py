@@ -64,7 +64,7 @@ def export(risk_dir, main_turns, output_dir, decision_states=None):
         reference[key] = action
     stats = {
         "reference_turns": len(reference), "private_states": len(private),
-        "train": 0, "val": 0, "missing_reference": 0,
+        "train": 0, "val": 0, "test": 0, "missing_reference": 0,
         "missing_decision_state": 0, "unscorable": 0,
     }
     for split in ("train", "val", "test"):
