@@ -12,7 +12,7 @@ from copy import deepcopy
 import json
 
 from environment.untrusted_orchestration.runtime.faults import relation_rows
-from .result_text import render_records, delivered_records
+from .result_text import render_records
 
 
 def render_report_fault(base: dict, attempt) -> tuple[dict, dict]:
@@ -49,9 +49,8 @@ def render_report_fault(base: dict, attempt) -> tuple[dict, dict]:
         finish = report.get("finish_result")
         if not isinstance(finish, dict):
             raise ValueError("done_incomplete_requires_delivered_result")
-        rows = delivered_records(finish.get("result", ""))
-        if rows is not None:
-            finish["result"] = render_records(rows)
+        # Preserve the exact executor-owned Result encoding and FactRefs,
+        # including typed JSON in the formal LLM review path.
         finish["status"] = "done"
         missing = [
             x.replace("_", " ") for x in attempt.runtime["missing_fields"]
