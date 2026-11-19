@@ -125,8 +125,7 @@ class CandidateExplorationTests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(full), len(capped))
         self.assertEqual(full[0]["candidate_count_pruned"], 0)
-        self.assertEqual({p["sample_id"] for p in full},
-                         {p["sample_id"] for p in full})
+        self.assertEqual(len({p["sample_id"] for p in full}), len(full))
 
     def test_no_selection_limit_retains_every_distinct_recovery(self):
         plans = [{
