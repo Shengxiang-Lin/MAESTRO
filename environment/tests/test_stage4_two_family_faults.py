@@ -262,6 +262,65 @@ class IntraReportFaultTests(unittest.TestCase):
                          ["ledger:F002"])
         self.assertEqual(attempt.product.rows[0]["values"]["metric"], 12)
 
+    def test_4c_done_null_uses_flattened_o1_history(self):
+        from environment.untrusted_orchestration.offline_pipeline import (
+            _public_done_null_fields, _visibility_issues,
+        )
+        entries = [{
+            "attempt": 1, "subtask_results": [{
+                "status": "done", "result": json.dumps([{
+                    "values": {"case_id": "Dossier-01", "metric_b": None},
+                    "source_fact_refs": ["metric_b:F001"],
+                }]),
+                "summary": "A finding was returned.",
+                "instruction": "Return metric_b for the identified case.",
+            }],
+        }]
+        self.assertEqual(_public_done_null_fields(entries), {"metric_b"})
+        requests = [{
+            "request_id": "R02-Ework_M8-F01",
+            "operation": "complete_partial_evidence",
+            "target_fields": ["metric_b"],
+            "known_identifiers": [],
+        }]
+        # O1 formats the history as text, NOT a JSON array. The evidence
+        # checker must read the structured delivered history separately.
+        self.assertEqual(_visibility_issues(
+            requests, entries, "Round 1: Sub-Agent finished (done)."
+        ), [])
+        entries[0]["subtask_results"][0]["result"] = json.dumps([{
+            "values": {"case_id": "Dossier-01", "metric_b": 87},
+            "source_fact_refs": ["metric_b:F001"],
+        }])
+        self.assertEqual(_visibility_issues(
+            requests, entries, "Round 1: Sub-Agent finished (done)."
+        ), ["R02-Ework_M8-F01:missing_status"])
+
+    def test_dossier_identifier_visible_result_summary_conflict(self):
+        from environment.untrusted_orchestration.main_decision_contract import (
+            build_main_decision_contract,
+        )
+        entries = [{"attempt": 1, "subtask_results": [{
+            "status": "done",
+            "result": json.dumps([{
+                "values": {"case_id": "Dossier-001"},
+                "source_fact_refs": ["M1:F001"],
+            }]),
+            "summary": "The summary records case id = Dossier-002.",
+        }]}]
+        contract = build_main_decision_contract(
+            entries, [{
+                "operation": "verify_conflicting_evidence",
+                "target_fields": ["case_id"],
+                "main_visible_justification": "The result and summary disagree.",
+            }], number_of_tasks=1,
+        )
+        conflicts = contract["visible_evidence"][
+            "confirmed_result_summary_conflicts"]
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["summary_value"], "dossier-002")
+        self.assertEqual(conflicts[0]["result_value"], "dossier-001")
+
 
 if __name__ == "__main__":
     unittest.main()
