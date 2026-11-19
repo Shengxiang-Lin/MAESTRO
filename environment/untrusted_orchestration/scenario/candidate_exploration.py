@@ -175,9 +175,44 @@ def enumerate_round_candidates(
         atomic_fault_kinds=atomic_fault_kinds,
         max_parallel_tasks=max_parallel_tasks,
     )
-    # Preserve per-round coverage only if neither existing-task faults
-    # (method A) nor real later recheck dispatches (method B) are possible.
-    if not eligible and not rechecks:
+    # Method C: one old report is corrupted, actual descendants execute
+    # BEFORE a clean late recheck reveals the discrepancy. Only candidates
+    # with an already-dispatched intermediate consumer are meaningful.
+    waves = scene["macro_graph"]["reference_waves"]
+    delayed = []
+    for repeat in rechecks:
+        origin = repeat["older_wave_index"]
+        newer = repeat["new_wave_index"]
+        old_id = repeat["older_task_id"]
+        middle = {
+            tid for wave in waves[origin + 1:newer] for tid in wave
+        }
+        if not middle:
+            continue
+        queue, descendants = [old_id], set()
+        while queue:
+            current = queue.pop()
+            for task in tasks.values():
+                tid = task["task_id"]
+                if current in task["depends_on"] and tid not in descendants:
+                    descendants.add(tid)
+                    queue.append(tid)
+        if not descendants & middle:
+            continue
+        if not _candidate_is_real(
+            scene, tasks[old_id], repeat["fault_kind"],
+            repeat["fault_variant"], products,
+        ):
+            continue
+        delayed.append({
+            **repeat,
+            "construction": "delayed_consumed_error_recovery",
+            "feeds_future_tasks": [],  # Keep the ORIGINAL dependency chain.
+            "consumers_before_discovery": sorted(descendants & middle),
+        })
+    # Keep an explicit denominator when none of the three genuine causal
+    # construction routes can execute.
+    if not eligible and not rechecks and not delayed:
         skipped = deepcopy(round_plan)
         skipped["faults"] = []
         skipped["fault_mode"] = None
@@ -293,7 +328,42 @@ def enumerate_round_candidates(
         )
         item["scenario_plan"]["same_source_recheck_plan"] = patch
         result.append(item)
-    total = len(ordered) + len(rechecks)
+    # Method C does not mutate or rewrite old feedback. The same clean
+    # Stage-3 dispatch sequence is replayed using the EARLY poisoned
+    # WorkProduct and actual downstream operator execution, then a later
+    # clean recheck is delegated before the fork decision.
+    for patch in delayed:
+        if max_candidates is not None and len(result) >= max_candidates:
+            break
+        slot = len(result) + 1
+        item = deepcopy(round_plan)
+        item["sample_id"] += f"-candidate-{slot:03d}"
+        item["candidate_variant_index"] = patch["fault_variant"]
+        item["skip_reason"] = None
+        item["fault_mode"] = patch["fault_kind"]
+        item["incoming_task_ids"] = [
+            *item["incoming_task_ids"], patch["new_task"]["task_id"]
+        ]
+        old_id = patch["older_task_id"]
+        item["faults"] = [AtomicFault(
+            patch["fault_kind"], old_id,
+            origin_round=patch["older_wave_index"] + 1,
+            seed=local_seed + slot,
+            variant_index=patch["fault_variant"],
+        ).as_legacy_fault()]
+        item["scenario_plan"] = make_scenario(
+            scene, item, mode="event_driven",
+            max_fault_atoms=1, delayed_evidence_probability=0.0,
+        )
+        item["scenario_plan"]["blueprint"] = (
+            "delayed_consumed_error_recovery"
+        )
+        item["scenario_plan"]["fault_atoms"][0]["origin_round"] = (
+            patch["older_wave_index"] + 1
+        )
+        item["scenario_plan"]["same_source_recheck_plan"] = patch
+        result.append(item)
+    total = len(ordered) + len(rechecks) + len(delayed)
     for item in result:
         item["candidate_count_total"] = total
         item["candidate_count_pruned"] = total - len(result)
