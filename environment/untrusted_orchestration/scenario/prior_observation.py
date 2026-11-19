@@ -318,7 +318,7 @@ def comparison_rows(state, *, require_visible_scope: bool = True) -> list[dict]:
         old_report, new_report = state.public_reports[tid], state.public_reports[target]
         first = delivered_records((old_report.get("finish_result") or {}).get("result", ""))
         second = delivered_records((new_report.get("finish_result") or {}).get("result", ""))
-        if not first or not second or len(second) != 1:
+        if not first or not second:
             continue
         key, wanted = task["history_scope_key"]
         matching = [
@@ -328,7 +328,19 @@ def comparison_rows(state, *, require_visible_scope: bool = True) -> list[dict]:
         if len(matching) != 1:
             continue
         earlier = matching[0]["values"].get(source_field)
-        latest = second[0]["values"].get(field)
+        if len(second) == 1:
+            latest_row = second[0]
+        else:
+            # Multiple delivered rows are comparable only when the same
+            # public key identifies one and only one latest record.
+            narrowed = [
+                row for row in second
+                if row.get("values", {}).get(key) == wanted
+            ]
+            if len(narrowed) != 1:
+                continue
+            latest_row = narrowed[0]
+        latest = latest_row["values"].get(field)
         if not _scalar(earlier) or type(latest) is not type(earlier):
             continue
         if (state.public_report_rounds.get(tid, 0)
@@ -357,7 +369,7 @@ def comparison_rows(state, *, require_visible_scope: bool = True) -> list[dict]:
             "older_round": state.public_report_rounds[tid],
             "latest_round": state.public_report_rounds[target],
             "older_fact_refs": matching[0].get("source_fact_refs", []),
-            "latest_fact_refs": second[0].get("source_fact_refs", []),
+            "latest_fact_refs": latest_row.get("source_fact_refs", []),
             "comparison_kind": "earlier_source_survey",
         })
     return comparisons
