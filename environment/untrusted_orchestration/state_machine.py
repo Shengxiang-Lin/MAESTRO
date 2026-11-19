@@ -1145,12 +1145,19 @@ class ExecutionState:
         The simulator retains these as PRIVATE risk-supervision diagnostics.
         The Main still receives only the original O1 Sub-Agent history.
         """
+        from .reporting.public_work import visible_work_discrepancy
         issues = []
         for tid in sorted(self.public_reports):
             if tid not in self.current:
                 continue
             status = self.public_status(tid)
             item = self.current[tid]
+            finish = self.public_reports[tid].get("finish_result") or {}
+            visible_text = (
+                str(finish.get("summary") or "") + " " +
+                str(self.public_reports[tid].get("trace_summary") or "")
+            )
+            work_issue = visible_work_discrepancy(visible_text)
             if status == "missing":
                 kind = "missing_delivery"
                 reason = self.visible_discrepancy(tid)
@@ -1183,17 +1190,16 @@ class ExecutionState:
             elif self._visible_passthrough_issue(tid):
                 kind = "derived_identifier_disagreement"
                 reason = self._visible_passthrough_issue(tid)
+            elif work_issue:
+                kind = (
+                    "entity_association_inconsistency"
+                    if work_issue.startswith("The report associated ")
+                    else "arithmetic_inconsistency"
+                )
+                reason = work_issue
             elif self._visible_arithmetic_issue(tid):
                 kind = "arithmetic_inconsistency"
                 reason = self._visible_arithmetic_issue(tid)
-            elif (self.visible_discrepancy(tid) and
-                  "report states" in self.visible_discrepancy(tid).lower()):
-                kind = "arithmetic_inconsistency"
-                reason = self.visible_discrepancy(tid)
-            elif (self.visible_discrepancy(tid) and
-                  "associated the first" in self.visible_discrepancy(tid).lower()):
-                kind = "entity_association_inconsistency"
-                reason = self.visible_discrepancy(tid)
             else:
                 # An unexplained discrepancy is not a license to read
                 # the private Attempt or invent an outside verifier.
