@@ -948,7 +948,7 @@ def generate_turns(
     delayed_evidence_probability: float = 0.0,
     candidate_strategy: str = "sample_one",
     max_candidates_per_round: int | None = None,
-    max_distractors_per_fault: int = 2,
+    max_distractors_per_fault: int | None = None,
     max_selected_per_round: int | None = None,
     selection_strategy: str = "causal_rank",
     max_diagnostics_per_scene: int = 0,
