@@ -821,66 +821,66 @@ class ExecutionState:
                 })
         return rows
 
-    def _repeat_observation_conflicts(self) -> list[tuple[str, str, list, list]]:
-        """Compare complete public deliveries for the identical frozen query."""
-        pairs = []
-        for tid, task in self.tasks.items():
-            target = task.get("verification_target_task_id")
-            if (not target or target not in self.tasks
-                    or self.public_status(tid) != "done"
-                    or self.public_status(target) != "done"):
-                continue
-            observed = self.current.get(tid)
-            original = self.current.get(target)
-            if (observed is None or original is None
-                    or observed.status not in {"done", "disputed"}
-                    or original.status not in {"done", "disputed"}
-                    or observed.used_parent_versions != original.used_parent_versions):
-                continue
-            left = self._public_result_rows(self.public_reports[target])
-            right = self._public_result_rows(self.public_reports[tid])
-            if left is None or right is None:
-                continue
-            canonical = lambda rows: sorted(
-                {json.dumps(row, sort_keys=True, ensure_ascii=False)
-                 for row in rows}
-            )
-            if canonical(left) != canonical(right):
-                pairs.append((target, tid, left, right))
-        return pairs
+    def _detect_history_report_conflicts(self) -> None:
+        """Compare the NEWEST delivered batch against earlier public reports.
 
-    def _detect_repeat_observation_conflicts(self) -> None:
-        for target, witness, left, right in self._repeat_observation_conflicts():
-            current = self.current[target]
-            if current.status != "done":
+        The Main has no private fault label: disagreement is a reason for
+        investigation, never proof about which reporter is right. Sources
+        may be shared, but shared sources do not count as independent votes.
+        """
+        from .scenario.history_conflicts import latest_history_disagreements
+
+        for conflict in latest_history_disagreements(self):
+            target = conflict["latest_task"]
+            current = self.current.get(target)
+            if current is None or current.status != "done":
                 continue
-            current.status = "disputed"
-            current.runtime["visible_issue"] = (
-                "Two reports for the same source query returned different records: "
-                + json.dumps(left, ensure_ascii=False) + " versus "
-                + json.dumps(right, ensure_ascii=False)
-                + ". Reconcile the conflicting field or identity against the "
-                  "cited materials; the reports share a source."
+            old = conflict["older_task"]
+            if self.public_status(old) != "done":
+                continue
+            key = (old, target, conflict["subject"], conflict["attribute"])
+            if any(event.get("history_pair_key") == key
+                   and event.get("recheck_task_version") == current.version
+                   for event in self.detected_conflicts):
+                continue
+            message = (
+                "Earlier and newest Sub-Agent reports disagree about "
+                + conflict["attribute"].replace("_", " ") + " for "
+                + conflict["subject"] + ": earlier "
+                + str(conflict["earlier_value"]) + ", latest "
+                + str(conflict["latest_value"])
+                + ". Recheck the cited report before relying on this value."
             )
-            current.runtime["cross_source_recheck_requested"] = True
+            current.status = "disputed"
+            current.runtime["visible_issue"] = message
+            current.runtime["history_conflict_recheck_requested"] = True
             self.detected_conflicts.append({
-                "kind": "same_query_report_disagreement",
-                "compared_parent_tasks": [target, witness],
+                "kind": "cross_round_report_disagreement",
+                "history_pair_key": key,
+                "compared_parent_tasks": [old, target],
                 "recheck_task_id": target,
-                "at_public_round": max(
-                    self.public_report_rounds.get(target, 0),
-                    self.public_report_rounds.get(witness, 0),
-                ),
+                "recheck_task_version": current.version,
+                "claim": {
+                    "subject": conflict["subject"],
+                    "attribute": conflict["attribute"],
+                    "valid_scope": "same_record",
+                },
+                "observed_values": [
+                    conflict["earlier_value"], conflict["latest_value"],
+                ],
+                "cited_fact_refs": [
+                    conflict["older_fact_refs"], conflict["latest_fact_refs"],
+                ],
+                "at_public_round": conflict["latest_round"],
+                "conflict_timing": "delayed",
                 "empirically_independent": False,
-                "conflict_timing": (
-                    "simultaneous" if self.public_report_rounds.get(target)
-                    == self.public_report_rounds.get(witness) else "delayed"
-                ),
                 "downstream_previously_executed": any(
-                    target in child.used_parent_versions
+                    child.used_parent_versions.get(target) == current.version
                     for child in self.current.values()
+                    if child is not current
                 ),
             })
+            return
 
     def _detect_explicit_cross_report_disagreements(self) -> None:
         """Contested same-claim reports support bounded sequential rechecks.
@@ -891,7 +891,6 @@ class ExecutionState:
         """
         if not self.cross_source_checks_enabled:
             return
-        self._detect_repeat_observation_conflicts()
         by_claim = {}
         for claim in self._explicit_report_claims():
             key = (claim["subject"], claim["attribute"], claim["valid_scope"])
@@ -998,14 +997,35 @@ class ExecutionState:
                     })
                     return
 
+        # No independent-source disagreement was detected. Look for a
+        # latest-vs-earlier contradiction, including same-source reports.
+        self._detect_history_report_conflicts()
+
     def unresolved_cited_conflicts(self) -> bool:
         """After rechecking, do two PUBLIC independent claims still disagree?
 
         A re-execution that returns exactly the same value is *not*
         automatically a resolution. Neither source's hidden Gold is used.
         """
-        if self._repeat_observation_conflicts():
-            return True
+        from .scenario.history_conflicts import public_claims
+        claims = public_claims(self)
+        for event in self.detected_conflicts:
+            if event.get("kind") != "cross_round_report_disagreement":
+                continue
+            old, recent = event["compared_parent_tasks"]
+            subject = event["claim"]["subject"]
+            field = event["claim"]["attribute"]
+            values = {}
+            for row in claims:
+                if (row["task_id"] in (old, recent)
+                        and row["subject"] == subject
+                        and row["attribute"] == field):
+                    values.setdefault(row["task_id"], set()).add(
+                        (type(row["value"]).__name__, repr(row["value"]))
+                    )
+            if (old not in values or recent not in values
+                    or values[old] != values[recent]):
+                return True
         relevant = [
             row for row in self.detected_conflicts
             if row.get("kind") == "explicit_independent_claim_disagreement"
@@ -1056,6 +1076,9 @@ class ExecutionState:
                 # derived result is not newly verified by that replacement.
                 kind = "stale_downstream_result"
                 reason = "A previously used upstream report was replaced."
+            elif item.runtime.get("history_conflict_recheck_requested"):
+                kind = "historical_report_conflict"
+                reason = item.runtime.get("visible_issue")
             elif item.runtime.get("cross_source_recheck_requested"):
                 kind = "cross_source_conflict"
                 reason = item.runtime.get("visible_issue")
