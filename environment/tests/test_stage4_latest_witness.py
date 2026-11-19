@@ -191,6 +191,68 @@ class LatestBatchWitnessTests(unittest.TestCase):
             "not_real_world_independent_confirmation"
         ])
 
+    def test_prefer_one_new_report_disagreeing_with_prior_natural_report(self):
+        delegates = [
+            step for step in self.clean_episode["trajectory"]
+            if step["action"] == "delegate_task"
+        ]
+        single = None
+        for round_number in range(3, len(delegates) + 2):
+            candidate = make_latest_pair(
+                self.scene, feedback_round=round_number,
+                base_episode=self.clean_episode, max_parallel_tasks=4,
+            )
+            if candidate is not None and candidate[
+                "historical_anchor_used"
+            ]:
+                single = (round_number, candidate)
+                break
+        self.assertIsNotNone(
+            single, "fixture lacks explicit prior source pair"
+        )
+        round_number, extension = single
+        self.assertEqual(len(extension["entries"]), 1)
+        self.assertEqual(
+            extension["private_generation_basis"][
+                "historical_anchor"]["report_round"]
+            ] < round_number - 1, True,
+        )
+        original_history = deepcopy(self.clean_episode["trajectory"])
+        expanded = extend_clean_prefix(self.clean_episode, extension)
+        for before, after in zip(
+            original_history, expanded["trajectory"]
+        ):
+            if before["attempt"] < round_number - 1:
+                self.assertEqual(before, after)
+        fault = AtomicFault(
+            "fabricated_claim", extension["faulted_task_id"],
+            round_number - 1, variant_index=1,
+        ).as_legacy_fault()
+        plan = {
+            "index": 0, "scene_index": 0,
+            "task_id": self.scene["task_id"],
+            "sample_id": "single-latest-witness",
+            "branch_round": round_number, "faults": [fault],
+        }
+        scenario = make_scenario(
+            self.scene, plan, mode="event_driven",
+            max_fault_atoms=1,
+        )
+        episode, turns, audit = build_branch(
+            self.scene, self.reports, self.clean_episode,
+            branch_round=round_number, faults=[fault],
+            scenario_plan=scenario,
+            witness_extension=extension,
+            max_parallel_tasks=4, max_rounds=20,
+        )
+        self.assertTrue(any(
+            issue["kind"] == "cross_source_conflict"
+            for snap in audit["observable_issue_snapshots"]
+            for issue in snap["issues"]
+        ))
+        self.assertEqual(audit["execution_outcome"], "recovered")
+        self.assertTrue(turns)
+
     def test_direct_generator_exports_cross_report_candidate_diagnostics(self):
         round_number, extension = self._find_case()
         self.assertIsNotNone(extension)
