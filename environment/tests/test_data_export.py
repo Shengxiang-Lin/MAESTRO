@@ -93,18 +93,23 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
             )
             self.assertEqual(audit["outcome"], "recovered")
             cid = scene_id + "-branch-02-fault-001"
+            cid2 = scene_id + "-branch-02-fault-002"
             stage4 = root / "stage4"
             write(stage4 / "round_index.jsonl", [{
-                "round_sample_id": cid,
+                "round_sample_id": item,
                 "question_id": scene_id,
                 "main_decision_round": 2,
                 "scenario_blueprint": "latest_fault",
-            }])
+            } for item in (cid, cid2)])
             write(stage4 / "episodes.jsonl", [
-                {**ep, "round_sample_id": cid},
+                {**ep, "round_sample_id": item}
+                for item in (cid, cid2)
             ])
+            # Both candidates deliberately have identical display sample_id
+            # and visible prompts, but MUST have distinct candidate identity.
             write(stage4 / "main_turns.jsonl", [
-                {**turn, "round_sample_id": cid} for turn in turns
+                {**turn, "round_sample_id": item}
+                for item in (cid, cid2) for turn in turns
             ])
             journal = {
                 "task_id": scene_id,
@@ -113,11 +118,13 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
                 "private_audit": audit,
                 "turns": turns,
             }
-            write(stage4 / "journal/000000.json", [])  # replaced by atomic JSON
-            (stage4 / "journal/000000.json").write_text(
-                json.dumps(journal, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            (stage4 / "journal").mkdir(parents=True, exist_ok=True)
+            for index, item in enumerate((cid, cid2)):
+                payload = {**journal, "round_sample_id": item}
+                (stage4 / "journal" / f"{index:06d}.json").write_text(
+                    json.dumps(payload, ensure_ascii=False),
+                    encoding="utf-8",
+                )
             (stage4 / "manifest.json").write_text(json.dumps({
                 "input_sha256": [digest(paths["scenes"]), "report-hash"],
                 "settings": {
@@ -133,7 +140,7 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
                 stage4_dir=stage4, output_dir=out,
                 require_llm=False,
             )
-            self.assertEqual(manifest["accepted_fault_cases"], 1)
+            self.assertEqual(manifest["accepted_fault_cases"], 2)
             splits = json.loads(
                 (out / "splits.json").read_text(encoding="utf-8")
             )["scene_to_split"]
@@ -151,6 +158,11 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
             )
             target = [row for row in decisions if row["case_id"] == cid]
             self.assertEqual(len(target), len(turns))
+            sibling = [row for row in decisions if row["case_id"] == cid2]
+            self.assertEqual(len(sibling), len(turns))
+            self.assertTrue(set(row["decision_id"] for row in target).isdisjoint(
+                {row["decision_id"] for row in sibling}
+            ))
             self.assertEqual({
                 row["source"] for row in target
             }, {"untrusted"})
