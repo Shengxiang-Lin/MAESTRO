@@ -404,6 +404,8 @@ class IntraReportFaultTests(unittest.TestCase):
         # Once both reports have been delivered in the latest batch,
         # only their PUBLIC cited claims can justify a cross-source check.
         state.scene = patched
+        from environment.implement_subtask.realize import _fact_index
+        state.fact_index = _fact_index(patched["world"])
         state.tasks[patch["task_id"]] = patch["task"]
         state.attempts[patch["task_id"]] = []
         state.origin_by_ref[patch["source_id"] + ":F001"] = (
