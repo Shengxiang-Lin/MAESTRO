@@ -199,6 +199,79 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         self.assertFalse(state.unresolved_cited_conflicts())
         self.assertEqual(handoff_disagreements(state), [])
 
+    def test_real_stage1_scene_produces_cross_round_handoff_conflict(self):
+        """End-to-end 4A test on a real Stage-1/2/3 Task Plan, without LLM."""
+        from pathlib import Path
+        import tempfile
+
+        from environment.tests.current_stage1 import current_scene
+        from environment.implement_subtask.realize import realize_scene
+        from environment.implement_subtask.reporting import code_owned_result
+        from environment.base_orchestration.trajectory_builder import (
+            build_episode,
+        )
+        from environment.untrusted_orchestration.generate_turns import (
+            generate_turns,
+        )
+
+        scene = current_scene(0, "medium")
+        teacher = realize_scene(scene)
+        reports = []
+        for item in teacher["macro_tasks"]:
+            reports.append({
+                **deepcopy(item),
+                "finish_result": {
+                    "status": "done",
+                    "result": code_owned_result(item),
+                    "summary": "Returned the exact delegated Macro result.",
+                },
+                "report_authoring": {
+                    "status": "accepted",
+                    "mode": "pilot_deterministic_not_llm_reviewed",
+                },
+            })
+        clean, _turns, _audit, status = build_episode(
+            scene, reports, freeze_dispatch=True, max_attempts=16,
+        )
+        self.assertEqual(status["status"], "accepted")
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            for name, records in (
+                ("scenes.jsonl", [scene]),
+                ("subtasks.jsonl", reports),
+                ("clean_episodes.jsonl", [clean]),
+            ):
+                (output / name).write_text(
+                    "".join(json.dumps(row, ensure_ascii=False) + "\\n"
+                            for row in records),
+                    encoding="utf-8",
+                )
+            summary = generate_turns(
+                scenes_path=output / "scenes.jsonl",
+                reports_path=output / "subtasks.jsonl",
+                clean_episodes_path=output / "clean_episodes.jsonl",
+                output_dir=output / "stage4",
+                max_scenes=1, branches_per_scene=None, seed=17,
+                scenario_mode="event_driven",
+                atomic_fault_kinds=["wrong_retrieval", "fabricated_claim"],
+                candidate_strategy="enumerate", max_candidates_per_round=2,
+                max_distractors_per_fault=1,
+                max_selected_per_round=1,
+                max_language_attempts_per_round=1,
+                max_rounds=16, max_retries=1, max_parallel_tasks=4,
+                workers=2, no_progress=True, overwrite=True,
+                main_mode="template", report_mode="template",
+            )
+            self.assertGreater(
+                summary.get("historical_anchor_status_distribution", {})
+                       .get("generated", 0), 0,
+                summary.get("historical_anchor_reason_distribution", {}),
+            )
+            self.assertGreater(
+                summary.get("cross_round_report_conflicts_detected", 0), 0,
+                summary.get("historical_anchor_reason_distribution", {}),
+            )
+
     def test_absent_parent_visible_key_is_not_a_candidate(self):
         scene, _, _ = _scene()
         base = {"trajectory": [{
