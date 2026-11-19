@@ -539,10 +539,25 @@ def run_attempt(
         raise FaultUnsupported("fault_changed_frozen_output_schema")
     if not _different(final, correct) or not final.rows:
         raise FaultUnsupported("fault_did_not_propagate_to_workproduct")
+    observed_actual = trace(actual_steps, products)
+    if meta.get("kind") == "misjoined_real_candidates":
+        for step in observed_actual:
+            if step["node_id"] == target["id"]:
+                # The selected two rows were genuinely inspected, so their
+                # keys can be reported even if overlapping FactRefs make
+                # automatic support matching ambiguous. This describes the
+                # attempted association; it does NOT label it as wrong.
+                step["public_work_checks"] = [{
+                    "kind": "association",
+                    "left": meta["left_key"],
+                    "right": meta["right_key"],
+                    "source_fact_refs": meta["source_fact_refs"],
+                }]
+                break
     return final, {
         "status": "done", "available_fields": list(final.columns),
         "primitive": target["id"],
-        "observed_operator_steps": trace(actual_steps, products),
+        "observed_operator_steps": observed_actual,
         "source_fact_refs": sorted({
             ref for row in final.rows for ref in row["support"]
         }),
