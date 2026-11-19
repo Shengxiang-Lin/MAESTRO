@@ -784,6 +784,31 @@ class HistoryFirstHandoffTests(unittest.TestCase):
                 },
             })
         base = {"task_id": scene["task_id"], "trajectory": results}
+        sampled = enumerate_round_candidates(
+            scene, {
+                **_round_plan(scene),
+                "branch_round": 4,
+                "incoming_task_ids": [filler["task_id"]],
+            },
+            atomic_fault_kinds=["wrong_retrieval"],
+            max_candidates=None, max_distractors=1,
+            base_episode=base, max_parallel_tasks=4,
+        )
+        delayed_candidates = [
+            candidate for candidate in sampled
+            if candidate["scenario_plan"].get("blueprint")
+                == "delayed_consumed_error_recovery"
+        ]
+        self.assertTrue(delayed_candidates,
+                        "No delayed early-fault candidate was generated")
+        self.assertTrue(any(
+            candidate["faults"][0].task_id == "parent"
+            and candidate["scenario_plan"]["fault_atoms"][0][
+                "origin_round"] == 1
+            and candidate["scenario_plan"]["same_source_recheck_plan"][
+                "consumers_before_discovery"] == ["child"]
+            for candidate in delayed_candidates
+        ))
         patch = {
             "new_task": witness,
             "older_task_id": "parent", "older_wave_index": 0,
