@@ -119,13 +119,41 @@ its returned evidence and any Main-visible prerequisite values:
   perturbations may remain diagnostic, not forced recovery examples.
 
 **II. Inter-Sub-Agent conflicts** are not separate fault injectors:
-an actual wrong/fabricated report plus an independent, already returned
-same-claim report can form a value or relation disagreement. Same-round
-and later-visible disagreements both request rechecking, with actual
+an actual wrong/fabricated report plus a separately sourced, already
+returned same-claim report can form a disagreement. Same-round and
+later-visible disagreements both request rechecking, with actual
 downstream invalidation only if an earlier value was used. If reports
 still disagree after rechecking, the branch is unresolved, even if a
-private Gold answer happened to match. No fabricated second source or
-new Stage-1 operator is added.
+private Gold answer happened to match.
+
+For CURRENT simulated benchmark data, set
+`generation.latest_cross_report_pairs: true`. The Stage-4-only
+`latest_witness.py` creates two supplemental **simulated** audit
+observations of one already-grounded Stage-1 source fact, each with
+a distinct virtual source, origin, FactRef, and executable Macro.
+One Sub-Agent's latest-batch handoff is deliberately changed with a
+grounded same-source distractor via the existing `fabricated_claim`
+atomic mechanism; the other latest-batch report stays clean. Both new
+tasks are appended to the SAME last received batch and to its preceding
+Main `delegate_task` action. Earlier original Stage-3 feedback rounds
+are not modified. The original Stage-1–3 reference is strictly validated
+before the local augmentation; the augmented Scene never overwrites the
+user's frozen Scene or Stage-2 reports. Auxiliary clean reports are also
+reviewed in 4B; 4C receives the expanded source catalog.
+
+**Important evidential limitation:** the supplemental sources are
+*benchmark-synthesized* observations, with the same underlying fact
+copied from a validated original source into two constructed audit
+registers. They are NOT evidence of genuine independent real-world
+verification. The private `witness_extension.private_generation_basis`
+records this fact. The benchmark tests the Main's behavior on multiple
+apparently independent reports, not actual outside corroboration.
+No invented value from this private generation contract is directly
+given to Main. If a relevant anchored fact, a real-world-grounded
+distractor or two free parallel slots are unavailable, the generator
+skips the supplemental scenario. This produces a same-round, latest
+feedback conflict; later-arriving conflict detection remains supported
+for naturally occurring independent reports.
 
 In `private/candidate_selection.jsonl`, compare the **private fault
 mechanism** with `observable_issue_family` (`intra_report_issue`,
@@ -135,14 +163,16 @@ and `recovery_effect` (execution unblocked, inconsistency resolved,
 incorrect answer genuinely corrected, downstream recomputed, or not
 recovered). These aggregates are also exported to `summary.json`.
 
-Stage 1–3 remain frozen. Some scenes genuinely have zero same-fact,
-independent cross-report witnesses; Stage 4 records that limitation
-rather than fabricating a contradictory report.
+Stage 1–3 remain frozen. Natural comparable cross-report witnesses may
+still be absent. Stage 4 never mislabels a virtual audit register as an
+original Stage-1 source, and never claims a private synthetic witness is
+an independent real-world finding.
 
 ## Functional pipeline
 
 1. `trusted_prefix.py`: validate clean, executable historical batches.
-2. `candidate_exploration.py`, `candidate_selection.py`: explore
+2. `candidate_exploration.py`, `latest_witness.py`,
+   `candidate_selection.py`: explore
    **one atomic fault per candidate**, replay recovery and select
    causally distinct branches before expensive language review.
 3. `state_machine.py`, `evidence_planning.py`: version WorkProducts,
