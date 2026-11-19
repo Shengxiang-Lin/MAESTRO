@@ -23,6 +23,7 @@ from environment.base_orchestration.trajectory_builder import _strict_reports
 from environment.generate_question.execution.program_ir import Relation
 from .reporting.report_author import naturalize_report
 from .scenario.prior_observation import patch_scene as patch_prior_observation_scene
+from .scenario.same_source_recheck import patch_scene as patch_same_source_recheck_scene
 from .reporting.public_language import sanitize_public_report
 from environment.untrusted_orchestration.orchestration.reasoning_fidelity import reasoning_evidence_issues
 from environment.untrusted_orchestration.inspection.visible_history import visible_history_reasoning_issues
@@ -104,6 +105,9 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
     # Stage 4 changes the latest delivered report and may expose an
     # already-executed older record; it never adds a hidden verifier task.
     reviewed = _strict_reports(scene, stage2_rows)
+    scene = patch_same_source_recheck_scene(
+        scene, audit.get("same_source_recheck_plan"),
+    )
     scene = patch_prior_observation_scene(
         scene, audit.get("prior_observation_patch"),
     )
@@ -327,6 +331,9 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
         visible_step["result"]["subtask_results"] = [
             sanitize_public_report(report) for report in report_list
         ]
+    scene = patch_same_source_recheck_scene(
+        scene, audit.get("same_source_recheck_plan"),
+    )
     scene = patch_prior_observation_scene(
         scene, audit.get("prior_observation_patch"),
     )
