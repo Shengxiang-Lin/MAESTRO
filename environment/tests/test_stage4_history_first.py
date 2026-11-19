@@ -859,26 +859,21 @@ class HistoryFirstHandoffTests(unittest.TestCase):
                 "same_source_recheck_plan"]["consumers_before_discovery"]
                 == ["child"]
         )
-        reviewed = {
-            task_id: {
-                "answer_with_provenance": relation_rows(attempt.product),
-                "finish_result": deepcopy(
-                    results[next(i for i, wave in enumerate(
-                        scene["macro_graph"]["reference_waves"]
-                    ) if task_id in wave)]["result"]["subtask_results"][
-                        next(j for j, tid in enumerate(
-                            scene["macro_graph"]["reference_waves"][next(
-                                i for i, wave in enumerate(
-                                    scene["macro_graph"]["reference_waves"]
-                                ) if task_id in wave
-                            )]
-                        ) if tid == task_id)
-                    ]["finish_result"]
-                ),
-                "report_authoring": {"status": "accepted"},
-            }
-            for task_id, attempt in clean_state.current.items()
-        }
+        reviewed = {}
+        for wave_index, wave in enumerate(
+            scene["macro_graph"]["reference_waves"]
+        ):
+            for slot, tid in enumerate(wave):
+                reviewed[tid] = {
+                    "answer_with_provenance": relation_rows(
+                        clean_state.current[tid].product
+                    ),
+                    "finish_result": deepcopy(
+                        results[wave_index]["result"][
+                            "subtask_results"][slot]["finish_result"]
+                    ),
+                    "report_authoring": {"status": "accepted"},
+                }
         _episode, _turns, branch_audit = build_branch(
             scene, [], base,
             branch_round=4, faults=chosen["faults"],
