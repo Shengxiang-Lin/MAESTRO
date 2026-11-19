@@ -10,10 +10,10 @@ from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.config import (
     DEFAULT_CONFIG, load_config,
 )
-from environment.untrusted_orchestration.candidate_exploration import (
+from environment.untrusted_orchestration.scenario.candidate_exploration import (
     enumerate_round_candidates, expand_all_rounds,
 )
-from environment.untrusted_orchestration.candidate_selection import (
+from environment.untrusted_orchestration.scenario.candidate_selection import (
     select_recovered_candidates, classify_trial,
 )
 from environment.untrusted_orchestration.evidence_affordances import (
