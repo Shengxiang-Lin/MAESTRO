@@ -504,6 +504,7 @@ class IntraReportFaultTests(unittest.TestCase):
                 faults=[atom.as_legacy_fault()],
                 scenario_plan=scenario, max_rounds=16, max_retries=1,
                 max_post_fork_rounds=4,
+                max_parallel_tasks=len(first) + 1,
             )
         latest = episode["trajectory"][0]
         self.assertEqual(latest["attempt"], 1)
