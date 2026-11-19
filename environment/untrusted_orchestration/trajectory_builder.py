@@ -180,6 +180,8 @@ def _history_batch(number: int, returned: list[dict]) -> dict:
 def _clean_prefix(
     scene: dict, reviewed: dict, base_episode: dict, *,
     branch_round: int, faults: list[Fault],
+    fault_origin_wave_index: int | None = None,
+    prefix_report_reviews: list[dict] | None = None,
     report_author=None, report_critic=None,
     report_revisions: int = 1,
     model_alias: str = "model_1",
@@ -197,8 +199,23 @@ def _clean_prefix(
            for index in range(branch_round - 1)):
         raise ValueError("clean_base_alignment_invalid")
     targets = {fault.task_id: fault for fault in faults}
-    if not targets or not set(targets) <= set(waves[branch_round - 2]):
-        raise ValueError("fault_targets_must_be_in_last_completed_batch")
+    origin = (branch_round - 2
+              if fault_origin_wave_index is None
+              else fault_origin_wave_index)
+    if not 0 <= origin <= branch_round - 2:
+        raise ValueError("fault_origin_must_precede_branch_decision")
+    if not targets or not set(targets) <= set(waves[origin]):
+        raise ValueError("fault_targets_must_be_in_declared_origin_batch")
+    if len(targets) != len(faults):
+        raise ValueError("duplicate_initial_fault_target")
+    # Only an earlier executed error can affect an intermediate consumer.
+    # Re-run those consumers against the poisoned product and replace their
+    # reports with actual observed values; never copy Stage-3 clean answers.
+    affected = set()
+    if origin < branch_round - 2:
+        probe = ExecutionState(scene, reviewed)
+        for tid in targets:
+            affected.update(probe._dependents(tid))
 
     state = ExecutionState(scene, reviewed)
     history, episode_prefix, fault_log = [], [], []
@@ -208,13 +225,18 @@ def _clean_prefix(
         visible_results = []
         for slot, tid in enumerate(waves[index]):
             clean_result = previous_batch[slot]
-            fault = targets.get(tid) if index == branch_round - 2 else None
+            fault = targets.get(tid) if index == origin else None
             attempt = state.register(tid, fault=fault)
-            if fault is None:
-                # Preserve exactly what the trusted Main saw, including the
-                # natural-language Stage-2 report and O1 task instruction.
+            # Descendants of an early bad result must be replayed using
+            # their ACTUAL values. A newly delegated clean recheck must
+            # likewise have its own executed report rather than inheriting
+            # the earlier Sub-Agent's prose verbatim.
+            reauthor = (
+                fault is not None or tid in affected
+                or "history_recheck_of" in state.tasks[tid]
+            )
+            if not reauthor:
                 public = _as_public(clean_result)
-                report_mode = "reviewed_clean"
             else:
                 public, status = naturalize_report(
                     state.tasks[tid], attempt,
@@ -225,16 +247,24 @@ def _clean_prefix(
                     max_revisions=report_revisions,
                 )
                 public["subtask_index"] = slot
-                report_mode = status["mode"]
+                if prefix_report_reviews is not None:
+                    prefix_report_reviews.append({
+                        "task_id": tid,
+                        "attempt_version": attempt.version,
+                        "round": index + 1,
+                        "authoring": deepcopy(status),
+                    })
                 if on_report_review is not None:
                     on_report_review(status)
-                fault_log.append({
-                    "task_id": tid, "mode": fault.mode,
-                    "persistence": fault.persistence, "seed": fault.seed,
-                    "injection_primitive": attempt.runtime.get("primitive"),
-                    "execution": deepcopy(attempt.runtime),
-                    "report_mode": status,
-                })
+                if fault is not None:
+                    fault_log.append({
+                        "task_id": tid, "mode": fault.mode,
+                        "persistence": fault.persistence, "seed": fault.seed,
+                        "injection_primitive": attempt.runtime.get("primitive"),
+                        "execution": deepcopy(attempt.runtime),
+                        "report_mode": status,
+                        "origin_round": index + 1,
+                    })
             state.set_public_report(
                 tid, public, round_number=index + 1,
             )
@@ -413,9 +443,19 @@ def build_branch(
         scene = patch_same_source_recheck_scene(
             scene, same_source_recheck_plan,
         )
+    fault_origin_wave_index = (
+        same_source_recheck_plan["older_wave_index"]
+        if same_source_recheck_plan is not None
+        and same_source_recheck_plan.get("construction")
+            == "delayed_consumed_error_recovery"
+        else branch_round - 2
+    )
+    prefix_report_reviews = []
     state, task_entries, trajectory, injected = _clean_prefix(
         scene, reviewed, base_episode,
         branch_round=branch_round, faults=faults,
+        fault_origin_wave_index=fault_origin_wave_index,
+        prefix_report_reviews=prefix_report_reviews,
         report_author=report_author, report_critic=report_critic,
         report_revisions=report_max_revisions, model_alias=model_alias,
         on_report_review=on_report_review,
@@ -430,7 +470,11 @@ def build_branch(
     # already stated field explicit; no new source access is introduced.
     if same_source_recheck_plan is not None:
         history_anchor = {
-            "status": "generated", "reason": "earlier_same_query_result",
+            "status": "generated",
+            "reason": same_source_recheck_plan.get(
+                "construction", "earlier_same_query_result"
+            ) if fault_origin_wave_index != branch_round - 2
+              else "earlier_same_query_result",
             "task_id": same_source_recheck_plan["older_task_id"],
             "target_task_id": same_source_recheck_plan["new_task"]["task_id"],
             "prior_round": same_source_recheck_plan["older_wave_index"] + 1,
@@ -536,16 +580,21 @@ def build_branch(
 
     paired_clean_history = None
     if history_anchor["status"] in {"exposed", "generated"}:
-        paired_clean_history = deepcopy(trajectory)
-        # Only the current fault differs between the clean/error variants;
-        # their earlier source-backed history remains identical.
-        last_wave = scene["macro_graph"]["reference_waves"][branch_round - 2]
-        for fault in faults:
-            slot = last_wave.index(fault.task_id)
-            paired_clean_history[-1]["result"]["subtask_results"][slot] = (
-                deepcopy(base_episode["trajectory"][branch_round - 2][
-                    "result"]["subtask_results"][slot])
+        if fault_origin_wave_index < branch_round - 2:
+            # Entire paired prefix, including the original downstream
+            # values, comes from the unpoisoned source-local dispatches.
+            paired_clean_history = deepcopy(
+                base_episode["trajectory"][:branch_round - 1]
             )
+        else:
+            paired_clean_history = deepcopy(trajectory)
+            last_wave = scene["macro_graph"]["reference_waves"][branch_round - 2]
+            for fault in faults:
+                slot = last_wave.index(fault.task_id)
+                paired_clean_history[-1]["result"]["subtask_results"][slot] = (
+                    deepcopy(base_episode["trajectory"][branch_round - 2][
+                        "result"]["subtask_results"][slot])
+                )
     before = counterfactual_continuation(
         state, start_wave_index=branch_round - 1,
     )
@@ -589,17 +638,18 @@ def build_branch(
     applied_fault_events = [{
         "task_id": fault.task_id,
         "kind": fault.atom_kind or fault.mode,
-        "actual_execution_round": branch_round - 1,
-        "where": "incoming_feedback",
+        "actual_execution_round": fault_origin_wave_index + 1,
+        "where": ("historical_consumed_feedback"
+                  if fault_origin_wave_index < branch_round - 2
+                  else "incoming_feedback"),
     } for fault in faults]
     catalog = source_catalog(scene)
     retry_counts = Counter()
     turns = []
     decisions = []
-    report_reviews = [{
-        "task_id": item["task_id"], "attempt_version": 1,
-        "round": branch_round - 1, "authoring": deepcopy(item["report_mode"]),
-    } for item in injected]
+    # Actual earlier poisoned reports, dependent reports, and the late
+    # clean witness must all be independently materialized in Stage 4B.
+    report_reviews = prefix_report_reviews
     main_reviews = []
     evidence_plan = []
     decision_reward_states = []
@@ -897,10 +947,46 @@ def build_branch(
                 == "delayed_independent_evidence"
             and (not state.detected_conflicts or not state.invalidations)):
         stopped = "delayed_blueprint_not_demonstrated"
-    # Positive reviewed-turn in LLM mode must be language-reviewed on *both*
-    # surfaces. The existing deterministic report remains inspectable
-    # as a diagnostic when a review fails, not secretly accepted as an
-    # LLM-written trajectory.
+    # For delayed propagation, positive supervision REQUIRES an observable
+    # conflict, invalidation of a real pre-discovery consumer, and an actual
+    # post-discovery re-execution of that consumer. A correct final answer
+    # alone is insufficient.
+    delayed_causal_audit = None
+    if (same_source_recheck_plan is not None
+            and same_source_recheck_plan.get("construction")
+                == "delayed_consumed_error_recovery"):
+        old_id = same_source_recheck_plan["older_task_id"]
+        expected_consumers = set(
+            same_source_recheck_plan["consumers_before_discovery"]
+        )
+        invalidated = {
+            item["stale_task"] for item in state.invalidations
+            if item["stale_task"] in expected_consumers
+        }
+        recomputed = {
+            tid for tid in invalidated
+            if len(state.attempts.get(tid, [])) >= 2
+            and state.current[tid].status == "done"
+        }
+        observable = any(
+            event.get("kind") == "cross_round_report_disagreement"
+            and set(event.get("compared_parent_tasks", [])) ==
+                {old_id, same_source_recheck_plan["new_task"]["task_id"]}
+            for event in state.detected_conflicts
+        )
+        delayed_causal_audit = {
+            "fault_origin_round": fault_origin_wave_index + 1,
+            "discovery_main_round": branch_round,
+            "pre_discovery_consumers": sorted(expected_consumers),
+            "invalidated_consumers": sorted(invalidated),
+            "recomputed_consumers": sorted(recomputed),
+            "observable_conflict": observable,
+        }
+        if stopped == "recovered" and not (
+            observable and invalidated and invalidated <= recomputed
+        ):
+            stopped = "delayed_propagation_not_demonstrated"
+    # LLM publication must retain both independently reviewed surfaces.
     execution_outcome = stopped
     if stopped == "recovered" and (
         (report_author is not None and any(
@@ -952,6 +1038,7 @@ def build_branch(
         "history_conflict_anchor": history_anchor,
         "prior_observation_patch": prior_observation_patch,
         "same_source_recheck_plan": same_source_recheck_plan,
+        "delayed_causal_audit": delayed_causal_audit,
         "paired_clean_history": paired_clean_history,
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
