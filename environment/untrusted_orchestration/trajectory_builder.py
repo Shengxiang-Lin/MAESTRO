@@ -281,6 +281,47 @@ def _clean_prefix(
             ),
         }
         episode_prefix.append(modified)
+    if origin < branch_round - 2:
+        # A frozen trusted Stage-3 action is not automatically causal after
+        # an earlier report has changed. Reject intermediate instructions
+        # that explicitly name clean-only source values which no public
+        # report or original question has supplied at that point.
+        from .reporting.result_text import delivered_records
+
+        def visible_values(report):
+            finish = (report.get("finish_result") or {})
+            records = delivered_records(finish.get("result"))
+            if records is None:
+                return set()
+            return {
+                str(value) for record in records
+                for value in record["values"].values()
+                if isinstance(value, str) and len(value.strip()) >= 5
+            }
+
+        clean_only = set()
+        for slot, tid in enumerate(waves[origin]):
+            if tid not in targets:
+                continue
+            clean_only.update(
+                visible_values(actions[origin]["result"]["subtask_results"][slot])
+                - visible_values(episode_prefix[origin]["result"]["subtask_results"][slot])
+            )
+        for index in range(origin + 1, branch_round - 1):
+            action = episode_prefix[index]
+            plan_text = json.dumps({
+                "reasoning": action.get("reasoning"),
+                "assignments": action.get("params"),
+            }, ensure_ascii=False)
+            known_text = str(scene.get("question", "")) + json.dumps([
+                row["result"]["subtask_results"]
+                for row in episode_prefix[:index]
+            ], ensure_ascii=False)
+            if any(value in plan_text and value not in known_text
+                   for value in clean_only):
+                raise ValueError(
+                    "delayed_prefix_dispatch_references_unseen_clean_value"
+                )
     return state, history, episode_prefix, fault_log
 
 
