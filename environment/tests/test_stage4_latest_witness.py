@@ -4,6 +4,8 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.atomic_faults import AtomicFault
@@ -15,6 +17,7 @@ from environment.untrusted_orchestration.offline_pipeline import (
     author_branch_main, author_branch_reports,
 )
 from environment.untrusted_orchestration.trajectory_builder import build_branch
+from environment.untrusted_orchestration.generate_turns import generate_turns
 from environment.untrusted_orchestration.scenario_generator import make_scenario
 from environment.untrusted_orchestration.main_decision_contract import (
     build_main_decision_contract,
@@ -150,6 +153,58 @@ class LatestBatchWitnessTests(unittest.TestCase):
         self.assertTrue(extension["private_generation_basis"][
             "not_real_world_independent_confirmation"
         ])
+
+    def test_direct_generator_exports_cross_report_candidate_diagnostics(self):
+        round_number, extension = self._find_case()
+        self.assertIsNotNone(extension)
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            scenes = root / "scenes.jsonl"
+            reports = root / "reports.jsonl"
+            base = root / "clean_episodes.jsonl"
+            for path, records in (
+                (scenes, [self.scene]),
+                (reports, self.reports),
+                (base, [self.clean_episode]),
+            ):
+                path.write_text(
+                    "".join(json.dumps(item) + "\\n" for item in records),
+                    encoding="utf-8",
+                )
+            result = generate_turns(
+                scenes_path=scenes, reports_path=reports,
+                clean_episodes_path=base,
+                output_dir=root / "output",
+                max_scenes=1, branches_per_scene=4,
+                round_sampling_strategy="chronological",
+                candidate_strategy="enumerate",
+                scenario_mode="event_driven",
+                atomic_fault_kinds=["no_result"],
+                latest_cross_report_pairs=True,
+                max_candidates_per_round=4,
+                max_distractors_per_fault=1,
+                max_selected_per_round=1,
+                max_language_attempts_per_round=1,
+                workers=1, no_progress=True,
+                main_mode="template", report_mode="template",
+            )
+            self.assertGreater(
+                result["latest_pair_candidates_planned"], 0
+            )
+            selections = [
+                json.loads(line) for line in (
+                    root / "output/private/candidate_selection.jsonl"
+                ).read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertTrue(any(
+                row["observable_issue_family"] == "inter_report_conflict"
+                for row in selections
+            ))
+            self.assertTrue(any(
+                row["execution_outcome"] == "recovered"
+                and row["observable_issue_family"] == "inter_report_conflict"
+                for row in selections
+            ))
 
     def test_actual_replay_detects_rechecks_and_reviews_new_reports(self):
         round_number, extension = self._find_case()
