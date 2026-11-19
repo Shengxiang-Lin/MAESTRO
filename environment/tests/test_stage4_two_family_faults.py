@@ -504,6 +504,40 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertIn("DIFFERENT attributes", _MAIN_REASONING_CRITIC_SYSTEM)
         self.assertIn("pending computation", _MAIN_REASONING_CRITIC_SYSTEM)
 
+    def test_published_result_format_drift_is_audited_by_phase(self):
+        from environment.untrusted_orchestration.generate_turns import (
+            _published_result_formats,
+        )
+        episode = {"branch_round": 2, "trajectory": [
+            {"attempt": 0, "action": "delegate_task", "result": {
+                "subtask_results": [{"finish_result": {
+                    "status": "done", "result": "Case-011 metric is 87.",
+                }}],
+            }},
+            {"attempt": 1, "action": "delegate_task", "result": {
+                "subtask_results": [{"finish_result": {
+                    "status": "done", "result": json.dumps([{
+                        "values": {"case_id": "Case-011", "metric": 55},
+                        "source_fact_refs": ["primary:F001"],
+                    }]),
+                }}],
+            }},
+            {"attempt": 2, "action": "delegate_task", "result": {
+                "subtask_results": [
+                    {"finish_result": {"status": "missing", "result": ""}},
+                    {"finish_result": {"status": "done",
+                                       "result": "The metric was rechecked."}},
+                ],
+            }},
+        ]}
+        self.assertEqual(_published_result_formats([episode]), {
+            "clean_prefix": {"natural_language": 1},
+            "faulted_latest_batch": {"typed_evidence_json": 1},
+            "recovery_continuation": {
+                "missing": 1, "natural_language": 1,
+            },
+        })
+
     def test_latest_batch_report_has_matching_dispatch_in_full_branch(self):
         from unittest.mock import patch as mocked
         from environment.untrusted_orchestration.atomic_faults import probe_atoms
