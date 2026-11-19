@@ -472,27 +472,27 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                     status = deepcopy(cached["authoring"])
                 else:
                     action, status = author_delegate_action(
-                    assignments=assignments, prompt=prompt,
-                    author=author, critic=critic,
-                    max_revisions=max_revisions,
-                    author_system=author_system,
-                    critic_system=_MAIN_REASONING_CRITIC_SYSTEM,
-                    freeze_assignment_prose=True,
-                    reasoning_goals=visible_goals,
-                    decision_contract=decision_contract,
-                    critic_conflict_objection=(
-                        lambda review: critic_denies_confirmed_conflict(
-                            review, decision_contract,
-                        )
-                    ),
-                    reasoning_guard=(
-                        lambda text: (
-                            reasoning_evidence_issues(text, visible_goals)
-                            + visible_history_reasoning_issues(
-                                text, decision_contract["prior_field_activity"]
+                        assignments=assignments, prompt=prompt,
+                        author=author, critic=critic,
+                        max_revisions=max_revisions,
+                        author_system=author_system,
+                        critic_system=_MAIN_REASONING_CRITIC_SYSTEM,
+                        freeze_assignment_prose=True,
+                        reasoning_goals=visible_goals,
+                        decision_contract=decision_contract,
+                        critic_conflict_objection=(
+                            lambda review: critic_denies_confirmed_conflict(
+                                review, decision_contract,
                             )
-                        )
-                    ) if author is not None else None,
+                        ),
+                        reasoning_guard=(
+                            lambda text: (
+                                reasoning_evidence_issues(text, visible_goals)
+                                + visible_history_reasoning_issues(
+                                    text, decision_contract["prior_field_activity"]
+                                )
+                            )
+                        ) if author is not None else None,
                     )
                 # The final Main instruction/context must be exactly the
                 # field-and-source-scoped 4A contract rebuilt against FINAL
