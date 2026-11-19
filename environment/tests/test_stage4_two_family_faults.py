@@ -321,6 +321,110 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(conflicts[0]["summary_value"], "dossier-002")
         self.assertEqual(conflicts[0]["result_value"], "dossier-001")
 
+    def test_latest_batch_synthetic_witness_is_real_and_prior_scene_unchanged(self):
+        from copy import deepcopy
+        from environment.untrusted_orchestration.latest_batch_witness import (
+            propose_witness_patch, patch_scene,
+        )
+        from environment.untrusted_orchestration.state_machine import (
+            deterministic_report,
+        )
+        scene = deepcopy(self.scene)
+        scene["world"]["sources"]["local_primary"] = {
+            "schema": ["case_id", "metric"],
+            "access_mode": "browse",
+            "access_policy": {"mode": "browse"},
+            "modality": "text",
+            "title": "Primary register",
+            "observations": [{
+                "observation_id": "local_primary.OBS001",
+                "values": {"case_id": "Case-011", "metric": 87},
+                "fact_refs": ["local_primary:F001"],
+                "evidence_origin_id": "primary_root",
+                "observed_content": "Case-011 has metric 87.",
+            }, {
+                "observation_id": "local_primary.OBS002",
+                "values": {"case_id": "Case-012", "metric": 55},
+                "fact_refs": ["local_primary:F002"],
+                "evidence_origin_id": "distractor_root",
+                "observed_content": "Case-012 has metric 55.",
+            }],
+        }
+        task = {
+            "task_id": "target", "depends_on": [], "source_ids": ["local_primary"],
+            "external_inputs": [], "input_schema": {},
+            "operator_chain": [{
+                "id": "load", "op": "scan", "inputs": [],
+                "source_id": "local_primary",
+            }, {
+                "id": "filter", "op": "filter_eq", "inputs": ["load"],
+                "field": "case_id", "value": "Case-011",
+            }],
+            "program_node_id": "filter",
+            "outputs": {"typed_relation": ["case_id", "metric"]},
+        }
+        state = ExecutionState(scene, {})
+        state.tasks = {"target": task}
+        attempt = state.register("target")
+        public = deterministic_report(
+            task, attempt,
+            instruction="Look up Case-011 metric from local_primary.",
+            model_alias="model_1",
+        )
+        public["finish_result"]["result"] = json.dumps([{
+            "values": {"case_id": "Case-011", "metric": 55},
+            "source_fact_refs": ["local_primary:F002"],
+        }])
+        state.set_public_report("target", public, round_number=1)
+        patch = propose_witness_patch(state, "target", branch_round=2)
+        self.assertIsNotNone(patch)
+        self.assertEqual(patch["claim"]["attribute"], "metric")
+        self.assertEqual(patch["claim"]["faulty_delivered_value"], 55)
+        self.assertEqual(patch["claim"]["clean_observation_value"], 87)
+        self.assertFalse(patch["empirically_independent"])
+        patched = patch_scene(scene, patch)
+        self.assertNotIn(patch["source_id"], scene["world"]["sources"])
+        self.assertNotIn(patch["task_id"], {
+            x["task_id"] for x in scene["macro_graph"]["tasks"]
+        })
+        self.assertIn(patch["source_id"], patched["world"]["sources"])
+        witness, _ = run_attempt(
+            patch["task"], parents=[],
+            sources={patch["source_id"]: patch["source"]},
+        )
+        self.assertEqual(relation_rows(witness)[0]["values"], {
+            "case_id": "Case-011", "metric": 87,
+        })
+        self.assertEqual(
+            relation_rows(witness)[0]["source_fact_refs"],
+            [patch["source_id"] + ":F001"],
+        )
+
+        # Once both reports have been delivered in the latest batch,
+        # only their PUBLIC cited claims can justify a cross-source check.
+        state.scene = patched
+        state.tasks[patch["task_id"]] = patch["task"]
+        state.attempts[patch["task_id"]] = []
+        state.origin_by_ref[patch["source_id"] + ":F001"] = (
+            patch["source"]["observations"][0]["evidence_origin_id"]
+        )
+        new_attempt = state.register(patch["task_id"])
+        new_report = deterministic_report(
+            patch["task"], new_attempt,
+            instruction="Inspect the comparison register.",
+            model_alias="model_1",
+        )
+        state.set_public_report(patch["task_id"], new_report, round_number=1)
+        state.cross_source_checks_enabled = True
+        state._detect_explicit_cross_report_disagreements()
+        self.assertEqual(len(state.detected_conflicts), 1)
+        self.assertEqual(
+            state.detected_conflicts[0]["conflict_timing"], "simultaneous"
+        )
+        self.assertEqual(
+            state.detected_conflicts[0]["recheck_task_id"], "target"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
