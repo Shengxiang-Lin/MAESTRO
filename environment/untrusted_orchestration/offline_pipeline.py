@@ -21,9 +21,9 @@ from environment.base_orchestration.o1_compat import (
 )
 from environment.base_orchestration.trajectory_builder import _strict_reports
 from environment.generate_question.execution.program_ir import Relation
-from .report_author import naturalize_report
+from .reporting.report_author import naturalize_report
 from .scenario.prior_observation import patch_scene as patch_prior_observation_scene
-from .public_language import sanitize_public_report
+from .reporting.public_language import sanitize_public_report
 from .reasoning_fidelity import reasoning_evidence_issues
 from .visible_history import visible_history_reasoning_issues
 from .main_decision_contract import (
@@ -174,7 +174,7 @@ def _public_done_null_fields(entries: list[dict]) -> set[str]:
             if not isinstance(finish, dict) or finish.get("status") != "done":
                 continue
             try:
-                from .result_text import delivered_records
+                from .reporting.result_text import delivered_records
                 rows = delivered_records(finish.get("result", ""))
             except (ValueError, TypeError):
                 continue
