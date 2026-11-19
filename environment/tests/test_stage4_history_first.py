@@ -262,6 +262,14 @@ class HistoryFirstHandoffTests(unittest.TestCase):
                 workers=2, no_progress=True, overwrite=True,
                 main_mode="template", report_mode="template",
             )
+            print("HISTORY_FIRST_4A_COUNTS=" + json.dumps({
+                "anchors": summary.get("historical_anchor_status_distribution", {}),
+                "reasons": summary.get("historical_anchor_reason_distribution", {}),
+                "detected_conflicts": summary.get("cross_round_report_conflicts_detected"),
+                "outcomes": summary.get("execution_outcomes", {}),
+                "reviewed_positives": summary.get("outcomes", {}),
+                "main_training_turns": summary.get("main_training_turns"),
+            }, ensure_ascii=False, sort_keys=True), flush=True)
             self.assertGreater(
                 summary.get("historical_anchor_status_distribution", {})
                        .get("generated", 0), 0,
