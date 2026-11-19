@@ -168,7 +168,7 @@ class LatestBatchWitnessTests(unittest.TestCase):
                 (base, [self.clean_episode]),
             ):
                 path.write_text(
-                    "".join(json.dumps(item) + "\\n" for item in records),
+                    "".join(json.dumps(item) + "\n" for item in records),
                     encoding="utf-8",
                 )
             result = generate_turns(
