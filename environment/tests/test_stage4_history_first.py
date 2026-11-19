@@ -513,7 +513,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
 
     def test_same_query_identity_change_across_long_history_is_repaired(self):
         from environment.untrusted_orchestration.scenario.same_source_recheck import (
-            _recheck_task, _reported_scalar_really_changes,
+            _clone_source_query, _public_result_set_differs,
         )
         from environment.untrusted_orchestration.scenario.history_conflicts import (
             same_query_disagreements,
@@ -533,7 +533,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
              "fields": ["case_id"]},
         ]
         parent["outputs"] = {"typed_relation": ["case_id"]}
-        repeated = _recheck_task(parent, 5)
+        repeated = _clone_source_query(parent, 5)
         scene["macro_graph"]["tasks"].append(repeated)
         state = ExecutionState(scene, {})
         original = state.register("parent")
@@ -547,7 +547,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         new = deterministic_report(repeated, wrong, instruction="Repeat the matching query.",
                                    model_alias="model_1")
         state.set_public_report(repeated["task_id"], new, round_number=4)
-        self.assertTrue(_reported_scalar_really_changes(
+        self.assertTrue(_public_result_set_differs(
             relation_rows(original.product), relation_rows(wrong.product), old,
         ))
         events = same_query_disagreements(state)
@@ -568,13 +568,13 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         self.assertEqual(same_query_disagreements(state), [])
         unknown = deepcopy(old)
         unknown["finish_result"]["result"] = "No usable candidate was identified."
-        self.assertFalse(_reported_scalar_really_changes(
+        self.assertFalse(_public_result_set_differs(
             relation_rows(original.product), relation_rows(wrong.product), unknown,
         ))
 
     def test_recheck_result_is_consumed_and_stale_descendant_is_recomputed(self):
         from environment.untrusted_orchestration.scenario.same_source_recheck import (
-            _recheck_task, patch_scene,
+            _clone_source_query, patch_scene,
         )
         scene, parent, child = _scene()
         scene["world"]["sources"]["parent_src"]["observations"].append({
@@ -587,7 +587,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
             "field": "case_id", "value": "Case-001",
         })
         parent["operator_chain"][-1]["inputs"] = ["parent_filter"]
-        repeated = _recheck_task(parent, 3)
+        repeated = _clone_source_query(parent, 3)
         scene["macro_graph"]["reference_waves"] = [["parent"], [], ["child"]]
         patch = {
             "new_task": repeated, "older_task_id": "parent",
@@ -620,7 +620,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         No hidden fault label tells the Main which report to trust.
         """
         from environment.untrusted_orchestration.scenario.same_source_recheck import (
-            _recheck_task, patch_scene,
+            _clone_source_query, patch_scene,
         )
         from environment.untrusted_orchestration.scenario.history_conflicts import (
             same_query_disagreements,
@@ -638,7 +638,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
             "value": "Case-001",
         })
         parent["operator_chain"][-1]["inputs"] = ["parent_filter"]
-        recheck = _recheck_task(parent, 4)
+        recheck = _clone_source_query(parent, 4)
         scene["macro_graph"]["reference_waves"] = [
             ["parent"], ["child"], [],
         ]
@@ -728,11 +728,11 @@ class HistoryFirstHandoffTests(unittest.TestCase):
     def test_delayed_fault_candidate_keeps_old_dependency_edges(self):
         """Fault only the old task; a clean new witness is genuinely delegated."""
         from environment.untrusted_orchestration.scenario.same_source_recheck import (
-            _recheck_task, patch_scene,
+            _clone_source_query, patch_scene,
         )
         scene, parent, child = _scene()
         patch = {
-            "new_task": _recheck_task(parent, 4),
+            "new_task": _clone_source_query(parent, 4),
             "older_task_id": "parent", "older_wave_index": 0,
             "new_wave_index": 2,
             "feeds_future_tasks": [],
