@@ -4,13 +4,13 @@ from __future__ import annotations
 import json
 import unittest
 
-from environment.untrusted_orchestration.result_text import delivered_records
+from environment.untrusted_orchestration.reporting.result_text import delivered_records
 
 from environment.generate_question.execution.program_ir import Relation
 from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.atomic_faults import AtomicFault
 from environment.untrusted_orchestration.faults import run_attempt, relation_rows
-from environment.untrusted_orchestration.report_author import naturalize_report
+from environment.untrusted_orchestration.reporting.report_author import naturalize_report
 from environment.untrusted_orchestration.visible_claim_extraction import (
     extract_visible_claims,
 )
@@ -477,7 +477,7 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(len(traj[0]["params"]["tasks"]), 1)
 
     def test_date_wording_is_guarded_against_exact_observed_iso_dates(self):
-        from environment.untrusted_orchestration.report_validation import (
+        from environment.untrusted_orchestration.reporting.report_validation import (
             claim_tokens, grounded_calendar_text,
         )
         actual = json.dumps({
@@ -600,7 +600,7 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertFalse(state.unresolved_cited_conflicts())
 
     def test_cited_prose_preserves_nested_and_null_values(self):
-        from environment.untrusted_orchestration.result_text import (
+        from environment.untrusted_orchestration.reporting.result_text import (
             render_records, parse_records,
         )
         rows = [{
