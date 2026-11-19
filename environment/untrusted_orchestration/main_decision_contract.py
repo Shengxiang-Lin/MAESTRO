@@ -83,6 +83,90 @@ def _visible_finish(report: dict) -> dict | None:
     return None
 
 
+def _cross_report_visible_disagreements(
+    batches: list[dict], requested_fields: set[str], latest: int | None,
+) -> list[dict]:
+    """Detect same-subject/value disagreement from public cited Result rows.
+
+    This tests observable disagreement, NOT factual truth or independent
+    evidence origins. True provenance independence is validated in Stage
+    4A; a 4C prose reviewer is not permitted to consult that private map.
+    """
+    from .visible_claim_extraction import SUBJECT_FIELDS
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for batch in batches:
+        for report in batch["subtask_results"]:
+            if not isinstance(report, dict):
+                continue
+            finish = _visible_finish(report)
+            if finish is None or finish.get("status") != "done":
+                continue
+            try:
+                records = json.loads(finish.get("result") or "")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(records, list):
+                continue
+            for item in records:
+                if not isinstance(item, dict):
+                    continue
+                values = item.get("values", item)
+                refs = item.get("source_fact_refs", [])
+                if (not isinstance(values, dict)
+                        or not isinstance(refs, list)):
+                    continue
+                sid_set = {
+                    ref.split(":", 1)[0] for ref in refs
+                    if isinstance(ref, str) and ":" in ref
+                }
+                subject_field = next((
+                    key for key in SUBJECT_FIELDS
+                    if isinstance(values.get(key), str) and values[key]
+                ), None)
+                if subject_field is None or len(sid_set) != 1:
+                    continue
+                for field, value in values.items():
+                    if (field == subject_field
+                            or _normalize_field(field) not in requested_fields
+                            or type(value) not in {str, int, float, bool}):
+                        continue
+                    grouped.setdefault(
+                        (values[subject_field], _normalize_field(field)), []
+                    ).append({
+                        "source_id": next(iter(sid_set)),
+                        "value": value,
+                        "round": batch["attempt"],
+                    })
+    disagreements = []
+    for (subject, field), rows in sorted(grouped.items()):
+        for i, earlier in enumerate(rows):
+            for later in rows[i + 1:]:
+                if (earlier["source_id"] == later["source_id"]
+                        or (type(earlier["value"]), earlier["value"])
+                           == (type(later["value"]), later["value"])
+                        or latest not in (earlier["round"], later["round"])):
+                    continue
+                disagreements.append({
+                    "subject": subject, "field": field,
+                    "reported_values": [
+                        earlier["value"], later["value"],
+                    ],
+                    "source_ids": [
+                        earlier["source_id"], later["source_id"],
+                    ],
+                    "observed_rounds": [
+                        earlier["round"], later["round"],
+                    ],
+                    "basis": "two distinct cited sources in visible Result",
+                    "status": "disputed_not_verified",
+                })
+                break
+            else:
+                continue
+            break
+    return disagreements
+
+
 def build_main_decision_contract(history: list[dict], goals: list[dict],
                                  *, number_of_tasks: int) -> dict:
     """A verification request is not proof; confirm values in one public report."""
@@ -129,10 +213,16 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
                 "basis": "same visible Sub-Agent Result and Summary",
                 "state": "unverified",
             })
+    cross_reports = _cross_report_visible_disagreements(
+        batches, fields, latest,
+    )
     return {
         "contract_version": "v10_4_3",
-        "visible_evidence": {"latest_round": latest, "delivery_gaps": gaps,
-                             "confirmed_result_summary_conflicts": conflicts},
+        "visible_evidence": {
+            "latest_round": latest, "delivery_gaps": gaps,
+            "confirmed_result_summary_conflicts": conflicts,
+            "confirmed_cross_report_disagreements": cross_reports,
+        },
         "prior_field_activity": public_field_activity(history, goals),
         "pending_requests": [{
             "operation": g.get("operation"),
@@ -146,8 +236,12 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
 
 
 def critic_denies_confirmed_conflict(review: dict, contract: dict) -> bool:
+    evidence = contract.get("visible_evidence") or {}
     if (not isinstance(review, dict) or review.get("verdict") != "fail"
-            or not contract["visible_evidence"]["confirmed_result_summary_conflicts"]):
+            or not (
+                evidence.get("confirmed_result_summary_conflicts")
+                or evidence.get("confirmed_cross_report_disagreements")
+            )):
         return False
     reason = (str(review.get("reason", "")) + " " +
               str(review.get("repair_hint", ""))).lower()
