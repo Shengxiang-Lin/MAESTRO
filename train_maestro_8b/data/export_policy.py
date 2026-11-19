@@ -70,7 +70,7 @@ def export(risk_dir, main_turns, output_dir, decision_states=None):
     for split in ("train", "val", "test"):
         path = Path(risk_dir) / (split + ".jsonl")
         if not path.exists():
-            if split == "val":
+            if split in {"val", "test"}:
                 continue
             raise FileNotFoundError(path)
         with (out / (split + ".jsonl")).open("w", encoding="utf-8") as dest:
