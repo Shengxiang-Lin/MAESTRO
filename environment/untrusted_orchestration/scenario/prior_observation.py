@@ -270,8 +270,13 @@ def latest_scope_statement(patch: dict) -> str:
     )
 
 
-def comparison_rows(state) -> list[dict]:
-    """Compare only publicly delivered reports and explicit public scope."""
+def comparison_rows(state, *, require_visible_scope: bool = True) -> list[dict]:
+    """Compare delivered reports using the same historically anchored key.
+
+    First detection requires an explicit public lookup scope. Once Main has
+    seen the conflict, a later retry must actually reconcile the values:
+    omitting the scope sentence does not magically resolve the conflict.
+    """
     from ..reporting.result_text import delivered_records
 
     comparisons = []
@@ -312,7 +317,7 @@ def comparison_rows(state) -> list[dict]:
             new_report.get("trace_summary", "") + " "
             + (new_report.get("finish_result") or {}).get("summary", "")
         )
-        if scope_text not in latest_prose or earlier == latest:
+        if (require_visible_scope and scope_text not in latest_prose) or earlier == latest:
             continue
         comparisons.append({
             "older_task": tid, "latest_task": target,
