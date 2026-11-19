@@ -968,6 +968,16 @@ def build_branch(
             if len(state.attempts.get(tid, [])) >= 2
             and state.current[tid].status == "done"
         }
+        # A dependency edge alone is not sufficient: at least one
+        # completed intermediate WorkProduct must ACTUALLY differ from
+        # its clean executable counterpart before the late witness.
+        impacted = {
+            tid for tid in expected_consumers
+            if reviewed.get(tid) is not None
+            and state.attempts.get(tid)
+            and relation_rows(state.attempts[tid][0].product)
+                != reviewed[tid].get("answer_with_provenance")
+        }
         observable = any(
             event.get("kind") == "cross_round_report_disagreement"
             and set(event.get("compared_parent_tasks", [])) ==
@@ -978,12 +988,14 @@ def build_branch(
             "fault_origin_round": fault_origin_wave_index + 1,
             "discovery_main_round": branch_round,
             "pre_discovery_consumers": sorted(expected_consumers),
+            "impacted_consumers": sorted(impacted),
             "invalidated_consumers": sorted(invalidated),
             "recomputed_consumers": sorted(recomputed),
             "observable_conflict": observable,
         }
         if stopped == "recovered" and not (
-            observable and invalidated and invalidated <= recomputed
+            observable and impacted and invalidated
+            and invalidated & impacted and invalidated <= recomputed
         ):
             stopped = "delayed_propagation_not_demonstrated"
     # LLM publication must retain both independently reviewed surfaces.
