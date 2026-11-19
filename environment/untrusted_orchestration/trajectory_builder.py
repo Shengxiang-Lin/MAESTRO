@@ -177,7 +177,7 @@ def _history_batch(number: int, returned: list[dict]) -> dict:
     }
 
 
-def _clean_prefix(
+def _replay_observed_prefix(
     scene: dict, reviewed: dict, base_episode: dict, *,
     branch_round: int, faults: list[Fault],
     fault_origin_wave_index: int | None = None,
@@ -498,7 +498,7 @@ def build_branch(
         else branch_round - 2
     )
     prefix_report_reviews = []
-    state, task_entries, trajectory, injected = _clean_prefix(
+    state, task_entries, trajectory, injected = _replay_observed_prefix(
         scene, reviewed, base_episode,
         branch_round=branch_round, faults=faults,
         fault_origin_wave_index=fault_origin_wave_index,
