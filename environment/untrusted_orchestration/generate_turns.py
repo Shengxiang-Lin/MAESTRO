@@ -868,6 +868,7 @@ def generate_turns(
     candidate_strategy: str = "sample_one",
     max_candidates_per_round: int = 24,
     max_distractors_per_fault: int = 2,
+    latest_cross_report_pairs: bool = False,
     max_selected_per_round: int = 1,
     selection_strategy: str = "causal_rank",
     max_diagnostics_per_scene: int = 0,
@@ -894,6 +895,8 @@ def generate_turns(
         raise FileNotFoundError("stage4_requires_stage1_scenes_and_stage2_reports")
     if type(workers) is not int or not 1 <= workers <= 64:
         raise ValueError("untrusted_workers_invalid")
+    if type(latest_cross_report_pairs) is not bool:
+        raise ValueError("invalid_latest_cross_report_pairs")
     if branches_per_scene is not None and (
         type(branches_per_scene) is not int or branches_per_scene < 1
     ):
@@ -980,6 +983,7 @@ def generate_turns(
         "candidate_strategy": candidate_strategy,
         "max_candidates_per_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
+        "latest_cross_report_pairs": latest_cross_report_pairs,
         "max_selected_per_round": max_selected_per_round,
         "selection_strategy": selection_strategy,
         "max_diagnostics_per_scene": max_diagnostics_per_scene,
@@ -1046,6 +1050,67 @@ def generate_turns(
             delayed_evidence_probability=delayed_evidence_probability,
             seed=seed,
         )
+    if latest_cross_report_pairs and candidate_strategy == "enumerate":
+        # Cross-report scenes target the SAME most-recently-returned batch.
+        # Reserve one candidate slot per eligible round, rather than
+        # contaminating an earlier Stage-3 report or exceeding its
+        # configured per-round candidate budget.
+        from .latest_witness import make_latest_pair
+        from .scenario_generator import make_scenario
+        grouped = defaultdict(list)
+        for plan in planned:
+            grouped[(plan["scene_index"], plan["branch_round"])].append(plan)
+        enriched = []
+        for (scene_index, feedback_round), old in grouped.items():
+            scene = scenes[scene_index]
+            extension = make_latest_pair(
+                scene, feedback_round=feedback_round,
+                max_parallel_tasks=max_parallel_tasks,
+            )
+            if extension is None:
+                enriched.extend(old)
+                continue
+            keep = old[:max(0, max_candidates_per_round - 1)]
+            enriched.extend(keep)
+            original = old[0]
+            new = deepcopy(original)
+            new["sample_id"] = (
+                scene["task_id"]
+                + f"-fork-round-{feedback_round:02d}-latest-pair"
+            )
+            new["skip_reason"] = None
+            new["fault_mode"] = "fabricated_claim"
+            new["candidate_variant_index"] = 1
+            new["witness_extension"] = extension
+            new["incoming_task_ids"] = (
+                list(original["incoming_task_ids"]) + [
+                    entry["task"]["task_id"]
+                    for entry in extension["entries"]
+                ]
+            )
+            new["incoming_subtask_count"] = len(
+                new["incoming_task_ids"]
+            )
+            new["faults"] = [
+                AtomicFault(
+                    "fabricated_claim",
+                    extension["faulted_task_id"],
+                    origin_round=feedback_round - 1,
+                    seed=seed + feedback_round + scene_index,
+                    variant_index=1,
+                ).as_legacy_fault()
+            ]
+            new["scenario_plan"] = make_scenario(
+                scene, new, mode="event_driven",
+                max_fault_atoms=1, delayed_evidence_probability=0.0,
+            )
+            new["scenario_plan"]["blueprint"] = (
+                "latest_batch_cross_report_conflict"
+            )
+            enriched.append(new)
+        planned = enriched
+        for index, plan in enumerate(planned):
+            plan["index"] = index
     if overwrite and output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -1360,6 +1425,7 @@ def generate_turns(
                 base[scene["task_id"]],
                 branch_round=plan["branch_round"], faults=plan["faults"],
                 scenario_plan=plan["scenario_plan"],
+                witness_extension=plan.get("witness_extension"),
                 max_rounds=max_rounds, max_cost=max_cost,
                 max_post_fork_rounds=max_post_fork_rounds,
                 max_retries=max_retries,
@@ -1474,6 +1540,11 @@ def generate_turns(
             write(journal, plan, source)
             return
         try:
+            if plan.get("witness_extension") is not None:
+                from .latest_witness import extend_local_scene
+                scene = extend_local_scene(
+                    scene, plan["witness_extension"],
+                )
             episode, turns, audit = author_branch_main(
                 scene, source["episode"], source["private_audit"],
                 author=author, critic=critic,
@@ -1633,6 +1704,10 @@ def generate_turns(
         "pipeline": "maestro_untrusted_orchestration",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
+        "latest_cross_report_pairs": latest_cross_report_pairs,
+        "latest_pair_candidates_planned": sum(
+            bool(p.get("witness_extension")) for p in planned
+        ),
         "selection_strategy": selection_strategy,
         "max_diagnostics_per_scene": max_diagnostics_per_scene,
         "round_sampling_strategy": round_sampling_strategy,
