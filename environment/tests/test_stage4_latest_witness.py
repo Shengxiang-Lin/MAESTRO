@@ -69,6 +69,43 @@ class FlattenedO1MissingFieldTests(unittest.TestCase):
         }]}]
         self.assertEqual(_public_done_null_fields(rows), {"a"})
 
+    def test_public_cross_report_conflict_is_evidenced_not_assumed(self):
+        def record(value, ref):
+            return {
+                "status": "done",
+                "result": json.dumps([{
+                    "values": {"case_id": "Case-013", "metric": value},
+                    "source_fact_refs": [ref],
+                }]),
+                "summary": "The record was delivered.",
+            }
+        goals = [{
+            "operation": "verify_conflicting_evidence",
+            "target_fields": ["metric"],
+            "main_visible_justification": (
+                "Two cited reports disagree about Case-013 metric."
+            ),
+        }]
+        history = [
+            {"attempt": 1, "subtask_results": [record(87, "s1:F001")]},
+            {"attempt": 2, "subtask_results": [record(55, "s2:F003")]},
+        ]
+        evidence = build_main_decision_contract(
+            history, goals, number_of_tasks=1,
+        )["visible_evidence"]
+        self.assertEqual(
+            evidence["confirmed_cross_report_disagreements"][0][
+                "reported_values"
+            ], [87, 55],
+        )
+        history[1]["subtask_results"][0] = record(55, "s1:F002")
+        evidence = build_main_decision_contract(
+            history, goals, number_of_tasks=1,
+        )["visible_evidence"]
+        self.assertEqual(
+            evidence["confirmed_cross_report_disagreements"], [],
+        )
+
     def test_public_dossier_result_summary_conflict(self):
         history = [{"attempt": 1, "subtask_results": [{
             "status": "done",
