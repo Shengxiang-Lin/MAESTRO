@@ -54,6 +54,47 @@ It refuses to mix any existing 4B or 4C journals. Subsequent reruns use
 the standard signed manifest (no flag necessary). For any other branch
 or changed semantics, use a **new** output directory instead.
 
+## Global training budget and fine-grained recovery
+
+Stage 4A enumerates all executable grounded faults independently of the
+training budget. After 4A completes, `selection_strategy: global_balanced`
+and `target_main_turns: 10000` choose **entire recovered Episodes**
+whose estimated Main decisions fit that global budget. The budget is
+measured in post-fork Main **turns**, not in Episode count or trial count.
+
+- Fault-kind allocation is availability-aware: kinds that have no
+  demonstrably recoverable candidates receive **no fabricated quota**.
+  Within each kind, rare recovery effects and strategy signatures are
+  prioritized. Selection is deterministic for a fixed seed.
+- Candidate reserves remain in 4A for review failures; 4C can replace
+  failed chosen cases without reopening all reserves or exceeding the
+  global target. Genuine non-recovered cases remain private diagnostics.
+- A target is a **maximum**, not an assertion that enough eligible
+  Episodes exist. Any unmet target is explicitly reported; individual
+  Episodes are never truncated to force an exact count.
+- CLI override: `--target-main-turns 10000`. Existing debug limits
+  such as `--max-scenes` affect supply, not the budget itself.
+
+Stage 4B commits each completed authored Sub-Agent report to
+`stage4b/journal/<candidate>.rounds/round-<ordinal>.json`; Stage 4C
+commits each reviewed Main decision to
+`journal/<candidate>.rounds/round-<ordinal>.json`. After all units in a
+candidate finish, the original atomic candidate journal is committed
+as before. On restart the signed manifest is checked, and per-item
+checkpoints replay exact report contents/authoring statuses or Main
+actions with matching task identities, assigned instructions, and
+prompt hash. A mismatch is a **hard validation failure**, not permission
+to regenerate a different continuation silently. Only globally accepted
+recovered Episodes are published as positive SFT.
+
+For audit, `summary.json` exposes
+`target_main_turns`, `estimated_selected_main_turns`,
+`selected_recovered_by_fault_kind`,
+`fault_kind_execution_outcomes`, `fault_kind_observability` and
+`computation_fault_operators`. These distinguish structural fault
+availability, visible evidence, execution recovery and actual published
+coverage.
+
 ## Safety and causal invariants
 
 1. The initial fault is **one** real executor or delivery fault at an
