@@ -62,6 +62,20 @@ def _scope_from_execution(task: dict, runtime: dict, source_id: str,
     return None
 
 
+def _source_field_aliases(task: dict, output_field: str) -> set[str]:
+    """Follow explicit project.rename_fields rather than matching equal
+    values across unrelated fields. Project without renames preserves names.
+    """
+    result = {output_field}
+    for step in reversed(task.get("operator_chain", [])):
+        if step.get("op") != "project":
+            continue
+        for before, after in (step.get("rename_fields") or {}).items():
+            if after in result:
+                result.add(before)
+    return result
+
+
 def _row_is_changed(clean_rows: list[dict], latest_rows: list[dict],
                     row: dict, field: str) -> bool:
     """One matching final-result claim changed, not two unrelated rows."""
@@ -156,34 +170,35 @@ def propose_prior_observation(state, target: str, *,
                 if not refs.intersection(clean_row["source_fact_refs"]):
                     continue
                 for field in task["outputs"]["typed_relation"]:
-                    if field not in values or values[field] != clean_row["values"].get(field):
-                        continue
-                    if not _scalar(values[field]):
-                        continue
-                    scope = _scope_from_execution(
-                        task, actual_trace, sid, observation, source,
-                    )
-                    if scope is None or scope[0] == field:
-                        # A source survey must expose a key distinct from the
-                        # answer, not simply query the future answer value.
-                        continue
-                    source_claims.append((sid, field, scope, clean_row))
+                    for source_field in sorted(_source_field_aliases(task, field)):
+                        if (source_field not in values
+                                or values[source_field] != clean_row["values"].get(field)
+                                or not _scalar(values[source_field])):
+                            continue
+                        scope = _scope_from_execution(
+                            task, actual_trace, sid, observation, source,
+                        )
+                        if scope is None or scope[0] == source_field:
+                            continue
+                        source_claims.append((
+                            sid, field, source_field, scope, clean_row,
+                        ))
     if not source_claims:
         return skip("no_provenance_bound_history_fact")
 
     # Only AFTER identifying a genuine historical fact do we ask whether
     # the latest delivered report disagrees about the same final field.
-    for sid, field, (key, key_value), clean_row in source_claims:
+    for sid, field, source_field, (key, key_value), clean_row in source_claims:
         if not _row_is_changed(clean_rows, latest_rows, clean_row, field):
             continue
         source = world[sid]
         source_values = [o.get("values") or {} for o in source["observations"]]
-        if (any(key not in values or field not in values
+        if (any(key not in values or source_field not in values
                 for values in source_values)):
             continue
         token = sha256(
             (target + ":" + str(branch_round) + ":" + sid
-             + ":" + field + ":" + key).encode()
+             + ":" + field + ":" + source_field + ":" + key).encode()
         ).hexdigest()[:12]
         tid = "hist_" + token
         # A source survey is independent of the *future* selected record.
@@ -196,13 +211,14 @@ def propose_prior_observation(state, target: str, *,
                 {"id": "hist_scan", "op": "scan", "inputs": [],
                  "source_id": sid},
                 {"id": "hist_project", "op": "project",
-                 "inputs": ["hist_scan"], "fields": [key, field]},
+                 "inputs": ["hist_scan"], "fields": [key, source_field]},
             ],
             "program_node_id": "hist_project",
-            "outputs": {"typed_relation": [key, field]},
+            "outputs": {"typed_relation": [key, source_field]},
             "macro_role": "historical_source_observation",
             "history_compare_target_task_id": target,
             "history_compare_field": field,
+            "history_source_field": source_field,
             "history_scope_key": [key, key_value],
             "history_compare_source_id": sid,
         }
@@ -216,14 +232,14 @@ def propose_prior_observation(state, target: str, *,
         if (len(rows) != len(source_values)
                 or not any(
                     row["values"].get(key) == key_value
-                    and row["values"].get(field) == clean_row["values"][field]
+                    and row["values"].get(source_field) == clean_row["values"][field]
                     and row["source_fact_refs"]
                     for row in rows
                 )):
             continue
         instruction = (
             "Survey the existing " + sid + " source and return every "
-            + key.replace("_", " ") + " to " + field.replace("_", " ")
+            + key.replace("_", " ") + " to " + source_field.replace("_", " ")
             + " mapping with citations. Include all rows in the source."
         )
         patch = {
@@ -231,6 +247,7 @@ def propose_prior_observation(state, target: str, *,
             "prior_wave_index": eligible_wave,
             "target_task_id": target, "instruction": instruction,
             "source_id": sid, "field": field,
+            "source_field": source_field,
             "scope_key": [key, key_value],
             "construction": "earlier_complete_source_survey",
         }
@@ -239,7 +256,7 @@ def propose_prior_observation(state, target: str, *,
             "reason": "source_claim_first_then_latest_disagreement",
             "task_id": tid, "target_task_id": target,
             "prior_round": eligible_wave + 1, "field": field,
-            "source_rows": len(rows),
+            "source_field": source_field, "source_rows": len(rows),
         }
     return skip("no_latest_error_matching_prior_source_fact")
 
@@ -263,10 +280,20 @@ def patch_scene(scene: dict, patch: dict | None) -> dict:
 def latest_scope_statement(patch: dict) -> str:
     """Task-scope clarification, derived only from observed lookup input."""
     key, value = patch["scope_key"]
+    source_field = patch.get("source_field", patch.get("field"))
+    output_field = patch.get("field", source_field)
+    mapped = (
+        " The source field " + source_field.replace("_", " ")
+        + " is reported as output field "
+        + output_field.replace("_", " ") + "."
+        if source_field and output_field and source_field != output_field
+        else ""
+    )
     return (
         "The returned finding concerns the " + patch["source_id"]
         + " source lookup where " + key.replace("_", " ")
         + " = " + json.dumps(value, ensure_ascii=False) + "."
+        + mapped
     )
 
 
@@ -283,6 +310,7 @@ def comparison_rows(state, *, require_visible_scope: bool = True) -> list[dict]:
     for tid, task in state.tasks.items():
         target = task.get("history_compare_target_task_id")
         field = task.get("history_compare_field")
+        source_field = task.get("history_source_field", field)
         if not target or target not in state.tasks or not field:
             continue
         if state.public_status(tid) != "done" or state.public_status(target) != "done":
@@ -299,7 +327,7 @@ def comparison_rows(state, *, require_visible_scope: bool = True) -> list[dict]:
         ]
         if len(matching) != 1:
             continue
-        earlier = matching[0]["values"].get(field)
+        earlier = matching[0]["values"].get(source_field)
         latest = second[0]["values"].get(field)
         if not _scalar(earlier) or type(latest) is not type(earlier):
             continue
@@ -312,6 +340,8 @@ def comparison_rows(state, *, require_visible_scope: bool = True) -> list[dict]:
         scope_text = latest_scope_statement({
             "source_id": task["history_compare_source_id"],
             "scope_key": [key, wanted],
+            "source_field": source_field,
+            "field": field,
         })
         latest_prose = (
             new_report.get("trace_summary", "") + " "
