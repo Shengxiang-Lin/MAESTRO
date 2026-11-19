@@ -174,100 +174,6 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
 
 
 
-def _resume_v10_audit_fix(
-    output: Path, previous: dict, expected: dict,
-    planned: list[dict],
-) -> dict:
-    """Explicit compatibility migration for the interrupted v10 4A run.
-
-    Only simulator orchestration and the missing causal-audit import may
-    differ. Validate exact inputs/settings/candidate ledger and every
-    existing journal before replacing the signed manifest. Delayed
-    journals are ALWAYS discarded and recomputed after the fix.
-    """
-    if previous.get("version") != expected.get("version"):
-        raise ValueError("stage4_resume_previous_engine_version_mismatch")
-    if (previous.get("input_sha256") != expected.get("input_sha256")
-            or previous.get("settings") != expected.get("settings")):
-        raise ValueError("stage4_resume_input_or_generation_settings_changed")
-    old_hashes = previous.get("source_code_sha256") or {}
-    new_hashes = expected.get("source_code_sha256") or {}
-    if set(old_hashes) != set(new_hashes):
-        raise ValueError("stage4_resume_code_manifest_shape_changed")
-    modified = sorted(key for key in old_hashes
-                      if old_hashes[key] != new_hashes[key])
-    allowed = {"trajectory_builder.py", "generate_turns.py", "config.py"}
-    if not modified or not set(modified) <= allowed:
-        raise ValueError("stage4_resume_unsupported_code_changes:" +
-                         ",".join(modified))
-    # Do not mix incompatible 4B/4C outputs with a new simulation
-    # version. In the reported v10 crash, both phases had not started.
-    for name in ("stage4b/journal", "journal"):
-        if any((output / name).glob("*.json")):
-            raise ValueError("stage4_resume_language_journals_already_present")
-    old_rounds = _jsonl(output / "round_index.jsonl")
-    if len(old_rounds) != len(planned):
-        raise ValueError("stage4_resume_candidate_count_changed")
-    for plan, old in zip(planned, old_rounds):
-        if (old.get("round_sample_id") != plan["sample_id"]
-                or old.get("question_id") != plan["task_id"]
-                or old.get("main_decision_round") != plan["branch_round"]
-                or old.get("scenario_blueprint") !=
-                    plan["scenario_plan"]["blueprint"]
-                or old.get("candidate_variant_index") !=
-                    plan.get("candidate_variant_index")
-                or old.get("latest_subagent_task_ids") !=
-                    plan["incoming_task_ids"]
-                or old.get("atomic_fault_kinds") != [
-                    item["kind"]
-                    for item in plan["scenario_plan"]["fault_atoms"]
-                ]):
-            raise ValueError("stage4_resume_candidate_identity_changed")
-    journal = output / "stage4a" / "journal"
-    stale, checked = [], 0
-    for file in sorted(journal.glob("*.json")):
-        if not file.stem.isdigit() or int(file.stem) >= len(planned):
-            raise ValueError("stage4_resume_unexpected_journal:" + file.name)
-        plan = planned[int(file.stem)]
-        row = json.loads(file.read_text(encoding="utf-8"))
-        if (row.get("task_id") != plan["task_id"]
-                or row.get("round_sample_id") != plan["sample_id"]
-                or row.get("fork_round") != plan["branch_round"]):
-            raise ValueError("stage4_resume_journal_identity_mismatch")
-        audit = row.get("private_audit") or {}
-        event = audit.get("event_scenario") or {}
-        if audit and (
-            event.get("scenario_id") != plan["sample_id"]
-            or event.get("blueprint") != plan["scenario_plan"]["blueprint"]
-            or event.get("fault_atoms") !=
-                plan["scenario_plan"]["fault_atoms"]
-            or event.get("evidence_events") !=
-                plan["scenario_plan"]["evidence_events"]
-        ):
-            raise ValueError("stage4_resume_journal_scenario_mismatch")
-        if plan["scenario_plan"]["blueprint"] == (
-            "delayed_consumed_error_recovery"
-        ):
-            stale.append(file)
-        else:
-            checked += 1
-    # All validation completed. Preserve original signed provenance.
-    _atomic_json(output / "manifest.before_v10_audit_fix.json", previous)
-    report = {
-        "operation": "explicit_v10_4a_audit_fix_resume",
-        "prior_modified_code_paths": modified,
-        "input_and_settings_match": True,
-        "candidate_ledger_matches": True,
-        "reused_nondelayed_journals": checked,
-        "discarded_delayed_journals": len(stale),
-    }
-    _atomic_json(output / "private" / "v10_resume_audit.json", report)
-    for file in stale:
-        file.unlink()
-    _atomic_json(output / "manifest.json", expected)
-    return report
-
-
 def _plan_branches(
     scenes: list[dict], base: dict[str, dict],
     *, branches_per_scene: int | None = None, seed: int,
@@ -1116,6 +1022,7 @@ def generate_turns(
     max_candidates_per_round: int | None = None,
     max_distractors_per_fault: int | None = None,
     max_selected_per_round: int | None = None,
+    target_main_turns: int | None = None,
     selection_strategy: str = "causal_rank",
     max_diagnostics_per_scene: int = 0,
     max_language_attempts_per_round: int | None = None,
@@ -1132,7 +1039,6 @@ def generate_turns(
     clean_episodes_path: Path | None = None,
     main_mode: str | None = None,
     report_mode: str | None = None,
-    resume_after_audit_fix: bool = False,
 ) -> dict:
     paths = tuple(map(Path, (scenes_path, reports_path)))
     if clean_episodes_path is not None:
@@ -1142,8 +1048,6 @@ def generate_turns(
         raise FileNotFoundError("stage4_requires_stage1_scenes_and_stage2_reports")
     if type(workers) is not int or not 1 <= workers <= 64:
         raise ValueError("untrusted_workers_invalid")
-    if type(resume_after_audit_fix) is not bool or (resume_after_audit_fix and overwrite):
-        raise ValueError("stage4_resume_after_fix_must_not_overwrite")
     if branches_per_scene is not None and (
         type(branches_per_scene) is not int or branches_per_scene < 1
     ):
@@ -1191,7 +1095,7 @@ def generate_turns(
             type(value) is not int or not 1 <= value <= maximum
         ):
             raise ValueError("invalid_" + name)
-    if selection_strategy not in {"causal_rank", "stratified"}:
+    if selection_strategy not in {"causal_rank", "stratified", "global_balanced"}:
         raise ValueError("invalid_candidate_selection_strategy")
     if type(max_diagnostics_per_scene) is not int or not (
         0 <= max_diagnostics_per_scene <= 8
@@ -1202,6 +1106,10 @@ def generate_turns(
             and max_selected_per_round is not None
             and max_language_attempts_per_round < max_selected_per_round):
         raise ValueError("language_budget_smaller_than_selection")
+    if target_main_turns is not None and (
+        type(target_main_turns) is not int or target_main_turns < 1
+    ):
+        raise ValueError("invalid_global_main_turn_budget")
     modes = list(fault_modes or ["missing", "partial", "wrong"])
     if scenario_mode not in {"round_fork", "event_driven"}:
         raise ValueError("invalid_scenario_mode")
@@ -1235,6 +1143,7 @@ def generate_turns(
         "max_candidates_per_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
         "max_selected_per_round": max_selected_per_round,
+        "target_main_turns": target_main_turns,
         "selection_strategy": selection_strategy,
         "max_diagnostics_per_scene": max_diagnostics_per_scene,
         "max_language_attempts_per_round": max_language_attempts_per_round,
@@ -1306,14 +1215,8 @@ def generate_turns(
     output.mkdir(parents=True, exist_ok=True)
     manifest = output / "manifest.json"
     if manifest.is_file():
-        previous = json.loads(manifest.read_text(encoding="utf-8"))
-        if previous != signature:
-            if not resume_after_audit_fix:
-                raise ValueError(
-                    "untrusted_resume_input_or_code_signature_mismatch"
-                    " (pass --resume-after-audit-fix only for interrupted v10 4A)"
-                )
-            _resume_v10_audit_fix(output, previous, signature, planned)
+        if json.loads(manifest.read_text(encoding="utf-8")) != signature:
+            raise ValueError("untrusted_resume_input_or_code_signature_mismatch")
     elif any(output.iterdir()):
         raise ValueError("untrusted_existing_output_without_manifest")
     else:
@@ -1407,6 +1310,44 @@ def generate_turns(
 
     def write(directory: Path, plan: dict, data: dict) -> None:
         _atomic_json(directory / f"{plan['index']:06d}.json", data)
+
+    def checkpoint_directory(directory: Path, plan: dict) -> Path:
+        return directory / f"{plan['index']:06d}.rounds"
+
+    def load_checkpoints(directory: Path, plan: dict,
+                         phase: str) -> list[dict]:
+        folder = checkpoint_directory(directory, plan)
+        if not folder.exists():
+            return []
+        if not folder.is_dir():
+            raise RuntimeError("stage4_checkpoint_path_not_directory")
+        checkpoints = []
+        for ordinal, file in enumerate(sorted(folder.glob("round-*.json")), 1):
+            if file.name != f"round-{ordinal:04d}.json":
+                raise RuntimeError("stage4_checkpoint_noncontiguous_sequence")
+            item = json.loads(file.read_text(encoding="utf-8"))
+            if (item.get("ordinal") != ordinal
+                    or item.get("round_sample_id") != plan["sample_id"]
+                    or item.get("phase") != phase):
+                raise RuntimeError("stage4_checkpoint_candidate_mismatch")
+            checkpoints.append(item)
+        return checkpoints
+
+    def save_checkpoint(directory: Path, plan: dict,
+                        phase: str, checkpoint: dict) -> None:
+        folder = checkpoint_directory(directory, plan)
+        ordinal = checkpoint["ordinal"]
+        file = folder / f"round-{ordinal:04d}.json"
+        if file.exists():
+            raise RuntimeError("stage4_checkpoint_would_overwrite")
+        if ordinal > 1 and not (
+            folder / f"round-{ordinal-1:04d}.json"
+        ).exists():
+            raise RuntimeError("stage4_checkpoint_noncontiguous_write")
+        _atomic_json(file, {
+            **checkpoint, "round_sample_id": plan["sample_id"],
+            "phase": phase,
+        })
 
     def as_failure(scene: dict, exc: Exception, *,
                    source: dict | None = None,
@@ -1681,6 +1622,7 @@ def generate_turns(
             select_recovered_candidates(
                 planned, [saved(stage_a, plan) for plan in planned],
                 max_selected_per_round=max_selected_per_round,
+                target_main_turns=target_main_turns,
                 strategy=selection_strategy,
                 max_diagnostics_per_scene=max_diagnostics_per_scene,
                 seed=seed,
@@ -1736,11 +1678,16 @@ def generate_turns(
             write(stage_b, plan, source)
             return
         try:
+            existing = load_checkpoints(stage_b, plan, "stage4b")
             episode, audit = author_branch_reports(
                 scene, rows_by_scene[scene["task_id"]],
                 source["episode"], source["private_audit"],
                 author=report_author, critic=report_critic,
                 max_revisions=report_max_revisions,
+                resume_reports=existing,
+                on_report_checkpoint=lambda row: save_checkpoint(
+                    stage_b, plan, "stage4b", row,
+                ),
                 on_report=lambda status: tick(status),
             )
             data = {
@@ -1759,12 +1706,16 @@ def generate_turns(
             write(journal, plan, source)
             return
         try:
+            existing = load_checkpoints(journal, plan, "stage4c")
             episode, turns, audit = author_branch_main(
                 scene, source["episode"], source["private_audit"],
                 author=author, critic=critic,
                 max_revisions=main_max_revisions,
                 max_rounds=max_rounds, sub_model=sub_model,
-                model_alias=model_alias,
+                model_alias=model_alias, resume_actions=existing,
+                on_main_checkpoint=lambda row: save_checkpoint(
+                    journal, plan, "stage4c", row,
+                ),
                 on_main=lambda status: tick(status),
             )
             data = {
@@ -1825,6 +1776,36 @@ def generate_turns(
         if candidate_strategy != "enumerate":
             break
         next_active = set()
+        if target_main_turns is not None:
+            # Globally budgeted selection may have many unseen reserves.
+            # Use one only to replace a FAILED initially selected positive,
+            # never to expand successful groups beyond the global target.
+            successful_turns = sum(
+                action_count(saved(journal, by_index[i]))
+                for i in attempted if published_recovery(i)
+            )
+            remaining_turns = max(0, target_main_turns - successful_turns)
+            for key, candidates in sorted(ranked.items()):
+                failed_positive = [
+                    row for row in candidates
+                    if row["candidate_index"] in attempted
+                    and row["selection_purpose"] == "positive"
+                    and not published_recovery(row["candidate_index"])
+                ]
+                if not failed_positive or remaining_turns <= 0:
+                    continue
+                for row in candidates:
+                    index = row["candidate_index"]
+                    if index in attempted or index in next_active:
+                        continue
+                    size = row["decision_rounds_post_fork"]
+                    if 0 < size <= remaining_turns:
+                        next_active.add(index)
+                        remaining_turns -= size
+                        backfilled_groups.add(key)
+                        break
+            active = next_active
+            continue
         for key, candidates in ranked.items():
             past = [r for r in candidates if r["candidate_index"] in attempted]
             succeeded = sum(
@@ -1981,6 +1962,11 @@ def generate_turns(
         "subagent_report_mode": report_mode,
         "main_action_mode": main_mode,
         "main_actions_planned": total_actions,
+        "global_target_main_turns": target_main_turns,
+        "global_published_main_turn_gap": (
+            max(0, target_main_turns - counts_summary["main_training_turns"])
+            if target_main_turns is not None else None
+        ),
         "main_actions_processed": sum(
             len(((saved(journal, by_index[i]) or {}).get("private_audit")
                  or {}).get("main_action_reviews", []))

@@ -24,7 +24,7 @@ all executable single-fault source variants. Set explicit numeric
 cap; expiry is not successful recovery. Run `--mode llm` only after
 checking template-mode source/recovery diagnostics.
 
-## Performance and interrupted v10 recovery
+## Execution performance
 
 4A is deterministic **CPU-heavy** replay. It now uses a process pool
 bounded by `--workers` and the actual available CPU quota, whereas 4B/4C
@@ -33,26 +33,46 @@ validation is reused once per accepted scene; per-candidate atomic
 journals are unchanged. Runtime gains depend on real allocated CPU cores;
 20 workers do not imply 20 available cores.
 
-The v10 rollout from PR #270 crashed after 4,231 of 4,381 candidates
-due to a missing `relation_rows` import in the final delayed audit.
-To **explicitly resume** that exact directory after pulling the fix:
+## Global training budget and fine-grained recovery
 
-```bash
-python -m environment generate-untrusted-turns \
-  --config environment/configs/untrusted_orchestration.yaml \
-  --max-scenes 10 --workers 20 --mode template \
-  --output-dir environment/data/stage4_delayed_v10_template_10 \
-  --resume-after-audit-fix
-```
+Stage 4A enumerates all executable grounded faults independently of the
+training budget. After 4A completes, `selection_strategy: global_balanced`
+and `target_main_turns: 10000` choose **entire recovered Episodes**
+whose estimated Main decisions fit that global budget. The budget is
+measured in post-fork Main **turns**, not in Episode count or trial count.
 
-The migration refuses changed input hashes, settings, candidate ledgers,
-or other changes to source executor/claim logic. Each old 4A journal must
-match the exact candidate identity. It preserves `manifest.before_v10_audit_fix.json`,
-records `private/v10_resume_audit.json`, retains only already completed
-**non-delayed** 4A journals, and *always recomputes* delayed candidates.
-It refuses to mix any existing 4B or 4C journals. Subsequent reruns use
-the standard signed manifest (no flag necessary). For any other branch
-or changed semantics, use a **new** output directory instead.
+- Fault-kind allocation is availability-aware: kinds that have no
+  demonstrably recoverable candidates receive **no fabricated quota**.
+  Within each kind, rare recovery effects and strategy signatures are
+  prioritized. Selection is deterministic for a fixed seed.
+- Candidate reserves remain in 4A for review failures; 4C can replace
+  failed chosen cases without reopening all reserves or exceeding the
+  global target. Genuine non-recovered cases remain private diagnostics.
+- A target is a **maximum**, not an assertion that enough eligible
+  Episodes exist. Any unmet target is explicitly reported; individual
+  Episodes are never truncated to force an exact count.
+- CLI override: `--target-main-turns 10000`. Existing debug limits
+  such as `--max-scenes` affect supply, not the budget itself.
+
+Stage 4B commits each completed authored Sub-Agent report to
+`stage4b/journal/<candidate>.rounds/round-<ordinal>.json`; Stage 4C
+commits each reviewed Main decision to
+`journal/<candidate>.rounds/round-<ordinal>.json`. After all units in a
+candidate finish, the original atomic candidate journal is committed
+as before. On restart the signed manifest is checked, and per-item
+checkpoints replay exact report contents/authoring statuses or Main
+actions with matching task identities, assigned instructions, and
+prompt hash. A mismatch is a **hard validation failure**, not permission
+to regenerate a different continuation silently. Only globally accepted
+recovered Episodes are published as positive SFT.
+
+For audit, `summary.json` exposes
+`target_main_turns`, `estimated_selected_main_turns`,
+`selected_recovered_by_fault_kind`,
+`fault_kind_execution_outcomes`, `fault_kind_observability` and
+`computation_fault_operators`. These distinguish structural fault
+availability, visible evidence, execution recovery and actual published
+coverage.
 
 ## Safety and causal invariants
 
