@@ -24,14 +24,14 @@ from .faults import (
     Fault, FaultUnsupported, choose_targets, probe_eligible_fault_modes,
 )
 from .atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
-from .scenario_generator import make_scenario
+from .scenario.scenario_generator import make_scenario
 from .trajectory_builder import build_branch
 from .offline_pipeline import author_branch_reports, author_branch_main
 from .trusted_prefix import compile_trusted_prefixes
 from .publication_guard import review_turn_surface
-from .candidate_exploration import expand_all_rounds
-from .candidate_selection import select_recovered_candidates
-from .round_sampling import select_feedback_rounds
+from .scenario.candidate_exploration import expand_all_rounds
+from .scenario.candidate_selection import select_recovered_candidates
+from .scenario.round_sampling import select_feedback_rounds
 from .evidence_affordances import analyze_scene_evidence_affordances
 
 
@@ -71,8 +71,10 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
     directory = Path(__file__).resolve().parent
     code_files = (
         "faults.py", "atomic_faults.py", "report_faults.py",
-        "event_scheduler.py", "scenario_generator.py",
-        "candidate_exploration.py", "candidate_selection.py",
+        "event_scheduler.py",
+        "scenario/scenario_generator.py", "scenario/round_sampling.py",
+        "scenario/candidate_exploration.py",
+        "scenario/candidate_selection.py",
         "evidence_affordances.py", "reasoning_fidelity.py",
         "visible_history.py", "visible_claim_state.py",
         "visible_claim_extraction.py",
