@@ -304,65 +304,51 @@ def enumerate_round_candidates(
                 if by_history[gap]:
                     diverse.append(by_history[gap].pop(0))
         extra = diverse[:max(0, max_candidates - len(result))]
-    for patch in extra:
+    def add_recheck(patch: dict, *, delayed_fault: bool) -> None:
+        """One canonical fault/assignment constructor for B and C."""
         slot = len(result) + 1
         item = deepcopy(round_plan)
         item["sample_id"] += f"-candidate-{slot:03d}"
-        item["candidate_count_total"] = len(ordered) + len(rechecks)
         item["candidate_variant_index"] = patch["fault_variant"]
         item["skip_reason"] = None
         item["fault_mode"] = patch["fault_kind"]
         item["incoming_task_ids"] = [
             *item["incoming_task_ids"], patch["new_task"]["task_id"]
         ]
+        origin_round = (
+            patch["older_wave_index"] + 1 if delayed_fault
+            else item["branch_round"] - 1
+        )
+        target = (
+            patch["older_task_id"] if delayed_fault
+            else patch["new_task"]["task_id"]
+        )
         item["faults"] = [AtomicFault(
-            patch["fault_kind"], patch["new_task"]["task_id"],
-            origin_round=item["branch_round"] - 1,
+            patch["fault_kind"], target, origin_round=origin_round,
             seed=local_seed + slot,
             variant_index=patch["fault_variant"],
         ).as_legacy_fault()]
         item["scenario_plan"] = make_scenario(
-            scene, item, mode="event_driven",
-            max_fault_atoms=max_fault_atoms,
+            scene, item, mode="event_driven", max_fault_atoms=1,
             delayed_evidence_probability=0.0,
         )
+        if delayed_fault:
+            item["scenario_plan"]["blueprint"] = (
+                "delayed_consumed_error_recovery"
+            )
+            item["scenario_plan"]["fault_atoms"][0]["origin_round"] = (
+                origin_round
+            )
         item["scenario_plan"]["same_source_recheck_plan"] = patch
         result.append(item)
-    # Method C does not mutate or rewrite old feedback. The same clean
-    # Stage-3 dispatch sequence is replayed using the EARLY poisoned
-    # WorkProduct and actual downstream operator execution, then a later
-    # clean recheck is delegated before the fork decision.
+
+    for patch in extra:
+        add_recheck(patch, delayed_fault=False)
+    # Actual consumed error precedes the later clean and delegated recheck.
     for patch in delayed:
         if max_candidates is not None and len(result) >= max_candidates:
             break
-        slot = len(result) + 1
-        item = deepcopy(round_plan)
-        item["sample_id"] += f"-candidate-{slot:03d}"
-        item["candidate_variant_index"] = patch["fault_variant"]
-        item["skip_reason"] = None
-        item["fault_mode"] = patch["fault_kind"]
-        item["incoming_task_ids"] = [
-            *item["incoming_task_ids"], patch["new_task"]["task_id"]
-        ]
-        old_id = patch["older_task_id"]
-        item["faults"] = [AtomicFault(
-            patch["fault_kind"], old_id,
-            origin_round=patch["older_wave_index"] + 1,
-            seed=local_seed + slot,
-            variant_index=patch["fault_variant"],
-        ).as_legacy_fault()]
-        item["scenario_plan"] = make_scenario(
-            scene, item, mode="event_driven",
-            max_fault_atoms=1, delayed_evidence_probability=0.0,
-        )
-        item["scenario_plan"]["blueprint"] = (
-            "delayed_consumed_error_recovery"
-        )
-        item["scenario_plan"]["fault_atoms"][0]["origin_round"] = (
-            patch["older_wave_index"] + 1
-        )
-        item["scenario_plan"]["same_source_recheck_plan"] = patch
-        result.append(item)
+        add_recheck(patch, delayed_fault=True)
     total = len(ordered) + len(rechecks) + len(delayed)
     for item in result:
         item["candidate_count_total"] = total
