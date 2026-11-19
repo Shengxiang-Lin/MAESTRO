@@ -24,7 +24,7 @@ all executable single-fault source variants. Set explicit numeric
 cap; expiry is not successful recovery. Run `--mode llm` only after
 checking template-mode source/recovery diagnostics.
 
-## Performance and interrupted v10 recovery
+## Execution performance
 
 4A is deterministic **CPU-heavy** replay. It now uses a process pool
 bounded by `--workers` and the actual available CPU quota, whereas 4B/4C
