@@ -146,6 +146,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "rewards/decision_reward_state.py",
         "rewards/orchestration_reward.py",
         "reporting/report_validation.py", "reporting/public_language.py",
+        "reporting/public_work.py",
         "inspection/publication_guard.py",
         "state_machine.py", "reporting/report_author.py",
         "trusted_prefix.py",
