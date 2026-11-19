@@ -183,16 +183,22 @@ def _wrong_computation(
         "derive_arithmetic", "derive_date_gap", "goal_compute",
     } or not clean.rows or variant_index > 1:
         return None
-    candidate_fields = [
-        step.get("output_field"), "count", "answer", "result",
-    ]
-    candidate_fields.extend(clean.columns)
-    field = next((
-        key for key in dict.fromkeys(candidate_fields)
-        if key in clean.columns
-        and all(type(row["values"].get(key)) in {int, float}
-                for row in clean.rows)
-    ), None)
+    # Only a *computed* output can be corrupted. In particular,
+    # goal_compute may retain numeric source fields while producing a
+    # nonnumeric selection; mutating such a passthrough source value was
+    # falsely labeled as a computation error and cannot be verified.
+    if step["op"] == "goal_compute" and step.get(
+        "goal_operation", {}
+    ).get("op") not in {"arithmetic", "temporal_difference"}:
+        return None
+    field = (
+        "count" if step["op"] in {"count", "group_count"}
+        else step.get("output_field")
+    )
+    if (not isinstance(field, str) or field not in clean.columns
+            or not all(type(row["values"].get(field)) in {int, float}
+                       for row in clean.rows)):
+        return None
     if field is None:
         return None
     delta = 1 if variant_index == 0 else -1
@@ -347,19 +353,25 @@ def run_attempt(
         ref.split(":", 1)[0]
         for parent in parents for row in parent.rows for ref in row["support"]
     }
-    def trace(steps):
-        return [
-            _observed_step(
+    def trace(steps, work_products):
+        from ..reporting.public_work import observed_work_checks
+        visible = []
+        for step, product in steps:
+            observed = _observed_step(
                 step, product, evidence_index=evidence_index,
                 source_ids=source_ids,
             )
-            for step, product in steps
-        ]
+            inputs = [work_products[pid] for pid in step["inputs"]]
+            checks = observed_work_checks(step, inputs, product)
+            if checks:
+                observed["public_work_checks"] = checks
+            visible.append(observed)
+        return visible
 
     if fault is None:
         return correct, {
             "status": "done", "available_fields": list(correct.columns),
-            "primitive": None, "observed_operator_steps": trace(clean_steps),
+            "primitive": None, "observed_operator_steps": trace(clean_steps, prefix),
             "source_fact_refs": sorted({
                 ref for row in correct.rows for ref in row["support"]
             }),
@@ -390,7 +402,7 @@ def run_attempt(
         return correct, {
             "status": "done", "available_fields": list(correct.columns),
             "primitive": None,
-            "observed_operator_steps": trace(clean_steps),
+            "observed_operator_steps": trace(clean_steps, prefix),
             "source_fact_refs": sorted({
                 ref for row in correct.rows for ref in row["support"]
             }),
@@ -408,7 +420,7 @@ def run_attempt(
             if step["op"] in {"scan", "lookup_by_key"}
         ), 0)
         failed = clean_steps[index][0]
-        observed = trace(clean_steps[:index])
+        observed = trace(clean_steps[:index], prefix)
         observed.append({
             "node_id": failed["id"], "operation": failed["op"],
             "input_nodes": list(failed["inputs"]),
@@ -454,7 +466,7 @@ def run_attempt(
                 raise FaultUnsupported("done_incomplete_requires_visible_field_gap")
         # The final operation's report-facing observation is the actually
         # delivered relation. Do not show the hidden pre-delivery values.
-        observed = trace(clean_steps[:-1])
+        observed = trace(clean_steps[:-1], prefix)
         observed.append(_observed_step(
             clean_steps[-1][0], delivered, evidence_index=evidence_index,
             source_ids=source_ids,
@@ -533,10 +545,25 @@ def run_attempt(
         raise FaultUnsupported("fault_changed_frozen_output_schema")
     if not _different(final, correct) or not final.rows:
         raise FaultUnsupported("fault_did_not_propagate_to_workproduct")
+    observed_actual = trace(actual_steps, products)
+    if meta.get("kind") == "misjoined_real_candidates":
+        for step in observed_actual:
+            if step["node_id"] == target["id"]:
+                # The selected two rows were genuinely inspected, so their
+                # keys can be reported even if overlapping FactRefs make
+                # automatic support matching ambiguous. This describes the
+                # attempted association; it does NOT label it as wrong.
+                step["public_work_checks"] = [{
+                    "kind": "association",
+                    "left": meta["left_key"],
+                    "right": meta["right_key"],
+                    "source_fact_refs": meta["source_fact_refs"],
+                }]
+                break
     return final, {
         "status": "done", "available_fields": list(final.columns),
         "primitive": target["id"],
-        "observed_operator_steps": trace(actual_steps),
+        "observed_operator_steps": observed_actual,
         "source_fact_refs": sorted({
             ref for row in final.rows for ref in row["support"]
         }),

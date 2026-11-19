@@ -208,10 +208,14 @@ def naturalize_report(task: dict, attempt: Attempt, *,
     # Controlled report faults alter *only what Main sees*, not the
     # executed WorkProduct. They are intentional, so the normal report
     # author/critic cannot silently "fix" the malicious claim.
-    if attempt.runtime.get("report_fault_kind"):
+    report_fault_kind = attempt.runtime.get("report_fault_kind")
+    if report_fault_kind and report_fault_kind != "done_but_incomplete":
         from .report_faults import render_report_fault
         return render_report_fault(base, attempt)
     if author is None:
+        if report_fault_kind == "done_but_incomplete":
+            from .report_faults import render_report_fault
+            return render_report_fault(base, attempt)
         return base, {"status": "accepted", "mode": provenance,
                       "attempts": 0}
     # In LLM mode even a repaired retry whose WorkProduct equals the clean
@@ -397,8 +401,16 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                     candidate["summary"].strip() + " " +
                     candidate["trace_summary"].strip()
                 )
+            if report_fault_kind == "done_but_incomplete":
+                # Controlled DONE presentation, but actual evidence prose
+                # has been independently authored and reviewed by the LLM.
+                from .report_faults import render_report_fault
+                report, _ = render_report_fault(report, attempt)
             return report, {
                 "status": "accepted", "mode": "llm_reviewed",
+                "controlled_done_partial_overlay": (
+                    report_fault_kind == "done_but_incomplete"
+                ),
                 "attempts": revision + 1,
                 "author_status_ignored": candidate.get("status") is not None,
                 "trace_from_actual_execution":
@@ -429,6 +441,9 @@ def naturalize_report(task: dict, attempt: Attempt, *,
             "repair_hint": str(decision.get("repair_hint", ""))[:250]
                            if isinstance(decision, dict) else "",
         })
+    if report_fault_kind == "done_but_incomplete":
+        from .report_faults import render_report_fault
+        base, _ = render_report_fault(base, attempt)
     return base, {
         "status": "fallback",
         "mode": "grounded_template_fallback",

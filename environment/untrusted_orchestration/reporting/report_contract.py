@@ -17,6 +17,7 @@ from environment.implement_subtask.reporting import (
 )
 from ..state_machine import Attempt, relation_rows
 from .report_evidence import observed_handoff_discrepancies
+from .public_work import public_work_clauses
 
 
 def _trace_facts(observed: list[dict]) -> list[dict]:
@@ -144,6 +145,7 @@ def _fact_spine(contract: dict) -> dict:
                 witness["later_unmatched_identities"][:5]
             ) + ". This observed identity discrepancy remains unverified."
         )
+    mandatory.extend(public_work_clauses(contract["observed_operator_steps"]))
     for fact in contract["partial_intermediate_observations"][:2]:
         mandatory.append(
             "An intermediate " + "/".join(

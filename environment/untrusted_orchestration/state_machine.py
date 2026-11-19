@@ -412,24 +412,37 @@ class ExecutionState:
                 ))
         if task_id == self.scene["macro_graph"]["terminal_task_id"]:
             required.update(self.tasks[task_id]["outputs"]["typed_relation"])
-        # The private typed output schema cannot by itself prove Main
-        # knew that a field was mandatory. Require the field to be
-        # identifiable in the actual delegated public instruction.
-        instruction = str(
-            self.public_reports[task_id].get("task_instruction") or ""
-        ).casefold().replace("_", " ")
+        # A task may acknowledge an unsuccessful extraction in ordinary
+        # prose even when its outer status is DONE. Publicly returned nulls
+        # and the admission are sufficient: never require an internal field
+        # label to appear literally in a Main-assigned instruction.
         missing = sorted(
             field for field in required
-            if field.casefold().replace("_", " ") in instruction
-            and all(row.get(field) is None for row in result_rows)
+            if all(field in row and row[field] is None for row in result_rows)
         )
-        if not missing:
+        report = self.public_reports[task_id]
+        evidence_text = " ".join(str(x) for x in (
+            (report.get("finish_result") or {}).get("summary") or "",
+            report.get("trace_summary") or "",
+        )).casefold()
+        admitted = any(phrase in evidence_text for phrase in (
+            "could not extract", "could not retrieve",
+            "remains incomplete", "unable to verify",
+            "could not verify", "failed to extract",
+        ))
+        if not missing and not admitted:
             return None
+        if missing:
+            return (
+                "The report is marked done but the delivered result lacks "
+                "usable evidence for required outputs: "
+                + ", ".join(x.replace("_", " ") for x in missing)
+                + ". The unfinished extraction needs follow-up."
+            )
         return (
-            "The delivered Finish Result is marked done, but it has no "
-            "usable values for the required fields: "
-            + ", ".join(missing) + ". The missing evidence is needed "
-            "before the next dependent investigation can proceed."
+            "The Sub-Agent reported done but explicitly acknowledged "
+            "unfinished evidence work. Verify or continue that work "
+            "before treating the result as complete."
         )
 
     def _visible_lookup_issue(self, task_id: str) -> str | None:
@@ -709,6 +722,18 @@ class ExecutionState:
         passthrough_issue = self._visible_passthrough_issue(task_id)
         if passthrough_issue:
             return passthrough_issue
+        # These checks parse ONLY statements in the delivered report.
+        # The witness was constructed from the operator's actual input
+        # relations on both clean and failed attempts; no Gold is consulted.
+        from .reporting.public_work import visible_work_discrepancy
+        finish = (self.public_reports.get(task_id) or {}).get("finish_result") or {}
+        work_text = " ".join(str(x) for x in (
+            finish.get("summary") or "",
+            self.public_reports.get(task_id, {}).get("trace_summary") or "",
+        ))
+        issue = visible_work_discrepancy(work_text)
+        if issue:
+            return issue
         arithmetic_issue = self._visible_arithmetic_issue(task_id)
         if arithmetic_issue:
             return arithmetic_issue
@@ -1119,12 +1144,19 @@ class ExecutionState:
         The simulator retains these as PRIVATE risk-supervision diagnostics.
         The Main still receives only the original O1 Sub-Agent history.
         """
+        from .reporting.public_work import visible_work_discrepancy
         issues = []
         for tid in sorted(self.public_reports):
             if tid not in self.current:
                 continue
             status = self.public_status(tid)
             item = self.current[tid]
+            finish = self.public_reports[tid].get("finish_result") or {}
+            visible_text = (
+                str(finish.get("summary") or "") + " " +
+                str(self.public_reports[tid].get("trace_summary") or "")
+            )
+            work_issue = visible_work_discrepancy(visible_text)
             if status == "missing":
                 kind = "missing_delivery"
                 reason = self.visible_discrepancy(tid)
@@ -1157,6 +1189,13 @@ class ExecutionState:
             elif self._visible_passthrough_issue(tid):
                 kind = "derived_identifier_disagreement"
                 reason = self._visible_passthrough_issue(tid)
+            elif work_issue:
+                kind = (
+                    "entity_association_inconsistency"
+                    if work_issue.startswith("The report associated ")
+                    else "arithmetic_inconsistency"
+                )
+                reason = work_issue
             elif self._visible_arithmetic_issue(tid):
                 kind = "arithmetic_inconsistency"
                 reason = self._visible_arithmetic_issue(tid)
@@ -1269,6 +1308,12 @@ def deterministic_report(
             str(len(actual_rows)) + " record(s) for " +
             available + "."
         )
+        from .reporting.public_work import public_work_clauses
+        clauses = public_work_clauses(
+            attempt.runtime.get("observed_operator_steps", [])
+        )
+        if clauses:
+            summary += " " + " ".join(clauses)
         if unresolved:
             summary += " Still unresolved: " + unresolved + "."
         finish = {

@@ -74,6 +74,42 @@ For audit, `summary.json` exposes
 availability, visible evidence, execution recovery and actual published
 coverage.
 
+## Ten-question official LLM language pilot (1,000 Main turns)
+
+Use the isolated `environment/configs/untrusted_orchestration_llm_pilot_10.yaml`
+after confirming the local `local-qwen3.5-9b` OpenAI-compatible API
+is reachable at the configured `127.0.0.1:8807/v1`. This intentionally
+selects at most **1,000 published post-fork Main decisions**, not 1,000
+Episodes. Both Stage 4B report narratives and Stage 4C Main reasoning
+are generated with the real Author/Critic, not template teachers.
+The malicious surface of a report-only injected fault remains controlled
+to preserve the actual delivered contradiction, never silently corrected.
+
+```bash
+python -m environment generate-untrusted-turns \\
+  --config environment/configs/untrusted_orchestration_llm_pilot_10.yaml \\
+  --max-scenes 10 --workers 8 --mode llm \\
+  --output-dir environment/data/stage4_llm_pilot_10_1000
+```
+
+Stage 4A remains exhaustive and its results are source-backed; the
+global Main-turn budget limits expensive language review after 4A.
+Stage 4B/4C have separate per-report and per-Main-decision atomic
+checkpoints. Rerun the same command without `--overwrite` for a
+signature-checked continuation. Missing or rejected LLM reviews do
+**not** become accepted template-based SFT labels. Inspect the final
+`summary.json` for actual published turns and rejected/fallback counts.
+
+The report contract now includes concise *observed work evidence*:
+actual arithmetic inputs/results and attempted Join key pairs, with
+the same rendering rule for clean and corrupted executions. Main may
+recompute/check only these literally reported facts, never private
+Gold or injection labels. For `done_but_incomplete`, a finished attempt
+may truthfully say a required extraction remained incomplete: natural
+4B language is LLM-authored, while the completion-status overlay stays
+controlled. Generic absence of an internal field name in the user
+instruction is no longer a prerequisite for verification.
+
 ## Safety and causal invariants
 
 1. The initial fault is **one** real executor or delivery fault at an

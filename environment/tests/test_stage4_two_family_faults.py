@@ -100,11 +100,23 @@ class IntraReportFaultTests(unittest.TestCase):
                          "done_but_incomplete")
         self.assertIn("T", state.scheduling_state()["repair"])
 
-        # The private missing field must NOT create a Main-visible
-        # discrepancy when the delivered report has the full value.
+        # When Result lists a value but the SAME public report still
+        # admits that extraction failed, this is a visible inconsistency,
+        # NOT a leak from the hidden execution ledger. It merits checking.
         safe = delivered_records(report["finish_result"]["result"])
         safe[0]["values"]["metric"] = 12
         report["finish_result"]["result"] = json.dumps(safe)
+        state.set_public_report("T", report, round_number=2)
+        self.assertIn("unfinished evidence work",
+                      state.visible_discrepancy("T"))
+        # Removing the public admission leaves no basis for inferring the
+        # private missing field from the hidden Attempt alone.
+        report["finish_result"]["summary"] = (
+            "The completed report lists the extracted metric of 12."
+        )
+        report["trace_summary"] = (
+            "The available source record was inspected."
+        )
         state.set_public_report("T", report, round_number=2)
         self.assertIsNone(state.visible_discrepancy("T"))
         self.assertEqual(state.observable_issues(), [])
