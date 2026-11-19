@@ -110,6 +110,16 @@ Existing source data being sufficient does NOT mean the planned derivation
 already ran or that Main should Complete now. Judge the authored reasoning
 for grounding, not the frozen delegate-versus-complete choice.
 
+CRITICAL CLAIM-SCOPE RULE: values of DIFFERENT attributes (for example,
+metric_a=87 and metric_b=55 for the same entity) are not contradictory
+merely because their values differ. Only explicit rival values for the SAME
+entity, SAME attribute and SAME scope, or a Result/Summary mismatch on
+the SAME field, establish an observed discrepancy. Do not invent a
+cross-source conflict where the visible history provides only complementary
+measurements. If the inputs have arrived but a comparison, join or synthesis
+has not yet run, it is correct to delegate that pending computation; do not
+reject a grounded description of available inputs as a premature conclusion.
+
 The attached locked Main decision facts, if present, were compiled
 from the actual Main-visible Sub-Agent Result and Summary in the latest
 returned batch, and distinguish observed statements, unresolved evidence,
