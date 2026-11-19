@@ -147,7 +147,11 @@ def _historical_fact(
                     if obs.get("values", {}).get(subject_field) == subject
                     and str(obs.get("values", {}).get(field)) == literal
                 ]
-                if len(valid) != 1:
+                if (len(valid) != 1
+                        or not isinstance(
+                            valid[0].get("evidence_origin_id"), str
+                        )
+                        or not valid[0].get("fact_refs")):
                     continue
                 value = valid[0]["values"][field]
                 for decoy in sources[sid].get("observations", []):
