@@ -79,7 +79,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             "max_candidates_per_round", None
         ),
         "max_distractors_per_fault": run.get(
-            "max_distractors_per_fault", 2
+            "max_distractors_per_fault", None
         ),
         "max_selected_per_round": run.get(
             "max_selected_per_round", None
