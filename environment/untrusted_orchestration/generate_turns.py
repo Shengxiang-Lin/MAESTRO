@@ -1879,6 +1879,36 @@ def generate_turns(
         if candidate_strategy != "enumerate":
             break
         next_active = set()
+        if target_main_turns is not None:
+            # Globally budgeted selection may have many unseen reserves.
+            # Use one only to replace a FAILED initially selected positive,
+            # never to expand successful groups beyond the global target.
+            successful_turns = sum(
+                action_count(saved(journal, by_index[i]))
+                for i in attempted if published_recovery(i)
+            )
+            remaining_turns = max(0, target_main_turns - successful_turns)
+            for key, candidates in sorted(ranked.items()):
+                failed_positive = [
+                    row for row in candidates
+                    if row["candidate_index"] in attempted
+                    and row["selection_purpose"] == "positive"
+                    and not published_recovery(row["candidate_index"])
+                ]
+                if not failed_positive or remaining_turns <= 0:
+                    continue
+                for row in candidates:
+                    index = row["candidate_index"]
+                    if index in attempted or index in next_active:
+                        continue
+                    size = row["decision_rounds_post_fork"]
+                    if 0 < size <= remaining_turns:
+                        next_active.add(index)
+                        remaining_turns -= size
+                        backfilled_groups.add(key)
+                        break
+            active = next_active
+            continue
         for key, candidates in ranked.items():
             past = [r for r in candidates if r["candidate_index"] in attempted]
             succeeded = sum(
@@ -2035,6 +2065,11 @@ def generate_turns(
         "subagent_report_mode": report_mode,
         "main_action_mode": main_mode,
         "main_actions_planned": total_actions,
+        "global_target_main_turns": target_main_turns,
+        "global_published_main_turn_gap": (
+            max(0, target_main_turns - counts_summary["main_training_turns"])
+            if target_main_turns is not None else None
+        ),
         "main_actions_processed": sum(
             len(((saved(journal, by_index[i]) or {}).get("private_audit")
                  or {}).get("main_action_reviews", []))
