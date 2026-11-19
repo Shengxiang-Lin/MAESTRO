@@ -85,7 +85,9 @@ def latest_history_disagreements(state: "ExecutionState") -> list[dict]:
     return result
 
 
-def same_query_disagreements(state: "ExecutionState") -> list[dict]:
+def same_query_disagreements(
+    state: "ExecutionState", *, require_latest: bool = True,
+) -> list[dict]:
     """Compare public result sets of explicitly repeated frozen queries.
 
     Shared origins are expected here. A mismatch is a reporting disagreement,
@@ -102,8 +104,10 @@ def same_query_disagreements(state: "ExecutionState") -> list[dict]:
         if (old_attempt.status not in {"done", "disputed"}
                 or new_attempt.status not in {"done", "disputed"}
                 or old_attempt.used_parent_versions != new_attempt.used_parent_versions
-                or state.public_report_rounds.get(tid) != latest_round
-                or state.public_report_rounds.get(older, latest_round) >= latest_round):
+                or (require_latest and
+                    state.public_report_rounds.get(tid) != latest_round)
+                or (require_latest and
+                    state.public_report_rounds.get(older, latest_round) >= latest_round)):
             continue
         old = public_query_rows(state.tasks[older], state.public_reports.get(older, {}))
         new = public_query_rows(task, state.public_reports.get(tid, {}))
