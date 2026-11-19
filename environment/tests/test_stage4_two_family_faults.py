@@ -365,6 +365,7 @@ class IntraReportFaultTests(unittest.TestCase):
         }
         state = ExecutionState(scene, {})
         state.tasks = {"target": task}
+        state.attempts = {"target": []}
         attempt = state.register("target")
         public = deterministic_report(
             task, attempt,
