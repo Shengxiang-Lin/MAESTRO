@@ -32,8 +32,7 @@ from .state_machine import (
 )
 from .report_author import naturalize_report
 from .evidence_planning import schedule_evidence_requests
-from .latest_batch_witness import propose_witness_patch, patch_scene
-from environment.implement_subtask.realize import _fact_index
+from .scenario.history_conflicts import expose_executed_prior_record
 
 
 _MAIN_AUTHOR_SYSTEM = _AUTHOR_SYSTEM + """
@@ -423,93 +422,33 @@ def build_branch(
         report_revisions=report_max_revisions, model_alias=model_alias,
         on_report_review=on_report_review,
     )
-    # An auxiliary comparison report, if executable, is appended ONLY to
-    # the most recently delivered batch. All older Stage-3 actions and
-    # feedback remain unchanged. Both the new dispatch and its real attempt
-    # are recorded, so no Sub-Agent report appears without a Main task.
-    private_witness_patch = None
-    paired_clean_feedback = None
-    witness_probe = {"status": "not_applicable", "reason": "not_targeted"}
+    # Stage 4 changes ONLY the latest delivered feedback. An optional
+    # historical comparison claim must be a record returned by an actual
+    # earlier task, not a new synthetic verifier or an added Main dispatch.
+    # Preserve the same augmented prior evidence for a paired clean variant.
+    history_anchor = {"status": "not_applicable", "reason": "not_targeted"}
     if (scenario_plan is not None
             and scenario_plan.get("mode") == "event_driven"
             and len(faults) == 1
             and faults[0].atom_kind in {
                 "wrong_retrieval", "wrong_entity_binding",
-                "fabricated_claim",
+                "fabricated_claim", "computation_error",
             }):
-        if len(task_entries[-1]["subtask_results"]) >= max_parallel_tasks:
-            witness_probe = {
-                "status": "ineligible", "reason": "parallel_capacity_full",
-            }
-        else:
-            witness_probe = {}
-            private_witness_patch = propose_witness_patch(
-                state, faults[0].task_id, branch_round=branch_round,
-                diagnostic=witness_probe,
-            )
-            if not witness_probe:
-                # Also support patched/fixture generators that return only
-                # the patch. This remains private audit metadata.
-                witness_probe = {
-                    "status": "generated" if private_witness_patch else "ineligible",
-                    "reason": ("witness_patch_returned" if private_witness_patch
-                               else "no_comparable_cited_claim"),
-                }
-        if private_witness_patch is not None:
-            scene = patch_scene(scene, private_witness_patch)
-            state.scene = scene
-            state.fact_index = _fact_index(scene["world"])
-            if private_witness_patch.get("source") is not None:
-                ref = private_witness_patch["source_id"] + ":F001"
-                state.origin_by_ref[ref] = (
-                    private_witness_patch["source"]["observations"][0][
-                        "evidence_origin_id"]
-                )
-            witness_id = private_witness_patch["task_id"]
-            witness_task = private_witness_patch["task"]
-            state.tasks[witness_id] = witness_task
-            state.attempts[witness_id] = []
-            attempt = state.register(witness_id)
-            paired_slot = scene["macro_graph"]["reference_waves"][
-                branch_round - 2
-            ].index(faults[0].task_id)
-            paired_assignment = trajectory[-1]["params"]["tasks"][paired_slot]
-            instruction = (
-                paired_assignment["task_instruction"]
-                + " Perform a separate reading of the same cited materials "
-                  "and return the complete matching records with citations."
-            )
-            if private_witness_patch.get("source") is not None:
-                instruction = "Examine " + private_witness_patch["source_id"] + "."
-            public_report = deterministic_report(
-                witness_task, attempt,
-                instruction=instruction, model_alias=model_alias,
-            )
-            slot = len(trajectory[-1]["result"]["subtask_results"])
-            public_report["subtask_index"] = slot
-            state.set_public_report(
-                witness_id, public_report,
-                round_number=branch_round - 1,
-            )
-            task_entries[-1]["subtask_results"].append(
-                public_history_item(public_report, slot)
-            )
-            task_entries[-1]["total_steps"] += public_report["steps_taken"]
-            latest_action = trajectory[-1]
-            latest_action["params"]["tasks"].append({
-                "task_instruction": instruction,
-                "context": paired_assignment["context"],
-                "model": model_alias,
-                "tools": list(paired_assignment["tools"]),
-            })
-            latest_action["result"]["subtask_results"].append(public_report)
-            latest_action["result"]["total_subtasks"] += 1
-            latest_action["result"]["total_steps"] += public_report["steps_taken"]
-            # The paired clean batch differs in exactly one returned report.
-            paired_clean_feedback = deepcopy(latest_action)
-            paired_clean_feedback["result"]["subtask_results"][paired_slot] = (
+        history_anchor = expose_executed_prior_record(
+            state, task_entries, trajectory,
+            latest_task_ids={faults[0].task_id},
+        )
+    paired_clean_history = None
+    if history_anchor["status"] == "exposed":
+        paired_clean_history = deepcopy(trajectory)
+        # Only the current fault differs between the clean/error variants;
+        # their earlier source-backed history remains identical.
+        last_wave = scene["macro_graph"]["reference_waves"][branch_round - 2]
+        for fault in faults:
+            slot = last_wave.index(fault.task_id)
+            paired_clean_history[-1]["result"]["subtask_results"][slot] = (
                 deepcopy(base_episode["trajectory"][branch_round - 2][
-                    "result"]["subtask_results"][paired_slot])
+                    "result"]["subtask_results"][slot])
             )
     before = counterfactual_continuation(
         state, start_wave_index=branch_round - 1,
@@ -565,15 +504,6 @@ def build_branch(
         "task_id": item["task_id"], "attempt_version": 1,
         "round": branch_round - 1, "authoring": deepcopy(item["report_mode"]),
     } for item in injected]
-    if private_witness_patch is not None:
-        report_reviews.append({
-            "task_id": private_witness_patch["task_id"],
-            "attempt_version": 1,
-            "round": branch_round - 1,
-            "authoring": {
-                "status": "accepted", "mode": "deterministic_executed",
-            },
-        })
     main_reviews = []
     evidence_plan = []
     decision_reward_states = []
@@ -923,9 +853,8 @@ def build_branch(
         "task_id": scene["task_id"], "branch_round": branch_round,
         "clean_reference_identity": clean_identity,
         "faults": injected,
-        "latest_batch_witness_patch": private_witness_patch,
-        "latest_batch_clean_reference": paired_clean_feedback,
-        "latest_batch_witness_probe": witness_probe,
+        "history_conflict_anchor": history_anchor,
+        "paired_clean_history": paired_clean_history,
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
         "visible_claim_state": visible_claim_state,
