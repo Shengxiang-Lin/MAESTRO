@@ -862,6 +862,20 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         reviewed = {
             task_id: {
                 "answer_with_provenance": relation_rows(attempt.product),
+                "finish_result": deepcopy(
+                    results[next(i for i, wave in enumerate(
+                        scene["macro_graph"]["reference_waves"]
+                    ) if task_id in wave)]["result"]["subtask_results"][
+                        next(j for j, tid in enumerate(
+                            scene["macro_graph"]["reference_waves"][next(
+                                i for i, wave in enumerate(
+                                    scene["macro_graph"]["reference_waves"]
+                                ) if task_id in wave
+                            )]
+                        ) if tid == task_id)
+                    ]["finish_result"]
+                ),
+                "report_authoring": {"status": "accepted"},
             }
             for task_id, attempt in clean_state.current.items()
         }
