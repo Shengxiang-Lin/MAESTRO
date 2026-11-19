@@ -829,8 +829,13 @@ class ExecutionState:
         may be shared, but shared sources do not count as independent votes.
         """
         from .scenario.history_conflicts import latest_history_disagreements
+        from .scenario.prior_observation import comparison_rows
 
-        for conflict in latest_history_disagreements(self):
+        # Include a genuinely executed *earlier* direct-source lookup.
+        # Its relation to the latest query is explicit in the prior task
+        # instruction and verified offline by the same source record.
+        for conflict in (latest_history_disagreements(self)
+                         + comparison_rows(self)):
             target = conflict["latest_task"]
             old = conflict["older_task"]
             # An existing independent-source dispute is already handled by
@@ -864,6 +869,7 @@ class ExecutionState:
             current.runtime["history_conflict_recheck_requested"] = True
             self.detected_conflicts.append({
                 "kind": "cross_round_report_disagreement",
+                "comparison_kind": conflict.get("comparison_kind", "same_claim"),
                 "history_pair_key": key,
                 "compared_parent_tasks": [old, target],
                 "recheck_task_id": target,
@@ -1016,11 +1022,20 @@ class ExecutionState:
         automatically a resolution. Neither source's hidden Gold is used.
         """
         from .scenario.history_conflicts import public_claims
+        from .scenario.prior_observation import comparison_rows
+        remaining_prior = {
+            (row["older_task"], row["latest_task"], row["attribute"])
+            for row in comparison_rows(self)
+        }
         claims = public_claims(self)
         for event in self.detected_conflicts:
             if event.get("kind") != "cross_round_report_disagreement":
                 continue
             old, recent = event["compared_parent_tasks"]
+            if event.get("comparison_kind") == "earlier_source_lookup":
+                if (old, recent, event["claim"]["attribute"]) in remaining_prior:
+                    return True
+                continue
             subject = event["claim"]["subject"]
             field = event["claim"]["attribute"]
             values = {}
