@@ -372,6 +372,142 @@ class HistoryFirstHandoffTests(unittest.TestCase):
             ExecutionState._detect_history_report_conflicts(state)
             self.assertEqual(len(state.detected_conflicts), 3)
 
+    def test_later_same_source_recheck_is_a_real_delegated_fault_candidate(self):
+        """Method B augments the latest Main assignment, not just its report."""
+        from environment.untrusted_orchestration.scenario.same_source_recheck import (
+            discover_same_source_rechecks, patch_clean_episode, patch_scene,
+        )
+        from environment.untrusted_orchestration.reporting.result_text import (
+            render_records,
+        )
+        scene, parent, child = _scene()
+        scene["world"]["sources"]["parent_src"]["observations"].append({
+            "values": {"case_id": "Case-002",
+                       "entity_final": "Dunhaven District"},
+            "fact_refs": ["parent_src:F002"],
+            "observation_id": "parent_src.OBS002",
+            "evidence_origin_id": "synthetic:parent002",
+        })
+        parent["operator_chain"] = [
+            {"id": "parent_scan", "op": "scan", "inputs": [],
+             "source_id": "parent_src"},
+            {"id": "parent_filter", "op": "filter_eq",
+             "inputs": ["parent_scan"], "field": "case_id",
+             "value": "Case-001"},
+            {"id": "parent_project", "op": "project",
+             "inputs": ["parent_filter"],
+             "fields": ["case_id", "entity_final"]},
+        ]
+        parent["outputs"] = {"typed_relation": ["case_id", "entity_final"]}
+        from environment.untrusted_orchestration.scenario.candidate_exploration import (
+            _clean_products,
+        )
+        from environment.untrusted_orchestration.runtime.faults import relation_rows
+        products = _clean_products(scene)
+        old_report = {
+            "task_instruction": "Find Case-001 in the image records.",
+            "model": "model_1", "steps_taken": 3,
+            "finish_result": {
+                "status": "done",
+                "result": render_records(relation_rows(products["parent"])),
+                "summary": "Case-001: Lakehurst District.",
+            },
+        }
+        new_report = {
+            "task_instruction": "Find its year.",
+            "model": "model_1", "steps_taken": 2,
+            "finish_result": {
+                "status": "done",
+                "result": render_records(relation_rows(products["child"])),
+                "summary": "Observed the requested year.",
+            },
+        }
+        assignments = [
+            {"task_instruction": "Find Case-001.", "context": "Inspect source.",
+             "model": "model_1", "tools": ["Inspect"]},
+        ]
+        base = {"trajectory": [{
+            "attempt": 1, "action": "delegate_task",
+            "params": {"tasks": deepcopy(assignments)},
+            "result": {"subtask_results": [old_report],
+                       "total_subtasks": 1, "total_steps": 3},
+        }, {
+            "attempt": 2, "action": "delegate_task",
+            "params": {"tasks": deepcopy(assignments)},
+            "result": {"subtask_results": [new_report],
+                       "total_subtasks": 1, "total_steps": 2},
+        }]}
+        plan = _round_plan(scene)
+        discovered = discover_same_source_rechecks(
+            scene, plan, products, base_episode=base,
+            atomic_fault_kinds=["fabricated_claim"],
+            max_parallel_tasks=4,
+        )
+        self.assertTrue(discovered, "No real repeated-source contradiction")
+        patch = discovered[0]
+        self.assertEqual(patch["older_wave_index"], 0)
+        self.assertEqual(patch["new_wave_index"], 1)
+        self.assertEqual(
+            patch["new_task"]["source_ids"], parent["source_ids"],
+        )
+        augmented_scene = patch_scene(scene, patch)
+        augmented_base = patch_clean_episode(
+            base, scene, patch, max_parallel_tasks=4,
+        )
+        self.assertEqual(
+            augmented_scene["macro_graph"]["reference_waves"][1],
+            ["child", patch["new_task"]["task_id"]],
+        )
+        self.assertEqual(
+            len(augmented_base["trajectory"][1]["params"]["tasks"]), 2,
+        )
+        self.assertEqual(
+            len(augmented_base["trajectory"][1]["result"]["subtask_results"]), 2,
+        )
+        self.assertIn(
+            "Independently recheck",
+            augmented_base["trajectory"][1]["params"]["tasks"][1][
+                "task_instruction"],
+        )
+        # A same-source disagreement is observable, but is not an
+        # independent-source vote for either side.
+        from environment.untrusted_orchestration.reporting.result_text import (
+            render_records,
+        )
+        from environment.untrusted_orchestration.runtime.faults import relation_rows
+        state = ExecutionState(augmented_scene, {})
+        attempt = state.register("parent")
+        earlier = deterministic_report(
+            parent, attempt, instruction="Find the case",
+            model_alias="model_1",
+        )
+        state.set_public_report("parent", earlier, round_number=1)
+        state.register("child")
+        new_task = patch["new_task"]
+        fault = AtomicFault(
+            patch["fault_kind"], new_task["task_id"], 2,
+            variant_index=patch["fault_variant"],
+        ).as_legacy_fault()
+        faulted = state.register(new_task["task_id"], fault=fault)
+        last = deterministic_report(
+            new_task, faulted, instruction="Recheck the old case.",
+            model_alias="model_1",
+        )
+        changed = faulted.runtime.get("communicated_rows")
+        self.assertIsNotNone(changed)
+        last["finish_result"]["result"] = render_records(changed)
+        state.set_public_report(new_task["task_id"], last, round_number=2)
+        state.cross_source_checks_enabled = True
+        state.scheduling_state()
+        found = [
+            event for event in state.detected_conflicts
+            if event.get("kind") == "cross_round_report_disagreement"
+        ]
+        self.assertTrue(found)
+        self.assertFalse(found[0]["empirically_independent"])
+        self.assertEqual(found[0]["older_round"], 1)
+        self.assertEqual(found[0]["latest_round"], 2)
+
     def test_absent_parent_visible_key_is_not_a_candidate(self):
         scene, _, _ = _scene()
         base = {"trajectory": [{
