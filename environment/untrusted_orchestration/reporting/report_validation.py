@@ -76,10 +76,10 @@ def grounded_calendar_text(text: str, observed_text: str) -> str:
 
 
 _EVIDENCE_COUNT = re.compile(
-    r"(?<!\\w)(?P<count>\\d+)\\s+"
-    r"(?:(?:distinct|unique|total|supporting|cited)\\s+)?"
-    r"(?:fact\\s*refs?|fact\\s*references?|source\\s*fact\\s*refs?"
-    r"|source\\s*references?|evidence\\s*citations?)(?!\\w)",
+    r"(?<!\w)(?P<count>\d+)\s+"
+    r"(?:(?:distinct|unique|total|supporting|cited)\s+)?"
+    r"(?:fact\s*refs?|fact\s*references?|source\s*fact\s*refs?"
+    r"|source\s*references?|evidence\s*citations?)(?!\w)",
     re.I,
 )
 
