@@ -1094,7 +1094,7 @@ def generate_turns(
             max_distractors_per_fault=max_distractors_per_fault,
             max_fault_atoms=max_fault_atoms,
             delayed_evidence_probability=delayed_evidence_probability,
-            seed=seed,
+            seed=seed, base=base,
         )
     if overwrite and output.exists():
         shutil.rmtree(output)
