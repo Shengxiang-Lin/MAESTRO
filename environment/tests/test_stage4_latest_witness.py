@@ -106,6 +106,49 @@ class FlattenedO1MissingFieldTests(unittest.TestCase):
             evidence["confirmed_cross_report_disagreements"], [],
         )
 
+    def test_prior_natural_claim_and_new_latest_citation_disagree(self):
+        historic = {
+            "status": "done",
+            "instruction": (
+                "Inspect metric_a and return entity_final and date_a."
+            ),
+            "result": "Riverton District (2014-11-14)",
+            "summary": "The source lists its recorded date.",
+        }
+        latest = {
+            "status": "done",
+            "result": json.dumps([{
+                "values": {
+                    "entity_final": "Riverton District",
+                    "date_a": "2014-03-09",
+                },
+                "source_fact_refs": ["audit_probe:F002"],
+            }]),
+            "summary": "The audit register returned a date.",
+        }
+        goal = {
+            "operation": "verify_conflicting_evidence",
+            "target_fields": ["entity_final", "date_a"],
+            "main_visible_justification": (
+                "Two reports disagree about Riverton District date_a."
+            ),
+        }
+        history = [
+            {"attempt": 1, "subtask_results": [historic]},
+            {"attempt": 2, "subtask_results": [latest]},
+        ]
+        evidence = build_main_decision_contract(
+            history, [goal], number_of_tasks=1,
+        )["visible_evidence"]
+        self.assertEqual(
+            len(evidence["confirmed_cross_report_disagreements"]), 1
+        )
+        self.assertEqual(
+            evidence["confirmed_cross_report_disagreements"][0][
+                "reported_values"
+            ], ["2014-11-14", "2014-03-09"],
+        )
+
     def test_public_dossier_result_summary_conflict(self):
         history = [{"attempt": 1, "subtask_results": [{
             "status": "done",
