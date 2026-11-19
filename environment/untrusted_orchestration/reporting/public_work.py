@@ -152,7 +152,9 @@ def public_work_clauses(observed: list[dict]) -> list[str]:
                     + " decimal places, and reported "
                     + str(item["reported"]) + "."
                 )
-    return clauses[:4]
+    # The final attempted derivation is usually the one just delegated.
+    # Bound prose size while keeping recently executed checks observable.
+    return clauses[-3:]
 
 
 def visible_work_discrepancy(public_text: str) -> str | None:
