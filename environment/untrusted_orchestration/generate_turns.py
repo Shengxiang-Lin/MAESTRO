@@ -1595,12 +1595,21 @@ def generate_turns(
                             pool.submit(_execute_evidence_candidate, plan): plan
                             for plan in pending
                         }
-                        for future in as_completed(futures):
-                            commit_round(
-                                futures[future],
-                                process_status=future.result(),
-                            )
-                            tick()
+                        try:
+                            for future in as_completed(futures):
+                                commit_round(
+                                    futures[future],
+                                    process_status=future.result(),
+                                )
+                                tick()
+                        except BaseException:
+                            # Fail fast if an unexpected programming error
+                            # reaches the coordinator. Journals already
+                            # atomically written remain resumable; cancel
+                            # tasks still queued rather than replaying them.
+                            for future in futures:
+                                future.cancel()
+                            raise
             else:
                 with ThreadPoolExecutor(
                     max_workers=workers,
