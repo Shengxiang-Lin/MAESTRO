@@ -225,14 +225,48 @@ def _build_decisions(
     rows, private_rows, grpo_rows, sft_rows = [], [], [], []
     seen: set[str] = set()
     for stage, turns, settings in sources:
-        examples, _, _ = make_examples(
-            scenes, turns, source=stage, settings=settings,
-            seen=seen, require_llm=require_llm,
-        )
-        turn_by_id = _index(turns, "sample_id", stage + "_main_turn")
-        for example in examples:
+        if stage == "stage3":
+            examples, _, _ = make_examples(
+                scenes, turns, source=stage, settings=settings,
+                seen=seen, require_llm=require_llm,
+            )
+            index = _index(turns, "sample_id", "stage3_main_turn")
+            prepared = [
+                (example, index[example["extra_info"]["sample_id"]])
+                for example in examples
+            ]
+        else:
+            # The original Stage4 display sample_id is NOT unique across
+            # multiple one-fault variants of the same fork/decision round.
+            # round_sample_id is the explicit and immutable candidate key.
+            from train_maestro_8b.data.export_da_grpo import convert
+            index = {}
+            for turn in turns:
+                key = (turn.get("round_sample_id"), turn.get("round"))
+                if (not isinstance(key[0], str) or type(key[1]) is not int
+                        or key in index):
+                    raise ValueError("duplicate_or_missing_stage4_decision_key")
+                index[key] = turn
+            if turns:
+                examples, _, _ = convert(
+                    list(scenes.values()), turns, settings,
+                    reviewed_only=require_llm,
+                )
+            else:
+                examples = []
+            prepared = []
+            for example in examples:
+                key = (
+                    example["extra_info"]["sample_id"].rsplit(
+                        "-decision-round-", 1
+                    )[0],
+                    example["extra_info"]["step_index"],
+                )
+                if key not in index:
+                    raise ValueError("stage4_candidate_round_join_mismatch")
+                prepared.append((example, index[key]))
+        for example, turn in prepared:
             ident = example["extra_info"]["sample_id"]
-            turn = turn_by_id[ident]
             scene_id = turn["task_id"]
             split = splits[scene_id]
             if stage == "stage4":
