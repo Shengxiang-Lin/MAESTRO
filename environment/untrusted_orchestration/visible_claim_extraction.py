@@ -116,6 +116,32 @@ def _literal_case_mentions(result: str) -> list[str]:
     return list(dict.fromkeys(_DELIVERED_CASE_ID.findall(values)))
 
 
+def literal_parenthesized_pairs(result: str) -> list[tuple[str, str]]:
+    """Read ONLY complete, explicit 'entity (value)' Result lists.
+
+    Current Stage-2 clean summaries may encode entity/date handoffs in
+    this literal format instead of typed JSON with FactRefs. This parser
+    does not fill a field name, source, date or entity from private data.
+    Callers may establish a named attribute only from the task's visible
+    two-column instruction and verify its matching source provenance.
+    """
+    if not isinstance(result, str) or not result.strip():
+        return []
+    items = result.strip().split(", ")
+    if not 1 <= len(items) <= 64:
+        return []
+    found = []
+    for item in items:
+        match = re.fullmatch(
+            r"([^,()]{2,120})\\s*\\(([^,()]{1,80})\\)",
+            item.strip(),
+        )
+        if not match:
+            return []
+        found.append((match.group(1).strip(), match.group(2).strip()))
+    return found
+
+
 def _typed_scalar(value):
     return type(value) in _SCALAR and (
         not isinstance(value, str) or bool(value.strip())
