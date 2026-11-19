@@ -1039,7 +1039,7 @@ class ExecutionState:
             if event.get("comparison_kind") in {
                 "earlier_source_lookup", "earlier_source_survey",
                 "earlier_keyed_handoff",
-            }
+            }:
                 if (old, recent, event["claim"]["attribute"]) in remaining_prior:
                     return True
                 continue
