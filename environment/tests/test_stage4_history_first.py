@@ -242,7 +242,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
                 ("clean_episodes.jsonl", [clean]),
             ):
                 (output / name).write_text(
-                    "".join(json.dumps(row, ensure_ascii=False) + "\\n"
+                    "".join(json.dumps(row, ensure_ascii=False) + "\n"
                             for row in records),
                     encoding="utf-8",
                 )
