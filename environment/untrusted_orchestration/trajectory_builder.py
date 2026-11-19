@@ -455,6 +455,7 @@ def build_branch(
     main_max_revisions: int | None = None,
     sub_model: str = "qwen3-8b", model_alias: str = "model_1",
     on_report_review=None, on_main_review=None,
+    validated_reference: tuple[dict, dict] | None = None,
 ) -> tuple[dict, list[dict], dict]:
     """Returns (public episode, accepted *post-branch* turn labels, audit)."""
     if max_rounds < branch_round or max_parallel_tasks < 1:
@@ -469,8 +470,13 @@ def build_branch(
         main_max_revisions = max_revisions
     if base_episode.get("task_id") != scene["task_id"]:
         raise ValueError("base_episode_wrong_scene")
-    reviewed = _strict_reports(scene, stage2_rows)
-    clean_identity = clean_reference_identity(scene, reviewed)
+    # The Stage-4A coordinator validates each frozen scene exactly once.
+    # Public callers retain strict per-branch validation by default.
+    if validated_reference is None:
+        reviewed = _strict_reports(scene, stage2_rows)
+        clean_identity = clean_reference_identity(scene, reviewed)
+    else:
+        reviewed, clean_identity = validated_reference
     declared_reference = base_episode.get("clean_reference_id")
     if (declared_reference is not None and
             declared_reference != clean_identity["clean_reference_id"]):
