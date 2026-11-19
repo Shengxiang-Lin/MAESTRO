@@ -21,6 +21,7 @@ from environment.generate_question.execution.program_ir import ProgramError
 from ..atomic_faults import AtomicFault, ATOM_TO_MODE
 from ..faults import FaultUnsupported, relation_rows, run_attempt
 from .scenario_generator import make_scenario
+from .handoff_conflicts import discover_handoffs, fault_breaks_handoff
 
 
 _VARIANT_KINDS = {
@@ -116,6 +117,7 @@ def enumerate_round_candidates(
     max_fault_atoms: int = 1,
     delayed_evidence_probability: float = 0.0,
     seed: int = 17,
+    base_episode: dict | None = None,
 ) -> list[dict]:
     """Return preflight-valid one-fault scenarios for one feedback round.
 
@@ -162,7 +164,29 @@ def enumerate_round_candidates(
         + round_plan["branch_round"] * 92821
     )
     ordered = _stable_candidate_order(eligible, local_seed)
-    sampled = ordered[:max_candidates]
+    # True history-first discovery: anchor previous public keys before
+    # deciding which erroneous newest records to synthesize. Reserve at
+    # most one B candidate per feedback round, retaining A fault variety.
+    handoffs = discover_handoffs(
+        scene, round_plan, products, base_episode=base_episode,
+    )
+    history = {}
+    for tid, kind, variant in ordered:
+        plan = handoffs.get(tid)
+        if not plan or kind not in {"wrong_retrieval", "wrong_entity_binding",
+                                  "fabricated_claim", "legacy_wrong_evidence"}:
+            continue
+        fault = AtomicFault(
+            kind, tid, origin_round=round_plan["branch_round"] - 1,
+            variant_index=variant,
+        ).as_legacy_fault()
+        if fault_breaks_handoff(scene, plan, fault, products):
+            history[(tid, kind, variant)] = plan
+    first_history = next((row for row in ordered if row in history), None)
+    prioritized = ([first_history] if first_history else []) + [
+        row for row in ordered if row != first_history
+    ]
+    sampled = prioritized[:max_candidates]
     result = []
     for slot, (tid, kind, variant) in enumerate(sampled, 1):
         item = deepcopy(round_plan)
@@ -187,6 +211,10 @@ def enumerate_round_candidates(
             max_fault_atoms=max_fault_atoms,
             delayed_evidence_probability=delayed_evidence_probability,
         )
+        if (tid, kind, variant) in history:
+            item["scenario_plan"]["history_first_plan"] = history[
+                (tid, kind, variant)
+            ]
         result.append(item)
     return result
 
@@ -199,6 +227,7 @@ def expand_all_rounds(
     max_fault_atoms: int,
     delayed_evidence_probability: float,
     seed: int,
+    base: dict[str, dict] | None = None,
 ) -> list[dict]:
     """Expand each historical feedback round into eligible independent trials."""
     expanded = []
@@ -211,6 +240,7 @@ def expand_all_rounds(
             max_fault_atoms=max_fault_atoms,
             delayed_evidence_probability=delayed_evidence_probability,
             seed=seed,
+            base_episode=(base or {}).get(scene["task_id"]),
         )
         for child in children:
             child["index"] = len(expanded)
