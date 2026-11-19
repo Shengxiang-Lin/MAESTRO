@@ -11,7 +11,11 @@ import re
 from .visible_history import public_field_activity
 
 _FIELD = re.compile(r"disagree\s+about\s+([A-Za-z][A-Za-z0-9 _-]{0,75})\s*:", re.I)
-_VALUE = r"(?:Case-\d+|Entry-\d+|MK-\d+|RK-\d+|KEY[12]-\w+|true|false|yes|no|-?\d+(?:\.\d+)?)"
+_VALUE = (
+    r"(?:Case-\d+|Entry-\d+|Dossier-[A-Za-z0-9]+|"
+    r"(?:ENT|Entity)-[A-Za-z0-9]+|MK-\d+|RK-\d+|"
+    r"KEY[12]-\w+|true|false|yes|no|-?\d+(?:\.\d+)?)"
+)
 
 
 def _normalize_field(field: str) -> str:
