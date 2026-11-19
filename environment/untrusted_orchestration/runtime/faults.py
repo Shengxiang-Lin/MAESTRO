@@ -183,16 +183,22 @@ def _wrong_computation(
         "derive_arithmetic", "derive_date_gap", "goal_compute",
     } or not clean.rows or variant_index > 1:
         return None
-    candidate_fields = [
-        step.get("output_field"), "count", "answer", "result",
-    ]
-    candidate_fields.extend(clean.columns)
-    field = next((
-        key for key in dict.fromkeys(candidate_fields)
-        if key in clean.columns
-        and all(type(row["values"].get(key)) in {int, float}
-                for row in clean.rows)
-    ), None)
+    # Only a *computed* output can be corrupted. In particular,
+    # goal_compute may retain numeric source fields while producing a
+    # nonnumeric selection; mutating such a passthrough source value was
+    # falsely labeled as a computation error and cannot be verified.
+    if step["op"] == "goal_compute" and step.get(
+        "goal_operation", {}
+    ).get("op") not in {"arithmetic", "temporal_difference"}:
+        return None
+    field = (
+        "count" if step["op"] in {"count", "group_count"}
+        else step.get("output_field")
+    )
+    if (not isinstance(field, str) or field not in clean.columns
+            or not all(type(row["values"].get(field)) in {int, float}
+                       for row in clean.rows)):
+        return None
     if field is None:
         return None
     delta = 1 if variant_index == 0 else -1
