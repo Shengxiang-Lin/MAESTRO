@@ -75,6 +75,34 @@ def grounded_calendar_text(text: str, observed_text: str) -> str:
     return _CALENDAR_DATE.sub(subst, text)
 
 
+_EVIDENCE_COUNT = re.compile(
+    r"(?<!\w)(?P<count>\d+)\s+"
+    r"(?:(?:distinct|unique|total|supporting|cited)\s+)?"
+    r"(?:fact\s*refs?|fact\s*references?|source\s*fact\s*refs?"
+    r"|source\s*references?|evidence\s*citations?)(?!\w)",
+    re.I,
+)
+
+
+def grounded_reference_count_text(text: str, delivered_rows: list[dict]) -> str:
+    """Ignore only a correctly counted, explicitly labeled FactRef count.
+
+    A number in unrelated prose is never whitelisted. The evidence count
+    comes exclusively from the delivered Result (unique nonempty FactRefs),
+    not from private World/Gold or an intermediate step.
+    """
+    refs = {
+        ref for row in delivered_rows
+        for ref in row.get("source_fact_refs", [])
+        if isinstance(ref, str) and ref
+    }
+    def replace(match: re.Match) -> str:
+        if refs and int(match.group("count")) == len(refs):
+            return "the cited fact references"
+        return match.group(0)
+    return _EVIDENCE_COUNT.sub(replace, text)
+
+
 def explicit_final_value_issues(text: str, contract: dict) -> list[str]:
     """Distinguish a claimed delivered field value from observed provenance.
 
@@ -242,6 +270,9 @@ def validate_report_draft(draft: dict, contract: dict, attempt: Attempt) -> list
         # month name. Normalize only dates literally observed in this
         # Attempt; never grant a generic numeric exemption.
         grounded_text = grounded_calendar_text(text, available)
+        grounded_text = grounded_reference_count_text(
+            grounded_text, contract["actual_delivered_rows"],
+        )
         if claim_tokens(grounded_text) - allowed:
             issues.append(field + "_unobserved_numeric_or_entity")
         if field == "result":

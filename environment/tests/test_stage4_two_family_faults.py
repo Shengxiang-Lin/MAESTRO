@@ -508,6 +508,45 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertIn("2", claim_tokens("There are 2 observations.")
                       - claim_tokens(actual))
 
+    def test_report_guard_accepts_only_exact_delivered_factref_count(self):
+        from environment.untrusted_orchestration.reporting.report_validation import (
+            claim_tokens, grounded_reference_count_text,
+        )
+        rows = [{
+            "values": {"answer": {
+                "conclusion": "first",
+                "first_count": 87,
+                "second_count": 55,
+            }},
+            "source_fact_refs": [f"real:F{i:03d}" for i in range(1, 15)],
+        }]
+        available = json.dumps(rows, ensure_ascii=False)
+        summary = (
+            "The returned conclusion was first, with counts 87 and 55, "
+            "supported by 14 fact references."
+        )
+        grounded = grounded_reference_count_text(summary, rows)
+        self.assertNotIn("14", claim_tokens(grounded) - claim_tokens(available))
+        self.assertIn(
+            "15", claim_tokens(
+                grounded_reference_count_text(
+                    "The result cited 15 fact references.", rows,
+                )
+            ) - claim_tokens(available),
+        )
+        self.assertIn(
+            "14", claim_tokens(
+                grounded_reference_count_text(
+                    "The result contained 14 observations.", rows,
+                )
+            ) - claim_tokens(available),
+        )
+        # Duplicated citations are not counted twice.
+        rows[0]["source_fact_refs"].append("real:F014")
+        self.assertNotIn("14", claim_tokens(
+            grounded_reference_count_text(summary, rows)
+        ) - claim_tokens(available))
+
     def test_prior_observation_is_executed_in_an_earlier_wave(self):
         from copy import deepcopy
         from environment.untrusted_orchestration.state_machine import (
@@ -583,6 +622,19 @@ class IntraReportFaultTests(unittest.TestCase):
                                        instruction=patch["instruction"],
                                        model_alias="model_1")
         state.set_public_report(patch["task_id"], earlier, round_number=1)
+        # Private task linkage without an explicit latest source scope is
+        # insufficient to establish a Main-visible contradiction.
+        self.assertEqual(comparison_rows(state), [])
+        from environment.untrusted_orchestration.scenario.prior_observation import (
+            latest_scope_statement,
+        )
+        last = state.public_reports["target"]
+        last["trace_summary"] += " " + latest_scope_statement(patch)
+        state.set_public_report("target", last, round_number=2)
+        self.assertEqual(len(
+            state._public_result_rows(state.public_reports[patch["task_id"]])
+        ), 2)
+        self.assertNotIn("Case-011", patch["instruction"])
         self.assertEqual(len(comparison_rows(state)), 1)
         state.cross_source_checks_enabled = True
         state.scheduling_state()
@@ -593,12 +645,102 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(state.detected_conflicts[-1]["recheck_task_id"],
                          "target")
         self.assertTrue(state.unresolved_cited_conflicts())
+        first_retry = state.register("target")
+        repeated = deterministic_report(
+            task, first_retry, instruction="Recheck the metric.",
+            model_alias="model_1",
+        )
+        repeated["finish_result"]["result"] = json.dumps([{
+            "values": {"metric": 55},
+            "source_fact_refs": ["hist_source:F002"],
+        }])
+        state.set_public_report("target", repeated, round_number=3)
+        # Dropping the scope sentence while preserving the wrong value
+        # cannot resolve a previously observed dispute.
+        self.assertTrue(state.unresolved_cited_conflicts())
         fresh = state.register("target")
         fixed = deterministic_report(task, fresh,
                                      instruction="Recheck the metric.",
                                      model_alias="model_1")
-        state.set_public_report("target", fixed, round_number=3)
+        state.set_public_report("target", fixed, round_number=4)
         self.assertFalse(state.unresolved_cited_conflicts())
+
+    def test_history_survey_matches_explicit_project_field_rename(self):
+        from copy import deepcopy
+        from environment.untrusted_orchestration.state_machine import (
+            deterministic_report,
+        )
+        from environment.untrusted_orchestration.scenario.prior_observation import (
+            propose_prior_observation, latest_scope_statement, comparison_rows,
+        )
+        scene = deepcopy(self.scene)
+        scene["world"]["sources"]["renamed_source"] = {
+            "schema": ["case_id", "source_metric"],
+            "access_mode": "browse", "access_policy": {"mode": "browse"},
+            "modality": "text", "title": "Source register",
+            "observations": [
+                {"observation_id": "renamed_source.OBS001",
+                 "values": {"case_id": "Case-011", "source_metric": 87},
+                 "fact_refs": ["renamed_source:F001"],
+                 "evidence_origin_id": "root01",
+                 "observed_content": "Case-011 source metric 87."},
+                {"observation_id": "renamed_source.OBS002",
+                 "values": {"case_id": "Case-012", "source_metric": 55},
+                 "fact_refs": ["renamed_source:F002"],
+                 "evidence_origin_id": "root02",
+                 "observed_content": "Case-012 source metric 55."},
+            ],
+        }
+        task = {
+            "task_id": "latest", "depends_on": [],
+            "source_ids": ["renamed_source"], "external_inputs": [],
+            "input_schema": {},
+            "operator_chain": [
+                {"id": "read", "op": "scan", "inputs": [],
+                 "source_id": "renamed_source"},
+                {"id": "select", "op": "filter_eq", "inputs": ["read"],
+                 "field": "case_id", "value": "Case-011"},
+                {"id": "finish", "op": "project", "inputs": ["select"],
+                 "fields": ["source_metric"],
+                 "rename_fields": {"source_metric": "metric"}},
+            ],
+            "program_node_id": "finish",
+            "outputs": {"typed_relation": ["metric"]},
+        }
+        state = ExecutionState(scene, {})
+        state.tasks = {"latest": task}
+        state.attempts = {"latest": []}
+        clean = state.register("latest")
+        report = deterministic_report(
+            task, clean, instruction="Check Case-011.", model_alias="model_1",
+        )
+        report["finish_result"]["result"] = json.dumps([{
+            "values": {"metric": 55},
+            "source_fact_refs": ["renamed_source:F002"],
+        }])
+        state.set_public_report("latest", report, round_number=2)
+        patch, diagnostic = propose_prior_observation(
+            state, "latest", branch_round=3,
+            max_parallel_tasks=len(scene["macro_graph"]["reference_waves"][0]) + 1,
+        )
+        self.assertIsNotNone(patch, diagnostic)
+        self.assertEqual(patch["field"], "metric")
+        self.assertEqual(patch["source_field"], "source_metric")
+        self.assertNotIn("Case-011", patch["instruction"])
+        report["trace_summary"] += " " + latest_scope_statement(patch)
+        state.set_public_report("latest", report, round_number=2)
+        state.tasks[patch["task_id"]] = patch["task"]
+        state.attempts[patch["task_id"]] = []
+        prior = state.register(patch["task_id"])
+        earlier = deterministic_report(
+            patch["task"], prior,
+            instruction=patch["instruction"], model_alias="model_1",
+        )
+        state.set_public_report(patch["task_id"], earlier, round_number=1)
+        disagreements = comparison_rows(state)
+        self.assertEqual(len(disagreements), 1)
+        self.assertEqual(disagreements[0]["earlier_value"], 87)
+        self.assertEqual(disagreements[0]["latest_value"], 55)
 
     def test_cited_prose_preserves_nested_and_null_values(self):
         from environment.untrusted_orchestration.reporting.result_text import (

@@ -1025,14 +1025,16 @@ class ExecutionState:
         from .scenario.prior_observation import comparison_rows
         remaining_prior = {
             (row["older_task"], row["latest_task"], row["attribute"])
-            for row in comparison_rows(self)
+            for row in comparison_rows(self, require_visible_scope=False)
         }
         claims = public_claims(self)
         for event in self.detected_conflicts:
             if event.get("kind") != "cross_round_report_disagreement":
                 continue
             old, recent = event["compared_parent_tasks"]
-            if event.get("comparison_kind") == "earlier_source_lookup":
+            if event.get("comparison_kind") in {
+                "earlier_source_lookup", "earlier_source_survey",
+            }:
                 if (old, recent, event["claim"]["attribute"]) in remaining_prior:
                     return True
                 continue

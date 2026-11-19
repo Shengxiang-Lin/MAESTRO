@@ -133,13 +133,18 @@ Main-observable issue families only:
 
 When a prior report lacks an explicit comparable record, Stage 4
 first checks for a row in an earlier task's already executed WorkProduct.
-If that is unsupported, it can instead schedule one **source-backed
-historical observation in an existing earlier batch**, provided that batch
-has a legal spare slot and the target's original source contains a uniquely
-selectable comparison fact. The added observation has an explicit earlier
-Main dispatch, an executed scan/filter/project, a cited Sub-Agent Result and
-a matching clean/faulted historical prefix. It never adds a new World source,
-guesses a FactRef or introduces a future observation into Main's history.
+If that is unsupported, it can instead schedule one **bounded
+source survey in an existing earlier batch**, provided that batch has a
+legal spare slot. The survey returns all existing key/value pairs (up to
+24 source rows), with original FactRefs; it does **not** select a future
+answer or lookup key in the earlier Main dispatch. When the newest report
+arrives, its actual executed lookup key is stated explicitly in public
+feedback, and only a matching survey row may contradict its delivered
+field. Project `rename_fields` is respected for source/output schema
+matching, and multiple result rows require an unambiguous public row key.
+The clean and faulty branch share the same earlier survey.
+No new World sources, guessed FactRefs, or unsupported private-only
+comparisons are used.
 For the first feedback batch (no earlier wave), or without comparable source
 evidence, the candidate remains a diagnostic negative.
 
@@ -323,3 +328,11 @@ python -m environment generate-untrusted-turns \\
 `outcomes`, and `published_result_format_by_phase` in `summary.json`.
 The local Author/Critic APIs must be running as configured; CI only provides
 offline and small paired smoke checks.
+
+### 4B FactRef-count guard
+
+A prose claim such as `14 fact references` is permitted only when the
+delivered Result really cites 14 **unique** nonempty FactRefs. The guard
+normalizes only that exact, explicitly labeled count phrase; an unsupported
+count or unrelated number remains invalid. Date wording remains anchored
+to actual observed ISO dates. Neither rule loosens general factual checks.
