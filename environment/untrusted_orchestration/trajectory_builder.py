@@ -361,6 +361,7 @@ def build_branch(
     scene: dict, stage2_rows: list[dict], base_episode: dict, *,
     branch_round: int, faults: list[Fault],
     scenario_plan: dict | None = None,
+    witness_extension: dict | None = None,
     author=None, critic=None, report_author=None, report_critic=None,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
     max_post_fork_rounds: int | None = None,
@@ -389,6 +390,22 @@ def build_branch(
     if (declared_reference is not None and
             declared_reference != clean_identity["clean_reference_id"]):
         raise ValueError("stage4_clean_reference_fingerprint_mismatch")
+    # Strictly validate the ORIGINAL frozen Stage-1/2/3 reference first.
+    # Only afterward may this one Stage-4 candidate append supplemental
+    # simulated sources and delegated reports to its latest returned batch.
+    if witness_extension is not None:
+        from .latest_witness import (
+            extend_local_scene, extend_clean_prefix,
+        )
+        if witness_extension["feedback_round"] != branch_round:
+            raise ValueError("witness_not_in_latest_feedback_round")
+        scene = extend_local_scene(scene, witness_extension)
+        base_episode = extend_clean_prefix(
+            base_episode, witness_extension,
+        )
+        if (set(f.task_id for f in faults)
+                != {witness_extension["faulted_task_id"]}):
+            raise ValueError("witness_fault_must_target_latest_report")
     state, task_entries, trajectory, injected = _clean_prefix(
         scene, reviewed, base_episode,
         branch_round=branch_round, faults=faults,
@@ -450,6 +467,18 @@ def build_branch(
         "task_id": item["task_id"], "attempt_version": 1,
         "round": branch_round - 1, "authoring": deepcopy(item["report_mode"]),
     } for item in injected]
+    if witness_extension is not None:
+        # 4B reviews the clean supplemental report too, not just the
+        # deliberately corrupted report and subsequent repair attempts.
+        for entry in witness_extension["entries"]:
+            tid = entry["task"]["task_id"]
+            if tid not in {x["task_id"] for x in report_reviews}:
+                report_reviews.append({
+                    "task_id": tid, "attempt_version": 1,
+                    "round": branch_round - 1,
+                    "authoring": {"mode": "pending_stage4b",
+                                  "status": "pending"},
+                })
     main_reviews = []
     evidence_plan = []
     decision_reward_states = []
@@ -804,6 +833,7 @@ def build_branch(
         "visible_claim_state": visible_claim_state,
         "observable_issue_snapshots": observable_issue_snapshots,
         "event_scenario": scenario_plan,
+        "witness_extension": deepcopy(witness_extension),
         "event_timeline": scheduler.audit(),
         "fault_events_applied": applied_fault_events,
         "unrealized_future_fault_tasks": sorted(
