@@ -405,6 +405,7 @@ def build_branch(
     private_witness_patch = None
     if (scenario_plan is not None
             and scenario_plan.get("mode") == "event_driven"
+            and len(task_entries[-1]["subtask_results"]) < max_parallel_tasks
             and len(faults) == 1
             and faults[0].atom_kind in {
                 "wrong_retrieval", "wrong_entity_binding",
