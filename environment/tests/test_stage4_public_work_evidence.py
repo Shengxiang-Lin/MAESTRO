@@ -113,6 +113,56 @@ class PublicWorkEvidenceTests(unittest.TestCase):
         self.assertIn("unfinished extraction", state.visible_discrepancy("child"))
         self.assertEqual(status["status"], "accepted")
 
+    def test_done_but_incomplete_is_really_llm_authored(self):
+        scene, parent, child = _scene()
+        state = ExecutionState(scene, {})
+        state.register("parent")
+        partial = state.register(
+            "child", fault=Fault(
+                "child", "partial", atom_kind="done_but_incomplete"
+            ),
+        )
+
+        class ReportAuthor:
+            def __init__(self):
+                self.calls = 0
+
+            def complete_json(self, system, payload):
+                self.calls += 1
+                return {
+                    "summary": (
+                        "The lookup returned the place name but I could "
+                        "not extract the observation year from this result."
+                    ),
+                    "trace_summary": (
+                        "I inspected the authorized lookup and returned "
+                        "only the available observations."
+                    ),
+                }
+
+        class ReportCritic:
+            def complete_json(self, system, payload):
+                return {
+                    "verdict": "pass", "grounded": True,
+                    "scope_preserved": True, "natural": True,
+                    "useful": True,
+                }
+
+        author = ReportAuthor()
+        report, status = naturalize_report(
+            child, partial,
+            instruction="Find the place and the observation year.",
+            model_alias="model_1", reviewed=None,
+            author=author, critic=ReportCritic(), max_revisions=0,
+        )
+        self.assertGreater(author.calls, 0)
+        self.assertEqual(status["status"], "accepted", status)
+        self.assertEqual(status["mode"], "llm_reviewed")
+        self.assertTrue(status["controlled_done_partial_overlay"])
+        self.assertEqual(report["finish_result"]["status"], "done")
+        self.assertIn("could not extract",
+                      report["finish_result"]["summary"])
+
     def test_real_wrong_entity_binding_stays_an_executable_fault(self):
         # The public association witness must come from actual attempted
         # Join evidence, not a synthetic wrong-ID label.
