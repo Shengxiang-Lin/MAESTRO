@@ -35,6 +35,7 @@ from .evidence_planning import schedule_evidence_requests
 from .scenario.history_conflicts import expose_executed_prior_record
 from .scenario.prior_observation import (
     propose_prior_observation, patch_scene as patch_prior_observation_scene,
+    latest_scope_statement,
 )
 
 
@@ -455,8 +456,9 @@ def build_branch(
             prior_action["params"]["tasks"].append({
                 "task_instruction": instruction,
                 "context": (
-                    "A prior source-backed investigation for the same "
-                    "question. Return only the selected source record."
+                    "A prior independent source survey for the same "
+                    "question. Return all observed source rows, without "
+                    "assuming which row will be needed later."
                 ),
                 "model": model_alias,
                 "tools": list(original_assignment["tools"]),
@@ -472,6 +474,25 @@ def build_branch(
                 public_history_item(report, slot)
             )
             prior_entry["total_steps"] += report["steps_taken"]
+            # The newest Sub-Agent must explicitly state the source lookup
+            # key it actually used. Otherwise an earlier table and a later
+            # answer are not an *observable* same-record disagreement.
+            latest_report = state.public_reports[faults[0].task_id]
+            note = latest_scope_statement(prior_observation_patch)
+            latest_report["trace_summary"] = (
+                str(latest_report.get("trace_summary") or "").rstrip()
+                + " " + note
+            ).strip()
+            state.set_public_report(
+                faults[0].task_id, latest_report,
+                round_number=branch_round - 1,
+            )
+            trajectory[-1]["result"]["subtask_results"][current_slot] = (
+                latest_report
+            )
+            task_entries[-1]["subtask_results"][current_slot] = (
+                public_history_item(latest_report, current_slot)
+            )
             history_anchor = prior_diag
         else:
             history_anchor = prior_diag
