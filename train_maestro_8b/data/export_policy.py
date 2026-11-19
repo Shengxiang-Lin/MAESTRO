@@ -64,13 +64,13 @@ def export(risk_dir, main_turns, output_dir, decision_states=None):
         reference[key] = action
     stats = {
         "reference_turns": len(reference), "private_states": len(private),
-        "train": 0, "val": 0, "missing_reference": 0,
+        "train": 0, "val": 0, "test": 0, "missing_reference": 0,
         "missing_decision_state": 0, "unscorable": 0,
     }
-    for split in ("train", "val"):
+    for split in ("train", "val", "test"):
         path = Path(risk_dir) / (split + ".jsonl")
         if not path.exists():
-            if split == "val":
+            if split in {"val", "test"}:
                 continue
             raise FileNotFoundError(path)
         with (out / (split + ".jsonl")).open("w", encoding="utf-8") as dest:
