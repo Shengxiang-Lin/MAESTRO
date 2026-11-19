@@ -27,7 +27,13 @@ uses the existing field/dependency-aware state machine, and is capped by
 `short_replay_horizon`, **not** a successful recovery.
 
 `selection_strategy: stratified` balances different causally replayed recovery
-behaviors across rounds. `max_diagnostics_per_scene` additionally chooses a
+behaviors across rounds, but successful cross-feedback conflict recovery is
+prioritized ahead of routine missing/partial repairs. By default, up to **3**
+behaviorally distinct recovered candidates are retained per feedback round,
+with a **4**-attempt per-round language budget to allow one replacement after
+review rejection. The selection signature distinguishes conflicts with
+different *actually observed* historical report rounds. It never picks a
+non-recovered candidate as positive SFT. `max_diagnostics_per_scene` additionally chooses a
 small number of genuinely failed executions for 4B/4C language review;
 those are **never** published as positive Main SFT turns. This sampling
 changes only the fork and review distribution, not the trusted dispatch
@@ -118,7 +124,12 @@ its returned evidence and any Main-visible prerequisite values:
   receives automatic Main-visible inconsistency detection; other
   perturbations may remain diagnostic, not forced recovery examples.
 
-**Latest feedback versus prior history.** Stage 4 now generates two
+**Latest feedback versus prior history.** A newly received report in wave
+N is compared with **every earlier public wave 1..N-1**, not just N-1.
+A single newest report may disagree with several different earlier reports;
+all distinct grounded claim pairs are recorded, while the newest task requires
+only one actual recheck per task version. An old report is never changed just
+to manufacture a conflict. Stage 4 now generates two
 Main-observable issue families only:
 
 1. **Latest report itself is abnormal** (missing, partial, incorrect scope,
@@ -166,8 +177,15 @@ The deprecated same-batch auxiliary verifier and its synthetic-source
 interfaces remain deleted. Private audit records
 `history_conflict_anchor`, optional `prior_observation_patch`, and
 `paired_clean_history` to preserve comparable clean/fault contexts.
-Summary reports `historical_anchor_status_distribution` and
-`cross_round_report_conflicts_detected`.
+Summary reports `historical_anchor_status_distribution`,
+`cross_round_report_conflicts_detected`,
+`historical_conflict_older_round_distribution`,
+`historical_conflict_round_gap_distribution`,
+`selected_recovered_historical_conflicts`, and
+`selected_historical_conflict_round_gap_distribution`. Individual 4A
+candidate rows contain `history_conflict_older_rounds` and
+`history_conflict_round_gaps`. These fields are **private selection/audit
+metadata**, not additional facts exposed to Main.
 
 4C now checks `done_but_incomplete` against the structured, flattened
 O1 reports, not against `json.loads()` of the formatted history prose;
