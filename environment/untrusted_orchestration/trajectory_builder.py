@@ -24,7 +24,7 @@ from environment.base_orchestration.trajectory_builder import (
     _answer_text, _strict_reports, _main_local_terminal,
     clean_reference_identity,
 )
-from environment.untrusted_orchestration.runtime.faults import Fault
+from environment.untrusted_orchestration.runtime.faults import Fault, relation_rows
 from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault
 from environment.untrusted_orchestration.runtime.event_scheduler import EventScheduler
 from .state_machine import (
