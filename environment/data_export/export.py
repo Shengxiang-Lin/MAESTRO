@@ -87,8 +87,8 @@ def _case_for_clean(scene: dict, episode: dict, split: str):
         "fault": {"atoms": [], "applied_events": []},
         "recovery": {
             "publication_status": "accepted",
-            "execution_outcome": "recovered",
-            "globally_recovered": True,
+            "execution_outcome": "clean_completed",
+            "globally_recovered": None,
             "observable_issues": [],
             "main_decisions": [],
             "invalidations": [],
@@ -438,6 +438,11 @@ def export_dataset(
     distribution = Counter(row["split"] for row in decisions)
     case_distribution = Counter(row["split"] for row in cases)
     source_distribution = Counter(row["source"] for row in decisions)
+    fault_types = Counter(
+        ((case["fault"]["atoms"][0].get("kind") or "unknown")
+         if case["fault"]["atoms"] else "unknown")
+        for case in cases if case["kind"] == "fault_injected"
+    )
     result = {
         "schema": DATASET_SCHEMA,
         "source_sha256": {
@@ -459,6 +464,8 @@ def export_dataset(
         "decision_sources": dict(sorted(source_distribution.items())),
         "stage4_journal_outcomes": dict(sorted(counts.items())),
         "accepted_fault_cases": len(accepted_cases),
+        "fault_case_types": dict(sorted(fault_types.items())),
+        "clean_cases": sum(case["kind"] == "clean" for case in cases),
         "require_llm": require_llm,
         "parquet": parquet,
         "label_policy": (
