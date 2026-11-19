@@ -428,6 +428,98 @@ class IntraReportFaultTests(unittest.TestCase):
             state.detected_conflicts[0]["recheck_task_id"], "target"
         )
 
+    def test_latest_batch_report_has_matching_dispatch_in_full_branch(self):
+        from unittest.mock import patch as mocked
+        from environment.untrusted_orchestration.atomic_faults import probe_atoms
+        from environment.untrusted_orchestration.trajectory_builder import (
+            build_branch,
+        )
+        from environment.tests.test_untrusted_orchestration import sample
+        scene, reports, trusted = sample(0)
+        eligible = probe_atoms(scene, [
+            "fabricated_claim", "wrong_retrieval",
+        ])
+        first = scene["macro_graph"]["reference_waves"][0]
+        choice = next((
+            (tid, kind) for tid in first
+            for kind in ("fabricated_claim", "wrong_retrieval")
+            if kind in eligible.get(tid, [])
+        ), None)
+        if choice is None:
+            self.skipTest("fixture has no first-round Wrong/Report candidate")
+        tid, kind = choice
+        atom = AtomicFault(kind, tid, origin_round=1)
+        ident = "crosscheck_unit_test"
+        witness_tid = "zz_aux_unit_test"
+        patch = {
+            "version": 1,
+            "source_id": ident,
+            "task_id": witness_tid,
+            "feedback_round": 1,
+            "compare_with": tid,
+            "claim": {
+                "subject": "Case-011", "subject_field": "case_id",
+                "attribute": "metric", "faulty_delivered_value": 55,
+                "clean_observation_value": 87,
+            },
+            "construction": "stage4_synthetic_comparison_source",
+            "empirically_independent": False,
+            "source": {
+                "schema": ["case_id", "metric"],
+                "access_mode": "browse",
+                "access_policy": {"mode": "browse"},
+                "modality": "text", "title": "Comparison register",
+                "observations": [{
+                    "observation_id": ident + ".OBS001",
+                    "values": {"case_id": "Case-011", "metric": 87},
+                    "fact_refs": [ident + ":F001"],
+                    "evidence_origin_id": ident + ".root",
+                    "observed_content": "Case-011 metric is 87.",
+                }],
+            },
+            "task": {
+                "task_id": witness_tid, "depends_on": [],
+                "source_ids": [ident], "external_inputs": [],
+                "input_schema": {},
+                "operator_chain": [{
+                    "id": "read_comparison", "op": "scan",
+                    "inputs": [], "source_id": ident,
+                }],
+                "program_node_id": "read_comparison",
+                "outputs": {"typed_relation": ["case_id", "metric"]},
+            },
+        }
+        scenario = {
+            "mode": "event_driven", "blueprint": "immediate_feedback_fault",
+            "scenario_id": "latest-batch-fixture",
+            "fault_atoms": [atom.to_private_dict()],
+            "evidence_events": [],
+        }
+        with mocked(
+            "environment.untrusted_orchestration.trajectory_builder."
+            "propose_witness_patch", return_value=patch,
+        ):
+            episode, _, audit = build_branch(
+                scene, reports, trusted, branch_round=2,
+                faults=[atom.as_legacy_fault()],
+                scenario_plan=scenario, max_rounds=16, max_retries=1,
+                max_post_fork_rounds=4,
+            )
+        latest = episode["trajectory"][0]
+        self.assertEqual(latest["attempt"], 1)
+        self.assertEqual(latest["action"], "delegate_task")
+        self.assertEqual(
+            len(latest["params"]["tasks"]),
+            len(latest["result"]["subtask_results"]),
+        )
+        self.assertIn(ident, latest["params"]["tasks"][-1][
+            "task_instruction"])
+        self.assertIn(ident + ":F001", latest["result"][
+            "subtask_results"][-1]["finish_result"]["result"])
+        self.assertIn(witness_tid, audit["runtime"]["attempt_versions"])
+        self.assertEqual(audit["latest_batch_witness_patch"], patch)
+        self.assertNotIn(ident, scene["world"]["sources"])
+
 
 if __name__ == "__main__":
     unittest.main()
