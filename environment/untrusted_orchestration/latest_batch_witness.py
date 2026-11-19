@@ -69,16 +69,15 @@ def propose_witness_patch(state, target: str, *, branch_round: int,
             continue
         wrong = item["values"]
         refs = item.get("source_fact_refs")
-        cited_sources = {
-            ref.split(":", 1)[0] for ref in refs
-            if isinstance(ref, str) and ":" in ref
-        } if isinstance(refs, list) else set()
-        origins = (
-            {state.origin_by_ref.get(ref) for ref in refs}
-            if isinstance(refs, list) else set()
-        )
-        if (not refs or len(cited_sources) != 1 or len(origins) != 1
-                or None in origins or len(cited_sources & set(task["source_ids"])) != 1):
+        if (not isinstance(refs, list) or not refs
+                or not all(isinstance(ref, str) and ":" in ref for ref in refs)):
+            reason = "malformed_or_missing_fact_refs"
+            continue
+        cited_sources = {ref.split(":", 1)[0] for ref in refs}
+        origins = {state.origin_by_ref.get(ref) for ref in refs}
+        if (len(cited_sources) != 1 or len(origins) != 1
+                or None in origins
+                or not cited_sources <= set(task["source_ids"])):
             reason = "no_single_origin_direct_source_claim"
             continue
         reason = "no_explicit_subject"
