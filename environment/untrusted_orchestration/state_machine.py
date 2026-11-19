@@ -835,6 +835,10 @@ class ExecutionState:
         # Include a genuinely executed *earlier* direct-source lookup.
         # Its relation to the latest query is explicit in the prior task
         # instruction and verified offline by the same source record.
+        # A single newest report may disagree with several genuinely earlier
+        # reports. Record every distinct old/new claim pair, but request only
+        # one recheck of that newest task version.
+        history_messages = {}
         for conflict in (latest_history_disagreements(self)
                          + handoff_disagreements(self)
                          + comparison_rows(self)):
@@ -848,7 +852,11 @@ class ExecutionState:
                    for event in self.detected_conflicts):
                 continue
             current = self.current.get(target)
-            if current is None or current.status != "done":
+            if current is None or not (
+                current.status == "done"
+                or (current.status == "disputed"
+                    and current.runtime.get("history_conflict_recheck_requested"))
+            ):
                 continue
             old = conflict["older_task"]
             if self.public_status(old) != "done":
@@ -867,11 +875,13 @@ class ExecutionState:
                 + ". Recheck the cited report before relying on this value."
             )
             current.status = "disputed"
-            current.runtime["visible_issue"] = message
+            history_messages.setdefault(target, []).append(message)
             current.runtime["history_conflict_recheck_requested"] = True
             self.detected_conflicts.append({
                 "kind": "cross_round_report_disagreement",
                 "comparison_kind": conflict.get("comparison_kind", "same_claim"),
+                "older_round": conflict["older_round"],
+                "latest_round": conflict["latest_round"],
                 "history_pair_key": key,
                 "compared_parent_tasks": [old, target],
                 "recheck_task_id": target,
@@ -896,7 +906,8 @@ class ExecutionState:
                     if child is not current
                 ),
             })
-            return
+        for target, messages in history_messages.items():
+            self.current[target].runtime["visible_issue"] = " ".join(messages)
 
     def _detect_explicit_cross_report_disagreements(self) -> None:
         """Contested same-claim reports support bounded sequential rechecks.
@@ -991,6 +1002,8 @@ class ExecutionState:
                     self.detected_conflicts.append({
                         "kind": "explicit_independent_claim_disagreement",
                         "claim_pair_key": pair,
+                        "older_round": earlier["observed_round"],
+                        "latest_round": later["observed_round"],
                         "compared_parent_tasks": [left, right],
                         "recheck_task_id": target,
                         "recheck_task_version": prev.version,
