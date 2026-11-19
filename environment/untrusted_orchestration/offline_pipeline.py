@@ -151,19 +151,21 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
     return episode, audit
 
 
-def _public_done_null_fields(public_history: str) -> set[str]:
-    """Read missing typed fields ONLY from the already delivered history."""
-    try:
-        batches = json.loads(public_history)
-    except (ValueError, TypeError):
-        return set()
-    if not isinstance(batches, list):
-        return set()
+def _public_done_null_fields(public_batches: list[dict]) -> set[str]:
+    """Read delivered nulls from actual O1 batches, not formatted O1 prose.
+
+    O1 history stores flattened status/result/summary; the older nested
+    finish_result form is only accepted for diagnostic fixtures. The
+    checker never reads private missing_fields or the clean WorkProduct.
+    """
     missing = set()
-    for batch in batches:
+    for batch in public_batches:
         for report in batch.get("subtask_results", []):
-            finish = report.get("finish_result") if isinstance(report, dict) else None
-            if not isinstance(finish, dict) or finish.get("status") != "done":
+            if not isinstance(report, dict):
+                continue
+            nested = report.get("finish_result")
+            finish = nested if isinstance(nested, dict) else report
+            if finish.get("status") != "done":
                 continue
             try:
                 rows = json.loads(finish.get("result", ""))
@@ -182,10 +184,13 @@ def _public_done_null_fields(public_history: str) -> set[str]:
     return missing
 
 
-def _visibility_issues(requests: list[dict], public_history: str) -> list[str]:
-    """Fail closed if the planner relied on an identifier not in reports."""
+def _visibility_issues(
+    requests: list[dict], public_history: str,
+    *, public_batches: list[dict] | None = None,
+) -> list[str]:
+    """Validate reasons against actually delivered O1 evidence, not Gold."""
     visible = public_history.casefold()
-    delivered_null_fields = _public_done_null_fields(public_history)
+    delivered_null_fields = _public_done_null_fields(public_batches or [])
     missing = []
     for request in requests:
         for identifier in request.get("known_identifiers", []):
@@ -336,7 +341,10 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
             if step["action"] == "delegate_task":
                 plan = plans[round_number]
                 history = json.dumps(entries, ensure_ascii=False)
-                issues = _visibility_issues(plan["evidence_requests"], history)
+                issues = _visibility_issues(
+                    plan["evidence_requests"], history,
+                    public_batches=entries,
+                )
                 if issues:
                     failure = "stage4c_evidence_not_main_visible:" + ",".join(issues)
                     break
