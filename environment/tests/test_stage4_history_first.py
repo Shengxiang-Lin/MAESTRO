@@ -733,7 +733,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
             _clone_source_query, patch_clean_episode, patch_scene,
         )
         from environment.untrusted_orchestration.trajectory_builder import (
-            _clean_prefix,
+            _replay_observed_prefix,
         )
         scene, parent, child = _scene()
         source = scene["world"]["sources"]["parent_src"]
@@ -799,7 +799,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         fault = AtomicFault(
             "wrong_retrieval", "parent", 1,
         ).as_legacy_fault()
-        state, history, prefix, log = _clean_prefix(
+        state, history, prefix, log = _replay_observed_prefix(
             augmented_scene, {}, augmented_base,
             branch_round=4, faults=[fault],
             fault_origin_wave_index=0,
@@ -827,7 +827,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         with self.assertRaisesRegex(
             ValueError, "delayed_prefix_dispatch_references_unseen_clean_value",
         ):
-            _clean_prefix(
+            _replay_observed_prefix(
                 augmented_scene, {}, leaked_base,
                 branch_round=4, faults=[fault],
                 fault_origin_wave_index=0,
