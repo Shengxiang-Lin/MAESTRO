@@ -81,6 +81,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "main_decision_contract.py",
         "report_contract.py", "report_evidence.py", "result_text.py",
         "scenario/history_conflicts.py",
+        "scenario/prior_observation.py",
         "report_validation.py", "public_language.py",
         "publication_guard.py",
         "state_machine.py", "report_author.py",
