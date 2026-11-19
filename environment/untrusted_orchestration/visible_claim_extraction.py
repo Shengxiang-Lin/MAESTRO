@@ -133,7 +133,7 @@ def literal_parenthesized_pairs(result: str) -> list[tuple[str, str]]:
     found = []
     for item in items:
         match = re.fullmatch(
-            r"([^,()]{2,120})\\s*\\(([^,()]{1,80})\\)",
+            r"([^,()]{2,120})\s*\(([^,()]{1,80})\)",
             item.strip(),
         )
         if not match:
