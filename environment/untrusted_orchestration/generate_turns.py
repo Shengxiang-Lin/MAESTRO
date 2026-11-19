@@ -1066,6 +1066,7 @@ def generate_turns(
             extension = make_latest_pair(
                 scene, feedback_round=feedback_round,
                 max_parallel_tasks=max_parallel_tasks,
+                base_episode=base[scene["task_id"]],
             )
             if extension is None:
                 enriched.extend(old)
