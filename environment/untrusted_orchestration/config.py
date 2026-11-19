@@ -82,7 +82,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             "max_distractors_per_fault", 2
         ),
         "max_selected_per_round": run.get(
-            "max_selected_per_round", 1
+            "max_selected_per_round", 3
         ),
         "selection_strategy": run.get(
             "selection_strategy", "causal_rank"
@@ -91,7 +91,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             "max_diagnostics_per_scene", 0
         ),
         "max_language_attempts_per_round": run.get(
-            "max_language_attempts_per_round", 1
+            "max_language_attempts_per_round", 4
         ),
         "atomic_fault_kinds": run.get("atomic_fault_kinds", [
             "no_result", "incomplete_retrieval", "done_but_incomplete",
