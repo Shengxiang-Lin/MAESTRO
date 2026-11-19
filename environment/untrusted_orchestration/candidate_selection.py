@@ -93,7 +93,9 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         for snap in snapshots
         for issue in snap.get("issues", [])
         if (issue.get("task_id") in fault_targets
-            or issue.get("kind") == "cross_source_conflict"
+            or issue.get("kind") in {
+                "cross_source_conflict", "historical_report_conflict",
+            }
             or (snap["decision_round"] > fork_round and (
                 issue.get("reported_round", 0) >= fork_round
                 or issue.get("kind") == "stale_downstream_result"
@@ -114,7 +116,8 @@ def classify_trial(plan: dict, journal: dict) -> dict:
     })
     observable_family = (
         "inter_report_conflict"
-        if "cross_source_conflict" in visible_issue_types
+        if ({"cross_source_conflict", "historical_report_conflict"}
+            & set(visible_issue_types))
         else "intra_report_issue" if visible_issue_types
         else "not_observed"
     )
@@ -201,16 +204,15 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         "fault_events_applied": len(applied),
         "observability": observability,
         "observable_issue_family": observable_family,
-        "latest_batch_witness_generated": bool(
-            audit.get("latest_batch_witness_patch")
+        "historical_anchor_status": (
+            (audit.get("history_conflict_anchor") or {}).get("status")
         ),
-        "latest_batch_witness_probe_status": (
-            (audit.get("latest_batch_witness_probe") or {}).get("status")
+        "historical_anchor_reason": (
+            (audit.get("history_conflict_anchor") or {}).get("reason")
         ),
-        "latest_batch_witness_skip_reason": (
-            (audit.get("latest_batch_witness_probe") or {}).get("reason")
-            if (audit.get("latest_batch_witness_probe") or {}).get("status")
-            == "ineligible" else None
+        "history_conflicts_detected": sum(
+            event.get("kind") == "cross_round_report_disagreement"
+            for event in conflicts
         ),
         "recovery_effect": recovery_effect,
         "first_visible_issue_round": first_visible_issue_round,
@@ -384,27 +386,18 @@ def select_recovered_candidates(
     recovery_effect_distribution = Counter(
         row["recovery_effect"] for row in rows
     )
-    witness_rows = [
-        row for row in rows if row["latest_batch_witness_generated"]
-    ]
     stats = {
-        "latest_batch_witness_generated": len(witness_rows),
-        "latest_batch_witness_conflicts_detected": sum(
-            row["observable_issue_family"] == "inter_report_conflict"
-            for row in witness_rows
-        ),
-        "latest_batch_witness_recovered": sum(
-            row["execution_outcome"] == "recovered"
-            for row in witness_rows
-        ),
-        "latest_batch_witness_probe_distribution": dict(sorted(Counter(
-            row["latest_batch_witness_probe_status"] for row in rows
-            if row["latest_batch_witness_probe_status"] not in (None, "not_applicable")
+        "historical_anchor_status_distribution": dict(sorted(Counter(
+            row["historical_anchor_status"] for row in rows
+            if row["historical_anchor_status"] not in (None, "not_applicable")
         ).items())),
-        "latest_batch_witness_ineligible_reasons": dict(sorted(Counter(
-            row["latest_batch_witness_skip_reason"] for row in rows
-            if row["latest_batch_witness_skip_reason"]
+        "historical_anchor_reason_distribution": dict(sorted(Counter(
+            row["historical_anchor_reason"] for row in rows
+            if row["historical_anchor_reason"]
         ).items())),
+        "cross_round_report_conflicts_detected": sum(
+            row["history_conflicts_detected"] for row in rows
+        ),
         "candidates_simulated": len(rows),
         "candidates_execution_recovered": sum(
             row["execution_outcome"] == "recovered" for row in rows
