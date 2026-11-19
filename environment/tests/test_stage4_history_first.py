@@ -28,6 +28,8 @@ def _scene():
             "values": {"case_id": "Case-001",
                        "entity_final": "Lakehurst District"},
             "fact_refs": ["parent_src:F001"],
+            "observation_id": "parent_src.OBS001",
+            "evidence_origin_id": "synthetic:parent001",
         }],
     }
     source_b = {
@@ -39,10 +41,14 @@ def _scene():
             "values": {"entity_final": "Lakehurst District",
                        "observation_year": 2025},
             "fact_refs": ["lookup_src:F001"],
+            "observation_id": "lookup_src.OBS001",
+            "evidence_origin_id": "synthetic:lookup001",
         }, {
             "values": {"entity_final": "Dunhaven District",
                        "observation_year": 2024},
             "fact_refs": ["lookup_src:F002"],
+            "observation_id": "lookup_src.OBS002",
+            "evidence_origin_id": "synthetic:lookup002",
         }],
     }
     parent = {
@@ -60,7 +66,7 @@ def _scene():
     child = {
         "task_id": "child", "source_ids": ["lookup_src"],
         "depends_on": ["parent"], "external_inputs": ["parent_project"],
-        "input_schema": {"parent_project": ["entity_final"]},
+        "input_schema": {"input_0": ["entity_final"]},
         "operator_chain": [
             {"id": "child_lookup", "op": "lookup_by_key",
              "inputs": ["parent_project"], "source_id": "lookup_src",
