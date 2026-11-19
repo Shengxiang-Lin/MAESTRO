@@ -508,6 +508,45 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertIn("2", claim_tokens("There are 2 observations.")
                       - claim_tokens(actual))
 
+    def test_report_guard_accepts_only_exact_delivered_factref_count(self):
+        from environment.untrusted_orchestration.reporting.report_validation import (
+            claim_tokens, grounded_reference_count_text,
+        )
+        rows = [{
+            "values": {"answer": {
+                "conclusion": "first",
+                "first_count": 87,
+                "second_count": 55,
+            }},
+            "source_fact_refs": [f"real:F{i:03d}" for i in range(1, 15)],
+        }]
+        available = json.dumps(rows, ensure_ascii=False)
+        summary = (
+            "The returned conclusion was first, with counts 87 and 55, "
+            "supported by 14 fact references."
+        )
+        grounded = grounded_reference_count_text(summary, rows)
+        self.assertNotIn("14", claim_tokens(grounded) - claim_tokens(available))
+        self.assertIn(
+            "15", claim_tokens(
+                grounded_reference_count_text(
+                    "The result cited 15 fact references.", rows,
+                )
+            ) - claim_tokens(available),
+        )
+        self.assertIn(
+            "14", claim_tokens(
+                grounded_reference_count_text(
+                    "The result contained 14 observations.", rows,
+                )
+            ) - claim_tokens(available),
+        )
+        # Duplicated citations are not counted twice.
+        rows[0]["source_fact_refs"].append("real:F014")
+        self.assertNotIn("14", claim_tokens(
+            grounded_reference_count_text(summary, rows)
+        ) - claim_tokens(available))
+
     def test_prior_observation_is_executed_in_an_earlier_wave(self):
         from copy import deepcopy
         from environment.untrusted_orchestration.state_machine import (
@@ -583,6 +622,16 @@ class IntraReportFaultTests(unittest.TestCase):
                                        instruction=patch["instruction"],
                                        model_alias="model_1")
         state.set_public_report(patch["task_id"], earlier, round_number=1)
+        from environment.untrusted_orchestration.scenario.prior_observation import (
+            latest_scope_statement,
+        )
+        last = state.public_reports["target"]
+        last["trace_summary"] += " " + latest_scope_statement(patch)
+        state.set_public_report("target", last, round_number=2)
+        self.assertEqual(len(
+            state._public_result_rows(state.public_reports[patch["task_id"]])
+        ), 2)
+        self.assertNotIn("Case-011", patch["instruction"])
         self.assertEqual(len(comparison_rows(state)), 1)
         state.cross_source_checks_enabled = True
         state.scheduling_state()
