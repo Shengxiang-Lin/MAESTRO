@@ -17,7 +17,8 @@ _REQUIRED = {
         "workers", "mode", "report_max_revisions", "main_max_revisions",
         "sub_model", "model_alias", "overwrite", "no_progress",
         "atomic_fault_kinds", "max_candidates_per_round",
-        "max_distractors_per_fault", "max_selected_per_round",
+        "max_distractors_per_fault", "latest_cross_report_pairs",
+        "max_selected_per_round",
         "selection_strategy", "max_diagnostics_per_scene",
         "max_language_attempts_per_round",
     },
@@ -80,6 +81,9 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         ),
         "max_distractors_per_fault": run.get(
             "max_distractors_per_fault", 2
+        ),
+        "latest_cross_report_pairs": run.get(
+            "latest_cross_report_pairs", False
         ),
         "max_selected_per_round": run.get(
             "max_selected_per_round", 1
@@ -160,7 +164,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         type(config["max_scenes"]) is not int or config["max_scenes"] < 1
     ):
         raise ValueError("untrusted_invalid_max_scenes")
-    for key in ("overwrite", "no_progress"):
+    for key in ("overwrite", "no_progress", "latest_cross_report_pairs"):
         if type(config[key]) is not bool:
             raise ValueError("untrusted_invalid_" + key)
     if config["mode"] not in {"llm", "template"}:
