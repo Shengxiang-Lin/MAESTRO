@@ -76,13 +76,13 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         "scenario_mode": "event_driven",
         "candidate_strategy": "enumerate",
         "max_candidates_per_round": run.get(
-            "max_candidates_per_round", 24
+            "max_candidates_per_round", None
         ),
         "max_distractors_per_fault": run.get(
             "max_distractors_per_fault", 2
         ),
         "max_selected_per_round": run.get(
-            "max_selected_per_round", 3
+            "max_selected_per_round", None
         ),
         "selection_strategy": run.get(
             "selection_strategy", "causal_rank"
@@ -91,7 +91,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             "max_diagnostics_per_scene", 0
         ),
         "max_language_attempts_per_round": run.get(
-            "max_language_attempts_per_round", 4
+            "max_language_attempts_per_round", None
         ),
         "atomic_fault_kinds": run.get("atomic_fault_kinds", [
             "no_result", "incomplete_retrieval", "done_but_incomplete",
@@ -182,9 +182,13 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         ("max_language_attempts_per_round", 1, 8),
     ):
         value = config[field]
-        if type(value) is not int or not minimum <= value <= maximum:
+        if value is not None and (
+            type(value) is not int or not minimum <= value <= maximum
+        ):
             raise ValueError("untrusted_invalid_" + field)
-    if (config["max_language_attempts_per_round"] <
+    if (config["max_language_attempts_per_round"] is not None
+            and config["max_selected_per_round"] is not None
+            and config["max_language_attempts_per_round"] <
             config["max_selected_per_round"]):
         raise ValueError("untrusted_language_budget_smaller_than_selection")
     kinds = config["atomic_fault_kinds"]
