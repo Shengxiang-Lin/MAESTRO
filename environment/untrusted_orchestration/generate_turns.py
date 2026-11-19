@@ -173,6 +173,93 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
     }
 
 
+
+def _resume_v10_audit_fix(
+    output: Path, previous: dict, expected: dict,
+    planned: list[dict],
+) -> dict:
+    """Explicit compatibility migration for the interrupted v10 4A run.
+
+    Only simulator orchestration and the missing causal-audit import may
+    differ. Validate exact inputs/settings/candidate ledger and every
+    existing journal before replacing the signed manifest. Delayed
+    journals are ALWAYS discarded and recomputed after the fix.
+    """
+    if previous.get("version") != expected.get("version"):
+        raise ValueError("stage4_resume_previous_engine_version_mismatch")
+    if (previous.get("input_sha256") != expected.get("input_sha256")
+            or previous.get("settings") != expected.get("settings")):
+        raise ValueError("stage4_resume_input_or_generation_settings_changed")
+    old_hashes = previous.get("source_code_sha256") or {}
+    new_hashes = expected.get("source_code_sha256") or {}
+    if set(old_hashes) != set(new_hashes):
+        raise ValueError("stage4_resume_code_manifest_shape_changed")
+    modified = sorted(key for key in old_hashes
+                      if old_hashes[key] != new_hashes[key])
+    allowed = {"trajectory_builder.py", "generate_turns.py", "config.py"}
+    if not modified or not set(modified) <= allowed:
+        raise ValueError("stage4_resume_unsupported_code_changes:" +
+                         ",".join(modified))
+    # Do not mix incompatible 4B/4C outputs with a new simulation
+    # version. In the reported v10 crash, both phases had not started.
+    for name in ("stage4b/journal", "journal"):
+        if any((output / name).glob("*.json")):
+            raise ValueError("stage4_resume_language_journals_already_present")
+    old_rounds = _jsonl(output / "round_index.jsonl")
+    if len(old_rounds) != len(planned):
+        raise ValueError("stage4_resume_candidate_count_changed")
+    for plan, old in zip(planned, old_rounds):
+        if (old.get("round_sample_id") != plan["sample_id"]
+                or old.get("question_id") != plan["task_id"]
+                or old.get("main_decision_round") != plan["branch_round"]
+                or old.get("scenario_blueprint") !=
+                    plan["scenario_plan"]["blueprint"]
+                or old.get("atomic_fault_kinds") != [
+                    item["kind"]
+                    for item in plan["scenario_plan"]["fault_atoms"]
+                ]):
+            raise ValueError("stage4_resume_candidate_identity_changed")
+    journal = output / "stage4a" / "journal"
+    stale, checked = [], 0
+    for file in sorted(journal.glob("*.json")):
+        if not file.stem.isdigit() or int(file.stem) >= len(planned):
+            raise ValueError("stage4_resume_unexpected_journal:" + file.name)
+        plan = planned[int(file.stem)]
+        row = json.loads(file.read_text(encoding="utf-8"))
+        if (row.get("task_id") != plan["task_id"]
+                or row.get("round_sample_id") != plan["sample_id"]
+                or row.get("fork_round") != plan["branch_round"]):
+            raise ValueError("stage4_resume_journal_identity_mismatch")
+        audit = row.get("private_audit") or {}
+        event = audit.get("event_scenario") or {}
+        if audit and (
+            event.get("scenario_id") != plan["sample_id"]
+            or event.get("blueprint") != plan["scenario_plan"]["blueprint"]
+        ):
+            raise ValueError("stage4_resume_journal_scenario_mismatch")
+        if plan["scenario_plan"]["blueprint"] == (
+            "delayed_consumed_error_recovery"
+        ):
+            stale.append(file)
+        else:
+            checked += 1
+    # All validation completed. Preserve original signed provenance.
+    _atomic_json(output / "manifest.before_v10_audit_fix.json", previous)
+    report = {
+        "operation": "explicit_v10_4a_audit_fix_resume",
+        "prior_modified_code_paths": modified,
+        "input_and_settings_match": True,
+        "candidate_ledger_matches": True,
+        "reused_nondelayed_journals": checked,
+        "discarded_delayed_journals": len(stale),
+    }
+    _atomic_json(output / "private" / "v10_resume_audit.json", report)
+    for file in stale:
+        file.unlink()
+    _atomic_json(output / "manifest.json", expected)
+    return report
+
+
 def _plan_branches(
     scenes: list[dict], base: dict[str, dict],
     *, branches_per_scene: int | None = None, seed: int,
@@ -1037,6 +1124,7 @@ def generate_turns(
     clean_episodes_path: Path | None = None,
     main_mode: str | None = None,
     report_mode: str | None = None,
+    resume_after_audit_fix: bool = False,
 ) -> dict:
     paths = tuple(map(Path, (scenes_path, reports_path)))
     if clean_episodes_path is not None:
@@ -1046,6 +1134,8 @@ def generate_turns(
         raise FileNotFoundError("stage4_requires_stage1_scenes_and_stage2_reports")
     if type(workers) is not int or not 1 <= workers <= 64:
         raise ValueError("untrusted_workers_invalid")
+    if type(resume_after_audit_fix) is not bool or (resume_after_audit_fix and overwrite):
+        raise ValueError("stage4_resume_after_fix_must_not_overwrite")
     if branches_per_scene is not None and (
         type(branches_per_scene) is not int or branches_per_scene < 1
     ):
@@ -1208,8 +1298,14 @@ def generate_turns(
     output.mkdir(parents=True, exist_ok=True)
     manifest = output / "manifest.json"
     if manifest.is_file():
-        if json.loads(manifest.read_text(encoding="utf-8")) != signature:
-            raise ValueError("untrusted_resume_input_or_code_signature_mismatch")
+        previous = json.loads(manifest.read_text(encoding="utf-8"))
+        if previous != signature:
+            if not resume_after_audit_fix:
+                raise ValueError(
+                    "untrusted_resume_input_or_code_signature_mismatch"
+                    " (pass --resume-after-audit-fix only for interrupted v10 4A)"
+                )
+            _resume_v10_audit_fix(output, previous, signature, planned)
     elif any(output.iterdir()):
         raise ValueError("untrusted_existing_output_without_manifest")
     else:
