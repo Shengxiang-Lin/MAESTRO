@@ -9,6 +9,7 @@ remain constant in scope/tools but can reuse the newly authored public context.
 from __future__ import annotations
 
 from copy import deepcopy
+from hashlib import sha256
 import json
 from typing import Callable
 
@@ -95,7 +96,8 @@ def _refresh_visible_claim_supervision(
 def author_branch_reports(scene: dict, stage2_rows: list[dict],
                           episode: dict, audit: dict, *,
                           author=None, critic=None, max_revisions: int = 2,
-                          on_report=None) -> tuple[dict, dict]:
+                          on_report=None, resume_reports=None,
+                          on_report_checkpoint=None) -> tuple[dict, dict]:
     """4B authors *only* actual previously simulated Attempt returns.
 
     The original trusted prefix reports are reused verbatim. 4B does not
@@ -120,7 +122,10 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
     waves = scene["macro_graph"]["reference_waves"]
     fork = audit["branch_round"]
     review_rows = []
-    for scheduled in audit["subagent_report_reviews"]:
+    saved_reports = list(resume_reports or [])
+    if len(saved_reports) > len(audit["subagent_report_reviews"]):
+        raise ValueError("stage4b_checkpoint_exceeds_report_count")
+    for index, scheduled in enumerate(audit["subagent_report_reviews"]):
         tid, version, round_number = (
             scheduled["task_id"], scheduled["attempt_version"],
             scheduled["round"],
@@ -137,12 +142,35 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
             v for v in versions[tid] if v["version"] == version
         )
         actual = _attempt_from_audit(tasks[tid], record)
-        report, status = naturalize_report(
-            tasks[tid], actual,
-            instruction=old["task_instruction"], model_alias=old["model"],
-            reviewed=reviewed.get(tid), author=author, critic=critic,
-            max_revisions=max_revisions,
-        )
+        if index < len(saved_reports):
+            cached = saved_reports[index]
+            if (cached.get("ordinal") != index + 1
+                    or cached.get("task_id") != tid
+                    or cached.get("attempt_version") != version
+                    or cached.get("round") != round_number
+                    or cached.get("task_instruction") != old["task_instruction"]
+                    or cached.get("model") != old["model"]):
+                raise ValueError("stage4b_checkpoint_report_alignment_changed")
+            report = deepcopy(cached["report"])
+            status = deepcopy(cached["authoring"])
+        else:
+            report, status = naturalize_report(
+                tasks[tid], actual,
+                instruction=old["task_instruction"], model_alias=old["model"],
+                reviewed=reviewed.get(tid), author=author, critic=critic,
+                max_revisions=max_revisions,
+            )
+            if on_report_checkpoint is not None:
+                on_report_checkpoint({
+                    "ordinal": index + 1,
+                    "task_id": tid,
+                    "attempt_version": version,
+                    "round": round_number,
+                    "task_instruction": old["task_instruction"],
+                    "model": old["model"],
+                    "report": deepcopy(report),
+                    "authoring": deepcopy(status),
+                })
         report["subtask_index"] = slot
         step["result"]["subtask_results"][slot] = _as_public(
             sanitize_public_report(report)
@@ -315,7 +343,8 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                        max_rounds: int = 16,
                        sub_model: str = "qwen3-8b",
                        model_alias: str = "model_1",
-                       on_main=None) -> tuple[dict, list[dict], dict]:
+                       on_main=None, resume_actions=None,
+                       on_main_checkpoint=None) -> tuple[dict, list[dict], dict]:
     """4C writes all Main turns after 4B has completed, from public history."""
     episode, audit = deepcopy(episode), deepcopy(audit)
     # Trusted Stage-3 prefix reports may still contain synthetic Macro /
@@ -342,6 +371,14 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
     tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
     catalog = source_catalog(scene)
     entries, latest, turns, reviews = [], {}, [], []
+    saved_actions = list(resume_actions or [])
+    expected_actions = sum(
+        step["attempt"] >= fork and step["action"] in {
+            "delegate_task", "complete",
+        } for step in episode["trajectory"]
+    )
+    if len(saved_actions) > expected_actions:
+        raise ValueError("stage4c_checkpoint_exceeds_decision_count")
     failure = None
     for step in episode["trajectory"]:
         round_number = step["attempt"]
@@ -421,7 +458,20 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                         "pending work. Do not assert that all prerequisites are "
                         "verified or retell older event-validation steps."
                     )
-                action, status = author_delegate_action(
+                cached = (saved_actions[len(reviews)]
+                          if len(reviews) < len(saved_actions) else None)
+                if cached is not None:
+                    if (cached.get("ordinal") != len(reviews) + 1
+                            or cached.get("round") != round_number
+                            or cached.get("kind") != "delegate"
+                            or cached.get("prompt_sha256") != sha256(
+                                prompt.encode("utf-8")
+                            ).hexdigest()):
+                        raise ValueError("stage4c_checkpoint_dispatch_drift")
+                    action = deepcopy(cached["action"])
+                    status = deepcopy(cached["authoring"])
+                else:
+                    action, status = author_delegate_action(
                     assignments=assignments, prompt=prompt,
                     author=author, critic=critic,
                     max_revisions=max_revisions,
@@ -443,7 +493,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                             )
                         )
                     ) if author is not None else None,
-                )
+                    )
                 # The final Main instruction/context must be exactly the
                 # field-and-source-scoped 4A contract rebuilt against FINAL
                 # 4B evidence, even if a fluent LLM drafted an unrelated
@@ -456,15 +506,40 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                     )
             else:
                 expected = _completion_from_visible(step, latest, scene)
-                action, status = author_complete_action(
-                    template=expected, prompt=prompt,
-                    delivered={
-                        k: v for k, v in latest.items()
-                        if isinstance(v.get("finish_result"), dict)
-                    },
-                    author=author, critic=critic,
-                    max_revisions=max_revisions,
-                )
+                cached = (saved_actions[len(reviews)]
+                          if len(reviews) < len(saved_actions) else None)
+                if cached is not None:
+                    if (cached.get("ordinal") != len(reviews) + 1
+                            or cached.get("round") != round_number
+                            or cached.get("kind") != "complete"
+                            or cached.get("prompt_sha256") != sha256(
+                                prompt.encode("utf-8")
+                            ).hexdigest()):
+                        raise ValueError("stage4c_checkpoint_completion_drift")
+                    action = deepcopy(cached["action"])
+                    status = deepcopy(cached["authoring"])
+                else:
+                    action, status = author_complete_action(
+                        template=expected, prompt=prompt,
+                        delivered={
+                            k: v for k, v in latest.items()
+                            if isinstance(v.get("finish_result"), dict)
+                        },
+                        author=author, critic=critic,
+                        max_revisions=max_revisions,
+                    )
+            if cached is None and on_main_checkpoint is not None:
+                on_main_checkpoint({
+                    "ordinal": len(reviews) + 1,
+                    "round": round_number,
+                    "kind": ("delegate" if step["action"] == "delegate_task"
+                             else "complete"),
+                    "prompt_sha256": sha256(
+                        prompt.encode("utf-8")
+                    ).hexdigest(),
+                    "action": deepcopy(action),
+                    "authoring": deepcopy(status),
+                })
             reviews.append({
                 "round": round_number,
                 "kind": ("delegate" if step["action"] == "delegate_task"
