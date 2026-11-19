@@ -68,8 +68,8 @@ class CanonicalStagePathsTests(TestCase):
         # Avoid coupling this handoff test to an outdated Stage-3 quota.
         self.assertGreaterEqual(main["max_scenes"], stage4["max_scenes"])
         self.assertEqual(stage4["max_scenes"], 10)
-        self.assertEqual(stage4["branches_per_scene"], 3)
-        self.assertEqual(stage4["round_sampling_strategy"], "evidence_aware")
+        self.assertIsNone(stage4["branches_per_scene"])
+        self.assertEqual(stage4["round_sampling_strategy"], "chronological")
         self.assertEqual(stage4["max_post_fork_rounds"], 8)
         self.assertTrue(main["freeze_dispatch"])
         self.assertNotIn("max_fault_atoms", stage4)
