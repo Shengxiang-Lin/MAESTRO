@@ -507,10 +507,9 @@ def build_branch(
         report_revisions=report_max_revisions, model_alias=model_alias,
         on_report_review=on_report_review,
     )
-    # Stage 4 changes ONLY the latest delivered feedback. An optional
-    # historical comparison claim must be a record returned by an actual
-    # earlier task, not a new synthetic verifier or an added Main dispatch.
-    # Preserve the same augmented prior evidence for a paired clean variant.
+    # All comparisons use actual previously delivered evidence. An early
+    # fault may propagate before a later, Main-delegated clean witness;
+    # preserve the independently replayed clean pair only in private audit.
     history_anchor = {"status": "not_applicable", "reason": "not_targeted"}
     # A source-legal, earlier *public* keyed input was chosen before the
     # atomic fault. Preserve that real prior WorkProduct and only make its
