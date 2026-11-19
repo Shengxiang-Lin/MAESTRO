@@ -1,0 +1,161 @@
+"""Public evidence, truthful partial reporting, and visible recovery checks."""
+from __future__ import annotations
+
+from copy import deepcopy
+import unittest
+
+from environment.generate_question.execution.program_ir import Relation
+from environment.untrusted_orchestration.reporting.public_work import (
+    observed_work_checks, public_work_clauses, visible_work_discrepancy,
+)
+from environment.untrusted_orchestration.reporting.report_author import (
+    naturalize_report,
+)
+from environment.untrusted_orchestration.runtime.faults import Fault, FaultUnsupported
+from environment.untrusted_orchestration.state_machine import (
+    ExecutionState, deterministic_report,
+)
+from environment.tests.test_stage4_history_first import _scene
+from environment.tests.test_untrusted_orchestration import sample
+
+
+def relation(values, refs=("source:F1",)):
+    return Relation(tuple(values), ({
+        "values": dict(values), "support": tuple(refs),
+    },))
+
+
+class PublicWorkEvidenceTests(unittest.TestCase):
+    def test_arithmetic_is_recomputable_from_public_report_without_gold(self):
+        src = relation({"a": 120, "b": 75})
+        wrong = relation({"difference": 46})
+        step = {
+            "op": "derive_arithmetic", "left_field": "a",
+            "right_field": "b", "output_field": "difference",
+            "operation": "absolute_difference", "round_digits": 0,
+        }
+        checks = observed_work_checks(step, [src], wrong)
+        self.assertEqual(len(checks), 1)
+        clause = public_work_clauses([{"public_work_checks": checks}])[0]
+        self.assertIn("120", clause)
+        self.assertIn("75", clause)
+        self.assertIn("46", clause)
+        self.assertIn("rather than 45", visible_work_discrepancy(clause))
+        clean = relation({"difference": 45})
+        clean_clause = public_work_clauses([{
+            "public_work_checks": observed_work_checks(step, [src], clean)
+        }])[0]
+        self.assertIsNone(visible_work_discrepancy(clean_clause))
+        self.assertIsNone(visible_work_discrepancy(
+            "An unexplained 46 was returned; source values are not known."
+        ))
+
+    def test_wrong_entity_join_has_real_input_key_evidence(self):
+        left = relation({"record_id": "B02", "name": "Beta"}, ("A:F2",))
+        right = relation({"record_id": "A01", "revenue": 100}, ("B:F1",))
+        combined = Relation(
+            ("record_id", "name", "revenue"), ({
+                "values": {
+                    "record_id": "B02", "name": "Beta", "revenue": 100,
+                },
+                "support": ("A:F2", "B:F1"),
+            },),
+        )
+        node = {
+            "op": "join", "left_on": "record_id",
+            "right_on": "record_id",
+        }
+        clauses = public_work_clauses([{"public_work_checks":
+            observed_work_checks(node, [left, right], combined)
+        }])
+        self.assertEqual(len(clauses), 1)
+        self.assertIn("B02", visible_work_discrepancy(clauses[0]))
+        matched_right = relation(
+            {"record_id": "B02", "revenue": 100}, ("B:F2",)
+        )
+        matched = Relation(
+            ("record_id", "name", "revenue"), ({
+                "values": {"record_id": "B02", "name": "Beta", "revenue": 100},
+                "support": ("A:F2", "B:F2"),
+            },),
+        )
+        clean_clause = public_work_clauses([{"public_work_checks":
+            observed_work_checks(node, [left, matched_right], matched)
+        }])[0]
+        self.assertIsNone(visible_work_discrepancy(clean_clause))
+
+    def test_completed_attempt_can_admit_failed_extraction_in_natural_text(self):
+        scene, parent, child = _scene()
+        state = ExecutionState(scene, {})
+        parent_attempt = state.register("parent")
+        state.set_public_report("parent", deterministic_report(
+            parent, parent_attempt,
+            instruction="Find the named place.",
+            model_alias="model_1",
+        ))
+        attempted = state.register(
+            "child",
+            fault=Fault(
+                "child", "partial", atom_kind="done_but_incomplete",
+            ),
+        )
+        report, status = naturalize_report(
+            child, attempted,
+            instruction="Look up the place and collect the available evidence.",
+            model_alias="model_1", reviewed=None,
+        )
+        self.assertEqual(report["finish_result"]["status"], "done")
+        self.assertIn("could not extract",
+                      report["finish_result"]["summary"])
+        self.assertNotIn("observation year",
+                         report["task_instruction"].casefold())
+        state.set_public_report("child", report)
+        self.assertIn("unfinished extraction", state.visible_discrepancy("child"))
+        self.assertEqual(status["status"], "accepted")
+
+    def test_real_wrong_entity_binding_stays_an_executable_fault(self):
+        # The public association witness must come from actual attempted
+        # Join evidence, not a synthetic wrong-ID label.
+        found = False
+        for i in range(10):
+            scene, rows, _ = sample(i)
+            state = ExecutionState(scene, {})
+            for wave in scene["macro_graph"]["reference_waves"]:
+                for tid in wave:
+                    task = state.tasks[tid]
+                    fault = (Fault(tid, "wrong",
+                                   atom_kind="wrong_entity_binding")
+                             if any(step["op"] == "join"
+                                    for step in task["operator_chain"])
+                             else None)
+                    try:
+                        attempt = state.register(tid, fault=fault)
+                    except FaultUnsupported:
+                        attempt = state.register(tid)
+                        fault = None
+                    report = deterministic_report(
+                        task, attempt,
+                        instruction="Inspect the permitted evidence.",
+                        model_alias="model_1",
+                    )
+                    state.set_public_report(tid, report)
+                    if fault is not None:
+                        found = True
+                        self.assertIn(
+                            "For the record association",
+                            report["finish_result"]["summary"],
+                        )
+                        self.assertIn(
+                            "identifiers disagree",
+                            state.visible_discrepancy(tid),
+                        )
+                        break
+                if found:
+                    break
+            if found:
+                break
+        self.assertTrue(found, "No genuine wrong join available")
+
+
+if __name__ == "__main__":
+    unittest.main()
