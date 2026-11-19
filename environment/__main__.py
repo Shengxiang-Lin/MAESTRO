@@ -96,10 +96,6 @@ def parser() -> argparse.ArgumentParser:
     )
     untrusted.add_argument("--mode", choices=("template", "llm"))
     untrusted.add_argument("--overwrite", action="store_true")
-    untrusted.add_argument(
-        "--resume-after-audit-fix", action="store_true",
-        help="Explicitly validate and reuse non-delayed 4A journals from the interrupted v10 run",
-    )
     untrusted.add_argument("--no-progress", action="store_true")
     return root
 
@@ -163,8 +159,6 @@ def main(argv: list[str] | None = None) -> int:
                 overrides[option] = value
         if cli.overwrite:
             overrides["overwrite"] = True
-        if cli.resume_after_audit_fix:
-            overrides["resume_after_audit_fix"] = True
         if cli.no_progress:
             overrides["no_progress"] = True
         summary = generate_untrusted_from_config(cli.config, **overrides)
