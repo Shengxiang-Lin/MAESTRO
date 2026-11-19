@@ -18,6 +18,8 @@ def plan(index: int, *, delayed: bool = False) -> dict:
         "task_id": "q",
         "branch_round": index + 2,
         "sample_id": f"q-R{index + 2}-candidate-001",
+        "incoming_task_ids": ["parent"],
+        "candidate_variant_index": 0,
         "scenario_plan": {
             "scenario_id": f"q-R{index + 2}-candidate-001",
             "blueprint": ("delayed_consumed_error_recovery"
@@ -27,6 +29,7 @@ def plan(index: int, *, delayed: bool = False) -> dict:
                 "task_id": "parent",
                 "origin_round": index + 1,
             }],
+            "evidence_events": [],
         },
     }
 
@@ -51,6 +54,8 @@ def make_files(root: Path, plans: list[dict]) -> None:
         "question_id": p["task_id"],
         "main_decision_round": p["branch_round"],
         "scenario_blueprint": p["scenario_plan"]["blueprint"],
+        "candidate_variant_index": p["candidate_variant_index"],
+        "latest_subagent_task_ids": p["incoming_task_ids"],
         "atomic_fault_kinds": [
             a["kind"] for a in p["scenario_plan"]["fault_atoms"]
         ],
