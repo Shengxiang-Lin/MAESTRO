@@ -11,7 +11,7 @@ from copy import deepcopy
 from hashlib import sha256
 import json
 
-from ..faults import relation_rows, run_attempt
+from environment.untrusted_orchestration.runtime.faults import relation_rows, run_attempt
 
 MAX_SURVEY_ROWS = 24
 
