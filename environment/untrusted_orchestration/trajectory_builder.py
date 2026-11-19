@@ -30,7 +30,7 @@ from .event_scheduler import EventScheduler
 from .state_machine import (
     ExecutionState, deterministic_report, public_history_item,
 )
-from .report_author import naturalize_report
+from .reporting.report_author import naturalize_report
 from .evidence_planning import schedule_evidence_requests
 from .scenario.history_conflicts import expose_executed_prior_record
 from .scenario.prior_observation import (
