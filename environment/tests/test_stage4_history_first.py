@@ -736,6 +736,14 @@ class HistoryFirstHandoffTests(unittest.TestCase):
             _replay_observed_prefix,
         )
         scene, parent, child = _scene()
+        # A full Main orchestration requires the public source catalog
+        # to match the modified private source contracts in this fixture.
+        scene["public"]["available_source_descriptions"] = [{
+            "source_id": sid,
+            "title": "Permitted simulated evidence: " + sid,
+            "modality_hint": "table",
+            "access_mode": source["access_policy"]["mode"],
+        } for sid, source in scene["world"]["sources"].items()]
         source = scene["world"]["sources"]["parent_src"]
         source["observations"].append({
             "values": {"case_id": "Case-002", "entity_final": "Dunhaven District"},
