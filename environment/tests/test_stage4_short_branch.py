@@ -187,10 +187,10 @@ class StratifiedForkTests(unittest.TestCase):
         self.assertIsNone(rows[1]["recovery_rank"])
         self.assertEqual(stats["diagnostics_selected_for_language_review"], 1)
 
-    def test_canonical_pilot_enables_short_stratified_replay(self):
+    def test_all_feedback_rounds_preserve_short_replay_budget(self):
         cfg = load_config()
-        self.assertEqual(cfg["round_sampling_strategy"], "evidence_aware")
-        self.assertEqual(cfg["branches_per_scene"], 3)
+        self.assertEqual(cfg["round_sampling_strategy"], "chronological")
+        self.assertIsNone(cfg["branches_per_scene"])
         self.assertEqual(cfg["max_post_fork_rounds"], 8)
         self.assertEqual(cfg["max_diagnostics_per_scene"], 1)
 
