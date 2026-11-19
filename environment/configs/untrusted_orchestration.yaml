@@ -21,6 +21,7 @@ generation:
   # Enumerate executable one-atom variants with provenance-grounded distractors.
   max_candidates_per_round: 12
   max_distractors_per_fault: 1
+  latest_cross_report_pairs: true  # newest returned batch only; original Stage1-3 untouched
   max_selected_per_round: 1
   selection_strategy: stratified
   max_diagnostics_per_scene: 1  # reviewed evidence-only negatives; never positive SFT
