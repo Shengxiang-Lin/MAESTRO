@@ -28,10 +28,12 @@ uses the existing field/dependency-aware state machine, and is capped by
 
 `selection_strategy: stratified` balances different causally replayed recovery
 behaviors across rounds, but successful cross-feedback conflict recovery is
-prioritized ahead of routine missing/partial repairs. By default, up to **3**
-behaviorally distinct recovered candidates are retained per feedback round,
-with a **4**-attempt per-round language budget to allow one replacement after
-review rejection. The selection signature distinguishes conflicts with
+prioritized ahead of routine missing/partial repairs. Production defaults now cover **every accepted feedback round** and
+all executable one-atom candidate faults. The default `null` values for
+`branches_per_scene`, `max_candidates_per_round`,
+`max_selected_per_round`, and `max_language_attempts_per_round` remove
+sampling and review caps; explicit integer limits remain available for pilots.
+Behaviorally equivalent recoveries are still deduplicated. The selection signature distinguishes conflicts with
 different *actually observed* historical report rounds. It never picks a
 non-recovered candidate as positive SFT. `max_diagnostics_per_scene` additionally chooses a
 small number of genuinely failed executions for 4B/4C language review;
@@ -384,3 +386,23 @@ The root package keeps only primary CLI/pipeline entrypoints
 
 Old top-level file paths are deleted, not maintained as compatibility wrappers.
 Calls from the training pipeline and tests use the new canonical module paths.
+
+### Later same-source repeated observations
+
+In addition to faulting an existing latest-batch Sub-Agent (method A), a
+scenario can now add a **real Main-delegated recheck** in a later feedback
+batch (method B). The recheck executes the same earlier authorized source
+and upstream inputs, with the additional task explicitly recorded in the
+Main assignment as well as the returned feedback. It is only generated
+when the prior public report states a source-backed scalar and the injected
+single fault yields a different value **for the same subject and field**.
+A shared source can create a genuine **report disagreement** but does not
+constitute independent corroboration. The original Stage-3 reference is
+retained, and the scenario-local augmented dispatch is separately audited
+under `same_source_recheck_plan`.
+
+With unlimited per-round candidate selection, Stage 4 can review more
+trajectories; on large runs, use `--mode template` to audit coverage before
+running the LLM mode. The replay budget (`max_post_fork_rounds`) and
+parallel execution safety limit (`max_parallel_tasks`) are separate from
+candidate sampling and remain explicit.
