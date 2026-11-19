@@ -832,6 +832,14 @@ class ExecutionState:
 
         for conflict in latest_history_disagreements(self):
             target = conflict["latest_task"]
+            old = conflict["older_task"]
+            # An existing independent-source dispute is already handled by
+            # its bounded recheck protocol. Do not create a second same-pair
+            # history event while waiting for that recheck.
+            if any(set(event.get("compared_parent_tasks", []))
+                   == {old, target}
+                   for event in self.detected_conflicts):
+                continue
             current = self.current.get(target)
             if current is None or current.status != "done":
                 continue
