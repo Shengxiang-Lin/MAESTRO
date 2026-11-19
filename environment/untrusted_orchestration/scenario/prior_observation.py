@@ -156,13 +156,17 @@ def propose_prior_observation(state, target: str, *,
     # delivered scalar whose supporting FactRef includes that very source
     # observation. This prevents joining unrelated same-valued facts.
     source_claims = []
+    restricted_sources = 0
+    browse_sources = 0
     for sid in task["source_ids"]:
         source = world[sid]
         # A keyed-only store must not be swept with an offline scan. Its
         # lookup key requires an executed, previously delivered parent;
         # the history-first handoff route handles that causal case.
         if source.get("access_policy", {}).get("mode", "browse") != "browse":
+            restricted_sources += 1
             continue
+        browse_sources += 1
         observations = source.get("observations", [])
         if not observations or len(observations) > MAX_SURVEY_ROWS:
             continue
@@ -189,7 +193,11 @@ def propose_prior_observation(state, target: str, *,
                             sid, field, source_field, scope, clean_row,
                         ))
     if not source_claims:
-        return skip("no_provenance_bound_history_fact")
+        return skip(
+            "prior_survey_requires_preexisting_keyed_handoff"
+            if restricted_sources and not browse_sources
+            else "no_provenance_bound_history_fact"
+        )
 
     # Only AFTER identifying a genuine historical fact do we ask whether
     # the latest delivered report disagrees about the same final field.
