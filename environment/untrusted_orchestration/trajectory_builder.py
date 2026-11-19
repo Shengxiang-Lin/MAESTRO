@@ -296,18 +296,24 @@ def _clean_prefix(
             return {
                 str(value) for record in records
                 for value in record["values"].values()
-                if isinstance(value, str) and len(value.strip()) >= 5
+                if (type(value) in {str, int, float}
+                    and len(str(value).strip()) >= 4)
             }
 
-        clean_only = set()
-        for slot, tid in enumerate(waves[origin]):
-            if tid not in targets:
-                continue
-            clean_only.update(
-                visible_values(actions[origin]["result"]["subtask_results"][slot])
-                - visible_values(episode_prefix[origin]["result"]["subtask_results"][slot])
-            )
         for index in range(origin + 1, branch_round - 1):
+            # The originally clean downstream reports can themselves
+            # contain fields lost or changed in the poisoned replay.
+            clean_only = set()
+            for earlier in range(origin, index):
+                for slot, tid in enumerate(waves[earlier]):
+                    if tid not in targets and tid not in affected:
+                        continue
+                    clean_only.update(
+                        visible_values(actions[earlier]["result"][
+                            "subtask_results"][slot])
+                        - visible_values(episode_prefix[earlier]["result"][
+                            "subtask_results"][slot])
+                    )
             action = episode_prefix[index]
             plan_text = json.dumps({
                 "reasoning": action.get("reasoning"),
