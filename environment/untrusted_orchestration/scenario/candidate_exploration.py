@@ -219,7 +219,11 @@ def enumerate_round_candidates(
     prioritized = ([first_history] if first_history else []) + [
         row for row in ordered if row != first_history
     ]
-    sampled = prioritized if max_candidates is None else prioritized[:max_candidates]
+    if max_candidates is None:
+        sampled = prioritized
+    else:
+        repeat_budget = min(len(rechecks), max_candidates // 2)
+        sampled = prioritized[:max_candidates - repeat_budget]
     result = []
     for slot, (tid, kind, variant) in enumerate(sampled, 1):
         item = deepcopy(round_plan)
@@ -250,8 +254,21 @@ def enumerate_round_candidates(
             ]
         result.append(item)
 
-    extra = (rechecks if max_candidates is None
-             else rechecks[:max(0, max_candidates - len(result))])
+    if max_candidates is None:
+        extra = rechecks
+    else:
+        by_history = {}
+        for repeat in rechecks:
+            gap = repeat["new_wave_index"] - repeat["older_wave_index"]
+            by_history.setdefault(gap, []).append(repeat)
+        for repeats in by_history.values():
+            repeats.sort(key=lambda repeat: not bool(repeat.get("feeds_future_tasks")))
+        diverse = []
+        while any(by_history.values()):
+            for gap in sorted(by_history, reverse=True):
+                if by_history[gap]:
+                    diverse.append(by_history[gap].pop(0))
+        extra = diverse[:max(0, max_candidates - len(result))]
     for patch in extra:
         slot = len(result) + 1
         item = deepcopy(round_plan)

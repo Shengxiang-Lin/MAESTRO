@@ -40,48 +40,101 @@ def _recheck_task(original: dict, branch_round: int) -> dict:
         step["id"] = local_ids[step["id"]]
     task["program_node_id"] = local_ids[task["program_node_id"]]
     task["macro_role"] = "verification"
+    task["history_recheck_of"] = original["task_id"]
     return task
+
+
+def public_query_rows(task: dict, report: dict) -> list[dict] | None:
+    """Read a complete, explicit query result from public text only."""
+    from ..reporting.result_text import delivered_records
+    from ..inspection.visible_claim_extraction import (
+        extract_visible_claims, _parse_current_record_prose,
+    )
+    finish = report.get("finish_result") or {}
+    if finish.get("status") != "done":
+        return None
+    result = finish.get("result")
+    fields = task["outputs"]["typed_relation"]
+    records = delivered_records(result)
+    if records is not None:
+        return [row["values"] for row in records]
+    if not isinstance(result, str):
+        return None
+    records = _parse_current_record_prose(result, set(fields))
+    if records is not None:
+        return records
+    # Stage-2 may return an explicit entity-to-measurement list. Require
+    # a complete closed grammar, never use the World to fill an omitted row.
+    subject = next((field for field in SUBJECT_FIELDS if field in fields), None)
+    if len(fields) == 2 and subject is not None:
+        attribute = next(field for field in fields if field != subject)
+        import re
+        body = result.strip().rstrip(".")
+        mapped = []
+        for entry in body.split(", "):
+            match = re.fullmatch(
+                r"([^:(),\n]+): (-?\d+(?:\.\d+)?)", entry,
+            )
+            dated = re.fullmatch(r"([^:(),\n]+) \((\d{4}-\d{2}-\d{2})\)", entry)
+            if match:
+                number = match[2]
+                mapped.append({subject: match[1],
+                               attribute: float(number) if "." in number else int(number)})
+            elif dated:
+                mapped.append({subject: dated[1], attribute: dated[2]})
+            else:
+                mapped = []
+                break
+        if mapped:
+            return mapped
+    if fields == ["case_id"]:
+        claims, meta = extract_visible_claims(
+            report, output_fields=fields, source_id=None,
+        )
+        if meta.get("parsed"):
+            ids = sorted({
+                claim["subject"] for claim in claims
+                if claim["surface"] == "result"
+                and claim["attribute"] == "identifier_present"
+            })
+            if ids:
+                return [{"case_id": value} for value in ids]
+    if len(fields) == 1:
+        # A bare literal identifier/name is a one-field handoff. Sentences
+        # and lists are handled above, never inferred from the hidden World.
+        import re
+        literal = result.strip()
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{0,120}", literal):
+            return [{fields[0]: literal}]
+    return None
+
+
+def query_values(rows: list[dict]) -> list[str]:
+    import json
+    return sorted(json.dumps(row, sort_keys=True, ensure_ascii=False)
+                  for row in rows)
 
 
 def _reported_scalar_really_changes(
     clean_rows: list[dict], faulty_rows: list[dict],
     old_report: dict,
 ) -> bool:
-    """Require the same explicit subject and a changed non-key field.
+    """Require complete public old rows and a changed identical-query result.
 
-    A swapped entity is not incorrectly called a same-entity conflict.
-    A field not actually present in the older public answer cannot be
-    supplied retroactively from the private World.
+    Identical source/query/input contracts can disagree on returned membership,
+    even when no stable subject survives a mistaken entity binding.
     """
-    result = (old_report.get("finish_result") or {}).get("result")
-    summary = (old_report.get("finish_result") or {}).get("summary")
-    if (old_report.get("finish_result") or {}).get("status") != "done":
+    if not clean_rows:
         return False
-    public = str(result or "") + " " + str(summary or "")
-    for clean in clean_rows:
-        values = clean["values"]
-        # Match the EXACT subject-field precedence used by the public
-        # claim parser. Treating a secondary entity label as the subject
-        # could misclassify a wrong case_id as a same-entity disagreement.
-        subject_field = next((
-            key for key in SUBJECT_FIELDS
-            if isinstance(values.get(key), str) and values[key].strip()
-        ), None)
-        if subject_field is None or str(values[subject_field]) not in public:
-            continue
-        for faulty in faulty_rows:
-            other = faulty["values"]
-            if other.get(subject_field) != values[subject_field]:
-                continue
-            for changed in sorted(set(values) & set(other) - {subject_field}):
-                expected, got = values[changed], other[changed]
-                if (type(expected) in {str, int, float, bool}
-                        and type(got) is type(expected)
-                        and expected != got and str(expected) in public
-                        and clean.get("source_fact_refs")
-                        and faulty.get("source_fact_refs")):
-                    return True
-    return False
+    task = {"outputs": {"typed_relation": list(clean_rows[0]["values"])}}
+    public = public_query_rows(task, old_report)
+    actual = [row["values"] for row in clean_rows]
+    return (
+        public is not None and query_values(public) == query_values(actual)
+        and query_values(actual) != query_values(
+            [row["values"] for row in faulty_rows]
+        )
+    )
 
 
 def discover_same_source_rechecks(
@@ -154,7 +207,12 @@ def discover_same_source_rechecks(
                                 for source in sources.values())
                             * max(1, len(clone["outputs"]["typed_relation"]))
                             if kind == "fabricated_claim" else 2)
-                for variant in range(max(1, variants)):
+                total_variants = max(1, variants)
+                offset = int(sha256(
+                    (older_id + ":" + str(round_plan["branch_round"]) + ":" + kind).encode()
+                ).hexdigest()[:8], 16) % total_variants
+                for index in range(total_variants):
+                    variant = (offset + index) % total_variants
                     fault = AtomicFault(
                         kind, clone["task_id"],
                         origin_round=round_plan["branch_round"] - 1,
@@ -182,6 +240,10 @@ def discover_same_source_rechecks(
                         "fault_variant": variant,
                         "new_wave_index": latest_index,
                         "construction": "later_main_delegated_same_source_recheck",
+                        "feeds_future_tasks": [
+                            tid for wave in waves[latest_index + 1:] for tid in wave
+                            if older_id in original_tasks[tid]["depends_on"]
+                        ],
                     })
                     # One naturally different error per fault family and
                     # older observation; extra variants are equivalent.
@@ -204,6 +266,12 @@ def patch_scene(scene: dict, patch: dict | None) -> dict:
     }
     if not set(task["depends_on"]) <= earlier:
         raise ValueError("history_recheck_future_dependency")
+    for consumer in result["macro_graph"]["tasks"]:
+        if consumer["task_id"] in patch.get("feeds_future_tasks", []):
+            consumer["depends_on"] = [
+                tid if parent == patch["older_task_id"] else parent
+                for parent in consumer["depends_on"]
+            ]
     result["macro_graph"]["tasks"].append(task)
     result["macro_graph"]["reference_waves"][
         patch["new_wave_index"]].append(tid)
@@ -236,17 +304,23 @@ def patch_clean_episode(
     old_slot = scene["macro_graph"]["reference_waves"][
         patch["older_wave_index"]].index(patch["older_task_id"])
     older_report = previous["result"]["subtask_results"][old_slot]
+    rows = public_query_rows(
+        patch["new_task"], older_report,
+    )
+    if rows is None:
+        raise ValueError("history_recheck_prior_result_not_public")
+    # Keep the prior value surface identical; the actual new attempt is
+    # materialized by the normal executor at its assigned later wave.
     older_assignment = previous["params"]["tasks"][old_slot]
-    fields = patch["new_task"]["outputs"]["typed_relation"]
     instruction = (
-        "Independently recheck the earlier Sub-Agent's reported "
-        + ", ".join(fields) + " using the same authorized source and "
-        "previously available inputs. Return the actual finding and citations."
+        older_assignment["task_instruction"]
+        + " Repeat the same source query with the same earlier inputs. "
+          "Return the complete matching records with citations."
     )
     assignment = deepcopy(older_assignment)
     assignment["task_instruction"] = instruction
     assignment["context"] = (
-        "Previously returned evidence should be checked independently; "
+        "Re-read the same source materials using the earlier query conditions; "
         "do not assume that it is correct. " + str(
             older_assignment.get("context", "")
         )

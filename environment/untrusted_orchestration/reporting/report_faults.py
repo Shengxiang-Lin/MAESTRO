@@ -68,14 +68,15 @@ def render_report_fault(base: dict, attempt) -> tuple[dict, dict]:
         raise ValueError("missing_grounded_report_fault_payload")
     field, replacement = payload["field"], payload["replacement"]
     rows = relation_rows(attempt.product)
-    if not rows or field not in rows[0]["values"]:
+    row_index = payload.get("row_index", 0)
+    if not rows or row_index >= len(rows) or field not in rows[row_index]["values"]:
         raise ValueError("report_fault_field_not_in_delivered_relation")
     if kind == "fabricated_claim":
         # Mutate ONLY the communicated handoff; keep its cited, grounded
         # distractor FactRef, never the original row's false provenance.
         # The true executed WorkProduct and operator trace remain immutable.
-        rows[0]["values"][field] = replacement
-        rows[0]["source_fact_refs"] = list(payload["source_fact_refs"])
+        rows[row_index]["values"][field] = replacement
+        rows[row_index]["source_fact_refs"] = list(payload["source_fact_refs"])
         report["finish_result"] = {
             "status": "done",
             "result": render_records(rows),

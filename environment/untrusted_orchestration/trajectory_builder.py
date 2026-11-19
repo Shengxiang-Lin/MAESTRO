@@ -428,6 +428,14 @@ def build_branch(
     # A source-legal, earlier *public* keyed input was chosen before the
     # atomic fault. Preserve that real prior WorkProduct and only make its
     # already stated field explicit; no new source access is introduced.
+    if same_source_recheck_plan is not None:
+        history_anchor = {
+            "status": "generated", "reason": "earlier_same_query_result",
+            "task_id": same_source_recheck_plan["older_task_id"],
+            "target_task_id": same_source_recheck_plan["new_task"]["task_id"],
+            "prior_round": same_source_recheck_plan["older_wave_index"] + 1,
+            "construction": "later_main_delegated_same_source_recheck",
+        }
     handoff_plan = (scenario_plan or {}).get("history_first_plan")
     if handoff_plan is not None:
         history_anchor = expose_prior_handoff(

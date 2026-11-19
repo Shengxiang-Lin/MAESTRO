@@ -123,12 +123,18 @@ def propose_prior_observation(state, target: str, *,
     if not latest_rows:
         return skip("latest_result_not_parseable")
     waves = state.scene["macro_graph"]["reference_waves"]
-    eligible_wave = next((
-        index for index in range(branch_round - 3, -1, -1)
+    eligible_waves = [
+        index for index in range(branch_round - 2)
         if len(waves[index]) < max_parallel_tasks
-    ), None)
-    if eligible_wave is None:
+    ]
+    if not eligible_waves:
         return skip("earlier_dispatch_parallel_capacity_full")
+    # Select among all legal past slots from the query identity, independently
+    # of a future value or desired fault outcome.
+    placement = int(sha256(
+        (target + ":" + str(branch_round)).encode()
+    ).hexdigest()[:8], 16)
+    eligible_wave = eligible_waves[placement % len(eligible_waves)]
 
     parents = [state.communicated_product(tid) for tid in task["depends_on"]]
     if any(item is None for item in parents):

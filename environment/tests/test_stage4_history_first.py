@@ -350,6 +350,8 @@ class HistoryFirstHandoffTests(unittest.TestCase):
                   return_value=[]),
             patch("environment.untrusted_orchestration.scenario.prior_observation.comparison_rows",
                   return_value=[]),
+            patch("environment.untrusted_orchestration.scenario.history_conflicts.same_query_disagreements",
+                  return_value=[]),
         ):
             ExecutionState._detect_history_report_conflicts(state)
             recorded = [
@@ -466,7 +468,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
             len(augmented_base["trajectory"][1]["result"]["subtask_results"]), 2,
         )
         self.assertIn(
-            "Independently recheck",
+            "Repeat the same source query",
             augmented_base["trajectory"][1]["params"]["tasks"][1][
                 "task_instruction"],
         )
@@ -508,6 +510,160 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         self.assertFalse(found[0]["empirically_independent"])
         self.assertEqual(found[0]["older_round"], 1)
         self.assertEqual(found[0]["latest_round"], 2)
+
+    def test_same_query_identity_change_across_long_history_is_repaired(self):
+        from environment.untrusted_orchestration.scenario.same_source_recheck import (
+            _recheck_task, _reported_scalar_really_changes,
+        )
+        from environment.untrusted_orchestration.scenario.history_conflicts import (
+            same_query_disagreements,
+        )
+        scene, parent, _child = _scene()
+        source = scene["world"]["sources"]["parent_src"]
+        source["observations"].append({
+            "values": {"case_id": "Case-002", "entity_final": "Other District"},
+            "fact_refs": ["parent_src:F002"], "observation_id": "parent_src.OBS002",
+            "evidence_origin_id": "synthetic:parent002",
+        })
+        parent["operator_chain"] = [
+            {"id": "parent_scan", "op": "scan", "inputs": [], "source_id": "parent_src"},
+            {"id": "parent_filter", "op": "filter_eq", "inputs": ["parent_scan"],
+             "field": "case_id", "value": "Case-001"},
+            {"id": "parent_project", "op": "project", "inputs": ["parent_filter"],
+             "fields": ["case_id"]},
+        ]
+        parent["outputs"] = {"typed_relation": ["case_id"]}
+        repeated = _recheck_task(parent, 5)
+        scene["macro_graph"]["tasks"].append(repeated)
+        state = ExecutionState(scene, {})
+        original = state.register("parent")
+        old = deterministic_report(parent, original, instruction="Find the matching case.",
+                                   model_alias="model_1")
+        state.set_public_report("parent", old, round_number=1)
+        wrong = state.register(
+            repeated["task_id"],
+            fault=AtomicFault("wrong_retrieval", repeated["task_id"], 4).as_legacy_fault(),
+        )
+        new = deterministic_report(repeated, wrong, instruction="Repeat the matching query.",
+                                   model_alias="model_1")
+        state.set_public_report(repeated["task_id"], new, round_number=4)
+        self.assertTrue(_reported_scalar_really_changes(
+            relation_rows(original.product), relation_rows(wrong.product), old,
+        ))
+        events = same_query_disagreements(state)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["latest_round"] - events[0]["older_round"], 3)
+        self.assertEqual(events[0]["comparison_kind"], "same_query_result_set")
+        state.cross_source_checks_enabled = True
+        self.assertIn(repeated["task_id"], state.scheduling_state()["repair"])
+        self.assertTrue(state.unresolved_cited_conflicts())
+        fixed = state.register(repeated["task_id"])
+        state.set_public_report(
+            repeated["task_id"],
+            deterministic_report(repeated, fixed, instruction="Re-read the query.",
+                                 model_alias="model_1"),
+            round_number=5,
+        )
+        self.assertFalse(state.unresolved_cited_conflicts())
+        self.assertEqual(same_query_disagreements(state), [])
+        unknown = deepcopy(old)
+        unknown["finish_result"]["result"] = "No usable candidate was identified."
+        self.assertFalse(_reported_scalar_really_changes(
+            relation_rows(original.product), relation_rows(wrong.product), unknown,
+        ))
+
+    def test_recheck_result_is_consumed_and_stale_descendant_is_recomputed(self):
+        from environment.untrusted_orchestration.scenario.same_source_recheck import (
+            _recheck_task, patch_scene,
+        )
+        scene, parent, child = _scene()
+        scene["world"]["sources"]["parent_src"]["observations"].append({
+            "values": {"case_id": "Case-002", "entity_final": "Dunhaven District"},
+            "fact_refs": ["parent_src:F002"], "observation_id": "parent_src.OBS002",
+            "evidence_origin_id": "synthetic:parent002",
+        })
+        parent["operator_chain"].insert(1, {
+            "id": "parent_filter", "op": "filter_eq", "inputs": ["parent_scan"],
+            "field": "case_id", "value": "Case-001",
+        })
+        parent["operator_chain"][-1]["inputs"] = ["parent_filter"]
+        repeated = _recheck_task(parent, 3)
+        scene["macro_graph"]["reference_waves"] = [["parent"], [], ["child"]]
+        patch = {
+            "new_task": repeated, "older_task_id": "parent",
+            "older_wave_index": 0, "new_wave_index": 1,
+            "feeds_future_tasks": ["child"],
+        }
+        augmented = patch_scene(scene, patch)
+        self.assertEqual(child["depends_on"], ["parent"])
+        current_child = next(t for t in augmented["macro_graph"]["tasks"]
+                             if t["task_id"] == "child")
+        self.assertEqual(current_child["depends_on"], [repeated["task_id"]])
+        self.assertEqual(current_child["operator_chain"], child["operator_chain"])
+        state = ExecutionState(augmented, {})
+        state.register("parent")
+        state.register(
+            repeated["task_id"],
+            fault=AtomicFault("wrong_retrieval", repeated["task_id"], 2).as_legacy_fault(),
+        )
+        state.register("child")
+        self.assertFalse(state.answer_matches_gold())
+        state.register(repeated["task_id"])
+        self.assertEqual(state.current["child"].status, "stale")
+        self.assertTrue(state.invalidations)
+        state.register("child")
+        self.assertTrue(state.answer_matches_gold())
+
+    def test_public_measurement_map_never_fills_omitted_rows(self):
+        from environment.untrusted_orchestration.scenario.same_source_recheck import (
+            public_query_rows,
+        )
+        task = {"outputs": {"typed_relation": ["entity_final", "metric_a"]}}
+        report = {"finish_result": {
+            "status": "done", "result": "Alderwick: 87, Lakehurst: 55.",
+        }}
+        self.assertEqual(public_query_rows(task, report), [
+            {"entity_final": "Alderwick", "metric_a": 87},
+            {"entity_final": "Lakehurst", "metric_a": 55},
+        ])
+        task["outputs"]["typed_relation"].reverse()
+        self.assertEqual(public_query_rows(task, report)[0], {
+            "entity_final": "Alderwick", "metric_a": 87,
+        })
+        report["finish_result"]["result"] = "Several cities have measurements."
+        self.assertIsNone(public_query_rows(task, report))
+
+    def test_report_fault_can_misassociate_existing_values_with_another_row(self):
+        from environment.untrusted_orchestration.runtime.faults import run_attempt
+        scene, parent, _child = _scene()
+        scene["world"]["sources"]["parent_src"]["observations"].append({
+            "values": {"case_id": "Case-002", "entity_final": "Dunhaven District"},
+            "fact_refs": ["parent_src:F002"], "observation_id": "parent_src.OBS002",
+            "evidence_origin_id": "synthetic:parent002",
+        })
+        parent["operator_chain"][-1]["fields"] = ["case_id", "entity_final"]
+        parent["outputs"] = {"typed_relation": ["case_id", "entity_final"]}
+        actual, runtime = run_attempt(
+            parent, parents=[],
+            sources={"parent_src": scene["world"]["sources"]["parent_src"]},
+            fault=AtomicFault("fabricated_claim", "parent", 1).as_legacy_fault(),
+        )
+        self.assertEqual(actual.rows[0]["values"]["case_id"], "Case-001")
+        communicated = runtime["communicated_rows"]
+        self.assertNotEqual(communicated, relation_rows(actual))
+        self.assertIn(runtime["report_fault_payload"]["replacement"], {
+            value for row in actual.rows for value in row["values"].values()
+        })
+        second, changed = run_attempt(
+            parent, parents=[],
+            sources={"parent_src": scene["world"]["sources"]["parent_src"]},
+            fault=AtomicFault("fabricated_claim", "parent", 1,
+                              variant_index=1).as_legacy_fault(),
+        )
+        self.assertEqual(changed["report_fault_payload"]["row_index"], 1)
+        self.assertEqual(changed["communicated_rows"][0], relation_rows(second)[0])
+        self.assertNotEqual(changed["communicated_rows"][1], relation_rows(second)[1])
+
 
     def test_absent_parent_visible_key_is_not_a_candidate(self):
         scene, _, _ = _scene()

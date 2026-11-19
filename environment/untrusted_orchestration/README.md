@@ -394,12 +394,26 @@ scenario can now add a **real Main-delegated recheck** in a later feedback
 batch (method B). The recheck executes the same earlier authorized source
 and upstream inputs, with the additional task explicitly recorded in the
 Main assignment as well as the returned feedback. It is only generated
-when the prior public report states a source-backed scalar and the injected
-single fault yields a different value **for the same subject and field**.
-A shared source can create a genuine **report disagreement** but does not
-constitute independent corroboration. The original Stage-3 reference is
-retained, and the scenario-local augmented dispatch is separately audited
-under `same_source_recheck_plan`.
+when the earlier public report explicitly supplies the complete query result.
+The same frozen query and upstream input versions can be compared as returned
+record sets, including mistaken entity bindings and multi-source provenance.
+Only the Main-visible old and new rows enter this comparison. Scalar independent
+source checks retain their provenance rules.
+
+A repeat may consume a value originally returned several waves earlier. When
+the repeated result has a still-pending consumer, the scenario redirects that
+consumer's typed input to the new attempt. Earlier executed tasks and same-batch
+tasks keep their existing dependencies. The private unrepaired continuation
+records whether accepting the conflicting new value would change the answer;
+a clean repeated value must preserve the original computation. A shared source
+is recorded as a same-query disagreement.
+
+The behavior signature includes comparison kind, report pair, public conflict
+object and values, and actual history rounds. It merges equivalent atomic fault
+variants while retaining different Main-visible conflicts. Finite debugging
+candidate caps reserve space for existing-task faults and historical repeats,
+with round-robin coverage of available history gaps. Production enumeration
+continues to honor null candidate limits.
 
 With unlimited per-round candidate selection, Stage 4 can review more
 trajectories; on large runs, use `--mode template` to audit coverage before

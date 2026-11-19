@@ -85,6 +85,43 @@ def latest_history_disagreements(state: "ExecutionState") -> list[dict]:
     return result
 
 
+def same_query_disagreements(state: "ExecutionState") -> list[dict]:
+    """Compare public result sets of explicitly repeated frozen queries.
+
+    Shared origins are expected here. A mismatch is a reporting disagreement,
+    with no independent-source vote and no private clean value comparison.
+    """
+    from .same_source_recheck import public_query_rows, query_values
+    conflicts = []
+    latest_round = max(state.public_report_rounds.values(), default=0)
+    for tid, task in state.tasks.items():
+        older = task.get("history_recheck_of")
+        if not older or older not in state.current or tid not in state.current:
+            continue
+        old_attempt, new_attempt = state.current[older], state.current[tid]
+        if (old_attempt.status not in {"done", "disputed"}
+                or new_attempt.status not in {"done", "disputed"}
+                or old_attempt.used_parent_versions != new_attempt.used_parent_versions
+                or state.public_report_rounds.get(tid) != latest_round
+                or state.public_report_rounds.get(older, latest_round) >= latest_round):
+            continue
+        old = public_query_rows(state.tasks[older], state.public_reports.get(older, {}))
+        new = public_query_rows(task, state.public_reports.get(tid, {}))
+        if old is None or new is None or query_values(old) == query_values(new):
+            continue
+        conflicts.append({
+            "comparison_kind": "same_query_result_set",
+            "older_task": older, "latest_task": tid,
+            "subject": "the repeated query of " + ", ".join(task["source_ids"]),
+            "attribute": "returned_records",
+            "earlier_value": old, "latest_value": new,
+            "older_round": state.public_report_rounds[older],
+            "latest_round": state.public_report_rounds[tid],
+            "older_fact_refs": [], "latest_fact_refs": [],
+        })
+    return conflicts
+
+
 def expose_executed_prior_record(
     state: "ExecutionState", task_entries: list[dict],
     episode_prefix: list[dict], *, latest_task_ids: set[str],

@@ -828,7 +828,9 @@ class ExecutionState:
         investigation, never proof about which reporter is right. Sources
         may be shared, but shared sources do not count as independent votes.
         """
-        from .scenario.history_conflicts import latest_history_disagreements
+        from .scenario.history_conflicts import (
+            latest_history_disagreements, same_query_disagreements,
+        )
         from .scenario.prior_observation import comparison_rows
         from .scenario.handoff_conflicts import handoff_disagreements
 
@@ -840,6 +842,7 @@ class ExecutionState:
         # one recheck of that newest task version.
         history_messages = {}
         for conflict in (latest_history_disagreements(self)
+                         + same_query_disagreements(self)
                          + handoff_disagreements(self)
                          + comparison_rows(self)):
             target = conflict["latest_task"]
@@ -1036,13 +1039,14 @@ class ExecutionState:
         A re-execution that returns exactly the same value is *not*
         automatically a resolution. Neither source's hidden Gold is used.
         """
-        from .scenario.history_conflicts import public_claims
+        from .scenario.history_conflicts import public_claims, same_query_disagreements
         from .scenario.prior_observation import comparison_rows
         from .scenario.handoff_conflicts import handoff_disagreements
         remaining_prior = {
             (row["older_task"], row["latest_task"], row["attribute"])
             for row in (comparison_rows(self, require_visible_scope=False)
-                        + handoff_disagreements(self))
+                        + handoff_disagreements(self)
+                        + same_query_disagreements(self))
         }
         claims = public_claims(self)
         for event in self.detected_conflicts:
@@ -1051,7 +1055,7 @@ class ExecutionState:
             old, recent = event["compared_parent_tasks"]
             if event.get("comparison_kind") in {
                 "earlier_source_lookup", "earlier_source_survey",
-                "earlier_keyed_handoff",
+                "earlier_keyed_handoff", "same_query_result_set",
             }:
                 if (old, recent, event["claim"]["attribute"]) in remaining_prior:
                     return True

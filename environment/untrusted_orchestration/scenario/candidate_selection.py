@@ -189,9 +189,17 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         )
         for request in requests
     ]
+    history_context = [{
+        "comparison_kind": event.get("comparison_kind", "same_claim"),
+        "tasks": event.get("compared_parent_tasks", []),
+        "claim": event.get("claim"),
+        "values": event.get("observed_values", []),
+        "rounds": [event.get("older_round"), event.get("latest_round")],
+    } for event in history_events]
     signature = sha256(json.dumps(
         {"category": category, "requests": behavior,
-         "history_round_pairs": history_round_pairs},
+         "history_round_pairs": history_round_pairs,
+         "history_context": history_context},
         sort_keys=True, ensure_ascii=False,
     ).encode("utf-8")).hexdigest()[:16]
     return {

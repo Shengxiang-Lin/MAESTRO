@@ -215,8 +215,13 @@ def _wrong_computation(
 def _report_fault_payload(clean: Relation, sources: dict, *,
                           variant_index: int = 0) -> dict | None:
     """Find a REAL same-field distractor from the task's granted sources."""
+    if not clean.rows:
+        return None
+    # Spread the finite variants across delivered records. A real value
+    # from another row can be misassociated with this particular record.
+    row_index = variant_index % len(clean.rows)
     clean_values = {
-        field: {str(row["values"].get(field)) for row in clean.rows}
+        field: {str(clean.rows[row_index]["values"].get(field))}
         for field in clean.columns
     }
     payloads, seen = [], set()
@@ -235,7 +240,7 @@ def _report_fault_payload(clean: Relation, sources: dict, *,
                 seen.add(key)
                 payloads.append({
                     "field": field, "replacement": candidate,
-                    "source_id": sid,
+                    "row_index": row_index, "source_id": sid,
                     "source_fact_refs": list(obs.get("fact_refs", [])),
                 })
     return payloads[variant_index] if variant_index < len(payloads) else None
@@ -377,8 +382,9 @@ def run_attempt(
         communicated = None
         if kind == "fabricated_claim":
             communicated = relation_rows(correct)
-            communicated[0]["values"][payload["field"]] = payload["replacement"]
-            communicated[0]["source_fact_refs"] = list(
+            row_index = payload.get("row_index", 0)
+            communicated[row_index]["values"][payload["field"]] = payload["replacement"]
+            communicated[row_index]["source_fact_refs"] = list(
                 payload["source_fact_refs"]
             )
         return correct, {
