@@ -68,7 +68,7 @@ def propose_prior_observation(state, target: str, *,
     if len(clean_rows) != 1:
         return skip("clean_result_not_single_row")
 
-    faulty = latest_rows[0]["values"]
+    faulty = latest_rows[0]  # _public_result_rows strips the citation wrapper
     clean_values = clean_rows[0]["values"]
     fields = task["outputs"]["typed_relation"]
     for field in fields:
@@ -197,8 +197,8 @@ def comparison_rows(state) -> list[dict]:
         second = state._public_result_rows(state.public_reports[target])
         if not first or not second or len(first) != 1 or len(second) != 1:
             continue
-        earlier = first[0]["values"].get(field)
-        latest = second[0]["values"].get(field)
+        earlier = first[0].get(field)
+        latest = second[0].get(field)
         if not _scalar(earlier) or type(latest) is not type(earlier):
             continue
         if (state.public_report_rounds.get(tid, 0)
@@ -206,6 +206,13 @@ def comparison_rows(state) -> list[dict]:
             continue
         if earlier == latest:
             continue
+        from ..reporting.result_text import delivered_records
+        prior_full = delivered_records(
+            state.public_reports[tid]["finish_result"].get("result", "")
+        ) or []
+        latest_full = delivered_records(
+            state.public_reports[target]["finish_result"].get("result", "")
+        ) or []
         comparisons.append({
             "older_task": tid, "latest_task": target,
             "subject": "source_lookup:" + str(task["history_scope_key"]),
@@ -213,8 +220,10 @@ def comparison_rows(state) -> list[dict]:
             "latest_value": latest,
             "older_round": state.public_report_rounds[tid],
             "latest_round": state.public_report_rounds[target],
-            "older_fact_refs": first[0].get("source_fact_refs", []),
-            "latest_fact_refs": second[0].get("source_fact_refs", []),
+            "older_fact_refs": (prior_full[0].get("source_fact_refs", [])
+                                if prior_full else []),
+            "latest_fact_refs": (latest_full[0].get("source_fact_refs", [])
+                                 if latest_full else []),
             "comparison_kind": "earlier_source_lookup",
         })
     return comparisons
