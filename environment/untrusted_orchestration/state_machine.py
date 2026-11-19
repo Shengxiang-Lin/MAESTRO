@@ -830,11 +830,13 @@ class ExecutionState:
         """
         from .scenario.history_conflicts import latest_history_disagreements
         from .scenario.prior_observation import comparison_rows
+        from .scenario.handoff_conflicts import handoff_disagreements
 
         # Include a genuinely executed *earlier* direct-source lookup.
         # Its relation to the latest query is explicit in the prior task
         # instruction and verified offline by the same source record.
         for conflict in (latest_history_disagreements(self)
+                         + handoff_disagreements(self)
                          + comparison_rows(self)):
             target = conflict["latest_task"]
             old = conflict["older_task"]
@@ -1023,9 +1025,11 @@ class ExecutionState:
         """
         from .scenario.history_conflicts import public_claims
         from .scenario.prior_observation import comparison_rows
+        from .scenario.handoff_conflicts import handoff_disagreements
         remaining_prior = {
             (row["older_task"], row["latest_task"], row["attribute"])
-            for row in comparison_rows(self, require_visible_scope=False)
+            for row in (comparison_rows(self, require_visible_scope=False)
+                        + handoff_disagreements(self))
         }
         claims = public_claims(self)
         for event in self.detected_conflicts:
@@ -1034,7 +1038,8 @@ class ExecutionState:
             old, recent = event["compared_parent_tasks"]
             if event.get("comparison_kind") in {
                 "earlier_source_lookup", "earlier_source_survey",
-            }:
+                "earlier_keyed_handoff",
+            }
                 if (old, recent, event["claim"]["attribute"]) in remaining_prior:
                     return True
                 continue
