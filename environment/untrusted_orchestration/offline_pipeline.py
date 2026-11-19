@@ -29,6 +29,7 @@ from .main_decision_contract import (
     build_main_decision_contract, critic_denies_confirmed_conflict,
 )
 from .state_machine import Attempt
+from .latest_batch_witness import patch_scene
 from .visible_claim_state import audit_visible_claim_states
 from .trajectory_builder import (
     _MAIN_DECISION_AUTHOR_SYSTEM, _MAIN_REASONING_CRITIC_SYSTEM, _history_batch,
@@ -100,8 +101,11 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
     schedule tasks, invoke Main, or redo the underlying poisoned program.
     """
     episode, audit = deepcopy(episode), deepcopy(audit)
-    tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
+    # Validate the original Stage-1/2 clean contracts BEFORE applying
+    # any Stage-4-only synthetic comparison source.
     reviewed = _strict_reports(scene, stage2_rows)
+    scene = patch_scene(scene, audit.get("latest_batch_witness_patch"))
+    tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
     versions = audit["runtime"]["attempt_versions"]
     decision_ids = {
         d["round"]: d["task_ids"]
@@ -320,6 +324,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
         visible_step["result"]["subtask_results"] = [
             sanitize_public_report(report) for report in report_list
         ]
+    scene = patch_scene(scene, audit.get("latest_batch_witness_patch"))
     fork = audit["branch_round"]
     plans = {p["round"]: p for p in audit.get("evidence_plan", [])}
     tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
