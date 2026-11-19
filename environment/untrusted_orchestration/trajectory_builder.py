@@ -33,6 +33,10 @@ from .state_machine import (
 from .reporting.report_author import naturalize_report
 from environment.untrusted_orchestration.runtime.evidence_planning import schedule_evidence_requests
 from .scenario.history_conflicts import expose_executed_prior_record
+from .scenario.same_source_recheck import (
+    patch_scene as patch_same_source_recheck_scene,
+    patch_clean_episode as patch_same_source_recheck_episode,
+)
 from .scenario.handoff_conflicts import expose_prior_handoff
 from .scenario.prior_observation import (
     propose_prior_observation, patch_scene as patch_prior_observation_scene,
@@ -394,6 +398,21 @@ def build_branch(
     if (declared_reference is not None and
             declared_reference != clean_identity["clean_reference_id"]):
         raise ValueError("stage4_clean_reference_fingerprint_mismatch")
+    # A new same-source recheck is an explicit, scenario-local Main
+    # delegation, not a ghost report appended to the latest feedback.
+    # Preserve original Stage-3 identity; mark the augmented prefix
+    # separately in the private branch audit.
+    same_source_recheck_plan = (
+        (scenario_plan or {}).get("same_source_recheck_plan")
+    )
+    if same_source_recheck_plan is not None:
+        base_episode = patch_same_source_recheck_episode(
+            base_episode, scene, same_source_recheck_plan,
+            max_parallel_tasks=max_parallel_tasks,
+        )
+        scene = patch_same_source_recheck_scene(
+            scene, same_source_recheck_plan,
+        )
     state, task_entries, trajectory, injected = _clean_prefix(
         scene, reviewed, base_episode,
         branch_round=branch_round, faults=faults,
@@ -924,6 +943,7 @@ def build_branch(
         "faults": injected,
         "history_conflict_anchor": history_anchor,
         "prior_observation_patch": prior_observation_patch,
+        "same_source_recheck_plan": same_source_recheck_plan,
         "paired_clean_history": paired_clean_history,
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
