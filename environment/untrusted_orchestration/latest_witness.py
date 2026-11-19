@@ -1,8 +1,9 @@
 """Stage-4-only, latest-returned-batch cross-report witness construction.
 
-Build TWO separately executed, simulated observations of an already grounded
-Stage-1 fact. One new Sub-Agent report is corrupted at its delivery boundary,
-while the other independently reports the clean value. Earlier Stage-3
+Prefer ONE latest-batch simulated report contradicting a literal, earlier
+source-backed Stage-3 claim. If the earlier history cannot support a
+comparable claim, construct TWO latest-batch simulated reports (one faulty,
+one clean) from an already grounded Stage-1 observation. Earlier Stage-3
 history, its Macro DAG, and the original Stage-1 files remain unchanged.
 
 These are benchmark-generated *simulated* sources, not independently
@@ -179,7 +180,7 @@ def _historical_fact(
 def make_latest_pair(scene: dict, *, feedback_round: int,
                      max_parallel_tasks: int = 4,
                      base_episode: dict | None = None) -> dict | None:
-    """Preflight a same-claim pair at the last delivered batch ONLY.
+    """Preflight a same-claim contradiction at the last batch ONLY.
 
     No source from the original World is changed. If the new batch would
     exceed the actual O1 parallel-task cap, abstain rather than silently
@@ -257,8 +258,8 @@ def make_latest_pair(scene: dict, *, feedback_round: int,
             "access_policy": {"mode": "browse"},
             "observations": [primary, other],
         }
-        # Verify that both virtual sources ACTUALLY execute to the same
-        # clean claim before constructing any competing returned report.
+        # Every constructed source must ACTUALLY execute to its clean
+        # claim before a competing delivery can be introduced.
         product = execute_task(
             task, input_products=[], visible_sources={sid: source},
         )
