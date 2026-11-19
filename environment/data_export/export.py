@@ -380,9 +380,12 @@ def export_dataset(
             if key in private_states:
                 raise ValueError("duplicate_stage4_decision_reward_state")
             private_states[key] = state["state"]
+    clean_turns = read_jsonl(paths[2])
+    if any(turn.get("task_id") not in clean for turn in clean_turns):
+        raise ValueError("stage3_turn_without_accepted_clean_case")
     decisions, labels, grpo, sft = _build_decisions(
         [
-            ("stage3", read_jsonl(paths[2]), source_settings["stage3"]),
+            ("stage3", clean_turns, source_settings["stage3"]),
             ("stage4", read_jsonl(stage4_dir / "main_turns.jsonl"),
              source_settings["stage4"]),
         ], scenes, splits, accepted_cases, private_states,
@@ -462,6 +465,17 @@ def export_dataset(
         "case_counts": dict(sorted(case_distribution.items())),
         "decision_counts": dict(sorted(distribution.items())),
         "decision_sources": dict(sorted(source_distribution.items())),
+        "missing_decision_reward_states": sum(
+            row["source"] == "untrusted" and
+            labels[i]["reward_state"] is None
+            for i, row in enumerate(decisions)
+        ),
+        "unscorable_decision_reward_states": sum(
+            row["source"] == "untrusted" and
+            isinstance(labels[i]["reward_state"], dict) and
+            labels[i]["reward_state"].get("scorable") is False
+            for i, row in enumerate(decisions)
+        ),
         "stage4_journal_outcomes": dict(sorted(counts.items())),
         "accepted_fault_cases": len(accepted_cases),
         "fault_case_types": dict(sorted(fault_types.items())),
