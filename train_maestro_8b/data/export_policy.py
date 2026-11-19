@@ -67,7 +67,7 @@ def export(risk_dir, main_turns, output_dir, decision_states=None):
         "train": 0, "val": 0, "missing_reference": 0,
         "missing_decision_state": 0, "unscorable": 0,
     }
-    for split in ("train", "val"):
+    for split in ("train", "val", "test"):
         path = Path(risk_dir) / (split + ".jsonl")
         if not path.exists():
             if split == "val":
