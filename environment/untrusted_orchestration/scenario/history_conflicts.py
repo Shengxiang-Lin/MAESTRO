@@ -51,7 +51,7 @@ def latest_history_disagreements(state: "ExecutionState") -> list[dict]:
     claims = public_claims(state)
     if not claims:
         return []
-    latest = max(row["observed_round"] for row in claims)
+    latest = max(state.public_report_rounds.values(), default=0)
     previous = [row for row in claims if row["observed_round"] < latest]
     current = [row for row in claims if row["observed_round"] == latest]
     result = []
