@@ -104,8 +104,40 @@ def _cross_report_visible_disagreements(
             try:
                 records = json.loads(finish.get("result") or "")
             except (TypeError, ValueError):
-                continue
+                records = None
             if not isinstance(records, list):
+                # Historical Stage-2 source reports sometimes expose
+                # explicit "Entity (date)" pairs instead of typed JSON.
+                # Only the visible assignment can supply the attribute
+                # and source; no Stage-1 World or Oracle is accessible.
+                from .visible_claim_extraction import (
+                    literal_parenthesized_pairs,
+                )
+                instruction = str(
+                    report.get("instruction")
+                    or report.get("task_instruction")
+                    or ""
+                )
+                name = re.search(
+                    r"\\b(?:inspect|examine)\\s+([A-Za-z0-9_]+)\\b",
+                    instruction, re.I,
+                )
+                if name:
+                    sid = name.group(1)
+                    for subject, literal in literal_parenthesized_pairs(
+                        finish.get("result")
+                    ):
+                        for field in requested_fields:
+                            if (field not in {"case_id", "entity_final"}
+                                    and field.replace("_", " ").casefold()
+                                    in instruction.casefold().replace("_", " ")):
+                                grouped.setdefault(
+                                    (subject, field), []
+                                ).append({
+                                    "source_id": sid,
+                                    "value": literal,
+                                    "round": batch["attempt"],
+                                })
                 continue
             for item in records:
                 if not isinstance(item, dict):
