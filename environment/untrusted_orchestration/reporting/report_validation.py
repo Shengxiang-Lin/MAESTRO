@@ -11,7 +11,7 @@ import re
 from environment.implement_subtask.reporting import (
     _normalize_author_result, _stage_scope_issues,
 )
-from .state_machine import Attempt, relation_rows
+from ..state_machine import Attempt, relation_rows
 from .report_contract import render_delivered_result
 
 
@@ -36,6 +36,44 @@ def claim_tokens(value: str) -> set[str]:
     """Normalize thousands separators, not facts or entity identifiers."""
     value = re.sub(r"(?<=\d),(?=\d{3}\b)", "", value)
     return {token.casefold() for token in _TOKEN.findall(value)}
+
+_MONTHS = {
+    name.casefold(): number for number, name in enumerate((
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ), start=1)
+}
+_CALENDAR_DATE = re.compile(
+    r"\b(" + "|".join(_MONTHS) + r")\s+(\d{1,2})"
+    r"(?:,?\s+(\d{4}))?\b", re.I,
+)
+_ISO_DATE = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
+
+
+def grounded_calendar_text(text: str, observed_text: str) -> str:
+    """Normalize calendar wording *only* if that exact date was observed.
+
+    E.g. 'July 2, 2011' and '2011-07-02' are equivalent, but a proposed
+    July 3 is NOT authorized. A month/day without a year is normalized only
+    when exactly one matching full date exists in the delivered/observed trace.
+    Unrelated numbers are untouched, so this does not relax numeric guards.
+    """
+    known = {}
+    for year, month, day in _ISO_DATE.findall(observed_text):
+        iso = f"{year}-{month}-{day}"
+        known.setdefault((int(month), int(day)), set()).add(iso)
+
+    def subst(match: re.Match) -> str:
+        month = _MONTHS[match.group(1).casefold()]
+        day = int(match.group(2))
+        year = match.group(3)
+        dates = known.get((month, day), set())
+        if year:
+            dates = {date for date in dates if date.startswith(year + "-")}
+        return next(iter(dates)) if len(dates) == 1 else match.group(0)
+
+    return _CALENDAR_DATE.sub(subst, text)
+
 
 def explicit_final_value_issues(text: str, contract: dict) -> list[str]:
     """Distinguish a claimed delivered field value from observed provenance.
@@ -200,7 +238,11 @@ def validate_report_draft(draft: dict, contract: dict, attempt: Attempt) -> list
         # from masquerading as the delivered output.
         allowed = (allowed_tokens if field == "result"
                    else allowed_tokens | instruction_tokens)
-        if claim_tokens(text) - allowed:
+        # Authored calendar wording can omit a leading zero or use a
+        # month name. Normalize only dates literally observed in this
+        # Attempt; never grant a generic numeric exemption.
+        grounded_text = grounded_calendar_text(text, available)
+        if claim_tokens(grounded_text) - allowed:
             issues.append(field + "_unobserved_numeric_or_entity")
         if field == "result":
             issues.extend("result_" + issue for issue in

@@ -131,18 +131,25 @@ Main-observable issue families only:
    is true, and same-source reports are never counted as independent
    corroboration. Main can recheck, repair or continue independent work.
 
-When a prior report lacks an explicit comparable record, Stage 4 may
-surface a row from that earlier task's **already executed** WorkProduct.
-It preserves the earlier dispatch, source, field contract and real FactRefs;
-it neither introduces a new source nor fabricates a Main action or value.
-Unsupported cross-history candidates remain observational negatives.
-The branch-local historical presentation is privately paired with a clean
-variant that shares exactly the same earlier evidence, while the original
-Stage-3 files remain unchanged.
+When a prior report lacks an explicit comparable record, Stage 4
+first checks for a row in an earlier task's already executed WorkProduct.
+If that is unsupported, it can instead schedule one **source-backed
+historical observation in an existing earlier batch**, provided that batch
+has a legal spare slot and the target's original source contains a uniquely
+selectable comparison fact. The added observation has an explicit earlier
+Main dispatch, an executed scan/filter/project, a cited Sub-Agent Result and
+a matching clean/faulted historical prefix. It never adds a new World source,
+guesses a FactRef or introduces a future observation into Main's history.
+For the first feedback batch (no earlier wave), or without comparable source
+evidence, the candidate remains a diagnostic negative.
+
+These are branch-local changes to Stage-4 scenario presentation; frozen
+Stage-1/2/3 source artifacts are never rewritten.
 
 The deprecated same-batch auxiliary verifier and its synthetic-source
-interfaces have been deleted. Private audit now records
-`history_conflict_anchor` and, when needed, `paired_clean_history`.
+interfaces remain deleted. Private audit records
+`history_conflict_anchor`, optional `prior_observation_patch`, and
+`paired_clean_history` to preserve comparable clean/fault contexts.
 Summary reports `historical_anchor_status_distribution` and
 `cross_round_report_conflicts_detected`.
 
@@ -190,10 +197,12 @@ a source or claiming unsupported verification.
    `scenario/candidate_selection.py`: explore
    **one atomic fault per candidate**, replay recovery and select
    causally distinct branches before expensive language review.
-3. `scenario/history_conflicts.py`, `state_machine.py`,
-   `evidence_planning.py`: compare delivered historical claims, version WorkProducts,
+3. `scenario/history_conflicts.py`, `scenario/prior_observation.py`,
+   `state_machine.py`, `evidence_planning.py`: compare historical claims,
+   create supported prior-source observations, version WorkProducts,
    track invalidations/retries, generate permitted evidence requests.
-4. `report_contract.py`, `report_author.py`: render actual attempt
+4. `reporting/report_contract.py`, `reporting/report_author.py`:
+   render actual attempt
    deliveries and review Sub-Agent language, without restoring hidden
    clean values.
 5. `visible_claim_extraction.py`, `visible_claim_state.py`: compute
@@ -292,3 +301,25 @@ batches and multiple injected faults per branch are not generated.
 For fast deterministic diagnostics use `--mode template --max-scenes 2
 --output-dir environment/data/pilots/stage4`. For reviewed SFT, use the
 default `llm` mode.
+
+## Slightly expanded local Qwen pilot
+
+The sample configuration contains reviewed Stage-2/3 inputs for ten scenes.
+To expand beyond a three-scene smoke test **without exceeding the available
+trusted inputs**, run:
+
+```bash
+python -m environment generate-untrusted-turns \\
+  --config environment/configs/untrusted_orchestration.yaml \\
+  --max-scenes 10 --branches-per-scene 3 --workers 4 \\
+  --mode llm \\
+  --output-dir environment/data/stage4_history_v4_10
+```
+
+`candidates_simulated` counts inexpensive preflight trials, while
+`main_turns.jsonl` counts individual Main-Agent training samples. Inspect
+`historical_anchor_status_distribution`,
+`cross_round_report_conflicts_detected`,
+`outcomes`, and `published_result_format_by_phase` in `summary.json`.
+The local Author/Critic APIs must be running as configured; CI only provides
+offline and small paired smoke checks.

@@ -70,7 +70,7 @@ def _hash_file(path: Path) -> str:
 def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
     directory = Path(__file__).resolve().parent
     code_files = (
-        "faults.py", "atomic_faults.py", "report_faults.py",
+        "faults.py", "atomic_faults.py", "reporting/report_faults.py",
         "event_scheduler.py",
         "scenario/scenario_generator.py", "scenario/round_sampling.py",
         "scenario/candidate_exploration.py",
@@ -79,11 +79,12 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "visible_history.py", "visible_claim_state.py",
         "visible_claim_extraction.py",
         "main_decision_contract.py",
-        "report_contract.py", "report_evidence.py", "result_text.py",
+        "reporting/report_contract.py", "reporting/report_evidence.py", "reporting/result_text.py",
         "scenario/history_conflicts.py",
-        "report_validation.py", "public_language.py",
+        "scenario/prior_observation.py",
+        "reporting/report_validation.py", "reporting/public_language.py",
         "publication_guard.py",
-        "state_machine.py", "report_author.py",
+        "state_machine.py", "reporting/report_author.py",
         "trusted_prefix.py",
         "trajectory_builder.py", "generate_turns.py",
         "evidence_planning.py", "offline_pipeline.py",
@@ -300,7 +301,7 @@ def _published_result_formats(episodes: list[dict]) -> dict:
                         decoded = json.loads(value)
                     except (ValueError, TypeError):
                         decoded = None
-                    from .result_text import parse_records
+                    from .reporting.result_text import parse_records
                     if parse_records(value) is not None:
                         label = "cited_record_prose_v1"
                     elif (isinstance(decoded, list)

@@ -10,7 +10,7 @@ from copy import deepcopy
 from typing import TYPE_CHECKING
 
 from ..faults import relation_rows
-from ..result_text import render_records
+from ..reporting.result_text import render_records
 from ..visible_claim_extraction import extract_visible_claims, SUBJECT_FIELDS
 
 if TYPE_CHECKING:

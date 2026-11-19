@@ -4,13 +4,13 @@ from __future__ import annotations
 import json
 import unittest
 
-from environment.untrusted_orchestration.result_text import delivered_records
+from environment.untrusted_orchestration.reporting.result_text import delivered_records
 
 from environment.generate_question.execution.program_ir import Relation
 from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.atomic_faults import AtomicFault
 from environment.untrusted_orchestration.faults import run_attempt, relation_rows
-from environment.untrusted_orchestration.report_author import naturalize_report
+from environment.untrusted_orchestration.reporting.report_author import naturalize_report
 from environment.untrusted_orchestration.visible_claim_extraction import (
     extract_visible_claims,
 )
@@ -476,8 +476,132 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(len(latest_history_disagreements(state)), 1)
         self.assertEqual(len(traj[0]["params"]["tasks"]), 1)
 
+    def test_date_wording_is_guarded_against_exact_observed_iso_dates(self):
+        from environment.untrusted_orchestration.reporting.report_validation import (
+            claim_tokens, grounded_calendar_text,
+        )
+        actual = json.dumps({
+            "answer": {
+                "duration_days": 39,
+                "midpoint_date": "2011-07-02",
+                "observation_count": 12,
+            },
+            "date_a": "2011-06-13", "date_b": "2011-07-22",
+        })
+        summary = (
+            "A 39-day gap from June 13 to July 22, 2011 produced "
+            "the midpoint July 2, 2011, across 12 observations."
+        )
+        grounded = grounded_calendar_text(summary, actual)
+        self.assertEqual(
+            claim_tokens(grounded) - claim_tokens(actual), set()
+        )
+        self.assertEqual(
+            grounded_calendar_text("The midpoint was July 3, 2011.", actual),
+            "The midpoint was July 3, 2011.",
+        )
+        self.assertIn("3", claim_tokens(
+            grounded_calendar_text("July 3, 2011", actual)
+        ) - claim_tokens(actual))
+        # A bare numeric claim of 2 is never admitted solely because a
+        # supported date contains 02.
+        self.assertIn("2", claim_tokens("There are 2 observations.")
+                      - claim_tokens(actual))
+
+    def test_prior_observation_is_executed_in_an_earlier_wave(self):
+        from copy import deepcopy
+        from environment.untrusted_orchestration.state_machine import (
+            deterministic_report,
+        )
+        from environment.untrusted_orchestration.scenario.prior_observation import (
+            propose_prior_observation, patch_scene, comparison_rows,
+        )
+        scene = deepcopy(self.scene)
+        scene["world"]["sources"]["hist_source"] = {
+            "schema": ["case_id", "metric"],
+            "access_mode": "browse", "access_policy": {"mode": "browse"},
+            "modality": "text", "title": "Case register",
+            "observations": [{
+                "observation_id": "hist_source.OBS001",
+                "values": {"case_id": "Case-011", "metric": 87},
+                "fact_refs": ["hist_source:F001"],
+                "evidence_origin_id": "hist_root",
+                "observed_content": "Case-011 has metric 87.",
+            }, {
+                "observation_id": "hist_source.OBS002",
+                "values": {"case_id": "Case-012", "metric": 55},
+                "fact_refs": ["hist_source:F002"],
+                "evidence_origin_id": "hist_other",
+                "observed_content": "Case-012 has metric 55.",
+            }],
+        }
+        task = {
+            "task_id": "target", "depends_on": [],
+            "source_ids": ["hist_source"], "external_inputs": [],
+            "input_schema": {},
+            "operator_chain": [{
+                "id": "scan", "op": "scan", "inputs": [],
+                "source_id": "hist_source",
+            }, {
+                "id": "filter", "op": "filter_eq", "inputs": ["scan"],
+                "field": "case_id", "value": "Case-011",
+            }, {
+                "id": "project", "op": "project", "inputs": ["filter"],
+                "fields": ["metric"],
+            }],
+            "program_node_id": "project",
+            "outputs": {"typed_relation": ["metric"]},
+        }
+        state = ExecutionState(scene, {})
+        state.tasks = {"target": task}
+        state.attempts = {"target": []}
+        attempt = state.register("target")
+        faulty = deterministic_report(task, attempt,
+                                     instruction="Find the metric.",
+                                     model_alias="model_1")
+        faulty["finish_result"]["result"] = json.dumps([{
+            "values": {"metric": 55},
+            "source_fact_refs": ["hist_source:F002"],
+        }])
+        state.set_public_report("target", faulty, round_number=2)
+        patch, probe = propose_prior_observation(
+            state, "target", branch_round=3,
+            max_parallel_tasks=len(scene["macro_graph"]["reference_waves"][0]) + 1,
+        )
+        self.assertIsNotNone(patch, probe)
+        self.assertEqual(probe["status"], "generated")
+        self.assertEqual(patch["prior_wave_index"], 0)
+        patched = patch_scene(scene, patch)
+        self.assertEqual(scene["world"], patched["world"])
+        self.assertNotIn(patch["task_id"], {
+            x["task_id"] for x in scene["macro_graph"]["tasks"]
+        })
+        state.tasks[patch["task_id"]] = patch["task"]
+        state.attempts[patch["task_id"]] = []
+        checked = state.register(patch["task_id"])
+        earlier = deterministic_report(patch["task"], checked,
+                                       instruction=patch["instruction"],
+                                       model_alias="model_1")
+        state.set_public_report(patch["task_id"], earlier, round_number=1)
+        self.assertEqual(len(comparison_rows(state)), 1)
+        state.cross_source_checks_enabled = True
+        state.scheduling_state()
+        self.assertEqual(
+            state.detected_conflicts[-1]["kind"],
+            "cross_round_report_disagreement",
+        )
+        self.assertEqual(state.detected_conflicts[-1]["recheck_task_id"],
+                         "target")
+        self.assertTrue(state.unresolved_cited_conflicts())
+        fresh = state.register("target")
+        fixed = deterministic_report(task, fresh,
+                                     instruction="Recheck the metric.",
+                                     model_alias="model_1")
+        state.set_public_report("target", fixed, round_number=3)
+        self.assertFalse(state.unresolved_cited_conflicts())
+
     def test_cited_prose_preserves_nested_and_null_values(self):
-        from environment.untrusted_orchestration.result_text import (
+        from environment.untrusted_orchestration.reporting.result_text import (
             render_records, parse_records,
         )
         rows = [{

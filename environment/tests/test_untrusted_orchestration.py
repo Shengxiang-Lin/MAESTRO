@@ -23,7 +23,7 @@ from environment.untrusted_orchestration.generate_turns import (
 )
 from environment.untrusted_orchestration.config import DEFAULT_CONFIG, load_config
 from environment.untrusted_orchestration.state_machine import ExecutionState, Attempt
-from environment.untrusted_orchestration.report_author import naturalize_report
+from environment.untrusted_orchestration.reporting.report_author import naturalize_report
 from environment.untrusted_orchestration.config import generate_from_config
 from environment.generate_question.execution.program_ir import Relation
 
@@ -1194,7 +1194,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
 
 
     def test_attempt_contract_separates_delivery_from_preview(self):
-        from environment.untrusted_orchestration.report_contract import (
+        from environment.untrusted_orchestration.reporting.report_contract import (
             build_report_contract,
         )
         tasks = {task["task_id"]: task for task in
@@ -1261,10 +1261,10 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertIn("not delivered", report["finish_result"]["result"])
 
     def test_result_context_ids_are_grounded_but_invented_ids_still_fail(self):
-        from environment.untrusted_orchestration.report_contract import (
+        from environment.untrusted_orchestration.reporting.report_contract import (
             build_report_contract,
         )
-        from environment.untrusted_orchestration.report_validation import (
+        from environment.untrusted_orchestration.reporting.report_validation import (
             validate_report_draft, claim_tokens,
         )
         task = {"task_id": "lookup", "source_ids": ["stat_a"],
@@ -1684,7 +1684,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertEqual(status["mode"], "llm_reviewed_contract_frozen")
 
     def test_stage4b_intermediate_numeric_is_not_final_delivered_value(self):
-        from environment.untrusted_orchestration.report_validation import (
+        from environment.untrusted_orchestration.reporting.report_validation import (
             explicit_final_value_issues, validate_report_draft,
         )
         delivered = [{

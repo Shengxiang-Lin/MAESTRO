@@ -10,7 +10,7 @@ from __future__ import annotations
 from environment.base_orchestration.generation_meta import (
     GENERATION_PROCESS_RE,
 )
-from .public_language import internal_labels_in_text
+from .reporting.public_language import internal_labels_in_text
 from .visible_history import visible_history_reasoning_issues
 
 

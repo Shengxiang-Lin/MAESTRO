@@ -15,7 +15,7 @@ import json
 from environment.implement_subtask.reporting import (
     _readable_value, _readable_verified_answer,
 )
-from .state_machine import Attempt, relation_rows
+from ..state_machine import Attempt, relation_rows
 from .report_evidence import observed_handoff_discrepancies
 
 

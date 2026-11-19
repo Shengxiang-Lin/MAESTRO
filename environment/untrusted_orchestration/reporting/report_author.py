@@ -20,7 +20,7 @@ from .report_contract import (
 )
 from .report_validation import validate_report_draft
 from .public_language import sanitize_public_prose
-from .state_machine import deterministic_report, Attempt
+from ..state_machine import deterministic_report, Attempt
 
 _AUTHOR_SYSTEM = """Naturalize a Sub-Agent's executed evidence into concise
 Orchestra-o1 feedback. You are NOT deciding which facts occurred.
