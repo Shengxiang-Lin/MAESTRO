@@ -946,12 +946,12 @@ def generate_turns(
     max_fault_atoms: int = 1,
     delayed_evidence_probability: float = 0.0,
     candidate_strategy: str = "sample_one",
-    max_candidates_per_round: int = 24,
+    max_candidates_per_round: int | None = None,
     max_distractors_per_fault: int = 2,
-    max_selected_per_round: int = 1,
+    max_selected_per_round: int | None = None,
     selection_strategy: str = "causal_rank",
     max_diagnostics_per_scene: int = 0,
-    max_language_attempts_per_round: int = 1,
+    max_language_attempts_per_round: int | None = None,
     max_revisions: int = 2,
     report_max_revisions: int | None = None,
     main_max_revisions: int | None = None,
@@ -1017,7 +1017,9 @@ def generate_turns(
         ("max_selected_per_round", max_selected_per_round, 8),
         ("max_language_attempts_per_round", max_language_attempts_per_round, 8),
     ):
-        if type(value) is not int or not 1 <= value <= maximum:
+        if value is not None and (
+            type(value) is not int or not 1 <= value <= maximum
+        ):
             raise ValueError("invalid_" + name)
     if selection_strategy not in {"causal_rank", "stratified"}:
         raise ValueError("invalid_candidate_selection_strategy")
@@ -1026,6 +1028,8 @@ def generate_turns(
     ):
         raise ValueError("invalid_max_diagnostics_per_scene")
     if (candidate_strategy == "enumerate"
+            and max_language_attempts_per_round is not None
+            and max_selected_per_round is not None
             and max_language_attempts_per_round < max_selected_per_round):
         raise ValueError("language_budget_smaller_than_selection")
     modes = list(fault_modes or ["missing", "partial", "wrong"])
@@ -1625,8 +1629,12 @@ def generate_turns(
             succeeded = sum(
                 published_recovery(r["candidate_index"]) for r in past
             )
-            room = max(0, max_selected_per_round - succeeded)
-            budget = max(0, max_language_attempts_per_round - len(past))
+            room = (len(candidates) - succeeded
+                    if max_selected_per_round is None
+                    else max(0, max_selected_per_round - succeeded))
+            budget = (len(candidates) - len(past)
+                      if max_language_attempts_per_round is None
+                      else max(0, max_language_attempts_per_round - len(past)))
             if room == 0 or budget == 0:
                 continue
             for candidate in candidates:
