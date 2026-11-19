@@ -15,8 +15,8 @@ from __future__ import annotations
 from copy import deepcopy
 import random
 
-from .atomic_faults import AtomicFault, legacy_atom
-from .event_scheduler import EvidenceEvent
+from ..atomic_faults import AtomicFault, legacy_atom
+from ..event_scheduler import EvidenceEvent
 
 
 def _dependents(tasks: dict[str, dict], tid: str) -> set[str]:

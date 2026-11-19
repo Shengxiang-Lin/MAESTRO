@@ -18,8 +18,8 @@ import json
 import random
 
 from environment.generate_question.execution.program_ir import ProgramError
-from .atomic_faults import AtomicFault, ATOM_TO_MODE
-from .faults import FaultUnsupported, relation_rows, run_attempt
+from ..atomic_faults import AtomicFault, ATOM_TO_MODE
+from ..faults import FaultUnsupported, relation_rows, run_attempt
 from .scenario_generator import make_scenario
 
 

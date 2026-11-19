@@ -24,14 +24,14 @@ from .faults import (
     Fault, FaultUnsupported, choose_targets, probe_eligible_fault_modes,
 )
 from .atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
-from .scenario_generator import make_scenario
+from .scenario.scenario_generator import make_scenario
 from .trajectory_builder import build_branch
 from .offline_pipeline import author_branch_reports, author_branch_main
 from .trusted_prefix import compile_trusted_prefixes
 from .publication_guard import review_turn_surface
-from .candidate_exploration import expand_all_rounds
-from .candidate_selection import select_recovered_candidates
-from .round_sampling import select_feedback_rounds
+from .scenario.candidate_exploration import expand_all_rounds
+from .scenario.candidate_selection import select_recovered_candidates
+from .scenario.round_sampling import select_feedback_rounds
 from .evidence_affordances import analyze_scene_evidence_affordances
 
 
@@ -71,13 +71,16 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
     directory = Path(__file__).resolve().parent
     code_files = (
         "faults.py", "atomic_faults.py", "report_faults.py",
-        "event_scheduler.py", "scenario_generator.py",
-        "candidate_exploration.py", "candidate_selection.py",
+        "event_scheduler.py",
+        "scenario/scenario_generator.py", "scenario/round_sampling.py",
+        "scenario/candidate_exploration.py",
+        "scenario/candidate_selection.py",
         "evidence_affordances.py", "reasoning_fidelity.py",
         "visible_history.py", "visible_claim_state.py",
         "visible_claim_extraction.py",
         "main_decision_contract.py",
         "report_contract.py", "report_evidence.py", "result_text.py",
+        "scenario/history_conflicts.py",
         "report_validation.py", "public_language.py",
         "publication_guard.py",
         "state_machine.py", "report_author.py",
@@ -297,14 +300,17 @@ def _published_result_formats(episodes: list[dict]) -> dict:
                         decoded = json.loads(value)
                     except (ValueError, TypeError):
                         decoded = None
-                    label = (
-                        "typed_evidence_json" if isinstance(decoded, list)
-                        and all(isinstance(item, dict)
-                                and isinstance(item.get("values"), dict)
-                                and isinstance(item.get("source_fact_refs"), list)
-                                for item in decoded)
-                        else "natural_language"
-                    )
+                    from .result_text import parse_records
+                    if parse_records(value) is not None:
+                        label = "cited_record_prose_v1"
+                    elif (isinstance(decoded, list)
+                          and all(isinstance(item, dict)
+                                  and isinstance(item.get("values"), dict)
+                                  and isinstance(item.get("source_fact_refs"), list)
+                                  for item in decoded)):
+                        label = "typed_evidence_json"
+                    else:
+                        label = "legacy_prose"
                 counts[phase][label] += 1
     return {phase: dict(sorted(values.items()))
             for phase, values in sorted(counts.items())}

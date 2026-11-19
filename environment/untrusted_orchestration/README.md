@@ -118,56 +118,58 @@ its returned evidence and any Main-visible prerequisite values:
   receives automatic Main-visible inconsistency detection; other
   perturbations may remain diagnostic, not forced recovery examples.
 
-**Latest-batch source re-observation.** For a Wrong/Fabricated candidate,
-Stage 4 may add one execution of the same frozen query to the latest feedback
-batch, with a matching Main delegation. It copies the original source scope,
-operators, upstream context and tool routing. It reads existing observations;
-no new source or comparison value is constructed from the clean execution.
+**Latest feedback versus prior history.** Stage 4 now generates two
+Main-observable issue families only:
 
-The two reports share their source. Their agreement does not count as independent
-corroboration. A complete public row-set disagreement, including an entity binding
-difference, triggers a targeted reconciliation of the original task. Only delivered
-records are compared. Multi-source provenance is preserved without being called a
-single independent origin. The normal independent-claim checks continue to require
-distinct provenance.
+1. **Latest report itself is abnormal** (missing, partial, incorrect scope,
+   or explicit Result/Summary/available-input mismatch). The fault is
+   applied to the latest returned Sub-Agent batch; Main acts on that
+   feedback and its past observations.
+2. **Latest report conflicts with a prior report.** Earlier and newest
+   public Result assertions are compared ONLY when the entity, field and
+   record scope match. The disagreement is not proof that either side
+   is true, and same-source reports are never counted as independent
+   corroboration. Main can recheck, repair or continue independent work.
 
-The private audit includes `latest_batch_clean_reference`, a paired clean batch
-with identical assignments and all other reports held fixed. Capacity limits remain
-enforced. For first batches already containing four tasks, a pilot can use
-`max_parallel_tasks: 5` when the environment permits five simultaneous tasks.
-Every generated repeat still requires an actual dispatch and executed attempt.
+When a prior report lacks an explicit comparable record, Stage 4 may
+surface a row from that earlier task's **already executed** WorkProduct.
+It preserves the earlier dispatch, source, field contract and real FactRefs;
+it neither introduces a new source nor fabricates a Main action or value.
+Unsupported cross-history candidates remain observational negatives.
+The branch-local historical presentation is privately paired with a clean
+variant that shares exactly the same earlier evidence, while the original
+Stage-3 files remain unchanged.
 
-Every targeted candidate records `latest_batch_witness_probe`. Summary counters
-retain their existing names, including `latest_batch_witness_generated` and
-`latest_batch_witness_conflicts_detected`; here they count repeated-source
-observations and visible disagreements, not independent-source confirmation.
+The deprecated same-batch auxiliary verifier and its synthetic-source
+interfaces have been deleted. Private audit now records
+`history_conflict_anchor` and, when needed, `paired_clean_history`.
+Summary reports `historical_anchor_status_distribution` and
+`cross_round_report_conflicts_detected`.
 
 4C now checks `done_but_incomplete` against the structured, flattened
 O1 reports, not against `json.loads()` of the formatted history prose;
 the Result/Summary conflict contract recognizes Dossier/ENT/PRJ IDs.
-Track `latest_batch_witness_generated`,
-`latest_batch_witness_conflicts_detected` and
-`latest_batch_witness_recovered` in private selection statistics.
 The 4C Critic is explicitly instructed that different attributes of the
 same entity do not constitute rival same-claim observations, and that a
 source-free comparison still needs a delegated derivation step.
 
 `summary.json` also reports `published_result_format_by_phase` for
 `clean_prefix`, `faulted_latest_batch` and `recovery_continuation`.
-This is an intentional audit of potential O1 text/typed-JSON shortcuts,
+It distinguishes `legacy_prose`, `cited_record_prose_v1`,
+`typed_evidence_json` and `missing`, to expose surface-format shortcuts,
 **not** a claim that the surfaces are already normalized. Rewriting frozen
 Stage-3 clean reports or private fact provenance to hide that drift would
 invalidate clean/fault pairing; any future training-time normalization must
 preserve Main-visible source evidence and be evaluated separately.
 
-**II. Inter-Sub-Agent conflicts** are not separate fault injectors:
-an actual wrong/fabricated report plus an independent, already returned
-same-claim report can form a value or relation disagreement. Same-round
-and later-visible disagreements both request rechecking, with actual
-downstream invalidation only if an earlier value was used. If reports
-still disagree after rechecking, the branch is unresolved, even if a
-private Gold answer happened to match. No fabricated second source or
-new Stage-1 operator is added.
+**II. Cross-report disagreements** are not separate fault injectors:
+an actual wrong/fabricated latest report plus a previously delivered
+same-claim record can create an observable disagreement. Independent
+sources, shared sources and Result/Summary discrepancies remain explicitly
+distinguished. The Main does not know the private fault origin and must
+recheck rather than treating the older report as automatically correct.
+If the comparison remains unresolved after the bounded retry budget, the
+branch is not published as positive supervision.
 
 In `private/candidate_selection.jsonl`, compare the **private fault
 mechanism** with `observable_issue_family` (`intra_report_issue`,
@@ -177,17 +179,19 @@ and `recovery_effect` (execution unblocked, inconsistency resolved,
 incorrect answer genuinely corrected, downstream recomputed, or not
 recovered). These aggregates are also exported to `summary.json`.
 
-Stage 1–3 remain frozen. Some scenes genuinely have zero same-fact,
-independent cross-report witnesses; Stage 4 records that limitation
-rather than fabricating a contradictory report.
+Stage 1–3 remain frozen. Some scenes genuinely have no legal comparable
+prior records; Stage 4 records that limitation instead of inventing
+a source or claiming unsupported verification.
 
 ## Functional pipeline
 
 1. `trusted_prefix.py`: validate clean, executable historical batches.
-2. `candidate_exploration.py`, `candidate_selection.py`: explore
+2. `scenario/candidate_exploration.py`,
+   `scenario/candidate_selection.py`: explore
    **one atomic fault per candidate**, replay recovery and select
    causally distinct branches before expensive language review.
-3. `state_machine.py`, `evidence_planning.py`: version WorkProducts,
+3. `scenario/history_conflicts.py`, `state_machine.py`,
+   `evidence_planning.py`: compare delivered historical claims, version WorkProducts,
    track invalidations/retries, generate permitted evidence requests.
 4. `report_contract.py`, `report_author.py`: render actual attempt
    deliveries and review Sub-Agent language, without restoring hidden

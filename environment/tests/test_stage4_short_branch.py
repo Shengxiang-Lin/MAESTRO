@@ -4,10 +4,10 @@ from __future__ import annotations
 from copy import deepcopy
 import unittest
 
-from environment.untrusted_orchestration.round_sampling import (
+from environment.untrusted_orchestration.scenario.round_sampling import (
     select_feedback_rounds,
 )
-from environment.untrusted_orchestration.candidate_selection import (
+from environment.untrusted_orchestration.scenario.candidate_selection import (
     select_recovered_candidates, classify_trial,
 )
 from environment.untrusted_orchestration.config import load_config
