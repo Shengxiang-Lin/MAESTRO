@@ -403,17 +403,32 @@ def build_branch(
     # feedback remain unchanged. Both the new dispatch and its real attempt
     # are recorded, so no Sub-Agent report appears without a Main task.
     private_witness_patch = None
+    witness_probe = {"status": "not_applicable", "reason": "not_targeted"}
     if (scenario_plan is not None
             and scenario_plan.get("mode") == "event_driven"
-            and len(task_entries[-1]["subtask_results"]) < max_parallel_tasks
             and len(faults) == 1
             and faults[0].atom_kind in {
                 "wrong_retrieval", "wrong_entity_binding",
                 "fabricated_claim",
             }):
-        private_witness_patch = propose_witness_patch(
-            state, faults[0].task_id, branch_round=branch_round,
-        )
+        if len(task_entries[-1]["subtask_results"]) >= max_parallel_tasks:
+            witness_probe = {
+                "status": "ineligible", "reason": "parallel_capacity_full",
+            }
+        else:
+            witness_probe = {}
+            private_witness_patch = propose_witness_patch(
+                state, faults[0].task_id, branch_round=branch_round,
+                diagnostic=witness_probe,
+            )
+            if not witness_probe:
+                # Also support patched/fixture generators that return only
+                # the patch. This remains private audit metadata.
+                witness_probe = {
+                    "status": "generated" if private_witness_patch else "ineligible",
+                    "reason": ("witness_patch_returned" if private_witness_patch
+                               else "no_comparable_cited_claim"),
+                }
         if private_witness_patch is not None:
             scene = patch_scene(scene, private_witness_patch)
             state.scene = scene
@@ -878,6 +893,7 @@ def build_branch(
         "clean_reference_identity": clean_identity,
         "faults": injected,
         "latest_batch_witness_patch": private_witness_patch,
+        "latest_batch_witness_probe": witness_probe,
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
         "visible_claim_state": visible_claim_state,
