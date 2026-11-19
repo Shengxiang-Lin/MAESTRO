@@ -2,8 +2,9 @@
 
 A previous, publicly returned Sub-Agent can be re-invoked in the next
 selected wave using the *same* authorized source and the same inputs.
-An injected executor/report fault may yield a conflicting observation.
-The new Sub-Agent must be present in the earlier Main delegate action;
+Either the newest repeated query is faulted, or an old consumed result is
+faulted before a clean later witness. The extra Sub-Agent must be in an
+actual Main delegate action;
 adding only a returned report would be a fabricated, unrequested task.
 This is a scenario-local branch augmentation, not the frozen Stage-3 run.
 """
