@@ -196,6 +196,11 @@ def _stage4_cases(
             status_counts["missing_final_journal"] += 1
             continue
         data = json.loads(journal_path.read_text(encoding="utf-8"))
+        if data.get("status") == "not_selected_for_language_review":
+            # Stage4A may enumerate thousands of legitimate alternatives,
+            # but these were not reviewed as trainable complete Episodes.
+            status_counts["screened_out"] += 1
+            continue
         scene_id = item["question_id"]
         if scene_id not in scenes or scene_id not in clean:
             raise ValueError("stage4_scene_without_clean_pair:" + scene_id)
