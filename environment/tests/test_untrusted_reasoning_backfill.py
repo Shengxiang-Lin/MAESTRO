@@ -13,7 +13,7 @@ from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.reasoning_fidelity import (
     reasoning_evidence_issues,
 )
-from environment.untrusted_orchestration.candidate_selection import (
+from environment.untrusted_orchestration.scenario.candidate_selection import (
     select_recovered_candidates,
 )
 
