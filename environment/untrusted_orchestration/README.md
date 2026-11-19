@@ -128,18 +128,26 @@ private Gold answer happened to match.
 
 For CURRENT simulated benchmark data, set
 `generation.latest_cross_report_pairs: true`. The Stage-4-only
-`latest_witness.py` creates two supplemental **simulated** audit
-observations of one already-grounded Stage-1 source fact, each with
-a distinct virtual source, origin, FactRef, and executable Macro.
-One Sub-Agent's latest-batch handoff is deliberately changed with a
-grounded same-source distractor via the existing `fabricated_claim`
-atomic mechanism; the other latest-batch report stays clean. Both new
-tasks are appended to the SAME last received batch and to its preceding
-Main `delegate_task` action. Earlier original Stage-3 feedback rounds
-are not modified. The original Stage-1–3 reference is strictly validated
-before the local augmentation; the augmented Scene never overwrites the
-user's frozen Scene or Stage-2 reports. Auxiliary clean reports are also
-reviewed in 4B; 4C receives the expanded source catalog.
+`latest_witness.py` first attempts to identify an explicit, earlier
+Stage-3 source report containing an already-returned entity/attribute
+pair. For the current clean Stage-2 natural report form, the literal
+`entity (value)` statement must match an actual authorized Stage-1
+source observation and its evidence origin. **Only ONE supplemental
+Sub-Agent** is then added to the latest received batch, with a distinct
+virtual source, executable Macro and `fabricated_claim` fault that
+contradicts the previously returned clean report. The old report and its
+entire earlier delegation history stay unchanged.
+
+If no such earlier literal source-backed assertion is available, the
+fallback creates TWO supplemental **simulated** audit observations
+of a currently grounded Stage-1 fact. One added report is corrupted,
+the other remains clean, and both are attached to the latest batch only.
+Both forms require matching actual subtask assignments in the immediately
+preceding `delegate_task` action, source-scoped operator replay and
+full FactRefs for newly synthesized reports. The original Stage-1–3
+reference is strictly validated before local augmentation; the
+augmented Scene never overwrites frozen files. Added clean reports
+are reviewed in 4B, and 4C sees the expanded source catalog.
 
 **Important evidential limitation:** the supplemental sources are
 *benchmark-synthesized* observations, with the same underlying fact
@@ -149,11 +157,12 @@ verification. The private `witness_extension.private_generation_basis`
 records this fact. The benchmark tests the Main's behavior on multiple
 apparently independent reports, not actual outside corroboration.
 No invented value from this private generation contract is directly
-given to Main. If a relevant anchored fact, a real-world-grounded
-distractor or two free parallel slots are unavailable, the generator
-skips the supplemental scenario. This produces a same-round, latest
-feedback conflict; later-arriving conflict detection remains supported
-for naturally occurring independent reports.
+given to Main. If a relevant anchored fact, a grounded distractor or enough
+parallel capacity is unavailable, the generator skips the supplemental
+scenario. Historical single-witness scenarios produce **delayed**
+conflict at the target Main round, while two-witness fallback scenarios
+produce same-batch conflict. Neither requires retroactively altering
+earlier Sub-Agent handoffs.
 
 In `private/candidate_selection.jsonl`, compare the **private fault
 mechanism** with `observable_issue_family` (`intra_report_issue`,
