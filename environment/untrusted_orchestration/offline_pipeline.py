@@ -100,8 +100,14 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
     schedule tasks, invoke Main, or redo the underlying poisoned program.
     """
     episode, audit = deepcopy(episode), deepcopy(audit)
-    tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
     reviewed = _strict_reports(scene, stage2_rows)
+    extension = audit.get("witness_extension")
+    if extension is not None:
+        # Stage-2 is validated against its ORIGINAL frozen Scene. These
+        # additional tasks exist solely inside the Stage-4 local branch.
+        from .latest_witness import extend_local_scene
+        scene = extend_local_scene(scene, extension)
+    tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
     versions = audit["runtime"]["attempt_versions"]
     decision_ids = {
         d["round"]: d["task_ids"]
