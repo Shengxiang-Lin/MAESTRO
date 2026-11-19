@@ -565,7 +565,8 @@ class IntraReportFaultTests(unittest.TestCase):
         }])
         state.set_public_report("target", faulty, round_number=2)
         patch, probe = propose_prior_observation(
-            state, "target", branch_round=3, max_parallel_tasks=5,
+            state, "target", branch_round=3,
+            max_parallel_tasks=len(scene["macro_graph"]["reference_waves"][0]) + 1,
         )
         self.assertIsNotNone(patch, probe)
         self.assertEqual(probe["status"], "generated")
