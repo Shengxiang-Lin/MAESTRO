@@ -90,6 +90,10 @@ def parser() -> argparse.ArgumentParser:
     untrusted.add_argument("--max-scenes", type=int)
     untrusted.add_argument("--branches-per-scene", type=int)
     untrusted.add_argument("--workers", type=int)
+    untrusted.add_argument(
+        "--target-main-turns", type=int,
+        help="Global budget of publishable Main decisions; 4A remains exhaustive",
+    )
     untrusted.add_argument("--mode", choices=("template", "llm"))
     untrusted.add_argument("--overwrite", action="store_true")
     untrusted.add_argument(
@@ -152,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
             ("output_dir", "output_dir"), ("max_scenes", "max_scenes"),
             ("branches_per_scene", "branches_per_scene"),
             ("workers", "workers"), ("mode", "mode"),
+            ("target_main_turns", "target_main_turns"),
         ):
             value = getattr(cli, cli_name)
             if value is not None:
