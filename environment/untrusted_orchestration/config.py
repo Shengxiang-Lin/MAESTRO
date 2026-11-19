@@ -20,7 +20,6 @@ _REQUIRED = {
         "max_distractors_per_fault", "max_selected_per_round",
         "selection_strategy", "max_diagnostics_per_scene",
         "max_language_attempts_per_round", "target_main_turns",
-
     },
     "model": {
         "author_api_base", "author_model", "critic_api_base",
