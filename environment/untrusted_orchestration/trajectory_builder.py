@@ -24,14 +24,14 @@ from environment.base_orchestration.trajectory_builder import (
     _answer_text, _strict_reports, _main_local_terminal,
     clean_reference_identity,
 )
-from .faults import Fault
-from .atomic_faults import AtomicFault
-from .event_scheduler import EventScheduler
+from environment.untrusted_orchestration.runtime.faults import Fault
+from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault
+from environment.untrusted_orchestration.runtime.event_scheduler import EventScheduler
 from .state_machine import (
     ExecutionState, deterministic_report, public_history_item,
 )
 from .reporting.report_author import naturalize_report
-from .evidence_planning import schedule_evidence_requests
+from environment.untrusted_orchestration.runtime.evidence_planning import schedule_evidence_requests
 from .scenario.history_conflicts import expose_executed_prior_record
 from .scenario.handoff_conflicts import expose_prior_handoff
 from .scenario.prior_observation import (
@@ -646,7 +646,7 @@ def build_branch(
         )
         # Record the FULL decision choice set before the Author or any new
         # Sub-Agent observations. The record is private training metadata.
-        from .decision_reward_state import capture_decision_state
+        from environment.untrusted_orchestration.rewards.decision_reward_state import capture_decision_state
         decision_reward_states.append(capture_decision_state(
             state, round_number=round_number, repairs=repairs,
             ready=ready, blocked=scheduling["blocked"],
@@ -890,7 +890,7 @@ def build_branch(
     # Teacher-side state is computed from the ACTUAL public report text in
     # each returned batch, including injected faults and retry replacements.
     # It is never passed to Main (which still sees only O1 formatted history).
-    from .visible_claim_state import audit_visible_claim_states
+    from environment.untrusted_orchestration.inspection.visible_claim_state import audit_visible_claim_states
     decision_bindings = {
         d["round"]: d["task_ids"] for d in decisions
         if d.get("decision_kind") == "delegate"

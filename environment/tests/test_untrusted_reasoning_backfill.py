@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from environment.base_orchestration.action_author import author_delegate_action
 from environment.tests.test_untrusted_orchestration import sample
-from environment.untrusted_orchestration.reasoning_fidelity import (
+from environment.untrusted_orchestration.orchestration.reasoning_fidelity import (
     reasoning_evidence_issues,
 )
 from environment.untrusted_orchestration.scenario.candidate_selection import (

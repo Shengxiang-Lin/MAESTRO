@@ -20,19 +20,19 @@ from threading import Lock
 
 from tqdm.auto import tqdm
 
-from .faults import (
+from environment.untrusted_orchestration.runtime.faults import (
     Fault, FaultUnsupported, choose_targets, probe_eligible_fault_modes,
 )
-from .atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
+from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault, probe_atoms, ATOM_TO_MODE
 from .scenario.scenario_generator import make_scenario
 from .trajectory_builder import build_branch
 from .offline_pipeline import author_branch_reports, author_branch_main
 from .trusted_prefix import compile_trusted_prefixes
-from .publication_guard import review_turn_surface
+from environment.untrusted_orchestration.inspection.publication_guard import review_turn_surface
 from .scenario.candidate_exploration import expand_all_rounds
 from .scenario.candidate_selection import select_recovered_candidates
 from .scenario.round_sampling import select_feedback_rounds
-from .evidence_affordances import analyze_scene_evidence_affordances
+from environment.untrusted_orchestration.inspection.evidence_affordances import analyze_scene_evidence_affordances
 
 
 def _jsonl(path: Path) -> list[dict]:

@@ -15,7 +15,7 @@ from environment.base_orchestration.action_author import (
 from environment.base_orchestration.generation_meta import (
     generation_process_leak,
 )
-from environment.untrusted_orchestration.publication_guard import (
+from environment.untrusted_orchestration.inspection.publication_guard import (
     review_turn_surface,
 )
 

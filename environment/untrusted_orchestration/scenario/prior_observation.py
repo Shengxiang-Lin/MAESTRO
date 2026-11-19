@@ -158,6 +158,11 @@ def propose_prior_observation(state, target: str, *,
     source_claims = []
     for sid in task["source_ids"]:
         source = world[sid]
+        # A keyed-only store must not be swept with an offline scan. Its
+        # lookup key requires an executed, previously delivered parent;
+        # the history-first handoff route handles that causal case.
+        if source.get("access_policy", {}).get("mode", "browse") != "browse":
+            continue
         observations = source.get("observations", [])
         if not observations or len(observations) > MAX_SURVEY_ROWS:
             continue

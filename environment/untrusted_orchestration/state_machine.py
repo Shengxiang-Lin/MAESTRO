@@ -14,8 +14,8 @@ import json
 import re
 
 from environment.generate_question.execution.program_ir import Relation
-from .faults import Fault, relation_rows, run_attempt
-from .visible_claim_extraction import extract_visible_claims
+from environment.untrusted_orchestration.runtime.faults import Fault, relation_rows, run_attempt
+from environment.untrusted_orchestration.inspection.visible_claim_extraction import extract_visible_claims
 from environment.implement_subtask.realize import _fact_index
 
 

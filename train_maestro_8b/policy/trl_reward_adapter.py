@@ -17,8 +17,8 @@ from statistics import pstdev
 from typing import Any
 from uuid import uuid4
 
-from environment.untrusted_orchestration.decision_reward_state import SCHEMA
-from environment.untrusted_orchestration.orchestration_reward import score_decision
+from environment.untrusted_orchestration.rewards.decision_reward_state import SCHEMA
+from environment.untrusted_orchestration.rewards.orchestration_reward import score_decision
 from train_maestro_8b.policy.hybrid_reward import HybridReward
 
 # Conservative normalization of Qwen3's reasoning envelope, *not* baseline's

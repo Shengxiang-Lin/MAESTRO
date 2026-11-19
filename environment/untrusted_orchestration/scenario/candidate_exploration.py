@@ -18,8 +18,8 @@ import json
 import random
 
 from environment.generate_question.execution.program_ir import ProgramError
-from ..atomic_faults import AtomicFault, ATOM_TO_MODE
-from ..faults import FaultUnsupported, relation_rows, run_attempt
+from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault, ATOM_TO_MODE
+from environment.untrusted_orchestration.runtime.faults import FaultUnsupported, relation_rows, run_attempt
 from .scenario_generator import make_scenario
 from .handoff_conflicts import discover_handoffs, fault_breaks_handoff
 

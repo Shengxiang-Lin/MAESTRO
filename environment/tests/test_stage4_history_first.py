@@ -6,8 +6,8 @@ import json
 import unittest
 
 from environment.tests.test_untrusted_orchestration import sample
-from environment.untrusted_orchestration.atomic_faults import AtomicFault
-from environment.untrusted_orchestration.faults import relation_rows
+from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault
+from environment.untrusted_orchestration.runtime.faults import relation_rows
 from environment.untrusted_orchestration.scenario.candidate_exploration import (
     _clean_products, enumerate_round_candidates,
 )

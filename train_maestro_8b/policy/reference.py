@@ -157,7 +157,7 @@ def main():
     debug_path = Path(args.reward_debug_jsonl) if args.reward_debug_jsonl else None
     if debug_path:
         debug_path.parent.mkdir(parents=True, exist_ok=True)
-    from environment.untrusted_orchestration.orchestration_reward import score_decision
+    from environment.untrusted_orchestration.rewards.orchestration_reward import score_decision
     skipped_groups = 0
     for epoch in range(args.epochs):
         random.shuffle(data)

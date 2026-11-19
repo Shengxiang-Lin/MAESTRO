@@ -8,10 +8,10 @@ from environment.untrusted_orchestration.reporting.result_text import delivered_
 
 from environment.generate_question.execution.program_ir import Relation
 from environment.tests.test_untrusted_orchestration import sample
-from environment.untrusted_orchestration.atomic_faults import AtomicFault
-from environment.untrusted_orchestration.faults import run_attempt, relation_rows
+from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault
+from environment.untrusted_orchestration.runtime.faults import run_attempt, relation_rows
 from environment.untrusted_orchestration.reporting.report_author import naturalize_report
-from environment.untrusted_orchestration.visible_claim_extraction import (
+from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
     extract_visible_claims,
 )
 from environment.untrusted_orchestration.state_machine import (
@@ -299,7 +299,7 @@ class IntraReportFaultTests(unittest.TestCase):
         ), ["R02-Ework_M8-F01:missing_status"])
 
     def test_dossier_identifier_visible_result_summary_conflict(self):
-        from environment.untrusted_orchestration.main_decision_contract import (
+        from environment.untrusted_orchestration.orchestration.main_decision_contract import (
             build_main_decision_contract,
         )
         entries = [{"attempt": 1, "subtask_results": [{
@@ -760,7 +760,7 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(parse_records(render_records([])), [])
 
     def test_cross_field_values_do_not_prove_same_claim_disagreement(self):
-        from environment.untrusted_orchestration.main_decision_contract import (
+        from environment.untrusted_orchestration.orchestration.main_decision_contract import (
             build_main_decision_contract,
         )
         from environment.untrusted_orchestration.trajectory_builder import (
@@ -832,7 +832,7 @@ class IntraReportFaultTests(unittest.TestCase):
         })
 
     def test_stage4_fault_branch_keeps_original_main_dispatch(self):
-        from environment.untrusted_orchestration.atomic_faults import probe_atoms
+        from environment.untrusted_orchestration.runtime.atomic_faults import probe_atoms
         from environment.untrusted_orchestration.trajectory_builder import (
             build_branch,
         )

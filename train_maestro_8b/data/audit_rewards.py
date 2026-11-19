@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from statistics import mean
 
-from environment.untrusted_orchestration.orchestration_reward import score_decision
+from environment.untrusted_orchestration.rewards.orchestration_reward import score_decision
 from train_maestro_8b.data.contracts import iter_jsonl
 
 

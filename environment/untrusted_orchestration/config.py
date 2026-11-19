@@ -167,7 +167,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         raise ValueError("untrusted_mode_requires_template_or_llm")
     # Current Stage-4 config fixes enumerate/event_driven; all other
     # legacy fault knobs inherit the maintained generate_turns defaults.
-    from .atomic_faults import ATOM_TO_MODE
+    from environment.untrusted_orchestration.runtime.atomic_faults import ATOM_TO_MODE
     if config["selection_strategy"] not in {
         "causal_rank", "stratified",
     }:

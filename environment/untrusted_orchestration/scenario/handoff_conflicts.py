@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from ..faults import relation_rows, run_attempt
+from environment.untrusted_orchestration.runtime.faults import relation_rows, run_attempt
 from ..reporting.result_text import delivered_records, render_records
 
 

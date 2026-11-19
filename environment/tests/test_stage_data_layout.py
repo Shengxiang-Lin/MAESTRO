@@ -93,7 +93,7 @@ class CanonicalStagePathsTests(TestCase):
         self.assertEqual(generate.call_args.kwargs["workers"], 2)
 
     def test_batched_evidence_is_private_not_in_public_sft(self):
-        from environment.untrusted_orchestration.visible_claim_state import (
+        from environment.untrusted_orchestration.inspection.visible_claim_state import (
             audit_visible_claim_states,
         )
         scene = {

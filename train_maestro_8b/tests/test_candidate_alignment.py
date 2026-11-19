@@ -7,7 +7,7 @@ import unittest
 from train_maestro_8b.data.export_risk import index_states
 from train_maestro_8b.data.export_policy import export, reference_key
 from train_maestro_8b.data.contracts import VERSION, iter_jsonl
-from environment.untrusted_orchestration.decision_reward_state import SCHEMA
+from environment.untrusted_orchestration.rewards.decision_reward_state import SCHEMA
 
 
 class CandidateAlignmentTests(unittest.TestCase):

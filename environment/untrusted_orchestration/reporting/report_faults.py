@@ -11,7 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 
-from ..faults import relation_rows
+from environment.untrusted_orchestration.runtime.faults import relation_rows
 from .result_text import render_records, delivered_records
 
 

@@ -14,7 +14,7 @@ from dataclasses import dataclass, asdict
 from typing import Iterable
 
 from environment.generate_question.execution.program_ir import ProgramError
-from .faults import Fault, FaultUnsupported, relation_rows, run_attempt
+from environment.untrusted_orchestration.runtime.faults import Fault, FaultUnsupported, relation_rows, run_attempt
 
 
 # Public names intentionally distinguish *where* the fault occurred from
