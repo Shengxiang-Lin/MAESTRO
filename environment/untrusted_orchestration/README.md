@@ -33,27 +33,6 @@ validation is reused once per accepted scene; per-candidate atomic
 journals are unchanged. Runtime gains depend on real allocated CPU cores;
 20 workers do not imply 20 available cores.
 
-The v10 rollout from PR #270 crashed after 4,231 of 4,381 candidates
-due to a missing `relation_rows` import in the final delayed audit.
-To **explicitly resume** that exact directory after pulling the fix:
-
-```bash
-python -m environment generate-untrusted-turns \
-  --config environment/configs/untrusted_orchestration.yaml \
-  --max-scenes 10 --workers 20 --mode template \
-  --output-dir environment/data/stage4_delayed_v10_template_10 \
-  --resume-after-audit-fix
-```
-
-The migration refuses changed input hashes, settings, candidate ledgers,
-or other changes to source executor/claim logic. Each old 4A journal must
-match the exact candidate identity. It preserves `manifest.before_v10_audit_fix.json`,
-records `private/v10_resume_audit.json`, retains only already completed
-**non-delayed** 4A journals, and *always recomputes* delayed candidates.
-It refuses to mix any existing 4B or 4C journals. Subsequent reruns use
-the standard signed manifest (no flag necessary). For any other branch
-or changed semantics, use a **new** output directory instead.
-
 ## Global training budget and fine-grained recovery
 
 Stage 4A enumerates all executable grounded faults independently of the
