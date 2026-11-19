@@ -15,7 +15,7 @@ from environment.untrusted_orchestration.atomic_faults import (
 from environment.untrusted_orchestration.event_scheduler import (
     EvidenceEvent, EventScheduler,
 )
-from environment.untrusted_orchestration.scenario_generator import (
+from environment.untrusted_orchestration.scenario.scenario_generator import (
     make_scenario, delayed_event_candidate,
 )
 from environment.untrusted_orchestration.faults import Fault, relation_rows
