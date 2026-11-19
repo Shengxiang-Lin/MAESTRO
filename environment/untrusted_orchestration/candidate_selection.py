@@ -204,6 +204,14 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         "latest_batch_witness_generated": bool(
             audit.get("latest_batch_witness_patch")
         ),
+        "latest_batch_witness_probe_status": (
+            (audit.get("latest_batch_witness_probe") or {}).get("status")
+        ),
+        "latest_batch_witness_skip_reason": (
+            (audit.get("latest_batch_witness_probe") or {}).get("reason")
+            if (audit.get("latest_batch_witness_probe") or {}).get("status")
+            == "ineligible" else None
+        ),
         "recovery_effect": recovery_effect,
         "first_visible_issue_round": first_visible_issue_round,
         "visible_issue_types": visible_issue_types,
@@ -389,6 +397,14 @@ def select_recovered_candidates(
             row["execution_outcome"] == "recovered"
             for row in witness_rows
         ),
+        "latest_batch_witness_probe_distribution": dict(sorted(Counter(
+            row["latest_batch_witness_probe_status"] for row in rows
+            if row["latest_batch_witness_probe_status"] not in (None, "not_applicable")
+        ).items())),
+        "latest_batch_witness_ineligible_reasons": dict(sorted(Counter(
+            row["latest_batch_witness_skip_reason"] for row in rows
+            if row["latest_batch_witness_skip_reason"]
+        ).items())),
         "candidates_simulated": len(rows),
         "candidates_execution_recovered": sum(
             row["execution_outcome"] == "recovered" for row in rows

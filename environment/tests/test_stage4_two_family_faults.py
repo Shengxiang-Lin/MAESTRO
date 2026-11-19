@@ -350,12 +350,28 @@ class IntraReportFaultTests(unittest.TestCase):
                 "observed_content": "Case-012 has metric 55.",
             }],
         }
+        scene["world"]["sources"]["local_secondary"] = {
+            "schema": ["case_id", "metric"],
+            "access_mode": "browse", "access_policy": {"mode": "browse"},
+            "modality": "text", "title": "Secondary register",
+            "observations": [{
+                "observation_id": "local_secondary.OBS001",
+                "values": {"case_id": "Case-011", "metric": 22},
+                "fact_refs": ["local_secondary:F001"],
+                "evidence_origin_id": "secondary_root",
+                "observed_content": "A secondary observation.",
+            }],
+        }
         task = {
-            "task_id": "target", "depends_on": [], "source_ids": ["local_primary"],
+            "task_id": "target", "depends_on": [],
+            "source_ids": ["local_primary", "local_secondary"],
             "external_inputs": [], "input_schema": {},
             "operator_chain": [{
                 "id": "load", "op": "scan", "inputs": [],
                 "source_id": "local_primary",
+            }, {
+                "id": "secondary", "op": "scan", "inputs": [],
+                "source_id": "local_secondary",
             }, {
                 "id": "filter", "op": "filter_eq", "inputs": ["load"],
                 "field": "case_id", "value": "Case-011",
@@ -377,8 +393,30 @@ class IntraReportFaultTests(unittest.TestCase):
             "source_fact_refs": ["local_primary:F002"],
         }])
         state.set_public_report("target", public, round_number=1)
-        patch = propose_witness_patch(state, "target", branch_round=2)
+        diagnostic = {}
+        patch = propose_witness_patch(
+            state, "target", branch_round=2, diagnostic=diagnostic,
+        )
         self.assertIsNotNone(patch)
+        self.assertEqual(diagnostic["status"], "generated")
+        self.assertEqual(diagnostic["macro_source_count"], 2)
+        # Composite FactRefs are NOT independent single-origin claims.
+        mixed = deepcopy(public)
+        mixed["finish_result"]["result"] = json.dumps([{
+            "values": {"case_id": "Case-011", "metric": 55},
+            "source_fact_refs": [
+                "local_primary:F002", "local_secondary:F001",
+            ],
+        }])
+        state.set_public_report("target", mixed, round_number=1)
+        skipped = {}
+        self.assertIsNone(propose_witness_patch(
+            state, "target", branch_round=2, diagnostic=skipped,
+        ))
+        self.assertEqual(
+            skipped["reason"], "no_single_origin_direct_source_claim",
+        )
+        state.set_public_report("target", public, round_number=1)
         self.assertEqual(patch["claim"]["attribute"], "metric")
         self.assertEqual(patch["claim"]["faulty_delivered_value"], 55)
         self.assertEqual(patch["claim"]["clean_observation_value"], 87)
@@ -427,6 +465,78 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(
             state.detected_conflicts[0]["recheck_task_id"], "target"
         )
+
+    def test_cross_field_values_do_not_prove_same_claim_disagreement(self):
+        from environment.untrusted_orchestration.main_decision_contract import (
+            build_main_decision_contract,
+        )
+        from environment.untrusted_orchestration.trajectory_builder import (
+            _MAIN_REASONING_CRITIC_SYSTEM,
+        )
+        entries = [{"attempt": 1, "subtask_results": [{
+            "status": "done",
+            "result": json.dumps([{
+                "values": {
+                    "case_id": "Dossier-01",
+                    "metric_a": 87, "metric_b": 55,
+                },
+                "source_fact_refs": ["primary:F001"],
+            }]),
+            "summary": (
+                "Dossier-01 metric_a = 87, metric_b = 55. "
+                "Comparison still pending."
+            ),
+        }]}]
+        goals = [{
+            "operation": "verify_conflicting_evidence",
+            "target_fields": ["metric_a", "metric_b"],
+            "main_visible_justification": (
+                "A later comparison of metric_a and metric_b is pending."
+            ),
+        }]
+        contract = build_main_decision_contract(
+            entries, goals, number_of_tasks=1,
+        )
+        self.assertEqual(
+            contract["visible_evidence"]["confirmed_result_summary_conflicts"],
+            [],
+        )
+        self.assertIn("DIFFERENT attributes", _MAIN_REASONING_CRITIC_SYSTEM)
+        self.assertIn("pending computation", _MAIN_REASONING_CRITIC_SYSTEM)
+
+    def test_published_result_format_drift_is_audited_by_phase(self):
+        from environment.untrusted_orchestration.generate_turns import (
+            _published_result_formats,
+        )
+        episode = {"branch_round": 2, "trajectory": [
+            {"attempt": 0, "action": "delegate_task", "result": {
+                "subtask_results": [{"finish_result": {
+                    "status": "done", "result": "Case-011 metric is 87.",
+                }}],
+            }},
+            {"attempt": 1, "action": "delegate_task", "result": {
+                "subtask_results": [{"finish_result": {
+                    "status": "done", "result": json.dumps([{
+                        "values": {"case_id": "Case-011", "metric": 55},
+                        "source_fact_refs": ["primary:F001"],
+                    }]),
+                }}],
+            }},
+            {"attempt": 2, "action": "delegate_task", "result": {
+                "subtask_results": [
+                    {"finish_result": {"status": "missing", "result": ""}},
+                    {"finish_result": {"status": "done",
+                                       "result": "The metric was rechecked."}},
+                ],
+            }},
+        ]}
+        self.assertEqual(_published_result_formats([episode]), {
+            "clean_prefix": {"natural_language": 1},
+            "faulted_latest_batch": {"typed_evidence_json": 1},
+            "recovery_continuation": {
+                "missing": 1, "natural_language": 1,
+            },
+        })
 
     def test_latest_batch_report_has_matching_dispatch_in_full_branch(self):
         from unittest.mock import patch as mocked
@@ -519,6 +629,9 @@ class IntraReportFaultTests(unittest.TestCase):
             "subtask_results"][-1]["finish_result"]["result"])
         self.assertIn(witness_tid, audit["runtime"]["attempt_versions"])
         self.assertEqual(audit["latest_batch_witness_patch"], patch)
+        self.assertEqual(
+            audit["latest_batch_witness_probe"]["status"], "generated",
+        )
         self.assertNotIn(ident, scene["world"]["sources"])
 
 

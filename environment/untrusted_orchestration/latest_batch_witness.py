@@ -23,29 +23,37 @@ def _scalar(value) -> bool:
     )
 
 
-def propose_witness_patch(state, target: str, *, branch_round: int) -> dict | None:
+def propose_witness_patch(state, target: str, *, branch_round: int,
+                          diagnostic: dict | None = None) -> dict | None:
     """Find ONE literal, same-subject same-field faulty/clean difference.
 
     Only the most recently faulted report is examined. A composite source,
     absent FactRef, missing cited origin, or different entity is not a
     comparable fact and must not generate a verification witness.
     """
-    task = state.tasks[target]
-    if len(task.get("source_ids", [])) != 1:
+    def skip(reason: str):
+        if diagnostic is not None:
+            diagnostic.update(status="ineligible", reason=reason)
         return None
+
+    task = state.tasks[target]
+    # A composite Macro may return a *single-source* cited assertion.
+    # Decide eligibility per delivered claim, not by Macro source count.
+    if not task.get("source_ids"):
+        return skip("no_direct_source")
     received = state.public_reports.get(target, {})
     finish = received.get("finish_result") or {}
     if finish.get("status") != "done":
-        return None
+        return skip("no_completed_public_result")
     try:
         delivered = json.loads(finish.get("result", ""))
     except (ValueError, TypeError):
-        return None
+        return skip("result_not_typed_json")
     if not isinstance(delivered, list):
-        return None
+        return skip("result_not_typed_json")
     parents = [state.communicated_product(p) for p in task["depends_on"]]
     if any(parent is None for parent in parents):
-        return None
+        return skip("missing_executable_parent")
     try:
         clean, _ = run_attempt(
             task, parents=parents,
@@ -53,19 +61,26 @@ def propose_witness_patch(state, target: str, *, branch_round: int) -> dict | No
                      for sid in task["source_ids"]},
         )
     except (ValueError, TypeError, KeyError, ZeroDivisionError):
-        return None
+        return skip("clean_execution_not_replayable")
     clean_rows = [item["values"] for item in relation_rows(clean)]
+    reason = "no_comparable_cited_claim"
     for item in delivered:
         if not isinstance(item, dict) or not isinstance(item.get("values"), dict):
             continue
         wrong = item["values"]
         refs = item.get("source_fact_refs")
         if (not isinstance(refs, list) or not refs
-                or len({r.split(":", 1)[0] for r in refs
-                        if isinstance(r, str) and ":" in r}) != 1
-                or len({state.origin_by_ref.get(r) for r in refs}) != 1
-                or None in {state.origin_by_ref.get(r) for r in refs}):
+                or not all(isinstance(ref, str) and ":" in ref for ref in refs)):
+            reason = "malformed_or_missing_fact_refs"
             continue
+        cited_sources = {ref.split(":", 1)[0] for ref in refs}
+        origins = {state.origin_by_ref.get(ref) for ref in refs}
+        if (len(cited_sources) != 1 or len(origins) != 1
+                or None in origins
+                or not cited_sources <= set(task["source_ids"])):
+            reason = "no_single_origin_direct_source_claim"
+            continue
+        reason = "no_explicit_subject"
         subject_field = next((field for field in SUBJECT_FIELDS
                               if isinstance(wrong.get(field), str)
                               and wrong[field].strip()), None)
@@ -76,7 +91,9 @@ def propose_witness_patch(state, target: str, *, branch_round: int) -> dict | No
             if row.get(subject_field) == wrong[subject_field]
         ]
         if len(same_subject) != 1:
+            reason = "subject_not_unique_in_clean_result"
             continue
+        reason = "no_differing_scalar_attribute"
         for field, original in same_subject[0].items():
             reported = wrong.get(field)
             if (field == subject_field or field not in wrong
@@ -126,6 +143,11 @@ def propose_witness_patch(state, target: str, *, branch_round: int) -> dict | No
                 "program_node_id": op,
                 "outputs": {"typed_relation": [subject_field, field]},
             }
+            if diagnostic is not None:
+                diagnostic.update(
+                    status="generated", reason="row_level_comparable_claim",
+                    macro_source_count=len(task["source_ids"]),
+                )
             return {
                 "version": 1,
                 "source": source,
@@ -144,7 +166,7 @@ def propose_witness_patch(state, target: str, *, branch_round: int) -> dict | No
                 "construction": "stage4_synthetic_comparison_source",
                 "empirically_independent": False,
             }
-    return None
+    return skip(reason)
 
 
 def patch_scene(scene: dict, patch: dict | None) -> dict:
