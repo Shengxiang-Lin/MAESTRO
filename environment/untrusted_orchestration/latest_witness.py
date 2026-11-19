@@ -94,8 +94,87 @@ def _original_fact(scene: dict, *, before_round: int):
     return None
 
 
+def _historical_fact(
+    scene: dict, base_episode: dict | None, *, latest_delegate_round: int,
+) -> dict | None:
+    """Prefer one latest report contradicting an ACTUALLY visible old claim.
+
+    Source grounding and distractor feasibility are checked privately;
+    the old entity/value pair comes verbatim from the earlier delivered
+    Stage-3 Result, not from private Gold.
+    """
+    if base_episode is None:
+        return None
+    from .visible_claim_extraction import literal_parenthesized_pairs
+    tasks = {
+        t["task_id"]: t for t in scene["macro_graph"]["tasks"]
+    }
+    sources = scene["world"]["sources"]
+    for action in base_episode["trajectory"]:
+        if (action.get("action") != "delegate_task"
+                or action["attempt"] >= latest_delegate_round):
+            continue
+        wave = scene["macro_graph"]["reference_waves"][
+            action["attempt"] - 1
+        ]
+        returned = action["result"]["subtask_results"]
+        for tid, report in zip(wave, returned):
+            task = tasks[tid]
+            scoped = task.get("source_ids") or []
+            fields = task["outputs"]["typed_relation"]
+            if len(scoped) != 1 or len(fields) != 2:
+                continue
+            subject_field = next((
+                f for f in fields if f in _SUBJECT
+            ), None)
+            if subject_field is None:
+                continue
+            field = next(f for f in fields if f != subject_field)
+            sid = scoped[0]
+            instruction = str(report.get("task_instruction") or "")
+            if (sid not in instruction
+                    or subject_field.replace("_", " ").casefold() not in
+                       instruction.casefold().replace("_", " ")
+                    or field.replace("_", " ").casefold() not in
+                       instruction.casefold().replace("_", " ")):
+                continue
+            finish = report.get("finish_result") or {}
+            for subject, literal in literal_parenthesized_pairs(
+                finish.get("result")
+            ):
+                valid = [
+                    obs for obs in sources[sid].get("observations", [])
+                    if obs.get("values", {}).get(subject_field) == subject
+                    and str(obs.get("values", {}).get(field)) == literal
+                ]
+                if len(valid) != 1:
+                    continue
+                value = valid[0]["values"][field]
+                for decoy in sources[sid].get("observations", []):
+                    wrong = decoy.get("values", {}).get(field)
+                    if type(wrong) is type(value) and wrong != value:
+                        return {
+                            "subject_field": subject_field,
+                            "subject": subject, "field": field,
+                            "clean_value": value,
+                            "distractor_value": wrong,
+                            "original_task_id": tid,
+                            "original_source_id": sid,
+                            "historical_anchor": {
+                                "report_round": action["attempt"],
+                                "task_id": tid, "source_id": sid,
+                                "visible_claim": subject + " (" + literal + ")",
+                                "evidence_origin_id": valid[0].get(
+                                    "evidence_origin_id"
+                                ),
+                            },
+                        }
+    return None
+
+
 def make_latest_pair(scene: dict, *, feedback_round: int,
-                     max_parallel_tasks: int = 4) -> dict | None:
+                     max_parallel_tasks: int = 4,
+                     base_episode: dict | None = None) -> dict | None:
     """Preflight a same-claim pair at the last delivered batch ONLY.
 
     No source from the original World is changed. If the new batch would
@@ -105,9 +184,19 @@ def make_latest_pair(scene: dict, *, feedback_round: int,
     if feedback_round < 3:
         return None
     wave = scene["macro_graph"]["reference_waves"][feedback_round - 2]
-    if len(wave) + 2 > max_parallel_tasks:
+    fact = _historical_fact(
+        scene, base_episode,
+        latest_delegate_round=feedback_round - 1,
+    )
+    # When the previous report does not have a comparable explicit
+    # statement, put two separate reports in the latest batch instead.
+    required_extra = 1 if fact is not None else 2
+    if len(wave) + required_extra > max_parallel_tasks:
         return None
-    fact = _original_fact(scene, before_round=feedback_round - 1)
+    if fact is None:
+        fact = _original_fact(
+            scene, before_round=feedback_round - 1,
+        )
     if not fact:
         return None
     tag = sha256((
@@ -119,7 +208,7 @@ def make_latest_pair(scene: dict, *, feedback_round: int,
     original = fact["clean_value"]
     distractor = fact["distractor_value"]
     extensions = []
-    for index in (1, 2):
+    for index in range(1, required_extra + 1):
         sid = "audit_probe_" + tag + "_" + str(index)
         tid = "audit_check_" + tag + "_" + str(index)
         primary = {
@@ -173,7 +262,7 @@ def make_latest_pair(scene: dict, *, feedback_round: int,
             {subject_field: subject, field: original}
         ):
             return None
-        if index == 2:
+        if index == required_extra:
             corrupted, meta = run_attempt(
                 task, parents=[], sources={sid: source},
                 fault=Fault(
@@ -200,10 +289,11 @@ def make_latest_pair(scene: dict, *, feedback_round: int,
         "version": "latest_batch_comparable_pair.v1",
         "feedback_round": feedback_round,
         "latest_delegate_round": feedback_round - 1,
-        "faulted_task_id": extensions[1]["task"]["task_id"],
+        "faulted_task_id": extensions[-1]["task"]["task_id"],
         "fault_kind": "fabricated_claim",
         "fault_variant_index": 1,
         "entries": extensions,
+        "historical_anchor_used": bool(fact.get("historical_anchor")),
         "private_generation_basis": {
             **fact,
             "independence": "two_distinct_simulated_source_observations",
