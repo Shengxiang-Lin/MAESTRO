@@ -33,6 +33,7 @@ from .state_machine import (
 from .reporting.report_author import naturalize_report
 from .evidence_planning import schedule_evidence_requests
 from .scenario.history_conflicts import expose_executed_prior_record
+from .scenario.handoff_conflicts import expose_prior_handoff
 from .scenario.prior_observation import (
     propose_prior_observation, patch_scene as patch_prior_observation_scene,
     latest_scope_statement,
@@ -405,7 +406,16 @@ def build_branch(
     # earlier task, not a new synthetic verifier or an added Main dispatch.
     # Preserve the same augmented prior evidence for a paired clean variant.
     history_anchor = {"status": "not_applicable", "reason": "not_targeted"}
-    if (scenario_plan is not None
+    # A source-legal, earlier *public* keyed input was chosen before the
+    # atomic fault. Preserve that real prior WorkProduct and only make its
+    # already stated field explicit; no new source access is introduced.
+    handoff_plan = (scenario_plan or {}).get("history_first_plan")
+    if handoff_plan is not None:
+        history_anchor = expose_prior_handoff(
+            state, task_entries, trajectory, handoff_plan,
+        )
+    if (history_anchor["status"] != "generated"
+            and scenario_plan is not None
             and scenario_plan.get("mode") == "event_driven"
             and len(faults) == 1
             and faults[0].atom_kind in {
@@ -417,7 +427,7 @@ def build_branch(
             latest_task_ids={faults[0].task_id},
         )
     prior_observation_patch = None
-    if (history_anchor["status"] != "exposed"
+    if (history_anchor["status"] not in {"exposed", "generated"}
             and scenario_plan is not None
             and scenario_plan.get("mode") == "event_driven"
             and len(faults) == 1
