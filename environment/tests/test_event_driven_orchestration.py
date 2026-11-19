@@ -19,7 +19,7 @@ from environment.untrusted_orchestration.scenario.scenario_generator import (
     make_scenario, delayed_event_candidate,
 )
 from environment.untrusted_orchestration.faults import Fault, relation_rows
-from environment.untrusted_orchestration.report_author import naturalize_report
+from environment.untrusted_orchestration.reporting.report_author import naturalize_report
 from environment.untrusted_orchestration.state_machine import (
     ExecutionState, Attempt,
 )
