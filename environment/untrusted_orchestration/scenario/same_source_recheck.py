@@ -2,8 +2,9 @@
 
 A previous, publicly returned Sub-Agent can be re-invoked in the next
 selected wave using the *same* authorized source and the same inputs.
-An injected executor/report fault may yield a conflicting observation.
-The new Sub-Agent must be present in the earlier Main delegate action;
+Either the newest repeated query is faulted, or an old consumed result is
+faulted before a clean later witness. The extra Sub-Agent must be in an
+actual Main delegate action;
 adding only a returned report would be a fabricated, unrequested task.
 This is a scenario-local branch augmentation, not the frozen Stage-3 run.
 """
@@ -23,7 +24,7 @@ from environment.untrusted_orchestration.inspection.visible_claim_extraction imp
 RECHECK_FAULT_KINDS = {"wrong_retrieval", "computation_error", "fabricated_claim"}
 
 
-def _recheck_task(original: dict, branch_round: int) -> dict:
+def _clone_source_query(original: dict, branch_round: int) -> dict:
     suffix = sha256(
         (original["task_id"] + ":" + str(branch_round)).encode()
     ).hexdigest()[:12]
@@ -115,7 +116,7 @@ def query_values(rows: list[dict]) -> list[str]:
                   for row in rows)
 
 
-def _reported_scalar_really_changes(
+def _public_result_set_differs(
     clean_rows: list[dict], faulty_rows: list[dict],
     old_report: dict,
 ) -> bool:
@@ -178,7 +179,7 @@ def discover_same_source_rechecks(
             clean_rows = relation_rows(products[older_id])
             if not clean_rows:
                 continue
-            clone = _recheck_task(older, round_plan["branch_round"])
+            clone = _clone_source_query(older, round_plan["branch_round"])
             if clone["task_id"] in original_tasks:
                 continue
             sources = {
@@ -228,7 +229,7 @@ def discover_same_source_rechecks(
                     changed = runtime.get("communicated_rows")
                     if changed is None:
                         changed = relation_rows(result)
-                    if not _reported_scalar_really_changes(
+                    if not _public_result_set_differs(
                         clean_rows, changed, old_report,
                     ):
                         continue
@@ -259,7 +260,7 @@ def patch_scene(scene: dict, patch: dict | None) -> dict:
     task = deepcopy(patch["new_task"])
     tid = task["task_id"]
     if tid in {item["task_id"] for item in result["macro_graph"]["tasks"]}:
-        raise ValueError("duplicate_history_recheck_task")
+        raise ValueError("duplicate_history_clone_source_query")
     earlier = {
         t for wave in result["macro_graph"]["reference_waves"][
             :patch["new_wave_index"]] for t in wave

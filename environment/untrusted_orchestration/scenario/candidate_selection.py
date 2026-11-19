@@ -196,6 +196,13 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         "values": event.get("observed_values", []),
         "rounds": [event.get("older_round"), event.get("latest_round")],
     } for event in history_events]
+    # Policy diversity deliberately ignores concrete task IDs, values and
+    # historical placement. Case diversity still preserves all of them.
+    policy_signature = sha256(json.dumps(
+        {"category": category, "operations": [
+            request[0] for request in behavior
+        ]}, sort_keys=True, ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()[:16]
     signature = sha256(json.dumps(
         {"category": category, "requests": behavior,
          "history_round_pairs": history_round_pairs,
@@ -229,6 +236,9 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         ),
         "category": category,
         "behavior_signature": signature,
+        "policy_signature": policy_signature,
+        "scenario_blueprint": plan["scenario_plan"].get("blueprint"),
+        "delayed_causal_audit": audit.get("delayed_causal_audit"),
         "fault_events_applied": len(applied),
         "observability": observability,
         "observable_issue_family": observable_family,
@@ -449,6 +459,27 @@ def select_recovered_candidates(
                     if row["selection_purpose"] == "positive"
                     for gap in row["history_conflict_round_gaps"]).items()
         )),
+        "candidate_delayed_propagation_trials": sum(
+            row["scenario_blueprint"] == "delayed_consumed_error_recovery"
+            for row in rows
+        ),
+        "execution_recovered_delayed_propagation": sum(
+            row["scenario_blueprint"] == "delayed_consumed_error_recovery"
+            and row["execution_outcome"] == "recovered" for row in rows
+        ),
+        "selected_recovered_delayed_propagation": sum(
+            row["scenario_blueprint"] == "delayed_consumed_error_recovery"
+            and row["selection_purpose"] == "positive" for row in rows
+        ),
+        "distinct_selected_policy_signatures": len({
+            row["policy_signature"] for row in rows
+            if row["selection_purpose"] == "positive"
+        }),
+        "distinct_selected_case_signatures": len({
+            (row["question_id"], row["feedback_round"],
+             row["behavior_signature"]) for row in rows
+            if row["selection_purpose"] == "positive"
+        }),
         "candidates_simulated": len(rows),
         "candidates_execution_recovered": sum(
             row["execution_outcome"] == "recovered" for row in rows

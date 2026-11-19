@@ -847,13 +847,22 @@ class ExecutionState:
                          + comparison_rows(self)):
             target = conflict["latest_task"]
             old = conflict["older_task"]
-            # An existing independent-source dispute is already handled by
-            # its bounded recheck protocol. Do not create a second same-pair
-            # history event while waiting for that recheck.
-            if any(set(event.get("compared_parent_tasks", []))
-                   == {old, target}
-                   for event in self.detected_conflicts):
-                continue
+            # Recheck the newest report first. If it still disagrees
+            # after a real retry, verify the older report. This decision
+            # uses only visible disagreement and attempt versions.
+            matching_events = [
+                event for event in self.detected_conflicts
+                if set(event.get("compared_parent_tasks", [])) == {old, target}
+            ]
+            if matching_events:
+                prior = matching_events[-1]
+                if (conflict.get("comparison_kind") != "same_query_result_set"
+                        or prior.get("kind") != "cross_round_report_disagreement"
+                        or prior["recheck_task_id"] != target
+                        or self.current[target].version <=
+                           prior["recheck_task_version"]):
+                    continue
+                target = old
             current = self.current.get(target)
             if current is None or not (
                 current.status == "done"
@@ -864,8 +873,12 @@ class ExecutionState:
             old = conflict["older_task"]
             if self.public_status(old) != "done":
                 continue
-            key = (old, target, conflict["subject"], conflict["attribute"])
+            key = (
+                conflict["older_task"], conflict["latest_task"],
+                conflict["subject"], conflict["attribute"],
+            )
             if any(event.get("history_pair_key") == key
+                   and event.get("recheck_task_id") == target
                    and event.get("recheck_task_version") == current.version
                    for event in self.detected_conflicts):
                 continue
@@ -1046,7 +1059,7 @@ class ExecutionState:
             (row["older_task"], row["latest_task"], row["attribute"])
             for row in (comparison_rows(self, require_visible_scope=False)
                         + handoff_disagreements(self)
-                        + same_query_disagreements(self))
+                        + same_query_disagreements(self, require_latest=False))
         }
         claims = public_claims(self)
         for event in self.detected_conflicts:

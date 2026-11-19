@@ -513,7 +513,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
 
     def test_same_query_identity_change_across_long_history_is_repaired(self):
         from environment.untrusted_orchestration.scenario.same_source_recheck import (
-            _recheck_task, _reported_scalar_really_changes,
+            _clone_source_query, _public_result_set_differs,
         )
         from environment.untrusted_orchestration.scenario.history_conflicts import (
             same_query_disagreements,
@@ -533,7 +533,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
              "fields": ["case_id"]},
         ]
         parent["outputs"] = {"typed_relation": ["case_id"]}
-        repeated = _recheck_task(parent, 5)
+        repeated = _clone_source_query(parent, 5)
         scene["macro_graph"]["tasks"].append(repeated)
         state = ExecutionState(scene, {})
         original = state.register("parent")
@@ -547,7 +547,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         new = deterministic_report(repeated, wrong, instruction="Repeat the matching query.",
                                    model_alias="model_1")
         state.set_public_report(repeated["task_id"], new, round_number=4)
-        self.assertTrue(_reported_scalar_really_changes(
+        self.assertTrue(_public_result_set_differs(
             relation_rows(original.product), relation_rows(wrong.product), old,
         ))
         events = same_query_disagreements(state)
@@ -568,13 +568,13 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         self.assertEqual(same_query_disagreements(state), [])
         unknown = deepcopy(old)
         unknown["finish_result"]["result"] = "No usable candidate was identified."
-        self.assertFalse(_reported_scalar_really_changes(
+        self.assertFalse(_public_result_set_differs(
             relation_rows(original.product), relation_rows(wrong.product), unknown,
         ))
 
     def test_recheck_result_is_consumed_and_stale_descendant_is_recomputed(self):
         from environment.untrusted_orchestration.scenario.same_source_recheck import (
-            _recheck_task, patch_scene,
+            _clone_source_query, patch_scene,
         )
         scene, parent, child = _scene()
         scene["world"]["sources"]["parent_src"]["observations"].append({
@@ -587,7 +587,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
             "field": "case_id", "value": "Case-001",
         })
         parent["operator_chain"][-1]["inputs"] = ["parent_filter"]
-        repeated = _recheck_task(parent, 3)
+        repeated = _clone_source_query(parent, 3)
         scene["macro_graph"]["reference_waves"] = [["parent"], [], ["child"]]
         patch = {
             "new_task": repeated, "older_task_id": "parent",
@@ -613,6 +613,278 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         self.assertTrue(state.invalidations)
         state.register("child")
         self.assertTrue(state.answer_matches_gold())
+
+    def test_delayed_fault_is_consumed_before_late_clean_recheck(self):
+        """One early error, real downstream use, late discovery, two-sided
+        public verification, actual stale descendant and recomputation.
+        No hidden fault label tells the Main which report to trust.
+        """
+        from environment.untrusted_orchestration.scenario.same_source_recheck import (
+            _clone_source_query, patch_scene,
+        )
+        from environment.untrusted_orchestration.scenario.history_conflicts import (
+            same_query_disagreements,
+        )
+        scene, parent, child = _scene()
+        scene["world"]["sources"]["parent_src"]["observations"].append({
+            "values": {"case_id": "Case-002", "entity_final": "Dunhaven District"},
+            "fact_refs": ["parent_src:F002"],
+            "observation_id": "parent_src.OBS002",
+            "evidence_origin_id": "synthetic:parent002",
+        })
+        parent["operator_chain"].insert(1, {
+            "id": "parent_filter", "op": "filter_eq",
+            "inputs": ["parent_scan"], "field": "case_id",
+            "value": "Case-001",
+        })
+        parent["operator_chain"][-1]["inputs"] = ["parent_filter"]
+        recheck = _clone_source_query(parent, 4)
+        scene["macro_graph"]["reference_waves"] = [
+            ["parent"], ["child"], [],
+        ]
+        patch = {
+            "new_task": recheck, "older_task_id": "parent",
+            "older_wave_index": 0, "new_wave_index": 2,
+            "feeds_future_tasks": [],
+            "consumers_before_discovery": ["child"],
+            "construction": "delayed_consumed_error_recovery",
+        }
+        scene = patch_scene(scene, patch)
+        tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
+        self.assertEqual(tasks["child"]["depends_on"], ["parent"])
+
+        state = ExecutionState(scene, {})
+        bad = state.register(
+            "parent",
+            fault=AtomicFault(
+                "wrong_retrieval", "parent", 1,
+            ).as_legacy_fault(),
+        )
+        state.set_public_report(
+            "parent", deterministic_report(
+                parent, bad, instruction="Find the source record.",
+                model_alias="model_1",
+            ), round_number=1,
+        )
+        consumer = state.register("child")
+        self.assertEqual(
+            relation_rows(consumer.product)[0]["values"]["observation_year"],
+            2024,
+        )
+        state.set_public_report(
+            "child", deterministic_report(
+                child, consumer, instruction="Use the returned key.",
+                model_alias="model_1",
+            ), round_number=2,
+        )
+        witness = state.register(recheck["task_id"])
+        state.set_public_report(
+            recheck["task_id"], deterministic_report(
+                recheck, witness, instruction="Repeat the same source query.",
+                model_alias="model_1",
+            ), round_number=3,
+        )
+        state.cross_source_checks_enabled = True
+        self.assertIn(recheck["task_id"], state.scheduling_state()["repair"])
+        conflicts = [
+            e for e in state.detected_conflicts
+            if e["kind"] == "cross_round_report_disagreement"
+        ]
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["older_round"], 1)
+        self.assertEqual(conflicts[0]["latest_round"], 3)
+        self.assertTrue(conflicts[0]["downstream_previously_executed"] is False)
+
+        # First same-query retry confirms the clean witness. The
+        # disagreement persists, so the earlier consumed side is checked.
+        checked = state.register(recheck["task_id"])
+        state.set_public_report(
+            recheck["task_id"], deterministic_report(
+                recheck, checked, instruction="Recheck newest.",
+                model_alias="model_1",
+            ), round_number=4,
+        )
+        self.assertIn("parent", state.scheduling_state()["repair"])
+        self.assertEqual(len(state.detected_conflicts), 2)
+        self.assertTrue(state.unresolved_cited_conflicts())
+
+        corrected = state.register("parent")
+        state.set_public_report(
+            "parent", deterministic_report(
+                parent, corrected, instruction="Verify old source value.",
+                model_alias="model_1",
+            ), round_number=5,
+        )
+        self.assertTrue(state.invalidations)
+        self.assertEqual(state.current["child"].status, "stale")
+        self.assertFalse(state.unresolved_cited_conflicts())
+        updated = state.register("child")
+        self.assertEqual(
+            relation_rows(updated.product)[0]["values"]["observation_year"],
+            2025,
+        )
+        self.assertEqual(len(state.attempts["child"]), 2)
+
+    def test_poisoned_prefix_replays_real_descendant_and_rejects_clean_leak(self):
+        """The intermediate Stage-3 dispatch may be reused only while its
+        source values are grounded in the ACTUAL earlier public history.
+        """
+        from environment.untrusted_orchestration.scenario.same_source_recheck import (
+            _clone_source_query, patch_clean_episode, patch_scene,
+        )
+        from environment.untrusted_orchestration.trajectory_builder import (
+            _replay_observed_prefix,
+        )
+        scene, parent, child = _scene()
+        source = scene["world"]["sources"]["parent_src"]
+        source["observations"].append({
+            "values": {"case_id": "Case-002", "entity_final": "Dunhaven District"},
+            "fact_refs": ["parent_src:F002"],
+            "observation_id": "parent_src.OBS002",
+            "evidence_origin_id": "synthetic:parent002",
+        })
+        parent["operator_chain"].insert(1, {
+            "id": "parent_filter", "op": "filter_eq",
+            "inputs": ["parent_scan"], "field": "case_id",
+            "value": "Case-001",
+        })
+        parent["operator_chain"][-1]["inputs"] = ["parent_filter"]
+        filler = _clone_source_query(parent, 99)
+        witness = _clone_source_query(parent, 4)
+        scene["macro_graph"]["tasks"].append(filler)
+        scene["macro_graph"]["reference_waves"] = [
+            ["parent"], ["child"], [filler["task_id"]],
+        ]
+        clean_state = ExecutionState(scene, {})
+        results = []
+        for index, wave in enumerate(scene["macro_graph"]["reference_waves"]):
+            batch = []
+            for task_id in wave:
+                task = clean_state.tasks[task_id]
+                attempt = clean_state.register(task_id)
+                batch.append(deterministic_report(
+                    task, attempt,
+                    instruction="Inspect the requested source.",
+                    model_alias="model_1",
+                ))
+            results.append({
+                "attempt": index + 1,
+                "action": "delegate_task",
+                "reasoning": "Collect authorized evidence.",
+                "params": {"tasks": [{
+                    "task_instruction": "Inspect the requested source.",
+                    "context": "Use the authorized source.",
+                    "model": "model_1", "tools": ["Inspect"],
+                } for _ in wave]},
+                "result": {
+                    "subtask_results": batch,
+                    "total_subtasks": len(batch),
+                    "total_steps": sum(x["steps_taken"] for x in batch),
+                    "all_done": True,
+                },
+            })
+        base = {"task_id": scene["task_id"], "trajectory": results}
+        sampled = enumerate_round_candidates(
+            scene, {
+                **_round_plan(scene),
+                "branch_round": 4,
+                "incoming_task_ids": [filler["task_id"]],
+            },
+            atomic_fault_kinds=["wrong_retrieval"],
+            max_candidates=None, max_distractors=1,
+            base_episode=base, max_parallel_tasks=4,
+        )
+        delayed_candidates = [
+            candidate for candidate in sampled
+            if candidate["scenario_plan"].get("blueprint")
+                == "delayed_consumed_error_recovery"
+        ]
+        self.assertTrue(delayed_candidates,
+                        "No delayed early-fault candidate was generated")
+        self.assertTrue(any(
+            candidate["faults"][0].task_id == "parent"
+            and candidate["scenario_plan"]["fault_atoms"][0][
+                "origin_round"] == 1
+            and candidate["scenario_plan"]["same_source_recheck_plan"][
+                "consumers_before_discovery"] == ["child"]
+            for candidate in delayed_candidates
+        ))
+        patch = {
+            "new_task": witness,
+            "older_task_id": "parent", "older_wave_index": 0,
+            "new_wave_index": 2, "feeds_future_tasks": [],
+            "consumers_before_discovery": ["child"],
+            "construction": "delayed_consumed_error_recovery",
+        }
+        augmented_base = patch_clean_episode(
+            base, scene, patch, max_parallel_tasks=4,
+        )
+        augmented_scene = patch_scene(scene, patch)
+        review_rows = []
+        fault = AtomicFault(
+            "wrong_retrieval", "parent", 1,
+        ).as_legacy_fault()
+        state, history, prefix, log = _replay_observed_prefix(
+            augmented_scene, {}, augmented_base,
+            branch_round=4, faults=[fault],
+            fault_origin_wave_index=0,
+            prefix_report_reviews=review_rows,
+        )
+        self.assertEqual(len(log), 1)
+        self.assertTrue(
+            {"parent", "child", witness["task_id"]} <=
+            {r["task_id"] for r in review_rows}
+        )
+        bad_child = relation_rows(state.current["child"].product)
+        self.assertEqual(bad_child[0]["values"]["observation_year"], 2024)
+        self.assertIn(
+            "2024", str(prefix[1]["result"]["subtask_results"][0][
+                "finish_result"]["result"]),
+        )
+        self.assertEqual(
+            relation_rows(clean_state.current["child"].product)[0][
+                "values"]["observation_year"], 2025,
+        )
+        self.assertEqual(history[0]["subtask_results"][0]["status"], "done")
+        # A plan that still uses the clean-only name after the early fault
+        # is *not* an acceptable delayed training history.
+        leaked_base = deepcopy(augmented_base)
+        leaked_base["trajectory"][1]["params"]["tasks"][0][
+            "task_instruction"] = "Inspect Lakehurst District by name."
+        with self.assertRaisesRegex(
+            ValueError, "delayed_prefix_dispatch_references_unseen_clean_value",
+        ):
+            _replay_observed_prefix(
+                augmented_scene, {}, leaked_base,
+                branch_round=4, faults=[fault],
+                fault_origin_wave_index=0,
+            )
+
+    def test_delayed_fault_candidate_keeps_old_dependency_edges(self):
+        """Fault only the old task; a clean new witness is genuinely delegated."""
+        from environment.untrusted_orchestration.scenario.same_source_recheck import (
+            _clone_source_query, patch_scene,
+        )
+        scene, parent, child = _scene()
+        patch = {
+            "new_task": _clone_source_query(parent, 4),
+            "older_task_id": "parent", "older_wave_index": 0,
+            "new_wave_index": 2,
+            "feeds_future_tasks": [],
+            "consumers_before_discovery": ["child"],
+            "construction": "delayed_consumed_error_recovery",
+        }
+        scene["macro_graph"]["reference_waves"] = [
+            ["parent"], ["child"], [],
+        ]
+        new_scene = patch_scene(scene, patch)
+        descendants = {
+            t["task_id"]: t["depends_on"]
+            for t in new_scene["macro_graph"]["tasks"]
+        }
+        self.assertEqual(descendants["child"], ["parent"])
+        self.assertEqual(new_scene["macro_graph"]["reference_waves"][2],
+                         [patch["new_task"]["task_id"]])
 
     def test_public_measurement_map_never_fills_omitted_rows(self):
         from environment.untrusted_orchestration.scenario.same_source_recheck import (

@@ -1,10 +1,10 @@
 """Zero-LLM enumeration of genuine Stage-4 atomic fault candidates.
 
 The original Macro DAG is an executable *baseline*, not a verifier graph.
-For every eligible trusted feedback round, try each actual returned
-Sub-Agent task, supported atomic mechanism, and (optionally) several
-different genuine distractors. Each candidate must pass a real executor
-preflight on the frozen Scene. No random text or new World facts.
+All accepted feedback rounds are eligible. Existing returned-task faults
+and source-authorized repeated queries are preflighted on real WorkProducts.
+Delayed scenarios corrupt an earlier attempt only if an actual descendant
+was dispatched before a late clean query. No new World facts.
 
 This is deliberately limited to ONE initial fault per candidate; a
 multi-fault search is not required to obtain complex recovery trajectories.
@@ -175,9 +175,44 @@ def enumerate_round_candidates(
         atomic_fault_kinds=atomic_fault_kinds,
         max_parallel_tasks=max_parallel_tasks,
     )
-    # Preserve per-round coverage only if neither existing-task faults
-    # (method A) nor real later recheck dispatches (method B) are possible.
-    if not eligible and not rechecks:
+    # Method C: one old report is corrupted, actual descendants execute
+    # BEFORE a clean late recheck reveals the discrepancy. Only candidates
+    # with an already-dispatched intermediate consumer are meaningful.
+    waves = scene["macro_graph"]["reference_waves"]
+    delayed = []
+    for repeat in rechecks:
+        origin = repeat["older_wave_index"]
+        newer = repeat["new_wave_index"]
+        old_id = repeat["older_task_id"]
+        middle = {
+            tid for wave in waves[origin + 1:newer] for tid in wave
+        }
+        if not middle:
+            continue
+        queue, descendants = [old_id], set()
+        while queue:
+            current = queue.pop()
+            for task in tasks.values():
+                tid = task["task_id"]
+                if current in task["depends_on"] and tid not in descendants:
+                    descendants.add(tid)
+                    queue.append(tid)
+        if not descendants & middle:
+            continue
+        if not _candidate_is_real(
+            scene, tasks[old_id], repeat["fault_kind"],
+            repeat["fault_variant"], products,
+        ):
+            continue
+        delayed.append({
+            **repeat,
+            "construction": "delayed_consumed_error_recovery",
+            "feeds_future_tasks": [],  # Keep the ORIGINAL dependency chain.
+            "consumers_before_discovery": sorted(descendants & middle),
+        })
+    # Keep an explicit denominator when none of the three genuine causal
+    # construction routes can execute.
+    if not eligible and not rechecks and not delayed:
         skipped = deepcopy(round_plan)
         skipped["faults"] = []
         skipped["fault_mode"] = None
@@ -269,31 +304,52 @@ def enumerate_round_candidates(
                 if by_history[gap]:
                     diverse.append(by_history[gap].pop(0))
         extra = diverse[:max(0, max_candidates - len(result))]
-    for patch in extra:
+    def add_recheck(patch: dict, *, delayed_fault: bool) -> None:
+        """One canonical fault/assignment constructor for B and C."""
         slot = len(result) + 1
         item = deepcopy(round_plan)
         item["sample_id"] += f"-candidate-{slot:03d}"
-        item["candidate_count_total"] = len(ordered) + len(rechecks)
         item["candidate_variant_index"] = patch["fault_variant"]
         item["skip_reason"] = None
         item["fault_mode"] = patch["fault_kind"]
         item["incoming_task_ids"] = [
             *item["incoming_task_ids"], patch["new_task"]["task_id"]
         ]
+        origin_round = (
+            patch["older_wave_index"] + 1 if delayed_fault
+            else item["branch_round"] - 1
+        )
+        target = (
+            patch["older_task_id"] if delayed_fault
+            else patch["new_task"]["task_id"]
+        )
         item["faults"] = [AtomicFault(
-            patch["fault_kind"], patch["new_task"]["task_id"],
-            origin_round=item["branch_round"] - 1,
+            patch["fault_kind"], target, origin_round=origin_round,
             seed=local_seed + slot,
             variant_index=patch["fault_variant"],
         ).as_legacy_fault()]
         item["scenario_plan"] = make_scenario(
-            scene, item, mode="event_driven",
-            max_fault_atoms=max_fault_atoms,
+            scene, item, mode="event_driven", max_fault_atoms=1,
             delayed_evidence_probability=0.0,
         )
+        if delayed_fault:
+            item["scenario_plan"]["blueprint"] = (
+                "delayed_consumed_error_recovery"
+            )
+            item["scenario_plan"]["fault_atoms"][0]["origin_round"] = (
+                origin_round
+            )
         item["scenario_plan"]["same_source_recheck_plan"] = patch
         result.append(item)
-    total = len(ordered) + len(rechecks)
+
+    for patch in extra:
+        add_recheck(patch, delayed_fault=False)
+    # Actual consumed error precedes the later clean and delegated recheck.
+    for patch in delayed:
+        if max_candidates is not None and len(result) >= max_candidates:
+            break
+        add_recheck(patch, delayed_fault=True)
+    total = len(ordered) + len(rechecks) + len(delayed)
     for item in result:
         item["candidate_count_total"] = total
         item["candidate_count_pruned"] = total - len(result)

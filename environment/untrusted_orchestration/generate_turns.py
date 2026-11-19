@@ -375,6 +375,7 @@ def _publish(output: Path, planned: list[dict],
     published_with_downstream_invalidation = 0
     published_with_invalidation_and_visible_conflict = 0
     published_recovered_historical_conflicts = 0
+    published_delayed_propagation_recoveries = 0
     published_history_gap_distribution = Counter()
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
@@ -459,6 +460,17 @@ def _publish(output: Path, planned: list[dict],
                     and 0 < event["older_round"] < event["latest_round"]
                 }
                 published_history_gap_distribution.update(gaps)
+            causal = data["private_audit"].get("delayed_causal_audit")
+            if causal is not None:
+                if (not causal["observable_conflict"]
+                        or not causal["impacted_consumers"]
+                        or not causal["invalidated_consumers"]
+                        or not set(causal["invalidated_consumers"]) <=
+                               set(causal["recomputed_consumers"])):
+                    raise RuntimeError(
+                        "delayed_propagation_lacks_verified_recompute"
+                    )
+                published_delayed_propagation_recoveries += 1
             public_episode = deepcopy(data["episode"])
             # Truth labels belong in private audit, never public reviewed-turn.
             public_episode.pop("outcome", None)
@@ -864,6 +876,8 @@ def _publish(output: Path, planned: list[dict],
             published_with_invalidation_and_visible_conflict,
         "published_recovered_historical_conflicts":
             published_recovered_historical_conflicts,
+        "published_delayed_propagation_recoveries":
+            published_delayed_propagation_recoveries,
         "published_historical_conflict_round_gap_distribution":
             dict(sorted(published_history_gap_distribution.items())),
         "event_timeline_diagnostics": str(
