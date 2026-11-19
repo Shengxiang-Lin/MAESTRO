@@ -878,6 +878,7 @@ class ExecutionState:
                 conflict["subject"], conflict["attribute"],
             )
             if any(event.get("history_pair_key") == key
+                   and event.get("recheck_task_id") == target
                    and event.get("recheck_task_version") == current.version
                    for event in self.detected_conflicts):
                 continue
