@@ -195,16 +195,18 @@ class PublicWorkEvidenceTests(unittest.TestCase):
                             "incorrect_result_after_actual_propagation",
                         },
                     )
-                    delivered = next(
-                        report for report in episode["trajectory"][
-                            wave_index]["result"]["subtask_results"]
-                        if report is not None and
-                        "For the" in (report.get("finish_result") or {})
-                        .get("summary", "")
+                    delivered = episode["trajectory"][wave_index][
+                        "result"]["subtask_results"][wave.index(tid)]
+                    summary = (delivered.get("finish_result") or {}).get(
+                        "summary", ""
                     )
                     self.assertTrue(
-                        "calculation" in delivered["finish_result"]["summary"]
-                        or "count" in delivered["finish_result"]["summary"],
+                        "calculation" in summary or "count" in summary,
+                        f"Targeted computation {tid} has no observable "
+                        f"work evidence; operations="
+                        f"{[x['op'] for x in scene['macro_graph']['tasks'] "
+                        f"if x['task_id'] == tid for x in x['operator_chain']]} "
+                        f"summary={summary[:250]}",
                     )
                     if audit["execution_outcome"] == "recovered":
                         self.assertTrue(turns)
