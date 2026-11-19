@@ -126,7 +126,8 @@ def label_reports(state: dict, snapshots: list[dict], slots: list[tuple[int, int
     return result
 
 
-def render_samples(scene: dict, episode: dict, states: dict, max_attempts: int):
+def render_samples(scene: dict, episode: dict, states: dict, max_attempts: int,
+                   *, sub_model="qwen3-8b", model_alias="model_1"):
     """Use full accumulated reports available BEFORE each Main decision."""
     from environment.base_orchestration.o1_compat import (
         o1_history, o1_prompt_from_history,
@@ -155,7 +156,7 @@ def render_samples(scene: dict, episode: dict, states: dict, max_attempts: int):
         history = o1_history(history_items)
         prompt = o1_prompt_from_history(
             scene, history, attempt=next_round, max_attempts=max_attempts,
-            sub_model="qwen3-8b", model_alias="model_1",
+            sub_model=sub_model, model_alias=model_alias,
         )
         base = prompt.find(history)
         if base < 0 or prompt.find(history, base + 1) != -1:
@@ -186,6 +187,18 @@ def export(scenes_path, episodes_path, states_path, output_dir,
         raise ValueError("val_fraction must be in [0,1)")
     scene_map = {s["task_id"]: s for s in iter_jsonl(scenes_path)}
     state_map = index_states(states_path)
+    # Rebuild the *exact* source O1 prompt, not a hard-coded risk-model
+    # default which may differ from the actual Stage4 subagent model.
+    original = Path(episodes_path).parent / "manifest.json"
+    model_cfg = {}
+    if original.is_file():
+        model_cfg = (json.loads(original.read_text(
+            encoding="utf-8"
+        )).get("settings") or {})
+    sub_model = model_cfg.get("sub_model", "qwen3-8b")
+    model_alias = model_cfg.get("model_alias", "model_1")
+    if type(model_cfg.get("max_rounds")) is int:
+        max_attempts = model_cfg["max_rounds"]
     fixed = None
     if split_map is not None:
         from environment.data_export.splits import VERSION
@@ -240,7 +253,10 @@ def export(scenes_path, episodes_path, states_path, output_dir,
             else:
                 bucket = int(sha256(f"{seed}:{scene_id}".encode()).hexdigest()[:12], 16) / 16**12
                 writer = val if bucket < val_fraction else train
-            for row in render_samples(scene_map[scene_id], ep, state_map[key], max_attempts):
+            for row in render_samples(
+                scene_map[scene_id], ep, state_map[key], max_attempts,
+                sub_model=sub_model, model_alias=model_alias,
+            ):
                 signature = sha256(row["prompt"].encode("utf-8")).hexdigest()
                 supervision = [(r["start"], r["end"], r["risk"], r["mask"])
                                for r in row["reports"]]
