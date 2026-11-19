@@ -114,7 +114,7 @@ def enumerate_round_candidates(
     scene: dict, round_plan: dict, *,
     atomic_fault_kinds: list[str],
     max_candidates: int | None,
-    max_distractors: int,
+    max_distractors: int | None,
     max_fault_atoms: int = 1,
     delayed_evidence_probability: float = 0.0,
     seed: int = 17,
@@ -126,7 +126,8 @@ def enumerate_round_candidates(
     The caller attaches stable *global* indices after all Scene/round
     candidates have been created. No language model is used here.
     """
-    if (max_candidates is not None and max_candidates < 1) or max_distractors < 1:
+    if ((max_candidates is not None and max_candidates < 1)
+            or (max_distractors is not None and max_distractors < 1)):
         raise ValueError("candidate_exploration_limit_invalid")
     if any(kind not in ATOM_TO_MODE for kind in atomic_fault_kinds):
         raise ValueError("unsupported_candidate_kind")
@@ -137,8 +138,29 @@ def enumerate_round_candidates(
     products = _clean_products(scene)
     eligible = []
     for tid in round_plan["incoming_task_ids"]:
+        task = tasks[tid]
         for kind in atomic_fault_kinds:
-            variants = max_distractors if kind in _VARIANT_KINDS else 1
+            if kind not in _VARIANT_KINDS:
+                variants = 1
+            elif max_distractors is not None:
+                variants = max_distractors
+            elif kind == "computation_error":
+                variants = 2
+            else:
+                # Exhaust finite *real* alternatives from already granted
+                # observations and upstream products. More source records
+                # may yield more valid variants, but never invented values.
+                source_rows = sum(
+                    len(scene["world"]["sources"][sid].get("observations", []))
+                    for sid in task.get("source_ids", [])
+                )
+                parent_rows = sum(
+                    len(relation_rows(products[pid]))
+                    for pid in task.get("depends_on", [])
+                )
+                variants = max(1, (
+                    source_rows + parent_rows
+                ) * max(1, len(task["outputs"]["typed_relation"])))
             for variant in range(variants):
                 if _candidate_is_real(
                     scene, tasks[tid], kind, variant, products
@@ -265,7 +287,7 @@ def expand_all_rounds(
     scenes: list[dict], round_plans: list[dict], *,
     atomic_fault_kinds: list[str],
     max_candidates_per_round: int | None,
-    max_distractors_per_fault: int,
+    max_distractors_per_fault: int | None,
     max_fault_atoms: int,
     delayed_evidence_probability: float,
     seed: int,
