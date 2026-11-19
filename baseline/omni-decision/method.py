@@ -25,7 +25,7 @@ async def review(*, reports: list[dict], llm, options: dict) -> dict:
         '"scope":"...","value":"...","status":"reported"}],'
         '"open_needs":["..."],"issues":["..."]}.\n'
         "Delivered history:\n" +
-        json.dumps(reports, ensure_ascii=False)[:int(options.get("max_chars", 22000]))
+        json.dumps(reports, ensure_ascii=False)[:int(options.get("max_chars", 22000))]
     )
     verdict = await ask_json(llm, prompt)
     ledger: dict[tuple[str, str, str], list[dict]] = defaultdict(list)

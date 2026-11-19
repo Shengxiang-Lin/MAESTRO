@@ -48,7 +48,7 @@ async def review(*, reports: list[dict], llm, options: dict) -> dict:
             '{"local":{"r1.1":0.2},"edges":[{"parent":"r1.1",'
             '"child":"r2.1","uptake":0.8}]}.\n'
             + json.dumps(reports, ensure_ascii=False)[:int(
-                options.get("max_chars", 22000])))
+                options.get("max_chars", 22000))])
         estimate = await ask_json(llm, prompt)
         if raw_local is None:
             raw_local = estimate.get("local", {})

@@ -46,7 +46,7 @@ async def review(*, reports: list[dict], llm, options: dict) -> dict:
         'ONLY JSON: {"verdicts":[{"index":0,"label":"neutral",'
         '"reason":"..."}]}.\n'
         + json.dumps({"history": reports, "hypotheses": candidates},
-                     ensure_ascii=False)[:int(options.get("max_chars", 22000]))))
+                     ensure_ascii=False)[:int(options.get("max_chars", 22000))]))
     decisions = {}
     for v in result.get("verdicts", []):
         if not isinstance(v, dict) or not isinstance(v.get("index"), int):
