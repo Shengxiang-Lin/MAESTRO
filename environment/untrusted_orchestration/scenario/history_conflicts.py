@@ -34,6 +34,14 @@ def public_claims(state: "ExecutionState") -> list[dict]:
                     or not claim.get("declared_output_field")
                     or claim["subject"].startswith("source:")):
                 continue
+            # A composite JOIN may cite several observation roots. Its
+            # numeric result is not an independent claim about an individual
+            # source record; do not turn it into a rival assertion.
+            refs = claim.get("fact_refs") or []
+            if refs:
+                origins = {state.origin_by_ref.get(ref) for ref in refs}
+                if len(origins) != 1 or None in origins:
+                    continue
             collected.append({
                 **claim, "task_id": tid,
                 "observed_round": state.public_report_rounds.get(tid, 0),
