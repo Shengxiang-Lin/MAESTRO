@@ -201,6 +201,9 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         "fault_events_applied": len(applied),
         "observability": observability,
         "observable_issue_family": observable_family,
+        "latest_batch_witness_generated": bool(
+            audit.get("latest_batch_witness_patch")
+        ),
         "recovery_effect": recovery_effect,
         "first_visible_issue_round": first_visible_issue_round,
         "visible_issue_types": visible_issue_types,
@@ -373,7 +376,19 @@ def select_recovered_candidates(
     recovery_effect_distribution = Counter(
         row["recovery_effect"] for row in rows
     )
+    witness_rows = [
+        row for row in rows if row["latest_batch_witness_generated"]
+    ]
     stats = {
+        "latest_batch_witness_generated": len(witness_rows),
+        "latest_batch_witness_conflicts_detected": sum(
+            row["observable_issue_family"] == "inter_report_conflict"
+            for row in witness_rows
+        ),
+        "latest_batch_witness_recovered": sum(
+            row["execution_outcome"] == "recovered"
+            for row in witness_rows
+        ),
         "candidates_simulated": len(rows),
         "candidates_execution_recovered": sum(
             row["execution_outcome"] == "recovered" for row in rows

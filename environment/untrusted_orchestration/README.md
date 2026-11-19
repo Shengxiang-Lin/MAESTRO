@@ -118,6 +118,29 @@ its returned evidence and any Main-visible prerequisite values:
   receives automatic Main-visible inconsistency detection; other
   perturbations may remain diagnostic, not forced recovery examples.
 
+**Latest-batch targeted cross-report witnesses.** After an eligible
+single-source Wrong/Fabricated attempt has been returned in feedback batch
+\(t-1\), Stage 4 can append ONE executable comparison investigation to that
+same latest batch, with a matching added Main delegation. It copies neither
+private Gold into Main prompts nor a fabricated FactRef: a branch-local
+synthetic comparison source contains one separately identified observation
+derived from the *frozen clean execution* of the same attribute. The older
+Stage-3 batches are unchanged. The extra source and Macro exist only in this
+Stage-4 branch and are rehydrated consistently for 4B/4C. Its provenance
+is explicitly tagged `stage4_synthetic_comparison_source` and
+`empirically_independent=false`: distinct simulated evidence roots are **not**
+a claim of real-world independent empirical verification. A candidate is
+skipped unless both delivered reports have the same literal entity/attribute,
+different values, explicit FactRefs and a valid known source origin. Neither
+an extra source nor a false conflict is forced for unsupported cases.
+
+4C now checks `done_but_incomplete` against the structured, flattened
+O1 reports, not against `json.loads()` of the formatted history prose;
+the Result/Summary conflict contract recognizes Dossier/ENT/PRJ IDs.
+Track `latest_batch_witness_generated`,
+`latest_batch_witness_conflicts_detected` and
+`latest_batch_witness_recovered` in private selection statistics.
+
 **II. Inter-Sub-Agent conflicts** are not separate fault injectors:
 an actual wrong/fabricated report plus an independent, already returned
 same-claim report can form a value or relation disagreement. Same-round

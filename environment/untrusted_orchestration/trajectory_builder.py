@@ -32,6 +32,8 @@ from .state_machine import (
 )
 from .report_author import naturalize_report
 from .evidence_planning import schedule_evidence_requests
+from .latest_batch_witness import propose_witness_patch, patch_scene
+from environment.implement_subtask.realize import _fact_index
 
 
 _MAIN_AUTHOR_SYSTEM = _AUTHOR_SYSTEM + """
@@ -396,6 +398,73 @@ def build_branch(
         report_revisions=report_max_revisions, model_alias=model_alias,
         on_report_review=on_report_review,
     )
+    # An auxiliary comparison report, if executable, is appended ONLY to
+    # the most recently delivered batch. All older Stage-3 actions and
+    # feedback remain unchanged. Both the new dispatch and its real attempt
+    # are recorded, so no Sub-Agent report appears without a Main task.
+    private_witness_patch = None
+    if (scenario_plan is not None
+            and scenario_plan.get("mode") == "event_driven"
+            and len(task_entries[-1]["subtask_results"]) < max_parallel_tasks
+            and len(faults) == 1
+            and faults[0].atom_kind in {
+                "wrong_retrieval", "wrong_entity_binding",
+                "fabricated_claim",
+            }):
+        private_witness_patch = propose_witness_patch(
+            state, faults[0].task_id, branch_round=branch_round,
+        )
+        if private_witness_patch is not None:
+            scene = patch_scene(scene, private_witness_patch)
+            state.scene = scene
+            state.fact_index = _fact_index(scene["world"])
+            ref = private_witness_patch["source_id"] + ":F001"
+            state.origin_by_ref[ref] = (
+                private_witness_patch["source"]["observations"][0][
+                    "evidence_origin_id"]
+            )
+            witness_id = private_witness_patch["task_id"]
+            witness_task = private_witness_patch["task"]
+            state.tasks[witness_id] = witness_task
+            state.attempts[witness_id] = []
+            attempt = state.register(witness_id)
+            claim = private_witness_patch["claim"]
+            source_id = private_witness_patch["source_id"]
+            instruction = (
+                "Independently examine the available comparison register "
+                + source_id + ". Return " + claim["subject_field"]
+                + " and " + claim["attribute"]
+                + " with source-backed observations. This is a parallel "
+                  "check of the requested evidence, not a recheck of a "
+                  "yet-unreceived Sub-Agent result."
+            )
+            public_report = deterministic_report(
+                witness_task, attempt,
+                instruction=instruction, model_alias=model_alias,
+            )
+            slot = len(trajectory[-1]["result"]["subtask_results"])
+            public_report["subtask_index"] = slot
+            state.set_public_report(
+                witness_id, public_report,
+                round_number=branch_round - 1,
+            )
+            task_entries[-1]["subtask_results"].append(
+                public_history_item(public_report, slot)
+            )
+            task_entries[-1]["total_steps"] += public_report["steps_taken"]
+            latest_action = trajectory[-1]
+            latest_action["params"]["tasks"].append({
+                "task_instruction": instruction,
+                "context": (
+                    "The independent comparison register is an authorized "
+                    "workspace source. Collect a second observation in "
+                    "parallel to the other assigned investigations."
+                ),
+                "model": model_alias, "tools": ["GoogleSearchAction"],
+            })
+            latest_action["result"]["subtask_results"].append(public_report)
+            latest_action["result"]["total_subtasks"] += 1
+            latest_action["result"]["total_steps"] += public_report["steps_taken"]
     before = counterfactual_continuation(
         state, start_wave_index=branch_round - 1,
     )
@@ -450,6 +519,15 @@ def build_branch(
         "task_id": item["task_id"], "attempt_version": 1,
         "round": branch_round - 1, "authoring": deepcopy(item["report_mode"]),
     } for item in injected]
+    if private_witness_patch is not None:
+        report_reviews.append({
+            "task_id": private_witness_patch["task_id"],
+            "attempt_version": 1,
+            "round": branch_round - 1,
+            "authoring": {
+                "status": "accepted", "mode": "deterministic_executed",
+            },
+        })
     main_reviews = []
     evidence_plan = []
     decision_reward_states = []
@@ -799,6 +877,7 @@ def build_branch(
         "task_id": scene["task_id"], "branch_round": branch_round,
         "clean_reference_identity": clean_identity,
         "faults": injected,
+        "latest_batch_witness_patch": private_witness_patch,
         "counterfactual_unrepaired": before,
         "runtime": state.audit(),
         "visible_claim_state": visible_claim_state,
