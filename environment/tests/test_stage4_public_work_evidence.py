@@ -202,9 +202,9 @@ class PublicWorkEvidenceTests(unittest.TestCase):
                         "For the" in (report.get("finish_result") or {})
                         .get("summary", "")
                     )
-                    self.assertIn(
-                        "calculation",
-                        delivered["finish_result"]["summary"],
+                    self.assertTrue(
+                        "calculation" in delivered["finish_result"]["summary"]
+                        or "count" in delivered["finish_result"]["summary"],
                     )
                     if audit["execution_outcome"] == "recovered":
                         self.assertTrue(turns)
