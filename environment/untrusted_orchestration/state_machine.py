@@ -821,6 +821,74 @@ class ExecutionState:
                     "provenance_source_id": next(iter(cited_sources)),
                     "observed_round": self.public_report_rounds.get(tid, 0),
                 })
+        # Some frozen Stage-2 clean reports encode a single-source
+        # entity/date lookup as a literal "Name (value)" list rather than
+        # JSON FactRefs. Preserve their original words. Map provenance
+        # only after matching that exact visible pair to ONE authorized
+        # source observation; never invent a new claim from World rows.
+        from .visible_claim_extraction import (
+            literal_parenthesized_pairs,
+        )
+        for tid, report in self.public_reports.items():
+            if tid not in self.tasks or self.public_status(tid) != "done":
+                continue
+            task = self.tasks[tid]
+            sources = task.get("source_ids") or []
+            fields = task.get("outputs", {}).get("typed_relation", [])
+            if len(sources) != 1 or len(fields) != 2:
+                continue
+            subject_field = next((
+                field for field in fields if field in {
+                    "entity_final", "case_id", "candidate_id",
+                    "entry_label", "accession_id", "project_id",
+                    "event_id", "entity_0", "entity_1",
+                }
+            ), None)
+            if subject_field is None:
+                continue
+            field = next(x for x in fields if x != subject_field)
+            sid = sources[0]
+            instruction = str(report.get("task_instruction") or "")
+            normalized = instruction.casefold().replace("_", " ")
+            if (sid not in instruction
+                    or any(
+                        item.replace("_", " ").casefold() not in normalized
+                        for item in (subject_field, field)
+                    )):
+                continue
+            finish = report.get("finish_result") or {}
+            for subject, literal in literal_parenthesized_pairs(
+                finish.get("result")
+            ):
+                matching = [
+                    obs for obs in self.scene["world"]["sources"][
+                        sid
+                    ].get("observations", [])
+                    if obs.get("values", {}).get(subject_field) == subject
+                    and str(obs.get("values", {}).get(field)) == literal
+                ]
+                if len(matching) != 1:
+                    continue
+                obs = matching[0]
+                refs = obs.get("fact_refs") or []
+                origins = {self.origin_by_ref.get(ref) for ref in refs}
+                if len(origins) != 1 or None in origins:
+                    continue
+                rows.append({
+                    "subject": subject, "attribute": field,
+                    "value": obs["values"][field],
+                    "valid_scope": "same_record",
+                    "surface": "result",
+                    "declared_output_field": True,
+                    "fact_refs": list(refs),
+                    "task_id": tid,
+                    "evidence_origin_id": next(iter(origins)),
+                    "provenance_source_id": sid,
+                    "observed_round": self.public_report_rounds.get(tid, 0),
+                    "provenance_basis_private": (
+                        "literal_visible_pair_verified_against_source"
+                    ),
+                })
         return rows
 
     def _detect_explicit_cross_report_disagreements(self) -> None:
@@ -900,7 +968,7 @@ class ExecutionState:
                         for child in self._dependents(target)
                     )
                     message = (
-                        "Two separately cited sources report different "
+                        "Two source-attributed Sub-Agent reports disagree on "
                         + field.replace("_", " ") + " values for "
                         + subject + ": " + str(earlier["value"])
                         + " versus " + str(later["value"])
