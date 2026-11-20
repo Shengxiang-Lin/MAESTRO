@@ -97,3 +97,9 @@ They omit unreviewed/fallback actions by default, report duplicate/conflicting
 labels without auto-deletion and reject identical prompts shared across
 different splits. `--strict-conflicts` additionally rejects conflicting
 expert actions for the same prompt.
+
+Data preparation now shows phase-specific `tqdm` bars with counts, throughput
+and ETA; completed Case/decision conversion stages also show useful
+acceptance or action statistics. Use `--no-progress` on the `python -m environment.data_export`
+command to suppress progress bars when running CI or redirecting logs.
+This changes only the display, not the generated records or split policy.
