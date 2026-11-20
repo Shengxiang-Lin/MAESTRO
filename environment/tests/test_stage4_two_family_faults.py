@@ -4,13 +4,13 @@ from __future__ import annotations
 import json
 import unittest
 
-from environment.untrusted_orchestration.reporting.result_text import delivered_records
+from environment.untrusted_orchestration.reporting.surface import delivered_records
 
 from environment.generate_question.execution.program_ir import Relation
 from environment.tests.test_untrusted_orchestration import sample
 from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault
 from environment.untrusted_orchestration.runtime.faults import run_attempt, relation_rows
-from environment.untrusted_orchestration.reporting.report_author import naturalize_report
+from environment.untrusted_orchestration.reporting.author import naturalize_report
 from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
     extract_visible_claims,
 )
@@ -489,7 +489,7 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(len(traj[0]["params"]["tasks"]), 1)
 
     def test_date_wording_is_guarded_against_exact_observed_iso_dates(self):
-        from environment.untrusted_orchestration.reporting.report_validation import (
+        from environment.untrusted_orchestration.reporting.validation import (
             claim_tokens, grounded_calendar_text,
         )
         actual = json.dumps({
@@ -521,7 +521,7 @@ class IntraReportFaultTests(unittest.TestCase):
                       - claim_tokens(actual))
 
     def test_report_guard_accepts_only_exact_delivered_factref_count(self):
-        from environment.untrusted_orchestration.reporting.report_validation import (
+        from environment.untrusted_orchestration.reporting.validation import (
             claim_tokens, grounded_reference_count_text,
         )
         rows = [{
@@ -755,7 +755,7 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertEqual(disagreements[0]["latest_value"], 55)
 
     def test_cited_prose_preserves_nested_and_null_values(self):
-        from environment.untrusted_orchestration.reporting.result_text import (
+        from environment.untrusted_orchestration.reporting.surface import (
             render_records, parse_records,
         )
         rows = [{

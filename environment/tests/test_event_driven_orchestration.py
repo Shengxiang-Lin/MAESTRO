@@ -19,7 +19,7 @@ from environment.untrusted_orchestration.scenario.scenario_generator import (
     make_scenario, delayed_event_candidate,
 )
 from environment.untrusted_orchestration.runtime.faults import Fault, relation_rows
-from environment.untrusted_orchestration.reporting.report_author import naturalize_report
+from environment.untrusted_orchestration.reporting.author import naturalize_report
 from environment.untrusted_orchestration.state_machine import (
     ExecutionState, Attempt,
 )
@@ -469,7 +469,7 @@ class EventEngineTests(unittest.TestCase):
                 fault_modes=["missing"], workers=2,
                 no_progress=True,
             )
-            self.assertGreater(result["reviewed_turns"], 0)
+            self.assertGreater(result["main_training_turns"], 0)
             saved = out / "journal" / "000000.json"
             journal = json.loads(saved.read_text())
             journal["turns"][0]["output"]["reasoning"] = (
@@ -483,7 +483,7 @@ class EventEngineTests(unittest.TestCase):
                 multi_target_probability=0, max_rounds=16,
             )
             published = _publish(out, plans)
-            self.assertEqual(published["reviewed_turns"], 0)
+            self.assertEqual(published["main_training_turns"], 0)
             self.assertEqual(
                 published["publication_generation_process_leaks"], 1,
             )

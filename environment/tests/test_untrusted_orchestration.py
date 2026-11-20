@@ -23,7 +23,7 @@ from environment.untrusted_orchestration.generate_turns import (
 )
 from environment.untrusted_orchestration.config import DEFAULT_CONFIG, load_config
 from environment.untrusted_orchestration.state_machine import ExecutionState, Attempt
-from environment.untrusted_orchestration.reporting.report_author import naturalize_report
+from environment.untrusted_orchestration.reporting.author import naturalize_report
 from environment.untrusted_orchestration.config import generate_from_config
 from environment.generate_question.execution.program_ir import Relation
 
@@ -484,9 +484,9 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 json.loads(line) for line in
                 (output / "round_index.jsonl").read_text().splitlines()
             ]
-            self.assertEqual(summary["requested_feedback_rounds"],
+            self.assertEqual(summary["rounds_extracted_from_base"],
                              len(delegates))
-            self.assertEqual(summary["requested_branches"],
+            self.assertEqual(summary["candidate_trials"],
                              len(delegates))
             self.assertEqual(summary["completed_branches"],
                              len(delegates))
@@ -1012,7 +1012,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 no_progress=True,
             )
             summary = generate_turns(**args)
-            self.assertEqual(summary["requested_branches"], 1)
+            self.assertEqual(summary["candidate_trials"], 1)
             self.assertEqual(summary["recovered"], 1,
                              (root / "output" / "journal" /
                               "000000.json").read_text()[:1400])
@@ -1042,7 +1042,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             )
             self.assertEqual(summary["round_sampling_unit"],
                              "question_x_main_feedback_round")
-            self.assertEqual(summary["requested_feedback_rounds"], 1)
+            self.assertEqual(summary["rounds_extracted_from_base"], 1)
             round_index = (root / "output" / "round_index.jsonl")
             indexes = [json.loads(row) for row in
                        round_index.read_text().splitlines()]
@@ -1194,7 +1194,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
 
 
     def test_attempt_contract_separates_delivery_from_preview(self):
-        from environment.untrusted_orchestration.reporting.report_contract import (
+        from environment.untrusted_orchestration.reporting.contract import (
             build_report_contract,
         )
         tasks = {task["task_id"]: task for task in
@@ -1261,10 +1261,10 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertIn("not delivered", report["finish_result"]["result"])
 
     def test_result_context_ids_are_grounded_but_invented_ids_still_fail(self):
-        from environment.untrusted_orchestration.reporting.report_contract import (
+        from environment.untrusted_orchestration.reporting.contract import (
             build_report_contract,
         )
-        from environment.untrusted_orchestration.reporting.report_validation import (
+        from environment.untrusted_orchestration.reporting.validation import (
             validate_report_draft, claim_tokens,
         )
         task = {"task_id": "lookup", "source_ids": ["stat_a"],
@@ -1371,7 +1371,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                     seed=17, fault_modes=["missing"], workers=2,
                     no_progress=False,
                 )
-        self.assertEqual(result["requested_branches"], 1)
+        self.assertEqual(result["candidate_trials"], 1)
         self.assertEqual([bar.desc for bar in bars],
                          ["Evidence simulation",
                           "Sub-Agent feedback",
@@ -1419,12 +1419,20 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             result["main_actions_processed"]
             + result["main_actions_skipped_downstream"],
         )
+        self.assertEqual(result["recovered"], result["published_episodes"])
         self.assertEqual(
-            result["reviewed_branches"], result["recovered"],
+            result["main_training_turns"],
+            len((root / "dual_progress" / "main_turns.jsonl")
+                .read_text(encoding="utf-8").splitlines()),
         )
-        self.assertEqual(
-            result["reviewed_turns"], result["main_training_turns"],
-        )
+        # Summary has one canonical key per publication quantity, not
+        # historical duplicates with permanently equal values.
+        self.assertFalse({
+            "requested_branches", "requested_feedback_rounds",
+            "reviewed_branches", "reviewed_turns",
+            "screened_out_before_llm", "publication_surface_leaks",
+            "candidate_backfill_diversity", "limitations",
+        } & set(result))
         self.assertGreater(len(bars[0].snapshots), 1)
         self.assertGreater(len(bars[1].snapshots), 1)
         self.assertGreater(len(bars[2].snapshots), 1)
@@ -1476,7 +1484,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
                 summary["main_actions_skipped_downstream"],
                 summary["main_actions_planned"] - 1,
             )
-            self.assertEqual(summary["reviewed_turns"], 0)
+            self.assertEqual(summary["main_training_turns"], 0)
             self.assertEqual(
                 summary["outcomes"]["main_action_not_accepted"], 1,
             )
@@ -1684,7 +1692,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         self.assertEqual(status["mode"], "llm_reviewed_contract_frozen")
 
     def test_stage4b_intermediate_numeric_is_not_final_delivered_value(self):
-        from environment.untrusted_orchestration.reporting.report_validation import (
+        from environment.untrusted_orchestration.reporting.validation import (
             explicit_final_value_issues, validate_report_draft,
         )
         delivered = [{

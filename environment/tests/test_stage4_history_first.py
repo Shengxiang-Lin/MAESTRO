@@ -379,7 +379,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         from environment.untrusted_orchestration.scenario.same_source_recheck import (
             discover_same_source_rechecks, patch_clean_episode, patch_scene,
         )
-        from environment.untrusted_orchestration.reporting.result_text import (
+        from environment.untrusted_orchestration.reporting.surface import (
             render_records,
         )
         scene, parent, child = _scene()
@@ -474,7 +474,7 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         )
         # A same-source disagreement is observable, but is not an
         # independent-source vote for either side.
-        from environment.untrusted_orchestration.reporting.result_text import (
+        from environment.untrusted_orchestration.reporting.surface import (
             render_records,
         )
         from environment.untrusted_orchestration.runtime.faults import relation_rows

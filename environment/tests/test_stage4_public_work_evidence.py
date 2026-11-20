@@ -5,10 +5,10 @@ from copy import deepcopy
 import unittest
 
 from environment.generate_question.execution.program_ir import Relation
-from environment.untrusted_orchestration.reporting.public_work import (
+from environment.untrusted_orchestration.reporting.work_evidence import (
     observed_work_checks, public_work_clauses, visible_work_discrepancy,
 )
-from environment.untrusted_orchestration.reporting.report_author import (
+from environment.untrusted_orchestration.reporting.author import (
     naturalize_report,
 )
 from environment.untrusted_orchestration.runtime.faults import Fault, FaultUnsupported

@@ -10,19 +10,19 @@ from unittest.mock import patch
 
 from environment.generate_question.execution.program_ir import Relation
 from environment.tests.test_untrusted_orchestration import sample
-from environment.untrusted_orchestration.reporting.public_language import (
+from environment.untrusted_orchestration.reporting.surface import (
     sanitize_public_prose, sanitize_public_report,
 )
 from environment.untrusted_orchestration.inspection.publication_guard import (
     review_turn_surface,
 )
-from environment.untrusted_orchestration.reporting.report_evidence import (
+from environment.untrusted_orchestration.reporting.contract import (
     observed_handoff_discrepancies,
 )
-from environment.untrusted_orchestration.reporting.report_author import (
+from environment.untrusted_orchestration.reporting.author import (
     _review_denies_witnessed_handoff, naturalize_report,
 )
-from environment.untrusted_orchestration.reporting.report_contract import (
+from environment.untrusted_orchestration.reporting.contract import (
     build_report_contract, render_delivered_result,
 )
 from environment.untrusted_orchestration.state_machine import Attempt
@@ -310,7 +310,7 @@ class LanguageExceptionTests(unittest.TestCase):
                 summary["candidates_execution_recovered"],
                 summary["execution_recovered_branches"],
             )
-            self.assertEqual(summary["reviewed_turns"], 0)
+            self.assertEqual(summary["main_training_turns"], 0)
 
 
 class StructuredFactSpineTests(unittest.TestCase):
@@ -563,7 +563,7 @@ class StructuredFactSpineTests(unittest.TestCase):
         self.assertNotIn("2003", result)
 
     def test_long_typed_result_is_not_rejected_by_prose_length_limit(self):
-        from environment.untrusted_orchestration.reporting.report_validation import (
+        from environment.untrusted_orchestration.reporting.validation import (
             validate_report_draft,
         )
         task = {

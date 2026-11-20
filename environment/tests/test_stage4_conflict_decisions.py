@@ -7,8 +7,8 @@ from environment.untrusted_orchestration.state_machine import ExecutionState, de
 from environment.untrusted_orchestration.runtime.faults import Fault, relation_rows
 from environment.untrusted_orchestration.scenario.same_source_recheck import _clone_source_query
 from environment.untrusted_orchestration.scenario.handoff_conflicts import expose_prior_handoff
-from environment.untrusted_orchestration.reporting.result_text import render_records
-from environment.untrusted_orchestration.reporting.public_language import sanitize_public_report
+from environment.untrusted_orchestration.reporting.surface import render_records
+from environment.untrusted_orchestration.reporting.surface import sanitize_public_report
 from environment.untrusted_orchestration.rewards.decision_reward_state import capture_decision_state
 from environment.untrusted_orchestration.rewards.orchestration_reward import score_decision
 from environment.untrusted_orchestration.runtime.evidence_planning import evidence_request, evidence_assignment
@@ -257,7 +257,7 @@ class Stage4SemanticTests(unittest.TestCase):
         from environment.generate_question.execution.program_ir import Relation
         from environment.untrusted_orchestration.runtime.faults import run_attempt
         from environment.untrusted_orchestration.offline_pipeline import _attempt_from_audit
-        from environment.untrusted_orchestration.reporting.report_author import naturalize_report
+        from environment.untrusted_orchestration.reporting.author import naturalize_report
         left = Relation(("case_id", "name"), (
             {"values": {"case_id": "A01", "name": "Alpha"}, "support": ("left:F1",)},
             {"values": {"case_id": "B02", "name": "Beta"}, "support": ("left:F2",)},
@@ -313,7 +313,7 @@ class Stage4SemanticTests(unittest.TestCase):
     def test_ratio_mistakes_execute_from_unchanged_inputs(self):
         from environment.generate_question.execution.program_ir import Relation
         from environment.untrusted_orchestration.runtime.faults import run_attempt
-        from environment.untrusted_orchestration.reporting.public_work import public_work_clauses, visible_work_discrepancy
+        from environment.untrusted_orchestration.reporting.work_evidence import public_work_clauses, visible_work_discrepancy
         parent = Relation(("a", "b"), ({"values": {"a": 209, "b": 76}, "support": ("source:F1",)},))
         task = {
             "task_id": "ratio", "source_ids": [], "depends_on": ["input"],
