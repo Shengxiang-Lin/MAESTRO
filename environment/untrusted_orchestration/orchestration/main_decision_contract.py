@@ -128,6 +128,7 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
         "pending_requests": [{
             "operation": g.get("operation"),
             "target_fields": list(g.get("target_fields", [])),
+            "verification_focus": g.get("verification_focus"),
             "justification": g.get("main_visible_justification", ""),
             "status": "requested_not_executed",
         } for g in goals],
