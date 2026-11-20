@@ -31,6 +31,8 @@ jobs:
           bash -n train_maestro_8b/run/pipeline.sh
           bash train_maestro_8b/run/pipeline.sh help
           bash train_maestro_8b/run/pipeline.sh status
+      - name: Regression-test Stage2 preflight/judge/pilot/grpo shell routing
+        run: python -m unittest train_maestro_8b.tests.test_pipeline_shell_routing -v
       - name: Test risk schema, history alignment and masks
         run: python -m unittest train_maestro_8b.tests.test_reliability train_maestro_8b.tests.test_candidate_alignment train_maestro_8b.tests.test_io_inspection -v
 

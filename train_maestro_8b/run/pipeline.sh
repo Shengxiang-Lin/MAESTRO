@@ -371,9 +371,18 @@ init_stage2_da_args() {
     --logging_steps "$GRPO_LOGGING_STEPS"
     --save_steps "$GRPO_SAVE_STEPS"
   )
-  [[ -n "$STAGE1_BELIEF_ADAPTER" ]] && stage2_da_args+=(--stage1_belief_adapter "$STAGE1_BELIEF_ADAPTER")
-  [[ -n "$DA_MICRO_BATCH" ]] && stage2_da_args+=(--micro_batch_size "$DA_MICRO_BATCH")
-  [[ -n "$DA_GRAD_ACCUM" ]] && stage2_da_args+=(--gradient_accumulation_steps "$DA_GRAD_ACCUM")
+  # Optional CLI overrides must never make this initializer fail under
+  # `set -e` when the final value is empty (the default dual-GPU setup).
+  if [[ -n "$STAGE1_BELIEF_ADAPTER" ]]; then
+    stage2_da_args+=(--stage1_belief_adapter "$STAGE1_BELIEF_ADAPTER")
+  fi
+  if [[ -n "$DA_MICRO_BATCH" ]]; then
+    stage2_da_args+=(--micro_batch_size "$DA_MICRO_BATCH")
+  fi
+  if [[ -n "$DA_GRAD_ACCUM" ]]; then
+    stage2_da_args+=(--gradient_accumulation_steps "$DA_GRAD_ACCUM")
+  fi
+  return 0
 }
 stage2_da_launch() {
   python -m train_maestro_8b.run.launch_grpo --role train \
