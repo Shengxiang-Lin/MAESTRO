@@ -155,7 +155,7 @@ models:
     reuse_existing: true
     auto_start: true
     startup_timeout: 900
-    shutdown_on_exit: false
+    shutdown_on_exit: true
     log_file: "logs/vllm/qwen3-8b-da-sft-lora.log"
     extra_body:
       chat_template_kwargs:
@@ -185,7 +185,7 @@ models:
     reuse_existing: true
     auto_start: true
     startup_timeout: 900
-    shutdown_on_exit: false
+    shutdown_on_exit: true
     log_file: "logs/vllm/qwen3-8b-da-grpo-lora.log"
     extra_body:
       chat_template_kwargs:
