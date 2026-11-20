@@ -108,6 +108,25 @@ class PublicConflictDecisionTests(unittest.TestCase):
         self.assertFalse(state.unresolved_cited_conflicts())
         self.assertTrue(state.ready("child"))
 
+    def test_main_critic_query_witness_requires_same_query_and_input_versions(self):
+        from environment.untrusted_orchestration.orchestration.main_decision_contract import repeated_query_conflicts
+        scene, state, clone = fixture()
+        rounds = {"parent": 1, clone: 4}
+        versions = {"parent": {}, clone: {}}
+        witnesses = repeated_query_conflicts(state.tasks, state.public_reports, rounds, versions)
+        self.assertEqual(len(witnesses), 1)
+        self.assertEqual(witnesses[0]["original_report"]["attempt"], 1)
+        self.assertEqual(witnesses[0]["repeat_report"]["attempt"], 4)
+        self.assertNotIn("task_id", str(witnesses))
+        self.assertEqual(repeated_query_conflicts(
+            state.tasks, state.public_reports, rounds, {"parent": {"input": 1}, clone: {"input": 2}}), [])
+        altered = deepcopy(state.tasks)
+        altered[clone]["operator_chain"][1]["value"] = "Case-002"
+        self.assertEqual(repeated_query_conflicts(
+            altered, state.public_reports, rounds, versions), [])
+        self.assertEqual(repeated_query_conflicts(
+            state.tasks, state.public_reports, rounds, {}), [])
+
     def test_rechecking_the_older_report_keeps_the_actual_conflicting_pair(self):
         scene, state, clone = fixture(fault_on_old=True)
         self.assertTrue(snapshot(scene, state)["scorable"])
@@ -191,6 +210,37 @@ class Stage4SemanticTests(unittest.TestCase):
             reasoning_action_issues("Compute elapsed days between the earliest and latest dates.", assignments))
         self.assertEqual(reasoning_action_issues(
             "Compute elapsed days using date_a and date_b already returned.", assignments), [])
+
+    def test_intermediate_identifier_and_year_log_roles(self):
+        intermediate = {"outputs": {"typed_relation": ["entity_1"]}, "operator_chain": []}
+        self.assertIn("not final place names", " ".join(derivation_instructions(intermediate)))
+        assignments = [{"target_instruction": "Retrieve observations.",
+                        "output_fields": ["entity_final", "observation_id", "observation_year"],
+                        "source_ids": ["observation_log"], "tools": ["GoogleSearchAction"]}]
+        self.assertIn("observation_year_lookup_claims_date_coordinate_extraction",
+            reasoning_action_issues(
+                "We need to retrieve observation records containing dates and coordinates.",
+                assignments))
+        self.assertEqual(reasoning_action_issues(
+            "Retrieve observation identifiers and years, then count entries in or after 2025.",
+            assignments), [])
+        self.assertIn("intermediate_identifier_claimed_as_final_place_name",
+            reasoning_action_issues(
+                "The final answer requires the neighboring entity label, entity_1.",
+                assignments, question="Calculate the distance and return the final place name."))
+
+    def test_reasoning_identifiers_must_copy_received_keys_exactly(self):
+        assignments = [{"target_instruction": "Verify the returned project.", "tools": [], "source_ids": []}]
+        evidence = "Dossier-e4426e5ab3 returned PRJ-6493282D4118."
+        good = "Recheck Dossier-e4426e5ab3 and PRJ-6493282D4118."
+        self.assertEqual(reasoning_action_issues(good, assignments, visible_text=evidence), [])
+        bad = reasoning_action_issues(
+            "Recheck Dossier-e4426eab3.", assignments, visible_text=evidence)
+        self.assertTrue(any(x.startswith("unobserved_identifier_in_reasoning:") for x in bad))
+        self.assertIn("Dossier-e4426e5ab3", " ".join(bad))
+        self.assertEqual(reasoning_action_issues(
+            "Recompute 209 divided by 76 as approximately 2.75.", assignments,
+            visible_text="The returned counts are 209 and 76."), [])
 
     def test_source_free_work_and_intermediate_fields(self):
         assignments = [{"target_instruction": "Recompute the ratio.", "source_ids": [], "tools": []}]

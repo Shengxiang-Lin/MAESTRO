@@ -283,3 +283,22 @@ confusion and sum/difference confusion when an executable node supports them.
 Use a new output directory for regeneration; older accepted trajectories are
 not silently reclassified under the updated scheduling policy. This change
 is contained in Stage 4 and consumes frozen Stage 1-3 artifacts.
+
+The report Critic receives actual execution input bindings and arithmetic
+operands separately from the projected Result. A projected single identifier
+does not erase a witnessed wrong association. A bounded second review may
+reconsider that specific objection; rejection still produces fallback and
+cannot publish an unreviewed positive.
+
+Stage-4C retains rejected reasoning and guard reasons in private
+reasoning_guard_drafts. Revision feedback explains the applicable field or
+action constraint. Relationship identifiers are intermediate lookup keys;
+an observation-ID/year request does not request coordinates or full dates.
+
+For Main review, confirmed_repeated_query_conflicts compares the current
+delivered Results of an identical delegated query with identical publicly
+tracked prerequisite input versions. Different query bodies, changed parent
+versions, unknown inputs or an unparseable Result cannot create this witness.
+Only current received values and report round numbers enter the review
+contract. Neither a reporter's done/corrected wording nor a completed
+downstream calculation settles a still-disputed input.

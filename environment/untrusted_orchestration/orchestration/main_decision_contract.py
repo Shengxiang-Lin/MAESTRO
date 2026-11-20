@@ -166,3 +166,53 @@ def critic_denies_confirmed_conflict(review: dict, contract: dict) -> bool:
         r"(?:unsupported|unfounded|invented|false)",
         reason,
     ))
+
+
+def repeated_query_conflicts(tasks: dict, reports: dict, rounds: dict,
+                             parent_versions: dict) -> list[dict]:
+    """Current delivered results of the same query and same input versions.
+
+    Task bindings identify the already delegated query. Values come exclusively
+    from received reports, never the World, execution outputs or Gold.
+    """
+    from ..scenario.same_source_recheck import public_query_rows, query_values
+
+    def query_shape(task):
+        names = {node["id"]: "step_" + str(i)
+                 for i, node in enumerate(task["operator_chain"])}
+        names.update({name: "input_" + str(i)
+                      for i, name in enumerate(task.get("external_inputs", []))})
+        nodes = []
+        for node in task["operator_chain"]:
+            item = {k: v for k, v in node.items() if k not in {"id", "inputs"}}
+            item["inputs"] = [names.get(name, name) for name in node.get("inputs", [])]
+            nodes.append(item)
+        return (task["source_ids"], task["depends_on"],
+                task["outputs"]["typed_relation"], nodes)
+
+    conflicts = []
+    for tid, task in tasks.items():
+        old = task.get("history_recheck_of")
+        if (not old or old not in reports or tid not in reports
+                or old not in parent_versions or tid not in parent_versions
+                or parent_versions[old] != parent_versions[tid]
+                or query_shape(tasks[old]) != query_shape(task)):
+            continue
+        earlier = public_query_rows(tasks[old], reports[old])
+        repeat = public_query_rows(task, reports[tid])
+        if earlier is None or repeat is None or query_values(earlier) == query_values(repeat):
+            continue
+        conflicts.append({
+            "comparison": "identical_query_with_same_input_versions",
+            "source_scope": list(task["source_ids"]),
+            "requested_fields": list(task["outputs"]["typed_relation"]),
+            "original_report": {"attempt": rounds[old], "returned_values": earlier},
+            "repeat_report": {"attempt": rounds[tid], "returned_values": repeat},
+            "interpretation": (
+                "The received results disagree. Neither a done flag nor a "
+                "downstream calculated answer determines which is correct. "
+                "Results depending on the disputed input remain provisional "
+                "until the query disagreement is resolved."
+            ),
+        })
+    return conflicts

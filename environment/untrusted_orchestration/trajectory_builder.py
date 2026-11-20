@@ -90,6 +90,11 @@ For source-free work, explain reuse of returned findings and recomputation;
 do not promise new source inspection. Explain only the current evidence
 step and avoid repeatedly calling intermediate retrievals the final step.
 
+Copy opaque record keys literally from received evidence. Prefer referring
+to the previously returned case identifier instead of repeating a long hash key
+when its exact spelling is not needed to explain the decision. When comparing
+conflicting keys, quote only the exact already returned strings.
+
 Use two to four sentences focused on this round's missing fields or visible
 discrepancy. Name concrete returned findings and the next requested output.
 For a final derivation, explain which already delivered inputs will be combined.
@@ -155,6 +160,22 @@ observation. A pending matching or aggregation task may select those records;
 it does not require a new external retrieval merely because no prior task
 returned the selected row in isolation. Distinguish this available observation
 from an independently verified conclusion.
+
+The confirmed_repeated_query_conflicts, when present, compare actual
+received reports for the identical delegated query and identical prerequisite
+input versions. Distinct values there are an unresolved public disagreement.
+An already computed downstream answer is provisional while its input is
+disputed. Do not infer that one report self-corrected, that the inputs differ,
+or that completion is justified merely because a later calculation finished.
+Judge any additional claims of truth or verification independently.
+For a pending verification, re-inspecting the assigned source to determine
+which reported value it supports IS a valid way to reconcile the disagreement.
+Do not reject faithful reasoning merely for saying verify rather than reconcile,
+or speculate that an inconsistent source makes the assigned check impossible.
+The contract validates delegation legality, not the factual correctness of
+Sub-Agent feedback. A report saying corrected or done is itself a claim,
+and a newer report does not automatically settle an older same-query conflict.
+Reject assertions of successful verification before the check actually returns.
 
 The attached locked Main decision facts, if present, were compiled
 from the actual Main-visible Sub-Agent Result and Summary in the latest

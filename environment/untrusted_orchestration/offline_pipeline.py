@@ -29,7 +29,7 @@ from .reporting.public_language import sanitize_public_report
 from environment.untrusted_orchestration.orchestration.reasoning_fidelity import reasoning_evidence_issues, reasoning_action_issues
 from environment.untrusted_orchestration.inspection.visible_history import visible_history_reasoning_issues
 from environment.untrusted_orchestration.orchestration.main_decision_contract import (
-    build_main_decision_contract, critic_denies_confirmed_conflict,
+    build_main_decision_contract, critic_denies_confirmed_conflict, repeated_query_conflicts,
 )
 from .state_machine import Attempt
 from environment.untrusted_orchestration.inspection.visible_claim_state import audit_visible_claim_states
@@ -371,6 +371,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
     tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
     catalog = source_catalog(scene)
     entries, latest, turns, reviews = [], {}, [], []
+    latest_rounds, latest_versions, latest_parent_versions = {}, {}, {}
     saved_actions = list(resume_actions or [])
     expected_actions = sum(
         step["attempt"] >= fork and step["action"] in {
@@ -447,7 +448,19 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                 decision_contract = build_main_decision_contract(
                     entries, visible_goals, number_of_tasks=len(assignments),
                 )
+                history_conflicts = repeated_query_conflicts(
+                    tasks, latest, latest_rounds, latest_parent_versions,
+                )
+                decision_contract["visible_evidence"]["confirmed_repeated_query_conflicts"] = history_conflicts
                 author_system = _MAIN_DECISION_AUTHOR_SYSTEM
+                if history_conflicts:
+                    author_system += (
+                        "\nThe following already received reports describe the same "
+                        "delegated source query with the same prerequisite input versions. "
+                        "Their returned values still disagree. Explain the targeted check "
+                        "without treating a calculated downstream answer as verification:\n"
+                        + json.dumps(history_conflicts, ensure_ascii=False)
+                    )
                 if any(goal["operation"] == "derive_from_returned_evidence"
                        for goal in visible_goals):
                     author_system += (
@@ -458,6 +471,46 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                         "pending work. Do not assert that all prerequisites are "
                         "verified or retell older event-validation steps."
                     )
+                guard_drafts = []
+                def check_reasoning(text):
+                    problems = (
+                        reasoning_evidence_issues(text, visible_goals)
+                        + reasoning_action_issues(
+                            text, assignments, question=scene["question"],
+                            visible_text=prompt + " " + json.dumps(
+                                assignments, ensure_ascii=False
+                            ) + " " + json.dumps(history_conflicts, ensure_ascii=False),
+                        )
+                        + visible_history_reasoning_issues(
+                            text, decision_contract["prior_field_activity"])
+                    )
+                    if problems:
+                        guard_drafts.append({"reasoning": text, "issues": list(problems)})
+                    hints = {
+                        "unobserved_identifier_in_reasoning":
+                            "Copy identifiers exactly from the already received reports "
+                            "or omit an unnecessary identifier; do not introduce a new or misspelled key.",
+                        "observation_year_lookup_claims_date_coordinate_extraction":
+                            "This lookup returns observation identifiers and years for counting. "
+                            "Do not say it extracts dates, coordinates or location measurements.",
+                        "intermediate_identifier_claimed_as_final_place_name":
+                            "The entity_N value is an intermediate relationship identifier. "
+                            "Explain its role as the next lookup key, not a final place name.",
+                        "intermediate_field_claimed_as_question_output":
+                            "Explain that this identifier enables an intermediate lookup. "
+                            "Do not say the user explicitly requests this intermediate field.",
+                        "date_pair_replaced_with_observation_date_extrema":
+                            "Use the named date_a and date_b values. Observation-log years "
+                            "are for the observation count, not the date-pair calculation.",
+                        "source_free_action_claims_external_acquisition":
+                            "Explain recomputation from already returned observations; "
+                            "the current assignment performs no new external acquisition.",
+                    }
+                    return [
+                        issue + (": " + hints[issue.split(":", 1)[0]]
+                                 if issue.split(":", 1)[0] in hints else "")
+                        for issue in problems
+                    ]
                 cached = (saved_actions[len(reviews)]
                           if len(reviews) < len(saved_actions) else None)
                 if cached is not None:
@@ -485,16 +538,10 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                                 review, decision_contract,
                             )
                         ),
-                        reasoning_guard=(
-                            lambda text: (
-                                reasoning_evidence_issues(text, visible_goals)
-                                + reasoning_action_issues(text, assignments, question=scene["question"])
-                                + visible_history_reasoning_issues(
-                                    text, decision_contract["prior_field_activity"]
-                                )
-                            )
-                        ) if author is not None else None,
+                        reasoning_guard=check_reasoning if author is not None else None,
                     )
+                    if guard_drafts:
+                        status["reasoning_guard_drafts"] = guard_drafts
                 # The final Main instruction/context must be exactly the
                 # field-and-source-scoped 4A contract rebuilt against FINAL
                 # 4B evidence, even if a fluent LLM drafted an unrelated
@@ -591,8 +638,19 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                    [d["execution_binding"]["macro_task_id"]
                     for d in plans[round_number]["dispatch"]])
             returned = step["result"]["subtask_results"]
+            before_versions = dict(latest_versions)
             for tid, report in zip(ids, returned):
                 latest[tid] = report
+                latest_rounds[tid] = round_number
+                latest_versions[tid] = latest_versions.get(tid, 0) + 1
+                if all(parent in before_versions for parent in tasks[tid]["depends_on"]):
+                    latest_parent_versions[tid] = {
+                        parent: before_versions[parent] for parent in tasks[tid]["depends_on"]
+                    }
+                else:
+                    # Unreported internal execution cannot prove that two
+                    # publicly delegated queries used identical input versions.
+                    latest_parent_versions.pop(tid, None)
             entries.append(_history_batch(round_number, returned))
     execution_outcome = audit["execution_outcome"]
     had_report_fallback = any(

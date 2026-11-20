@@ -105,6 +105,20 @@ def reasoning_evidence_issues(
 def derivation_instructions(task: dict) -> list[str]:
     """Describe planned operations and named inputs, without executing them."""
     clauses = []
+    fields = task.get("outputs", {}).get("typed_relation", [])
+    intermediates = [f for f in fields if re.fullmatch(r"entity_\d+", f)]
+    if intermediates:
+        clauses.append(
+            "Return intermediate relationship identifier(s): "
+            + ", ".join(intermediates)
+            + ". These are lookup keys, not final place names or final answer fields."
+        )
+    if ("observation_id" in fields and "observation_year" in fields
+            and not any(f.startswith(("date_", "latitude", "longitude")) for f in fields)):
+        clauses.append(
+            "Return observation identifiers and years for the year-based count. "
+            "This assignment does not extract full dates or coordinates."
+        )
     for node in task.get("operator_chain", []):
         op = node["op"]
         if op == "goal_compute":
@@ -137,11 +151,32 @@ def derivation_instructions(task: dict) -> list[str]:
 
 
 def reasoning_action_issues(reasoning: str, assignments: list[dict], *,
-                            question: str = "") -> list[str]:
+                            question: str = "", visible_text: str | None = None) -> list[str]:
     """High-precision action/meaning checks, separate from LLM prose review."""
     issues = []
     if not isinstance(reasoning, str):
         return ["reasoning_not_text"]
+    if visible_text is not None:
+        identifiers = re.compile(
+            r"\b(?:Dossier-[A-Za-z0-9]+|PRJ-[A-Za-z0-9]+|ENT-[A-Za-z0-9]+|"
+            r"EVT-[A-Za-z0-9]+|OBS-[A-Za-z0-9]+|Case-\d+|Entry-\d+|"
+            r"KEY[12]-[A-Za-z0-9]+|MK-[A-Za-z0-9]+|RK-[A-Za-z0-9]+)\b",
+            re.I,
+        )
+        known = {value.casefold() for value in identifiers.findall(visible_text)}
+        unknown = sorted({value for value in identifiers.findall(reasoning)
+                          if value.casefold() not in known})
+        if unknown:
+            from difflib import get_close_matches
+            received = {value.casefold(): value for value in identifiers.findall(visible_text)}
+            details = []
+            for value in unknown:
+                matches = get_close_matches(value.casefold(), sorted(known), n=2, cutoff=0.85)
+                hints = [received[key] for key in matches]
+                details.append(value + (
+                    " (already received spellings: " + ", ".join(hints) + ")" if hints else ""
+                ))
+            issues.append("unobserved_identifier_in_reasoning:" + "; ".join(details))
     if assignments and all(not a.get("source_ids") and not a.get("tools")
                            for a in assignments):
         # Reading an already returned record is valid. Promise of a new
@@ -164,7 +199,22 @@ def reasoning_action_issues(reasoning: str, assignments: list[dict], *,
             reasoning, re.I,
         ):
             issues.append("date_pair_replaced_with_observation_date_extrema")
+    fields = {f for a in assignments for f in a.get("output_fields", [])}
+    if ("observation_id" in fields and "observation_year" in fields
+            and not any(f.startswith(("date_", "latitude", "longitude")) for f in fields)):
+        if re.search(
+            r"\b(?:retrieve|retrieving|extract|extracting|query|querying)\b"
+            r"[^.!?]{0,110}\b(?:dates?\s+and\s+coordinates?|coordinates?\s+and\s+dates?)\b",
+            reasoning, re.I,
+        ):
+            issues.append("observation_year_lookup_claims_date_coordinate_extraction")
     if question:
+        for match in re.finditer(
+            r"\bfinal answer requires[^.!?]{0,80}\b(?:label|name|field)\b"
+            r"[^.!?]{0,25}\b(entity_\d+)\b", reasoning, re.I,
+        ):
+            if match[1].casefold() not in question.casefold():
+                issues.append("intermediate_identifier_claimed_as_final_place_name")
         for match in re.finditer(
             r"\bquestion\s+(?:explicitly\s+)?(?:requires|demands|asks for)"
             r"[^.!?]{0,85}?\b(entity_\d+)\b", reasoning, re.I,
