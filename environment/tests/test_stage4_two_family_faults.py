@@ -810,7 +810,7 @@ class IntraReportFaultTests(unittest.TestCase):
         self.assertIn("pending computation", _MAIN_REASONING_CRITIC_SYSTEM)
 
     def test_published_result_format_drift_is_audited_by_phase(self):
-        from environment.untrusted_orchestration.generate_turns import (
+        from environment.untrusted_orchestration.publication import (
             _published_result_formats,
         )
         episode = {"branch_round": 2, "trajectory": [
