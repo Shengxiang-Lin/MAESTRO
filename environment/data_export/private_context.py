@@ -226,19 +226,97 @@ def attach_to_unified(
     return summary
 
 
+
+def discover_context_sources(
+    unified_dir: Path, root: Path,
+) -> tuple[Path, Path]:
+    """Locate original Stage1/Stage4 by frozen input hashes, not directory names.
+
+    A match is safe to reuse independent of path/name. Never match a private
+    copy under unified itself as an independent source. Prefer a Stage4
+    directory with preserved claim supervision when exact copies exist.
+    """
+    unified = Path(unified_dir).resolve()
+    search = Path(root).resolve()
+    if not search.is_dir():
+        raise FileNotFoundError("private_context_discovery_root_missing:" + str(search))
+    manifest_path = unified / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError("unified_manifest_missing:" + str(manifest_path))
+    expected = json.loads(manifest_path.read_text(encoding="utf-8")).get(
+        "source_sha256", {}
+    )
+    for key in ("scenes", "stage4_manifest", "stage4_main_turns"):
+        if not isinstance(expected.get(key), str) or len(expected[key]) != 64:
+            raise ValueError("private_context_discovery_missing_source_sha256:" + key)
+
+    def outside_unified(path: Path) -> bool:
+        return unified != path and unified not in path.parents
+
+    scenes = []
+    for path in search.rglob("scenes.jsonl"):
+        if path.is_file() and outside_unified(path.resolve()):
+            if digest(path) == expected["scenes"]:
+                scenes.append(path)
+    if not scenes:
+        raise FileNotFoundError(
+            "original_stage1_scenes_not_found: No scenes.jsonl under " +
+            str(search) + " matches unified/manifest.json source_sha256.scenes. "
+            "Recover the original Stage1 input or regenerate the unified dataset."
+        )
+
+    candidates = []
+    for path in search.rglob("manifest.json"):
+        if not path.is_file() or not outside_unified(path.resolve()):
+            continue
+        if digest(path) != expected["stage4_manifest"]:
+            continue
+        turns = path.parent / "main_turns.jsonl"
+        if turns.is_file() and digest(turns) == expected["stage4_main_turns"]:
+            candidates.append(path.parent)
+    if not candidates:
+        raise FileNotFoundError(
+            "original_stage4_not_found: No Stage4 directory under " +
+            str(search) + " matches BOTH the unified Stage4 manifest and "
+            "main-turn hashes. Recover the original Stage4 run or re-export."
+        )
+    candidates.sort(key=lambda path: (
+        not (path / "private/claim_state_supervision.jsonl").is_file(),
+        str(path),
+    ))
+    return sorted(scenes)[0], candidates[0]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Freeze Global Judge private Scene/claim context into an old unified export."
     )
     parser.add_argument("--unified-dir", type=Path, required=True)
-    parser.add_argument("--scenes", type=Path, required=True)
-    parser.add_argument("--stage4-dir", type=Path, required=True)
-    args = parser.parse_args(argv)
-    summary = attach_to_unified(
-        unified_dir=args.unified_dir, scenes_path=args.scenes,
-        stage4_dir=args.stage4_dir,
+    parser.add_argument("--scenes", type=Path)
+    parser.add_argument("--stage4-dir", type=Path)
+    parser.add_argument(
+        "--discover-root", type=Path,
+        default=Path(__file__).resolve().parents[2] / "environment/data",
+        help="Search for hash-matching original Stage1 and Stage4 data (default).",
     )
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    args = parser.parse_args(argv)
+    if args.scenes is None and args.stage4_dir is None:
+        scenes, stage4 = discover_context_sources(
+            args.unified_dir, args.discover_root,
+        )
+    elif args.scenes is not None and args.stage4_dir is not None:
+        scenes, stage4 = args.scenes, args.stage4_dir
+    else:
+        parser.error("Provide both --scenes and --stage4-dir, or neither to auto-discover.")
+    summary = attach_to_unified(
+        unified_dir=args.unified_dir, scenes_path=scenes,
+        stage4_dir=stage4,
+    )
+    print(json.dumps({
+        "resolved_scenes": str(scenes),
+        "resolved_stage4_dir": str(stage4),
+        **summary,
+    }, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
