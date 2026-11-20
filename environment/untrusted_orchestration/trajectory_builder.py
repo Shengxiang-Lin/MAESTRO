@@ -14,7 +14,7 @@ from copy import deepcopy
 import json
 
 from environment.base_orchestration.action_author import (
-    action_issues, author_delegate_action,
+    action_issues, author_delegate_action, _assignment,
     author_complete_action, _AUTHOR_SYSTEM, _CRITIC_SYSTEM,
 )
 from environment.base_orchestration.o1_compat import (
@@ -211,6 +211,46 @@ def _history_batch(number: int, returned: list[dict]) -> dict:
     }
 
 
+def _rebind_poisoned_prefix_action(
+    scene: dict, action: dict, task_ids: list[str],
+    delivered: dict[str, dict], catalog: dict[str, dict],
+) -> dict:
+    """Reconstruct a historical Main dispatch from evidence visible AT THAT ROUND.
+
+    The Macro slots and executable DAG stay frozen, but an old Stage-3 action
+    cannot keep clean-only identifiers or clean-report quotes after an early
+    fault. Regenerate the public instructions/context from actual earlier
+    deliveries, never from private World/Gold or future reports.
+    """
+    current = deepcopy(action)
+    assigned = (current.get("params") or {}).get("tasks")
+    if not isinstance(assigned, list) or len(assigned) != len(task_ids):
+        raise ValueError("delayed_prefix_dispatch_slot_mismatch")
+    tasks = {task["task_id"]: task for task in scene["macro_graph"]["tasks"]}
+    refreshed = []
+    for tid, original in zip(task_ids, assigned):
+        if tid not in tasks or not isinstance(original, dict):
+            raise ValueError("delayed_prefix_unknown_task")
+        replacement = _assignment(
+            tasks[tid], catalog, delivered,
+            model_alias=original["model"],
+        )
+        if replacement["tools"] != original["tools"]:
+            raise ValueError("delayed_prefix_tool_scope_drift")
+        rebuilt = deepcopy(original)
+        rebuilt["task_instruction"] = replacement["target_instruction"]
+        rebuilt["context"] = replacement["context"]
+        refreshed.append(rebuilt)
+    current["params"]["tasks"] = refreshed
+    current["reasoning"] = (
+        "I will continue the authorized investigations using the findings "
+        "actually returned so far. Dependent queries must use the reported "
+        "keys and available source evidence; their results still need "
+        "checking before the final conclusion."
+    )
+    return current
+
+
 def _replay_observed_prefix(
     scene: dict, reviewed: dict, base_episode: dict, *,
     branch_round: int, faults: list[Fault],
@@ -253,9 +293,20 @@ def _replay_observed_prefix(
 
     state = ExecutionState(scene, reviewed)
     history, episode_prefix, fault_log = [], [], []
+    catalog = source_catalog(scene)
     for index in range(branch_round - 1):
-        source_action = actions[index]
-        previous_batch = source_action["result"]["subtask_results"]
+        clean_action = actions[index]
+        # Re-author the *historical* Main action as well as its Sub-Agent
+        # results. A downstream action copied from the clean reference can
+        # otherwise quote a correct key while executing a poisoned key.
+        source_action = (
+            _rebind_poisoned_prefix_action(
+                scene, clean_action, waves[index], state.public_reports,
+                catalog,
+            ) if index > origin else deepcopy(clean_action)
+        )
+        previous_batch = clean_action["result"]["subtask_results"]
+        assignments = source_action["params"]["tasks"]
         visible_results = []
         for slot, tid in enumerate(waves[index]):
             clean_result = previous_batch[slot]
@@ -274,8 +325,8 @@ def _replay_observed_prefix(
             else:
                 public, status = naturalize_report(
                     state.tasks[tid], attempt,
-                    instruction=clean_result["task_instruction"],
-                    model_alias=clean_result["model"],
+                    instruction=assignments[slot]["task_instruction"],
+                    model_alias=assignments[slot]["model"],
                     reviewed=reviewed.get(tid),
                     author=report_author, critic=report_critic,
                     max_revisions=report_revisions,
@@ -299,6 +350,10 @@ def _replay_observed_prefix(
                         "report_mode": status,
                         "origin_round": index + 1,
                     })
+            # Even an unaffected clean report must reflect the actual
+            # public assignment for this historical wave.
+            public["task_instruction"] = assignments[slot]["task_instruction"]
+            public["model"] = assignments[slot]["model"]
             state.set_public_report(
                 tid, public, round_number=index + 1,
             )
