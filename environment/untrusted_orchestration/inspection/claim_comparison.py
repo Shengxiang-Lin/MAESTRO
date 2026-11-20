@@ -134,8 +134,8 @@ def report_claim_conflicts(
             conflicts.append({
                 "field": field,
                 "subject": (str(next(
-                    (row["values"][name] for name in _SUBJECT_FIELDS
-                     if name in row["values"]), "single_record"))
+                    (selected[0]["values"][name] for name in _SUBJECT_FIELDS
+                     if name in selected[0]["values"]), "single_record"))
                     if len(selected) == 1 else "unknown"),
                 "result_value": ", ".join(str(x) for x in values[:8]),
                 "summary_value": str(claimed),
