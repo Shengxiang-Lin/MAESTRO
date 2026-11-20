@@ -902,6 +902,10 @@ class HistoryFirstHandoffTests(unittest.TestCase):
         leaked_base = deepcopy(augmented_base)
         leaked_base["trajectory"][1]["params"]["tasks"][0][
             "task_instruction"] = "Inspect Lakehurst District by name."
+        leaked_base["trajectory"][1]["params"]["tasks"][0][
+            "context"] = "Lakehurst District was already identified."
+        leaked_base["trajectory"][1][
+            "reasoning"] = "The confirmed project is Lakehurst District."
         _state, _history, rewritten, _log = _replay_observed_prefix(
             augmented_scene, {}, leaked_base,
             branch_round=4, faults=[fault],
