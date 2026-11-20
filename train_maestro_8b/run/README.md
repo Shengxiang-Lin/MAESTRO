@@ -1,3 +1,64 @@
+## Stage2 GRPO: dedicated vLLM + distributed training (dual GPU default)
+
+`train_maestro_8b/policy/grpo_config.yaml` now defines:
+
+```yaml
+distributed:
+  vllm_mode: server
+  train_gpus: 1        # test with 1 rollout + 1 trainer GPU
+  rollout_gpu: 0
+  train_gpu_start: 1
+  server_host: 127.0.0.1
+  server_port: 8000
+
+training:
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+```
+
+`train_gpus: 1` means physical GPU 0 serves vLLM and GPU 1 trains.
+For four GPUs change **only** `train_gpus: 3`: GPU 0 stays rollout-only
+and GPUs 1,2,3 become three DDP training ranks. The global batch is
+`train_gpus * per_device_train_batch_size * gradient_accumulation_steps`
+completions; with `num_generations: 8` it is 1 or 3 prompt groups/step.
+Increase `per_device_train_batch_size: 2` only after checking VRAM;
+this yields 6 prompt groups/step on three training GPUs at A=8.
+
+TRL owns the Server-mode generation, adapter/weight synchronization
+and DDP gradients. Unsloth loads the training model with
+`fast_inference=False` to avoid creating a second local vLLM engine.
+The existing Global Judge/reward objective and unified data pipeline
+are unchanged. Each DDP rank writes independent reward diagnostics
+and Judge cache files, and only rank 0 writes the training manifest.
+
+### Two-terminal first smoke test
+
+```bash
+git pull origin main
+bash train_maestro_8b/run/pipeline.sh prepare-grpo
+bash train_maestro_8b/run/pipeline.sh preflight
+bash train_maestro_8b/run/pipeline.sh plan-gpus
+
+# Terminal A: blocking vLLM Server on physical GPU 0
+bash train_maestro_8b/run/pipeline.sh serve-vllm
+
+# Terminal B: after /health on :8000 is ready
+bash train_maestro_8b/run/pipeline.sh judge
+DA_PILOT_NEW_TOKENS=4096 bash train_maestro_8b/run/pipeline.sh pilot
+bash train_maestro_8b/run/pipeline.sh audit-pilot
+```
+
+The launcher runs `vllm serve` with the required TRL development
+weight-transfer endpoints (`VLLM_SERVER_DEV_MODE=1` and NCCL), binds
+to **localhost only**, and starts the trainer with the configured
+number of `torch.distributed.run` processes on disjoint GPUs.
+Run both terminals on the same machine. Do not expose port 8000.
+Version compatibility matters: test with a recent Unsloth/TRL/vLLM
+combination supporting Server Mode and the DDP gradient-sync fix.
+GPU execution and full adapter weight sync must be verified in the
+pilot before launching a long run.
+
+---
 ## Required canonical Environment dataset for GRPO
 
 `prepare-grpo` consumes the immutable `environment/data/unified` output
@@ -33,7 +94,7 @@ against the unified source and are reward-only, never student input.
 ---
 ## Stage 2 Default: Global Evidence & Recovery LLM Judge
 
-The native Unsloth + colocated vLLM + TRL GRPOTrainer / Qwen3
+The native Unsloth + dedicated vLLM Server + TRL GRPOTrainer / Qwen3
 chat-template pipeline remains unchanged. The **new default** is
 `DA_REWARD_MODE=global` (independent per-completion reward, not groupwise).
 
