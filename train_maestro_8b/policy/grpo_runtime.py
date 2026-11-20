@@ -126,7 +126,10 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
         raise ValueError("vllm_mode must be server or colocate")
     for key in ("train_gpus", "rollout_gpu", "train_gpu_start", "server_port"):
         val = distributed[key]
-        if type(val) is not int or val < (0 if key == "rollout_gpu" else 1):
+        # GPU indices are zero-based for both roles. Only train_gpus and
+        # server_port are positive counts; disjointness is checked below.
+        minimum = 0 if key in ("rollout_gpu", "train_gpu_start") else 1
+        if type(val) is not int or val < minimum:
             raise ValueError(f"Invalid distributed.{key}")
     if distributed["server_port"] > 65535:
         raise ValueError("Invalid vLLM server port")
