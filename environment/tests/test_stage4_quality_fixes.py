@@ -146,6 +146,7 @@ class PublicVerificationFocusTests(unittest.TestCase):
             "basis": "result_summary_disagreement",
             "subject": "PRJ-A",
             "attribute": "metric_count",
+            "observed_round": 1,
         })
         with patch(
             "environment.untrusted_orchestration.runtime.evidence_planning._assignment",
@@ -206,6 +207,7 @@ class PublicVerificationFocusTests(unittest.TestCase):
             "verification_focus": {
                 "basis": "result_summary_disagreement",
                 "subject": "PRJ-A", "attribute": "metric_count",
+                "observed_round": 1,
             },
             "main_visible_justification": "Result and Summary differ on metric count.",
         }
