@@ -1,3 +1,44 @@
+## Global Judge now reads only the canonical unified dataset
+
+GRPO data preparation uses `environment/data/unified` as its only
+dataset source. `environment.data_export` freezes private Scene/World
+and Stage4 claim snapshots in `unified/private/`; Stage2 copies the
+verified files to `DA_DATA/private/` with hashes in its `summary.json`.
+`preflight`, `pilot` and `grpo` then read those **prepared** private
+files instead of mutable Stage1/Stage4 directories. Mismatched paths
+or edited sidecar files fail closed; O1 Prompt data remains unchanged.
+
+For a **pre-existing unified export** that lacks private sidecars,
+perform this one-time provenance-checked upgrade:
+
+```bash
+python -m environment.data_export.private_context \
+  --unified-dir environment/data/unified \
+  --scenes PATH/TO/ORIGINAL/stage1/questions/scenes.jsonl \
+  --stage4-dir PATH/TO/ORIGINAL/stage4
+```
+
+The source paths must match the SHA256 hashes in the unified manifest.
+An out-of-sync `environment/data/stage1` cannot be substituted.
+For new data, `python -m environment.data_export` includes these
+sidecars automatically (provided Stage4 Claim supervision exists).
+
+```bash
+SKIP_COMPLETED=0 bash train_maestro_8b/run/pipeline.sh prepare-grpo
+bash train_maestro_8b/run/pipeline.sh preflight
+bash train_maestro_8b/run/pipeline.sh plan-gpus
+# Terminal A (rollout GPU 0):
+bash train_maestro_8b/run/pipeline.sh serve-vllm
+# Terminal B (train GPU 1, after vLLM health is ready):
+DA_PILOT_NEW_TOKENS=4096 bash train_maestro_8b/run/pipeline.sh pilot
+```
+
+Changing the private World/Claim data changes its manifest hash and
+invalidates cached GRPO preparation. No need to regenerate all Main
+decisions when upgrading the private evaluator context.
+
+---
+
 ## Stage2 GRPO: dedicated vLLM + distributed training (dual GPU default)
 
 `train_maestro_8b/policy/grpo_config.yaml` now defines:
