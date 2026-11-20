@@ -16,7 +16,8 @@ _UNCERTAIN = re.compile(
     r"unresolved|uncertain|ambiguous|verify|verification|recheck|"
     r"cross-check|reconcile|validate|resolve|re-examin\w*|"
     r"re-validat\w*|compar\w*|disjoint|unaligned|not\s+(?:yet\s+)?confirmed|"
-    r"needs?\s+(?:another\s+)?check)\b", re.I,
+    r"needs?\s+(?:another\s+)?check|re-?comput\w*|"
+    r"re-?calculat\w*|re-?deriv\w*)\b", re.I,
 )
 _FALSE_FINALITY = (
     re.compile(
