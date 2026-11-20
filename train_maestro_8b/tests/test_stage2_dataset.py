@@ -257,6 +257,17 @@ class Stage2CanonicalPreparationTests(unittest.TestCase):
             compatible, report = select_scorable_rows(converted, private)
             self.assertEqual(len(compatible), summary["counts"]["train"])
             self.assertEqual(report["excluded"], {})
+            from train_maestro_8b.policy.grpo_runtime import verify_prepared_global_context
+            self.assertEqual(
+                verify_prepared_global_context(output / "train.parquet"),
+                summary["private_context_file_sha256"],
+            )
+            prepared_world = output / "private/scenes.jsonl"
+            original_world = prepared_world.read_bytes()
+            prepared_world.write_bytes(original_world + b"\n")
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                verify_prepared_global_context(output / "train.parquet")
+            prepared_world.write_bytes(original_world)
             self.assertTrue(prepare(**arguments, reuse_if_unchanged=True)["reused"])
             with self.assertRaisesRegex(FileExistsError, "different recipe"):
                 prepare(**arguments, include_fallback=True)
