@@ -1224,6 +1224,27 @@ def generate_turns(
         selection_rows,
     )
     counts_summary = _publish(output, planned, base)
+    published_rows = [
+        row for row in selection_rows
+        if row.get("candidate_index") in attempted
+        and published_recovery(row["candidate_index"])
+    ]
+    selection_stats["published_answer_impact_distribution"] = dict(sorted(
+        Counter(row.get("answer_impact") or "not_evaluated"
+                for row in published_rows).items()
+    ))
+    selection_stats["published_recovery_effect_distribution"] = dict(sorted(
+        Counter(row.get("recovery_effect") or "unknown"
+                for row in published_rows).items()
+    ))
+    selection_stats["published_by_fault_kind"] = dict(sorted(
+        Counter(row.get("atom_kind") or "unknown"
+                for row in published_rows).items()
+    ))
+    selection_stats["unfilled_main_turn_budget"] = (
+        max(0, target_main_turns - counts_summary["main_training_turns"])
+        if target_main_turns is not None else None
+    )
     processed_actions = sum(
         len(((saved(journal, by_index[i]) or {}).get("private_audit")
              or {}).get("main_action_reviews", []))
