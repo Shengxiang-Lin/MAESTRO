@@ -4,7 +4,7 @@ version: 2
 
 paths:
   model: base_models/Qwen3-8B
-  train_parquet: dataset/data/da-grpo/train.parquet
+  train_parquet: baseline/da-grpo/data/train.parquet
   output_dir: baseline/da-grpo/output
 
 judge:
