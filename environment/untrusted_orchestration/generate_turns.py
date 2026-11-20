@@ -119,6 +119,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "inspection/evidence_affordances.py", "orchestration/reasoning_fidelity.py",
         "inspection/visible_history.py", "inspection/visible_claim_state.py",
         "inspection/visible_claim_extraction.py",
+        "inspection/claim_comparison.py",
         "orchestration/main_decision_contract.py",
         "reporting/contract.py", "reporting/surface.py",
         "scenario/history_conflicts.py",
