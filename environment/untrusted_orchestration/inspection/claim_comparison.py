@@ -75,7 +75,7 @@ def _subject_rows(prefix: str, rows: list[dict]) -> list[dict] | None:
 
 def _explicit_values(summary: str, field: str):
     # Anchor on an actual field of a delivered Result, not arbitrary prose.
-    label = re.escape(field).replace(r"\_", r"[_ ]")
+    label = "[_ ]".join(re.escape(part) for part in field.split("_"))
     pattern = re.compile(r"(?<!\w)" + label + r"\s*(?:=|:)\s*", re.I)
     for match in pattern.finditer(summary):
         fragment = summary[match.end():].lstrip()
