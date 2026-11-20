@@ -40,6 +40,8 @@ def teacher(row: dict, *, scorable: bool = True) -> dict:
         }
     return {
         "decision_id": row["decision_id"],
+        "scene_id": row["scene_id"],
+        "case_id": row["case_id"],
         "ground_truth": "SECRET_GOLD",
         "reference_action": row["reference_action"],
         "reward_state": state,
