@@ -110,6 +110,115 @@ class ReportClaimComparisonTests(unittest.TestCase):
         )
 
 
+class PublicVerificationFocusTests(unittest.TestCase):
+    @staticmethod
+    def state(*, disputed=True):
+        from types import SimpleNamespace
+        from environment.untrusted_orchestration.state_machine import ExecutionState
+        state = ExecutionState.__new__(ExecutionState)
+        state.scene = {"macro_graph": {"terminal_task_id": "M1"}}
+        state.tasks = {"M1": {
+            "task_id": "M1", "depends_on": [], "operator_chain": [],
+            "source_ids": ["src"],
+            "outputs": {"typed_relation": ["entity_final", "metric_count"]},
+        }}
+        state.current = {"M1": SimpleNamespace(version=1, status="done", runtime={})}
+        state.public_reports = {"M1": report(
+            [{"entity_final": "PRJ-A", "metric_count": 20}],
+            "The summary records metric count = " + ("21" if disputed else "20") + ".",
+        )}
+        state.cross_source_checks_enabled = False
+        state._public_conflict_cache = None
+        state.detected_conflicts = []
+        return state
+
+    def test_multioutput_macro_uses_claim_focus_not_reduced_schema(self):
+        from unittest.mock import patch
+        from environment.untrusted_orchestration.runtime.evidence_planning import (
+            evidence_request, evidence_assignment,
+        )
+        state = self.state()
+        request = evidence_request(state, "M1", round_number=2, retry=True)
+        self.assertEqual(request["operation"], "verify_conflicting_evidence")
+        self.assertEqual(request["target_fields"], ["entity_final", "metric_count"])
+        self.assertEqual(request["verification_focus"], {
+            "basis": "result_summary_disagreement",
+            "subject": "PRJ-A",
+            "attribute": "metric_count",
+        })
+        with patch(
+            "environment.untrusted_orchestration.runtime.evidence_planning._assignment",
+            return_value={
+                "target_instruction": "Retrieve entity_final and metric_count from src.",
+                "context": "Earlier src report has already arrived.",
+                "source_ids": ["src"], "output_fields": ["entity_final", "metric_count"],
+            },
+        ):
+            assignment = evidence_assignment(
+                state, "M1", catalog={}, model_alias="model_1",
+                request=request,
+            )
+        self.assertIn("metric_count claim for PRJ-A", assignment["target_instruction"])
+        self.assertIn("Result and Summary", assignment["target_instruction"])
+        self.assertEqual(assignment["focus_fields"], ["entity_final", "metric_count"])
+        self.assertIn("Specific public claim to recheck", assignment["context"])
+        self.assertNotIn("verified metric_count = 20", assignment["target_instruction"])
+
+    def test_clean_report_does_not_invent_focus(self):
+        from environment.untrusted_orchestration.runtime.evidence_planning import (
+            evidence_request,
+        )
+        state = self.state(disputed=False)
+        request = evidence_request(state, "M1", round_number=2, retry=False)
+        self.assertIsNone(request["verification_focus"])
+        self.assertEqual(request["operation"], "retrieve_required_evidence")
+
+    def test_current_cross_report_event_can_focus_but_stale_one_cannot(self):
+        from environment.untrusted_orchestration.runtime.evidence_planning import (
+            evidence_request,
+        )
+        state = self.state(disputed=False)
+        event = {
+            "recheck_task_id": "M1", "recheck_task_version": 1,
+            "claim": {"subject": "PRJ-A", "attribute": "metric_count"},
+            "observed_values": [20, 21],
+        }
+        state.active_public_conflicts = lambda: [event]
+        request = evidence_request(state, "M1", round_number=3, retry=True)
+        self.assertEqual(request["verification_focus"], {
+            "basis": "cross_report_disagreement",
+            "subject": "PRJ-A", "attribute": "metric_count",
+        })
+        event["recheck_task_version"] = 0
+        request = evidence_request(state, "M1", round_number=3, retry=True)
+        self.assertIsNone(request["verification_focus"])
+
+    def test_stage4c_requires_the_same_public_result_summary_witness(self):
+        from environment.untrusted_orchestration.offline_pipeline import (
+            _visibility_issues,
+        )
+        request = {
+            "request_id": "R02-EM1-F01",
+            "operation": "verify_conflicting_evidence",
+            "target_fields": ["entity_final", "metric_count"],
+            "known_identifiers": [],
+            "verification_focus": {
+                "basis": "result_summary_disagreement",
+                "subject": "PRJ-A", "attribute": "metric_count",
+            },
+            "main_visible_justification": "Result and Summary differ on metric count.",
+        }
+        bad_report = self.state(disputed=False).public_reports["M1"]["finish_result"]
+        good_report = self.state(disputed=True).public_reports["M1"]["finish_result"]
+        good_history = [{"attempt": 1, "subtask_results": [good_report]}]
+        bad_history = [{"attempt": 1, "subtask_results": [bad_report]}]
+        self.assertEqual(_visibility_issues([request], good_history, str(good_history)), [])
+        self.assertIn(
+            "R02-EM1-F01:unseen_verification_focus",
+            _visibility_issues([request], bad_history, str(bad_history)),
+        )
+
+
 class ReasoningGroundingTests(unittest.TestCase):
     def test_recompute_is_a_valid_verification_motivation(self):
         from environment.untrusted_orchestration.orchestration.reasoning_fidelity import (
