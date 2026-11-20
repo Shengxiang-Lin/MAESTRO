@@ -1,3 +1,19 @@
+## Default Global Judge: DeepSeek v4.1 Flash
+
+`DA_REWARD_MODE=global` now selects `deepseek-v4.1-flash-1017` from
+`config/model_config.yaml` (DashScope-compatible API). The shared
+registry supplies the endpoint; the key still uses `DASHSCOPE_API_KEY`.
+Override with `GRPO_JUDGE_MODEL=qwen3.7-flash` for an ablation.
+The Global Judge uses fixed `temperature=0` and a JSON rubric, independent
+of the registry's general-purpose model sampling temperature.
+The Judge cache key includes the model name, so prior Qwen and new DeepSeek
+scores are never treated as identical cached evaluations.
+
+After updating code, verify the selected model in `preflight` and call
+`bash train_maestro_8b/run/pipeline.sh judge` to probe the live API.
+These checks do not require rerunning `prepare-grpo` and do not train a GPU.
+
+---
 ## Global Judge now reads only the canonical unified dataset
 
 GRPO data preparation uses `environment/data/unified` as its only
