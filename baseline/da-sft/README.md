@@ -82,3 +82,9 @@ No vLLM, online Judge, KL term, reference model or RL rollout is used. The
 completion contains the original `action`, `reasoning` and `params`
 fields but is not a hidden thinking trace. Compare on matching held-out
 Scenes using full orchestration and decision metrics, not SFT loss alone.
+
+Data preparation now shows phase-specific `tqdm` bars with counts, throughput
+and ETA; completed Case/decision conversion stages also show useful
+acceptance or action statistics. Use `--no-progress` on the `prepare_data.py`
+command to suppress progress bars when running CI or redirecting logs.
+This changes only the display, not the generated records or split policy.

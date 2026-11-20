@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 from statistics import median
 
+from tqdm.auto import tqdm
+
 from .source_io import digest, read_jsonl
 
 SCHEMA = "maestro.base_quality.v1"
@@ -50,14 +52,15 @@ def _validate_action(action: dict, identity: str) -> None:
 
 
 def audit_dataset(cases: list[dict], decisions: list[dict],
-                  labels: list[dict]) -> dict:
+                  labels: list[dict], *, progress: bool = False) -> dict:
     """Raise for integrity/privacy boundary violations; report distributions."""
     _check(len(decisions) == len(labels), "decision_teacher_count_mismatch")
     case_by_id = {}
     scenes = set()
     recovered = set()
     cases_by_kind, fault_by_kind = Counter(), Counter()
-    for case in cases:
+    for case in tqdm(cases, desc="Audit base Cases", unit="case",
+                     disable=not progress, leave=False):
         identity, scene = case.get("case_id"), case.get("scene_id")
         _check(isinstance(identity, str) and identity and
                identity not in case_by_id, "duplicate_case_identity")
@@ -84,7 +87,8 @@ def audit_dataset(cases: list[dict], decisions: list[dict],
            "fault_scene_missing_clean_pair")
 
     teacher_by_id = {}
-    for item in labels:
+    for item in tqdm(labels, desc="Audit base labels", unit="label",
+                     disable=not progress, leave=False):
         did = item.get("decision_id")
         _check(isinstance(did, str) and did and
                did not in teacher_by_id, "duplicate_private_teacher_id")
@@ -98,7 +102,8 @@ def audit_dataset(cases: list[dict], decisions: list[dict],
     identical = Counter()
     sources, source_mode, modes, actions = Counter(), Counter(), Counter(), Counter()
     fault_decisions, scene_decisions = Counter(), Counter()
-    for row in decisions:
+    for row in tqdm(decisions, desc="Audit base decisions", unit="decision",
+                    disable=not progress, leave=False):
         did, cid, scene = (
             row.get("decision_id"), row.get("case_id"), row.get("scene_id")
         )
@@ -212,7 +217,8 @@ def audit_dataset(cases: list[dict], decisions: list[dict],
     }
 
 
-def audit_output(output_dir: Path, *, verify_manifest: bool = False) -> dict:
+def audit_output(output_dir: Path, *, verify_manifest: bool = False,
+                 progress: bool = False) -> dict:
     root = Path(output_dir)
     files = {
         "cases.jsonl": root / "cases.jsonl",
@@ -225,9 +231,11 @@ def audit_output(output_dir: Path, *, verify_manifest: bool = False) -> dict:
             _check(digest(path) == manifest["base_file_sha256"].get(name),
                    "base_source_checksum_changed:" + name)
     return audit_dataset(
-        read_jsonl(files["cases.jsonl"]),
-        read_jsonl(files["decisions.jsonl"]),
-        read_jsonl(files["private/decision_labels.jsonl"]),
+        read_jsonl(files["cases.jsonl"], progress=progress, desc="Read base Cases"),
+        read_jsonl(files["decisions.jsonl"], progress=progress, desc="Read base decisions"),
+        read_jsonl(files["private/decision_labels.jsonl"],
+                   progress=progress, desc="Read base labels"),
+        progress=progress,
     )
 
 
@@ -236,9 +244,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--verify-manifest", action="store_true")
+    parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args(argv)
     print(json.dumps(audit_output(
         args.output_dir, verify_manifest=args.verify_manifest,
+        progress=not args.no_progress,
     ), ensure_ascii=False, indent=2))
     return 0
 

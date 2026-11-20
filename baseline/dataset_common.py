@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 import shutil
 
+from tqdm.auto import tqdm
+
 from environment.data_export.audit import audit_output
 from environment.data_export.source_io import read_jsonl, digest
 from environment.data_export.splits import load_splits, make_splits
@@ -30,7 +32,7 @@ def repo_path(value: str | Path) -> Path:
     return (path if path.is_absolute() else ROOT / path).resolve()
 
 
-def load_base(source_dir: Path) -> tuple[list[dict], dict[str, dict], list[str], dict]:
+def load_base(source_dir: Path, *, progress: bool = False) -> tuple[list[dict], dict[str, dict], list[str], dict]:
     """Verify frozen source bytes and exact generic Scene/decision/teacher contract."""
     root = repo_path(source_dir)
     manifest_path = root / "manifest.json"
@@ -39,10 +41,13 @@ def load_base(source_dir: Path) -> tuple[list[dict], dict[str, dict], list[str],
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema") != "maestro.dataset.v1":
         raise ValueError("invalid_unified_dataset_schema")
-    audit_output(root, verify_manifest=True)
-    decisions = read_jsonl(root / "decisions.jsonl")
-    labels = read_jsonl(root / "private/decision_labels.jsonl")
-    cases = read_jsonl(root / "cases.jsonl")
+    audit_output(root, verify_manifest=True, progress=progress)
+    decisions = read_jsonl(root / "decisions.jsonl", progress=progress,
+                           desc="Load base decisions")
+    labels = read_jsonl(root / "private/decision_labels.jsonl", progress=progress,
+                        desc="Load base labels")
+    cases = read_jsonl(root / "cases.jsonl", progress=progress,
+                       desc="Load base Cases")
     ids = [row["scene_id"] for row in cases if row["kind"] == "clean"]
     teacher = {row["decision_id"]: row for row in labels}
     if len(teacher) != len(labels):
@@ -59,20 +64,27 @@ def get_splits(scene_ids: list[str], *, seed: int = 17,
     return make_splits(scene_ids, seed=seed, ratios=ratios)
 
 
-def select_rows(decisions: list[dict], *, include_fallback: bool = False):
+def select_rows(decisions: list[dict], *, include_fallback: bool = False,
+                progress: bool = False):
     kept, skipped = [], Counter()
-    for decision in decisions:
+    bar = tqdm(decisions, desc="Filter Main Decisions", unit="decision",
+               disable=not progress)
+    for index, decision in enumerate(bar):
         mode = decision.get("generation_mode", "unknown")
         if not include_fallback and mode not in REVIEWED_MODES:
             skipped[str(mode)] += 1
-            continue
-        kept.append(decision)
+        else:
+            kept.append(decision)
+        if progress and ((index + 1) % 128 == 0 or index + 1 == len(decisions)):
+            bar.set_postfix(accepted=len(kept), filtered=sum(skipped.values()),
+                            refresh=index + 1 == len(decisions))
     if not kept:
         raise ValueError("no_reviewed_positive_main_decisions")
     return kept, skipped
 
 
-def audit_selection(decisions: list[dict], splits: dict[str, str]) -> dict:
+def audit_selection(decisions: list[dict], splits: dict[str, str],
+                    *, progress: bool = False) -> dict:
     """Within-split duplicate/label conflicts and cross-split prompt overlap.
 
     Conflicts are counted, not silently discarded; identical model-visible
@@ -82,7 +94,8 @@ def audit_selection(decisions: list[dict], splits: dict[str, str]) -> dict:
     exact, by_split, by_source, per_scene, actions = (
         Counter(), Counter(), Counter(), Counter(), Counter()
     )
-    for row in decisions:
+    for row in tqdm(decisions, desc="Audit training selection",
+                    unit="decision", disable=not progress, leave=False):
         split = splits[row["scene_id"]]
         prompt = row["prompt"][0]["content"]
         label = row["reference_action"]

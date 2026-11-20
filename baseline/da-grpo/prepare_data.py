@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 import sys
 
+from tqdm.auto import tqdm
+
 ROOT_PATH = Path(__file__).resolve().parents[2]
 if str(ROOT_PATH) not in sys.path:
     sys.path.insert(0, str(ROOT_PATH))
@@ -24,10 +26,20 @@ from baseline.dataset_common import (
 
 
 def convert(decisions: list[dict], teachers: dict[str, dict],
-            splits: dict[str, str]) -> dict[str, list[dict]]:
+            splits: dict[str, str], *, progress: bool = False
+) -> dict[str, list[dict]]:
     result = {name: [] for name in SPLITS}
-    for decision in decisions:
+    bar = tqdm(decisions, desc="GRPO conversion", unit="decision",
+               disable=not progress)
+    by_split = Counter()
+    for index, decision in enumerate(bar):
         scene, identity = decision["scene_id"], decision["decision_id"]
+        split = splits[scene]
+        by_split[split] += 1
+        if progress and ((index + 1) % 128 == 0 or index + 1 == len(decisions)):
+            bar.set_postfix(train=by_split["train"], val=by_split["val"],
+                            test=by_split["test"],
+                            refresh=index + 1 == len(decisions))
         teacher = teachers.get(identity)
         if teacher is None:
             raise ValueError("grpo_teacher_missing:" + identity)
@@ -42,7 +54,7 @@ def convert(decisions: list[dict], teachers: dict[str, dict],
             for t in tasks
         ):
             raise ValueError("grpo_invalid_expert_delegation:" + identity)
-        result[splits[scene]].append({
+        result[split].append({
             "data_source": (
                 "maestro_stage3" if decision["source"] == "clean"
                 else "maestro_stage4"
@@ -85,20 +97,24 @@ def prepare(
     *, seed: int = 17, train_ratio: float = 0.8, val_ratio: float = 0.1,
     split_map: Path | None = None, include_fallback: bool = False,
     strict_conflicts: bool = False, overwrite: bool = False,
-    dry_run: bool = False,
+    dry_run: bool = False, progress: bool = False,
 ) -> dict:
-    decisions, teachers, scene_ids, source_manifest = load_base(source_dir)
+    decisions, teachers, scene_ids, source_manifest = load_base(
+        source_dir, progress=progress,
+    )
     split_data = get_splits(
         scene_ids, seed=seed,
         ratios=(train_ratio, val_ratio, 1 - train_ratio - val_ratio),
         split_map=split_map,
     )
-    kept, skipped = select_rows(decisions, include_fallback=include_fallback)
+    kept, skipped = select_rows(
+        decisions, include_fallback=include_fallback, progress=progress,
+    )
     mapping = split_data["scene_to_split"]
-    report = audit_selection(kept, mapping)
+    report = audit_selection(kept, mapping, progress=progress)
     if strict_conflicts and report["conflicting_prompt_groups"]:
         raise ValueError("da_grpo_ambiguous_expert_reference")
-    rows = convert(kept, teachers, mapping)
+    rows = convert(kept, teachers, mapping, progress=progress)
     if any(not rows[s] for s in SPLITS):
         raise ValueError(
             "da_grpo_empty_train_val_or_test_split:" +
@@ -123,7 +139,8 @@ def prepare(
     import pyarrow.parquet as pq
 
     out = prepare_directory(output_dir, overwrite=overwrite)
-    for split in SPLITS:
+    for split in tqdm(SPLITS, desc="Write GRPO Parquet", unit="split",
+                      disable=not progress):
         dest = out / (split + ".parquet")
         pq.write_table(pa.Table.from_pylist(rows[split]), dest)
         observed = pq.read_table(dest).to_pylist()
@@ -155,6 +172,8 @@ def main(argv=None):
     parser.add_argument("--strict-conflicts", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-progress", action="store_true",
+                        help="Disable tqdm bars for batch logs")
     args = parser.parse_args(argv)
     print(json.dumps(prepare(
         source_dir=args.source_dir, output_dir=args.output_dir,
@@ -163,6 +182,7 @@ def main(argv=None):
         include_fallback=args.include_fallback,
         strict_conflicts=args.strict_conflicts,
         overwrite=args.overwrite, dry_run=args.dry_run,
+        progress=not args.no_progress,
     ), ensure_ascii=False, indent=2))
     return 0
 

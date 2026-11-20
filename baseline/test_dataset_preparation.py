@@ -1,7 +1,9 @@
 """Cross-baseline contract: one unified source, two method-owned data outputs."""
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 from copy import deepcopy
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -185,6 +187,28 @@ class BaselineDataPreparationTests(unittest.TestCase):
             self.assertEqual(extra["counts"]["train"] +
                              extra["counts"]["val"] + extra["counts"]["test"], 12)
             self.assertEqual(main["scene_split"], extra["scene_split"])
+
+    def test_progress_toggle_keeps_outputs_unchanged(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = fixture(root)
+            for module, label in ((sft, "SFT conversion"),
+                                  (grpo, "GRPO conversion")):
+                output = root / ("sft" if module is sft else "grpo")
+                visible = io.StringIO()
+                with redirect_stderr(visible):
+                    with_progress = module.prepare(
+                        source, output, dry_run=True, progress=True,
+                    )
+                self.assertIn("Filter Main Decisions", visible.getvalue())
+                self.assertIn(label, visible.getvalue())
+                hidden = io.StringIO()
+                with redirect_stderr(hidden):
+                    without_progress = module.prepare(
+                        source, output, dry_run=True, progress=False,
+                    )
+                self.assertEqual(hidden.getvalue(), "")
+                self.assertEqual(with_progress, without_progress)
 
     def test_dry_run_does_not_write_data(self):
         with TemporaryDirectory() as temp:

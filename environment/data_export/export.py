@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 import shutil
 
+from tqdm.auto import tqdm
+
 from environment.base_orchestration.o1_compat import o1_prompt_from_turn
 from environment.base_orchestration.trajectory_builder import _answer_text
 from .source_io import digest, read_jsonl, settings_for
@@ -42,11 +44,12 @@ def _index(items, field, description):
     return result
 
 
-def _write_jsonl(path: Path, rows) -> None:
+def _write_jsonl(path: Path, rows, *, progress: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w", encoding="utf-8") as handle:
-        for item in rows:
+        for item in tqdm(rows, total=len(rows), desc=f"Write {path.name}",
+                         unit="row", disable=not progress, leave=False):
             handle.write(json.dumps(item, ensure_ascii=False) + "\n")
     tmp.replace(path)
 
@@ -172,17 +175,33 @@ def _case_for_branch(
     }
 
 
-def _stage4_cases(stage4_dir: Path, scenes: dict, clean: dict):
+def _stage4_cases(stage4_dir: Path, scenes: dict, clean: dict,
+                  *, progress: bool = False):
     index_path = stage4_dir / "round_index.jsonl"
     if not index_path.is_file():
         raise FileNotFoundError("stage4_round_index_missing:" + str(index_path))
     published = _index(
-        read_jsonl(stage4_dir / "episodes.jsonl"),
+        read_jsonl(stage4_dir / "episodes.jsonl", progress=progress,
+                   desc="Read Stage4 episodes"),
         "round_sample_id", "stage4_published_episode",
     )
     cases, seen = [], set()
     status_counts = Counter()
-    for number, item in enumerate(read_jsonl(index_path)):
+    entries = read_jsonl(index_path, progress=progress, desc="Read Stage4 index")
+    bar = tqdm(enumerate(entries), total=len(entries), desc="Stage4 Cases",
+               unit="case", disable=not progress, mininterval=0.5)
+    def update_counts(number: int) -> None:
+        if progress and ((number + 1) % 128 == 0 or number + 1 == len(entries)):
+            bar.set_postfix(
+                accepted=status_counts["accepted"],
+                diagnostic=status_counts["diagnostic"],
+                skipped=(status_counts["screened_out"] +
+                         status_counts["missing_final_journal"] +
+                         status_counts["no_episode"]),
+                refresh=number + 1 == len(entries),
+            )
+
+    for number, item in bar:
         case_id = item["round_sample_id"]
         if case_id in seen:
             raise ValueError("duplicate_stage4_round_index_case")
@@ -190,12 +209,14 @@ def _stage4_cases(stage4_dir: Path, scenes: dict, clean: dict):
         journal_path = stage4_dir / "journal" / f"{number:06d}.json"
         if not journal_path.is_file():
             status_counts["missing_final_journal"] += 1
+            update_counts(number)
             continue
         data = json.loads(journal_path.read_text(encoding="utf-8"))
         if data.get("status") == "not_selected_for_language_review":
             # Stage4A may enumerate thousands of legitimate alternatives,
             # but these were not reviewed as trainable complete Episodes.
             status_counts["screened_out"] += 1
+            update_counts(number)
             continue
         scene_id = item["question_id"]
         if scene_id not in scenes or scene_id not in clean:
@@ -210,6 +231,7 @@ def _stage4_cases(stage4_dir: Path, scenes: dict, clean: dict):
                           else "diagnostic"] += 1
         else:
             status_counts["no_episode"] += 1
+        update_counts(number)
     if not set(published) <= {
         c["case_id"] for c in cases if c["recovery"]["globally_recovered"]
     }:
@@ -221,14 +243,17 @@ def _build_decisions(
     sources: list[tuple[str, list[dict], dict]],
     scenes: dict[str, dict],
     published_cases: set[str],
-    private_states: dict,
+    private_states: dict, *, progress: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     """Reconstruct exact O1 prompts; do not filter labels for any trainer."""
     decisions, teacher = [], []
     identities = set()
     case_rounds = set()
     for stage, turns, settings in sources:
-        for turn in turns:
+        actions = Counter()
+        bar = tqdm(turns, total=len(turns), desc=f"{stage} Main Decisions",
+                   unit="decision", disable=not progress)
+        for index, turn in enumerate(bar):
             scene_id = turn.get("task_id")
             if scene_id not in scenes:
                 raise ValueError("decision_unknown_scene:" + str(scene_id))
@@ -292,6 +317,11 @@ def _build_decisions(
                 "prompt": [{"role": "user", "content": prompt}],
                 "reference_action": ref,
             })
+            actions[ref["action"]] += 1
+            if progress and ((index + 1) % 128 == 0 or index + 1 == len(turns)):
+                bar.set_postfix(delegate=actions["delegate_task"],
+                                complete=actions["complete"],
+                                refresh=index + 1 == len(turns))
             # Explicitly private common teacher state, NOT trainer-specific
             # reward metadata and NEVER included in model-visible prompts.
             teacher.append({
@@ -312,6 +342,7 @@ def export_dataset(
     *, scenes_path: Path, clean_episodes_path: Path,
     clean_turns_path: Path, stage4_dir: Path, output_dir: Path,
     overwrite: bool = False, strict_conflicts: bool = False,
+    progress: bool = False,
 ) -> dict:
     paths = [Path(p) for p in (
         scenes_path, clean_episodes_path, clean_turns_path,
@@ -326,8 +357,11 @@ def export_dataset(
         "stage4": settings_for(stage4_dir / "main_turns.jsonl",
                                paths[0], "stage4"),
     }
-    scenes = _index(read_jsonl(paths[0]), "task_id", "scene")
-    clean = _index(read_jsonl(paths[1]), "task_id", "stage3_clean_episode")
+    scenes = _index(read_jsonl(paths[0], progress=progress,
+                               desc="Read Scenes"), "task_id", "scene")
+    clean = _index(read_jsonl(paths[1], progress=progress,
+                              desc="Read Stage3 episodes"), "task_id",
+                   "stage3_clean_episode")
     for scene_id, episode in clean.items():
         if scene_id not in scenes:
             raise ValueError("stage3_unknown_scene")
@@ -336,9 +370,13 @@ def export_dataset(
         raise ValueError("empty_clean_episode_collection")
     cases = [
         _case_for_clean(scenes[scene_id], episode)
-        for scene_id, episode in sorted(clean.items())
+        for scene_id, episode in tqdm(sorted(clean.items()), desc="Clean Cases",
+                                      unit="case", disable=not progress,
+                                      leave=False)
     ]
-    branches, status_counts = _stage4_cases(stage4_dir, scenes, clean)
+    branches, status_counts = _stage4_cases(
+        stage4_dir, scenes, clean, progress=progress,
+    )
     cases.extend(branches)
     accepted = {
         item["case_id"] for item in branches
@@ -347,22 +385,25 @@ def export_dataset(
     states = {}
     path = stage4_dir / "private" / "decision_reward_states.jsonl"
     if path.is_file():
-        for state in read_jsonl(path):
+        for state in read_jsonl(path, progress=progress,
+                                desc="Read reward snapshots"):
             key = (state["round_sample_id"], state["decision_round"])
             if key in states:
                 raise ValueError("duplicate_stage4_reward_snapshot")
             states[key] = state["state"]
-    clean_turns = read_jsonl(paths[2])
+    clean_turns = read_jsonl(paths[2], progress=progress,
+                            desc="Read Stage3 turns")
     if any(item.get("task_id") not in clean for item in clean_turns):
         raise ValueError("stage3_turn_without_accepted_clean_case")
     decisions, labels = _build_decisions([
         ("stage3", clean_turns, source_settings["stage3"]),
-        ("stage4", read_jsonl(stage4_dir / "main_turns.jsonl"),
+        ("stage4", read_jsonl(stage4_dir / "main_turns.jsonl",
+                              progress=progress, desc="Read Stage4 turns"),
          source_settings["stage4"]),
-    ], scenes, accepted, states)
+    ], scenes, accepted, states, progress=progress)
     if not decisions:
         raise ValueError("no_main_decisions")
-    quality = audit_dataset(cases, decisions, labels)
+    quality = audit_dataset(cases, decisions, labels, progress=progress)
     if strict_conflicts and quality["conflicting_prompt_groups"]:
         raise ValueError("conflicting_labels_for_identical_prompt")
     if output_dir.exists() and any(output_dir.iterdir()):
@@ -370,11 +411,12 @@ def export_dataset(
             raise FileExistsError("dataset_output_exists_use_new_dir_or_explicit_overwrite")
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    _write_jsonl(output_dir / "cases.jsonl", cases)
-    _write_jsonl(output_dir / "decisions.jsonl", decisions)
-    _write_jsonl(output_dir / "private" / "decision_labels.jsonl", labels)
+    _write_jsonl(output_dir / "cases.jsonl", cases, progress=progress)
+    _write_jsonl(output_dir / "decisions.jsonl", decisions, progress=progress)
+    _write_jsonl(output_dir / "private" / "decision_labels.jsonl",
+                 labels, progress=progress)
     # Validate persisted base records; method adapters belong to baseline/*.
-    on_disk = audit_output(output_dir)
+    on_disk = audit_output(output_dir, progress=progress)
     if on_disk != quality:
         raise RuntimeError("base_data_quality_round_trip_mismatch")
     _write_json(output_dir / "quality_report.json", quality)
@@ -425,12 +467,15 @@ def main(argv=None):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--strict-conflicts", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--no-progress", action="store_true",
+                        help="Disable tqdm progress bars for batch logs")
     args = parser.parse_args(argv)
     result = export_dataset(
         scenes_path=args.scenes, clean_episodes_path=args.clean_episodes,
         clean_turns_path=args.clean_turns, stage4_dir=args.stage4_dir,
         output_dir=args.output_dir, overwrite=args.overwrite,
         strict_conflicts=args.strict_conflicts,
+        progress=not args.no_progress,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

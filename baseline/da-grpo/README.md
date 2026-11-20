@@ -379,3 +379,9 @@ MAESTRO_GRPO_TRACEBACK=1 python baseline/da-grpo/train.py \
   --max-steps 1 --max-completion-tokens 512 \
   --output-dir baseline/da-grpo/output_prompt1_test
 ```
+
+Data preparation now shows phase-specific `tqdm` bars with counts, throughput
+and ETA; completed Case/decision conversion stages also show useful
+acceptance or action statistics. Use `--no-progress` on the `prepare_data.py`
+command to suppress progress bars when running CI or redirecting logs.
+This changes only the display, not the generated records or split policy.

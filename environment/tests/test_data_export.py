@@ -1,7 +1,9 @@
 """Canonical paired data + immutable Scene split regression tests."""
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 from copy import deepcopy
+import io
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -133,12 +135,17 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
                 },
             }), encoding="utf-8")
             out = root / "unified"
-            manifest = export_dataset(
-                scenes_path=paths["scenes"],
-                clean_episodes_path=paths["clean"],
-                clean_turns_path=paths["turns"],
-                stage4_dir=stage4, output_dir=out,
-            )
+            progress_stream = io.StringIO()
+            with redirect_stderr(progress_stream):
+                manifest = export_dataset(
+                    scenes_path=paths["scenes"],
+                    clean_episodes_path=paths["clean"],
+                    clean_turns_path=paths["turns"],
+                    stage4_dir=stage4, output_dir=out, progress=True,
+                )
+            self.assertIn("Stage4 Cases", progress_stream.getvalue())
+            self.assertIn("stage4 Main Decisions", progress_stream.getvalue())
+            self.assertIn("Write decisions.jsonl", progress_stream.getvalue())
             self.assertEqual(manifest["accepted_fault_cases"], 2)
             quality = json.loads(
                 (out / "quality_report.json").read_text(encoding="utf-8")
