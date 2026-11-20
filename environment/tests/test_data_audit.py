@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib.util
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
-from environment.data_export.audit import audit_dataset
+from environment.data_export.audit import audit_dataset, audit_output
 
 
 def data():
@@ -101,6 +104,54 @@ class DataAuditTests(unittest.TestCase):
         args[0][3]["recovery"]["globally_recovered"] = False
         with self.assertRaisesRegex(ValueError, "unpublished_or_mismatched_case"):
             audit_dataset(*args)
+
+
+    @unittest.skipUnless(importlib.util.find_spec("pyarrow") is not None,
+                         "pyarrow is optional for JSONL-only environments")
+    def test_persisted_jsonl_parquet_adapter_round_trip(self):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        cases, decisions, adapters, splits = data()
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "splits.json").write_text(
+                json.dumps({"scene_to_split": splits}), encoding="utf-8",
+            )
+            for split in ("train", "val", "test"):
+                paths = [
+                    (root / "cases" / (split + ".jsonl"),
+                     [x for x in cases if x["split"] == split]),
+                    (root / "decisions" / (split + ".jsonl"),
+                     [x for x in decisions if x["split"] == split]),
+                    (root / "adapters" / "da-sft" / (split + ".jsonl"),
+                     [row for row_split, row in adapters if row_split == split]),
+                ]
+                for path, rows in paths:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(
+                        "".join(json.dumps(row) + "\n" for row in rows),
+                        encoding="utf-8",
+                    )
+                payload = paths[-1][1]
+                parquet_name = "eval" if split == "val" else split
+                pq.write_table(
+                    pa.Table.from_pylist(payload),
+                    root / "adapters" / "da-sft" / (parquet_name + ".parquet"),
+                )
+            report = audit_output(root, check_parquet=True)
+            self.assertEqual(report["decision_count"], len(decisions))
+            tampered = [dict(row) for _, row in adapters if row["prompt"][0]["content"] == "Question a"]
+            self.assertEqual(len(tampered), 1)
+            tampered[0]["completion"] = [{
+                "role": "assistant", "content": "{}",
+            }]
+            pq.write_table(
+                pa.Table.from_pylist(tampered),
+                root / "adapters" / "da-sft" / "train.parquet",
+            )
+            with self.assertRaisesRegex(ValueError, "sft_parquet_round_trip_mismatch"):
+                audit_output(root, check_parquet=True)
 
 
 if __name__ == "__main__":
