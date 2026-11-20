@@ -1,3 +1,41 @@
+## Canonical Environment dataset -> standalone Stage2 GRPO
+
+The Stage2 training data source is the method-independent dataset produced
+by `python -m environment.data_export` under `environment/data/unified`.
+The method-specific `train_maestro_8b/data/prepare_grpo.py` reads ONLY
+that frozen, audited snapshot (`cases.jsonl`, `decisions.jsonl`,
+`private/decision_labels.jsonl` and `manifest.json`), preserves exact O1
+Main-Agent prompts, and applies reviewed-mode selection (default),
+reward-compatible private-state filtering, and deterministic Scene-level
+train/val/test splits (80/10/10, seed 17 or a shared `--split-map`).
+
+The outputs are `DA_DATA/{train,val,test}.parquet`, `splits.json`,
+`quality_report.json` and `private/decision_reward_states.jsonl`.
+The private reward file is derived from unified labels, never added to
+the student prompt. Default `DA_REWARD_MODE=global` uses only Stage4
+decisions with scorable private state; `DA_REWARD_MODE=da` accepts
+reviewed Stage3+4 decisions. The Global Judge additionally verifies
+that the Stage1 Scenes/Stage4 manifest match the canonical snapshot,
+and reads Stage4 pre-action claim evidence for reward only.
+
+The older Stage4-only `data/prepare_grpo.py` has been removed.
+MAESTRO does not import any code from `baseline/da-grpo`.
+
+Generate the unified base once with `python -m environment.data_export`
+using matching Stage1, Stage3 and Stage4 inputs, then run:
+
+```bash
+bash train_maestro_8b/run/pipeline.sh prepare-grpo
+bash train_maestro_8b/run/pipeline.sh preflight
+bash train_maestro_8b/run/pipeline.sh judge
+DA_PILOT_NEW_TOKENS=4096 bash train_maestro_8b/run/pipeline.sh pilot
+```
+
+An old Stage4-only Parquet is not silently reused. Use a fresh `DA_DATA`
+or set `SKIP_COMPLETED=0` to explicitly rebuild after changing the
+source, reward mode, or split recipe.
+
+---
 ## Standalone Stage2 GRPO training (no DA baseline dependency)
 
 The default `STAGE2_TRAINER=da` path is implemented inside
@@ -77,8 +115,8 @@ Environment Reward is the original private-state 0.35 Evidence Coverage,
 Judge is the earlier 0.30 Evidence Grounding, 0.30 Recovery Strategy,
 0.20 Subtask Quality and 0.20 Reasoning Quality rubric. Only the current
 Main-visible O1 Prompt and candidate Action reach the remote Judge.
-Private pre-action states remain in
-`environment/data/stage4/private/decision_reward_states.jsonl`,
+Private pre-action reward states are prepared from unified private labels into
+`workspace/maestro_8b/stage2_da/private/decision_reward_states.jsonl`,
 never in the policy Prompt or remote API request. Gold/expert fields
 can remain in the DA-format Parquet for compatibility but are **not used**
 by the hybrid evaluator.
@@ -129,7 +167,7 @@ Stage1 Risk Head / RiskKV remains a separate experimental route:
 ## Main Stage 2 training (default): DA-style Unsloth + TRL GRPO
 
 The current main Stage2 training path is **`train_maestro_8b`**, not
-`baseline/da-grpo`. The commands below also use hybrid reward by default
+`baseline/da-grpo`. The commands below use Global reward by default
 (as described above). After Stage4 has published accepted Main turns, run:
 
 ```bash
@@ -143,7 +181,7 @@ GRPO_MAX_STEPS=100 bash train_maestro_8b/run/pipeline.sh grpo
 ```
 
 The pipeline defaults to `STAGE2_TRAINER=da`, with Stage2-owned
-`data/export_da_grpo.py`, `policy/da_backend.py` and
+`data/prepare_grpo.py`, `policy/da_backend.py` and
 `policy/train.py da ...`. **No Stage1 Risk Head/features/checkpoint is
 required for this run.** The original baseline source remains unchanged.
 The Stage2 backend **constructs and runs** BF16 LoRA + Unsloth/vLLM
@@ -155,7 +193,7 @@ the old four-dimension Judge is now available only via
 It sends public task/history plus the private gold/expert reference to
 the external Judge **for reward only**, never to the Main policy prompt.
 
-The Stage2-specific outputs are `workspace/maestro_8b/stage2_da/train.parquet`
+The Stage2-specific outputs include `workspace/maestro_8b/stage2_da/train.parquet`
 and `workspace/maestro_8b/checkpoints/stage2-da-{pilot,grpo}/`.
 The default pilot runs 3 updates with 16 training rows and 1536 generated
 tokens per candidate, then checks if any group had nonzero reward variance.

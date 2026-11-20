@@ -14,12 +14,15 @@ RUN_ROOT="${RUN_ROOT:-$ROOT/workspace/maestro_8b}"
 STAGE2_TRAINER="${STAGE2_TRAINER:-da}"     # da (default) or riskkv
 DA_REWARD_MODE="${DA_REWARD_MODE:-global}"  # global | hybrid | deterministic | judge_only | da
 DA_DATA="${DA_DATA:-$RUN_ROOT/stage2_da}"
+DA_UNIFIED_DIR="${DA_UNIFIED_DIR:-$ROOT/environment/data/unified}"
+DA_INCLUDE_FALLBACK="${DA_INCLUDE_FALLBACK:-0}"
+DA_SPLIT_SEED="${DA_SPLIT_SEED:-17}"
+DA_SPLIT_MAP="${DA_SPLIT_MAP:-}"
 DA_GRPO_CKPT="${DA_GRPO_CKPT:-$RUN_ROOT/checkpoints/stage2-${DA_REWARD_MODE}-grpo}"
 DA_PILOT_CKPT="${DA_PILOT_CKPT:-$RUN_ROOT/checkpoints/stage2-${DA_REWARD_MODE}-pilot}"
 DA_PILOT_STEPS="${DA_PILOT_STEPS:-3}"
 DA_PILOT_ROWS="${DA_PILOT_ROWS:-16}"
 DA_PILOT_NEW_TOKENS="${DA_PILOT_NEW_TOKENS:-1536}"
-DA_REVIEWED_ONLY="${DA_REVIEWED_ONLY:-0}"
 RISK_DATA="${RISK_DATA:-$STAGE4_DIR/private/window_risk}"
 BELIEF_DATA="${BELIEF_DATA:-$STAGE4_DIR/private/evidence_belief}"
 BELIEF_CKPT="${BELIEF_CKPT:-$RUN_ROOT/checkpoints/belief-stage1-pilot}"
@@ -103,8 +106,8 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
   export        Stage4 episodes/claim states -> train/val risk rows
   features      Frozen Qwen3-8B NF4 train/val window-feature cache
   risk          Train Risk Head only, using cached NF4 features
-  prepare-grpo  DA: export Stage4 -> Parquet; RiskKV: private-state reward rows
-  preflight     DA: baseline package/input checks; RiskKV: cache/logprob
+  prepare-grpo  DA: canonical unified dataset -> train/val/test Parquet; RiskKV: private-state reward rows
+  preflight     DA: independent package/input/reward-context checks; RiskKV: cache/logprob
   pilot         DA: 3-step smoke; hybrid: local validity + LLM semantic Judge
                 RiskKV: previous strict Action-reward pilot
   audit-pilot   DA: review Judge reward diagnostics; RiskKV: invalid reasons
@@ -116,8 +119,9 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
 
 Override settings via environment variables or run/config.env:
   STAGE2_TRAINER (da|riskkv), DA_REWARD_MODE (global|hybrid|deterministic|judge_only|da),
-  DA_DATA, DA_GRPO_CKPT, DA_PILOT_CKPT,
-  DA_PILOT_STEPS, DA_PILOT_ROWS, DA_PILOT_NEW_TOKENS, DA_REVIEWED_ONLY,
+  DA_DATA, DA_UNIFIED_DIR, DA_INCLUDE_FALLBACK, DA_SPLIT_SEED, DA_SPLIT_MAP,
+  DA_GRPO_CKPT, DA_PILOT_CKPT,
+  DA_PILOT_STEPS, DA_PILOT_ROWS, DA_PILOT_NEW_TOKENS,
   MODEL, STAGE1_DIR, STAGE4_DIR, RUN_ROOT, MAX_LENGTH,
   BELIEF_DATA, BELIEF_CKPT, BELIEF_MAX_LENGTH, BELIEF_EPOCHS,
   BELIEF_MAX_STEPS, BELIEF_GRAD_ACCUM, BELIEF_BATCH_SIZE,
@@ -278,43 +282,33 @@ train_risk() {
 }
 prepare_grpo() {
   if [[ "$STAGE2_TRAINER" == "da" ]]; then
-    need "$STAGE1_DIR/questions/scenes.jsonl"
-    need "$STAGE4_DIR/main_turns.jsonl"
-    if [[ "$DA_REWARD_MODE" != "da" ]]; then
-      need "$REWARD_STATES"
-    fi
-    if [[ "$DA_REWARD_MODE" == "global" ]]; then
-      need "$STAGE4_DIR/private/claim_state_supervision.jsonl"
-    fi
-    if [[ "$SKIP_COMPLETED" == "1" && -s "$DA_DATA/train.parquet" && -f "$DA_DATA/summary.json" ]] &&
-      python - "$DA_DATA/summary.json" "$STAGE1_DIR/questions/scenes.jsonl" "$STAGE4_DIR/main_turns.jsonl" <<'PY'
-import hashlib,json,sys
-from pathlib import Path
-def digest(path):
-    h=hashlib.sha256()
-    with open(path,"rb") as f:
-        for chunk in iter(lambda:f.read(1<<20),b""):
-            h.update(chunk)
-    return h.hexdigest()
-s=json.loads(Path(sys.argv[1]).read_text())
-if (s.get("schema") != "maestro.stage2_da_grpo.v1"
-        or s.get("scenes_sha256") != digest(sys.argv[2])
-        or s.get("turns_sha256") != digest(sys.argv[3])):
-    raise SystemExit(1)
-PY
-    then
-      say "Reusing verified Stage2 DA Parquet: $DA_DATA/train.parquet"
-      return
-    fi
-    say "Stage2 DA export: exact O1 prompts + reward-only expert metadata"
+    need "$DA_UNIFIED_DIR/manifest.json"
+    need "$DA_UNIFIED_DIR/cases.jsonl"
+    need "$DA_UNIFIED_DIR/decisions.jsonl"
+    need "$DA_UNIFIED_DIR/private/decision_labels.jsonl"
     local extra=()
-    [[ "$DA_REVIEWED_ONLY" == "1" ]] && extra+=(--reviewed_only)
-    python -m train_maestro_8b.data.export_da_grpo \
-      --scenes "$STAGE1_DIR/questions/scenes.jsonl" \
-      --turns "$STAGE4_DIR/main_turns.jsonl" \
-      --output_dir "$DA_DATA" --tokenizer "$MODEL" \
-      --max_prompt_tokens "$GRPO_MAX_PROMPT_TOKENS" "${extra[@]}"
+    [[ "$DA_INCLUDE_FALLBACK" == "1" ]] && extra+=(--include-fallback)
+    [[ -n "$DA_SPLIT_MAP" ]] && extra+=(--split-map "$DA_SPLIT_MAP")
+    if [[ "$SKIP_COMPLETED" == "1" ]]; then
+      extra+=(--reuse-if-unchanged)
+    else
+      extra+=(--overwrite)
+    fi
+    say "Stage2 GRPO: canonical Environment dataset -> Scene-split method Parquet"
+    python -m train_maestro_8b.data.prepare_grpo \
+      --source-dir "$DA_UNIFIED_DIR" \
+      --output-dir "$DA_DATA" \
+      --reward-mode "$DA_REWARD_MODE" \
+      --seed "$DA_SPLIT_SEED" \
+      --scenes-file "$STAGE1_DIR/questions/scenes.jsonl" \
+      --stage4-manifest "$STAGE4_DIR/manifest.json" \
+      --claim-states "$STAGE4_DIR/private/claim_state_supervision.jsonl" \
+      --tokenizer "$MODEL" \
+      --max-prompt-tokens "$GRPO_MAX_PROMPT_TOKENS" \
+      "${extra[@]}"
     need "$DA_DATA/train.parquet"
+    need "$DA_DATA/val.parquet"
+    need "$DA_DATA/test.parquet"
     return
   fi
   [[ "$STAGE2_TRAINER" == "riskkv" ]] || die "STAGE2_TRAINER must be da or riskkv"
@@ -363,7 +357,7 @@ init_stage2_da_args() {
     --judge_api_key_env "$GRPO_JUDGE_API_KEY_ENV"
     --judge_workers "$GRPO_JUDGE_WORKERS"
     --reward_mode "$DA_REWARD_MODE"
-    --decision_states "$REWARD_STATES"
+    --decision_states "$DA_DATA/private/decision_reward_states.jsonl"
     --scenes_file "$STAGE1_DIR/questions/scenes.jsonl"
     --claim_states "$STAGE4_DIR/private/claim_state_supervision.jsonl"
     --judge_weight "$GRPO_JUDGE_WEIGHT"
@@ -478,10 +472,14 @@ init_grpo_args() {
 inspect_io() {
   if [[ "$STAGE2_TRAINER" == "da" ]]; then
     need_model
-    python -m train_maestro_8b.data.export_da_grpo \
-      --scenes "$STAGE1_DIR/questions/scenes.jsonl" \
-      --turns "$STAGE4_DIR/main_turns.jsonl" --output_dir "$DA_DATA" \
-      --tokenizer "$MODEL" --max_prompt_tokens "$GRPO_MAX_PROMPT_TOKENS" --dry_run
+    python -m train_maestro_8b.data.prepare_grpo \
+      --source-dir "$DA_UNIFIED_DIR" \
+      --output-dir "$DA_DATA" \
+      --reward-mode "$DA_REWARD_MODE" \
+      --scenes-file "$STAGE1_DIR/questions/scenes.jsonl" \
+      --stage4-manifest "$STAGE4_DIR/manifest.json" \
+      --claim-states "$STAGE4_DIR/private/claim_state_supervision.jsonl" \
+      --tokenizer "$MODEL" --max-prompt-tokens "$GRPO_MAX_PROMPT_TOKENS" --dry-run
     return
   fi
   need_model
@@ -570,7 +568,7 @@ status() {
     [[ -f "$file" ]] && printf '%7s rows %s\n' "$(wc -l < "$file")" "$file" ||
                        printf 'MISSING      %s\n' "$file"
   done
-  for file in "$REWARD_STATES" "$BELIEF_CKPT/manifest.json" "$FEATURES_TRAIN/manifest.json" \
+  for file in "$DA_DATA/private/decision_reward_states.jsonl" "$REWARD_STATES" "$BELIEF_CKPT/manifest.json" "$FEATURES_TRAIN/manifest.json" \
               "$FEATURES_VAL/manifest.json" "$RISK_CKPT/risk_config.json" \
               "$GRPO_CKPT/risk_policy_config.json"; do
     [[ -f "$file" ]] && printf 'OK           %s\n' "$file" ||

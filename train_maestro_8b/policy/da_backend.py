@@ -147,7 +147,7 @@ def train_stage2(cfg: dict, *, resume: str | None, args):
             diagnostics_path=cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl",
             global_contexts=global_contexts,
         )
-    print(f"[MAESTRO/Stage2] {len(rows)} Stage4 Main decisions; "
+    print(f"[MAESTRO/Stage2] {len(rows)} reward-compatible Main decisions; "
           f"batch_plan={runtime.batch_plan(cfg)}", flush=True)
     model_cfg, rollout = cfg["model"], cfg["rollout"]
     policy, tokenizer = FastLanguageModel.from_pretrained(
