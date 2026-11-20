@@ -1,3 +1,36 @@
+## Required canonical Environment dataset for GRPO
+
+`prepare-grpo` consumes the immutable `environment/data/unified` output
+of `python -m environment.data_export`. It no longer reads raw Stage4
+turns to regenerate training prompts. Generate the unified base first:
+
+```bash
+python -m environment.data_export \
+  --scenes environment/data/stage1/questions/scenes.jsonl \
+  --clean-episodes environment/data/stage3/episodes.jsonl \
+  --clean-turns environment/data/stage3/main_turns.jsonl \
+  --stage4-dir environment/data/stage4 \
+  --output-dir environment/data/unified
+```
+
+Adjust the Stage3 paths to your actual Environment run. The unified
+exporter checks their shared source/version consistency; do not mix runs.
+
+Next run `bash train_maestro_8b/run/pipeline.sh prepare-grpo`.
+Stage2 applies reviewed-only selection and creates Scene-separated
+`train.parquet`, `val.parquet`, `test.parquet` plus split and quality
+reports. The default split is 80/10/10 (seed 17). Use `DA_SPLIT_MAP`
+to reuse a frozen baseline `splits.json`, `DA_INCLUDE_FALLBACK=1` to
+opt in to non-reviewed rows, or `SKIP_COMPLETED=0` to explicitly rebuild.
+
+For `global`, `hybrid`, `deterministic` and `judge_only`, only Stage4
+Main decisions with scorable canonical reward states are trainable.
+The original DA four-dimensional reward also supports clean Stage3
+decisions. The private-state sidecar comes from the unified labels;
+Global Judge's Stage4 claim snapshots and Stage1 Scenes are checked
+against the unified source and are reward-only, never student input.
+
+---
 ## Stage 2 Default: Global Evidence & Recovery LLM Judge
 
 The native Unsloth + colocated vLLM + TRL GRPOTrainer / Qwen3
@@ -39,9 +72,9 @@ Wrong tool/field/parallel strategy is not automatically -1 from an
 exact-string matcher; the earlier deterministic scorer's error is logged
 as `legacy_env_reason` **for diagnosis only**.
 
-Required Stage4 files:
-`private/decision_reward_states.jsonl` and
-`private/claim_state_supervision.jsonl`.
+Reward states are derived from unified private labels into
+`DA_DATA/private/decision_reward_states.jsonl`. Global Judge also
+requires the matching Stage4 `private/claim_state_supervision.jsonl`.
 The new context builder also reads the exact Stage1 `questions/scenes.jsonl`.
 Preflight rejects missing or future-timestamped claim states. If legacy
 journals lack pre-action claim audits, regenerate the Stage4 sidecar; do not
