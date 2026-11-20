@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 import os
+from pathlib import Path
+import tempfile
 from unittest.mock import patch
 import unittest
+import yaml
 
 from train_maestro_8b.policy import grpo_runtime
 from train_maestro_8b.run.launch_grpo import command, topology
@@ -27,6 +30,31 @@ class Stage2DistributedTests(unittest.TestCase):
         self.assertEqual(plan["gradient_accumulation_steps"], 8)
         self.assertEqual(plan["prompts_per_step"], 1)
         self.assertIsNone(plan["generation_batch_size"])
+
+    def test_swapped_roles_allow_gpu_zero_training(self):
+        # A physical GPU 0 trainer and GPU 1 server are a valid, disjoint
+        # topology; ensure parsing as well as launcher mapping accepts it.
+        raw = yaml.safe_load(Path(grpo_runtime.DEFAULT_CONFIG).read_text())
+        raw["distributed"]["rollout_gpu"] = 1
+        raw["distributed"]["train_gpu_start"] = 0
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_file = Path(tmp) / "swapped.yaml"
+            cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+            cfg = grpo_runtime.load_config(cfg_file)
+        self.assertEqual(topology(cfg, "serve")[0], ["1"])
+        self.assertEqual(topology(cfg, "train")[0], ["0"])
+        self.assertEqual(topology(cfg, "train")[1]["CUDA_VISIBLE_DEVICES"], "0")
+        self.assertEqual(grpo_runtime.batch_plan(cfg)["prompts_per_step"], 1)
+
+    def test_swapped_roles_still_reject_overlapping_devices(self):
+        raw = yaml.safe_load(Path(grpo_runtime.DEFAULT_CONFIG).read_text())
+        raw["distributed"]["rollout_gpu"] = 1
+        raw["distributed"]["train_gpu_start"] = 1
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_file = Path(tmp) / "overlap.yaml"
+            cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must not overlap"):
+                grpo_runtime.load_config(cfg_file)
 
     def test_4gpu_three_trainer_topology_and_microbatch_scaling(self):
         cfg = deepcopy(self.cfg)
