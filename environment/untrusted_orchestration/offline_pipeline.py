@@ -486,12 +486,12 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                 author_system = _MAIN_DECISION_AUTHOR_SYSTEM
                 if any(goal.get("verification_focus") for goal in visible_goals):
                     author_system += (
-                        "\\nWhen a request identifies a public verification_focus,"
+                        "\nWhen a request identifies a public verification_focus,"
                         " name its exact disputed attribute and subject in"
                         " the reasoning. The other required output fields"
                         " remain in the same Macro handoff, but are NOT"
                         " additional confirmed contradictions. Do not"
-                        " claim either side of the dispute has been proved.\\n"
+                        " claim either side of the dispute has been proved.\n"
                     )
                 if history_conflicts:
                     author_system += (
