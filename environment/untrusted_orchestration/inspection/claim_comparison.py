@@ -30,6 +30,8 @@ _ID_VALUE = re.compile(
 
 
 def _display(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
     return value.casefold() if isinstance(value, str) else str(value)
 
 
