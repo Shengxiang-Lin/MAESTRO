@@ -190,6 +190,17 @@ def _stage4_cases(stage4_dir: Path, scenes: dict, clean: dict,
     entries = read_jsonl(index_path, progress=progress, desc="Read Stage4 index")
     bar = tqdm(enumerate(entries), total=len(entries), desc="Stage4 Cases",
                unit="case", disable=not progress, mininterval=0.5)
+    def update_counts(number: int) -> None:
+        if progress and ((number + 1) % 128 == 0 or number + 1 == len(entries)):
+            bar.set_postfix(
+                accepted=status_counts["accepted"],
+                diagnostic=status_counts["diagnostic"],
+                skipped=(status_counts["screened_out"] +
+                         status_counts["missing_final_journal"] +
+                         status_counts["no_episode"]),
+                refresh=number + 1 == len(entries),
+            )
+
     for number, item in bar:
         case_id = item["round_sample_id"]
         if case_id in seen:
@@ -198,12 +209,14 @@ def _stage4_cases(stage4_dir: Path, scenes: dict, clean: dict,
         journal_path = stage4_dir / "journal" / f"{number:06d}.json"
         if not journal_path.is_file():
             status_counts["missing_final_journal"] += 1
+            update_counts(number)
             continue
         data = json.loads(journal_path.read_text(encoding="utf-8"))
         if data.get("status") == "not_selected_for_language_review":
             # Stage4A may enumerate thousands of legitimate alternatives,
             # but these were not reviewed as trainable complete Episodes.
             status_counts["screened_out"] += 1
+            update_counts(number)
             continue
         scene_id = item["question_id"]
         if scene_id not in scenes or scene_id not in clean:
@@ -218,18 +231,7 @@ def _stage4_cases(stage4_dir: Path, scenes: dict, clean: dict,
                           else "diagnostic"] += 1
         else:
             status_counts["no_episode"] += 1
-        if progress and (number + 1) % 128 == 0:
-            bar.set_postfix(accepted=status_counts["accepted"],
-                            diagnostic=status_counts["diagnostic"],
-                            skipped=status_counts["screened_out"] +
-                                    status_counts["missing_final_journal"],
-                            refresh=False)
-    if progress:
-        bar.set_postfix(accepted=status_counts["accepted"],
-                        diagnostic=status_counts["diagnostic"],
-                        skipped=status_counts["screened_out"] +
-                                status_counts["missing_final_journal"],
-                        refresh=True)
+        update_counts(number)
     if not set(published) <= {
         c["case_id"] for c in cases if c["recovery"]["globally_recovered"]
     }:
@@ -316,9 +318,10 @@ def _build_decisions(
                 "reference_action": ref,
             })
             actions[ref["action"]] += 1
-            if progress and (index + 1) % 128 == 0:
+            if progress and ((index + 1) % 128 == 0 or index + 1 == len(turns)):
                 bar.set_postfix(delegate=actions["delegate_task"],
-                                complete=actions["complete"], refresh=False)
+                                complete=actions["complete"],
+                                refresh=index + 1 == len(turns))
             # Explicitly private common teacher state, NOT trainer-specific
             # reward metadata and NEVER included in model-visible prompts.
             teacher.append({
@@ -332,9 +335,6 @@ def _build_decisions(
                     private_states.get((case_id, number))
                 ) if stage == "stage4" else None,
             })
-        if progress:
-            bar.set_postfix(delegate=actions["delegate_task"],
-                            complete=actions["complete"], refresh=True)
     return decisions, teacher
 
 
