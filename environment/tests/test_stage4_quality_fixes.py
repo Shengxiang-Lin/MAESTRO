@@ -220,6 +220,17 @@ class PublicVerificationFocusTests(unittest.TestCase):
             "R02-EM1-F01:unseen_verification_focus",
             _visibility_issues([request], bad_history, str(bad_history)),
         )
+        # A conflict in an older round does not justify an unsupported
+        # current-round verification focus after the report is replaced.
+        request["verification_focus"]["observed_round"] = 2
+        history = [
+            {"attempt": 1, "subtask_results": [good_report]},
+            {"attempt": 2, "subtask_results": [bad_report]},
+        ]
+        self.assertIn(
+            "R02-EM1-F01:unseen_verification_focus",
+            _visibility_issues([request], history, str(history)),
+        )
 
 
 class ReasoningGroundingTests(unittest.TestCase):
