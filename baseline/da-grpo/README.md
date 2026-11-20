@@ -385,3 +385,15 @@ and ETA; completed Case/decision conversion stages also show useful
 acceptance or action statistics. Use `--no-progress` on the `prepare_data.py`
 command to suppress progress bars when running CI or redirecting logs.
 This changes only the display, not the generated records or split policy.
+
+## Online LoRA inference with Qwen3 Thinking
+
+After training, `output/final_adapter/` is loaded directly via the existing
+managed vLLM Main-Agent backend: original Qwen3-8B + PEFT LoRA, no merged
+model export required. Both DA-SFT and DA-GRPO use
+`chat_template_kwargs.enable_thinking=true` and the `qwen3` reasoning
+parser to keep internal thinking separate from the final action JSON.
+
+Read [online LoRA serving and evaluation](../LORA_SERVING.md) for the
+full single-decision test, multi-round OmniGAIA launcher, GPU/port
+configuration, and saved output examples.
