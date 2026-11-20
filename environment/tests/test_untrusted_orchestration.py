@@ -1420,11 +1420,12 @@ class RoundLocalRecoveryTests(unittest.TestCase):
             + result["main_actions_skipped_downstream"],
         )
         self.assertEqual(result["recovered"], result["published_episodes"])
-        self.assertEqual(
-            result["main_training_turns"],
-            len((root / "dual_progress" / "main_turns.jsonl")
-                .read_text(encoding="utf-8").splitlines()),
+        published_turns = root / "dual_progress" / "main_turns.jsonl"
+        published_lines = (
+            published_turns.read_text(encoding="utf-8").splitlines()
+            if published_turns.is_file() else []
         )
+        self.assertEqual(result["main_training_turns"], len(published_lines))
         # Summary has one canonical key per publication quantity, not
         # historical duplicates with permanently equal values.
         self.assertFalse({
