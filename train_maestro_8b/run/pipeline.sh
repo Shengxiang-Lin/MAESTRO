@@ -357,7 +357,7 @@ init_stage2_da_args() {
     --judge_api_key_env "$GRPO_JUDGE_API_KEY_ENV"
     --judge_workers "$GRPO_JUDGE_WORKERS"
     --reward_mode "$DA_REWARD_MODE"
-    --decision_states "$REWARD_STATES"
+    --decision_states "$DA_DATA/private/decision_reward_states.jsonl"
     --scenes_file "$STAGE1_DIR/questions/scenes.jsonl"
     --claim_states "$STAGE4_DIR/private/claim_state_supervision.jsonl"
     --judge_weight "$GRPO_JUDGE_WEIGHT"
@@ -472,10 +472,14 @@ init_grpo_args() {
 inspect_io() {
   if [[ "$STAGE2_TRAINER" == "da" ]]; then
     need_model
-    python -m train_maestro_8b.data.export_da_grpo \
-      --scenes "$STAGE1_DIR/questions/scenes.jsonl" \
-      --turns "$STAGE4_DIR/main_turns.jsonl" --output_dir "$DA_DATA" \
-      --tokenizer "$MODEL" --max_prompt_tokens "$GRPO_MAX_PROMPT_TOKENS" --dry_run
+    python -m train_maestro_8b.data.prepare_grpo \
+      --source-dir "$DA_UNIFIED_DIR" \
+      --output-dir "$DA_DATA" \
+      --reward-mode "$DA_REWARD_MODE" \
+      --scenes-file "$STAGE1_DIR/questions/scenes.jsonl" \
+      --stage4-manifest "$STAGE4_DIR/manifest.json" \
+      --claim-states "$STAGE4_DIR/private/claim_state_supervision.jsonl" \
+      --tokenizer "$MODEL" --max-prompt-tokens "$GRPO_MAX_PROMPT_TOKENS" --dry-run
     return
   fi
   need_model
@@ -564,7 +568,7 @@ status() {
     [[ -f "$file" ]] && printf '%7s rows %s\n' "$(wc -l < "$file")" "$file" ||
                        printf 'MISSING      %s\n' "$file"
   done
-  for file in "$REWARD_STATES" "$BELIEF_CKPT/manifest.json" "$FEATURES_TRAIN/manifest.json" \
+  for file in "$DA_DATA/private/decision_reward_states.jsonl" "$REWARD_STATES" "$BELIEF_CKPT/manifest.json" "$FEATURES_TRAIN/manifest.json" \
               "$FEATURES_VAL/manifest.json" "$RISK_CKPT/risk_config.json" \
               "$GRPO_CKPT/risk_policy_config.json"; do
     [[ -f "$file" ]] && printf 'OK           %s\n' "$file" ||
