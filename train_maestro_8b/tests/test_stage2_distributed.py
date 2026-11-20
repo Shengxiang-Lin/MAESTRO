@@ -94,7 +94,9 @@ class Stage2DistributedTests(unittest.TestCase):
 
     def test_training_command_is_torchrun_with_three_ranks(self):
         cfg = deepcopy(self.cfg)
-        cfg["distributed"]["train_gpus"] = 3
+        cfg["distributed"].update({
+            "rollout_gpu": 0, "train_gpu_start": 1, "train_gpus": 3,
+        })
         args = ["--model", "base_models/Qwen3-8B", "--max_steps", "2"]
         cmd = command(cfg, "train", args)
         self.assertIn("torch.distributed.run", cmd)
