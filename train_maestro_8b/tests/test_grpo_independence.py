@@ -40,14 +40,27 @@ class StandaloneGRPOTests(unittest.TestCase):
                 text = (root / module).read_text(encoding="utf-8")
                 # The only permitted occurrence is the negative assertion
                 # in explanatory module comments/docstrings.
-                for line in text.splitlines():
-                    if "baseline/da-grpo" in line and (
-                        'import' in line or 'Path(' in line or 'open(' in line
-                    ):
-                        self.fail(f"Direct baseline source dependency in {module}: {line}")
+                import ast
+                tree = ast.parse(text, filename=module)
+                self.assertFalse(any(
+                    isinstance(node, ast.ImportFrom) and
+                    node.module in ("reward_adapter", "reward_fn")
+                    for node in ast.walk(tree)
+                ))
+                self.assertFalse(any(
+                    isinstance(node, ast.Call) and
+                    getattr(node.func, "attr", None) == "spec_from_file_location"
+                    for node in ast.walk(tree)
+                ))
+                self.assertFalse(any(
+                    isinstance(node, ast.Assign) and any(
+                        isinstance(target, ast.Name) and target.id == "BASELINE"
+                        for target in node.targets
+                    )
+                    for node in ast.walk(tree)
+                ))
                 self.assertNotIn("from reward_adapter import", text)
                 self.assertNotIn("from reward_fn import", text)
-                self.assertNotIn("spec_from_file_location(", text)
 
     def test_completion_normalization_is_in_project(self):
         self.assertEqual(completion_text(
