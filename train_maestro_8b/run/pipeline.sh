@@ -605,8 +605,7 @@ status() {
 case "${1:-help}" in
   all)
     if [[ "$STAGE2_TRAINER" == "da" ]]; then
-      prepare_grpo; preflight; stage2_da_plan
-      die "Start serve-vllm in a separate terminal, then run pilot and grpo"
+      prepare_grpo; preflight; pilot; grpo; status
     else
       export_data; extract_features; train_risk; prepare_grpo; inspect_io; preflight; pilot; grpo; status
     fi
