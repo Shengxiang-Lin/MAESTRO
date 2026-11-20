@@ -1,3 +1,48 @@
+## Frozen private Global Judge context (new)
+
+The canonical exporter now freezes private evaluator inputs alongside
+the unchanged method-independent Main decision dataset:
+
+```text
+environment/data/unified/
+  cases.jsonl
+  decisions.jsonl
+  private/
+    decision_labels.jsonl
+    scenes.jsonl                     # private Stage1 World + Macro Graph
+    claim_state_supervision.jsonl   # published Stage4 pre-action claims
+```
+
+The private files are SHA256-bound to `manifest.json.private_context`.
+They are **evaluator-only**: the O1 policy prompts remain unchanged;
+no World, gold answer or unseen claims are inserted into a Main prompt.
+Only claim snapshots for published Stage4 decision rounds are retained.
+Claims from the current/future round are rejected.
+
+**Upgrade an existing unified export without regenerating Cases/Decisions:**
+
+```bash
+python -m environment.data_export.private_context \
+  --unified-dir environment/data/unified \
+  --scenes PATH/TO/ORIGINAL/stage1/questions/scenes.jsonl \
+  --stage4-dir PATH/TO/ORIGINAL/stage4
+```
+
+The one-time upgrade checks the original Stage1 Scene file and Stage4
+manifest AND main_turns hashes from `unified/manifest.json`.
+If they no longer match, do not bypass this check: recover the exact
+source versions or regenerate unified with matching Stage1/3/4.
+Once upgraded, the original Environment paths are not needed for GRPO.
+Existing unified exports without `private_context` remain valid for
+DA-SFT and legacy DA-GRPO, but Global Judge training requires the new
+private sidecars. Missing required selected Stage4 claim snapshots
+are reported explicitly rather than fabricated.
+
+Run `python -m environment.data_export.audit --output-dir
+environment/data/unified --verify-manifest` to verify all hashed files.
+
+---
+
 # MAESTRO method-agnostic unified data export
 
 `python -m environment.data_export` exports only **base evidence and
